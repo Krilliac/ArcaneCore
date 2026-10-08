@@ -1,7 +1,8 @@
 # Transports: ships and zeppelins
 
-Status: wave-2 lane K (`claude/w2-transports`), behind `World:Transports:Enabled` (default false) until the content is
-present. WoW 1.12.1 (5875). Primary reference: vmangos `0e3ff01` `src/game/Transports/Transport.cpp`,
+Status: wave-2 lane K (`claude/w2-transports`), behind `World:Transports:Enabled` (default false). The content is
+imported by the content refresh since wave 4 (`claude/w4-transports-content`, docs/integration/transports-content-20261008.md):
+a world refreshed with `tools/content/refresh-world-content.ps1` and served with the switch on sails all nine classic routes. WoW 1.12.1 (5875). Primary reference: vmangos `0e3ff01` `src/game/Transports/Transport.cpp`,
 `TransportMgr.cpp`, the transport parts of `Maps/Map.cpp`, `Handlers/MovementHandler.cpp` and `Objects/Player.cpp`.
 Re-implemented from behaviour; no code was copied.
 
@@ -33,16 +34,29 @@ Re-implemented from behaviour; no code was copied.
 `World:Transports:Enabled` (false) is the master switch; `World:Transports:Entries` restricts the routes to a list of
 entries (empty: all). Both are restart-only and listed in the [configuration reference](../reference/configuration.md).
 Off, nothing is built and a client that claims to stand on a transport is treated as before (the flag is stored, nothing
-boards).
+boards). vmangos always runs its ships; the switch stays off by default only because a world without the content below
+has nothing to sail.
 
 The routes need data the repository does not ship:
 
 * `gameobject_template` rows of type 15 (classic-db and vmangos both have them: the eight vanilla boats and zeppelins,
-  among them 20808, 164871, 175080, 176231, 176244, 176310, 176495, 177233).
-* A build-5875 `TaxiPathNode.dbc`, the same file the flight paths use (`NpcServices:TaxiPathNodeDbcPath`).
-* Optionally the vmangos `transports` rows (period overrides) in world schema 41. Without them every route keeps the period
-  computed from its path; vmangos says that computation is "not perfect", so the client and the server can drift on a long
-  route until the overrides are imported. The content importer does not read this table yet.
+  20808, 164871, 175080, 176231, 176244, 176310, 176495, 177233, and the Naxxramas necropolis 181056 over the Plaguelands).
+  The full import writes them with every other object; `arcane-content-importer refresh` (and so the refresh script) writes the
+  dump's type 15 rows again and leaves every other object template alone.
+* The `transports` rows (period overrides, world schema 41), written by the refresh from the dump (classic-db: one row per ship,
+  stored with build 0). Without them every route keeps the period computed from its path; vmangos says that computation is "not
+  perfect", so the client and the server can drift on a long route.
+* A build-5875 `TaxiPathNode.dbc`, the same file the flight paths use (`NpcServices:TaxiPathNodeDbcPath`). The world reads it
+  itself, as vmangos does; the refresh reads the copy in its `-DbcDirectory` to check every ship's route and reports, as a
+  `check:` line, a route the world would refuse (no speed or acceleration, a path under three nodes, a map without a
+  `map_template` row). `D:\refs\client-dbc-5875-effective\TaxiPathNode.dbc` is the client's own (patch.MPQ).
+
+So a deploy runs the refresh, keeps `NpcServices:TaxiPathNodeDbcPath` pointing at the DBC and sets `World:Transports:Enabled`
+to true. At start the world logs `Transports: 9 routes, 9 ships sailing`; at Debug (`ArcaneCore.World.Transports`) every map
+change of a ship is logged (`Transport 20808 sailed from map 0 to map 1 with 0 passenger(s)`). `.playerbot scenario run ship`
+([playbots](playbots.md)) sends a bot across on the Ratchet - Booty Bay boat. Checked on a refreshed copy of the live world
+(`RealTransportContentTests`, env-gated): every ship waits at each of its ports at the port's TaxiPathNode position and the five
+crossings change maps; a bot rides the Booty Bay boat over on the live terrain.
 
 Routes that cannot be built (no path, zero speed or acceleration, a path too short for a spline, a multi-map route through an
 instanceable map, a map without a `map_template` row) are logged and refused; the server starts without them.
