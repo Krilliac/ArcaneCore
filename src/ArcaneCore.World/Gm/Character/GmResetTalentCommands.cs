@@ -40,11 +40,12 @@ public sealed class GmResetTalentCommands : ICommandGroup
             return true;
         }
 
+        // LANG_RESET_TALENTS (216) / LANG_RESET_TALENTS_ONLINE (213), mangos-classic mangos.sql:3582,3585.
         service.ResetTalents(target, noCost: true);
         target.SendSystemMessage("Your talents have been reset.");
         if (!ReferenceEquals(target, context.Player))
         {
-            context.Reply($"Talents reset for {GmStrings.PlayerLink(target.Name)}.");
+            context.Reply($"Talents of {GmStrings.PlayerLink(target.Name)} reset.");
         }
 
         return true;

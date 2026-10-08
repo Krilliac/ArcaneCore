@@ -1,9 +1,12 @@
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -35,15 +38,28 @@ public sealed class GmParityCommands : ICommandGroup
         }
 
         Unit? target = GmSelectedUnit.Require(context);
-        if (target is null || target is Player player && !context.CanActOn(player))
+        if (target is null)
         {
             return true;
         }
 
-        // DieCommandCredit defaults false in vmangos; MapCombat.Kill(null) gives no player kill credit.
+        if (target is Player player)
+        {
+            if (!context.CanActOn(player))
+            {
+                return true;
+            }
+
+            // HandleDieHelper: a player in god mode (an invincibility threshold) loses it first (Player::SetCheatGod(false)).
+            player.InvincibilityHpThreshold = 0;
+        }
+
+        // vmangos DieCommandCredit defaults off: the creature's loot recipient is cleared and the unit deals its whole health to
+        // itself (no kill credit, no loot, no durability loss; a creature's own death prevention still holds).
         if (target.IsAlive && target.Map is { } map)
         {
-            map.Combat.Kill(null, target, durabilityLoss: false);
+            (target as Creature)?.ClearLootRecipient();
+            map.Combat.DealDamage(target, target, target.Health, durabilityLoss: false);
         }
 
         return true;
@@ -63,9 +79,16 @@ public sealed class GmParityCommands : ICommandGroup
             return true;
         }
 
-        if (!context.Session.Services.GetRequiredService<SpellFeature>().System.AddAura(target, spellId, caster: context.Player))
+        // HandleAuraHelper: an unknown spell is a syntax failure; a spell without an aura effect gets LANG_SPELL_NO_HAVE_AURAS.
+        SpellSystem spells = context.Session.Services.GetRequiredService<SpellFeature>().System;
+        if (spells.Store.Get(spellId) is null)
         {
-            context.Reply($"Spell {spellId} has no applicable aura.");
+            return false;
+        }
+
+        if (!spells.AddAura(target, spellId, caster: context.Player))
+        {
+            context.Reply(SpellNoHaveAuras(spellId));
         }
 
         return true;
@@ -115,7 +138,7 @@ public sealed class GmParityCommands : ICommandGroup
 
         if (setId == 0)
         {
-            context.Reply("No items found for item set 0.");
+            context.Reply(NoItemsFromItemsetFound(setId));
             return true;
         }
 
@@ -140,7 +163,7 @@ public sealed class GmParityCommands : ICommandGroup
         ItemTemplate[] pieces = [.. store.All.Where(item => item.SetId == setId).OrderBy(item => item.Entry)];
         if (pieces.Length == 0)
         {
-            context.Reply(string.Create(CultureInfo.InvariantCulture, $"No items found for item set {setId}."));
+            context.Reply(NoItemsFromItemsetFound(setId));
             return true;
         }
 
@@ -174,6 +197,14 @@ public sealed class GmParityCommands : ICommandGroup
 
         return true;
     }
+
+    /// <summary>LANG_NO_ITEMS_FROM_ITEMSET_FOUND (502; mangos-classic mangos.sql:3854): "No items from itemset '%u' found.".</summary>
+    internal static string NoItemsFromItemsetFound(uint setId)
+        => string.Create(CultureInfo.InvariantCulture, $"No items from itemset '{setId}' found.");
+
+    /// <summary>LANG_SPELL_NO_HAVE_AURAS (1165; mangos-classic mangos.sql:4138): "Spell %u not have auras.".</summary>
+    internal static string SpellNoHaveAuras(uint spellId)
+        => string.Create(CultureInfo.InvariantCulture, $"Spell {spellId} not have auras.");
 }
 
 /// <summary>vmangos UnitCommands.cpp:2245-2278, Chat.cpp:589.</summary>
@@ -224,16 +255,26 @@ public sealed class GmParityModifyExtension : ICommandExtension
             return true;
         }
 
+        string link = GmStrings.PlayerLink(target.Name);
         if (context.Session.Services.GetService<NpcServicesFeature>()?.Flights is { } flights && flights.IsFlying(target))
         {
-            context.Reply($"{target.Name} is in flight.");
+            context.Reply(CharInFlight(link));
             return true;
         }
 
-        context.Reply(string.Create(CultureInfo.InvariantCulture, $"Changed run speed of {target.Name} to {rate}."));
+        context.Reply(string.Create(CultureInfo.InvariantCulture, $"You set the speed to {rate:0.00} from normal of {link}."));
+        if (!ReferenceEquals(target, context.Player))
+        {
+            target.SendSystemMessage(string.Create(CultureInfo.InvariantCulture,
+                $"{GmStrings.PlayerLink(context.Player.Name)} set your speed to {rate:0.00} from normal."));
+        }
+
         UnitSpeed.SetRate(target, MoveType.Run, rate);
         return true;
     }
+
+    /// <summary>LANG_CHAR_IN_FLIGHT (21; mangos-classic mangos.sql:3443): "%s is flying command failed.".</summary>
+    private static string CharInFlight(string link) => $"{link} is flying command failed.";
 
     private static bool Scale(CommandContext context, string text)
     {
@@ -255,13 +296,34 @@ public sealed class GmParityModifyExtension : ICommandExtension
             return true;
         }
 
+        if (target is Player subject)
+        {
+            // LANG_YOU_CHANGE_SIZE (147) / LANG_YOURS_SIZE_CHANGED (148), mangos-classic mangos.sql:3533-3534; players only, as vmangos.
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"You set the size {scale:0.00} of {GmStrings.PlayerLink(subject.Name)}."));
+            if (!ReferenceEquals(subject, context.Player))
+            {
+                subject.SendSystemMessage(string.Create(CultureInfo.InvariantCulture,
+                    $"{GmStrings.PlayerLink(context.Player.Name)} set your size to {scale:0.00}."));
+            }
+        }
+
+        // Unit::SetObjectScale then Unit::UpdateModelData: with the client model data loaded, the bounding radius, combat reach and
+        // collision height are recomputed from the display model (SpellSystem.UpdateDisplayModel); without it they follow the scale's ratio.
         float old = target.GetFloat(UpdateFields.ObjectFieldScaleX);
-        float ratio = old > 0 ? scale / old : scale;
         target.SetFloat(UpdateFields.ObjectFieldScaleX, scale);
-        target.SetFloat(UpdateFields.UnitFieldBoundingradius, target.GetFloat(UpdateFields.UnitFieldBoundingradius) * ratio);
-        target.SetFloat(UpdateFields.UnitFieldCombatreach, target.GetFloat(UpdateFields.UnitFieldCombatreach) * ratio);
-        target.Locomotion.CollisionHeight *= ratio;
-        context.Reply(string.Create(CultureInfo.InvariantCulture, $"Set {target.Guid} scale to {scale}."));
+        SpellSystem spells = context.Session.Services.GetRequiredService<SpellFeature>().System;
+        if (spells.DisplayModelResolver is not null)
+        {
+            spells.UpdateDisplayModel(target);
+        }
+        else
+        {
+            float ratio = old > 0 ? scale / old : scale;
+            target.SetFloat(UpdateFields.UnitFieldBoundingradius, target.GetFloat(UpdateFields.UnitFieldBoundingradius) * ratio);
+            target.SetFloat(UpdateFields.UnitFieldCombatreach, target.GetFloat(UpdateFields.UnitFieldCombatreach) * ratio);
+            target.Locomotion.CollisionHeight *= ratio;
+        }
+
         return true;
     }
 }

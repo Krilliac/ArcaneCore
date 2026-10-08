@@ -45,6 +45,7 @@ public sealed class GmResetTalentCommandTests
             {
                 Player player = host.World.FindOnlinePlayer("Resetgm")!;
                 player.Level = 10;
+                player.Money = 100_000;   // enough for a paid respec, so a charge would show
                 var service = host.WorldServices.GetRequiredService<TalentFeature>().Service!;
                 service.InitTalentForLevel(player);
                 Assert.True(service.LearnTalent(player, 1, 0));
@@ -54,7 +55,7 @@ public sealed class GmResetTalentCommandTests
             await gm.SendChatAsync(ChatType.Say, Language.Common, ".reset talents");
             await host.WaitForWorldAsync(() => host.WorldServices.GetRequiredService<TalentFeature>().Service!
                 .UsedPoints(host.World.FindOnlinePlayer("Resetgm")!) == 0, "talent points returned");
-            Assert.Equal(0u, await host.PlayerStateAsync("Resetgm", player => player.Money));
+            Assert.Equal(100_000u, await host.PlayerStateAsync("Resetgm", player => player.Money));
         }
     }
 }

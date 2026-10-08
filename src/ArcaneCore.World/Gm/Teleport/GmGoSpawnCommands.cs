@@ -8,6 +8,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Npc;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -49,11 +50,19 @@ public sealed class GmGoSpawnCommands : ICommandExtension
         CreatureSpawn? spawn = Closest(context.Player, spawns, s => s.MapId, s => s.X, s => s.Y, s => s.Z, s => s.Guid);
         if (spawn is null)
         {
-            context.Reply(GmStrings.NoCreaturesFound);
+            context.Reply(CreatureNotFound);
             return true;
         }
 
-        return TeleportCommands.GoHelper(context, context.Player, spawn.MapId, spawn.X, spawn.Y, spawn.Z, context.Player.Orientation);
+        // HandleGoCreatureCommand (TeleportCommands.cpp:498-503): a creature of the spawn loaded on the caller's map gives its live position.
+        (float x, float y, float z) = (spawn.X, spawn.Y, spawn.Z);
+        if (spawn.MapId == context.Player.MapId
+            && GmNpcCommands.SystemOf(context)?.Creatures.FirstOrDefault(c => c.Spawn?.Guid == spawn.Guid) is { } live)
+        {
+            (x, y, z) = (live.X, live.Y, live.Z);
+        }
+
+        return TeleportCommands.GoHelper(context, context.Player, spawn.MapId, x, y, z, context.Player.Orientation);
     }
 
     private static bool GoObject(CommandContext context, string text)
@@ -81,12 +90,18 @@ public sealed class GmGoSpawnCommands : ICommandExtension
         GameObjectSpawn? spawn = Closest(context.Player, spawns, s => s.MapId, s => s.X, s => s.Y, s => s.Z, s => s.Guid);
         if (spawn is null)
         {
-            context.Reply(GmStrings.NoGameObjectsFound);
+            context.Reply(ObjectNotFound);
             return true;
         }
 
         return TeleportCommands.GoHelper(context, context.Player, spawn.MapId, spawn.X, spawn.Y, spawn.Z, context.Player.Orientation);
     }
+
+    /// <summary>LANG_COMMAND_GOCREATNOTFOUND (268; mangos-classic mangos.sql:3637).</summary>
+    internal const string CreatureNotFound = "Creature not found!";
+
+    /// <summary>LANG_COMMAND_GOOBJNOTFOUND (267; mangos-classic mangos.sql:3636).</summary>
+    internal const string ObjectNotFound = "Object not found!";
 
     private static bool TryQuery(string text, string guidLink, string entryLink, out bool byEntry, out uint number, out string? name)
     {
