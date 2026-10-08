@@ -1,8 +1,12 @@
 using System.Globalization;
 using ArcaneCore.Data;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using ArcaneCore.World.Transports;
@@ -78,7 +82,7 @@ public sealed class RealTransportContentTests(ITestOutputHelper output) : IDispo
     public const string TerrainVariable = "ARCANECORE_TEST_TERRAIN_DIR";
 
     /// <summary>A copy of the real world database and the configuration the deploy gives the world for ships.</summary>
-    private IConfiguration RealConfiguration()
+    private IConfiguration RealConfiguration(bool transports = true)
     {
         Directory.CreateDirectory(_directory);
         string world = Path.Combine(_directory, "world.db");
@@ -89,7 +93,7 @@ public sealed class RealTransportContentTests(ITestOutputHelper output) : IDispo
             ["Database:World:Provider"] = "Sqlite",
             ["Database:World:ConnectionString"] = $"Data Source={world};Pooling=False",
             ["NpcServices:TaxiPathNodeDbcPath"] = taxiPathNodes,
-            ["World:Transports:Enabled"] = "true",
+            ["World:Transports:Enabled"] = transports ? "true" : "false",
         }).Build();
     }
 
@@ -207,6 +211,50 @@ public sealed class RealTransportContentTests(ITestOutputHelper output) : IDispo
 
         output.WriteLine(report.ToString());
         Assert.True(report.Passed, report.ToString());
+    }
+
+    /// <summary>
+    /// The flight masters' tables the refresh fills from TaxiNodes.dbc and TaxiPath.dbc (the live world had them empty): the world loads
+    /// every node, and a player flown from Stormwind (node 2) along the Stormwind - Ironforge path lands at Ironforge (node 6) once the
+    /// flight's game time has run.
+    /// </summary>
+    [RealTransportContentFact]
+    public async Task TheRefreshedTaxiTables_FlyAPlayerFromStormwindToIronforge()
+    {
+        const uint Stormwind = 2, Ironforge = 6;
+
+        // Without the ships: the test client's login expects the synthetic packet order, and a ship of map 0 is sent ahead of it.
+        IConfiguration configuration = RealConfiguration(transports: false);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton(configuration);
+            services.AddWorldDatabase(configuration);
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        NpcStore npcs = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.Npcs;
+        output.WriteLine($"{npcs.Nodes.Count()} taxi nodes");
+        Assert.True(npcs.Nodes.Count() > 50, $"{npcs.Nodes.Count()} taxi nodes");
+        TaxiNode from = npcs.Node(Stormwind)!;
+        TaxiNode to = npcs.Node(Ironforge)!;
+        TaxiPath path = npcs.Path(Stormwind, Ironforge)!;
+        output.WriteLine($"{from.Name} -> {to.Name}: path {path.Id}, {path.Price} copper, alliance mount {from.MountAlliance}");
+
+        await host.EnterWorldAsync("FLYER", "Flyer");
+        await host.PlaceAsync("Flyer", from.X, from.Y, from.Z);
+        TaxiFlightSystem flights = host.WorldServices.GetRequiredService<NpcServicesFeature>().Flights!;
+        Assert.True(await host.OnWorldAsync(() => flights.StartFlight(host.World.FindOnlinePlayer("Flyer")!, [Stormwind, Ironforge], [path.Id], from.MountAlliance)),
+            "the flight did not start");
+
+        bool landed = await host.World.AdvanceClockUntilAsync(30 * 60 * 1000, () => !flights.IsFlying(host.World.FindOnlinePlayer("Flyer")!));
+        (uint map, float distance) = await host.OnWorldAsync(() =>
+        {
+            Player flyer = host.World.FindOnlinePlayer("Flyer")!;
+            return (flyer.MapId, MathF.Sqrt(Square(flyer.X - to.X) + Square(flyer.Y - to.Y)));
+        });
+        output.WriteLine($"landed {landed} at {host.World.NowMs} ms, map {map}, {distance:0.0} yd from {to.Name}");
+        Assert.True(landed, "still flying after 30 minutes of game time");
+        Assert.Equal(to.MapId, map);
+        Assert.True(distance < 20f, $"{distance:0.0} yd from {to.Name}");
     }
 
     private static float Square(float value) => value * value;
