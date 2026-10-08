@@ -24,7 +24,17 @@ public sealed partial class QuestNpcServices
     /// </summary>
     public Func<Player, NpcInfo, bool>? UnlearnTalentsOffered { get; set; }
 
-    /// <summary>CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, no script hooks).</summary>
+    /// <summary>
+    /// The time to a spirit guide's next resurrection wave, in milliseconds (vmangos Creature::SendAreaSpiritHealerQueryOpcode
+    /// reads its current channel's cast time). The battleground area spirit-healer channel does not exist yet, so by default
+    /// no wave is running and the answer is 0; the battleground lane supplies the real time.
+    /// </summary>
+    public Func<ObjectGuid, uint>? SpiritGuideNextResurrectMs { get; set; }
+
+    /// <summary>
+    /// CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368, no script hooks): a spirit guide first
+    /// sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (:360-361), then the gossip menu goes out.
+    /// </summary>
     public void GossipHello(Player player, ObjectGuid guid)
     {
         // CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO are creature requests (GetNPCIfCanInteractWith); a game
@@ -33,6 +43,12 @@ public sealed partial class QuestNpcServices
         {
             LogMissing("GossipHello", guid);
             return;
+        }
+
+        if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
+        {
+            player.Session.Send(WorldOpcode.SmsgAreaSpiritHealerTime,
+                Battlegrounds.BattlegroundPackets.BuildAreaSpiritHealerTime(npc.Guid, SpiritGuideNextResurrectMs?.Invoke(npc.Guid) ?? 0));
         }
 
         PrepareGossipMenu(s, npc, npc.GossipMenuId);
