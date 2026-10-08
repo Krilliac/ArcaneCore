@@ -42,13 +42,14 @@ public sealed class TalentEffectCoverageTests
         TalentCoverageReport report = TalentEffectCoverage.Build(Catalog, kit.System);
 
         Assert.Equal(5, report.RankSpellCount);
-        Assert.Equal(2, report.SupportedCount);       // A (aura Dummy) and C (effect Dummy)
+        Assert.Equal(1, report.SupportedCount);       // C (effect Dummy); A's DUMMY aura applies but nothing reads it
         Assert.Equal(
             [
                 new TalentCoverageGap(10, 0, B, TalentGapKind.MissingAura, (int)UnhandledAuraA),
                 new TalentCoverageGap(20, 0, D, TalentGapKind.MissingEffect, (int)UnhandledEffect),
                 new TalentCoverageGap(20, 0, D, TalentGapKind.MissingAura, (int)UnhandledAuraB),
                 new TalentCoverageGap(20, 1, Missing, TalentGapKind.SpellMissing, 0),
+                new TalentCoverageGap(30, 0, A, TalentGapKind.NoConsumer, (int)AuraType.Dummy),
             ],
             report.Gaps);
     }
@@ -65,6 +66,7 @@ public sealed class TalentEffectCoverageTests
         Assert.Equal(1, report.CountOf(TalentGapKind.MissingEffect, (int)UnhandledEffect));
         Assert.Equal(1, report.CountOf(TalentGapKind.SpellMissing, 0));
         Assert.Equal(0, report.CountOf(TalentGapKind.MissingAura, (int)AuraType.Dummy));
+        Assert.Equal(1, report.CountOf(TalentGapKind.NoConsumer, (int)AuraType.Dummy));
     }
 
     [Fact]
@@ -77,7 +79,7 @@ public sealed class TalentEffectCoverageTests
 
         TalentCoverageReport report = TalentEffectCoverage.Build(Catalog, kit.System);
         Assert.DoesNotContain(report.Gaps, g => g.Spell == B);
-        Assert.Equal(3, report.SupportedCount);
+        Assert.Equal(2, report.SupportedCount);
     }
 
     [Fact]
@@ -89,8 +91,9 @@ public sealed class TalentEffectCoverageTests
         string second = TalentEffectCoverage.Build(Catalog, kit.System).Describe();
 
         Assert.Equal(first, second);
-        Assert.Contains("2 of 5", first);
+        Assert.Contains("1 of 5", first);
         Assert.Contains($"aura {(int)UnhandledAuraA}", first);
+        Assert.Contains("missing consumer of aura 4 (Dummy): 1", first);
     }
 
     [Fact]
