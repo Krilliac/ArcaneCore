@@ -135,6 +135,41 @@ public sealed class LifePersistenceTests
         }
     }
 
+    [Fact]
+    public async Task AZeroHealthNonGhostRecord_LoadsAliveWithItsSavedValuesAndRegenerates()
+    {
+        // A body saved at 0 health before its release (a crash between death and release). vmangos derives the death
+        // state from the ghost flag alone (Player.cpp:14973-14975), restores the saved health and powers
+        // (Player.cpp:15062-15070) and keeps LoadCorpse's half restore for a dead player (Player.cpp:15427-15439);
+        // the ALIVE player then regenerates (Player.cpp:1240-1243). No half health, no emptied rage.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Combat:RateRageLoss"] = "0" }).Build()));
+        (uint? AppliedHealth, bool DeathStateAlive)? atLogin = null;
+        host.World.PlayerLoggedIn += p =>
+        {
+            if (p.Name == "Lifezero")
+            {
+                atLogin = (p.LoadedLife?.AppliedHealth, p.Combat.DeathState == ArcaneCore.Game.Combat.DeathState.Alive);
+            }
+        };
+        (WorldTestClient client, _) = await CreateAsync(host, "LIFE6", "Lifezero");
+        await using (client)
+        {
+            host.Characters.SetLife(1, new CharacterLife(0, [0, 900, 0, 0, 0], 0, 0, false, null));
+            await client.LoginAsync(1);
+            await host.WaitForWorldAsync(() => atLogin is not null, "the login to complete");
+
+            Assert.Equal(((uint?)1u, true), atLogin!.Value); // 1, not 0: ArcaneCore's IsAlive also needs health above 0 (PlayerLife.ApplyVitals)
+            Assert.Equal(900u, await host.PlayerStateAsync("Lifezero", p => p.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage)));
+            // The test host has no stat tables (spirit 0, no regeneration): give the warrior some spirit to regenerate by.
+            await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Lifezero")!.SetUInt32(UpdateFields.UnitFieldStat0 + 4, 30));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lifezero")!.Health > 1, "regeneration to raise the loaded health");
+            Assert.True(await host.PlayerStateAsync("Lifezero", p => p.IsAlive));
+            Assert.False(await host.PlayerStateAsync("Lifezero", p => (p.Flags & PlayerFlags.Ghost) != 0));
+        }
+    }
+
     /// <summary>A loading hook that raises the maximum health of a character named Lifemax.</summary>
     private sealed class MaxRaiserServices : IWorldTestServices
     {

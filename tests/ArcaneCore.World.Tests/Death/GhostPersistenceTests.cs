@@ -119,7 +119,7 @@ public sealed class GhostPersistenceTests
     }
 
     [Fact]
-    public async Task AStoredDeadCharacterThatNeverReleased_ComesBackAtHalfHealth()
+    public async Task AStoredDeadCharacterThatNeverReleased_ComesBackAliveWithoutTheHalfRestore()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         (WorldTestClient client, _, _) = await CreateAsync(host, "GHOST4", "Ghostfour");
@@ -130,8 +130,10 @@ public sealed class GhostPersistenceTests
             await host.OnWorldAsync(() =>
             {
                 Player player = host.World.FindOnlinePlayer("Ghostfour")!;
+                // Not a ghost, so not dead (vmangos Player.cpp:14973-14975): no LoadCorpse half restore (Player.cpp:15427-15439).
+                // Loaded at 1 health, the least ArcaneCore's IsAlive accepts; the test host has no spirit, so nothing regenerates.
                 Assert.True(player.IsAlive);
-                Assert.Equal(player.MaxHealth / 2, player.Health);
+                Assert.Equal(1u, player.Health);
             });
         }
     }
