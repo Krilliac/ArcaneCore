@@ -373,6 +373,10 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             {
                 creature.Motion.MoveChase(victim, ranged.ChaseDistance);
             }
+            else if (creature.AI is CreatureEventAI { AttackDistance: > 0 } distancer)
+            {
+                creature.Motion.MoveChase(victim, distancer.AttackDistance); // cmangos RANGED_MOVEMENT: MoveChase(victim, m_attackDistance)
+            }
             else
             {
                 creature.Motion.MoveChase(victim);

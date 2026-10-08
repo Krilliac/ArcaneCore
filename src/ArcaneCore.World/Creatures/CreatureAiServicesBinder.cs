@@ -70,6 +70,7 @@ public static class CreatureAiServicesBinder
             // The conditions table is a world feature (ConditionFeature), not a registered IConditionEvaluator service.
             Conditions = services.GetService<IConditionEvaluator>() ?? services.GetServices<IWorldFeature>().OfType<IConditionEvaluator>().FirstOrDefault(),
             TeamOf = creature => FactionTeams.Of(creature.FactionTemplate, templates.Value, factions.Value),
+            QuestEvents = new EventAiQuestEvents(services),
         };
 
         foreach (PropertyInfo property in Bindable)

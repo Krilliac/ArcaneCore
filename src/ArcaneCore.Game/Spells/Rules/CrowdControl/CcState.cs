@@ -76,7 +76,7 @@ internal static class CcState
             // A creature has no client to order: the server-owned root flag is what its movement code reads
             // (CreatureMovementGates, the fear and confuse generators). The client-facing root packet of a creature
             // is not sent here (UNVERIFIED for 1.12.1, docs/areas/creature-movement-spawns.md).
-            if (system.IsRooted(creature))
+            if (system.IsRooted(creature) || creature.AiImmobilized)
             {
                 creature.AddMovementFlags(MovementFlags.Root);
             }

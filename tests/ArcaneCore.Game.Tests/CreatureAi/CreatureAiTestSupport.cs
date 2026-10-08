@@ -15,10 +15,10 @@ internal static class CreatureAiTestSupport
     public const string RecorderName = "RecorderAI";
 
     public static (WorldRuntime World, Map Map, CreatureMapSystem System) CreateAiSystem(
-        CreatureContent content, CreatureAiServices? services = null, CreatureOptions? options = null, WorldRuntime? world = null)
+        CreatureContent content, CreatureAiServices? services = null, CreatureOptions? options = null, WorldRuntime? world = null, uint instanceId = 0)
     {
         world ??= TestWorld.CreateRuntime();
-        Map map = world.GetMap(0);
+        Map map = world.GetMap(0, instanceId);
         var system = new CreatureMapSystem(map, content, options, random: new Random(1), aiServices: services ?? new CreatureAiServices());
         map.AddUpdater(system);
         return (world, map, system);

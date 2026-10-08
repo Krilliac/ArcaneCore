@@ -125,9 +125,10 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     /// UNIT_STATE_ROOT: UnitDefines.h:383, ChaseMovementGenerator::Update TargetedMovementGenerator.cpp:266-270). A creature's root is
     /// <c>MovementFlags.Root</c> (set by <c>CcState.RefreshRoot</c>), not a unit flag.
     /// </summary>
-    private static bool CannotMove(Creature creature, ICreatureMover mover)
+    private bool CannotMove(Creature creature, ICreatureMover mover)
         => mover.IsCasting(creature) || (creature.UnitFlags & (UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0
-            || creature.Movement.HasFlag(MovementFlags.Root);
+            || creature.Movement.HasFlag(MovementFlags.Root)
+            || (Type == MovementGeneratorType.Follow && creature.FollowMovementDisabled); // cmangos UNIT_STAT_NO_FOLLOW_MOVEMENT
 
     /// <summary>True when the creature is where this generator wants it.</summary>
     protected abstract bool IsInPosition(Creature creature);

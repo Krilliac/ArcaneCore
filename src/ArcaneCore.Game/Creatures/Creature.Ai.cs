@@ -73,6 +73,21 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>A relay script's SET_RUN: script moves of this creature run (cmangos SetWalk(false)).</summary>
     internal bool ScriptRun { get; set; }
 
+    /// <summary>
+    /// The template this creature had before an EventAI UPDATE_TEMPLATE swapped it (cmangos m_originalEntry); its next respawn takes it back
+    /// (Creature::ResetEntry). Null while the creature has its own template.
+    /// </summary>
+    internal CreatureTemplate? ScriptOriginalTemplate { get; set; }
+
+    /// <summary>cmangos UNIT_STAT_NO_FOLLOW_MOVEMENT (EventAI SET_FOLLOW_MOVEMENT 0): a follow movement holds still until it is set again.</summary>
+    internal bool FollowMovementDisabled { get; set; }
+
+    /// <summary>cmangos UNIT_STAT_AI_ROOT: an EventAI SET_IMMOBILIZED_STATE holds the creature rooted (kept when a root aura ends).</summary>
+    internal bool AiImmobilized { get; set; }
+
+    /// <summary>cmangos m_combatOnlyRoot: the EventAI root ends when the creature resets (evade, respawn).</summary>
+    internal bool AiImmobilizedCombatOnly { get; set; }
+
     /// <summary>A NO_MELEE_FLEE panic flight is running (cmangos ORDER_CRITTER_FLEE): the creature evades when it ends.</summary>
     internal bool InNoMeleePanic { get; set; }
 

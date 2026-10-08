@@ -50,6 +50,7 @@ public sealed class CreatureAiSummonRow
 
     public float Orientation { get; set; }
 
+    /// <summary>The <c>spawntimesecs</c> column; it holds milliseconds despite its name (<see cref="CreatureAiSummon.LifetimeMs"/>).</summary>
     public uint SpawnTimeSeconds { get; set; } = 120;
 
     public string Comment { get; set; } = string.Empty;

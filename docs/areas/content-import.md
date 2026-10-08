@@ -176,6 +176,25 @@ feature reads:
   with the dump's rows for build 5875 in one transaction, by column name for both the classic-db and the vmangos layout; vmangos rows whose
   build range misses 5875 are dropped and counted. `--cooldown-unit seconds` reads classic-db dumps before z2829, whose `Cooldown` is in
   seconds; `--dry-run` parses and counts without a database. Two kept rows for one spell are an error. See [procs](procs.md).
+- **Refresh an existing world.** `refresh <dump>... --database <file> [--dbc-dir <dir>]` brings a world that an older importer built up
+  to the tables the current world reads, and touches nothing else (creatures, objects, items, quests, loot and NPC services stay as they
+  are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`
+  (`WorldSafeLocs.dbc` in `--dbc-dir` adds the ids the dump lacks; a dump row keeps its facing, which the DBC does not have), the four
+  battleground tables, `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
+  (`TransportDumpImporter`; a cmangos row has no build and gets 0), `spell_proc_event` (build 5875; `--cooldown-unit auto` reads the
+  classic-db core revision from `db_version`: seconds before z2829, milliseconds from it, refused when the dump names none), the relay DB
+  scripts, and `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
+  holds 432 triggers, every `areatrigger_teleport` id of classic-db among them). A second run with the same inputs leaves the same rows. It
+  then checks what the world logs at start: teleports and taverns without a trigger, battleground start locations that are not safe
+  locations, transports without a type-15 object. It refuses a database file that does not exist, and a world whose schema is behind the
+  importer's unless `--migrate` is given (it never migrates on its own: an importer built with another lane's world step would otherwise
+  upgrade the live world before the server that needs it is deployed). `tools/content/refresh-world-content.ps1` wraps it for an
+  operator: it refuses a database another process holds open, writes a SHA-256-checked backup (the database and any leftover `-wal`),
+  checks the two DBCs against a `SHA256SUMS` file in `-DbcDirectory` when there is one or extracts them from the client's MPQs with
+  `mpqcli` (patch-2 over patch over dbc), and passes `-Migrate` on as `--migrate`. Run on a copy of the live world
+  (2026-10-07): 122 safe locations, 191 graveyard links, 3 battleground templates, 969 + 421 battleground spawn events, 24
+  battlemasters, 61 exploration levels, 33 weather zones, 42 taverns, 9 transports, 164 proc rows, 828 relay steps, 14 relay templates and
+  432 area triggers; every other table byte-identical afterwards (docs/integration/content-refresh-20261007.md).
 - Verified on the z2815 dump: 40 start positions, 1,497 starting spells, 353 teleport targets and 2,400 level-stat rows (human
   warrior level 1: strength 23; the file is a sample of the retail table, not committed); the daemon logged "level stats for
   2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each
@@ -187,8 +206,8 @@ feature reads:
 `GameTeleRow`, both into the existing map-data tables. cmangos' `status_failed_text` is the row's `Message` (vmangos:
 `message`); vmangos rows take the highest `patch` not above 10 (`ObjectMgr.cpp:7712-7717`). The row carries no item, quest or
 heroic-key requirement, so cmangos' `required_item`, `required_item2`, `required_quest_done` and `condition_id` are not
-enforced (`plan` lists them as not imported). The trigger shapes (`areatrigger_template`) and `map_template`/`area_template`
-come from client DBCs and are not imported, so a portal row cannot fire until those exist. Verified: 103 portals and 269 GM
+enforced (`plan` lists them as not imported). The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
+`refresh --dbc-dir` (above) and `map_template`/`area_template` through `import-map-dbc`; a portal row cannot fire until its trigger exists. Verified: 103 portals and 269 GM
 teleports imported; the daemon logged "103 area trigger teleports, 269 teleport locations".
 
 ## Verified against the real classic-db dump

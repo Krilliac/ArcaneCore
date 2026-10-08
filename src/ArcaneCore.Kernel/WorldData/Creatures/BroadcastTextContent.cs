@@ -31,9 +31,11 @@ public sealed record BroadcastText(
 
 /// <summary>
 /// One <c>creature_ai_summons</c> row: a summon location EventAI's SUMMON_ID action points at
-/// (cmangos-classic mangos.sql <c>creature_ai_summons</c>: id, position, orientation, spawntimesecs).
+/// (cmangos-classic mangos.sql <c>creature_ai_summons</c>: id, position, orientation, spawntimesecs). <see cref="LifetimeMs"/> is the
+/// spawntimesecs column, which holds milliseconds despite its name: cmangos hands it to SummonCreature as the despawn time
+/// (CreatureEventAI.cpp:1018-1019), and the classic-db z2815 values are 10000 to 86400000.
 /// </summary>
-public sealed record CreatureAiSummon(uint Id, float X, float Y, float Z, float Orientation, uint SpawnTimeSeconds);
+public sealed record CreatureAiSummon(uint Id, float X, float Y, float Z, float Orientation, uint LifetimeMs);
 
 /// <summary>Every <c>broadcast_text</c> row, loaded once at startup and read-only afterwards.</summary>
 public sealed class BroadcastTextCatalog

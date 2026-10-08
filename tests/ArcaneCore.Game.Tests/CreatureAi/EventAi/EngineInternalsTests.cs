@@ -15,8 +15,11 @@ public sealed class EngineInternalsTests
     [Fact]
     public void TheDefaultRegistry_HandlesTheImplementedEventsAndActions()
     {
-        Assert.Equal([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 18, 21, 22, 23, 24, 27, 28, 29, 31, 33, 36], EventAiRegistry.Default.EventTypes.Select(t => (int)t).Order());
-        Assert.Equal([1, 11, 12, 13, 14, 20, 21, 22, 23, 24, 25, 37, 39, 53, 54, 57], EventAiRegistry.Default.ActionTypes.Select(t => (int)t).Order());
+        Assert.Equal([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36],
+            EventAiRegistry.Default.EventTypes.Select(t => (int)t).Order());
+        Assert.Equal([1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 42,
+                43, 45, 47, 50, 51, 53, 54, 55, 56, 57, 58, 59, 61, 64],
+            EventAiRegistry.Default.ActionTypes.Select(t => (int)t).Order());
     }
 
     [Fact]

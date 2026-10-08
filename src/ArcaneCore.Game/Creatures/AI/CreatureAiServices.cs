@@ -261,4 +261,23 @@ public sealed class CreatureAiServices
     /// (GuardMgr::GetTeam); null here: nobody comes. Bound by the world from FactionTemplate.dbc and Faction.dbc.
     /// </summary>
     public Func<Creature, Team?>? TeamOf { get; init; }
+
+    /// <summary>
+    /// Quest credit that EventAI gives (ACTION_T_QUEST_EVENT 15, ACTION_T_KILLED_MONSTER 33); null: those actions fail. Bound by the world to
+    /// its quest service.
+    /// </summary>
+    public IEventAiQuestEvents? QuestEvents { get; init; }
+}
+
+/// <summary>The quest credit EventAI actions give (cmangos Player methods called from CreatureEventAI::ProcessAction).</summary>
+public interface IEventAiQuestEvents
+{
+    /// <summary>
+    /// cmangos Player::AreaExploredOrEventHappens, or with <paramref name="rewardGroup"/> RewardPlayerAndGroupAtEventExplored (every group
+    /// member near <paramref name="source"/>): the quest's exploration or event objective is done.
+    /// </summary>
+    void EventHappened(Player player, uint questId, Creature source, bool rewardGroup);
+
+    /// <summary>cmangos Player::RewardPlayerAndGroupAtEventCredit: kill credit for <paramref name="creatureEntry"/> to the player and its group near the source.</summary>
+    void KillCredit(Player player, uint creatureEntry, Creature source);
 }

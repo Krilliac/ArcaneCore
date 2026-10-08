@@ -196,6 +196,58 @@ public sealed class EventAiEngine
         ProcessEvents(player, null);
     }
 
+    /// <summary>
+    /// cmangos CreatureEventAI::MoveInLineOfSight (:1621-1648): while the creature has no victim, every EVENT_T_OOC_LOS row whose hostility,
+    /// player-only and range conditions <paramref name="who"/> meets is readied with it as the invoker.
+    /// </summary>
+    public void MoveInLineOfSight(Unit who)
+    {
+        if (Context.Victim is not null)
+        {
+            return;
+        }
+
+        DispatchWhere(EventAiTrigger.OutOfCombatLineOfSight, holder => holder.Handler!.MatchesUnit(Context, holder, who), who, null);
+    }
+
+    /// <summary>cmangos JustSummoned (the EVENT_T_SUMMONED_UNIT rows; the summoned creature is the invoker).</summary>
+    public void JustSummoned(Creature summoned) => DispatchWhere(EventAiTrigger.Summoned, static _ => true, summoned, null);
+
+    /// <summary>cmangos SummonedCreatureJustDied (:1540-1549).</summary>
+    public void SummonedJustDied(Creature summoned) => DispatchWhere(EventAiTrigger.SummonedDied, static _ => true, summoned, null);
+
+    /// <summary>cmangos SummonedCreatureDespawn (:1551-1560).</summary>
+    public void SummonedDespawned(Creature summoned) => DispatchWhere(EventAiTrigger.SummonedDespawned, static _ => true, summoned, null);
+
+    /// <summary>
+    /// cmangos CreatureEventAI::ReceiveAIEvent (:1562-1574): the EVENT_T_RECEIVE_AI_EVENT rows of <paramref name="eventType"/> whose sender
+    /// entry is 0 or the sender's are readied with the invoker and the sender (TARGET_T_EVENT_SENDER).
+    /// </summary>
+    public void ReceiveAiEvent(uint eventType, Creature sender, Unit? invoker)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        DispatchWhere(EventAiTrigger.AiEvent,
+            holder => holder.Param(0) == eventType && (holder.Param(1) == 0 || holder.Param(1) == sender.Entry), invoker, sender);
+    }
+
+    /// <summary>cmangos SpellHitTarget (:1680-1691): the EVENT_T_SPELLHIT_TARGET rows whose spell id and school mask match.</summary>
+    public void SpellHitTarget(Unit target, SpellInfo spell)
+        => DispatchWhere(EventAiTrigger.SpellHitTarget, holder => holder.Handler!.MatchesSpell(holder.Event, spell), target, null);
+
+    private void DispatchWhere(EventAiTrigger trigger, Func<EventAiHolder, bool> match, Unit? invoker, Unit? sender)
+    {
+        EnsureDepth();
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { } handler && handler.Trigger == trigger && match(holder))
+            {
+                CheckAndReady(holder, invoker, sender);
+            }
+        }
+
+        ProcessEvents(invoker, sender);
+    }
+
     private void Dispatch(EventAiTrigger trigger, Unit? invoker, Unit? sender)
     {
         EnsureDepth();

@@ -123,7 +123,15 @@ docs/integration/creature-ai.md.
     `Creature.ReceiveEmote` like vmangos HandleTextEmoteOpcode, ChatHandler.cpp:751-752), 23/24
     aura and target aura (at least N stacks), 27/28 missing aura and target missing aura (fewer than N), 29
     generic timer (in and out of combat), 31 energy percent, 33 facing target (within 5 yd, victim's back or
-    front half circle), 36 target not reachable. Aura stacks and the victim's casting state come from the
+    front half circle), 36 target not reachable; and (wave 3, `Events/ScriptLinkEvents.cs`) 10 out-of-combat line of sight (no victim;
+    hostile or not-hostile unit, player only, range and line of sight, condition), 14 friendly health (the friend in combat within the radius
+    missing the most health, points or percent; itself included, unless one of the row's actions casts at the event target (12) a spell with
+    SPELL_ATTR_EX_EXCLUDE_CASTER, cmangos friendlyHp.targetSelf, CreatureEventAIMgr.cpp:1082-1096; 14 classic-db z2815 rows), 15 friendly
+    crowd controlled (stunned, confused, fleeing or rooted friend in combat), 16 friendly missing buff (the three combat flags; the row's radius,
+    where cmangos measures the buff spell's range), 17/25/26 summoned unit, summoned just died and summoned just despawned (summons by EventAI
+    and spell summons of a creature caster; repeat timers are parameters 2 and 3), 30 receive AI event (event type, sender entry or any), 32
+    select attacking target (random threat-list unit between the two ranges), 34 spell hit target (the creature's own spell landed). The
+    friend-search and target-select events are armed with their repeat timer when the fight starts (EnterCombat :1608-1615). Aura stacks and the victim's casting state come from the
     `IUnitSpellQueries` seam (`SpellSystemUnitSpellQueries` over the spell system, bound by
     `CreatureAiServicesBinder`; without a spell system nobody has auras or casts).
   - **Actions with a handler**: 1 text (the 1/2/3-way choice by `rnd % 3` / `rnd % 2`), 11 cast (aura-not-
@@ -131,16 +139,32 @@ docs/integration/creature-ai.md.
     triggered or interrupts; success is the cast being accepted), 12 summon, 13 threat single (direct add or percent) and 14 threat all percent (docs/areas/threat.md), 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
     flee for assistance, 37 die, 39 call for help, 53 start relay script (see "Relay scripts" below), 54 target-aware
-    text (direct id or random template).
-  - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
+    text (direct id or random template); and (wave 3, `Actions/UnitStateActions.cs`, `Actions/ScriptFlowActions.cs`) 2 set faction (0: the
+    template's; a respawn restores it), 3 morph (entry's model, model id, or demorph), 4 sound (SMSG_PLAY_SOUND to the observers), 5 emote, 9
+    random sound, 10 random emote (-1 plays nothing), 15 quest event and 33 killed monster (through the `IEventAiQuestEvents` seam, bound by
+    the world to the quest service; group credit within the group reward distance), 17 set unit field (UNIT block only), 18/19 set and remove
+    unit flags, 28 remove auras of a spell, 29 ranged movement (chase distance; the angle is not modelled), 30/31 random phase and phase range,
+    32 summon at a `creature_ai_summons` position (its `spawntimesecs` lifetime is in milliseconds, as cmangos reads it), 36 update
+    template (health percent kept; the respawn restores the original), 38 zone combat pulse (only on a map whose template is a dungeon or
+    raid, so not a battleground, Map::IsDungeon; a creature with no victim then attacks the closest unit of its threat list), 40 sheath, 41 forced despawn (delay; a database spawn dies without a kill and respawns on its
+    timer), 42 death prevention (health never below 1), 43 mount (entry's model or model id; 0 dismounts), 45 throw AI event (custom events
+    A-F reach every living creature in range, the sender included; the other types the creatures that could assist against the invoker), 47
+    stand state, 50 react state, 51 pause waypoints, 55 attack start, 56 despawn guardians, 58 set walk (RUN/WALK_DEFAULT; the chase
+    variants change nothing: chases always run), 59 set facing, 61 immobilized state (the server-owned root flag, kept while a root aura comes
+    and goes; combat-only ends at the reset), 64 follow movement (0 holds a follow movement still).
+  - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 11 (the spawner: the creature that summoned this one, else its owner), 12 and 15
+    (no unit). Others fail the action.
+  - **Still unsupported** in classic-db z2815: action 34 SET_INST_DATA (37 rows; no instance scripts exist to receive the data) and action 48
+    CHANGE_MOVEMENT (3 rows; the motion master has no "push random/waypoint over the default" API yet). Both stay in the startup warning.
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
-    unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) needs
-    the death-prevention action and a combat hook and is not implemented.
+    unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) is not
+    implemented (action 42 clamps the health; no classic-db z2815 row uses event 35).
   - **Not supported, reported once per entry** (`CreatureEventAI.Unsupported`): every other event and action
     type; a death event with a condition id (no conditions system); a spawned event with the zone condition
     (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
     always off, so RANGED_MODE_ONLY rows never run); the combat-movement melee packet parameter.
-  - Summons still despawn on a flat timer (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN` is a later slice).
+  - Summons (12 and 32) with a lifetime count it down while alive, out of combat and uncharmed (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN`);
+    a lifetime of 0 is `TEMPSPAWN_TIMED_OOC_DESPAWN` with 0 ms: the summon goes as soon as it is alive and out of combat.
 - **Texts** (`creature_ai_texts`): say 25 yd, yell 300 yd, text emote 25 yd, boss emote and
   zone yell map-wide, whisper to the target. `$N` becomes the target name, and the text can
   carry an emote (SMSG_EMOTE).

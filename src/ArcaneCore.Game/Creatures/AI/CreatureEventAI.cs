@@ -67,6 +67,12 @@ public sealed class CreatureEventAI : AggressorAI
     /// <summary>The guard rule for a GuardEventAI, else the aggressor rule (vmangos GuardEventAI::MoveInLineOfSight, GuardEventAI.cpp:50-77).</summary>
     public override void MoveInLineOfSight(Unit who)
     {
+        _engine.MoveInLineOfSight(who); // cmangos: the OOC LOS events first, then UnitAI::MoveInLineOfSight (:1621-1650)
+        if (!Me.IsAlive)
+        {
+            return;
+        }
+
         if (!UsesGuardSightRules)
         {
             base.MoveInLineOfSight(who);
@@ -96,6 +102,9 @@ public sealed class CreatureEventAI : AggressorAI
     internal int RangedModeType => _rangedModeType;
 
     internal float ChaseDistance => _chaseDistance;
+
+    /// <summary>cmangos m_attackDistance: the chase distance an EventAI RANGED_MOVEMENT set (0: melee reach); reset to the ranged-mode distance.</summary>
+    internal float AttackDistance { get; set; }
 
     internal CreatureAiContent AiContent { get; }
 
@@ -130,6 +139,7 @@ public sealed class CreatureEventAI : AggressorAI
 
         _rangedMode = enabled;
         _chaseDistance = chaseDistance;
+        AttackDistance = chaseDistance;
         _rangedModeType = type;
         _currentRangedMode = enabled;
         return true;
@@ -140,6 +150,8 @@ public sealed class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
+        AttackDistance = _chaseDistance;
+        System?.ClearCombatOnlyRoot(Me);
         SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.Reset();
     }
@@ -167,11 +179,24 @@ public sealed class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
+        AttackDistance = _chaseDistance;
+        System?.ClearCombatOnlyRoot(Me);
         SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.ReachedHome();
     }
 
     public override void OnSpellHit(Unit caster, SpellInfo spell) => _engine.SpellHit(caster, spell);
+
+    public override void OnSpellHitTarget(Unit target, SpellInfo spell) => _engine.SpellHitTarget(target, spell);
+
+    public override void OnJustSummoned(Creature summoned) => _engine.JustSummoned(summoned);
+
+    public override void OnSummonedCreatureJustDied(Creature summoned) => _engine.SummonedJustDied(summoned);
+
+    public override void OnSummonedCreatureDespawn(Creature summoned) => _engine.SummonedDespawned(summoned);
+
+    public override void OnReceiveAiEvent(uint eventType, Creature sender, Unit? invoker, uint miscValue)
+        => _engine.ReceiveAiEvent(eventType, sender, invoker);
 
     /// <summary>cmangos UnitAI::UpdateAI: choose the victim, then the event timer batch.</summary>
     public override void OnUpdate(uint diffMs)
