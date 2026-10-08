@@ -288,8 +288,8 @@ bots board a ferry, duel aboard while it sails away from the flag, and the duel 
 `ship-crossing` (a bot rides a ship through its map change and arrives aboard on map 1).
 `PartyScenarioTests` runs `party-master` (`Scenarios/ScenarioParty.cs`, `PartyScenario`): the master is a real socket client
 (`IPartyScenarioMaster`, a `WorldTestClient` whose reader records every packet and acknowledges teleports like a game client) and
-the bot `Scnfollower` runs autonomously. The master, on the test's `Party:Allowlist`, invites the bot and it accepts; the bot
-follows a 40-yard walk;
+the bot `Scnfollower` runs autonomously. The master, on the test's `World:Playerbots:Party:Allowlist`, invites the bot and it
+accepts; the bot follows a 40-yard walk;
 the master targets the wolf and whispers `attack`, and the bot kills it; the group roll on the wolf's uncommon item gets the
 bot's vote within 2 s of game time and resolves on the master's vote; after `stay` the bot holds while the master walks off;
 `status` is answered; the master takes the Deadmines entrance (trigger 78) and the bot lands in the same instance, and comes
