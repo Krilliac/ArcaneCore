@@ -26,7 +26,6 @@ public sealed class MapAreaDbcReaderTests
     public void MapReader_SelectsBothCommonContinentsAndUsesSqlDefaults()
     {
         DbcFile file = DbcFile.Parse(MapImage(
-            MapRow(7, 1, 4, "ignored"),
             MapRow(0, 0, 77, "Eastern Kingdoms"),
             MapRow(1, 0, 88, "Kalimdor")));
 
@@ -41,6 +40,38 @@ public sealed class MapAreaDbcReaderTests
                 Assert.Equal(-1, row.GhostEntranceMap); Assert.Equal(string.Empty, row.ScriptName);
             },
             row => Assert.Equal(1u, row.Entry));
+    }
+
+    /// <summary>
+    /// Every Map.dbc row becomes a map_template row, not only the continents: the dungeons, raids and battlegrounds keep their instance
+    /// type (field 2: 1 dungeon, 2 raid, 3 battleground, as vmangos map_template.map_type) and linked zone (field 19), in id order.
+    /// </summary>
+    [Fact]
+    public void MapReader_ReadsEveryMap_WithItsInstanceTypeAndLinkedZone()
+    {
+        DbcFile file = DbcFile.Parse(MapImage(
+            MapRow(489, 3, 3277, "wrong"),
+            MapRow(36, 1, 0, "ignored"),
+            MapRow(0, 0, 77, "Eastern Kingdoms"),
+            MapRow(249, 2, 2159, "only"),
+            MapRow(1, 0, 88, "Kalimdor")));
+
+        IReadOnlyList<MapTemplateRow> rows = MapDbcReader.Read(file);
+
+        Assert.Equal([0u, 1u, 36u, 249u, 489u], rows.Select(r => r.Entry));
+        Assert.Equal([(byte)0, (byte)0, (byte)1, (byte)2, (byte)3], rows.Select(r => r.MapType));
+        Assert.Equal([77u, 88u, 0u, 2159u, 3277u], rows.Select(r => r.LinkedZone));
+        Assert.Equal("ignored", rows[2].MapName);
+        Assert.All(rows, r => Assert.Equal((0u, 0u, 0u, -1, ""), (r.Parent, r.PlayerLimit, r.ResetDelay, r.GhostEntranceMap, r.ScriptName)));
+    }
+
+    [Fact]
+    public void MapReader_RefusesAnUnknownInstanceType_AndADuplicateId()
+    {
+        Assert.Throws<InvalidDataException>(() => MapDbcReader.Read(DbcFile.Parse(MapImage(
+            MapRow(0, 0, 1, "ok"), MapRow(1, 0, 1, "ok"), MapRow(36, 4, 0, "wrong")))));
+        Assert.Throws<InvalidDataException>(() => MapDbcReader.Read(DbcFile.Parse(MapImage(
+            MapRow(0, 0, 1, "ok"), MapRow(1, 0, 1, "ok"), MapRow(36, 1, 0, "wrong"), MapRow(36, 1, 0, "only")))));
     }
 
     [Fact]

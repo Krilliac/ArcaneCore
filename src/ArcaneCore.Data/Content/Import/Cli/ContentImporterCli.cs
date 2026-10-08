@@ -56,7 +56,9 @@ public static partial class ContentImporterCli
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           import-map-dbc <Map.dbc> <AreaTable.dbc>
-                                import maps 0/1 and their areas using the build-5875 layouts
+                                import every map and area (map_template, area_template) using the build-5875
+                                layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
+                                entrance, script) from a classic-db instance_template or vmangos map_template
           verify                count the imported tables and check references
           class-masks <dump>... read spell_affect (the 64-bit class masks of the talent modifier auras)
                                 and write the overlay file Spells:Mods:ClassMaskFile reads
@@ -69,7 +71,9 @@ public static partial class ContentImporterCli
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
                                 dbscripts_on_relay and dbscript_relay_template, and (with --dbc-dir holding AreaTrigger.dbc)
-                                areatrigger_template; WorldSafeLocs.dbc in --dbc-dir adds the safe locations the dump lacks.
+                                areatrigger_template; WorldSafeLocs.dbc in --dbc-dir adds the safe locations the dump lacks;
+                                Map.dbc and AreaTable.dbc in --dbc-dir (both or neither) replace map_template (every map, the
+                                dungeon columns from the dump's instance_template) and area_template (every area).
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
@@ -733,11 +737,26 @@ public static partial class ContentImporterCli
         string? reportPath = a.Value("--report");
         GuardPath(target.FilePath);
         GuardPath(reportPath);
+        IReadOnlyDictionary<uint, MapInstanceData>? instances = null;
+        IReadOnlyList<string> corrections = [];
+        if (a.Value("--dump") is { } dumpPath)
+        {
+            (IReadOnlyList<DumpInput> inputs, _) = OpenInputs([dumpPath]);
+            var importer = new InstanceTemplateDumpImporter();
+            using (TextReader reader = ChainedTextReader.Create(inputs))
+            {
+                importer.Read(reader);
+            }
+
+            instances = importer.SawTable ? importer.Maps : null;
+            corrections = importer.Corrections;
+        }
+
         MapAreaDbcSnapshot snapshot;
         try
         {
             // Validate the complete admission before opening or bootstrapping a destination database.
-            snapshot = MapAreaDbcImporter.ReadSnapshot(a.Positional[0], a.Positional[1]);
+            snapshot = MapAreaDbcImporter.ReadSnapshot(a.Positional[0], a.Positional[1], instances);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
         {
@@ -766,7 +785,13 @@ public static partial class ContentImporterCli
             File.WriteAllText(reportPath, System.Text.Json.JsonSerializer.Serialize(report,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
         }
-        output.WriteLine($"Imported {report.MappedMaps} continent maps and {report.MappedAreas} areas; skipped {report.SkippedAreas} foreign-map areas.");
+        output.WriteLine($"Imported {report.MappedMaps} maps and {report.MappedAreas} areas; {report.InstanceRows} map(s) took instance data from the dump.");
+        foreach (string correction in corrections)
+        {
+            output.WriteLine($"  instance data: {correction}");
+        }
+
+        PrintWarnings(output, report.Warnings);
         return ExitCodes.Ok;
     }
 

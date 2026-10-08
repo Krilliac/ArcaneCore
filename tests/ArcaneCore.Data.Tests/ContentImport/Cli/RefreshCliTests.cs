@@ -39,6 +39,7 @@ public sealed class RefreshCliTests : IDisposable
         INSERT INTO `areatrigger_tavern` (`id`,`name`) VALUES (71,'Westfall - Sentinel Hill Inn'),(562,'Elwynn Forest - Goldshire');
         INSERT INTO `transports` (`entry`,`name`,`period`) VALUES (176231,'Menethil Harbor and Theramore Isle',329313);
         INSERT INTO `spell_proc_event` (`entry`,`SchoolMask`,`SpellFamilyName`,`SpellFamilyMask0`,`SpellFamilyMask1`,`SpellFamilyMask2`,`procFlags`,`procEx`,`ppmRate`,`CustomChance`,`Cooldown`) VALUES (324,0,0,0,0,0,0,65536,0,0,3);
+        INSERT INTO `instance_template` (`map`,`parent`,`levelMin`,`levelMax`,`maxPlayers`,`reset_delay`,`ghostEntranceMap`,`ghostEntranceX`,`ghostEntranceY`,`ScriptName`,`mountAllowed`) VALUES (36,0,17,26,10,0,0,-11207.8,1681.15,'instance_deadmines',1),(489,0,0,0,0,0,0,0,0,'',0);
         INSERT INTO `dbscripts_on_relay` (`id`,`delay`,`priority`,`command`,`datalong`,`datalong2`,`datalong3`,`buddy_entry`,`search_radius`,`data_flags`,`dataint`,`dataint2`,`dataint3`,`dataint4`,`datafloat`,`x`,`y`,`z`,`o`,`speed`,`condition_id`,`comments`) VALUES (19958,0,0,32,1,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,'pause'),(19958,4000,0,32,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,'unpause');
         """;
 
@@ -128,9 +129,71 @@ public sealed class RefreshCliTests : IDisposable
 
         // WorldSafeLocs.dbc (id, map, x, y, z, eight names, flags): 611 again (the dump's row with its facing must win) and 890, which the
         // dump lacks (name at string offset 1).
-        return Dbc("WorldSafeLocs.dbc", 14,
+        Dbc("WorldSafeLocs.dbc", 14,
             [611, 30, 1f, 2f, 3f, 1, 0, 0, 0, 0, 0, 0, 0, 0],
             [890, 529, 1313.9f, 1310.74f, -9.01043f, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        return MapDbcs();
+    }
+
+    /// <summary>
+    /// Map.dbc (42 fields: id, directory, instance type, pvp, names, ..., linked zone at 19) with the continents, Alterac Valley and Warsong
+    /// Gulch (battlegrounds) and The Deadmines (dungeon); AreaTable.dbc (25 fields: id, map, parent, explore flag, flags, ..., level at 10,
+    /// name at 11, team at 20, liquid at 24) with Elwynn Forest, Alterac Valley (2597, the dump's graveyard zone) and The Deadmines (1581).
+    /// </summary>
+    private string MapDbcs()
+    {
+        Dbc("Map.dbc", 42, MapRow(0, 0, 0), MapRow(1, 0, 0), MapRow(30, 3, 0), MapRow(36, 1, 1581), MapRow(489, 3, 3277));
+        return Dbc("AreaTable.dbc", 25, AreaRow(12, 0, 12), AreaRow(2597, 30, 2597), AreaRow(1581, 36, 0));
+
+        static object[] AreaRow(int id, int map, int flag)
+        {
+            object[] row = Enumerable.Repeat<object>(0, 25).ToArray();
+            row[0] = id;
+            row[1] = map;
+            row[3] = flag;
+            row[11] = 1;
+            return row;
+        }
+    }
+
+    /// <summary>A Map.dbc row (42 fields): id, instance type at 2, an enUS name at 4, the linked zone at 19.</summary>
+    private static object[] MapRow(int id, int type, int linkedZone)
+    {
+        object[] row = Enumerable.Repeat<object>(0, 42).ToArray();
+        row[0] = id;
+        row[2] = type;
+        row[4] = 1;
+        row[19] = linkedZone;
+        return row;
+    }
+
+    /// <summary>
+    /// Blackrock Spire (229) keeps no global reset: classic-db z2815 gives it <c>reset_delay</c> 3, but vmangos, the fidelity reference,
+    /// removed it ("Blackrock Spire no reset", sql/old_migrations/20170917193208_world.sql: <c>UPDATE map_template SET ResetDelay=0
+    /// WHERE Entry=229</c>; all its 229 rows in 20171129015531 have 0). With 3 the world would schedule a global reset of map 229 and send
+    /// everyone inside home every three days. Naxxramas' 7 is left alone.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_GivesBlackrockSpireNoResetDelay_AsVmangosDoes_AndKeepsTheRaidsOwn()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        // classic-db z2815 instance_template 229 and 533, verbatim.
+        File.WriteAllText(dump, Dump + "\n" +
+            "INSERT INTO `instance_template` (`map`,`parent`,`levelMin`,`levelMax`,`maxPlayers`,`reset_delay`,`ghostEntranceMap`,`ghostEntranceX`,`ghostEntranceY`,`ScriptName`,`mountAllowed`) " +
+            "VALUES (229,0,55,0,10,3,0,-7522.53,-1233.04,'instance_blackrock_spire',0),(533,0,60,60,40,7,0,0,0,'instance_naxxramas',0);\n");
+        string dbc = Dbcs();
+        Dbc("Map.dbc", 42, MapRow(0, 0, 0), MapRow(1, 0, 0), MapRow(30, 3, 0), MapRow(36, 1, 1581), MapRow(489, 3, 3277),
+            MapRow(229, 1, 0), MapRow(533, 2, 0));
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("map 229 reset_delay 3 -> 0 (vmangos: Blackrock Spire has no global reset)", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        MapTemplateRow spire = await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 229);
+        Assert.Equal(((byte)1, 10u, 0u, "instance_blackrock_spire"), (spire.MapType, spire.PlayerLimit, spire.ResetDelay, spire.ScriptName));
+        Assert.Equal(7u, (await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 533)).ResetDelay);
     }
 
     [Fact]
@@ -164,6 +227,16 @@ public sealed class RefreshCliTests : IDisposable
         AreaTriggerTemplateRow inn = await db.Set<AreaTriggerTemplateRow>().SingleAsync(r => r.Id == 562);
         Assert.Equal((20f, 15f, 10f, 0.5f), (inn.BoxX, inn.BoxY, inn.BoxZ, inn.BoxOrientation));
         Assert.Equal(3, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+
+        // Every map and area of the DBCs, the dungeon columns from the dump's instance_template.
+        Assert.Contains("  map_template  5", output, StringComparison.Ordinal);
+        Assert.Contains("  area_template  3", output, StringComparison.Ordinal);
+        Assert.Equal([0u, 1u, 30u, 36u, 489u], await db.Set<MapTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToListAsync());
+        MapTemplateRow deadmines = await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 36);
+        Assert.Equal(((byte)1, 1581u, 10u, 0, "instance_deadmines"),
+            (deadmines.MapType, deadmines.LinkedZone, deadmines.PlayerLimit, deadmines.GhostEntranceMap, deadmines.ScriptName));
+        Assert.Equal(-1, (await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 489)).GhostEntranceMap);
+        Assert.Equal([12u, 1581u, 2597u], await db.Set<AreaTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToListAsync());
 
         // The rest of the old world is as it was.
         Assert.Equal([1328u], await db.Set<CreatureTemplateRow>().Select(r => r.Entry).ToListAsync());
@@ -199,7 +272,17 @@ public sealed class RefreshCliTests : IDisposable
         text.Append($"masters {await db.Set<BattlemasterEntryRow>().CountAsync()} xp {await db.Set<ExplorationBaseXpRow>().CountAsync()} ");
         text.Append($"inns {await db.Set<AreaTriggerTavernRow>().CountAsync()} ships {await db.Set<TransportRow>().CountAsync()} ");
         text.Append($"procs {await db.Set<SpellProcEventRow>().CountAsync()} relay {await db.Set<RelayScriptRow>().CountAsync()} ");
-        text.Append($"triggers {await db.Set<AreaTriggerTemplateRow>().CountAsync()} creatures {await db.Set<CreatureTemplateRow>().CountAsync()}");
+        text.Append($"triggers {await db.Set<AreaTriggerTemplateRow>().CountAsync()} creatures {await db.Set<CreatureTemplateRow>().CountAsync()}\n");
+        foreach (MapTemplateRow r in await db.Set<MapTemplateRow>().OrderBy(r => r.Entry).ToListAsync())
+        {
+            text.Append($"map {r.Entry} {r.MapType} {r.LinkedZone} {r.PlayerLimit} {r.ResetDelay} {r.GhostEntranceMap} {r.GhostEntranceX} {r.GhostEntranceY} {r.MapName} {r.ScriptName}\n");
+        }
+
+        foreach (AreaTemplateRow r in await db.Set<AreaTemplateRow>().OrderBy(r => r.Entry).ToListAsync())
+        {
+            text.Append($"area {r.Entry} {r.MapId} {r.ZoneId} {r.ExploreFlag} {r.Name}\n");
+        }
+
         return text.ToString();
     }
 
@@ -216,6 +299,82 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Contains("check: 1 areatrigger_teleport row(s) have no areatrigger_template row: 78", output, StringComparison.Ordinal);
         Assert.Contains("check: 2 areatrigger_tavern row(s) have no areatrigger_template row: 71, 562", output, StringComparison.Ordinal);
         Assert.Contains("check: 1 transports row(s) name no gameobject_template of type 15: 176231", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A world whose map_template and area_template hold only the continents (what import-map-dbc left before) and a DBC directory without
+    /// Map.dbc and AreaTable.dbc: the refresh leaves both tables alone and names what the world will skip at start (the portal to map 36,
+    /// the graveyard link to zone 2597), the world's own "unknown target map" and "not existing zone id" warnings.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_WithoutTheMapDbcs_NamesThePortalsToUnknownMaps_AndTheGraveyardZonesWithoutAnArea()
+    {
+        string world = await OldWorldAsync();
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<MapTemplateRow>().AddRange(new MapTemplateRow { Entry = 0, MapName = "Eastern Kingdoms" }, new MapTemplateRow { Entry = 1, MapName = "Kalimdor" });
+            db.Set<AreaTemplateRow>().Add(new AreaTemplateRow { Entry = 12, MapId = 0, Name = "Elwynn Forest" });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+        string dbc = Dbcs();
+        File.Delete(Path.Combine(dbc, "Map.dbc"));
+        File.Delete(Path.Combine(dbc, "AreaTable.dbc"));
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("map_template and area_template are left as they are", output, StringComparison.Ordinal);
+        Assert.Contains("check: 1 areatrigger_teleport row(s) lead to a map with no map_template row: 78 (map 36)", output, StringComparison.Ordinal);
+        Assert.Contains("check: 1 game_graveyard_zone row(s) name a zone with no area_template row: 2597", output, StringComparison.Ordinal);
+        await using WorldDbContext after = Open(world);
+        Assert.Equal(2, await after.Set<MapTemplateRow>().CountAsync());
+        Assert.Equal(1, await after.Set<AreaTemplateRow>().CountAsync());
+    }
+
+    /// <summary>The same world refreshed with Map.dbc and AreaTable.dbc: both tables are replaced and both checks pass.</summary>
+    [Fact]
+    public async Task Refresh_WithTheMapDbcs_ReplacesTheContinentOnlyTables_AndEveryPortalAndGraveyardZoneResolves()
+    {
+        string world = await OldWorldAsync();
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<MapTemplateRow>().AddRange(new MapTemplateRow { Entry = 0, MapName = "Eastern Kingdoms" }, new MapTemplateRow { Entry = 1, MapName = "Kalimdor" });
+            db.Set<AreaTemplateRow>().Add(new AreaTemplateRow { Entry = 12, MapId = 0, Name = "Elwynn Forest" });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.DoesNotContain("check:", output, StringComparison.Ordinal);
+        Assert.True(output.Contains("refresh: every checked reference resolves", StringComparison.Ordinal), output);
+        await using WorldDbContext after = Open(world);
+        Assert.Equal(5, await after.Set<MapTemplateRow>().CountAsync());
+        Assert.Equal(3, await after.Set<AreaTemplateRow>().CountAsync());
+    }
+
+    /// <summary>Map.dbc without AreaTable.dbc (or the other way round) is refused before anything is written: half a map table set is worse.</summary>
+    [Fact]
+    public async Task Refresh_WithOnlyOneOfTheMapDbcs_IsRefused_AndWritesNothing()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+        string dbc = Dbcs();
+        File.Delete(Path.Combine(dbc, "AreaTable.dbc"));
+        byte[] before = await File.ReadAllBytesAsync(world);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Io, $"{code}\n{error}{output}");
+        Assert.Contains("AreaTable.dbc", error, StringComparison.Ordinal);
+        Assert.Equal(before, await File.ReadAllBytesAsync(world));
     }
 
     [Fact]

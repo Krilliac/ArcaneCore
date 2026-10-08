@@ -186,11 +186,15 @@ feature reads:
   scripts, and `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
   holds 432 triggers, every `areatrigger_teleport` id of classic-db among them). A second run with the same inputs leaves the same rows. It
   then checks what the world logs at start: teleports and taverns without a trigger, battleground start locations that are not safe
-  locations, transports without a type-15 object. It refuses a database file that does not exist, and a world whose schema is behind the
+  locations, transports without a type-15 object, portals to a map with no `map_template` row (vmangos "unknown target map") and
+  graveyard links to a zone with no `area_template` row (vmangos "not existing zone id"; checked only when the table has rows, as the
+  world does). With `Map.dbc` and `AreaTable.dbc` in `--dbc-dir` (both or neither: one alone is refused before the database is
+  opened) it also replaces `map_template` and `area_template` (`MapAreaDbcImporter`, below). It refuses a database file that does not exist, and a world whose schema is behind the
   importer's unless `--migrate` is given (it never migrates on its own: an importer built with another lane's world step would otherwise
   upgrade the live world before the server that needs it is deployed). `tools/content/refresh-world-content.ps1` wraps it for an
   operator: it refuses a database another process holds open, writes a SHA-256-checked backup (the database and any leftover `-wal`),
-  checks the two DBCs against a `SHA256SUMS` file in `-DbcDirectory` when there is one or extracts them from the client's MPQs with
+  checks the four DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`; all four are required) against a `SHA256SUMS` file in
+  `-DbcDirectory` when there is one or extracts them from the client's MPQs with
   `mpqcli` (patch-2 over patch over dbc), and passes `-Migrate` on as `--migrate`. Run on a copy of the live world
   (2026-10-07): 122 safe locations, 191 graveyard links, 3 battleground templates, 969 + 421 battleground spawn events, 24
   battlemasters, 61 exploration levels, 33 weather zones, 42 taverns, 9 transports, 164 proc rows, 828 relay steps, 14 relay templates and
@@ -207,8 +211,33 @@ feature reads:
 `message`); vmangos rows take the highest `patch` not above 10 (`ObjectMgr.cpp:7712-7717`). The row carries no item, quest or
 heroic-key requirement, so cmangos' `required_item`, `required_item2`, `required_quest_done` and `condition_id` are not
 enforced (`plan` lists them as not imported). The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
-`refresh --dbc-dir` (above) and `map_template`/`area_template` through `import-map-dbc`; a portal row cannot fire until its trigger exists. Verified: 103 portals and 269 GM
-teleports imported; the daemon logged "103 area trigger teleports, 269 teleport locations".
+`refresh --dbc-dir` (above) and `map_template`/`area_template` through `refresh --dbc-dir` or `import-map-dbc` (below); a portal row
+cannot fire until its trigger exists and its target map is in `map_template`. Verified: 103 portals and 269 GM teleports imported; the
+daemon logged "103 area trigger teleports, 269 teleport locations".
+
+### `map_template` and `area_template` (`Content/Maps/MapDbcReader.cs`, `MapAreaDbcImporter.cs`, `Import/Mappers/InstanceTemplateDumpImporter.cs`; no schema change)
+
+Every `Map.dbc` row becomes a `map_template` row and every `AreaTable.dbc` row an `area_template` row, as vmangos ships them (its
+`map_template` lists the 44 maps of 1.12, its `area_template` the whole AreaTable, instance areas and the two areas of maps 17 and 150
+that Map.dbc does not list included). Map.dbc gives the id, the instance type (field 2: 0 common, 1 dungeon, 2 raid, 3 battleground, the
+values of vmangos `map_type`), the enUS name (field 4) and the linked zone (field 19, `m_areaTableID`); cmangos `MapEntryfmt` and
+`DBCStructure.h:572-603`. The columns Map.dbc does not carry come from the dump: classic-db `instance_template` (`parent`, `maxPlayers`,
+`reset_delay`, `ghostEntranceMap/X/Y`, `ScriptName`; cmangos stores the ghost map unsigned, so its (0, 0, 0) is read as vmangos' -1, no
+entrance) or vmangos `map_template` (the newest `patch` up to 10). Where vmangos deliberately differs from classic-db its value is taken
+and printed (`instance data: map 229 reset_delay 3 -> 0 (...)`): Blackrock Spire has no global reset (vmangos
+`old_migrations/20170917193208_world.sql`, "Blackrock Spire no reset"; with classic-db's 3 the world would reset map 229 and send everyone
+inside home every three days). Both tables are replaced as a whole; every parent area must exist and
+none may cycle. A dungeon or raid without an instance row keeps player limit 0 (no cap), no reset and no ghost entrance, with a warning
+(classic-db z2815: 29 CashTest, 44 the unused Monastery, 269 Caverns of Time). `refresh --dbc-dir` writes them (the live path);
+`import-map-dbc <Map.dbc> <AreaTable.dbc> [--dump <file>] [--replace]` writes only these two tables (refused over existing rows without
+`--replace`).
+
+On the live world copy (2026-10-08, `docs/integration/instance-maps-20261008.md`): 44 maps (33 with classic-db instance rows) and 1081
+areas instead of 2 and 970; the world's 47 "unknown target map" and 56 "not existing zone id" warnings are gone, and the `dungeon`
+scenario enters a Deadmines instance through trigger 78. Against vmangos' own `map_template` (the 1.12 rows) the imported rows differ
+only in: the battleground player limits (cmangos 0, vmangos 40/10/15; neither core caps a battleground map by them), map 37 (unused),
+Onyxia's script name and one name's spacing (`<unused>StormwindPrison`, the DBC's). Blackrock Spire's `reset_delay` matches vmangos (0)
+through the correction above; the maps with a reset delay are the seven raids.
 
 ## Verified against the real classic-db dump
 

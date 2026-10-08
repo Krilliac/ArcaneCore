@@ -3,11 +3,17 @@ using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Data.Content.Maps;
 
-/// <summary>Reads the build-5875 Map.dbc rows needed to seed the two continent maps.</summary>
+/// <summary>
+/// Reads every build-5875 Map.dbc row as a <c>map_template</c> row (cmangos <c>MapEntryfmt</c>
+/// "nxixssssssssxxxxxxxixxxxxxxxxxxxxxxxxxixxx", DBCStructure.h:572-603): field 0 the id, field 2 the instance type (0 common, 1 dungeon,
+/// 2 raid, 3 battleground, the values of vmangos <c>map_template.map_type</c>), field 4 the enUS name, field 19 the linked zone
+/// (<c>m_areaTableID</c>). The columns the DBC does not carry (parent, player limit, reset delay, ghost entrance, script) get the SQL
+/// defaults; the content importer fills them from the dump (<see cref="MapAreaDbcImporter"/>). Both continents must be there and be common
+/// maps; an unknown instance type or a repeated id is refused.
+/// </summary>
 public static class MapDbcReader
 {
     public const int FieldCount = 42;
-    private const uint CommonMapType = 0;
 
     public static IReadOnlyList<MapTemplateRow> Read(string path) => Read(DbcFile.Load(path));
 
@@ -18,18 +24,19 @@ public static class MapDbcReader
         ArgumentNullException.ThrowIfNull(file);
         RequireLayout(file);
 
-        var rows = new List<MapTemplateRow>(2);
+        var rows = new List<MapTemplateRow>(file.RecordCount);
         var seen = new HashSet<uint>();
         for (int row = 0; row < file.RecordCount; row++)
         {
             uint entry = file.GetUInt32(row, 0);
-            if (entry is not (0 or 1))
-                continue;
-
             if (!seen.Add(entry))
-                throw new InvalidDataException("Map.dbc contains a duplicate continent id");
-            if (file.GetUInt32(row, 2) != CommonMapType)
-                throw new InvalidDataException("Map.dbc continent is not a common map");
+                throw new InvalidDataException($"Map.dbc contains the map id {entry} twice");
+
+            uint type = file.GetUInt32(row, 2);
+            if (type > (uint)MapType.Battleground)
+                throw new InvalidDataException($"Map.dbc map {entry} has the unknown instance type {type}");
+            if (entry is 0 or 1 && type != (uint)MapType.Common)
+                throw new InvalidDataException($"Map.dbc continent {entry} is not a common map");
 
             string name = file.GetStringStrict(row, 4);
             if (name.Length > 128) throw new InvalidDataException($"Map {entry} name exceeds the mapped 128-character limit");
@@ -37,7 +44,7 @@ public static class MapDbcReader
             {
                 Entry = entry,
                 Parent = 0,
-                MapType = (byte)MapType.Common,
+                MapType = (byte)type,
                 LinkedZone = file.GetUInt32(row, 19),
                 PlayerLimit = 0,
                 ResetDelay = 0,
@@ -49,7 +56,7 @@ public static class MapDbcReader
             });
         }
 
-        if (seen.Count != 2)
+        if (!seen.Contains(0) || !seen.Contains(1))
             throw new InvalidDataException("Map.dbc must contain both continent ids 0 and 1");
 
         return rows.OrderBy(row => row.Entry).ToArray();

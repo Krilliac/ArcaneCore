@@ -11,7 +11,7 @@ internal sealed class CliArguments
 {
     private static readonly string[] s_valueOptions =
         ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--class-mask-file",
-            "--player-stats-migrations-dir", "--cooldown-unit"];
+            "--player-stats-migrations-dir", "--cooldown-unit", "--dump"];
 
     private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose", "--migrate"];
 
@@ -20,7 +20,7 @@ internal sealed class CliArguments
         ["plan"] = ["--dialect", "--report", "--verbose"],
         ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--player-stats-migrations-dir", "--replace", "--dry-run", "--verbose"],
         ["import-dbc"] = ["--database", "--provider", "--connection-string"],
-        ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report"],
+        ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report", "--dump"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
         ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run"],

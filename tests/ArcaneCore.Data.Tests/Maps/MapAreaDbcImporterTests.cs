@@ -7,10 +7,20 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests.Maps;
 
+/// <summary>
+/// map_template and area_template from Map.dbc and AreaTable.dbc: every map and every area (vmangos keeps the whole AreaTable in
+/// area_template, instance areas included), the dungeon columns from the dump's instance rows, and the tables replaced as a whole.
+/// </summary>
 public sealed class MapAreaDbcImporterTests
 {
+    private static readonly IReadOnlyDictionary<uint, MapInstanceData> Deadmines = new Dictionary<uint, MapInstanceData>
+    {
+        [36] = new(0, 10, 0, 0, -11207.8f, 1681.15f, "instance_deadmines"),
+        [999] = new(0, 5, 0, -1, 0, 0, "instance_nowhere"),
+    };
+
     [Fact]
-    public async Task Replace_ImportsBothContinentsAndPreservesCustomOtherMapRows()
+    public async Task Replace_ImportsEveryMapAndArea_WithTheDumpsDungeonColumns_AndReplacesWhatWasThere()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");
         await connection.OpenAsync();
@@ -22,15 +32,55 @@ public sealed class MapAreaDbcImporterTests
         db.ChangeTracker.Clear(); // ImportTransaction intentionally refuses caller-owned tracked entities.
 
         using TempDbc files = CreateFiles(badParent: false);
-        MapAreaDbcImportReport report = await MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: true);
+        MapAreaDbcImportReport report = await MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, Deadmines, replace: true);
 
-        Assert.Equal(2, report.MappedMaps);
-        Assert.Equal(3, report.MappedAreas);
-        Assert.Equal(1, report.SkippedAreas);
+        Assert.Equal((3, 5, 1), (report.MappedMaps, report.MappedAreas, report.InstanceRows));
+        Assert.Contains(report.Warnings, w => w.Contains("map 999", StringComparison.Ordinal));
         uint[] mapIds = await db.Set<MapTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToArrayAsync();
         uint[] areaIds = await db.Set<AreaTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToArrayAsync();
         Assert.Equal([0u, 1u, 36u], mapIds);
-        Assert.Equal([1u, 2u, 3u, 3600u], areaIds);
+        Assert.Equal([1u, 2u, 3u, 4u, 5u], areaIds);
+        MapTemplateRow dungeon = await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 36);
+        Assert.Equal(((byte)1, 1581u, "Deadmines"), (dungeon.MapType, dungeon.LinkedZone, dungeon.MapName));
+        Assert.Equal((10u, 0, -11207.8f, 1681.15f, "instance_deadmines"),
+            (dungeon.PlayerLimit, dungeon.GhostEntranceMap, dungeon.GhostEntranceX, dungeon.GhostEntranceY, dungeon.ScriptName));
+        Assert.Equal(36u, await db.Set<AreaTemplateRow>().Where(r => r.Entry == 4).Select(r => r.MapId).SingleAsync());
+        Assert.Equal(17u, await db.Set<AreaTemplateRow>().Where(r => r.Entry == 5).Select(r => r.MapId).SingleAsync());
+    }
+
+    [Fact]
+    public async Task WithoutInstanceRows_TheDungeonsKeepTheSqlDefaults_AndAWarningSaysSo()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using WorldDbContext db = Context(connection);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+
+        using TempDbc files = CreateFiles(badParent: false);
+        MapAreaDbcImportReport report = await MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: false);
+
+        Assert.Equal((3, 5, 0), (report.MappedMaps, report.MappedAreas, report.InstanceRows));
+        Assert.Contains(report.Warnings, w => w.Contains("36", StringComparison.Ordinal));
+        MapTemplateRow dungeon = await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 36);
+        Assert.Equal((0u, -1, ""), (dungeon.PlayerLimit, dungeon.GhostEntranceMap, dungeon.ScriptName));
+    }
+
+    [Fact]
+    public async Task WithoutReplace_ExistingRowsAreRefused_AndNothingChanges()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using WorldDbContext db = Context(connection);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        db.Set<AreaTemplateRow>().Add(new AreaTemplateRow { Entry = 3600, MapId = 36, Name = "custom" });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        using TempDbc files = CreateFiles(badParent: false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: false));
+        Assert.Empty(await db.Set<MapTemplateRow>().ToArrayAsync());
+        uint[] areaIds = await db.Set<AreaTemplateRow>().Select(r => r.Entry).ToArrayAsync();
+        Assert.Equal([3600u], areaIds);
     }
 
     [Fact]
@@ -52,58 +102,6 @@ public sealed class MapAreaDbcImporterTests
     }
 
     [Fact]
-    public async Task Replace_AdmitsCrossMapAncestorWithoutAdmittingItsMap_AndReusesIt()
-    {
-        await using SqliteConnection connection = new("Data Source=:memory:");
-        await connection.OpenAsync();
-        await using WorldDbContext db = Context(connection);
-        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
-        db.Set<AreaTemplateRow>().Add(new AreaTemplateRow { Entry = 9000, MapId = 451, Name = "unrelated" });
-        await db.SaveChangesAsync();
-        db.ChangeTracker.Clear();
-
-        using TempDbc files = CreateCrossMapFiles();
-        MapAreaDbcImportReport first = await MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: true);
-        Assert.Equal((2, 4, 1), (first.MappedMaps, first.MappedAreas, first.SkippedAreas));
-        uint[] mapIds = await db.Set<MapTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToArrayAsync();
-        Assert.Equal([0u, 1u], mapIds);
-        Assert.Equal(1, await db.Set<AreaTemplateRow>().CountAsync(r => r.Entry == 22));
-        Assert.Equal(451u, await db.Set<AreaTemplateRow>().Where(r => r.Entry == 22).Select(r => r.MapId).SingleAsync());
-        Assert.Equal(1, await db.Set<AreaTemplateRow>().CountAsync(r => r.Entry == 9000));
-
-        db.ChangeTracker.Clear();
-        MapAreaDbcImportReport second = await MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: true);
-        Assert.Equal((2, 4, 1), (second.MappedMaps, second.MappedAreas, second.SkippedAreas));
-        Assert.Equal(1, await db.Set<AreaTemplateRow>().CountAsync(r => r.Entry == 22));
-        Assert.Equal(1, await db.Set<AreaTemplateRow>().CountAsync(r => r.Entry == 9000));
-        Assert.Equal(22u, await db.Set<AreaTemplateRow>().Where(r => r.Entry == 49).Select(r => r.ZoneId).SingleAsync());
-    }
-
-    [Fact]
-    public async Task IncompatibleExistingForeignAncestor_RollsBackWithoutSelectedWrites()
-    {
-        await using SqliteConnection connection = new("Data Source=:memory:");
-        await connection.OpenAsync();
-        await using WorldDbContext db = Context(connection);
-        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
-        db.Set<MapTemplateRow>().Add(new MapTemplateRow { Entry = 36, MapName = "custom" });
-        db.Set<AreaTemplateRow>().AddRange(
-            new AreaTemplateRow { Entry = 22, MapId = 451, ZoneId = 99, Name = "incompatible" },
-            new AreaTemplateRow { Entry = 9000, MapId = 451, Name = "unrelated" });
-        await db.SaveChangesAsync();
-        db.ChangeTracker.Clear();
-
-        using TempDbc files = CreateCrossMapFiles();
-        await Assert.ThrowsAsync<InvalidDataException>(() => MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: true));
-        uint[] mapIds = await db.Set<MapTemplateRow>().Select(r => r.Entry).ToArrayAsync();
-        uint[] areaIds = await db.Set<AreaTemplateRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToArrayAsync();
-        Assert.Equal([36u], mapIds);
-        Assert.Equal([22u, 9000u], areaIds);
-        Assert.Equal(99u, await db.Set<AreaTemplateRow>().Where(r => r.Entry == 22).Select(r => r.ZoneId).SingleAsync());
-        Assert.Empty(await db.Set<AreaTemplateRow>().Where(r => r.MapId == 0 || r.MapId == 1).ToArrayAsync());
-    }
-
-    [Fact]
     public async Task ParentCycles_AreRejectedBeforeDestinationWrites()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");
@@ -114,7 +112,7 @@ public sealed class MapAreaDbcImporterTests
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        using TempDbc files = CreateCrossMapFiles(cycle: true);
+        using TempDbc files = CreateCycleFiles();
         await Assert.ThrowsAsync<InvalidDataException>(() => MapAreaDbcImporter.ImportAsync(db, files.Map, files.Area, replace: true));
         uint[] mapIds = await db.Set<MapTemplateRow>().Select(r => r.Entry).ToArrayAsync();
         Assert.Equal([36u], mapIds);
@@ -124,38 +122,41 @@ public sealed class MapAreaDbcImporterTests
     private static WorldDbContext Context(SqliteConnection connection)
         => new(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite(connection).Options);
 
+    // Map.dbc: the continents and The Deadmines (dungeon, linked zone 1581); AreaTable.dbc: Elwynn and a child, a Kalimdor zone, an area
+    // inside the Deadmines and one on map 17, which Map.dbc does not list (the real AreaTable has two such areas; vmangos keeps them).
     private static TempDbc CreateFiles(bool badParent)
     {
         string dir = Path.Combine(Path.GetTempPath(), "arcane-map-area-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         string map = Path.Combine(dir, "Map.dbc");
         string area = Path.Combine(dir, "AreaTable.dbc");
-        WriteDbc(map, 42, [[0, 1, 0, 0, 0], [1, 2, 0, 0, 0]], ["", "Azeroth", "Kalimdor"]);
+        int[] dungeon = new int[20];
+        dungeon[0] = 36; dungeon[2] = 1; dungeon[4] = 35; dungeon[19] = 1581;
+        // String block offsets: 1 "Azeroth", 9 "Kalimdor", 18 "Eastern Kingdoms", 35 "Deadmines".
+        WriteDbc(map, 42, [[0, 1, 0, 0, 18], [1, 9, 0, 0, 9], dungeon], ["", "Azeroth", "Kalimdor", "Eastern Kingdoms", "Deadmines"]);
         WriteDbc(area, 25,
             [
                 [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
                 [2, 0, badParent ? 99 : 1, 2, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
                 [3, 1, 0, 3, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
-                [4, 2, 0, 4, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [4, 36, 0, 4, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [5, 17, 0, 5, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             ], ["", "Zone", "Child", "Kalimdor", "Foreign"]);
         return new TempDbc(map, area, dir);
     }
 
-    private static TempDbc CreateCrossMapFiles(bool cycle = false)
+    private static TempDbc CreateCycleFiles()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "arcane-map-area-cross-" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "arcane-map-area-cycle-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         string map = Path.Combine(dir, "Map.dbc");
         string area = Path.Combine(dir, "AreaTable.dbc");
-        WriteDbc(map, 42, [[0, 1, 0, 0, 0], [1, 2, 0, 0, 0]], ["", "Azeroth", "Kalimdor"]);
-        int parent = cycle ? 49 : 0;
+        WriteDbc(map, 42, [[0, 1, 0, 0, 1], [1, 2, 0, 0, 1]], ["", "Azeroth", "Kalimdor"]);
         WriteDbc(area, 25,
             [
                 [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
-                [2, 1, 0, 2, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
-                [22, 451, cycle ? 49 : 0, 22, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                [49, 0, parent == 0 ? 22 : parent, 49, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                [9000, 451, 0, 9000, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [22, 451, 49, 22, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [49, 0, 22, 49, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             ], ["", "Zone", "Child", "Foreign"]);
         return new TempDbc(map, area, dir);
     }

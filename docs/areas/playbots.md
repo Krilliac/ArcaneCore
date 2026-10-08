@@ -165,7 +165,8 @@ that the group is bound to (non-permanent), sends the member through the same tr
 inside, and, when `AllowedMaps` lists map 36, logs the member out inside and back in into the same instance (a managed bot may
 only log in on an allowed map). Both leave through the exit trigger 119 and the group is disbanded. It needs map 36 and triggers
 78 and 119 with their teleports (`map_template`, `areatrigger_template`, `areatrigger_teleport`) and fails at its first step
-naming what is missing. If a step fails after the entrance (the member refused, party chat, the exit), the scenario still
+naming what is missing. On the live content it passes once the world database has been refreshed with Map.dbc and AreaTable.dbc
+(`DungeonImportedMapsTests` runs it on the importer's own output; docs/integration/instance-maps-20261008.md). If a step fails after the entrance (the member refused, party chat, the exit), the scenario still
 brings every bot that is inside back to where it stood before the entrance and disbands the group (`cleanup: ...` steps, run
 under their own bound even after the run's deadline): otherwise the shared bots would stay saved on map 36, the default
 `AllowedMaps` [0, 1] would refuse their next login (`login-refused`), and every pair scenario would stop working. A bot that is

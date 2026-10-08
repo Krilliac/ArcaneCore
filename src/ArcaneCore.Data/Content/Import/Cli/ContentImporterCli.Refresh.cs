@@ -33,7 +33,10 @@ public static partial class ContentImporterCli
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
     /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, and <c>areatrigger_template</c> from
     /// <c>AreaTrigger.dbc</c>. Afterwards it checks the references the world logs at start (teleports and taverns without a trigger,
-    /// battleground start locations without a safe location, transports without a type-15 object). The world's schema must already be this
+    /// battleground start locations without a safe location, transports without a type-15 object, portals to a map with no map_template row,
+    /// graveyard links to a zone with no area_template row). With <c>Map.dbc</c> and <c>AreaTable.dbc</c> in <c>--dbc-dir</c> it also
+    /// replaces <c>map_template</c> (every map, the dungeon columns from the dump's <c>instance_template</c> or <c>map_template</c>) and
+    /// <c>area_template</c> (every area); one without the other is refused. The world's schema must already be this
     /// importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live world as a side effect.
     /// </summary>
     private static async Task<int> RefreshAsync(CliArguments a, TextWriter o, CancellationToken ct)
@@ -86,6 +89,7 @@ public static partial class ContentImporterCli
         var taverns = new AreaTriggerTavernDumpImporter();
         var transports = new TransportDumpImporter();
         var relays = new CreatureDumpImporter();
+        var instances = new InstanceTemplateDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -117,6 +121,11 @@ public static partial class ContentImporterCli
             worldState = WorldStateDumpImporter.Parse(reader);
         }
 
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            instances.Read(reader);
+        }
+
         SpellProcEventParseResult? procs = null;
         if (scan.Tables.TryGetValue(SpellProcEventDataModule.Table, out TableScan? procTable) && procTable.Rows > 0)
         {
@@ -127,8 +136,38 @@ public static partial class ContentImporterCli
         }
 
         IReadOnlyList<AreaTriggerTemplateRow>? triggers = null;
+        MapAreaDbcSnapshot? mapTables = null;
         if (dbcDirectory is not null)
         {
+            string mapPath = Path.Combine(dbcDirectory, "Map.dbc");
+            string areaPath = Path.Combine(dbcDirectory, "AreaTable.dbc");
+            bool haveMaps = File.Exists(mapPath);
+            bool haveAreas = File.Exists(areaPath);
+            if (haveMaps != haveAreas)
+            {
+                // Half a map table set is worse than none: area lookups resolve maps through map_template, and the reverse.
+                throw new CliException(ExitCodes.Io,
+                    $"'{dbcDirectory}' has {(haveMaps ? "Map.dbc but no AreaTable.dbc" : "AreaTable.dbc but no Map.dbc")}; give both or neither. Nothing was changed.");
+            }
+
+            if (haveMaps)
+            {
+                mapTables = ReadDbc("Map.dbc and AreaTable.dbc",
+                    () => MapAreaDbcImporter.ReadSnapshot(mapPath, areaPath, instances.SawTable ? instances.Maps : null));
+                o.WriteLine($"  Map.dbc: {mapTables.Maps.Count} map(s), AreaTable.dbc: {mapTables.Areas.Count} area(s); " +
+                    $"{mapTables.InstanceRows} map(s) with instance data from the dump");
+                foreach (string correction in instances.Corrections)
+                {
+                    o.WriteLine($"  instance data: {correction}");
+                }
+
+                warnings.AddRange(mapTables.Warnings);
+            }
+            else
+            {
+                warnings.Add($"no Map.dbc and AreaTable.dbc in '{dbcDirectory}': map_template and area_template are left as they are");
+            }
+
             string triggerPath = Path.Combine(dbcDirectory, "AreaTrigger.dbc");
             if (File.Exists(triggerPath))
             {
@@ -150,6 +189,7 @@ public static partial class ContentImporterCli
         else
         {
             warnings.Add("no --dbc-dir: areatrigger_template is left as it is (it comes from AreaTrigger.dbc)");
+            warnings.Add("no --dbc-dir: map_template and area_template are left as they are (they come from Map.dbc and AreaTable.dbc)");
         }
 
         GraveyardImportReport graveyardReport = graveyards.BuildReport();
@@ -182,6 +222,8 @@ public static partial class ContentImporterCli
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
+        Count(MapDataModule.MapTemplateTable, mapTables?.Maps.Count ?? 0, mapTables is not null);
+        Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -225,6 +267,11 @@ public static partial class ContentImporterCli
                     {
                         await db.Set<AreaTriggerTemplateRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                         await ImportBatch.InsertAsync(db, triggers, token).ConfigureAwait(false);
+                    }
+
+                    if (mapTables is not null)
+                    {
+                        await MapAreaDbcImporter.ReplaceAsync(db, mapTables, token).ConfigureAwait(false);
                     }
                 }, ct).ConfigureAwait(false);
 
@@ -345,6 +392,35 @@ public static partial class ContentImporterCli
         if (inns.Count > 0)
         {
             checks.Add($"{inns.Count} areatrigger_tavern row(s) have no areatrigger_template row: {Ids(inns)}");
+        }
+
+        // vmangos ObjectMgr::LoadAreaTriggerTeleports skips a portal whose target map is not in sMapStorage ("unknown target map"); with
+        // an empty map_template the world knows only the two continents (MapRegistry).
+        IQueryable<MapTemplateRow> maps = db.Set<MapTemplateRow>();
+        bool anyMap = await maps.AnyAsync(ct).ConfigureAwait(false);
+        IQueryable<AreaTriggerTeleportRow> unknownTargets = anyMap
+            ? db.Set<AreaTriggerTeleportRow>().Where(t => !maps.Any(m => m.Entry == t.TargetMap))
+            : db.Set<AreaTriggerTeleportRow>().Where(t => t.TargetMap > 1);
+        List<(uint Id, uint Map)> portals = (await unknownTargets
+                .OrderBy(t => t.Id).Select(t => new { t.Id, t.TargetMap }).ToListAsync(ct).ConfigureAwait(false))
+            .Select(t => (t.Id, t.TargetMap)).ToList();
+        if (portals.Count > 0)
+        {
+            checks.Add($"{portals.Count} areatrigger_teleport row(s) lead to a map with no map_template row: " +
+                string.Join(", ", portals.Take(20).Select(p => $"{p.Id} (map {p.Map})")) + (portals.Count > 20 ? $" ... ({portals.Count - 20} more)" : string.Empty));
+        }
+
+        // vmangos ObjectMgr::LoadGraveyardZones skips a link whose zone is not in the area table ("not existing zone id"); the world checks
+        // it only when it has area data (GraveyardCatalog.Build).
+        IQueryable<AreaTemplateRow> areas = db.Set<AreaTemplateRow>();
+        if (await areas.AnyAsync(ct).ConfigureAwait(false))
+        {
+            List<uint> zones = await db.Set<GraveyardZoneRow>().Where(g => !areas.Any(a => a.Entry == g.GhostZone)).Select(g => g.GhostZone)
+                .Distinct().OrderBy(id => id).ToListAsync(ct).ConfigureAwait(false);
+            if (zones.Count > 0)
+            {
+                checks.Add($"{zones.Count} game_graveyard_zone row(s) name a zone with no area_template row: {Ids(zones)}");
+            }
         }
 
         IQueryable<WorldSafeLocRow> locs = db.Set<WorldSafeLocRow>();

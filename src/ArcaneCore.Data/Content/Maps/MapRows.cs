@@ -86,3 +86,16 @@ public sealed class GameTeleRow
     public uint Map { get; set; }
     public string Name { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// The <c>map_template</c> columns a dump carries and Map.dbc does not (cmangos <c>instance_template</c>, vmangos <c>map_template</c>):
+/// the parent map, the player limit, the reset delay in days, the ghost entrance (map -1: none) and the instance script name.
+/// </summary>
+public sealed record MapInstanceData(
+    uint Parent,
+    uint PlayerLimit,
+    uint ResetDelay,
+    int GhostEntranceMap,
+    float GhostEntranceX,
+    float GhostEntranceY,
+    string ScriptName);
