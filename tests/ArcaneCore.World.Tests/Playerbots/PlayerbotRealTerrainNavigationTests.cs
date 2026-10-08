@@ -137,7 +137,7 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
     }
 
     /// <summary>
-    /// A ghost at its body with two hostile creatures camping within 25 yards of it (the camped-body rule) does not wait for them
+    /// A ghost at its body with two hostile creatures camping it (inside their aggro radius) does not wait for them
     /// or take the spirit healer: the reclaim radius is 39 yards, so it walks to a spot inside it that is clear of both and that the
     /// navigation mesh reaches, and revives there. Before, it stood at the body for a minute and took the spirit healer
     /// (Mirthblade, two Frostmane Troll Whelps).
@@ -187,9 +187,10 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
         {
             var at = new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
             Assert.True(Vector3.Distance(at, body) < ArcaneCore.Game.Combat.CombatConstants.CorpseReclaimRadius, $"revived {Vector3.Distance(at, body):F1} yards from the body");
-            foreach (Creature hostile in hostiles)
-                Assert.True(Vector3.Distance(at, new Vector3(hostile.X, hostile.Y, hostile.Z)) > PlayerbotRecovery.HostileClearYards,
-                    $"revived {Vector3.Distance(at, new Vector3(hostile.X, hostile.Y, hostile.Z)):F1} yards from a hostile");
+            Assert.Equal(2, PlayerbotRecovery.Threats(terrain.Player).Count);
+            foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(terrain.Player))
+                Assert.False(threat.Reaches(at, PlayerbotRecovery.CampMarginYards),
+                    $"revived {Vector3.Distance(at, threat.Position):F1} yards from a hostile with a {threat.Radius:F1} yard aggro radius");
         });
     }
 

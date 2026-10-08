@@ -157,6 +157,22 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         watch.Observe(new Vector3(player.X, player.Y, player.Z), player.IsAlive, host.World.NowMs);
                         if (!player.IsAlive && elapsed % 5_000 == 0 && bots.FindBrain(watch.BotId) is { } dead)
                             output.WriteLine($"{elapsed / 1000,4}s {name} recovery: {dead.Recovery.LastStep}/{dead.Recovery.LastSpiritHealerStep} spot={dead.Recovery.ReviveSpot} ({player.X:F1}, {player.Y:F1}, {player.Z:F1})");
+                        if (!player.IsAlive)
+                        {
+                            if (player.Combat.Corpse is { } corpse) watch.Body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+                            watch.Healer |= bots.FindBrain(watch.BotId)?.Recovery.UsingSpiritHealer == true;
+                            watch.Dead = true;
+                        }
+                        else if (watch.Dead)
+                        {
+                            watch.Dead = false;
+                            string body = watch.Body is { } at ? string.Create(CultureInfo.InvariantCulture,
+                                $"{Vector3.Distance(at, new Vector3(player.X, player.Y, player.Z)):F1} yards from its body") : "no body seen";
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{elapsed / 1000,4}s {name} revived at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}), {body}, {(watch.Healer ? "through the spirit healer" : "at its body")}"));
+                            watch.Healer = false;
+                            watch.Body = null;
+                        }
                         if (elapsed % 30_000 == 0)
                         {
                             PlayerbotBrain? brain = bots.FindBrain(watch.BotId);
@@ -184,6 +200,13 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
         private Vector3? _last;
 
         public Guid BotId { get; } = botId;
+
+        /// <summary>The death being watched: the body last seen, and whether the recovery took the spirit healer.</summary>
+        public bool Dead { get; set; }
+
+        public Vector3? Body { get; set; }
+
+        public bool Healer { get; set; }
 
         public uint LongestStillMs { get; private set; }
 

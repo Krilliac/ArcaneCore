@@ -7,6 +7,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -69,52 +70,85 @@ public sealed class PlayerbotRecoveryDecisionTests
     public void DecideSpiritHealer(bool healer, bool inReach, bool graveyard, bool stalled, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
 
+    /// <summary>A threat with a same-level aggro radius (20 yards) unless given, on the ground (the height limit applies).</summary>
+    private static PlayerbotThreat Threat(float x, float y, float radius = 20f, float z = 0f, bool flyer = false)
+        => new(new Vector3(x, y, z), radius, flyer, Radii: 0f);
+
+    private const float SpotClearance = PlayerbotRecovery.CampMarginYards + PlayerbotRecovery.ReviveSpotSlackYards;
+
     /// <summary>
-    /// The revive-spot search, free of world state: rings round the body inside the reclaim radius, nearest to the ghost first, clear
-    /// of every hostile; the first one the mesh reaches. The body here is surrounded: the only clear ground is the far rim.
+    /// The revive-spot search, free of world state: rings round the body inside the reclaim radius, nearest to the ghost first, out
+    /// of every threat's aggro reach with the margins; the first one the mesh reaches. The body here is surrounded: the only clear
+    /// ground is the far rim.
     /// </summary>
     [Fact]
-    public void FindReviveSpot_TakesTheNearestReachableCandidateClearOfEveryHostile()
+    public void FindReviveSpot_TakesTheNearestReachableCandidateOutOfEveryThreatsReach()
     {
         var body = new Vector3(0, 0, 0);
         var ghost = new Vector3(30, 0, 0);
-        // Hostiles at the body and east of it: the clear ground is west, 28+ yards from the body's own camp.
-        Vector3[] hostiles = [new(0, 0, 0), new(20, 0, 0), new(5, 15, 0), new(5, -15, 0)];
+        PlayerbotThreat[] hostiles = [Threat(0, 0), Threat(20, 0), Threat(5, 15), Threat(5, -15)];
         var asked = new List<Vector3>();
         Vector3? spot = PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, candidate => { asked.Add(candidate); return candidate; });
 
         Assert.NotNull(spot);
         Assert.True(Vector3.Distance(spot!.Value, body) <= PlayerbotRecovery.ReviveSpotMaxYards, "outside the reclaim radius");
-        Assert.All(hostiles, hostile => Assert.True(Vector3.Distance(spot.Value, hostile) > PlayerbotRecovery.HostileClearYards,
-            $"{Vector3.Distance(spot.Value, hostile):F1} yards from a hostile"));
+        Assert.All(hostiles, hostile => Assert.False(hostile.Reaches(spot.Value, SpotClearance),
+            $"{Vector3.Distance(spot.Value, hostile.Position):F1} yards from a hostile"));
         Assert.Equal(spot, asked[0]); // nearest first: the first clear candidate the search asked about was reachable
     }
 
-    /// <summary>A body whose whole reclaim disc is camped has no spot: the ghost goes on waiting, as before.</summary>
+    /// <summary>A body whose whole reclaim disc is inside the camp's reach has no spot: the ghost goes on waiting, as before.</summary>
     [Fact]
     public void FindReviveSpot_FindsNothing_WhenTheCampCoversTheReclaimDisc()
     {
-        // Eight hostiles on a circle of 22 yards round the body: every point of the 33-yard disc is within 27.5 yards of one.
-        Vector3[] hostiles = [.. Enumerable.Range(0, 8).Select(i => new Vector3(22f * MathF.Cos(i * MathF.PI / 4f), 22f * MathF.Sin(i * MathF.PI / 4f), 0))];
+        // Eight same-level hostiles on a circle of 22 yards round the body: every point of the disc is within 25 yards of one.
+        PlayerbotThreat[] hostiles = [.. Enumerable.Range(0, 8).Select(i => Threat(22f * MathF.Cos(i * MathF.PI / 4f), 22f * MathF.Sin(i * MathF.PI / 4f)))];
         Assert.Null(PlayerbotRecovery.FindReviveSpot(new Vector3(30, 0, 0), new Vector3(0, 0, 0), hostiles, candidate => candidate));
     }
 
     /// <summary>
-    /// A candidate the mesh cannot reach is skipped for the next, and a reachable end that lies outside the radius or beside a
-    /// hostile (the mesh ends short of an off-mesh candidate) is no spot; the number of asked candidates is bounded.
+    /// The same camp of low-level creatures (an aggro radius of 8 yards: vmangos GetAttackDistance shrinks it by the level
+    /// difference) leaves room: with the flat 25 yards every creature counted alike, it did not.
+    /// </summary>
+    [Fact]
+    public void FindReviveSpot_UsesEachThreatsOwnAggroRadius()
+    {
+        PlayerbotThreat[] hostiles = [.. Enumerable.Range(0, 8).Select(i => Threat(22f * MathF.Cos(i * MathF.PI / 4f), 22f * MathF.Sin(i * MathF.PI / 4f), radius: 8f))];
+        Vector3? spot = PlayerbotRecovery.FindReviveSpot(new Vector3(30, 0, 0), new Vector3(0, 0, 0), hostiles, candidate => candidate);
+        Assert.NotNull(spot);
+        Assert.All(hostiles, hostile => Assert.False(hostile.Reaches(spot!.Value, SpotClearance)));
+    }
+
+    /// <summary>
+    /// A threat's reach (CreatureMapSystem.IsInAggroReach): strictly inside radius plus margin, in 3D; a creature that cannot fly
+    /// does not aggro a unit more than 3 yards above or below it (bounding radii taken off), a flyer does.
+    /// </summary>
+    [Fact]
+    public void AThreatReachesOnlyInsideItsRadiusAndHeightLimit()
+    {
+        Assert.True(Threat(0, 0, radius: 5f).Reaches(new Vector3(7, 0, 0), PlayerbotRecovery.CampMarginYards));
+        Assert.False(Threat(0, 0, radius: 5f).Reaches(new Vector3(8, 0, 0), PlayerbotRecovery.CampMarginYards));
+        Assert.False(Threat(0, 0, z: 5f).Reaches(new Vector3(2, 0, 0), PlayerbotRecovery.CampMarginYards));
+        Assert.True(Threat(0, 0, z: 5f, flyer: true).Reaches(new Vector3(2, 0, 0), PlayerbotRecovery.CampMarginYards));
+        Assert.True(new PlayerbotThreat(new Vector3(0, 0, 5), 20f, false, Radii: 2.5f).Reaches(new Vector3(2, 0, 0), 0f));
+    }
+
+    /// <summary>
+    /// A candidate the mesh cannot reach is skipped for the next, and a reachable end that lies outside the radius or inside a
+    /// threat's reach (the mesh ends short of an off-mesh candidate) is no spot; the number of asked candidates is bounded.
     /// </summary>
     [Fact]
     public void FindReviveSpot_SkipsUnreachableCandidates_AndChecksTheEndTheMeshReturns()
     {
         var body = new Vector3(0, 0, 0);
         var ghost = new Vector3(30, 0, 0);
-        Vector3[] hostiles = [new(30, 10, 0)];
+        PlayerbotThreat[] hostiles = [Threat(30, 10)];
         int asked = 0;
         Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => { asked++; return null; }));
         Assert.Equal(PlayerbotRecovery.ReviveSpotMaxQueries, asked);
 
         // The mesh answers with the hostile's own place for every candidate: never a spot.
-        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => hostiles[0]));
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => hostiles[0].Position));
         // ... and with a place beyond the radius: never a spot either.
         Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => new Vector3(60, 0, 0)));
         // The first candidate fails, the second is reached.
@@ -202,9 +236,11 @@ public sealed class PlayerbotRecoveryDecisionTests
 
     /// <summary>
     /// At its body, after the reclaim delay, a ghost does not reclaim while a hostile creature stands near it; once the camp has
-    /// left, the ghost reclaims (mangoszero ReviveFromCorpseAction). The camp here is eight hostiles on a circle of 22 yards round the
-    /// body: every point inside the reclaim radius is within 27.5 yards of one, so there is no revive spot to walk to and the ghost
-    /// waits, as it always did. (With one hostile only, it now walks to clear ground: the next test.)
+    /// left, the ghost reclaims (mangoszero ReviveFromCorpseAction). The camp here is eight level-1 monsters (aggro radius 18 against
+    /// the level-1 bot) on a circle of 15 yards round the body: every point inside the reclaim radius is within their reach and the
+    /// margins, so there is no revive spot to walk to and the ghost waits, as it always did. (With one hostile only, it now walks
+    /// to clear ground: the next test.) The circle was 22 yards under the flat 25-yard rule; with the creatures' own 18-yard radius
+    /// a ghost 22 yards from them is no longer camped, so the camp moved in.
     /// </summary>
     [Fact]
     public async Task ACampOverTheWholeReclaimRadius_MeansWaiting_ThenTheGhostReclaimsWhenItLeaves()
@@ -214,7 +250,7 @@ public sealed class PlayerbotRecoveryDecisionTests
         await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
         await host.KillAndReleaseAsync();
         Creature[] camp = await host.OnWorldAsync(() => Enumerable.Range(0, 8).Select(i => DungeonBotHost.AddCreature(host.Player.Map!, 994310u + (uint)i,
-            host.Player.X + (22f * MathF.Cos(i * MathF.PI / 4f)), host.Player.Y + (22f * MathF.Sin(i * MathF.PI / 4f)), host.Player.Z, 0,
+            host.Player.X + (15f * MathF.Cos(i * MathF.PI / 4f)), host.Player.Y + (15f * MathF.Sin(i * MathF.PI / 4f)), host.Player.Z, 0,
             host.Host.World.NowMs, faction: 14)).ToArray()); // monsters
         await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
         clock.Seconds += 31;
@@ -239,7 +275,8 @@ public sealed class PlayerbotRecoveryDecisionTests
 
     /// <summary>
     /// A hostile camps the ghost's revive point, but the reclaim radius is 39 yards and the rest of it is clear: the ghost walks to
-    /// ground more than 25 yards from the hostile (and inside the radius), and reclaims there. Before, it stood still until the
+    /// ground out of the hostile's aggro reach (its own radius, 18 yards for a level-1 monster against the level-1 bot, plus the
+    /// margins; it was a flat 25 yards) and inside the radius, and reclaims there. Before, it stood still until the
     /// hostile left, and took the spirit healer after a minute (Mirthblade, two Frostmane Troll Whelps near its body).
     /// </summary>
     [Fact]
@@ -256,6 +293,8 @@ public sealed class PlayerbotRecoveryDecisionTests
         clock.Seconds += 31;
 
         var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        PlayerbotThreat threat = await host.OnWorldAsync(() => PlayerbotRecovery.Threats(host.Player).Single());
+        Assert.Equal(18f, threat.Radius); // vmangos GetAttackDistance: detection 18, same level
         Vector3 spot = await host.OnWorldAsync(() =>
         {
             host.Session.ManagedBudget = new ManagedActionBudget(4);
@@ -264,7 +303,7 @@ public sealed class PlayerbotRecoveryDecisionTests
             Assert.False(host.Player.IsAlive);
             return recovery.ReviveSpot!.Value;
         });
-        Assert.True(Vector3.Distance(spot, new Vector3(wolf.X, wolf.Y, wolf.Z)) > PlayerbotRecovery.HostileClearYards, "the spot is camped too");
+        Assert.False(threat.Reaches(spot, PlayerbotRecovery.CampMarginYards + PlayerbotRecovery.ReviveSpotSlackYards), "the spot is camped too");
         Assert.True(Vector3.Distance(spot, body) <= PlayerbotRecovery.ReviveSpotMaxYards, "the spot is outside the reclaim radius");
 
         bool revived = false;
@@ -287,9 +326,56 @@ public sealed class PlayerbotRecoveryDecisionTests
         await host.OnWorldAsync(() =>
         {
             var at = new Vector3(host.Player.X, host.Player.Y, host.Player.Z);
-            Assert.True(Vector3.Distance(at, new Vector3(wolf.X, wolf.Y, wolf.Z)) > PlayerbotRecovery.HostileClearYards, "revived beside the hostile");
+            Assert.False(threat.Reaches(at, PlayerbotRecovery.CampMarginYards), "revived inside the hostile's reach");
             Assert.True(Vector3.Distance(at, body) < CombatConstants.CorpseReclaimRadius, "revived outside the reclaim radius");
             Assert.Null(host.Player.Combat.Corpse);
+        });
+    }
+
+    /// <summary>
+    /// Only creatures that would attack the revived bot camp its body. A level-20 bot beside a level-1 monster 10 yards away (aggro
+    /// radius 5: 18 less the 19-level difference, never under 5) and a same-level monster flagged NO_AGGRO 4 yards away (react
+    /// state defensive: it never attacks on sight) reclaims where it stands. Under the flat 25-yard rule both camped it: it waited
+    /// a minute and took the spirit healer.
+    /// </summary>
+    [Fact]
+    public async Task CreaturesThatWouldNotAggroTheRevivedBot_DoNotCampItsBody()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        await host.OnWorldAsync(() =>
+        {
+            DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock));
+            host.Player.Level = 20;
+        });
+        await host.KillAndReleaseAsync();
+        (Creature low, Creature passive) = await host.OnWorldAsync(() =>
+        {
+            Creature lowLevel = DungeonBotHost.AddCreature(host.Player.Map!, 994320, host.Player.X + 10, host.Player.Y, host.Player.Z, 0,
+                host.Host.World.NowMs, faction: 14);
+            var noAggro = new Creature(994321, new CreatureTemplate
+            {
+                Entry = 994321, Name = "no-aggro monster", CreatureType = 1, Faction = 14, MinLevel = 20, MaxLevel = 20,
+                MinLevelHealth = 20, MaxLevelHealth = 20,
+            }, null, CreatureContent.Empty, new Random(994321));
+            noAggro.ReactState = CreatureReactState.Defensive; // what NO_AGGRO gives it (vmangos Creature::InitializeReactState)
+            noAggro.Relocate(host.Player.X - 4, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs);
+            host.Player.Map!.AddObject(noAggro);
+            return (lowLevel, noAggro);
+        });
+        await host.AcknowledgeUntilAsync(p => p.VisibleObjects.Contains(low.Guid) && p.VisibleObjects.Contains(passive.Guid), "the ghost sees both");
+        clock.Seconds += 31;
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        await host.OnWorldAsync(() =>
+        {
+            PlayerbotThreat only = Assert.Single(PlayerbotRecovery.Threats(host.Player)); // the NO_AGGRO one is no threat
+            Assert.Equal(5f, only.Radius);
+            Assert.False(PlayerbotRecovery.Camped(host.Player));
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(recovery.Update(host.Player, 500));
+            Assert.Equal(Step.Reclaim, recovery.LastStep);
+            Assert.True(host.Player.IsAlive);
         });
     }
 
