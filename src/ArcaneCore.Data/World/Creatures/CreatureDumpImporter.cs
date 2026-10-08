@@ -108,6 +108,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, CreatureAiScriptRow> _aiScripts = [];
     private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
     private readonly HashSet<int> _scriptTextEntries = [];
+    private readonly HashSet<int> _scriptDevTextEntries = []; // script_texts and the carried gossip_texts (the refresh's ScriptDev2 texts)
     private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
     private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
     private readonly Dictionary<(uint, int), CreatureTextTemplateRow> _textTemplates = [];
@@ -425,6 +426,44 @@ public sealed class CreatureDumpImporter
         await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
         await InsertBatchedAsync(db, _relayTemplates.Values, cancellationToken).ConfigureAwait(false);
         return (_relaySteps.Values.Sum(rows => rows.Count), _relayTemplates.Count);
+    }
+
+    /// <summary>The ScriptDev2 rows <see cref="ReplaceScriptDevContentAsync"/> would write: the texts, and the namespaced path points.</summary>
+    public (int Texts, int PathPoints) ScriptDevContentCounts()
+        => (_scriptDevTextEntries.Count, _movementTemplates.Keys.Count(k => (k.PathId & ScriptDevPathBits) != 0));
+
+    private const uint ScriptDevPathBits = CreatureContent.ScriptWaypointPathBit | CreatureContent.WaypointPathBit;
+
+    /// <summary>
+    /// The content-importer's <c>refresh</c> for the ScriptDev2 dungeon scripts (wave 7): the <c>script_texts</c> rows (and the carried
+    /// <c>gossip_texts</c> line) in <c>creature_ai_texts</c>, replaced by entry, and the <c>script_waypoint</c> and <c>waypoint_path</c>
+    /// copies in <c>creature_movement_template</c> (the path ids under <see cref="CreatureContent.ScriptWaypointPathBit"/> or
+    /// <see cref="CreatureContent.WaypointPathBit"/>), replaced whole. EventAI texts and ordinary entry paths are left as they are.
+    /// Runs inside the caller's transaction; nothing read, nothing changed. Returns the text and path-point counts written.
+    /// </summary>
+    public async Task<(int Texts, int PathPoints)> ReplaceScriptDevContentAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        int[] textIds = [.. _scriptDevTextEntries];
+        CreatureMovementTemplateRow[] points = [.. _movementTemplates.Values.Where(p => (p.PathId & ScriptDevPathBits) != 0)];
+        if (textIds.Length > 0)
+        {
+            foreach (int[] chunk in textIds.Chunk(500))
+            {
+                await db.Set<CreatureAiTextRow>().Where(t => chunk.Contains(t.Entry)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await InsertBatchedAsync(db, textIds.Select(id => _aiTexts[id]), cancellationToken).ConfigureAwait(false);
+        }
+
+        if (points.Length > 0)
+        {
+            await db.Set<CreatureMovementTemplateRow>().Where(p => (p.PathId & ScriptDevPathBits) != 0)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, points, cancellationToken).ConfigureAwait(false);
+        }
+
+        return (textIds.Length, points.Length);
     }
 
     /// <summary>
@@ -963,6 +1002,11 @@ public sealed class CreatureDumpImporter
         if (row.Table.Equals("script_texts", StringComparison.OrdinalIgnoreCase))
         {
             _scriptTextEntries.Add(text.Entry);
+        }
+
+        if (!row.Table.Equals("creature_ai_texts", StringComparison.OrdinalIgnoreCase))
+        {
+            _scriptDevTextEntries.Add(text.Entry);
         }
     }
 

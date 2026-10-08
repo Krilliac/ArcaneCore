@@ -33,8 +33,9 @@ public sealed class CraftingFeatureTests
         Assert.True(tradeFilter);
         Assert.Equal(1, await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.Observers.OfType<FirstAidObserver>().Count()));
         Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
-        Assert.IsType<ProfessionSpecializationGossip>(await host.OnWorldAsync(() =>
-            host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.GossipScript));
+        Assert.Contains(await host.OnWorldAsync(() =>
+            ArcaneCore.World.Tests.Npc.GossipScriptLayers.Of(host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.GossipScript)),
+            script => script is ProfessionSpecializationGossip);
     }
 
     [Fact]

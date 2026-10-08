@@ -37,7 +37,7 @@ public sealed class DungeonScriptFeatureTests
         await host.OnWorldAsync(() =>
         {
             QuestNpcServices npcs = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
-            Assert.IsType<EmiGossipScript>(npcs.GossipScript);
+            Assert.Contains(ArcaneCore.World.Tests.Npc.GossipScriptLayers.Of(npcs.GossipScript), script => script is EmiGossipScript);
             Assert.Contains(QuestAcceptedHandlers(npcs), handler => handler.Method.DeclaringType == typeof(DungeonScriptFeature));
             Assert.Contains(feature, host.WorldServices.GetRequiredService<SpellFeature>().System.Observers);
             // TeleportHandlers.HandleAreaTrigger asks every world feature that is an area-trigger listener.
@@ -50,6 +50,6 @@ public sealed class DungeonScriptFeatureTests
     {
         FieldInfo field = typeof(QuestNpcServices).GetField(nameof(QuestNpcServices.QuestAccepted), BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("QuestAccepted is no longer a field-like event");
-        return field.GetValue(npcs) is Action<Player, ObjectGuid, uint> handlers ? handlers.GetInvocationList() : [];
+        return field.GetValue(npcs) is Action<Player, ObjectGuid, ArcaneCore.Game.Quests.Quest> handlers ? handlers.GetInvocationList() : [];
     }
 }

@@ -72,7 +72,9 @@ public static partial class ContentImporterCli
                                 exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
                                 dbscripts_on_relay and dbscript_relay_template, dbscripts_on_quest_start/quest_end/gossip/event
                                 and script_waypoint (plus the script ids of quest_template and gossip_menu, and the
-                                gossip_menu_option rows that run a script), the ships' gameobject_template rows (type 15;
+                                gossip_menu_option rows that run a script), ScriptDev2's script_texts (and the carried
+                                gossip_texts) in creature_ai_texts by entry and the script_waypoint/waypoint_path copies in
+                                creature_movement_template (their path namespaces only), the ships' gameobject_template rows (type 15;
                                 other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
                                 taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and

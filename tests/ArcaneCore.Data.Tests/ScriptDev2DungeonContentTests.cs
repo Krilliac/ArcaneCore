@@ -28,9 +28,12 @@ public sealed class ScriptDev2DungeonContentTests
             (-3090000,'I am ready to begin.',NULL,'emi shortfuse GOSSIP_ITEM_START'),(-3090001,'Unrelated option',NULL,'other');
             """));
 
-        Assert.Equal([4508u, 6575u, 7998u, 8516u], importer.PathSnapshot().Select(r => r.Entry).Order());
-        Assert.Equal(7, importer.AiSnapshot().Texts.Count);
-        Assert.DoesNotContain(importer.AiSnapshot().Texts, t => t.Entry == -999999);
+        // Wave-7 integration: every script_waypoint path and script_texts row is imported (sd2-low), the paths under the script_waypoint
+        // namespace (CreatureContent.ScriptWaypointPathBit); only the gossip_texts rows stay limited to the ported option line.
+        Assert.Equal([4508u, 6575u, 7998u, 8516u, 9000u], importer.PathSnapshot().Select(r => r.Entry).Order());
+        Assert.All(importer.PathSnapshot(), r => Assert.Equal(CreatureContent.ScriptWaypointPathBit, r.PathId));
+        Assert.Equal(8, importer.AiSnapshot().Texts.Count);
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -999999);
         Assert.Equal("I am ready to begin.", Assert.Single(importer.AiSnapshot().Texts, t => t.Entry == -3090000).Content);
         Assert.DoesNotContain(importer.AiSnapshot().Texts, t => t.Entry == -3090001);
         Assert.Equal([RelayScriptCatalog.EventRelayId(2488), RelayScriptCatalog.EventRelayId(2609)],
@@ -49,7 +52,7 @@ public sealed class ScriptDev2DungeonContentTests
         importer.Read(reader);
 
         Assert.Equal([19, 25, 47, 12], new[] { 7998u, 8516u, 4508u, 6575u }
-            .Select(entry => importer.PathSnapshot().Count(row => row.Entry == entry)));
+            .Select(entry => importer.PathSnapshot().Count(row => row.Entry == entry && row.PathId == CreatureContent.ScriptWaypointPathBit)));
         int[] requiredTextIds = [-1000003, -1090000, -1189005, -1129005, -1047000, -1070001, -1209000];
         foreach (int id in requiredTextIds)
             Assert.Contains(importer.AiSnapshot().Texts, row => row.Entry == id);

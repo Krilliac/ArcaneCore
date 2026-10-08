@@ -18,6 +18,9 @@
     dbscripts_on_quest_start, dbscripts_on_quest_end,
     dbscripts_on_gossip, dbscripts_on_event,
     script_waypoint                                dump (world schema 42)
+    creature_ai_texts, script_texts/gossip_texts   dump; only those entries are replaced (the ScriptDev2 dungeon lines)
+    creature_movement_template, path namespaces    dump; only the script_waypoint (0x80000000|path) and waypoint_path
+                                                   (entry 0, 0x40000000|path) copies are replaced, entry paths stay
     quest_template.StartScript/CompleteScript,
     gossip_menu.script_id                          dump; set on the rows the world already has (no quest or menu is added)
     gossip_menu_option rows with action_script_id  dump; added when missing (importers before world 42 skipped them),
