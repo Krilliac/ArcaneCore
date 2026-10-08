@@ -173,7 +173,8 @@ public sealed class ModifyExtension : ICommandExtension
 /// <c>.levelup</c>, <c>.replenish</c> and <c>.deplenish</c> (vmangos CharacterCommands.cpp:695-762,
 /// 1849-1872; UnitCommands.cpp:2351-2403; all SEC_GAMEMASTER, Chat.cpp:1194-1195,1274).
 /// <para>
-/// Differences, documented in docs/integration/gm-commands.md: the level is capped at the
+/// Differences, documented in docs/integration/gm-commands.md: all three apply the target-rank check
+/// (<see cref="CommandContext.CanActOn"/>; vmangos has none on these commands); the level is capped at the
 /// progression maximum (<c>Progression:MaxPlayerLevel</c>, default 60) instead of vmangos' hard 255,
 /// because the level-stat table ends there; the talent recalculation (<c>InitTalentForLevel</c>)
 /// is not done (the talents area does not exist yet); a selected creature is not levelled and
@@ -219,7 +220,7 @@ public sealed class LevelCommands : ICommandGroup
             return true;
         }
 
-        if (!GmTargets.TryPlayer(context, nameArg, out Player? target))
+        if (!GmTargets.TryPlayer(context, nameArg, out Player? target) || !context.CanActOn(target))
         {
             return true;
         }
@@ -250,6 +251,11 @@ public sealed class LevelCommands : ICommandGroup
             return true;
         }
 
+        if (!context.CanActOn(unit))
+        {
+            return true;
+        }
+
         unit.Health = unit.MaxHealth;
         if (unit.PowerType == PowerType.Mana)
         {
@@ -264,6 +270,11 @@ public sealed class LevelCommands : ICommandGroup
         if (context.SelectedPlayerOrSelf() is not { IsAlive: true } unit)
         {
             context.Reply(GmStrings.SelectCharOrCreature);
+            return true;
+        }
+
+        if (!context.CanActOn(unit))
+        {
             return true;
         }
 

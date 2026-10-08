@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Gm.Items;
 /// SEC_GAMEMASTER, Chat.cpp:1277-1278).
 /// <para>
 /// Differences from vmangos, all deliberate and documented in docs/integration/gm-commands.md:
-/// the quest-settlement guard (a player whose quest reward is settling cannot have items changed);
+/// the target-rank check (<see cref="CommandContext.CanActOn"/>; vmangos has none on these commands); the quest-settlement guard (a player whose quest reward is settling cannot have items changed);
 /// offline players are refused with "Player not found!" (vmangos edits the characters DB);
 /// a worn item that cannot come off right now (combat) is not removed (vmangos skips the unequip
 /// check); the "not enough items" reply of a negative <c>.additem</c> is the English text of
@@ -90,6 +90,11 @@ public sealed class ItemCommands : ICommandGroup
 
         Player caller = context.Player;
         Player target = context.SelectedPlayerOrSelf() ?? caller;   // vmangos: a non-player selection falls back to the caller
+        if (!context.CanActOn(target))
+        {
+            return true;
+        }
+
         PlayerInventory inventory = target.Inventory;
         if (inventory.Templates.Find(itemId) is not { } template)
         {
@@ -182,6 +187,11 @@ public sealed class ItemCommands : ICommandGroup
                 out Player? target, out _) || target is null)
         {
             context.Reply(GmStrings.PlayerNotFound);
+            return true;
+        }
+
+        if (!context.CanActOn(target))
+        {
             return true;
         }
 

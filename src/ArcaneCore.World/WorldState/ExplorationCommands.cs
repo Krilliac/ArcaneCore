@@ -60,6 +60,11 @@ public sealed class ExplorationCommands : ICommandGroup
             return true;
         }
 
+        if (!context.CanActOn(target))
+        {
+            return true;
+        }
+
         context.Reply(string.Format(CultureInfo.InvariantCulture, flag != 0 ? YouSetExploreAllText : YouSetExploreNothingText, Link(target)));
         if (!ReferenceEquals(target, context.Player))
         {
@@ -98,6 +103,11 @@ public sealed class ExplorationCommands : ICommandGroup
         if (target is null)
         {
             context.Reply(NoCharSelectedText);
+            return true;
+        }
+
+        if (!context.CanActOn(target))
+        {
             return true;
         }
 

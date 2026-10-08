@@ -95,18 +95,14 @@ public sealed class CharacterRenameExtension : ICommandExtension
         Run(context, async services =>
         {
             // The owner's security decides, as HasLowerSecurity(NULL, guid) does through the guid's account.
-            IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>()
-                .GetUsernamesAsync([identity.AccountId]).ConfigureAwait(false);
-            Account? owner = names.TryGetValue(identity.AccountId, out string? username)
-                ? await services.GetRequiredService<IAccountStore>().FindByUsernameAsync(username).ConfigureAwait(false)
-                : null;
+            AccountSecurity? owner = await GmTargets.FindAccountSecurityAsync(services, identity.AccountId).ConfigureAwait(false);
             if (owner is null)
             {
                 context.Reply(GmStrings.PlayerNotFound);
                 return;
             }
 
-            if (GmSecurity.HasLowerSecurity(context.Security, owner.Security, strong: false, context.Commands.Gm))
+            if (GmSecurity.HasLowerSecurity(context.Security, owner.Value, strong: false, context.Commands.Gm))
             {
                 context.Reply(GmStrings.SecurityTooLow);
                 return;

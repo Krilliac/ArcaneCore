@@ -54,7 +54,7 @@ public sealed class DeathGmCommands : ICommandGroup
 
     private static bool Revive(CommandContext context, string text)
     {
-        if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player? target))
+        if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player? target) || !context.CanActOn(target))
         {
             return true;
         }
