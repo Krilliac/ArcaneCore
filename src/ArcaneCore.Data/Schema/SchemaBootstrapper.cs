@@ -195,14 +195,60 @@ public static class SchemaBootstrapper
         await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken, logger)
-                .ConfigureAwait(false);
-            await RunAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
-            await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
+            await using (SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken, logger)
+                .ConfigureAwait(false))
+            {
+                await RunAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
+                await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            // Only a database this build accepted: a refused one is left byte-for-byte untouched.
+            await UseWriteAheadLogAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Put a file-backed SQLite database in write-ahead-log mode (persistent in the file). In the default
+    /// rollback-journal mode a writer cannot commit while another connection holds a read lock, and two
+    /// connections that both read before writing make SQLite answer SQLITE_BUSY at once instead of waiting
+    /// (its deadlock avoidance skips the busy handler): the server's background write queues and a character
+    /// create on another connection then fail with "database is locked". WAL lets readers and the single
+    /// writer proceed together. Best effort: if another connection holds the file, the mode stays as it is
+    /// and is retried at the next start. In-memory databases are left alone.
+    /// </summary>
+    private static async Task UseWriteAheadLogAsync(DbContext db, SchemaDefinition definition, ILogger? logger, CancellationToken ct)
+    {
+        if (!db.Database.IsSqlite()
+            || db.Database.GetDbConnection() is not Microsoft.Data.Sqlite.SqliteConnection connection
+            || string.IsNullOrEmpty(connection.DataSource)
+            || connection.DataSource == ":memory:"
+            || new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connection.ConnectionString).Mode
+                is Microsoft.Data.Sqlite.SqliteOpenMode.Memory or Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly)
+        {
+            return;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL;";
+        string? mode;
+        try
+        {
+            mode = (await command.ExecuteScalarAsync(ct).ConfigureAwait(false)) as string;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            logger?.LogWarning(ex, "{Component}: could not switch the SQLite database to WAL mode; it keeps its journal mode", definition.Component);
+            return;
+        }
+
+        if (!string.Equals(mode, "wal", StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogWarning("{Component}: SQLite journal mode is {Mode}, not WAL (another connection may hold the file); concurrent writes can fail with 'database is locked'",
+                definition.Component, mode);
         }
     }
 
