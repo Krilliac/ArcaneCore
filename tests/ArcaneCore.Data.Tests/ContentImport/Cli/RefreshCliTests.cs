@@ -576,7 +576,9 @@ public sealed class RefreshCliTests : IDisposable
     public async Task Refresh_NamesTheShipsTheWorldCouldNotSail()
     {
         string world = await OldWorldAsync(withShip: false);
-        await AddMapsAsync(world, 0); // no Kalimdor: the Theramore route cannot be built
+        // No Kalimdor: the Theramore route cannot be built. Map 36 is there for the old world's Deadmines portal, so only the ships are
+        // left to report.
+        await AddMapsAsync(world, 0, 36);
         await using (WorldDbContext db = Open(world))
         {
             db.Set<GameObjectTemplateRow>().Add(new GameObjectTemplateRow { Entry = 20808, Type = 15, Name = "TEST Ship", Data0 = 292, Data1 = 0, Data2 = 1 });
@@ -585,8 +587,11 @@ public sealed class RefreshCliTests : IDisposable
 
         string dump = PathOf("world.sql");
         File.WriteAllText(dump, ShipDump());
-        Dbcs(); // the portal's trigger, so only the ships are left to report
-        string dbc = TaxiDbcs(withPath295: false);
+        string dbc = Dbcs(); // the portal's trigger
+        // Without the map DBCs the refresh keeps the map table above (with them it would hold both continents: Map.dbc must list 0 and 1).
+        File.Delete(Path.Combine(dbc, "Map.dbc"));
+        File.Delete(Path.Combine(dbc, "AreaTable.dbc"));
+        Assert.Equal(dbc, TaxiDbcs(withPath295: false));
 
         (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
 
