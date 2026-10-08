@@ -20,6 +20,22 @@ public sealed class NamesDbcReaderTests
     }
 
     [Fact]
+    public void Patterns_GiveTheFirstMatchRoomForTheAutomatonBuild_AndStayCorrectAfterTheWarmUp()
+    {
+        // A non-backtracking pattern builds its automaton on its first match: measured up to 17 ms unloaded and over the old
+        // 100 ms limit under memory pressure, where NameCatalog then refused a legal name as profane. The engine is linear in
+        // the (short) input, so the ceiling is a backstop and must leave room for that build or a GC pause.
+        string[] rows = [.. Enumerable.Range(0, 200).Select(i => $"(bad|evil|gm){i}.*")];
+        IReadOnlyList<System.Text.RegularExpressions.Regex> patterns = NamesDbcReader.Read(DbcFile.Parse(Image(rows)), "NamesProfanity.dbc");
+
+        Assert.All(patterns, pattern => Assert.True(pattern.MatchTimeout >= TimeSpan.FromSeconds(1), $"match timeout {pattern.MatchTimeout}"));
+        var catalog = new NameCatalog(patterns, [], []);
+        Assert.Equal(NameCatalogResult.Allowed, catalog.Check("Warmupname"));
+        Assert.Equal(NameCatalogResult.Allowed, catalog.Check("Thrall"));
+        Assert.Equal(NameCatalogResult.Profane, catalog.Check("Evil199x"));
+    }
+
+    [Fact]
     public void ConfiguredPath_WithUnsupportedPatternFailsClosed()
     {
         string path = Path.GetTempFileName();
