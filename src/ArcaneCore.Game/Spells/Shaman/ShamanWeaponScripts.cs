@@ -9,8 +9,9 @@ namespace ArcaneCore.Game.Spells.Shaman;
 /// Flametongue Weapon / Flametongue Totem proc (8026, 8028, 8029, 8248, 8253, 10445, 10523, 16343, 16344, 16389; vmangos scripts/spells/spell_shaman.cpp:19-44):
 /// the weapon enchantment's combat spell is a DUMMY whose damage scales with the weapon that procced it and the caster's fire spell damage,
 /// <c>(value + 3.85 * spell damage) * 0.01 * weapon speed</c> ("found spelldamage coefficients of 0.381% per 0.1 speed and 15.244 per 4.0 speed but
-/// own calculation say 0.385"), dithered and dealt by Flametongue Attack (10444) at the target, triggered. Without the cast item there is nothing
-/// to scale by and the proc does nothing (vmangos logs an error).
+/// own calculation say 0.385"), dithered and dealt by Flametongue Attack (10444) at the target, triggered, with the weapon as its cast item (vmangos
+/// passes <c>spell->m_CastItem</c>, spell_shaman.cpp:41). Without the cast item there is nothing to scale by and the proc does nothing (vmangos logs
+/// an error).
 /// <para>
 /// The caster's spell damage is SpellBaseDamageBonusDone for the spell's school: the SPELL_AURA_MOD_DAMAGE_DONE auras of the school (the spirit
 /// share of SpellBaseDamageBonusDone belongs to priest talents and is not a shaman's).
@@ -35,7 +36,7 @@ public sealed class FlametongueProcScript : ISpellScript
         float weaponSpeed = item.Template.Delay / 1000.0f;
         float total = Damage(context.Value, spellDamage, weaponSpeed);
         int dithered = (int)Math.Floor(Math.Max(total, 0f) + system.Random.NextSingle()); // rand_dither
-        system.CastCustomSpell(context.Caster, FlametongueAttack, SpellCastTargets.ForUnit(context.Target.Guid), dithered);
+        system.CastCustomSpell(context.Caster, FlametongueAttack, SpellCastTargets.ForUnit(context.Target.Guid), dithered, castItem: item);
     }
 
     /// <summary>The proc damage before dithering (spell_shaman.cpp:37-39).</summary>
@@ -45,7 +46,9 @@ public sealed class FlametongueProcScript : ISpellScript
 
 /// <summary>
 /// Rockbiter Weapon proc (20865, 20866, 20867, 20868, 20870, 20871; SCRIPT_EFFECT; vmangos <c>Spell::EffectScriptEffect</c>, SpellEffects.cpp:4544-4561):
-/// on a target that can have a threat list and already holds the caster on it, the caster gains <c>value * main-hand attack time / 1000</c> threat.
+/// on a target that can have a threat list and already holds the caster on it, the caster gains <c>value * main-hand attack time / 1000</c> threat,
+/// in whole numbers (uint32 arithmetic) and added raw (<c>addThreat(caster, threat)</c>: no threat spell, so no SPELLMOD_THREAT, and the default
+/// physical school for the caster's MOD_THREAT multiplier).
 /// </summary>
 [SpellScript(20865, 20866, 20867, 20868, 20870, 20871)]
 public sealed class RockbiterProcScript : ISpellScript
@@ -58,7 +61,15 @@ public sealed class RockbiterProcScript : ISpellScript
             return;
         }
 
-        float threat = context.Value * context.Caster.Combat.GetAttackTime(WeaponAttackType.BaseAttack) / 1000.0f;
-        context.System.AddSpellThreat(context.Caster, context.Target, context.Spell, threat);
+        Unit caster = context.Caster;
+        Unit target = context.Target;
+        if (!caster.IsAlive || !target.IsAlive || target.Map is null || !ReferenceEquals(target.Map, caster.Map))
+        {
+            return;
+        }
+
+        uint threat = unchecked((uint)context.Value * caster.Combat.GetAttackTime(WeaponAttackType.BaseAttack) / 1000u);
+        float total = ThreatCalc.Calc(new SpellThreatModifiers(context.System), caster, threat, false, ThreatCalc.PhysicalMask, null);
+        target.Combat.Threat.AddThreat(caster, total);
     }
 }

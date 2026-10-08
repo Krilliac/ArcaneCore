@@ -17,9 +17,11 @@ public sealed partial class SpellSystem
     /// effect's base points like <c>m_currentBasePoints</c> does in CalculateSpellEffectValue (SpellCaster.cpp:1147-1215):
     /// with a die of 0 or 1 sides it is the final value, otherwise the die is still rolled on top. Level and spell
     /// modifier terms stay. The override lives only for the synchronous cast (instant, which every triggered cast is);
-    /// nested casts of other spells are not affected.
+    /// nested casts of other spells are not affected. <paramref name="castItem"/> is vmangos' <c>castItem</c> argument: the cast runs with it
+    /// as its <see cref="SpellCast.CastItem"/>, as an item-triggered cast (no item-use check, none of its charges spent).
     /// </summary>
-    public SpellCastResult CastCustomSpell(Unit caster, uint spellId, SpellCastTargets targets, int? basePoints0, int? basePoints1 = null, int? basePoints2 = null)
+    public SpellCastResult CastCustomSpell(Unit caster, uint spellId, SpellCastTargets targets, int? basePoints0, int? basePoints1 = null, int? basePoints2 = null,
+        Items.Item? castItem = null)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(targets);
@@ -40,7 +42,8 @@ public sealed partial class SpellSystem
         _customValues = new CustomValueScope(caster, spell, [basePoints0, basePoints1, basePoints2]);
         try
         {
-            return Prepare(caster, spell, targets, triggered: true);
+            // A script's cast with an item is triggered from it, not a use of it (no item-use check, no charge).
+            return Prepare(caster, spell, targets, triggered: true, castItem: castItem, itemTriggeredCast: castItem is not null);
         }
         finally
         {

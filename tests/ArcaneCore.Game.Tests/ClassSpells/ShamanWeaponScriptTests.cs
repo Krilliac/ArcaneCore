@@ -23,6 +23,7 @@ public sealed class ShamanWeaponScriptTests : IDisposable
 {
     private const uint FlametongueProc = 8026;
     private const uint RockbiterProc = 20865;
+    private const uint RockbiterProcOdd = 20866;   // a rank whose value does not divide evenly
     private const uint FlametongueEnchant = 49_701;
     private const uint Weapon = 49_702;
 
@@ -46,6 +47,10 @@ public sealed class ShamanWeaponScriptTests : IDisposable
             Spell(RockbiterProc, Effect(SpellEffectName.ScriptEffect, 10, SpellImplicitTarget.UnitEnemy)) with
             {
                 SpellFamilyName = 11, RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+            },
+            Spell(RockbiterProcOdd, Effect(SpellEffectName.ScriptEffect, 7, SpellImplicitTarget.UnitEnemy)) with
+            {
+                School = SpellSchool.Nature, SpellFamilyName = 11, RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0,
             });
         (_shaman, _) = _kit.AddPlayer(1);
         (_enemy, _) = _kit.AddPlayer(2, 2, 0);
@@ -93,6 +98,27 @@ public sealed class ShamanWeaponScriptTests : IDisposable
         Assert.InRange(before - _enemy.Health, expected, expected + 1); // rand_dither of a whole number may round up by float error
     }
 
+    private sealed class CastItemRecorder : ISpellCastObserver
+    {
+        public List<(uint Spell, Item? Item)> Casts { get; } = [];
+
+        public void OnCast(SpellCast cast) => Casts.Add((cast.Spell.Id, cast.CastItem));
+    }
+
+    [Fact]
+    public void FlametongueProc_CastsFlametongueAttack_WithTheWeaponThatProccedAsItsCastItem()
+    {
+        // vmangos spell_shaman.cpp:41: CastCustomSpell(target, 10444, ..., true, spell->m_CastItem).
+        Item weapon = EquipImbuedWeapon(2000);
+        var recorder = new CastItemRecorder();
+        _kit.System.RegisterObserver(recorder);
+
+        Hit();
+
+        (uint _, Item? item) = Assert.Single(recorder.Casts, c => c.Spell == FlametongueProcScript.FlametongueAttack);
+        Assert.Same(weapon, item);
+    }
+
     [Fact]
     public void FlametongueProc_AddsThreePointEightFivePercentOfFireSpellDamagePerTenthOfASecond()
     {
@@ -126,5 +152,23 @@ public sealed class ShamanWeaponScriptTests : IDisposable
         Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_shaman, RockbiterProc, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
 
         Assert.Equal(5f + (10 * 2.6f), wolf.Combat.Threat.GetThreat(_shaman), 3);
+    }
+
+    [Fact]
+    public void RockbiterProc_TheThreatIsWholeNumberArithmetic_AddedRawAsPhysicalThreat()
+    {
+        // vmangos SpellEffects.cpp:4557-4558: addThreat(caster, damage * GetAttackTime(BASE_ATTACK) / 1000), uint32 arithmetic, no threat spell,
+        // the default physical school: 7 * 2600 / 1000 = 18, not 18.2.
+        Map map = _kit.World.GetMap(0);
+        var wolf = new CombatTestUnit();
+        wolf.Relocate(3, 0, _shaman.Z, 0, 0);
+        map.AddObject(wolf);
+        map.Combat.Track(wolf);
+        _shaman.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2600);
+        wolf.Combat.Threat.AddThreat(_shaman, 5);
+
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_shaman, RockbiterProcOdd, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
+
+        Assert.Equal(5f + 18f, wolf.Combat.Threat.GetThreat(_shaman), 3);
     }
 }
