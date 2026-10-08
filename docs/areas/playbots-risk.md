@@ -109,8 +109,8 @@ The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
 After a safe retreat the bot waits to `RecoverHealthPct` (eating or drinking when it can) before it pulls again; the creatures
 it fled from and the place are remembered for `DangerMemorySeconds`. The report: `retreat reason=losing-to-3 escapes=Frost_Nova+Blink`.
 
-A death also goes into the memory (whatever still attacks the body and the enemies of the fight being watched, and the place),
-and a bot killed within 30 seconds of walking an errand
+A death also goes into the memory (the creatures attacking the bot at its last living update, the enemies of the fight being
+watched, and the place), and a bot killed within 30 seconds of walking an errand
 (a trainer, vendor or quest destination) sets that errand aside for 10 minutes (`PlayerbotSuspensions`) instead of walking the
 same way into the same creatures after its revive.
 
@@ -133,6 +133,16 @@ A ghost's revive spot keeps out of the creature hazards too (`PlayerbotRecovery.
 creature's reach (plus 8) or a remembered killer's counts as camped, so the ghost revives at a clear spot inside the reclaim radius
 or, with none, takes the spirit healer after the usual 60 seconds. The remembered places themselves are not held against the body
 (it lies at the place of death).
+
+## The death loop breaker
+
+`PlayerbotStallWatch.RecordDeath` (claude/bot-ghost-wait) stays as the last resort: three deaths within 60 yards in 10 minutes are
+a death loop, reported like a stall; the bot takes the spirit healer and sets aside the errand it was on (every trainer for a
+training trip), and a creature entry present at two deaths is set aside for target choice. The brain records both from one place
+(`PlayerbotBrain.RecordDeath`): the attackers it captures at each living update are the loop breaker's entries and the risk's
+danger memory alike, and the errand it keeps is the one both set aside, the risk at the first death (within 30 seconds of the
+errand), the loop breaker at the third. Target choice skips both the set-aside entries and the remembered creatures. With the
+estimate and the hazards, the live replay no longer reaches the loop breaker (below).
 
 ## Party bots
 
