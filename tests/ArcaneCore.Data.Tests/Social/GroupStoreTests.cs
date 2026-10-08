@@ -53,12 +53,14 @@ public sealed class GroupStoreTests : IAsyncLifetime
         // With the placeholders only, the gap below 37 is filled and the schema composes.
         SchemaDefinition alone = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), DataModules.For(DatabaseComponent.Characters));
         Assert.Equal(Enumerable.Range(2, alone.CurrentVersion - 1), alone.Steps.Select(s => s.Version));
+        Assert.Equal([35, 36], alone.ReservedGapVersions); // a server process refuses to apply these (ReservedSchemaGapGuardTests)
 
         // Once a real module claims 35, its step is the one composed, not the placeholder's empty one.
         IDataModule[] merged = [.. DataModules.For(DatabaseComponent.Characters), owner];
         SchemaDefinition withOwner = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), merged);
         Assert.Same(owner.SchemaChanges, withOwner.Steps.Single(s => s.Version == 35).Changes);
         Assert.Empty(withOwner.Steps.Single(s => s.Version == 36).Changes);
+        Assert.Equal([36], withOwner.ReservedGapVersions);
 
         // Without placeholders the gap fails, as before.
         Assert.Throws<InvalidOperationException>(() => DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), real));

@@ -66,6 +66,12 @@ public sealed class SchemaDefinition
     /// <summary>Upgrade steps for versions 2..CurrentVersion, in order.</summary>
     public IReadOnlyList<SchemaStep> Steps { get; init; } = [];
 
+    /// <summary>
+    /// Versions whose step is an empty <see cref="IReservedSchemaGap"/> placeholder for a module this build lacks.
+    /// The bootstrapper and planner refuse to record them as applied (see <see cref="ReservedSchemaGaps"/>).
+    /// </summary>
+    public IReadOnlyList<int> ReservedGapVersions { get; init; } = [];
+
     public string VersionTable => Component + "_schema";
 }
 
@@ -200,12 +206,21 @@ public static class SchemaBootstrapper
         // version-0 marker of a resumed create, is written): a process that waited sees the winner's work.
         if (options.Policy != SchemaPolicy.Always)
         {
-            SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, ct).ConfigureAwait(false);
+            SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, options.AllowReservedSchemaGaps, ct).ConfigureAwait(false);
             SchemaPolicyException.ThrowIfForbidden(options.Policy, plan);
         }
 
         // Read only now that the lock is held: a process that waited sees the winner's work.
         int? version = await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
+
+        // Fail closed before any create, adoption or step: a reserved placeholder version recorded as applied would make
+        // every later build skip the owner's real step (ReservedSchemaGaps).
+        IReadOnlyList<int> pendingGaps = ReservedSchemaGaps.Pending(definition, version);
+        if (pendingGaps.Count > 0 && !options.AllowReservedSchemaGaps)
+        {
+            throw new SchemaMismatchException(ReservedSchemaGaps.RefusalMessage(definition, version, pendingGaps));
+        }
+
         if (version is null)
         {
             // A database without a version table was either empty (created fresh, at the current version)

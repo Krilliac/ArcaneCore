@@ -74,6 +74,7 @@ public static class DataModules
         IEnumerable<IDataModule>? modules = null)
     {
         var steps = new List<SchemaStep>(inlineSteps);
+        var gaps = new List<int>();
         IDataModule[] candidates = [.. modules ?? For(component)];
 
         // A reserved-gap placeholder yields to a real module or inline step that claims its version (IReservedSchemaGap).
@@ -97,6 +98,10 @@ public static class DataModules
             }
 
             steps.Add(new SchemaStep(module.SchemaVersion, module.SchemaChanges));
+            if (module is IReservedSchemaGap)
+            {
+                gaps.Add(module.SchemaVersion);
+            }
         }
 
         steps.Sort((a, b) => a.Version.CompareTo(b.Version));
@@ -119,6 +124,7 @@ public static class DataModules
             CurrentVersion = steps.Count + 1,
             Version1Tables = version1Tables,
             Steps = steps,
+            ReservedGapVersions = [.. gaps.Order()],
         };
     }
 
