@@ -226,8 +226,9 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   it, which resumes when the stack is cleared, as MoveRandomAroundPoint mutates (ScriptMgr.cpp:2334-2350); a waypoint with datalong3 bit
   0x1, pass the target, is skipped only without a target, :2318-2330), 35 SEND_AI_EVENT (event datalong; with a radius datalong2 to every
   living creature around for the custom events A-F, to the creatures that may assist the sender, in its line of sight, for the others,
-  and for AI_EVENT_CALL_ASSISTANCE (0) each receiver then answers the call and attacks the invoker, CreatureAI::HandleAssistanceCall,
-  AI/BaseAI/CreatureAI.cpp:224-233; without a radius to a creature target, or to the source itself for a player target), 45
+  and for AI_EVENT_CALL_ASSISTANCE (13, AIDefines.h:40; 0 is AI_EVENT_JUST_DIED, only received) each receiver then answers the call and
+  attacks the invoker, CreatureAI::HandleAssistanceCall, AI/BaseAI/CreatureAI.cpp:224-233; without a radius to a creature target, or to the
+  source itself for a player target; EventAI THROW_AI_EVENT, action 45, sends through the same `SendAiEventAround`), 45
   START_RELAY_SCRIPT.
 - **Steps without a source**: as cmangos HandleScriptStep (ScriptMgr.cpp:1704-1764) builds its pairs from the sources, a step whose
   source list is empty (for example REVERSE_DIRECTION with no target) runs nothing. Before this wave such a step ran with a null source

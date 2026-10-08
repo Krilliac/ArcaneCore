@@ -294,9 +294,10 @@ public sealed class RelayScriptCommandTests
     [Fact]
     public void SendAiEvent_CallAssistance_AlsoMakesTheHelpersAttackTheInvoker()
     {
-        // cmangos UnitAI::SendAIEventAround (AI/BaseAI/UnitAI.cpp:643-650): after ReceiveAIEvent, AI_EVENT_CALL_ASSISTANCE (0) runs
+        // cmangos UnitAI::SendAIEventAround (AI/BaseAI/UnitAI.cpp:643-650): after ReceiveAIEvent, AI_EVENT_CALL_ASSISTANCE runs
         // CreatureAI::HandleAssistanceCall (AI/BaseAI/CreatureAI.cpp:224-233): a helper that may assist the sender attacks the invoker.
-        using Town t = Start([Step(0, 35, dataLong: 0, dataLong2: 30, flags: FlagReverse)], more: [Spawn(2, BuddyEntry, 5, 0)], fightingBuddy: true);
+        // AI_EVENT_CALL_ASSISTANCE is 13 (AI/BaseAI/AIDefines.h:40); the "type 0" in the UnitAI.cpp:647 comment is stale.
+        using Town t = Start([Step(0, 35, dataLong: 13, dataLong2: 30, flags: FlagReverse)], more: [Spawn(2, BuddyEntry, 5, 0)], fightingBuddy: true);
         Creature buddy = Assert.Single(t.OfEntry(BuddyEntry));
         Run(t.World, 200);
         Assert.Null(buddy.Combat.Victim);
@@ -305,6 +306,23 @@ public sealed class RelayScriptCommandTests
         Run(t.World, 100);
 
         Assert.Same(t.Player, buddy.Combat.Victim);
+    }
+
+    [Fact]
+    public void SendAiEvent_JustDied_IsOnlyReceived_TheHelpersDoNotAnswerItAsACallForAssistance()
+    {
+        // AI_EVENT_JUST_DIED (0) goes to the same assisting creatures (AnyAssistCreatureInRangeCheck), but only CALL_ASSISTANCE (13) runs
+        // HandleAssistanceCall (UnitAI.cpp:648); the buddy's RECEIVE_AI_EVENT row for 0 proves the event arrived.
+        using Town t = Start([Step(0, 35, dataLong: 0, dataLong2: 30, flags: FlagReverse)], more: [Spawn(2, BuddyEntry, 5, 0)],
+            rows: [ReceiveRow(2, BuddyEntry, 0, 0, 7041)], fightingBuddy: true);
+        Creature buddy = Assert.Single(t.OfEntry(BuddyEntry));
+        Run(t.World, 200);
+
+        t.Wave();
+        Run(t.World, 100);
+
+        Assert.Equal([7041u], t.Spells.Casts.Select(c => c.Spell));
+        Assert.Null(buddy.Combat.Victim);
     }
 
     [Fact]

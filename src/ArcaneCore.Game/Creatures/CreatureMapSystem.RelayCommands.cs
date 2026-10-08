@@ -230,7 +230,8 @@ public sealed partial class CreatureMapSystem
     /// above 100 reach every living creature within <paramref name="radius"/> (IsWithinDistInMap: 3D, bounding radii added), the sender
     /// included; the other events reach the creatures that may assist the sender against the invoker (AnyAssistCreatureInRangeCheck, here
     /// <see cref="CanAssist"/>, which includes the line-of-sight check of AnyAssistCreatureInRangeCheck, GridNotifiers.cpp:265-282); for
-    /// AI_EVENT_CALL_ASSISTANCE (0) each receiver also answers the call (<see cref="HandleAssistanceCall"/>). The EventAI action THROW_AI_EVENT
+    /// AI_EVENT_CALL_ASSISTANCE (13, AI/BaseAI/AIDefines.h:40; the "type 0" of the UnitAI.cpp:647 comment is stale) each receiver also answers
+    /// the call (<see cref="HandleAssistanceCall"/>). The EventAI action THROW_AI_EVENT
     /// (45) and the relay command SEND_AI_EVENT (35) both send through here. Returns how many creatures received it.
     /// </summary>
     public int SendAiEventAround(Creature sender, uint eventType, Unit? invoker, float radius, uint miscValue = 0)
@@ -256,8 +257,11 @@ public sealed partial class CreatureMapSystem
         return receivers.Length;
     }
 
-    /// <summary>cmangos AI_EVENT_CALL_ASSISTANCE: the AI event type that also runs <see cref="HandleAssistanceCall"/> on each receiver.</summary>
-    public const uint AiEventCallAssistance = 0;
+    /// <summary>
+    /// cmangos AI_EVENT_CALL_ASSISTANCE (AI/BaseAI/AIDefines.h:40): the AI event type that also runs <see cref="HandleAssistanceCall"/> on each
+    /// receiver. 0 is AI_EVENT_JUST_DIED, which is only received.
+    /// </summary>
+    public const uint AiEventCallAssistance = 13;
 
     /// <summary>
     /// cmangos CreatureAI::HandleAssistanceCall (AI/BaseAI/CreatureAI.cpp:224-233): a receiver that is not a critter and may assist the sender
