@@ -305,6 +305,11 @@ public sealed class ShipTransport : WorldObject
     internal void UpdatePosition(float x, float y, float z, float o)
     {
         SetPosition(x, y, z, o);
+        if (_passengers.Count == 0)
+        {
+            return;
+        }
+
         foreach (Unit passenger in _passengers.ToArray())
         {
             UpdatePassengerPosition(passenger);
