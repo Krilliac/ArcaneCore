@@ -91,7 +91,7 @@ public sealed class DatabaseGuardSqliteLockTests
             // Once it has passed, the guard answers at once, in real time, while the store call is still stuck.
             Exception? thrown = await Record.ExceptionAsync(() => refused.WaitAsync(TimeSpan.FromSeconds(10)));
             Assert.IsType<TimeoutRejectedException>(thrown);
-            Assert.False(call.Ended.IsCompleted, "the store call was expected to still be blocked on the locked file");
+            Assert.False(call.Ended.IsCompleted, "the store call was expected to still be blocked on the locked file; it ended: " + call.Outcome);
             Assert.Equal(1, auth.ConsecutiveFailures);
 
             // The lock goes away (exclusive locking mode keeps it until the next access in normal mode): the abandoned call
@@ -147,18 +147,36 @@ public sealed class DatabaseGuardSqliteLockTests
         }
     }
 
-    /// <summary>A store call that reports when it really ends, abandoned or not.</summary>
+    /// <summary>
+    /// A store call that reports when it really ends, abandoned or not. It does not pass the guard's token on: the
+    /// deadline is armed before the call reaches SQLite, and Microsoft.Data.Sqlite checks the token once on entry to
+    /// ExecuteReaderAsync (then ignores it in the busy wait). Under a loaded full run the clock could be advanced while
+    /// the call was still in EF's pipeline, so it ended at that entry check with OperationCanceledException instead of
+    /// blocking (2026-10-07, 3 of 5 full runs). Ignoring the token models the provider this test is about (one that
+    /// ignores cancellation while blocked) at every point of the call, so the call ends only once the lock is gone.
+    /// </summary>
     private sealed class ObservedCall(IAccountStore store)
     {
         private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task Ended => _ended.Task;
 
+        /// <summary>How the call ended, for the failure message.</summary>
+        public string Outcome { get; private set; } = "not ended";
+
         public async ValueTask<Account?> FindAsync(CancellationToken cancellationToken)
         {
             try
             {
-                return await store.FindByUsernameAsync("NOBODY", cancellationToken).ConfigureAwait(false);
+                _ = cancellationToken; // deliberately not passed on (see the type's summary)
+                Account? found = await store.FindByUsernameAsync("NOBODY", CancellationToken.None).ConfigureAwait(false);
+                Outcome = "returned";
+                return found;
+            }
+            catch (Exception ex)
+            {
+                Outcome = ex.GetType().Name + ": " + ex.Message;
+                throw;
             }
             finally
             {
