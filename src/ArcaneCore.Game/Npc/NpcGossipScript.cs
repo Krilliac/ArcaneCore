@@ -77,7 +77,10 @@ public sealed record ScriptedGossipMenu(bool ShowQuests, uint NpcTextId, IReadOn
 /// What a script's choice asks of the menu, in the order vmangos scripts do it: close the menu, open the creature's vendor or trainer list, then show
 /// <paramref name="NpcTextId"/> over the same lines (0: none).
 /// </summary>
-public readonly record struct ScriptedGossipReply(uint NpcTextId, bool Close = false, bool Vendor = false, bool Trainer = false);
+public readonly record struct ScriptedGossipReply(uint NpcTextId, bool Close = false, bool Vendor = false, bool Trainer = false)
+{
+    public ScriptedGossipMenu? NextMenu { get; init; }
+}
 
 /// <summary>One scripted line (vmangos ADD_GOSSIP_ITEM: icon, text, sender, action).</summary>
 public readonly record struct ScriptedGossipItem(byte Icon, string Text, uint Sender, uint Action);

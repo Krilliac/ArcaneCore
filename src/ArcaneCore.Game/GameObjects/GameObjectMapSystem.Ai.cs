@@ -21,6 +21,13 @@ public interface IGameObjectAi
     /// object does nothing more. Not asked for a trap's target (that is <see cref="OnTrapTarget"/>).
     /// </summary>
     bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user) => false;
+
+    /// <summary>
+    /// The open-lock path (Spell::SendLoot after the lock check passed, SpellEffects.cpp): true when the script handled the opening and the
+    /// object does nothing more. Defaults to false so existing scripts keep their behaviour on the spell path; a script whose plain click
+    /// is refused (<see cref="OnUse"/> true) but whose validated opening acts, such as a Molten Core rune, overrides both.
+    /// </summary>
+    bool OnUnlockedUse(GameObjectMapSystem objects, GameObject go, Player user) => false;
 }
 
 /// <summary>The object scripts by entry and the little a script may do to its object.</summary>

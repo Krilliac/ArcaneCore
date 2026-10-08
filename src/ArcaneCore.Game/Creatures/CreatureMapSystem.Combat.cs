@@ -50,8 +50,9 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             creature.HasAggroed = true;
             creature.PacifiedMs = 0; // vmangos Creature::SetInCombatWith... enter combat clears the temporary pacify (Creature.cpp:3665)
             creature.CombatStart = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
-            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEnterCombat(creature);
-            creature.AI?.OnAggro(target); // the instance heard OnCreatureEnterCombat first (cmangos Unit::SetInCombatState; one call, sd2-mid and sd2-high both added it)
+            // The instance hears OnCreatureEnterCombat once, after the AI's aggro hook (below; cmangos Unit::SetInCombatWith). sd2-mid,
+            // sd2-high, sd2-end and raid-mc-ony each added a call; wave-7 integration keeps raid-mc-ony's, which also passes the enemy.
+            creature.AI?.OnAggro(target);
             if (!creature.IsAlive || creature.IsEvading)
             {
                 return true; // the aggro script killed or reset it
@@ -61,6 +62,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             if ((creature.Template.Behaviour & CreatureBehaviourFlags.CallsGuards) != 0)
             {
                 SummonGuard(creature, target); // vmangos Creature::OnEnterCombat (Creature.cpp:3689-3690)
+            }
+
+            // cmangos Unit::SetInCombatWith (Unit.cpp:8004-8008): InstanceData::OnCreatureEnterCombat, then the aggro linking event.
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEnterCombat(creature, target);
+            if (!creature.IsAlive || creature.IsEvading)
+            {
+                return true;
             }
 
             CallAssistance(creature, target);

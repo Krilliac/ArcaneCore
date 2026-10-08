@@ -370,6 +370,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.Ok;
         }
 
+        // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
+        if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
+        {
+            return GameObjectUseResult.Ok;
+        }
+
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
