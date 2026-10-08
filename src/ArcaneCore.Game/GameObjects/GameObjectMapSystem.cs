@@ -342,11 +342,19 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return result;
         }
 
+        // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
+        // chest branches spring the linked trap (GameObject.cpp:1441-1455, 1472-1479) - before the chest loot, whatever the quest gate says.
+        if (go.Type is GameObjectType.Chest or GameObjectType.Button)
+        {
+            TriggerLinkedTrap(go, player);
+        }
+
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
             GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
+            GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true),
             _ => GameObjectUseResult.NotUsable,
         };
@@ -846,6 +854,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _objects.Remove(go.Guid);
+        IndexRitual(go, tracked: false);
         Loot?.ForgetLoot(go);
         _questFlagsSent.Remove(go.Guid);
         _despawnAt.Remove(go.Guid);
@@ -1003,6 +1012,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
             go.System = this;
             _objects[go.Guid] = go;
+            IndexRitual(go, tracked: true);
             list.Add(go);
             ConfigureQuestFlags(go);
             if (DurableKeyOf(go) is { } durableKey)
@@ -1080,6 +1090,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             _objects.Remove(go.Guid);
+            IndexRitual(go, tracked: false);
             _questFlagsSent.Remove(go.Guid);
             _despawnAt.Remove(go.Guid);
             Loot?.ForgetLoot(go);
@@ -1114,6 +1125,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         go.System = this;
         _objects[go.Guid] = go;
+        IndexRitual(go, tracked: true);
         GridListOf(go.X, go.Y).Add(go);
         ConfigureQuestFlags(go);
         go.ClearChangedFields();

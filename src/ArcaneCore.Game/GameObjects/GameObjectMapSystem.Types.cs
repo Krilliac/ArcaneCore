@@ -208,12 +208,15 @@ public sealed partial class GameObjectMapSystem
     // --- linked traps -----------------------------------------------------------------------
 
     /// <summary>
-    /// GameObject::TriggerLinkedGameObject (GameObject.cpp:1284-1319): the nearest spawned trap of the object's linked trap entry (button data3, chest
-    /// data7, spell focus data2, goober data12) within the trap spell's maximum range (0.5 yards without a spell) is used on <paramref name="user"/>.
+    /// GameObject::TriggerLinkedGameObject (GameObject.cpp:1284-1319): the nearest trap of the object's linked trap entry (button data3, chest
+    /// data7, spell focus data2, goober data12) within the trap spell's maximum range (0.5 yards without a spell) is used on <paramref name="user"/>
+    /// when it is spawned. The nearest one decides: the grid search does not skip despawned traps, so a spawned trap further away never stands in
+    /// for a despawned one nearby.
     /// </summary>
     private void TriggerLinkedTrap(GameObject go, Unit user)
     {
-        if (FindLinkedTrap(go, spawned: true) is { } trap)
+        if (go.Template.LinkedTrapEntry() is var entry and not 0 && LinkedTrapTemplate(entry) is { } trapTemplate
+            && FindLinkedTrap(go, entry, Spells?.MaxRange(trapTemplate.GetData(TrapRules.SpellData)) ?? LinkedTrapSearchRange) is { IsSpawned: true } trap)
         {
             UseTrap(trap, user);
         }
@@ -221,31 +224,33 @@ public sealed partial class GameObjectMapSystem
 
     /// <summary>
     /// GameObject::RespawnLinkedGameObject (GameObject.cpp:1321-1347): when a door, button, chest, spell focus or goober respawns, the nearest
-    /// despawned trap of its linked entry within 0.5 yards respawns with it.
+    /// trap of its linked entry within 0.5 yards respawns with it when it is despawned.
     /// </summary>
     private void RespawnLinkedTrap(GameObject go)
     {
         if (go.Type is GameObjectType.Door or GameObjectType.Button or GameObjectType.Chest or GameObjectType.SpellFocus or GameObjectType.Goober
-            && FindLinkedTrap(go, spawned: false) is { } trap)
+            && go.Template.LinkedTrapEntry() is var entry and not 0 && LinkedTrapTemplate(entry) is not null
+            && FindLinkedTrap(go, entry, LinkedTrapSearchRange) is { IsSpawned: false } trap)
         {
             Respawn(trap);
         }
     }
 
-    private GameObject? FindLinkedTrap(GameObject go, bool spawned)
-    {
-        uint trapEntry = go.Template.LinkedTrapEntry();
-        if (trapEntry == 0 || _content.FindTemplate(trapEntry) is not { } trapTemplate || (GameObjectType)trapTemplate.Type != GameObjectType.Trap)
-        {
-            return null;
-        }
+    /// <summary>The template of a linked trap entry when it is a trap (TriggerLinkedGameObject and RespawnLinkedGameObject ignore anything else).</summary>
+    private GameObjectTemplate? LinkedTrapTemplate(uint trapEntry)
+        => _content.FindTemplate(trapEntry) is { } template && (GameObjectType)template.Type == GameObjectType.Trap ? template : null;
 
-        float range = spawned && Spells?.MaxRange(trapTemplate.GetData(TrapRules.SpellData)) is { } spellRange ? spellRange : LinkedTrapSearchRange;
+    /// <summary>
+    /// MaNGOS::NearestGameObjectEntryInObjectRangeCheck (GridNotifiers.h:639-661): the nearest object of <paramref name="trapEntry"/> within
+    /// <paramref name="range"/> (both bounding radii), spawned or not.
+    /// </summary>
+    private GameObject? FindLinkedTrap(GameObject go, uint trapEntry, float range)
+    {
         GameObject? best = null;
         float bestDistance = float.MaxValue;
         foreach (GameObject candidate in _objects.Values)
         {
-            if (candidate.Entry != trapEntry || candidate.IsSpawned != spawned || ReferenceEquals(candidate, go))
+            if (candidate.Entry != trapEntry || ReferenceEquals(candidate, go))
             {
                 continue;
             }
@@ -293,12 +298,14 @@ public sealed partial class GameObjectMapSystem
     // --- traps ------------------------------------------------------------------------------
 
     /// <summary>
-    /// GameObject::Use of a trap (GameObject.cpp:1487-1513), reached through a linked object: the trap's cooldown (data5) gates it, then its spell
+    /// GameObject::Use of a trap (GameObject.cpp:1421-1428, 1487-1513), reached through a linked object: the trap's cooldown (data5) gates it, then its spell
     /// (data3) is cast at the user by its owner or by the trap itself, a custom animation plays, and a trap with charges (data4) counts the use and is
     /// used up at the last charge.
     /// </summary>
     private void UseTrap(GameObject trap, Unit user)
     {
+        // The gate is GameObject::Use's own, ahead of its type switch (GameObject.cpp:1421-1428): GetCooldown is trap.cooldown for a trap
+        // (GameObjectDefines.h:632-640), and m_cooldownTime is the same timer the environmental scan reads (GameObject.cpp:467, 540).
         if (trap.Template.CooldownSeconds() is var cooldown and not 0)
         {
             if (trap.CooldownUntilMs > _clockMs)

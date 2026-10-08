@@ -65,7 +65,8 @@ public sealed partial class SpellSystem
         // Capture this before the sink: a lethal queued spell can stop combat and clear Victim.
         bool queuedMeleeSpell = spell.IsNextMeleeSwing && ReferenceEquals(caster.Combat.Victim, target);
         uint amount = CombatRules.ApplyArmor(caster, target, spell, damage);
-        bool crit = allowCrit && amount > 0 && CombatRules.RollCrit(this, caster, target, spell);
+        // A game object never crits (SpellCaster::IsSpellCrit, SpellCaster.h:320): neither does the unit standing in for one.
+        bool crit = allowCrit && amount > 0 && !IsGameObjectStandIn(caster) && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)
         {
             // Exact vmangos amount (talent bonus, creature-type multiplier) when the rules offer it; else the plain multiplier.
@@ -250,7 +251,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            int value = i == context.EffectIndex ? context.Value : context.Spell.CalculateEffectValue(i, context.Caster.Level, Random);
+            int value = i == context.EffectIndex ? context.Value : context.Spell.CalculateEffectValue(i, CasterLevelOf(context.Caster), Random);
             switch (effect.Effect)
             {
                 case SpellEffectName.WeaponPercentDamage:

@@ -143,6 +143,75 @@ public sealed class GameObjectSpellTypeTests
     }
 
     [Fact]
+    public void OpeningATrappedChestWithTheOpenLockSpell_SpringsItsLinkedTrap()
+    {
+        // The usual client path to a locked or "Opening" chest is the open-lock spell: Spell::SendLoot (SpellEffects.cpp:2048-2068) runs
+        // GameObject::Use on the chest, whose chest branch springs the linked trap (GameObject.cpp:1472-1479), before the loot is sent.
+        GameObjectTypeRig rig = Create([GoSpawn(1, TrappedChest, 3, 0), GoSpawn(2, ChestTrap, 3, 0)]);
+        (Player player, _) = rig.Join(1);
+        GameObject chest = rig.Single(TrappedChest);
+        GameObject trap = rig.Single(ChestTrap);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(player, chest.Guid, LockType.Open));
+        Assert.Equal([(trap, TrapSpell, (Unit)player, (Unit?)null)], rig.Spells.Casts);
+        Assert.NotNull(chest.Loot);
+    }
+
+    [Fact]
+    public void OpeningATrappedButtonWithTheOpenLockSpell_SpringsItsLinkedTrap()
+    {
+        // Spell::SendLoot runs GameObject::Use for a button too: it activates and springs its trap (GameObject.cpp:1441-1455).
+        GameObjectTypeRig rig = Create([GoSpawn(1, TrappedButton, 3, 0), GoSpawn(2, ChestTrap, 3, 0)]);
+        (Player player, _) = rig.Join(1);
+        GameObject button = rig.Single(TrappedButton);
+        GameObject trap = rig.Single(ChestTrap);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(player, button.Guid, LockType.Open));
+        Assert.Equal(GameObjectState.Active, button.State);
+        Assert.Equal([(trap, TrapSpell, (Unit)player, (Unit?)null)], rig.Spells.Casts);
+    }
+
+    [Fact]
+    public void TheNearestTrapOfTheLinkedEntryDecides_EvenWhileItIsDespawned()
+    {
+        // TriggerLinkedGameObject (GameObject.cpp:1304-1318) takes the nearest trap of the entry within range and only then asks whether it is
+        // spawned: a despawned trap nearby is not replaced by a spawned one further away.
+        GameObjectTypeRig rig = Create([GoSpawn(1, TrappedButton, 3, 0), GoSpawn(2, ChestTrap, 3, 1, spawnTimeSeconds: 600), GoSpawn(3, ChestTrap, 3, 6)]);
+        rig.Spells.Ranges[TrapSpell] = 10;
+        (Player player, _) = rig.Join(1);
+        GameObject button = rig.Single(TrappedButton);
+        GameObject near = rig.System.GameObjects.Single(g => g.Entry == ChestTrap && g.Y == 1);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, button.Guid));
+        Assert.Equal([(near, TrapSpell, (Unit)player, (Unit?)null)], rig.Spells.Casts);
+        rig.World.RunTick(50);
+        Assert.False(near.IsSpawned); // its one charge
+
+        // The button is still active, but its use still asks for the linked trap (GameObject.cpp:1441-1455): the nearest one is despawned.
+        rig.System.Use(player, button.Guid);
+        Assert.Single(rig.Spells.Casts);
+    }
+
+    [Fact]
+    public void ALinkedTrapKeepsItsOwnCooldown_LikeAnyUseOfTheTrap()
+    {
+        // GameObject::Use (GameObject.cpp:1421-1428) gates every use of an object that has a cooldown (GetCooldown: trap.cooldown, data5,
+        // GameObjectDefines.h:632-640) and starts it; TriggerLinkedGameObject reaches the trap through Use, so a second click within the trap's
+        // cooldown casts nothing.
+        GameObjectTypeRig rig = Create([GoSpawn(1, CooldownTrapButton, 3, 0), GoSpawn(2, CooldownTrap, 3, 0)]);
+        (Player player, _) = rig.Join(1);
+        GameObject button = rig.Single(CooldownTrapButton);
+
+        rig.System.Use(player, button.Guid);
+        rig.System.Use(player, button.Guid);
+        Assert.Single(rig.Spells.Casts);
+
+        rig.Seconds(6);
+        rig.System.Use(player, button.Guid);
+        Assert.Equal(2, rig.Spells.Casts.Count);
+    }
+
+    [Fact]
     public void EnvironmentalTrap_ArmsThenFiresAtTheNearestPlayer_WithItsCooldown()
     {
         GameObjectTypeRig rig = Create([GoSpawn(1, FireTrap, 3, 0)]);

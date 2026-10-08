@@ -15,6 +15,12 @@ public sealed partial class SpellSystem
     /// </summary>
     internal int ModInt(Unit caster, SpellInfo spell, SpellModOp op, int value)
     {
+        // A unit standing in for a game object has no spell mods of its own (vmangos: the object has no mod owner).
+        if (IsGameObjectStandIn(caster))
+        {
+            return value;
+        }
+
         float result = SpellModifiers.Apply(caster, spell, op, value);
         return result == value ? value : (int)result;
     }
@@ -34,5 +40,6 @@ public sealed partial class SpellSystem
         }
     }
 
-    internal float ModFloat(Unit caster, SpellInfo spell, SpellModOp op, float value) => SpellModifiers.Apply(caster, spell, op, value);
+    internal float ModFloat(Unit caster, SpellInfo spell, SpellModOp op, float value)
+        => IsGameObjectStandIn(caster) ? value : SpellModifiers.Apply(caster, spell, op, value);
 }

@@ -73,6 +73,39 @@ public sealed class SummoningRitualTests
     }
 
     [Fact]
+    public void AnActiveRitual_KeepsRunningWhenItsOwnersChannelEnds_DetachedFromTheOwner()
+    {
+        // GameObject::RemoveUniqueUse (GameObject.cpp:785-799): the owner cancelled while the ritual spell is under way (active, not finished):
+        // a non-persistent ritual is taken off the owner's list "to keep it running" and turns ready, so the Unit::RemoveGameObject(spellId, true)
+        // of the channel end that follows (Spell.cpp:3574-3597) no longer finds it.
+        GameObjectTypeRig rig = Create([]);
+        (Player warlock, _) = rig.Join(1);
+        (Player helper1, _) = rig.Join(2, 1, 0);
+        (Player helper2, _) = rig.Join(3, 0, 1);
+        GameObject ritual = OwnedRitual(rig, Ritual, warlock, default);
+        rig.Raids.Add((warlock.Guid, helper1.Guid));
+        rig.Raids.Add((warlock.Guid, helper2.Guid));
+        rig.Spells.Channeling.Add(warlock.Guid);
+        rig.Spells.RitualSpellSucceeds = false; // the spell was sent but has not gone off
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(helper1, ritual.Guid));
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(helper2, ritual.Guid));
+        Assert.Equal(GameObjectState.Active, ritual.State);
+
+        rig.System.OnChannelEnded(warlock, 698);
+        rig.World.RunTick(50);
+
+        Assert.Same(ritual, rig.System.Find(ritual.Guid));
+        Assert.True(ritual.IsSpawned);
+        Assert.True(ritual.OwnerGuid.IsEmpty);
+        Assert.Equal(GameObjectState.Ready, ritual.State);
+
+        // No longer the warlock's: his leaving the map does not take it either (Unit::RemoveAllGameObjects only knows its own list).
+        rig.World.RemovePlayer(warlock);
+        rig.World.RunTick(50);
+        Assert.Same(ritual, rig.System.Find(ritual.Guid));
+    }
+
+    [Fact]
     public void Ritual_GoesWhenItsOwnerLeavesTheMap()
     {
         GameObjectTypeRig rig = Create([]);

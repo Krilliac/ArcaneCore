@@ -144,8 +144,9 @@ public sealed partial class GameObjectMapSystem
 
     /// <summary>
     /// GameObject::RemoveUniqueUse (GameObject.cpp:774-801), when a participant stopped channelling: when the owner left, or too few helpers remain
-    /// while the ritual is active, a ritual that is not persistent goes (at once unless it is active: an active ritual stays until its spell ends),
-    /// and the ritual is ready again.
+    /// while the ritual is active, a ritual that is not persistent goes at once unless it is active; an active one is taken off its owner's list
+    /// "to keep it running" (Unit::RemoveGameObject(go, false): the owner is cleared, so the owner's channel end or logout no longer removes it).
+    /// Either way the ritual is ready again.
     /// </summary>
     internal void RemoveUniqueUse(GameObject go, Player player)
     {
@@ -160,12 +161,40 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
-        if (go.Template.GetData(RitualPersistentData) == 0 && go.State != GameObjectState.Active)
+        if (go.Template.GetData(RitualPersistentData) == 0)
         {
-            go.LootState = GameObjectLootState.JustDeactivated;
+            if (go.State != GameObjectState.Active)
+            {
+                go.LootState = GameObjectLootState.JustDeactivated;
+            }
+            else if (!go.OwnerGuid.IsEmpty)
+            {
+                go.SetOwner(default);
+            }
         }
 
         go.State = GameObjectState.Ready;
+    }
+
+    /// <summary>The summoning rituals this system tracks (spawned or not): the channel-end and leave hooks visit these instead of every object.</summary>
+    private readonly HashSet<GameObject> _rituals = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Keep <see cref="_rituals"/> in step with <see cref="_objects"/> (called where an object is tracked or forgotten).</summary>
+    private void IndexRitual(GameObject go, bool tracked)
+    {
+        if (go.Type != GameObjectType.SummoningRitual)
+        {
+            return;
+        }
+
+        if (tracked)
+        {
+            _rituals.Add(go);
+        }
+        else
+        {
+            _rituals.Remove(go);
+        }
     }
 
     /// <summary>
@@ -174,7 +203,12 @@ public sealed partial class GameObjectMapSystem
     /// </summary>
     private void OnRitualParticipantLeft(Player player)
     {
-        foreach (GameObject go in _objects.Values.Where(g => g.Type == GameObjectType.SummoningRitual).ToArray())
+        if (_rituals.Count == 0)
+        {
+            return;
+        }
+
+        foreach (GameObject go in _rituals.ToArray())
         {
             if (go.OwnerGuid == player.Guid)
             {
@@ -190,12 +224,18 @@ public sealed partial class GameObjectMapSystem
     /// <summary>
     /// A channel of <paramref name="player"/> ended (Spell::cancel, Spell.cpp:3560-3597, and the channel end of Spell::update, :4785-4796): every
     /// ritual of this map the player took part in loses the participant (<see cref="RemoveUniqueUse"/>), and a ritual the player created with that
-    /// spell goes with the channel unless its ritual spell already went off (Unit::RemoveGameObject(spellId, true)).
+    /// spell goes with the channel (Unit::RemoveGameObject(spellId, true)) unless <see cref="RemoveUniqueUse"/> just took an active, unfinished
+    /// one off the owner to keep it running.
     /// </summary>
     public void OnChannelEnded(Player player, uint spellId)
     {
         ArgumentNullException.ThrowIfNull(player);
-        foreach (GameObject go in _objects.Values.Where(g => g.Type == GameObjectType.SummoningRitual).ToArray())
+        if (_rituals.Count == 0)
+        {
+            return;
+        }
+
+        foreach (GameObject go in _rituals.ToArray())
         {
             bool created = go.OwnerGuid == player.Guid && go.SpellId == spellId;
             bool helper = go.Template.GetData(RitualAnimSpellData) == spellId && go.UniqueUsers.Contains(player.Guid);
@@ -209,7 +249,8 @@ public sealed partial class GameObjectMapSystem
                 RemoveUniqueUse(go, player);
             }
 
-            if (created && Tracks(go) && go.State != GameObjectState.Active)
+            // Spell::cancel (Spell.cpp:3574-3597): RemoveUniqueUse first, then the owner's objects of the spell go; a detached ritual is no longer his.
+            if (created && go.OwnerGuid == player.Guid && Tracks(go))
             {
                 Remove(go);
             }

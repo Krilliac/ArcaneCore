@@ -112,6 +112,8 @@ internal sealed class GameObjectTypeRig
     public const uint WildRitual = 317;
     public const uint GroupedRitual = 318;
     public const uint TrappedButton = 319;
+    public const uint CooldownTrap = 320;
+    public const uint CooldownTrapButton = 321;
 
     public const uint ChestLoot = 700;
     public const uint ExpendableKey = 3467;   // Dull Iron Key: spell 3366, charges -1 (classic-db item_template)
@@ -192,6 +194,8 @@ internal sealed class GameObjectTypeRig
             GoTemplate(WildRitual, GameObjectType.SummoningRitual, (0, 2), (1, RitualSpell), (2, RitualAnim), (4, SacrificeSpell)),
             GoTemplate(GroupedRitual, GameObjectType.SummoningRitual, (0, 2), (1, RitualSpell), (6, 1)),
             GoTemplate(TrappedButton, GameObjectType.Button, (3, ChestTrap)),
+            GoTemplate(CooldownTrap, GameObjectType.Trap, (3, TrapSpell), (5, 5)),
+            GoTemplate(CooldownTrapButton, GameObjectType.Button, (3, CooldownTrap)),
         ];
         var content = new GameObjectContent(templates, spawns, Locks, [], []);
         var lootContent = new LootContent([(LootTableKind.GameObject, Row(ChestLoot, Hide, 100))], []);

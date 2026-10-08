@@ -26,7 +26,8 @@ namespace ArcaneCore.World.Skills;
 /// cast from an item never gives a skill-up or adds the caster's skill (Spell.cpp:7906-7907, SpellEffects.cpp:2191-2192); the key is then
 /// used up by its own spell charges (Spell::TakeCastItem). Not modelled: the per-object use
 /// requirement table, battleground flags, the play-time flag, the SPELL_FAILED_DAMAGE_IMMUNE cast check (the effect itself refuses an
-/// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>), multi-use veins (the object system despawns an emptied chest). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
+/// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>). Multi-use veins are the object system's (an emptied vein may stay for another open,
+/// LootHandler.cpp:435-487, in <see cref="GameObjectMapSystem"/>). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
 /// tap list is approximated by the corpse loot's recipients (see <see cref="LootService.IsSkinnableBy"/>).
 /// </remarks>
 internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature skills)

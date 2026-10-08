@@ -155,7 +155,7 @@ public sealed partial class SpellSystem
                 // vmangos CalculateSpellEffectValue (spell mods) comes before the chain damage multiplier. SPELLMOD_ALL_EFFECTS
                 // runs after the registered value modifiers (combo points) like SpellCaster.cpp:1197-1199.
                 int value = ModInt(cast.Caster, cast.Spell, SpellModOp.AllEffects,
-                    ModifyValue(SpellValueKind.EffectValue, cast.Caster, cast.Spell, i, cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random), target));
+                    ModifyValue(SpellValueKind.EffectValue, cast.Caster, cast.Spell, i, cast.Spell.CalculateEffectValue(i, CasterLevelOf(cast.Caster), Random), target));
                 if (multipliers is not null && multipliers[i] != 1.0f)
                 {
                     value = (int)(value * multipliers[i]);
@@ -226,7 +226,7 @@ public sealed partial class SpellSystem
     /// </summary>
     internal void DeliverHeal(SpellEffectContext context, uint amount)
     {
-        bool crit = CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
+        bool crit = !IsGameObjectStandIn(context.Caster) && CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
         if (crit)
         {
             // Exact vmangos amount (+50% / creature-type multiplier) when the rules offer it; else the plain multiplier.

@@ -49,7 +49,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         ArgumentNullException.ThrowIfNull(spell);
         if (stage == SpellAmountStage.AbsorbShield)
         {
-            return AbsorbShield(caster, spell, amount);
+            return spells.IsGameObjectStandIn(caster) ? amount : AbsorbShield(caster, spell, amount);
         }
 
         bool overTime = stage is not (SpellAmountStage.DirectDamage or SpellAmountStage.DirectHeal);
@@ -141,8 +141,11 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     /// </summary>
     private float Done(bool heal, float amount, Unit caster, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack, SpellModOp modOp)
     {
+        // A unit standing in for a game object brings no done side: the object has no auras or spell mods (SpellCaster.cpp:1457-1700 read unit
+        // auras only, and a game object is not a unit).
         if (SpellBonusFormulas.IgnoresCasterModifiers(spell)
-            || (heal && spell.DamageClass == SpellDamageClass.None && spell.IsPassive))
+            || (heal && spell.DamageClass == SpellDamageClass.None && spell.IsPassive)
+            || spells.IsGameObjectStandIn(caster))
         {
             return Math.Max(amount, 0);
         }
