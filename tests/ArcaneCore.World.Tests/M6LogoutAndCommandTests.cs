@@ -227,7 +227,7 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal("Players online: 1 (0 queued). Max online: 1 (0 queued).", (await client.ReadChatAsync()).Text);
         Assert.StartsWith("Server uptime: ", (await client.ReadChatAsync()).Text);
         foreach (string prefix in new[] { "Tick target:", "Tick frames:", "Tick work:", "Commands: pending=", "Managed bots:",
-            "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: " })
+            "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: ", "Tick allocation mean: ", "GC: " })
             Assert.StartsWith("Server diagnostics: " + prefix, (await client.ReadChatAsync()).Text);
 
         // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.

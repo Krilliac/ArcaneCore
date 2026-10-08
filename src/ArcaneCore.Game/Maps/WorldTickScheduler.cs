@@ -7,17 +7,31 @@ namespace ArcaneCore.Game.Maps;
 public sealed class WorldTickScheduler
 {
     private readonly int _intervalMs;
+    private readonly int _lateToleranceMs;
     private long? _nextDueMs;
 
-    public WorldTickScheduler(int intervalMs)
+    /// <param name="intervalMs">The tick interval.</param>
+    /// <param name="lateToleranceMs">
+    /// How long after its due start a tick may start without counting as late (<c>World:TickLateToleranceMs</c>). The cadence
+    /// itself never depends on it: due starts stay at start + k x interval.
+    /// </param>
+    public WorldTickScheduler(int intervalMs, int lateToleranceMs = 0)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(intervalMs, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(lateToleranceMs);
         _intervalMs = intervalMs;
+        _lateToleranceMs = lateToleranceMs;
     }
 
     public int IntervalMs => _intervalMs;
 
-    /// <summary>Ticks that started after their scheduled start.</summary>
+    /// <summary>The tolerance before a tick counts as late, in milliseconds.</summary>
+    public int LateToleranceMs => _lateToleranceMs;
+
+    /// <summary>The due start of the next tick on the clock <see cref="NextWait"/> was given (null before the first call).</summary>
+    public long? NextDueMs => _nextDueMs;
+
+    /// <summary>Ticks that started more than <see cref="LateToleranceMs"/> after their scheduled start.</summary>
     public long LateTicks { get; private set; }
 
     /// <summary>Scheduled starts given up because the loop fell a whole interval or more behind (not caught up).</summary>
@@ -41,7 +55,7 @@ public sealed class WorldTickScheduler
         {
             due = tickStartMs;
         }
-        else if (tickStartMs > due)
+        else if (tickStartMs > due + _lateToleranceMs)
         {
             LateTicks++;
         }

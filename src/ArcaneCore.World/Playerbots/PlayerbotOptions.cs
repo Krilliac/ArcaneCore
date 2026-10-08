@@ -13,8 +13,25 @@ public sealed class PlayerbotOptions
     /// <summary>Log the saved managed bots back in when the world starts.</summary>
     public bool RestoreOnStartup { get; set; }
 
-    /// <summary>The most managed bots online at once (0..64).</summary>
+    /// <summary>The highest <see cref="MaxBots"/> accepted (docs/integration/perf-limits-20261008.md has the measurement behind it).</summary>
+    public const int MaxBotsCeiling = 1000;
+
+    /// <summary>The highest <see cref="MaxRegisteredBots"/> accepted.</summary>
+    public const int MaxRegisteredBotsCeiling = 10_000;
+
+    /// <summary>
+    /// The most managed bots running at once (0..1000, <see cref="MaxBotsCeiling"/>). Only running bots take a slot: a stopped,
+    /// faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry
+    /// or startup restore that finds no slot waits for one). Live through <c>.reload config</c>: raising it lets more bots start
+    /// at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped.
+    /// </summary>
     public int MaxBots { get; set; } = 8;
+
+    /// <summary>
+    /// The most managed bots registered (running or not; 0..10000, <see cref="MaxRegisteredBotsCeiling"/>): <c>.playerbot create</c> is
+    /// refused with "playerbot-registry-full" beyond it. Each one is a real account and character. Live through <c>.reload config</c>.
+    /// </summary>
+    public int MaxRegisteredBots { get; set; } = 1000;
 
     /// <summary>Milliseconds between two decisions of a bot (50..60000).</summary>
     public int ThinkIntervalMs { get; set; } = 500;
@@ -112,7 +129,9 @@ public sealed class PlayerbotOptions
 
     public void Validate()
     {
-        if (MaxBots is < 0 or > 64) throw new InvalidOperationException($"{SectionName}: MaxBots must be 0..64.");
+        if (MaxBots is < 0 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBots must be 0..{MaxBotsCeiling}.");
+        if (MaxRegisteredBots is < 0 or > MaxRegisteredBotsCeiling)
+            throw new InvalidOperationException($"{SectionName}: MaxRegisteredBots must be 0..{MaxRegisteredBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");

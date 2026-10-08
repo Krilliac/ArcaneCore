@@ -273,7 +273,7 @@ public sealed class ConfigReloadTests : IDisposable
     {
         // The running bots read World:Playerbots:MovementPackets from this options object at every movement packet
         // (PlayerbotMotion), so the change takes effect at the bots' next move.
-        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": 2, "MovementPackets": false } } }""");
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "ThinkIntervalMs": 100, "MovementPackets": false } } }""");
         var playerbots = new PlayerbotOptions { Enabled = true };
         ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
 
@@ -281,12 +281,36 @@ public sealed class ConfigReloadTests : IDisposable
 
         Assert.Equal(ReloadStatus.Applied, result.Status);
         Assert.False(playerbots.MovementPackets);
-        Assert.Equal(8, playerbots.MaxBots); // the other playerbot options are not part of the reload set
+        Assert.Equal(500, playerbots.ThinkIntervalMs); // the playerbot options outside the reload set are read at start
 
         File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
         await coordinator.ReloadAsync("config");
 
         Assert.True(playerbots.MovementPackets);
+    }
+
+    [Fact]
+    public async Task PlayerbotCaps_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // ManagedPlayerbotFeature reads MaxBots at every start and MaxRegisteredBots at every create (the live stress test of
+        // 2026-10-08 could not raise MaxBots without restarting the world its owner was playing on).
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": 400, "MaxRegisteredBots": 600 } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(400, playerbots.MaxBots);
+        Assert.Equal(600, playerbots.MaxRegisteredBots);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": 1001 } } }""");
+        ReloadResult refused = await coordinator.ReloadAsync("config");
+        Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+        Assert.Equal(400, playerbots.MaxBots);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(8, playerbots.MaxBots);
+        Assert.Equal(1000, playerbots.MaxRegisteredBots);
     }
 
     [Fact]
@@ -471,8 +495,10 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
-        // Of the playerbot options the movement transport and the whole risk, chat and groups sections are in the reload set (the rest
-        // are read once at start; the chat provider list is one key).
+        // Of the playerbot options the caps, the movement transport and the whole risk, chat and groups sections are in the reload set
+        // (the rest are read once at start; the chat provider list is one key).
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxBots)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxRegisteredBots)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
@@ -509,8 +535,10 @@ public sealed class ConfigReloadTests : IDisposable
         // TickIntervalMs: WorldRuntime.Run reads it once for the thread's sleep and SpellFeature.Attach
         // for its timer; Maps:DataDirectory: TerrainManager / CollisionServices load at attach (vmangos
         // DataDir, World.cpp:932-935); Port / BindAddress: the listener is bound at start (World.cpp:598);
-        // MaxConnections / MaxConnectionsPerIp: the connection limiter is built at start (hardening lane).
-        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp", "World:Port", "World:TickIntervalMs"], restartOnly);
+        // MaxConnections / MaxConnectionsPerIp: the connection limiter is built at start (hardening lane);
+        // TickTimer / TickLateToleranceMs: WorldRuntime.Run builds its waiter and scheduler once (perf-limits lane).
+        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp", "World:Port",
+            "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
     }
 
     private sealed class NullSaveQueue : ICharacterSaveQueue

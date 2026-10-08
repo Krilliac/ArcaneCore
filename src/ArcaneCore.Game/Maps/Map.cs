@@ -1147,9 +1147,7 @@ public sealed class Map
     }
 
     private void FlushPlayer(Player player)
-        => player.PendingUpdates.Flush(
-            (opcode, payload) => player.Session.Send(opcode, payload),
-            _world.Options.UpdateCompressionThreshold);
+        => player.PendingUpdates.Flush(player.PendingUpdatesSend, _world.Options.UpdateCompressionThreshold);
 
     internal void EnsureWorldThread()
     {

@@ -126,6 +126,8 @@ injectable for tests, monotonic so a wall-clock jump cannot refill or starve a b
 | Key | Default | Meaning | Fail-closed behaviour |
 |---|---|---|---|
 | `Net:Protection:MaxConnectionsPerIp` | 16 | simultaneous connections per address, combined with the daemon's own cap (lower wins); 0 disables this side | socket closed before a scope exists |
+| `Net:Protection:ExemptLoopbackOnLoopbackBind` | true | a listener bound to a loopback address does not apply `MaxConnectionsPerIp` to loopback clients (the owner's client and local crowd tests share 127.0.0.1; only local processes can reach such a listener). A `0.0.0.0`, `::` or LAN/public bind keeps capping loopback | n/a |
+| `Net:Protection:ExemptAddresses` | (empty) | addresses or CIDR networks exempt from `MaxConnectionsPerIp` on any bind. Only that shared cap is lifted: the daemon's own cap, the global cap, the connection rate and the failure budget still apply | an entry that does not parse exempts nothing (one warning at listener start; `check-config` error) |
 | `Net:Protection:ConnectionBurstPerIp` | 100 | connections one address may open at once; 0 disables the rate limit | socket closed, cap slot released |
 | `Net:Protection:ConnectionsPerMinutePerIp` | 300 | refill rate of the connection budget | `check-config` warns when 0 with a burst set (never refills) |
 | `Net:Protection:AuthFailureBurstPerIp` | 10 | failed authentication attempts per address before refusal; 0 disables | refused before any lookup, failure code sent, connection closed |

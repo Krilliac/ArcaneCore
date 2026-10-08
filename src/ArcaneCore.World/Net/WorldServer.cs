@@ -44,7 +44,8 @@ public sealed class WorldServer(
 
         try
         {
-            var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger);
+            var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger,
+                bindAddress: IPAddress.Parse(config.BindAddress));
             Guard = guard;
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),

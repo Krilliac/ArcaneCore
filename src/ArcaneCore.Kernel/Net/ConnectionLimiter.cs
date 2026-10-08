@@ -9,8 +9,16 @@ namespace ArcaneCore.Kernel.Net;
 /// vmangos equivalent (vmangos only exposes timeouts); 0 disables a limit. The defaults sit far
 /// above anything a retail 1.12.1 client does (one connection per client).
 /// </summary>
-public sealed class ConnectionLimiter(Func<int> maxConnections, Func<int> maxPerIp)
+/// <param name="maxConnections">The global cap, read at each admission (0 = none).</param>
+/// <param name="maxPerIpFor">The per-address cap of one (normalized) address, read at each admission (0 = none).</param>
+public sealed class ConnectionLimiter(Func<int> maxConnections, Func<IPAddress, int> maxPerIpFor)
 {
+    /// <summary>The same per-address cap for every address.</summary>
+    public ConnectionLimiter(Func<int> maxConnections, Func<int> maxPerIp)
+        : this(maxConnections, _ => maxPerIp())
+    {
+    }
+
     private readonly object _gate = new();
     private readonly Dictionary<IPAddress, int> _perIp = [];
     private int _total;
@@ -41,7 +49,7 @@ public sealed class ConnectionLimiter(Func<int> maxConnections, Func<int> maxPer
         // an IPv4 client reaching a dual-stack listener shows up as ::ffff:a.b.c.d
         IPAddress key = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
         int maxTotal = maxConnections();
-        int maxIp = maxPerIp();
+        int maxIp = maxPerIpFor(key);
         lock (_gate)
         {
             _perIp.TryGetValue(key, out int current);

@@ -12,6 +12,13 @@ visible sets, ordering and heartbeat timers are preserved. See the [lane report]
 for before/after runs, regression evidence and limits. This does not establish that the live 177 ms p99 is fixed;
 cold collision loading and full managed-bot/database workloads remain outside the optimization.
 
+## Limiters, tick timing and GC (2026-10-08)
+
+After the live stress test: the world loop waits on a high-resolution timer (`World:TickTimer`, late only beyond
+`World:TickLateToleranceMs`), `.server info` reports the tick and frame medians, frame p90, allocation per phase and
+feature and the garbage collector, the World runs Server GC with background collections, and the managed-bot and
+per-address connection caps were reworked. Measurements and limits: [lane report](../integration/perf-limits-20261008.md).
+
 ## Delivered
 
 ### 1. Tick statistics and the slow-update log

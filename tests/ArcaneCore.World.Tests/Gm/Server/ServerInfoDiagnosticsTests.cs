@@ -79,7 +79,7 @@ public sealed class ServerInfoDiagnosticsTests
         string[] lines = [.. ServerInfoDiagnostics.Format(values)];
         Assert.Contains("p95=3.25 ms", lines[2]);
         Assert.Contains("p99=4.00 ms", lines[2]);
-        Assert.Contains("late=12 skipped=7", lines[5]);
+        Assert.Contains("late=12 (>0 ms) skipped=7", lines[5]);
         Assert.Contains("commands=0.12 ms/0.90 ms maps=0.70 ms/8.00 ms features=0.18 ms/1.50 ms", lines[6]);
         Assert.Equal("Slowest features: ManagedPlayerbotFeature 0.15 ms, ChatFeature 0.02 ms", lines[7]);
         Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
@@ -93,5 +93,53 @@ public sealed class ServerInfoDiagnosticsTests
         Assert.Contains("p95=unavailable", lines[2]);
         Assert.Contains("commands=unavailable", lines[6]);
         Assert.Equal("Slowest features: unavailable", lines[7]);
+    }
+
+    [Fact]
+    public void FormatShowsTheMedianTickAndTheFrameIntervalPercentiles()
+    {
+        // The live stress test (2026-10-08) had only the watchdog's TickSummary line for a median and none for the frame spread.
+        ServerInfoDiagnosticsValues values = new(50, 20, 20, 64, 50_000, 3_000, 9_000, 12_000, 0, 0, 0, 1, 2, 10, 0)
+        {
+            P50TickMicros = 2_750,
+            P95TickMicros = 8_000,
+            FrameP50Micros = 50_004,
+            FrameP90Micros = 50_331,
+            LateToleranceMs = 2,
+            LateTicks = 3,
+        };
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+        Assert.Contains("mean=50.00 ms p50=50.00 ms p90=50.33 ms frameOverruns=0", lines[1]);
+        Assert.Contains("mean=3.00 ms p50=2.75 ms p95=8.00 ms", lines[2]);
+        Assert.Contains("late=3 (>2 ms) skipped=0", lines[5]);
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
+    }
+
+    [Fact]
+    public void FormatShowsTheAllocationPerPhaseTheLargestAllocatorsAndTheCollector()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, 20, 64, 50_000, 3_000, 9_000, 12_000, 0, 0, 0, 1, 2, 10, 0)
+        {
+            PhaseAllocations = (512, 900_000, 3 * 1024),
+            TopAllocatingFeatures = [("ManagedPlayerbotFeature", 2048), ("ChatFeature", 100)],
+            Gc = "workstation concurrent gen0/1/2=5/2/1 pauseTotal=40 ms lastPause=1.5 ms (0)",
+        };
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+        Assert.Equal("Tick allocation mean: commands=512 B maps=878.91 KiB features=3.00 KiB; top: ManagedPlayerbotFeature 2.00 KiB, ChatFeature 100 B", lines[8]);
+        Assert.Equal("GC: workstation concurrent gen0/1/2=5/2/1 pauseTotal=40 ms lastPause=1.5 ms (0)", lines[9]);
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
+
+        string[] empty = [.. ServerInfoDiagnostics.Format(new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null))];
+        Assert.Equal("Tick allocation mean: unavailable", empty[8]);
+        Assert.Equal("GC: unavailable", empty[9]);
+    }
+
+    [Fact]
+    public void FormatWithoutFrameSamplesSaysUnavailableForThePercentiles()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null);
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+        Assert.Contains("p50=unavailable p90=unavailable", lines[1]);
+        Assert.Contains("mean=unavailable p50=unavailable", lines[2]);
     }
 }

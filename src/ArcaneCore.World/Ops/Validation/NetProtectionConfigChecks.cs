@@ -34,6 +34,24 @@ public sealed class NetProtectionConfigChecks : IConfigCheck
         int? perSecond = Int(issues, configuration, $"{Root}:WorldPacketsPerSecond", defaults.WorldPacketsPerSecond, 0, int.MaxValue, "0 to disable, or a positive packet count");
         int? flood = Int(issues, configuration, $"{Root}:WorldFloodPacketsPerSecond", defaults.WorldFloodPacketsPerSecond, 0, int.MaxValue, "0 to disable, or a positive packet count");
 
+        foreach (IConfigurationSection entry in configuration.GetSection("Net:Protection:ExemptAddresses").GetChildren())
+        {
+            if (!ArcaneCore.Kernel.Net.NetGuard.TryParseExemption(entry.Value, out System.Net.IPNetwork network))
+            {
+                issues.Add(Error(entry.Path, $"'{entry.Value}' is not an IP address or CIDR network.", "use an address such as 127.0.0.1 or a network such as 10.0.0.0/8"));
+            }
+            else if (network.PrefixLength == 0)
+            {
+                issues.Add(Warn(entry.Path, "exempts every address from Net:Protection:MaxConnectionsPerIp.", "list the owner's own addresses or networks only"));
+            }
+        }
+
+        string? exemptLoopback = configuration[$"{Root}:ExemptLoopbackOnLoopbackBind"];
+        if (!string.IsNullOrWhiteSpace(exemptLoopback) && !bool.TryParse(exemptLoopback, out _))
+        {
+            issues.Add(Error($"{Root}:ExemptLoopbackOnLoopbackBind", $"'{exemptLoopback}' is not true or false.", "use true (default) or false"));
+        }
+
         if (opcodeBurst is > 0 && opcodeRefill is 0)
         {
             issues.Add(Warn($"{Root}:WorldOpcodeRefillPerSecond", "the per-opcode buckets never refill: once a connection has sent WorldOpcodeBurst packets of one opcode, every later one is dropped.", "set a positive rate, or 0 for WorldOpcodeBurst to disable the per-opcode buckets"));

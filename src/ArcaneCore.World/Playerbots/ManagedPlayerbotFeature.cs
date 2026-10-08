@@ -47,6 +47,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private readonly ConcurrentDictionary<Guid, ActiveBot> _active = new();
     private PlayerbotStatus[] _snapshot = [];
     private readonly object _snapshotGate = new();
+    // Allocation per tick (docs/integration/perf-limits-20261008.md): the running bots in BotId order are re-sorted only when the
+    // set changes (_activeVersion), and the snapshot is rebuilt only when a running bot's status changed or PublishStopped
+    // touched it (_snapshotEpoch). Before, both were rebuilt every tick: ~100 bytes per bot per tick in PlayerbotStatus alone.
+    private int _activeVersion;
+    private int _orderedVersion = -1;
+    private ActiveBot[] _ordered = [];
+    private int _snapshotEpoch;
+    private int _builtEpoch = -1;
+    private int _builtCount = -1;
     private WorldRuntime? _world;
     private bool _stopping;
     private int _cursor;
@@ -100,7 +109,11 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
                 bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode));
         }
-        Volatile.Write(ref _snapshot, stopped.ToArray());
+        lock (_snapshotGate)
+        {
+            Volatile.Write(ref _snapshot, stopped.ToArray());
+            _snapshotEpoch++;
+        }
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
             foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled).Take(_options.MaxBots))
@@ -136,8 +149,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
-            if ((await store.LoadAllAsync(cancellationToken).ConfigureAwait(false)).Count >= _options.MaxBots)
-                return new(false, "playerbot-capacity");
+            // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
+            // stopped bot never takes a running slot (the live stress test of 2026-10-08 found 5 stopped bots blocking creation).
+            if ((await store.LoadAllAsync(cancellationToken).ConfigureAwait(false)).Count >= _options.MaxRegisteredBots)
+                return new(false, "playerbot-registry-full");
             ICharacterStore characters = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
             if (await characters.IsNameTakenAsync(name, cancellationToken).ConfigureAwait(false)) return new(false, "name-in-use");
             // Credentials are random and discarded; only salt/verifier persist. These accounts cannot be adopted by name.
@@ -312,6 +327,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 return new(false, "quarantine-cleared", bot.BotId);
             if (_active.TryGetValue(bot.BotId, out ActiveBot? existing))
                 return new(!existing.Paused, existing.Paused ? "stop-incomplete" : "already-running", bot.BotId);
+            // Running bots only (World:Playerbots:MaxBots, live): stopped and quarantined bots hold no slot.
             if (_active.Count >= _options.MaxBots) return new(false, "playerbot-capacity");
             Account? owner = await scope.ServiceProvider.GetRequiredService<IAccountStore>()
                 .FindByUsernameAsync(bot.AccountName, cancellationToken).ConfigureAwait(false);
@@ -338,6 +354,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
             active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
+            Interlocked.Increment(ref _activeVersion);
             retained = true;
             logger.LogInformation("Started managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
             return new(true, "started", bot.BotId, session.Player!.Name);
@@ -445,7 +462,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId,
                 }, cancellationToken).ConfigureAwait(false);
                 active.Record = bot;
-                _active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active));
+                if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active))) Interlocked.Increment(ref _activeVersion);
                 PublishStopped(bot, active.Name, active.MapId);
                 await active.Scope.DisposeAsync().ConfigureAwait(false);
             }
@@ -476,7 +493,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     {
         if (_stopping || !_options.Enabled) return;
         Interlocked.Add(ref _clockMs, elapsedMs);
-        ActiveBot[] bots = _active.Values.OrderBy(b => b.Record.BotId).ToArray();
+        int version = Volatile.Read(ref _activeVersion);
+        if (version != _orderedVersion)
+        {
+            _ordered = _active.Values.OrderBy(b => b.Record.BotId).ToArray();
+            _orderedVersion = version;
+        }
+
+        ActiveBot[] bots = _ordered;
         // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
@@ -580,16 +604,32 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
     }
 
+    /// <summary>
+    /// The running bots' status lines (StatusOf), the snapshot rebuilt only when one of them changed, the running set changed or
+    /// PublishStopped touched it (_snapshotEpoch).
+    /// </summary>
     private void PublishSnapshot(ActiveBot[] bots)
     {
+        bool changed = false;
+        int running = 0;
+        foreach (ActiveBot b in bots)
+        {
+            if (!_active.ContainsKey(b.Record.BotId)) continue;
+            running++;
+            PlayerbotStatus status = StatusOf(b);
+            if (!ReferenceEquals(status, b.Status)) { b.Status = status; changed = true; }
+        }
+
         lock (_snapshotGate)
         {
-            PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
-            Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId)).Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => new PlayerbotStatus(
-                b.Record.BotId, b.Name, b.Session.State == SessionState.Closed ? ManagedPlayerbotState.Faulted : b.Record.State,
-                b.Record.DesiredEnabled, GoalOf(b).Goal, GoalOf(b).TargetEntry, GoalOf(b).QuestId, b.MapId, b.Session.Player?.Health ?? 0,
-                b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b), RiskOf(b),
-                coordinator?.Describe(b.Record.BotId)))).ToArray());
+            if (changed || running != _builtCount || _snapshotEpoch != _builtEpoch)
+            {
+                PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
+                Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId))
+                    .Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => b.Status!)).ToArray());
+                _builtCount = running;
+                _builtEpoch = _snapshotEpoch;
+            }
         }
     }
 
@@ -639,6 +679,25 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         { logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name); }
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>A running bot's status line: the one it had when nothing in it changed (no allocation), otherwise a new one.</summary>
+    private PlayerbotStatus StatusOf(ActiveBot b)
+    {
+        bool closed = b.Session.State == SessionState.Closed;
+        ManagedPlayerbotState state = closed ? ManagedPlayerbotState.Faulted : b.Record.State;
+        (PlayerbotGoalKind goal, uint target, uint quest) = GoalOf(b);
+        uint health = b.Session.Player?.Health ?? 0;
+        string? error = closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b);
+        string? risk = RiskOf(b);
+        string? group = coordinator?.Describe(b.Record.BotId);
+        if (b.Status is { } last && last.BotId == b.Record.BotId && last.State == state && last.DesiredEnabled == b.Record.DesiredEnabled
+            && last.Goal == goal && last.TargetEntry == target && last.QuestId == quest && last.MapId == b.MapId && last.Health == health
+            && string.Equals(last.Name, b.Name, StringComparison.Ordinal) && string.Equals(last.ErrorCode, error, StringComparison.Ordinal)
+            && string.Equals(last.Risk, risk, StringComparison.Ordinal) && string.Equals(last.Group, group, StringComparison.Ordinal))
+            return last;
+        return new PlayerbotStatus(b.Record.BotId, b.Name, state, b.Record.DesiredEnabled, goal, target, quest, b.MapId, health, error, risk,
+            group);
     }
 
     /// <summary>The risk line of a running bot (its party AI's while that drives it); none for a scripted bot.</summary>
@@ -821,6 +880,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
             Volatile.Write(ref _snapshot, current.Where(s => s.BotId != bot.BotId).Append(next).ToArray());
+            _snapshotEpoch++;
         }
     }
 
@@ -841,6 +901,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public IPlayerbotController? Controller;
         public string? FaultCode;
         public int StallsLogged;
+        public PlayerbotStatus? Status; // world thread: the last status line (StatusOf)
         public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
     }
 }

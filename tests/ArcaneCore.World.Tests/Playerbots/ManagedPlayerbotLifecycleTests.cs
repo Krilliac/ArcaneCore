@@ -14,6 +14,107 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class ManagedPlayerbotLifecycleTests
 {
     [Fact]
+    public async Task StoppedBots_DoNotTakeASlot_OnlyRunningBotsCountAgainstMaxBots()
+    {
+        // The live world of 2026-10-08 (MaxBots 10) refused '.playerbot create' with 5 bots running and 5 stopped.
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 2);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+
+        Guid[] ids = new Guid[4];
+        string[] names = ["Capone", "Captwo", "Capthree", "Capfour"];
+        for (int i = 0; i < ids.Length; i++)
+        {
+            PlayerbotOperationResult created = await feature.CreateAsync(names[i], 1, 1);
+            Assert.True(created.Success, $"{names[i]}: {created.Code}"); // was "playerbot-capacity" from the third on
+            ids[i] = created.BotId!.Value;
+        }
+
+        Assert.True((await feature.StartAsync(ids[0].ToString())).Success);
+        Assert.True((await feature.StartAsync(ids[1].ToString())).Success);
+        Assert.Equal("playerbot-capacity", (await feature.StartAsync(ids[2].ToString())).Code);
+
+        Assert.True((await feature.StopAsync(ids[0].ToString())).Success);
+        PlayerbotOperationResult third = await feature.StartAsync(ids[2].ToString());
+        Assert.True(third.Success, third.Code); // the stopped bot gave its slot back
+        Assert.Equal("playerbot-capacity", (await feature.StartAsync(ids[3].ToString())).Code);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public async Task TheStatusSnapshot_IsNotRebuiltWhileNothingInItChanges()
+    {
+        // Allocation per tick: the snapshot (one PlayerbotStatus per running bot) was rebuilt every tick, ~100 bytes per bot per
+        // tick (docs/integration/perf-limits-20261008.md). A scripted bot that does nothing changes nothing in its status line.
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Stillone", 1, 1)).BotId!.Value;
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+        await host.WaitForWorldAsync(() => feature.Snapshot().Any(b => b.BotId == id && b.State == ManagedPlayerbotState.Running), "running in the snapshot");
+
+        System.Reflection.FieldInfo field = typeof(ManagedPlayerbotFeature).GetField("_snapshot",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        object? before = await host.World.InvokeAsync(() => field.GetValue(feature));
+        long ticks = host.World.Stats.Snapshot().TotalTicks;
+        await host.WaitForWorldAsync(() => host.World.Stats.Snapshot().TotalTicks >= ticks + 10, "ten more ticks");
+        object? after = await host.World.InvokeAsync(() => field.GetValue(feature));
+        Assert.Same(before, after);
+
+        Assert.True((await feature.StopAsync(id.ToString())).Success); // a change is still published at once
+        Assert.Equal(ManagedPlayerbotState.Stopped, Assert.Single(feature.Snapshot(), b => b.BotId == id).State);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public async Task MaxRegisteredBots_BoundsCreation()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxRegisteredBots = 2);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Assert.True((await feature.CreateAsync("Regone", 1, 1)).Success);
+        Assert.True((await feature.CreateAsync("Regtwo", 1, 1)).Success);
+        Assert.Equal("playerbot-registry-full", (await feature.CreateAsync("Regthree", 1, 1)).Code);
+        Assert.Equal(2, (await owners.LoadAllAsync()).Count);
+    }
+
+    [Fact]
+    public async Task MaxBots_ReadAtEachStart_ARaiseAdmitsMore_ALoweringStopsNobodyAndRefusesNewStarts()
+    {
+        // .reload config writes the running PlayerbotOptions (WorldConfigKeys: World:Playerbots:MaxBots is live).
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        PlayerbotOptions? options = null;
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.MaxBots = 1; options = o; });
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = new Guid[3];
+        string[] names = ["Liveone", "Livetwo", "Livethree"];
+        for (int i = 0; i < ids.Length; i++) ids[i] = (await feature.CreateAsync(names[i], 1, 1)).BotId!.Value;
+
+        Assert.True((await feature.StartAsync(ids[0].ToString())).Success);
+        Assert.Equal("playerbot-capacity", (await feature.StartAsync(ids[1].ToString())).Code);
+
+        options!.MaxBots = 3;
+        Assert.True((await feature.StartAsync(ids[1].ToString())).Success);
+        Assert.True((await feature.StartAsync(ids[2].ToString())).Success);
+
+        options.MaxBots = 1; // below the running count: everybody keeps running, new starts are refused
+        await host.WaitForWorldAsync(() => feature.Snapshot().Count(b => b.State == ManagedPlayerbotState.Running) == 3, "three bots running");
+        Assert.True((await feature.StopAsync(ids[2].ToString())).Success);
+        Assert.Equal("playerbot-capacity", (await feature.StartAsync(ids[2].ToString())).Code);
+        Assert.Equal(2, feature.Snapshot().Count(b => b.State == ManagedPlayerbotState.Running));
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
     public async Task FailedRegistration_ReconcilesTheOrdinaryCharacterAndPendingProvision()
     {
         var accounts = new InMemoryAccountStore();
@@ -515,7 +616,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         public void Detached(Guid botId) { }
     }
 
-    private sealed class CapturingLogger : ILogger<ManagedPlayerbotFeature>
+    internal sealed class CapturingLogger : ILogger<ManagedPlayerbotFeature>
     {
         private readonly ConcurrentQueue<(Exception? Error, string Message)> _entries = new();
 
@@ -529,7 +630,7 @@ public sealed class ManagedPlayerbotLifecycleTests
             => _entries.Enqueue((exception, formatter(state, exception)));
     }
 
-    private static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
+    internal static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         MemoryManagedPlayerbotStore owners, MemoryProvisionStore? provisions = null,
         bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null,
         bool manualClock = false)
@@ -557,7 +658,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         public void Attach(WorldRuntime world) => world.UseManualClock();
     }
 
-    private sealed class MemoryProvisionStore(InMemoryAccountStore accounts) : IManagedPlayerbotProvisionStore
+    internal sealed class MemoryProvisionStore(InMemoryAccountStore accounts) : IManagedPlayerbotProvisionStore
     {
         private readonly ConcurrentDictionary<Guid, ManagedPlayerbotProvision> _pending = new();
         public int RollbackCount { get; private set; }
@@ -583,7 +684,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         }
     }
 
-    private sealed class MemoryManagedPlayerbotStore : IManagedPlayerbotStore
+    internal sealed class MemoryManagedPlayerbotStore : IManagedPlayerbotStore
     {
         private readonly ConcurrentDictionary<Guid, ManagedPlayerbot> _items = new();
         public bool FailNextCreate { get; set; }

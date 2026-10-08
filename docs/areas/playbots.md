@@ -12,9 +12,17 @@ protocol client.
 password-less Player accounts and logs them in through an ordinary socketless `WorldSession`
 (`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
-Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `ThinkIntervalMs` 500,
+Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `MaxRegisteredBots` 1000, `ThinkIntervalMs` 500,
 `MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
 `FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
+
+**Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
+start beyond it is refused with `playerbot-capacity` (a startup restore or quarantine retry waits for a slot). `MaxRegisteredBots`
+(0..10000) bounds `.playerbot create` (`playerbot-registry-full`); every registered bot is a real account and character. Both
+are live through `.reload config`: a raise admits more starts at once; lowering `MaxBots` below the running count stops nobody,
+it refuses new starts until enough bots are stopped. Until 2026-10-08 `MaxBots` was capped at 64 and creation counted stopped
+bots too; the ceiling of 1000 and its measurement are in `docs/integration/perf-limits-20261008.md` (a ceiling, not a
+recommendation: watch `.server info` on a real world).
 
 GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|list|inspect`
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
@@ -379,7 +387,7 @@ scenario against the running world on the real clock and print the report lines 
 Both are refused unless `World:Playerbots:Enabled` and `World:Playerbots:Scenarios:Enabled` are
 true (default false). `World:Playerbots:Scenarios:MaxDurationSeconds` (120, 5..600) and
 `StepTimeoutSeconds` (20, 1..300) bound a run; one run at a time. Scenario bots are real,
-persistent characters (they count against `MaxBots`); they are placed where `Scnalpha`
+persistent characters (running, they count against `MaxBots`; registered, against `MaxRegisteredBots`); they are placed where `Scnalpha`
 stands, and the setup helpers change their money, items and health. Enable it only on test
 realms.
 
