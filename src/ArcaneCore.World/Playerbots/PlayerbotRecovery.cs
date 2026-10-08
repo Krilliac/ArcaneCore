@@ -40,7 +40,7 @@ internal enum PlayerbotRecoveryStep
     /// <summary>Stand at the body while the server's reclaim delay runs (SMSG_CORPSE_RECLAIM_DELAY).</summary>
     WaitForReclaimDelay,
 
-    /// <summary>Stand at the body while a hostile creature is near it.</summary>
+    /// <summary>Stand within reclaim range while a hostile creature is near the ghost (where the reclaim revives it).</summary>
     WaitForHostiles,
 
     /// <summary>Reclaim the body (CMSG_RECLAIM_CORPSE).</summary>
@@ -49,7 +49,7 @@ internal enum PlayerbotRecoveryStep
     /// <summary>Give up on the body and take the spirit healer (CMSG_SPIRIT_HEALER_ACTIVATE).</summary>
     SpiritHealer,
 
-    /// <summary>A body that cannot even be released: the recovery faults.</summary>
+    /// <summary>A body that cannot even be released: the recovery faults (<see cref="PlayerbotRecovery.Stalled"/>).</summary>
     Fault,
 }
 
@@ -71,7 +71,9 @@ internal enum PlayerbotSpiritHealerStep
 
 /// <summary>
 /// Ordinary ghost recovery for one managed player, like a client: release, walk back to the body, wait out the reclaim delay,
-/// wait for hostiles near the body to leave (mangoszero playerbot ReviveFromCorpseAction), reclaim.
+/// wait for hostiles near the revive point to leave (mangoszero playerbot ReviveFromCorpseAction), reclaim. The revive point is
+/// where the ghost stands, not the body: CMSG_RECLAIM_CORPSE resurrects the player in place (vmangos MiscHandler.cpp:599,
+/// <c>ResurrectPlayer</c> without a relocation), and the walk stops as soon as the body is in reclaim range (about 39 yards).
 /// <list type="bullet">
 /// <item><description>A body on another map — the bot died in a dungeon and was released at a graveyard outside — is reached
 /// through the dungeon's entrance: the ghost walks into the area trigger whose <c>areatrigger_teleport</c> leads to the body's
@@ -93,7 +95,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal const long NoProgressMs = 60_000;
     internal const long StuckMs = 10_000;
 
-    /// <summary>A hostile creature this close to the body keeps the ghost from reclaiming it (just beyond the 20-yard same-level aggro radius).</summary>
+    /// <summary>
+    /// A hostile creature this close to the ghost keeps it from reclaiming its body (just beyond the 20-yard same-level aggro
+    /// radius): the reclaim revives the bot where the ghost stands.
+    /// </summary>
     internal const float HostileClearYards = 25f;
 
     /// <summary>The ghost activates a healer from this close: inside the server's interaction range with a margin.</summary>
@@ -184,7 +189,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
-        bool hostile = atCorpse && wait <= 0 && HostileNear(player, corpse!);
+        bool hostile = atCorpse && wait <= 0 && HostileNear(player);
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: false);
         LastStep = step;
         switch (step)
@@ -202,6 +207,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 StandStill(player);
                 _progressMs = now;
                 return false;
+
+            case PlayerbotRecoveryStep.Fault:
+                // A body that was never released and made no progress: never the spirit-healer fallback, which is for ghosts.
+                throw new InvalidOperationException(Stalled);
 
             case PlayerbotRecoveryStep.WaitForHostiles:
                 // Not progress: a body camped for NoProgressMs is given up for the spirit healer.
@@ -337,8 +346,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         return null;
     }
 
-    /// <summary>A living hostile creature the ghost can see within <see cref="HostileClearYards"/> of its body.</summary>
-    internal static bool HostileNear(Player player, Corpse corpse)
+    /// <summary>
+    /// A living hostile creature the ghost can see within <see cref="HostileClearYards"/> of the ghost itself, where CMSG_RECLAIM_CORPSE
+    /// revives it (vmangos MiscHandler.cpp:599), which may be up to the reclaim radius away from the body.
+    /// </summary>
+    internal static bool HostileNear(Player player)
     {
         if (player.Map is not { } map) return false;
         foreach (ObjectGuid guid in player.VisibleObjects)
@@ -346,7 +358,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
                 || !ReferenceEquals(creature.Map, map))
                 continue;
-            if (Distance(corpse, creature.X, creature.Y, creature.Z) <= HostileClearYards
+            if (Distance(player, creature.X, creature.Y, creature.Z) <= HostileClearYards
                 && map.Combat.Hooks.IsHostileTo(creature, player))
                 return true;
         }

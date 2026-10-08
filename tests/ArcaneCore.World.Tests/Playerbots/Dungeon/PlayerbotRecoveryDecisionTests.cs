@@ -171,6 +171,83 @@ public sealed class PlayerbotRecoveryDecisionTests
     }
 
     /// <summary>
+    /// The hostile check is made where the ghost stands, because CMSG_RECLAIM_CORPSE revives the player there (vmangos
+    /// MiscHandler.cpp:599, no relocation), and the walk stops as soon as the body is in reclaim range (about 39 yards). With the body
+    /// 30 yards away: a creature 15 yards from the ghost (45 from the body) means waiting; one beside the body (35 yards from the
+    /// ghost) does not. Before, both were measured from the body, the other way round.
+    /// </summary>
+    [Fact]
+    public async Task TheHostileCheck_IsMadeAroundTheGhost_WhereTheReclaimRevivesIt()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await host.KillAndReleaseAsync();
+        Vector3 ghost = await host.OnWorldAsync(() =>
+        {
+            Corpse corpse = host.Player.Combat.Corpse!;
+            corpse.SetPosition(host.Player.X + 30, host.Player.Y, host.Player.Z, 0);
+            return new Vector3(host.Player.X, host.Player.Y, host.Player.Z);
+        });
+        Creature wolf = await host.OnWorldAsync(() => DungeonBotHost.AddCreature(host.Player.Map!, 994302,
+            ghost.X - 15, ghost.Y, ghost.Z, 0, host.Host.World.NowMs, faction: 14)); // a monster behind the ghost
+        await host.AcknowledgeUntilAsync(p => p.VisibleObjects.Contains(wolf.Guid), "the ghost sees the creature");
+        clock.Seconds += 31;
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        await host.OnWorldAsync(() =>
+        {
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.False(recovery.Update(host.Player, 500));
+            Assert.Equal(Step.WaitForHostiles, recovery.LastStep);
+            Assert.False(host.Player.IsAlive);
+
+            wolf.Relocate(ghost.X + 35, ghost.Y, ghost.Z, 0, host.Host.World.NowMs); // beside the body
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(recovery.Update(host.Player, 500));
+            Assert.Equal(Step.Reclaim, recovery.LastStep);
+            Assert.True(host.Player.IsAlive);
+            Assert.True(Vector2.Distance(new(host.Player.X, host.Player.Y), new(ghost.X, ghost.Y)) < 1f, "revived away from where the ghost stood");
+        });
+    }
+
+    /// <summary>
+    /// A body that was never released (no ghost) and whose recovery counts as stalled faults with <see cref="PlayerbotRecovery.Stalled"/>
+    /// (<see cref="Step.Fault"/>); the spirit-healer fallback is for ghosts only. Here the bot walked as a ghost and lost the ghost
+    /// flag, so the stuck bound of the walk (<see cref="PlayerbotRecovery.StuckMs"/>) runs out well before the release bound
+    /// (<see cref="PlayerbotRecovery.NoProgressMs"/>). Before, the Fault step fell through to the spirit-healer fallback.
+    /// </summary>
+    [Fact]
+    public async Task AStalledBodyThatIsNoGhost_FaultsStalled_AndNeverTakesTheSpiritHealer()
+    {
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        await host.TeleportAsync(1, 100f, 100f, DeadminesTestContent.OutsideFloor);
+        await host.KillAndReleaseAsync();
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        await host.OnWorldAsync(() =>
+        {
+            Corpse corpse = host.Player.Combat.Corpse!;
+            corpse.SetPosition(host.Player.X + 60, host.Player.Y, host.Player.Z, 0);
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(recovery.Update(host.Player, 500));
+            Assert.Equal(Step.WalkToCorpse, recovery.LastStep);
+            PlayerbotMovementControl.Stop(host.Session, host.Player);
+        });
+        await host.AdvanceAsync((uint)PlayerbotRecovery.StuckMs + 1_000);
+
+        InvalidOperationException fault = await host.OnWorldAsync(() =>
+        {
+            host.Player.Flags &= ~PlayerFlags.Ghost;
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            return Assert.Throws<InvalidOperationException>(() => recovery.Update(host.Player, 500));
+        });
+
+        Assert.Equal(PlayerbotRecovery.Stalled, fault.Message);
+        Assert.Equal(Step.Fault, recovery.LastStep);
+        Assert.False(recovery.UsingSpiritHealer);
+    }
+
+    /// <summary>
     /// A corpse run that cannot get anywhere (the body lies far below the ground) is given up after <see cref="PlayerbotRecovery.StuckMs"/>
     /// for the spirit healer in sight: the ghost walks to it and activates it through the ordinary handler. Nothing throws. Before,
     /// the stuck walk threw "playerbot-recovery-stuck" and the fault quarantined the bot.
