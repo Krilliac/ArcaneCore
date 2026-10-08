@@ -194,6 +194,51 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
         });
     }
 
+    // Ironwander's graveyard on the ridge above Kharanos, and one of its bodies below (rehearsal replay, 2026-10-08).
+    private static readonly Vector3 KharanosRidgeGraveyard = new(-5165f, -876f, 507.245f);
+    private static readonly Vector3 IronwanderBody = new(-5384.3f, -715.74f, 397.39f);
+
+    /// <summary>
+    /// From the graveyard on the ridge above Kharanos the navigation mesh goes down a switchback: its first leg leads north-east,
+    /// away from a body 292 yards to the west, and the straight-line distance grows for more than 10 seconds before it shrinks.
+    /// The ghost follows that route to its body and never gives up for the spirit healer. Before, the corpse run counted only the
+    /// straight-line distance as closing, judged the walk stuck after <see cref="PlayerbotRecovery.StuckMs"/> and took the
+    /// spirit healer every time (Ironwander, three deaths in each replay).
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task AGhostOnTheKharanosRidge_FollowsTheSwitchbackDownToItsBody()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(IronwanderBody);
+        Vector3 body = await terrain.KillAndReleaseAsync();
+        await terrain.PlaceAsync(KharanosRidgeGraveyard);
+
+        var recovery = new PlayerbotRecovery(terrain.Session, new PlayerbotOptions { Enabled = true });
+        bool usedHealer = false, atBody = false;
+        float farthest = 0;
+        for (int think = 0; think < 600 && !atBody && !usedHealer; think++)
+        {
+            await terrain.Host.OnWorldAsync(() =>
+            {
+                PlayerbotMovementControl.Update(terrain.Session, terrain.Player);
+                terrain.Session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(terrain.Player, 500);
+                usedHealer = recovery.UsingSpiritHealer;
+                atBody = recovery.LastStep is PlayerbotRecoveryStep.WaitForReclaimDelay or PlayerbotRecoveryStep.Reclaim;
+                farthest = MathF.Max(farthest, Vector3.Distance(body, new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z)));
+            });
+            for (int tick = 0; tick < 10; tick++)
+            {
+                await terrain.Host.World.AdvanceClockAsync(50);
+                await terrain.Host.OnWorldAsync(() => PlayerbotMotion.Pump(terrain.Session, terrain.Player, terrain.Host.World.NowMs));
+            }
+        }
+
+        output.WriteLine($"farthest from the body on the way: {farthest:F1} yards");
+        Assert.False(usedHealer, $"the ghost took the spirit healer at ({await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z))})");
+        Assert.True(atBody, $"the ghost did not reach its body; last step {recovery.LastStep}");
+    }
+
     private sealed class RevivalClock(long seconds) : DeathClock
     {
         public long Seconds { get; set; } = seconds;

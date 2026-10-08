@@ -77,6 +77,23 @@ public sealed class PlayerbotRecoveryDecisionTests
     private const float SpotClearance = PlayerbotRecovery.CampMarginYards + PlayerbotRecovery.ReviveSpotSlackYards;
 
     /// <summary>
+    /// The way left along a route (the corpse run's second closing measure): to the next corner, along the remaining legs, then
+    /// straight on to the goal. A bot on the first leg of a route that bends away from its goal still has less way left as it walks.
+    /// </summary>
+    [Fact]
+    public void RouteLeft_FollowsTheRemainingLegs_ThenStraightOnToTheGoal()
+    {
+        var route = new PlayerbotRoute([new(0, 0, 0), new(10, 0, 0), new(10, 10, 0)], 20f, navigated: true);
+        var goal = new Vector3(10, 20, 0);
+        Assert.Equal(25f, PlayerbotRecovery.RouteLeft(new Vector3(5, 0, 0), route, goal), 3);
+        Assert.Equal(29f, PlayerbotRecovery.RouteLeft(new Vector3(1, 0, 0), route, goal), 3);
+        route.NextPoint = 2;
+        Assert.Equal(15f, PlayerbotRecovery.RouteLeft(new Vector3(10, 5, 0), route, goal), 3);
+        route.NextPoint = 3; // finished: straight on to the goal
+        Assert.Equal(10f, PlayerbotRecovery.RouteLeft(new Vector3(10, 10, 0), route, goal), 3);
+    }
+
+    /// <summary>
     /// The revive-spot search, free of world state: rings round the body inside the reclaim radius, nearest to the ghost first, out
     /// of every threat's aggro reach with the margins; the first one the mesh reaches. The body here is surrounded: the only clear
     /// ground is the far rim.
