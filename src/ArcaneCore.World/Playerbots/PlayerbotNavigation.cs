@@ -37,6 +37,21 @@ internal sealed class PlayerbotRoute
 
 internal static class PlayerbotNavigation
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
+
+    /// <summary>
+    /// The risk whose hazards (<see cref="PlayerbotHazards"/>) every route of this bot must keep out of (null: none). The brain sets
+    /// it each think; a party bot follows its master wherever he goes and has none.
+    /// </summary>
+    internal static void Guard(Player player, PlayerbotRisk? risk)
+    {
+        if (risk is null) Guards.Remove(player);
+        else Guards.AddOrUpdate(player, risk);
+    }
+
+    /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
+    private static readonly float[] HazardDetourYards = [5f, 15f];
+
     internal static bool IsUsablePath(PathResult path, int maxPoints, float maxDistance)
         => path.HasPath && (path.Type & (PathType.NotUsingPath | PathType.DestForced | PathType.FlyPath)) == 0
             && path.Points.Count <= maxPoints
@@ -79,6 +94,54 @@ internal static class PlayerbotNavigation
     /// stops short of it on the mesh is accepted when it closes on <paramref name="goal"/>.
     /// </summary>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
+        out PlayerbotRoute? route)
+    {
+        if (!PlanDirect(player, destination, goal, options, partial, out route) || route is null) return false;
+        if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Blocking(player, route.Points) is not { } hazard) return true;
+
+        // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
+        PlayerbotRoute direct = route;
+        route = null;
+        Vector3 start = direct.Points[0], end = direct.Points[^1];
+        Vector3 flat = new(end.X - start.X, end.Y - start.Y, 0);
+        if (flat.Length() < 1f || player.Map is not { } map) return false;
+        Vector3 along = Vector3.Normalize(flat);
+        Vector3 side = new(-along.Y, along.X, 0);
+        foreach (float extra in HazardDetourYards)
+            foreach (float sign in (float[])[1f, -1f])
+            {
+                // Round the hazard by its side: a corner before it and a corner past it, each its radius plus the margin off.
+                float off = hazard.Radius + extra;
+                Vector3 before = hazard.At - (along * off) + (side * sign * off);
+                Vector3 past = hazard.At + (along * off) + (side * sign * off);
+                if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first) || first is null) continue;
+                if (Leg(map, first.Points[^1], past, options) is not { } middle || Leg(map, middle[^1], end, options) is not { } last) continue;
+                List<Vector3> points = [.. first.Points, .. middle.Skip(1), .. last.Skip(1)];
+                float length = 0;
+                for (int i = 1; i < points.Count; i++) length += Vector3.Distance(points[i - 1], points[i]);
+                if (length > options.MaxRouteYards || points.Count > options.MaxPathPoints * 3) continue;
+                var detour = new PlayerbotRoute(points, length, first.Navigated);
+                if (risk.Blocking(player, detour.Points) is not null) continue;
+                route = detour;
+                return true;
+            }
+
+        return false;
+    }
+
+    /// <summary>A second leg from <paramref name="from"/> (the navigation mesh's, else a stepped terrain line), or null.</summary>
+    private static IReadOnlyList<Vector3>? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
+    {
+        PathResult path = map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
+        if ((path.Type & PathType.NotUsingPath) != 0)
+            return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
+                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain!.Points : null;
+        return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0 ? path.Points : null;
+    }
+
+    /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
+    private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route)
     {
         route = null;

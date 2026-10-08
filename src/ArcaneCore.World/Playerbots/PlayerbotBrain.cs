@@ -45,7 +45,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private PlayerbotRisk? _risk;
 
     /// <summary>Risk against reward and retreat (<see cref="PlayerbotRisk"/>; inspection and tests).</summary>
-    internal PlayerbotRisk Risk => _risk ??= new PlayerbotRisk(_session, _options, _combatSpells);
+    internal PlayerbotRisk Risk => _risk ??= NewRisk();
+
+    private PlayerbotRisk NewRisk()
+    {
+        var risk = new PlayerbotRisk(_session, _options, _combatSpells);
+        _recovery.Hazards = risk.HazardThreats;
+        return risk;
+    }
 
     /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>).</summary>
     internal string RiskReport => _options.Risk.Enabled ? Risk.Report : "decision=off";
@@ -124,6 +131,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
+                Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
                 _recovery.Update(player, recoveryInterval);
             }
             return;
@@ -202,6 +210,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         Risk.Track(player);
+        // Every walk of this bot keeps out of its hazards (PlayerbotHazards), unless the estimate is off.
+        PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? Risk : null);
 
         if (_lootOpened && _target is { } pendingLoot)
         {

@@ -35,7 +35,8 @@ internal enum RiskJoin : byte
 }
 
 /// <summary>One creature of a predicted fight: its level, rank, health and damage per second against the bot.</summary>
-internal readonly record struct RiskEnemy(uint Entry, byte Level, uint Rank, uint Health, float Dps, RiskJoin Join)
+/// <param name="Lethal">One of its spells kills the bot outright (<see cref="CreatureSpellThreat.IsLethalTo"/>).</param>
+internal readonly record struct RiskEnemy(uint Entry, byte Level, uint Rank, uint Health, float Dps, RiskJoin Join, bool Lethal = false)
 {
     /// <summary>vmangos CreatureEliteType: 1 elite, 2 rare elite, 3 world boss (4 rare is a normal creature).</summary>
     public bool Elite => Rank is 1 or 2 or 3;
@@ -87,7 +88,7 @@ internal readonly record struct PlayerbotEngagement(uint Entry, float Risk, floa
 
 /// <summary>Everything one in-combat estimate reads.</summary>
 internal readonly record struct PlayerbotFightFacts(uint BotHealth, uint BotMaxHealth, float DpsIn, float DpsOut, uint EnemyHealth,
-    int Enemies, float TargetHealthPct);
+    int Enemies, float TargetHealthPct, bool Lethal = false);
 
 /// <summary>The in-combat verdict: the times to kill and to die and whether to retreat.</summary>
 internal readonly record struct PlayerbotFightVerdict(bool Retreat, float TimeToKill, float TimeToDie, string Reason)
@@ -109,6 +110,8 @@ internal readonly record struct PlayerbotFightVerdict(bool Retreat, float TimeTo
 /// Mana-dependent damage shrinks with the mana left; remembered danger raises it and a ready escape lowers it a little.</item>
 /// <item><b>Reward</b>: the experience of the kills relative to a same-level kill (XP::Gain: a gray creature gives nothing, an
 /// elite twice), plus 2 for a quest objective and the loot value.</item>
+/// <item>A creature with a spell that kills the bot outright (an instakill, or one hit at least the bot's health) is avoided whatever
+/// the reward, and fled at once in a fight.</item>
 /// <item>A pull is taken when the risk is at most <c>Tolerance x min(0.9, 0.4 + 0.2 x reward)</c>: a same-level kill without a
 /// quest accepts about 0.65, a quest objective 0.9. An elite three or more levels above the bot is a quest objective or nothing.</item>
 /// </list>
@@ -145,6 +148,9 @@ internal static class PlayerbotRiskModel
         PlayerbotEngagement Verdict(PlayerbotEngageDecision decision, string reason) => new(target.Entry, risk, reward, decision, reason, adds);
 
         if (facts.Remembered) return Verdict(PlayerbotEngageDecision.Avoid, "remembered");
+        // A creature with a spell that kills the bot outright is never worth it, quest or not: no estimate of rates covers a one-shot.
+        if (facts.Enemies.Any(enemy => enemy.Lethal))
+            return new(target.Entry, float.PositiveInfinity, reward, PlayerbotEngageDecision.Avoid, "lethal", adds);
         if (target.Elite && target.Level >= facts.BotLevel + EliteLevelMargin && !facts.QuestObjective)
             return Verdict(PlayerbotEngageDecision.Avoid, "elite-above");
         if (risk <= accept) return Verdict(PlayerbotEngageDecision.Engage, adds > 0 ? $"ok-with-{adds}-adds" : "ok");
@@ -227,6 +233,8 @@ internal static class PlayerbotRiskModel
         float ttk = facts.EnemyHealth == 0 ? 0 : facts.EnemyHealth / MathF.Max(0.1f, facts.DpsOut);
         float ttd = facts.DpsIn <= 0.01f ? float.PositiveInfinity : facts.BotHealth / facts.DpsIn;
         if (facts.Enemies == 0 || facts.EnemyHealth == 0) return new(false, ttk, ttd, "won");
+        // An enemy that can kill outright: leave unless it dies within the next two seconds.
+        if (facts.Lethal) return ttk < 2f ? new(false, ttk, ttd, "nearly-won") : new(true, ttk, ttd, "lethal");
         float healthPct = facts.BotMaxHealth == 0 ? 0 : facts.BotHealth * 100f / facts.BotMaxHealth;
         if (facts.Enemies == 1 && facts.TargetHealthPct <= options.NearlyWonHealthPct && ttd * 2f >= ttk)
             return new(false, ttk, ttd, "nearly-won");

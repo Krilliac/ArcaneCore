@@ -488,6 +488,7 @@ internal sealed class PlayerbotPartyAI
         // A party bot follows its master's lead: it never weighs a fight on its own and stays while the group fights. Only a wiping
         // group (World:Playerbots:Risk:PartyRetreatOnWipe) sends it back the way it came, past the creatures' leash.
         _risk.Track(player);
+        PlayerbotNavigation.Guard(player, null); // a party bot goes where its master goes
         if (_risk.UpdateRetreat(player, interval))
         {
             Goal = PlayerbotGoalKind.Retreat;

@@ -61,6 +61,13 @@ internal sealed class PlayerbotRisk
 
     internal PlayerbotDangerMemory Memory { get; } = new();
 
+    /// <summary>The places the bot keeps out of on its walks (<see cref="PlayerbotHazards"/>).</summary>
+    internal PlayerbotHazards Hazards { get; } = new();
+
+    /// <summary>How often the visible creatures are looked over for hazards.</summary>
+    internal const uint HazardScanMs = 2_000;
+    private uint _nextScanMs;
+
     internal PlayerbotRetreat Retreat { get; }
 
     /// <summary>The last pre-engagement verdict (the target taken, or the best one passed over).</summary>
@@ -90,6 +97,7 @@ internal sealed class PlayerbotRisk
     {
         // The trail runs on through a pull (a bot is in combat from its first swing, often well short of where it fights).
         Breadcrumbs.Track(player);
+        ScanHazards(player);
         if (player.Combat.IsInCombat) return;
         _cornered = false;
         if (Tracker.Active) Tracker.End();
@@ -98,9 +106,14 @@ internal sealed class PlayerbotRisk
     /// <summary>The bot died: remember its killers and the place, and forget the fight.</summary>
     internal void OnDeath(Player player)
     {
-        if (Enabled && Tracker.LastEnemies.Count > 0)
+        // The killers: whatever still attacks the body, and the enemies of the fight being watched (not those of an earlier one).
+        Creature[] killers = [.. player.Combat.Attackers.OfType<Creature>().Concat(Tracker.Active ? Tracker.LastEnemies : []).Distinct()];
+        if (Enabled && killers.Length > 0)
             Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z),
-                Tracker.LastEnemies.Select(c => (c.Guid, c.Entry)), _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+                killers.Select(c => (c.Guid, c.Entry)), _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+        if (Enabled)
+            Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
+                _options.Risk.DangerMemorySeconds, "death");
         Retreat.Stop("died");
         Tracker.End();
         Breadcrumbs.Clear();
@@ -203,7 +216,7 @@ internal sealed class PlayerbotRisk
         float distance = Vector3.Distance(here, there);
         spot = distance <= range || distance < 0.01f ? here : there + ((here - there) * (range / distance));
 
-        var enemies = new List<RiskEnemy> { Enemy(target, RiskJoin.Target) };
+        var enemies = new List<RiskEnemy> { Enemy(target, RiskJoin.Target, player) };
         var counted = new HashSet<ObjectGuid> { target.Guid };
         List<PlayerbotThreat> threats = PlayerbotRecovery.Threats(player);
 
@@ -215,7 +228,7 @@ internal sealed class PlayerbotRisk
                     && system.CanAssist(helper, target, player, assist))
                 {
                     counted.Add(helper.Guid);
-                    enemies.Add(Enemy(helper, RiskJoin.Assist));
+                    enemies.Add(Enemy(helper, RiskJoin.Assist, player));
                 }
 
         // vmangos BasicAI::MoveInLineOfSight: any creature whose aggro radius covers where the bot will fight.
@@ -223,7 +236,7 @@ internal sealed class PlayerbotRisk
             if (threat.Source is { } creature && !counted.Contains(creature.Guid) && threat.Reaches(spot, 0f))
             {
                 counted.Add(creature.Guid);
-                enemies.Add(Enemy(creature, RiskJoin.FightSpot));
+                enemies.Add(Enemy(creature, RiskJoin.FightSpot, player));
             }
 
         // ... and those whose radius covers the way there (the planned route, sampled every 3 yards).
@@ -232,7 +245,7 @@ internal sealed class PlayerbotRisk
                 if (threat.Source is { } creature && !counted.Contains(creature.Guid) && Covers(threat, approach.Points))
                 {
                     counted.Add(creature.Guid);
-                    enemies.Add(Enemy(creature, RiskJoin.Path));
+                    enemies.Add(Enemy(creature, RiskJoin.Path, player));
                     pathThreats.Add(threat);
                 }
 
@@ -257,13 +270,19 @@ internal sealed class PlayerbotRisk
         };
     }
 
-    private static RiskEnemy Enemy(Creature creature, RiskJoin join)
+    private RiskEnemy Enemy(Creature creature, RiskJoin join, Player bot)
     {
         CreatureTemplate t = creature.Template;
         bool elite = t.Rank is 1 or 2 or 3;
+        CreatureSpellThreat spells = SpellThreat(creature);
         return new RiskEnemy(creature.Entry, creature.Level, t.Rank, creature.Health,
-            PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, elite), join);
+            PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, elite) + spells.Dps,
+            join, spells.IsLethalTo(bot.MaxHealth));
     }
+
+    /// <summary>The creature's own spells (<see cref="PlayerbotCreatureSpells"/>).</summary>
+    internal CreatureSpellThreat SpellThreat(Creature creature)
+        => PlayerbotCreatureSpells.Of(creature, _session.Services.GetService<SpellFeature>()?.System.Store);
 
     private static bool Covers(PlayerbotThreat threat, IReadOnlyList<Vector3> points)
     {
@@ -330,6 +349,45 @@ internal sealed class PlayerbotRisk
         _ => 0.05f,
     };
 
+    // --- hazards on the way -------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Every <see cref="HazardScanMs"/> (alive or a ghost): each visible creature that would attack the bot and has a spell that kills it outright, or that
+    /// the bot fled from or died to, is a hazard round its aggro reach (moving with it while seen).
+    /// </summary>
+    internal void ScanHazards(Player player)
+    {
+        if (!Enabled || !player.IsInWorld) return;
+        uint now = _session.World.NowMs;
+        if (unchecked((int)(_nextScanMs - now)) > 0) return;
+        _nextScanMs = unchecked(now + HazardScanMs);
+        int seconds = _options.Risk.DangerMemorySeconds;
+        foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
+        {
+            if (threat.Source is not { } creature) continue;
+            if (SpellThreat(creature).IsLethalTo(player.MaxHealth))
+                Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
+            else if (Memory.IsRemembered(creature.Guid, now))
+                Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
+        }
+    }
+
+    /// <summary>
+    /// Whether a living bot may walk <paramref name="points"/>: none of them inside a hazard it did not start in. A retreat walks
+    /// where it must; a dead bot (a ghost) is not attacked.
+    /// </summary>
+    internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points)
+        => !Enabled || !player.IsAlive || Retreat.Active ? null : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs);
+
+    /// <summary>
+    /// The hazards as threats for the ghost's revive spot (<see cref="PlayerbotRecovery"/>): a revive in reach of a creature that kills
+    /// outright, or of one the bot fled from or died to, is camped. Remembered places are not: the body lies at the place of death
+    /// itself, and a camp that has gone is no reason to give the body up.
+    /// </summary>
+    internal IEnumerable<PlayerbotThreat> HazardThreats(Player player)
+        => !Enabled ? [] : Hazards.Active(player.MapId, _session.World.NowMs).Where(h => !h.Creature.IsEmpty)
+            .Select(h => new PlayerbotThreat(h.At, h.Radius, IgnoresHeight: true, Radii: 0));
+
     // --- in a fight ------------------------------------------------------------------------------------------------
 
     /// <summary>
@@ -347,9 +405,10 @@ internal sealed class PlayerbotRisk
                 && !creature.IsInEvadeMode && !enemies.Contains(creature))
                 enemies.Add(creature);
         // Until the window is long enough the estimate's priors stand in: the creatures' template damage and the bot's damage.
-        float priorIn = enemies.Sum(e => Enemy(e, RiskJoin.Target).Dps);
+        float priorIn = enemies.Sum(e => Enemy(e, RiskJoin.Target, player).Dps);
         float priorOut = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level);
-        PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs, priorIn, priorOut);
+        PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs, priorIn, priorOut)
+            with { Lethal = enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)) };
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);
         Tracker.Record(verdict);
         if (!verdict.Retreat) return false;
@@ -380,7 +439,10 @@ internal sealed class PlayerbotRisk
         if (!Retreat.Active) return false;
         if (Retreat.Update(player, interval)) return true;
         if (Retreat.Outcome != "died")
+        {
             Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+            Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
+        }
         Tracker.End();
         if (Retreat.Outcome == "safe") BeginWait();
         else if (Retreat.Outcome == "cornered") _cornered = true;

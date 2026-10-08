@@ -45,10 +45,12 @@ internal sealed class RiskTestWorld : IAsyncDisposable
 
     public Player Player => Session.Player!;
 
-    public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null)
+    /// <param name="ai">EventAI rows for the creatures (their templates name <c>EventAI</c>), loaded as the world's creature content.</param>
+    public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
+            if (ai is not null) services.AddSingleton<ICreatureDataStore>(new AiStore(ai));
             services.AddSingleton<IWorldFeature, ManualClock>();
             services.AddSingleton(new FactionTemplateCatalog(
             [
@@ -67,7 +69,7 @@ internal sealed class RiskTestWorld : IAsyncDisposable
             Player player = session.Player!;
             WorldCollision.Of(host.World).Install(lineOfSight: new FlatGround(player.Z));
             if (player.Map!.FindUpdater<CreatureMapSystem>() is { } existing) return existing;
-            var system = new CreatureMapSystem(player.Map, new CreatureContent([], [], [], [], []), random: new Random(7));
+            var system = new CreatureMapSystem(player.Map, new CreatureContent([], [], [], [], [], ai), random: new Random(7));
             player.Map.AddUpdater(system);
             return system;
         });
@@ -144,6 +146,12 @@ internal sealed class RiskTestWorld : IAsyncDisposable
         Session.Kick();
         await Session.ManagedClosed;
         await Host.DisposeAsync();
+    }
+
+    private sealed class AiStore(CreatureAiContent ai) : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new CreatureContent([], [], [], [], [], ai));
     }
 
     private sealed class ManualClock : IWorldFeature

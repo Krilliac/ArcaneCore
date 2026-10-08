@@ -1,4 +1,6 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.Configuration;
@@ -179,4 +181,45 @@ public sealed class PlayerbotRiskModelTests
         Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { Risk = { RetreatHealthPct = 0f } }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { Risk = { DangerMemorySeconds = -1 } }.Validate());
     }
+
+    [Fact]
+    public void ACreatureThatKillsOutright_IsAvoided_EvenAsAQuestObjective_AndFledInAFight()
+    {
+        RiskEnemy lethal = Mob() with { Lethal = true };
+        PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(Bot(lethal) with { QuestObjective = true }, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Avoid, verdict.Decision);
+        Assert.Equal("lethal", verdict.Reason);
+        Assert.Equal("lethal", PlayerbotRiskModel.Assess(Bot(Mob(), lethal with { Join = RiskJoin.Assist }), Defaults).Reason);
+
+        // Full health, winning on the rates: still away from a one-shot, unless it dies within two seconds.
+        Assert.Equal("lethal", PlayerbotRiskModel.Judge(new(300, 300, 1f, 20f, 300, 1, 100f, Lethal: true), Defaults).Reason);
+        Assert.False(PlayerbotRiskModel.Judge(new(300, 300, 1f, 20f, 30, 1, 10f, Lethal: true), Defaults).Retreat);
+    }
+
+    [Fact]
+    public void ACreaturesEventAiCasts_AddToItsDanger()
+    {
+        var instakill = new SpellInfo { Id = 28265, Name = "Scourge Strike", Effects = [new SpellEffectInfo { Effect = SpellEffectName.Instakill, TargetA = SpellImplicitTarget.UnitEnemy }] };
+        var bolt = new SpellInfo { Id = 9001, Name = "Bolt", Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, TargetA = SpellImplicitTarget.UnitEnemy, BasePoints = 39, DieSides = 11 }] };
+        Func<uint, SpellInfo?> spells = id => id == 28265 ? instakill : id == 9001 ? bolt : null;
+
+        CreatureSpellThreat soldier = PlayerbotCreatureSpells.Of([Cast(16422, 28265, 5000, 10000)], spells);
+        Assert.True(soldier.Instakill);
+        Assert.True(soldier.IsLethalTo(10_000));
+
+        CreatureSpellThreat caster = PlayerbotCreatureSpells.Of([Cast(100, 9001, 4000, 6000)], spells);
+        Assert.False(caster.Instakill);
+        Assert.Equal(50, caster.MaxHit);
+        Assert.Equal(10f, caster.Dps, 3); // 50 every 5 s
+        Assert.True(caster.IsLethalTo(50));
+        Assert.False(caster.IsLethalTo(51));
+
+        Assert.Equal(CreatureSpellThreat.None, PlayerbotCreatureSpells.Of([Cast(100, 777, 0, 0)], spells));
+    }
+
+    private static CreatureAiEvent Cast(uint creature, uint spell, int repeatMin, int repeatMax) => new()
+    {
+        Id = creature * 100 + 1, CreatureId = creature, EventType = 0, Param3 = repeatMin, Param4 = repeatMax,
+        Action1 = new CreatureAiAction(PlayerbotCreatureSpells.ActionCast, (int)spell, 1, 0),
+    };
 }
