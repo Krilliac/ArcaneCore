@@ -60,10 +60,10 @@ y; z unchanged).
 |---|---|
 | `NNN.vmtree` | `"VMAP_7.0"`, u8 tiled, `"NODE"` BIH over all spawns, `"GOBJ"`, then (untiled maps only) spawn + u32 slot until EOF. |
 | `NNN_YY_XX.vmtile` | `"VMAP_7.0"`, u32 count, then spawn + u32 slot. (Name order: tile Y first; X/Y are the terrain tile indices.) |
-| `name.vmo` | `"VMAP_7.0"`, `"WMOD"` u32 size, u32 root WMO id, then optionally `"GMOD"` u32 count, groups, `"GBIH"` BIH. |
-| group | f32[6] bound, u32 MOGP flags, u32 group WMO id, `"VERT"` u32 size u32 count f32[3]×n (count 0 ends the group), `"TRIM"` u32 size u32 count u32[3]×n, `"MBIH"` BIH, `"LIQU"` u32 size [liquid]. |
+| `name.vmo` | `"VMAP_7.0"`, `"WMOD"` u32 size, u32 root WMO id, then optionally `"GMOD"` u32 count, groups, `"GBIH"` BIH. A spawn name stored with its NUL counted (`"Elfbed01.m2\0"`) names the file `Elfbed01.m2` with no `.vmo` (vmangos builds the path as a C string; 1298 client doodads). |
+| group | f32[6] bound, u32 MOGP flags, u32 group WMO id, `"VERT"` u32 size u32 count f32[3]×n (count 0 ends the group), `"TRIM"` u32 size u32 count u32[3]×n, `"MBIH"` BIH, `"LIQU"` u32 size [liquid]. The LIQU size is vmangos' `WmoLiquid::GetFileSize()`, 4 bytes short (no type field); it is only a presence flag and the liquid is read by its own grid, as vmangos does. |
 | spawn | u32 flags (M2 1, WORLDSPAWN 2, HAS_BOUND 4), u16 adt id, u32 id, f32[3] position, f32[3] rotation (degrees), f32 scale, [f32[6] bound], u32 name length, name. |
-| BIH | f32[3] low, f32[3] high, u32 n + u32 node words, u32 m + u32 object indices. Node: axis bits 30–31 (3 = leaf), BVH2 bit 29, 29-bit offset; leaf: count in word 1; inner: clip planes in words 1–2. |
+| BIH | f32[3] low, f32[3] high, u32 n + u32 node words, u32 m + u32 object indices. Node: axis bits 30–31 (3 = leaf), BVH2 bit 29, 29-bit offset; leaf: count in word 1; inner: clip planes in words 1–2. A node with an empty left side stores offset = right child − 3 and a left clip of −inf (vmangos `BIH::subdivide`), so its offset can equal the node itself; the "children follow their parent" guard applies to the child actually entered. |
 
 Pieces: `BihTree` (reader, builder for fixtures, bounds-checked ray/point traversal), `WorldModel`
 / `GroupModel` (Möller–Trumbore ray/triangle, enclosing-group floor), `ModelInstance` (rotation
@@ -102,6 +102,14 @@ as used by Sunflow; Möller–Trumbore; A*; the "simple stupid funnel" string-pu
 vmangos (GPL) and Recast/Detour sources were read only to confirm byte layouts and query
 semantics; no code was copied. Test data is synthetic and authored in the repository
 (`tests/ArcaneCore.Game.Tests/Collision/VMapFixture.cs`, `NavMeshFixture.cs`); no client data.
+
+Real-data verification (2026-10-07, `RealTerrainDataTests`, gated on `ARCANECORE_TEST_TERRAIN_DIR`;
+recipe in [maps-vmaps-mmaps.md](maps-vmaps-mmaps.md)): every file of a vmangos extraction parses,
+and 4898 height / line-of-sight / area queries on maps 0, 1, 34, 36, 43, 189, 389 and 409 agree
+exactly with vmangos' own `VMapManager2` on the same files. Getting there fixed three reader bugs
+the synthetic tiles could not show: the empty-left-child BIH node (17368 such nodes in 40 trees;
+whole subtrees, e.g. the Deathknell crypt, were unreachable), the 4-byte-short LIQU size (58
+models with liquid were rejected) and NUL-terminated doodad names (1298 models never loaded).
 
 ## Known gaps
 

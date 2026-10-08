@@ -203,13 +203,15 @@ public sealed class RealTerrainDataTests(ITestOutputHelper output)
     }
 
     [RealTerrainFact]
-    public void EveryContinentNavmeshTile_Parses_WithDistinctDetourCoordinates()
+    public void EveryNavmeshTile_Parses_WithDistinctDetourCoordinates()
     {
         string dir = Path.Combine(Root, "mmaps");
-        foreach (uint mapId in new[] { EasternKingdoms, Kalimdor })
+        Assert.True(File.Exists(Path.Combine(dir, NavMeshFormat.ParamsFileName(EasternKingdoms))), "Eastern Kingdoms has no navmesh");
+        Assert.True(File.Exists(Path.Combine(dir, NavMeshFormat.ParamsFileName(Kalimdor))), "Kalimdor has no navmesh");
+        int total = 0;
+        foreach (string paramsFile in Directory.GetFiles(dir, "???.mmap"))
         {
-            string paramsFile = Path.Combine(dir, NavMeshFormat.ParamsFileName(mapId));
-            Assert.True(File.Exists(paramsFile), paramsFile);
+            uint mapId = uint.Parse(Path.GetFileName(paramsFile)[..3], System.Globalization.CultureInfo.InvariantCulture);
             NavMeshParams parameters = NavMeshParams.Parse(File.ReadAllBytes(paramsFile));
             var seen = new HashSet<(int, int)>();
             string[] files = Directory.GetFiles(dir, $"{mapId:D3}????.mmtile");
@@ -222,7 +224,10 @@ public sealed class RealTerrainDataTests(ITestOutputHelper output)
             output.WriteLine($"map {mapId}: {files.Length} navmesh tiles parsed (params: {parameters.MaxTiles} max tiles)");
             Assert.NotEmpty(files);
             Assert.True(files.Length <= parameters.MaxTiles);
+            total += files.Length;
         }
+
+        output.WriteLine($"{total} navmesh tiles in all");
     }
 
     [RealTerrainFact]
