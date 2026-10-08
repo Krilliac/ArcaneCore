@@ -51,6 +51,10 @@ public sealed record CreatureImportReport(
     public int MovementTemplates { get; init; }
     /// <summary>ScriptDev2 <c>script_waypoint</c> rows among <see cref="MovementTemplates"/>.</summary>
     public int ScriptWaypoints { get; init; }
+
+    /// <summary>cmangos <c>waypoint_path</c> rows among <see cref="MovementTemplates"/> (stored under entry 0, see CreatureContent.WaypointPathBit).</summary>
+    public int WaypointPaths { get; init; }
+
     public int AiTextTemplates { get; init; }
 
     /// <summary><c>dbscripts_on_relay</c> rows (the relay DB scripts EventAI's START_RELAY_SCRIPT runs).</summary>
@@ -86,6 +90,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
     private readonly HashSet<(uint Entry, uint PathId, uint Point)> _scriptWaypointKeys = [];
+    private readonly HashSet<(uint Entry, uint PathId, uint Point)> _waypointPathKeys = [];
     private readonly HashSet<(uint Owner, uint Path, uint Point)> _scriptedNodes = [];
     private readonly Dictionary<(uint SpawnGuid, uint Entry), CreatureSpawnEntryRow> _spawnEntries = [];
     private readonly Dictionary<uint, (int Build, CreatureModelInfoRow Row)> _models = [];
@@ -138,6 +143,7 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_movement_template":
                 case "script_waypoint":
+                case "waypoint_path":
                     ReadMovementTemplate(row);
                     break;
                 case "creature_spawn_entry":
@@ -339,6 +345,7 @@ public sealed class CreatureDumpImporter
         AiSummons = _aiSummons.Count,
         MovementTemplates = _movementTemplates.Count,
         ScriptWaypoints = _scriptWaypointKeys.Count,
+        WaypointPaths = _waypointPathKeys.Count,
         SpawnEntries = _spawnEntries.Count,
         AiTextTemplates = _textTemplates.Count,
         RelayScriptSteps = _relaySteps.Values.Sum(rows => rows.Count),
@@ -728,11 +735,20 @@ public sealed class CreatureDumpImporter
     private void ReadMovementTemplate(DumpRow row)
     {
         bool scriptWaypoint = row.Table.Equals("script_waypoint", StringComparison.OrdinalIgnoreCase);
+        bool waypointPath = row.Table.Equals("waypoint_path", StringComparison.OrdinalIgnoreCase);
+        uint pathId = U32(row, "PathId", "path_id");
+        if ((scriptWaypoint || waypointPath) && (pathId & (CreatureContent.ScriptWaypointPathBit | CreatureContent.WaypointPathBit)) != 0)
+        {
+            Warn($"{row.Table} PathId {pathId} collides with the path namespace bits; skipped");
+            return;
+        }
+
         var point = new CreatureMovementTemplateRow
         {
-            Entry = U32(row, "Entry"),
-            // A separate namespace prevents an escort path from becoming an ordinary spawn's default waypoint path.
-            PathId = U32(row, "PathId", "path_id") | (scriptWaypoint ? 0x8000_0000u : 0u),
+            // cmangos waypoint_path is keyed by path id alone (PATH_FROM_WAYPOINT_PATH): one shared path store under entry 0.
+            Entry = waypointPath ? CreatureContent.WaypointPathEntry : U32(row, "Entry"),
+            // A separate namespace keeps an escort or waypoint_path path from becoming an ordinary spawn's default waypoint path.
+            PathId = pathId | (scriptWaypoint ? CreatureContent.ScriptWaypointPathBit : waypointPath ? CreatureContent.WaypointPathBit : 0u),
             Point = U32(row, "Point"),
             X = F32(row, 0f, "PositionX", "position_x"),
             Y = F32(row, 0f, "PositionY", "position_y"),
@@ -745,6 +761,11 @@ public sealed class CreatureDumpImporter
         {
             _scriptWaypointKeys.Add((point.Entry, point.PathId, point.Point));
         }
+        else if (waypointPath)
+        {
+            _waypointPathKeys.Add((point.Entry, point.PathId, point.Point));
+        }
+
         NoteScript(point.Entry, point.PathId + 1, point.Point, row);
     }
 

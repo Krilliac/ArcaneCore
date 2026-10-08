@@ -6,7 +6,16 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 
 /// <summary>Disciple of Naralex escort and ritual, from mangos-classic
 /// wailing_caverns/wailing_cavernsScripts.cpp:109-462, npc_disciple_of_naralexAI::WaypointReached,
-/// SummonedCreatureJustDied and UpdateEscortAI. The path is script_waypoint entry/path 3678.</summary>
+/// SummonedCreatureJustDied and UpdateEscortAI. The path is cmangos <c>waypoint_path</c> 3678 (PATH_ID_NARALEX, passed to
+/// npc_escortAI::Start by GossipSelect_npc_disciple_of_naralex; classic-db z2815 holds its 79 points, with the script's stops at
+/// points 12, 30 and 70).
+/// <para>
+/// The chamber's step 12 (the flight out) does not advance the step, as in the source (wailing_cavernsScripts.cpp:400-416 has no
+/// <c>++m_uiSubeventPhase</c>): it repeats every 30 s until the disciple reaches the end of the path and despawns there
+/// (npc_escortAI::MovementInform, base/escort_ai.cpp:182-202). The source's step 13 (both despawn and instance_wailing_caverns::DespawnAll) is
+/// therefore never reached and is not ported.
+/// </para>
+/// </summary>
 public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstance instance) : EscortAI(creature)
 {
     public const uint PathId = 3678;
@@ -229,11 +238,7 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
                 }
 
                 _eventTimer = 30_000;
-                break;
-            case 13:
-                if (instance.Naralex is { } gone) System?.ForcedDespawn(gone, 1_000);
-                System?.ForcedDespawn(Me, 1_000);
-                instance.DespawnAll();
+                _phase = 12; // the source never leaves this step (see the class remarks)
                 break;
         }
     }

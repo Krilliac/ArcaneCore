@@ -332,9 +332,32 @@ public sealed class CreatureContent
 
     public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
 
+    /// <summary>
+    /// The path-id bit under which ScriptDev2 <c>script_waypoint</c> rows (keyed by entry and path) import into
+    /// <c>creature_movement_template</c>, so an escort path never becomes an entry's default (path 0) movement.
+    /// </summary>
+    public const uint ScriptWaypointPathBit = 0x8000_0000;
+
+    /// <summary>
+    /// The path-id bit under which cmangos <c>waypoint_path</c> rows import into <c>creature_movement_template</c>. Those paths are keyed by
+    /// path id alone (mangos-classic WaypointManager::GetPathFromOrigin, PATH_FROM_WAYPOINT_PATH: <c>key = pathId</c>), so they are stored
+    /// under entry <see cref="WaypointPathEntry"/>, which no creature template uses. classic-db z2815 path ids stay below 2^23.
+    /// </summary>
+    public const uint WaypointPathBit = 0x4000_0000;
+
+    /// <summary>The entry column of the shared <c>waypoint_path</c> rows (see <see cref="WaypointPathBit"/>).</summary>
+    public const uint WaypointPathEntry = 0;
+
     /// <summary>One path of an entry (<c>creature_movement_template</c>), in point-id order; empty when there is none.</summary>
     public IReadOnlyList<CreatureWaypoint> GetEntryWaypoints(uint entry, uint pathId = 0)
         => _definitions.EntryWaypoints.GetValueOrDefault((entry, pathId)) ?? [];
+
+    /// <summary>
+    /// One cmangos <c>waypoint_path</c> path, shared by every entry (mangos-classic origin PATH_FROM_WAYPOINT_PATH, which ScriptDev2's
+    /// <c>npc_escortAI::Start</c> uses when it is given a path id), in point-id order; empty when there is none.
+    /// </summary>
+    public IReadOnlyList<CreatureWaypoint> GetWaypointPath(uint pathId)
+        => (pathId & (WaypointPathBit | ScriptWaypointPathBit)) != 0 ? [] : GetEntryWaypoints(WaypointPathEntry, WaypointPathBit | pathId);
 
     /// <summary>
     /// The path a creature walks by default: its spawn's own <c>creature_movement</c> rows, else the entry's default (PathId 0)

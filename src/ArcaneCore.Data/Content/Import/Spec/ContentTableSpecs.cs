@@ -167,6 +167,9 @@ public static class ContentTableSpecs
         new("script_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote", "sound", "broadcast_text_id"], []),
         new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
             ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
+        // cmangos waypoint_path (keyed by path id alone; stored under entry 0, CreatureContent.WaypointPathBit).
+        new("waypoint_path", [new KeyColumn("PathId"), new KeyColumn("Point")],
+            ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
         // cmangos dbscripts_on_relay has no key; the scan key is wide enough that only true duplicates collide (CreatureDumpImporter.ReadRelayStep).
         new("dbscripts_on_relay",

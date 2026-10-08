@@ -307,7 +307,7 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 
 ## Wave 5 ScriptDev2 data note (2026-10-08)
 
-The creature importer now maps ClassicDB `script_texts` into the existing creature AI text catalog, preserving type, language, sound, emote and broadcast id. It maps `script_waypoint` to `creature_movement_template` under path `0x80000000 | PathId`; that namespace prevents an escort path from becoming a creature's default movement. `refresh` reports the source rows separately. The real z2815 dump probe asserts Deadmines speech and the Shadowfang prisoner path; it finds no path for Disciple of Naralex (3678). Deadmines' known patrol GUIDs have `spawnMask=0`; the instance script gates those specific rows until a boss death. The general `spawnMask` import limit above remains.
+The creature importer now maps ClassicDB `script_texts` into the existing creature AI text catalog, preserving type, language, sound, emote and broadcast id. It maps `script_waypoint` to `creature_movement_template` under path `0x80000000 | PathId`, and cmangos `waypoint_path` (keyed by path id alone) under entry 0 and path `0x40000000 | PathId`; those namespaces keep an escort path from becoming a creature's default movement. `refresh` reports the source rows separately. The real z2815 dump probe asserts Deadmines speech, the Shadowfang prisoner path and the Disciple of Naralex escort (`waypoint_path` 3678, 79 points, 1 s stops at points 12, 30 and 70); z2815 has 5,393 `waypoint_path` rows on 170 paths and no `script_waypoint` rows for 3678. Deadmines' known patrol GUIDs have `spawnMask=0`; the instance script gates those specific rows until a boss death. The general `spawnMask` import limit above remains.
 
 ## References
 

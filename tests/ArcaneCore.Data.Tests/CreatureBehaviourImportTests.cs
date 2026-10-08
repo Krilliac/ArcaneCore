@@ -440,7 +440,17 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal(report.ScriptTexts, report.AiTexts); // z2815 creature_ai_texts is empty
         Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1036000 && t.Content.Contains("noise", StringComparison.Ordinal));
         Assert.Contains(importer.PathSnapshot(), p => p.Entry == 3849 && p.PathId == 0x8000_0000u && p.Point == 12);
+        // Disciple of Naralex has no script_waypoint rows: ScriptDev2 starts his escort on waypoint_path 3678 (79 points, 1 s stops at the
+        // script's event points 12, 30 and 70), which imports under entry 0 (CreatureContent.WaypointPathBit).
         Assert.DoesNotContain(importer.PathSnapshot(), p => p.Entry == 3678 && (p.PathId & 0x8000_0000u) != 0);
+        Assert.Equal(5393, report.WaypointPaths);
+        Assert.Equal(170, importer.PathSnapshot().Where(p => p.Entry == CreatureContent.WaypointPathEntry).Select(p => p.PathId).Distinct().Count());
+        CreatureMovementTemplateRow[] naralex = [.. importer.PathSnapshot()
+            .Where(p => p.Entry == CreatureContent.WaypointPathEntry && p.PathId == (CreatureContent.WaypointPathBit | 3678u)).OrderBy(p => p.Point)];
+        Assert.Equal(79, naralex.Length);
+        Assert.Equal((1u, 79u), (naralex[0].Point, naralex[^1].Point));
+        Assert.Equal((13_000u, 1_000u, 1_000u, 1_000u), (naralex[0].WaitTimeMs, naralex[11].WaitTimeMs, naralex[29].WaitTimeMs, naralex[69].WaitTimeMs));
+        Assert.Equal((12u, 30u, 70u), (naralex[11].Point, naralex[29].Point, naralex[69].Point));
 
         // Almost every row carries 1024/1025 and 39 rows are keyed by spawn guid.
         IReadOnlyCollection<CreatureAiScriptRow> scripts = importer.AiSnapshot().Scripts;

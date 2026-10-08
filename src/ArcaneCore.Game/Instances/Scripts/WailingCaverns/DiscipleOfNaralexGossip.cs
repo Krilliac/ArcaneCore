@@ -35,7 +35,7 @@ public sealed class DiscipleOfNaralexGossip : INpcGossipScript
             return default;
         }
 
-        if (creature.AI is DiscipleOfNaralexAi escort && escort.Start(pathId: DiscipleOfNaralexAi.PathId))
+        if (creature.AI is DiscipleOfNaralexAi escort && escort.Start(waypointPath: DiscipleOfNaralexAi.PathId))
         {
             creature.FactionTemplate = 250; // FACTION_ESCORT_N_NEUTRAL_ACTIVE, ScriptDevAIMgr.h:50
         }

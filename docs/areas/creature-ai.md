@@ -286,10 +286,14 @@ point's wait, `WaypointReached` on each; `SetEscortPaused` holds it at a point; 
 escort runs back to where the fight began (point `PointLastPoint`, not home) and goes on; `Stop` ends it where it stands; at the end of the
 path it disappears (or loops home, or respawns at once). The script hooks are `Reset` (the spawn, every evade, every respawn),
 `JustSpawned` (the work a ScriptDev constructor does, once the map placed the creature), `JustRespawned`, `Aggro` and `UpdateEscortAI`.
-The escort points are vmangos `script_waypoint` (one path per entry, ordered by point): imported into `creature_movement_template`
-under path `0x80000000 | PathId`, separate from an ordinary creature's movement path. `EscortAI.Start(pathId)` selects that path;
-the old path-0 lookup remains a fallback for manually supplied points. The world schema has no `script_waypoint` table. An
-entry without points does not start, and the map logs it once per entry. Not ported, since no script here escorts a player: the escorted
+The escort points come from one of two origins, as in mangos-classic `npc_escortAI::Start` (`base/escort_ai.cpp:253-261`).
+`EscortAI.Start()` without a path id walks the entry's ScriptDev2 `script_waypoint` path 0 (PATH_FROM_EXTERNAL), imported into
+`creature_movement_template` under path `0x80000000 | PathId`, separate from an ordinary creature's movement path; the entry's own
+path 0 remains a fallback for manually supplied points. `EscortAI.Start(waypointPath: id)` walks cmangos `waypoint_path` path `id`
+(PATH_FROM_WAYPOINT_PATH, keyed by path id alone) and nothing else: those rows import into `creature_movement_template` under entry 0
+and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`). The world schema has neither a `script_waypoint` nor a
+`waypoint_path` table. An escort without points does not start, and the map logs it once per entry. The `ScriptId` of a point is not run
+(ArcaneCore runs no creature-movement scripts; the importer counts such nodes). Not ported, since no script here escorts a player: the escorted
 player, its quest, the assist of the player in combat and the distance check that fails the escort.
 
 The map services the scripts use (`CreatureMapSystem.ScriptedAi.cs`): `SummonCorpseDespawn` (TEMPSUMMON_CORPSE_DESPAWN: the summon stays
