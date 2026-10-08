@@ -38,6 +38,13 @@ public sealed class WorldConfigChecks : IConfigCheck
             }
         }
 
+        Range(issues, configuration, "World:TickLateToleranceMs", 2, 0, 1000, "0-1000 ms a tick may start late before it counts as late (default 2)");
+        string? timer = configuration["World:TickTimer"];
+        if (!string.IsNullOrWhiteSpace(timer) && !Enum.TryParse<ArcaneCore.Game.Maps.WorldTickTimer>(timer, ignoreCase: true, out _))
+        {
+            issues.Add(Error("World:TickTimer", $"'{timer}' is not a known tick timer.", "use Precise (default) or Legacy"));
+        }
+
         Range(issues, configuration, "World:CharactersPerRealm", 10, 1, 10, "1-10 (vmangos CharactersPerRealm allows at most 10)");
         Range(issues, configuration, "World:AutosaveIntervalMs", 900000, 0, int.MaxValue, "0 to disable, or a positive number of milliseconds (vmangos PlayerSave.Interval 900000)");
         Range(issues, configuration, "World:UpdateCompressionThreshold", 128, 0, int.MaxValue, "0 to disable, or a byte count (vmangos Compression.Update.Size 128)");

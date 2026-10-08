@@ -79,6 +79,11 @@ bursts back-to-back catch-up ticks nor accumulates debt: it skips the missed sta
 restarts the cadence from now. Each tick still receives its real elapsed time as its diff (variable
 step, as vmangos), so skipping starts loses no simulated time; no spiral of death is possible.
 
+Since 2026-10-08 the wait itself is precise (`World:TickTimer` = `Precise`: a Windows high-resolution waitable timer instead of
+the ~15.6 ms event wait; frame p50/p90 50.0/50.3 ms instead of 46.5/61.6 ms in the cadence harness), and a tick counts as late
+only beyond `World:TickLateToleranceMs` (2 ms; the same tolerance for frame overruns). Before, ~94 % of live ticks counted as
+late from timer granularity alone. Details and measurements: `docs/integration/perf-limits-20261008.md`.
+
 The world loop preserves actual elapsed time. Its posted-command phase is bounded by
 `World:MaxCommandsPerTick` (default1024) and `World:CommandTimeBudgetMs` (default5; zero disables
 the time bound). FIFO commands beyond that budget remain queued for later ticks. Shutdown

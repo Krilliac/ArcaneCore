@@ -9,6 +9,19 @@ public sealed class WorldRuntimeOptions
     /// <summary>World tick length in milliseconds (vmangos WORLD_SLEEP_CONST = 50).</summary>
     public int TickIntervalMs { get; set; } = 50;
 
+    /// <summary>
+    /// How the world thread waits for its next tick (<see cref="WorldTickTimer.Precise"/> by default). Precise wakes within a
+    /// fraction of a millisecond of the due time; Legacy is the plain event wait, which on Windows wakes on the ~15.6 ms system
+    /// timer (frame p50 46 / p90 61 ms on a 50 ms tick; docs/integration/perf-limits-20261008.md). Read once at world start.
+    /// </summary>
+    public WorldTickTimer TickTimer { get; set; } = WorldTickTimer.Precise;
+
+    /// <summary>
+    /// Milliseconds a tick may start after its due time, and a frame may exceed the tick interval, before it counts as late
+    /// (<see cref="WorldTickScheduler.LateTicks"/>) or as a frame overrun (0..1000, default 2). Read once at world start.
+    /// </summary>
+    public int TickLateToleranceMs { get; set; } = 2;
+
     /// <summary>Maximum queued world commands admitted before the map pass of one tick.</summary>
     public int MaxCommandsPerTick { get; set; } = 1024;
 

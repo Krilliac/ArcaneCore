@@ -26,6 +26,16 @@ internal sealed record ServerInfoDiagnosticsValues(
 {
     public long? P95TickMicros { get; init; }
 
+    /// <summary>Median tick work (the watchdog's TickSummary body p50).</summary>
+    public long? P50TickMicros { get; init; }
+
+    /// <summary>Frame interval (between two tick starts) percentiles; null without frame samples.</summary>
+    public long? FrameP50Micros { get; init; }
+    public long? FrameP90Micros { get; init; }
+
+    /// <summary>How late a tick may start before it counts as late (<c>World:TickLateToleranceMs</c>).</summary>
+    public int LateToleranceMs { get; init; }
+
     /// <summary>World-loop schedule: ticks started after their due time, and due starts given up after a stall.</summary>
     public long LateTicks { get; init; }
     public long SkippedTicks { get; init; }
@@ -37,6 +47,13 @@ internal sealed record ServerInfoDiagnosticsValues(
 
     /// <summary>The slowest world features (smoothed mean per tick).</summary>
     public IReadOnlyList<(string Name, double MeanMicros)> SlowestFeatures { get; init; } = [];
+
+    /// <summary>Mean bytes allocated per tick by phase (null without samples), and the largest allocating features (smoothed).</summary>
+    public (double Commands, double Maps, double Features)? PhaseAllocations { get; init; }
+    public IReadOnlyList<(string Name, double MeanBytes)> TopAllocatingFeatures { get; init; } = [];
+
+    /// <summary>The garbage collector: server or workstation, concurrent, collections per generation, total pause.</summary>
+    public string? Gc { get; init; }
 }
 
 internal static class ServerInfoDiagnostics
@@ -64,13 +81,27 @@ internal static class ServerInfoDiagnostics
             bots)
         {
             P95TickMicros = stats.Samples > 0 ? stats.P95Micros : null,
+            P50TickMicros = stats.Samples > 0 ? stats.P50Micros : null,
+            FrameP50Micros = stats.FrameSamples > 0 ? stats.FrameP50Micros : null,
+            FrameP90Micros = stats.FrameSamples > 0 ? stats.FrameP90Micros : null,
+            LateToleranceMs = world.Scheduler.LateToleranceMs,
             LateTicks = world.Scheduler.LateTicks,
             SkippedTicks = world.Scheduler.SkippedTicks,
             Commands = stats.Samples > 0 ? stats.Commands : null,
             Maps = stats.Samples > 0 ? stats.Maps : null,
             Features = stats.Samples > 0 ? stats.Features : null,
             SlowestFeatures = stats.FeatureMeans.Take(3).ToArray(),
+            PhaseAllocations = stats.Samples > 0 ? (stats.CommandsMeanBytes, stats.MapsMeanBytes, stats.FeaturesMeanBytes) : null,
+            TopAllocatingFeatures = stats.FeatureAllocations.Take(3).ToArray(),
+            Gc = GcLine(),
         };
+    }
+
+    private static string GcLine()
+    {
+        GCMemoryInfo info = GC.GetGCMemoryInfo(GCKind.Any);
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{(System.Runtime.GCSettings.IsServerGC ? "server" : "workstation")} {(System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.Batch ? "non-concurrent" : "concurrent")} gen0/1/2={GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)} pauseTotal={GC.GetTotalPauseDuration().TotalMilliseconds:F0} ms lastPause={info.PauseDurations[0].TotalMilliseconds:F1} ms ({info.Generation}{(info.Concurrent ? " background" : string.Empty)})");
     }
 
     private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
@@ -94,14 +125,20 @@ internal static class ServerInfoDiagnostics
         [
             string.Create(CultureInfo.InvariantCulture,
                 $"Tick target: {value.TargetTickMs} ms ({Rate(value.TargetTicksPerSecond)}); observed: {Rate(value.ObservedTicksPerSecond)}"),
-            $"Tick frames: samples={value.FrameSamples.ToString(CultureInfo.InvariantCulture)} mean={Millis(value.MeanFrameIntervalMicros)} frameOverruns={Count(value.FrameOverruns)}",
-            $"Tick work: mean={Millis(value.MeanTickMicros)} p95={Millis(value.P95TickMicros)} p99={Millis(value.P99TickMicros)} max={Millis(value.MaxTickMicros)} workOverruns={Count(value.WorkOverruns)}",
+            $"Tick frames: samples={value.FrameSamples.ToString(CultureInfo.InvariantCulture)} mean={Millis(value.MeanFrameIntervalMicros)} p50={Millis(value.FrameP50Micros)} p90={Millis(value.FrameP90Micros)} frameOverruns={Count(value.FrameOverruns)}",
+            $"Tick work: mean={Millis(value.MeanTickMicros)} p50={Millis(value.P50TickMicros)} p95={Millis(value.P95TickMicros)} p99={Millis(value.P99TickMicros)} max={Millis(value.MaxTickMicros)} workOverruns={Count(value.WorkOverruns)}",
             $"Commands: pending={value.PendingCommands.ToString(CultureInfo.InvariantCulture)}; process: workingSet={Bytes(value.WorkingSetBytes)} managedHeap={Bytes(value.ManagedHeapBytes)} allocatedPerTick={Allocated(value.AllocatedBytesPerTick)}",
             $"Managed bots: {Active(value.ActiveBots)}",
-            $"Tick schedule: late={value.LateTicks.ToString(CultureInfo.InvariantCulture)} skipped={value.SkippedTicks.ToString(CultureInfo.InvariantCulture)} (drift-compensated; a stall skips missed starts instead of bursting)",
+            $"Tick schedule: late={value.LateTicks.ToString(CultureInfo.InvariantCulture)} (>{value.LateToleranceMs.ToString(CultureInfo.InvariantCulture)} ms) skipped={value.SkippedTicks.ToString(CultureInfo.InvariantCulture)} (drift-compensated; a stall skips missed starts instead of bursting)",
             $"Tick phases mean/max: commands={Phase(value.Commands)} maps={Phase(value.Maps)} features={Phase(value.Features)}",
             "Slowest features: " + (value.SlowestFeatures.Count == 0 ? "unavailable"
                 : string.Join(", ", value.SlowestFeatures.Select(feature => $"{Name(feature.Name)} {Millis(feature.MeanMicros)}"))),
+            "Tick allocation mean: " + (value.PhaseAllocations is { } a
+                ? $"commands={Allocated(a.Commands)} maps={Allocated(a.Maps)} features={Allocated(a.Features)}"
+                    + (value.TopAllocatingFeatures.Count == 0 ? string.Empty
+                        : "; top: " + string.Join(", ", value.TopAllocatingFeatures.Select(feature => $"{Name(feature.Name)} {Allocated(feature.MeanBytes)}")))
+                : "unavailable"),
+            "GC: " + (value.Gc ?? "unavailable"),
         ];
     }
 }

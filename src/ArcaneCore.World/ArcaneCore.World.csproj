@@ -4,6 +4,12 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>ArcaneCore.World</RootNamespace>
     <AssemblyName>ArcaneCore.World</AssemblyName>
+    <!-- Server GC (with DATAS, the .NET 9+ default for it) and background collections: on a live-sized heap the world loop's GC
+         pause total fell from 3.2-4.1 s to 0.31-0.38 s per 90 s and ticks over the 50 ms budget from 16-38 to 2, for ~200 MB more
+         working set (tests/ArcaneCore.Game.Tests/Ops/GcModeMeasurementTests.cs; docs/integration/perf-limits-20261008.md).
+         DOTNET_gcServer=0 in the environment restores the workstation collector without a rebuild. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

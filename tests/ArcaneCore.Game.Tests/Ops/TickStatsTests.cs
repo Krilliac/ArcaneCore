@@ -102,6 +102,49 @@ public sealed class TickStatsTests
     }
 
     [Fact]
+    public void FrameOverruns_IgnoreFramesWithinTheTolerance_AndPercentilesAreReported()
+    {
+        // A 50 ms loop whose frames wobble by a millisecond or two is on time (World:TickLateToleranceMs, default 2).
+        var stats = new TickStats(16) { FrameOverrunToleranceMicros = 2_000 };
+        foreach (long frame in new long[] { 49_000, 50_000, 50_500, 51_900, 52_000, 52_001, 61_000, 50_100, 50_200, 50_300 })
+        {
+            stats.Record(100, 0, 50_000, frame);
+        }
+
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(2, snapshot.FrameOverruns); // 52_001 and 61_000; 52_000 is exactly at the tolerance
+        Assert.Equal(50_300, snapshot.FrameP50Micros);
+        Assert.Equal(52_001, snapshot.FrameP90Micros);
+        Assert.Equal(61_000, snapshot.FrameP99Micros);
+    }
+
+    [Fact]
+    public void FrameOverruns_WithoutTolerance_CountEveryFrameAboveTheInterval()
+    {
+        var stats = new TickStats(4);
+        stats.Record(100, 0, 50_000, 50_001);
+        stats.Record(100, 0, 50_000, 50_000);
+        Assert.Equal(1, stats.Snapshot().FrameOverruns);
+        Assert.Throws<ArgumentOutOfRangeException>(() => stats.FrameOverrunToleranceMicros = -1);
+    }
+
+    [Fact]
+    public void PhaseAndFeatureAllocations_AreReported()
+    {
+        var stats = new TickStats(4);
+        stats.Record(100, 600, 50_000, 50_000, new TickPhases(1, 2, 3) { CommandsBytes = 100, MapsBytes = 400, FeaturesBytes = 100 });
+        stats.Record(100, 1_000, 50_000, 50_000, new TickPhases(1, 2, 3) { CommandsBytes = 300, MapsBytes = 600, FeaturesBytes = 100 });
+        stats.RecordFeature("Bots", 50, 4_096);
+        stats.RecordFeature("Chat", 50, 16);
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(200, snapshot.CommandsMeanBytes);
+        Assert.Equal(500, snapshot.MapsMeanBytes);
+        Assert.Equal(100, snapshot.FeaturesMeanBytes);
+        Assert.Equal(("Bots", 4_096d), snapshot.FeatureAllocations[0]);
+        Assert.Equal(("Chat", 16d), snapshot.FeatureAllocations[1]);
+    }
+
+    [Fact]
     public void FrameCadence_EmptyAndLegacyRecordsRemainUnmeasured()
     {
         var stats = new TickStats(4);

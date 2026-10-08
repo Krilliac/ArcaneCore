@@ -92,4 +92,36 @@ public sealed class WorldTickSchedulerTests
         Assert.Equal(0, scheduler.LateTicks);
         Assert.Equal(0, scheduler.SkippedTicks);
     }
+
+    [Fact]
+    public void StartsWithinTheTolerance_AreNotLate_AndTheCadenceIsUnchanged()
+    {
+        // A precise timer wakes up to about a millisecond after the due start: with the 2 ms tolerance none of that is late.
+        var random = new Random(5875);
+        var tolerant = new WorldTickScheduler(Interval, lateToleranceMs: 2);
+        List<long> starts = Simulate(tolerant, 1000, _ => 3, _ => random.Next(0, 3));
+        Assert.Equal(0, tolerant.LateTicks);
+        Assert.Equal(0, tolerant.SkippedTicks);
+        double meanPeriod = (starts[^1] - starts[0]) / (double)(starts.Count - 1);
+        Assert.InRange(meanPeriod, Interval - 0.5, Interval + 0.5);
+
+        // The same wake-ups without a tolerance count most ticks late: the counter cannot tell a real delay from timer slack.
+        random = new Random(5875);
+        var strict = new WorldTickScheduler(Interval);
+        Simulate(strict, 1000, _ => 3, _ => random.Next(0, 3));
+        Assert.True(strict.LateTicks > 500, $"late {strict.LateTicks}");
+    }
+
+    [Fact]
+    public void StartsBeyondTheTolerance_AreLate()
+    {
+        var scheduler = new WorldTickScheduler(Interval, lateToleranceMs: 2);
+        scheduler.NextWait(0, 3);                  // due 50
+        Assert.Equal(50, scheduler.NextDueMs);
+        scheduler.NextWait(52, 55);                // 2 ms late: on time
+        Assert.Equal(0, scheduler.LateTicks);
+        scheduler.NextWait(103, 106);              // 3 ms late: late
+        Assert.Equal(1, scheduler.LateTicks);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new WorldTickScheduler(Interval, -1));
+    }
 }
