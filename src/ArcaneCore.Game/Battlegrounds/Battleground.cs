@@ -334,6 +334,7 @@ public abstract partial class Battleground
         {
             _events |= BattlegroundStartEvents.Third;
             Host.Announce(StartMessageIds[2], BattlegroundChatKind.Neutral, ObjectGuid.Empty);
+            StartingEventThird();
         }
         else if (StartDelayMs <= 0 && (_events & BattlegroundStartEvents.Fourth) == 0)
         {
@@ -358,6 +359,14 @@ public abstract partial class Battleground
     }
 
     protected virtual void StartingEventOpenDoors()
+    {
+    }
+
+    /// <summary>
+    /// The third start warning went out (BattleGround.cpp:399-406; 30 s before the start of a two-minute countdown). vmangos has no hook
+    /// here; Alterac Valley uses it for the start-time events its own update tests this flag for (<see cref="AlteracValley"/>).
+    /// </summary>
+    protected virtual void StartingEventThird()
     {
     }
 

@@ -61,7 +61,9 @@ public sealed class AlteracValleyUpgradeTests
 
         TurnIn(bg, Alliance[0], AlteracValley.QuestAllianceScraps1, 1);
         Assert.Equal(20u, bg.ArmorResources(Team.Alliance));
-        Assert.Contains((AlteracValley.EventSupplies100, (byte)2, true, false), host.Events); // the first turn-in clears the piles
+        // The piles were cleared 30 s before the start (StartingEventThird), so the first turn-in's clear finds them empty already.
+        Assert.True(bg.IsActiveEvent(AlteracValley.EventSupplies100, 2));
+        Assert.DoesNotContain((AlteracValley.EventSupplies100, (byte)0, true, false), host.Events);
         Assert.Contains((Alliance[0], AlteracValley.FactionStormpike, 1), ports.Reputation);
 
         TurnIn(bg, Alliance[0], AlteracValley.QuestAllianceScraps2, 4);
@@ -274,7 +276,7 @@ public sealed class AlteracValleyUpgradeTests
         var (bg, host, _) = Running();
 
         TurnIn(bg, Horde[0], AlteracValley.QuestHordeRiderTame, 1);
-        Assert.Contains(((byte)(AlteracValley.EventTamed05 + 1), (byte)2, true, false), host.Events);
+        Assert.True(bg.IsActiveEvent((byte)(AlteracValley.EventTamed05 + 1), 2)); // empty since the start (StartingEventThird)
         TurnIn(bg, Horde[0], AlteracValley.QuestHordeRiderTame, 4);
         Assert.Contains(((byte)(AlteracValley.EventTamed05 + 1), (byte)0, true, false), host.Events);
         Assert.Contains(host.Says, s => s.Text == "Thanks for the supplies, %s" && s.Player == Horde[0]);

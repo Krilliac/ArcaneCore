@@ -11,10 +11,10 @@ namespace ArcaneCore.Game.Battlegrounds;
 /// <para>
 /// The turn-ins, the armor-scrap upgrades of the defenders (the defender events follow the owner's scraps), the challenge counters, the
 /// landmine layers and experts, the shredder owner check, the respawn stop of the commanders, the explosives experts and the defenders of an
-/// assaulted node, and the captains' and Snivvle's yells are in <c>AlteracValley.Upgrades.cs</c> and below. Not ported: the assault
-/// invocations of the scripts (escorted troops, beacons, war riders and world bosses; their counters and go flags are kept) and the
-/// start-time supply and tamed events (unreachable in vmangos: they test the third start event flag while the match is running,
-/// BattleGroundAV.cpp:845).
+/// assaulted node, and the captains' and Snivvle's yells are in <c>AlteracValley.Upgrades.cs</c> and below; the start-time supply and
+/// tamed events run at the third start warning (<see cref="StartingEventThird"/>; vmangos tests that flag where it is always set,
+/// BattleGroundAV.cpp:847). The assault invocations of the scripts are in <c>AlteracValley.Assaults.cs</c> and the
+/// <c>Battlegrounds/AlteracValleyScripts</c> creature and object scripts.
 /// </para>
 /// </summary>
 public sealed partial class AlteracValley : Battleground
@@ -314,6 +314,29 @@ public sealed partial class AlteracValley : Battleground
         }
 
         SpawnEvent(BattlegroundConstants.EventGhostGate, 0, spawn: false, forcedDespawn: true);
+    }
+
+    /// <summary>
+    /// The start-time supply and tamed events (BattleGroundAV.cpp:845-869): the supply piles and the tamed mounts of both teams go (events
+    /// 80-87 and 90-97 to their empty state 2), so neither shows before anything was turned in. vmangos tests the third start warning's flag
+    /// inside its in-progress branch, where every start flag is already set, so the block never runs there; it runs here at that warning
+    /// itself, 30 s before the gates open. The same block's two guard despawns (events (15, 0) and (28, 0), "upgraded tower guards") are
+    /// left out: in this event layout (BattleGroundAV.h:235-253) (15, 0) are the first aid station's own starting Alliance defenders and
+    /// (28, 0) the Alliance marshals of East Frostwolf Tower, which the Horde owns at the start.
+    /// </summary>
+    protected override void StartingEventThird()
+    {
+        foreach (byte supplies in new[] { EventSupplies100, EventSupplies200, EventSupplies300, EventSupplies400 })
+        {
+            SpawnEvent(supplies, 2, spawn: true, forcedDespawn: false);
+            SpawnEvent((byte)(supplies + 1), 2, spawn: true, forcedDespawn: false);
+        }
+
+        foreach (byte tamed in new[] { EventTamed05, EventTamed10, EventTamed15, EventTamed20 })
+        {
+            SpawnEvent(tamed, 2, spawn: true, forcedDespawn: false);
+            SpawnEvent((byte)(tamed + 1), 2, spawn: true, forcedDespawn: false);
+        }
     }
 
     // ------------------------------------------------------------------ update
