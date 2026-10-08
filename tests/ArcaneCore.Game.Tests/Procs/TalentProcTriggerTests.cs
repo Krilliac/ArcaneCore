@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.WorldData.Procs;
 using Xunit;
 using static ArcaneCore.Game.Tests.Procs.TalentProcRig;
 
@@ -101,12 +102,12 @@ public sealed class TalentProcTriggerTests
         ProcSpell = spell,
     };
 
-    private static ProcEvent Struck(Unit victim, uint amount) => new()
+    private static ProcEvent Struck(Unit victim, uint amount, ProcFlagsEx extra = ProcFlagsEx.NormalHit) => new()
     {
         Victim = victim,
         AttackerFlags = ProcFlags.DealMeleeSwing,
         VictimFlags = ProcFlags.TakeMeleeSwing | ProcFlags.TakenAnyDamage,
-        Extra = ProcFlagsEx.NormalHit,
+        Extra = extra,
         Amount = amount,
         OriginalAmount = amount,
     };
@@ -199,10 +200,69 @@ public sealed class TalentProcTriggerTests
         Player attacker = rig.AddPlayer(2, 2, 0, Race.Orc);
         rig.Apply(priest, rank);
 
-        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300));
+        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300, ProcFlagsEx.CriticalHit));
 
         TalentProcRig.ProbeHit hit = Assert.Single(rig.Probes);
         Assert.Equal((heal, priest, priest, value), (hit.SpellId, hit.Caster, hit.Target, hit.Value));
+    }
+
+    /// <summary>
+    /// The talent's spell_proc_event row (27811, procEx PROC_EX_CRITICAL_HIT, mangos-classic mangos.sql:13824) makes it a crit-only proc; Spell.dbc
+    /// alone (procFlags 0x2A8, chance 100) would heal on every melee or ranged hit taken. Without a row the case applies the row's condition itself.
+    /// </summary>
+    [Fact]
+    public void BlessedRecovery_WithoutARow_AnOrdinaryHitHealsNothing_AndACriticalHitHeals()
+    {
+        using TalentProcRig rig = NewRig();
+        Player priest = rig.AddPlayer(1, 0, 0);
+        Player attacker = rig.AddPlayer(2, 2, 0, Race.Orc);
+        rig.Apply(priest, BlessedRecoveryRank1);
+
+        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300));
+        Assert.Empty(rig.Probes);
+
+        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300, ProcFlagsEx.CriticalHit));
+        Assert.Equal(BlessedRecoveryHeal1, Assert.Single(rig.Probes).SpellId);
+    }
+
+    [Fact]
+    public void BlessedRecovery_WithItsRow_OnlyACriticalHitHeals()
+    {
+        using TalentProcRig rig = NewRig();
+        Player priest = rig.AddPlayer(1, 0, 0);
+        Player attacker = rig.AddPlayer(2, 2, 0, Race.Orc);
+        rig.UseRows(new SpellProcEventRecord(BlessedRecoveryRank1, 0, 0, 0, 0, 0, 0, (uint)ProcFlagsEx.CriticalHit, 0, 0, 0));
+        rig.Apply(priest, BlessedRecoveryRank1);
+
+        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300));
+        Assert.Empty(rig.Probes);
+
+        rig.System.ProcDamageAndSpell(attacker, Struck(priest, 300, ProcFlagsEx.CriticalHit));
+        Assert.Equal(BlessedRecoveryHeal1, Assert.Single(rig.Probes).SpellId);
+    }
+
+    /// <summary>
+    /// vmangos <c>HandleProcTriggerSpellAuraProc</c> holds the aura amount in a float (<c>float triggerAmount</c>, UnitAuraProcHandler.cpp:1153), so
+    /// <c>rand_dither(amount * triggerAmount / 100 / 3)</c> dithers the fraction: 310 x 8% / 3 = 8.27 heals 8 or 9, never always 8.
+    /// </summary>
+    [Fact]
+    public void BlessedRecovery_DithersTheFraction_AsVmangosFloatArithmeticDoes()
+    {
+        using TalentProcRig rig = NewRig();
+        Player priest = rig.AddPlayer(1, 0, 0);
+        Player attacker = rig.AddPlayer(2, 2, 0, Race.Orc);
+        rig.System.Random = new Random(1875);
+        rig.Apply(priest, BlessedRecoveryRank1);
+
+        for (int i = 0; i < 40; i++)
+        {
+            rig.System.ProcDamageAndSpell(attacker, Struck(priest, 310, ProcFlagsEx.CriticalHit));
+        }
+
+        Assert.Equal(40, rig.Probes.Count);
+        Assert.All(rig.Probes, hit => Assert.InRange(hit.Value, 8, 9));
+        Assert.Contains(rig.Probes, hit => hit.Value == 8);
+        Assert.Contains(rig.Probes, hit => hit.Value == 9);
     }
 
     [Fact]

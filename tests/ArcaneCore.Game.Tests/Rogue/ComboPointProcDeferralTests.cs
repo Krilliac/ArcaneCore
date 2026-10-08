@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -63,7 +64,8 @@ public sealed class ComboPointProcDeferralTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig()
+        /// <param name="deferral">Install the combo point service (which turns the post-finish deferral on), or, off, only its point effect.</param>
+        public Rig(bool deferral = true)
         {
             Kit = new SpellTestKit(
                 Ability(Eviscerate, EviscerateFlag, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with
@@ -86,7 +88,15 @@ public sealed class ComboPointProcDeferralTests
             MapCombat.UpdatePvp(Enemy, true);
             Enemy.Health = Enemy.MaxHealth = 5000;
             Combos = new ComboPointService(Kit.System, (_, guid) => Kit.World.FindOnlinePlayer(guid));
-            Combos.Install();
+            if (deferral)
+            {
+                Combos.Install();
+            }
+            else
+            {
+                Kit.System.RegisterEffect(SpellEffectName.AddComboPoints, context => Combos.AddComboPoints((Player)context.Caster, context.Target, context.Value));
+            }
+
             Kit.World.RunTick(0);
         }
 
@@ -103,6 +113,17 @@ public sealed class ComboPointProcDeferralTests
             Kit.System.CastSpell(Rogue, talent, SpellCastTargets.ForSelf(), triggered: true);
             Kit.Now++;
         }
+
+        /// <summary>An Eviscerate hit reported to the proc engine outside any cast of the rogue (a proc that arrives after the cast is gone).</summary>
+        public void ProcEviscerateHit() => Kit.System.ProcDamageAndSpell(Rogue, new ProcEvent
+        {
+            Victim = Enemy,
+            AttackerFlags = ProcFlags.DealMeleeAbility,
+            Extra = ProcFlagsEx.NormalHit,
+            Amount = 10,
+            OriginalAmount = 10,
+            ProcSpell = Kit.Store.Get(Eviscerate),
+        });
 
         public SpellCastResult Cast(uint spell) => Kit.System.CastSpell(Rogue, spell, SpellCastTargets.ForUnit(Enemy.Guid), triggered: false);
 
@@ -125,16 +146,43 @@ public sealed class ComboPointProcDeferralTests
     }
 
     [Fact]
-    public void TheComboPointSpell_CastOutsideAnyCastOfTheRogue_AddsAtOnce()
+    public void TheComboPointSpellItself_CastDirectly_AddsAtOnce()
     {
         using var rig = new Rig();
         rig.Learn(Ruthlessness);
         rig.Combos.AddComboPoints(rig.Rogue, rig.Enemy, 2);
 
-        // Without a finisher there is nothing to clear: a proc outside any cast of the rogue adds at once, as vmangos does with a proc delay.
+        // 14157 cast by itself, not through the Ruthlessness proc: the deferral belongs to the proc handler, so the spell adds its point at once.
         rig.Kit.System.CastSpell(rig.Rogue, RuthlessnessPoint, SpellCastTargets.ForUnit(rig.Enemy.Guid), triggered: true);
 
         Assert.Equal(3, rig.Combos.GetComboPoints(rig.Rogue));
+    }
+
+    [Fact]
+    public void Ruthlessness_AProcWithNoRunningCast_AddsNoPoint()
+    {
+        using var rig = new Rig();
+        rig.Learn(Ruthlessness);
+        rig.Combos.AddComboPoints(rig.Rogue, rig.Enemy, 2);
+
+        // vmangos takes the point's target from GetCurrentSpell(CURRENT_GENERIC_SPELL) and fails the proc without one (UnitAuraProcHandler.cpp:1592-1615).
+        rig.ProcEviscerateHit();
+
+        Assert.Equal(2, rig.Combos.GetComboPoints(rig.Rogue));
+    }
+
+    [Fact]
+    public void Ruthlessness_WithTheDeferralOff_ThePointIsCastAtOnce()
+    {
+        using var rig = new Rig(deferral: false);
+        rig.Learn(Ruthlessness);
+        rig.Combos.AddComboPoints(rig.Rogue, rig.Enemy, 2);
+
+        // Nothing promised to run the post-finish procs, so the handler casts 14157 on the proc's target immediately (the same event as above).
+        rig.ProcEviscerateHit();
+
+        Assert.Equal(3, rig.Combos.GetComboPoints(rig.Rogue));
+        Assert.Equal(rig.Enemy.Guid, rig.Combos.GetComboTarget(rig.Rogue));
     }
 
     [Fact]

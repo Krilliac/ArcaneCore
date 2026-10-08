@@ -195,6 +195,44 @@ public sealed class TalentEffectCoverageTests
     {
     }
 
+    /// <summary>
+    /// A DUMMY or OVERRIDE_CLASS_SCRIPTS talent read outside the script registries counts as handled only while its rule still reads it: every
+    /// <see cref="TalentEffectCoverage.ExternalReaders"/> site must hold a code line matching its pattern, so removing the read (or the rule) fails
+    /// here instead of leaving the talent reported as handled.
+    /// </summary>
+    [Fact]
+    public void EveryExternalReader_StillHasItsReadingLine()
+    {
+        string root = Path.Combine(RepoRoot(), "src", "ArcaneCore.Game");
+        IReadOnlyList<ExternalReader> readers = TalentEffectCoverage.ExternalReaders;
+
+        bool Reads(ExternalReader reader)
+        {
+            string file = Path.Combine(root, reader.Site.Replace('/', Path.DirectorySeparatorChar));
+            return File.Exists(file) && File.ReadLines(file).Any(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)
+                && System.Text.RegularExpressions.Regex.IsMatch(line, reader.Pattern));
+        }
+
+        Assert.True(readers.Count >= 20, $"only {readers.Count} external readers: the scan proved nothing");
+        Assert.False(Reads(readers[0] with { Pattern = "NoSuchReadingLine_" }), "the scan matches a line that does not exist");
+        Assert.False(Reads(readers[0] with { Site = "NoSuchFile.cs" }), "the scan matches a file that does not exist");
+        Assert.Empty(readers.Where(reader => !Reads(reader)).Select(reader => $"{reader.Kind} {reader.Key}: {reader.Site} /{reader.Pattern}/"));
+        Assert.Equal(
+            [831u, 832u, 833u, 834u, 835u, 2228u, 11094u, 11189u, 13043u, 17864u, 18393u, 28332u],
+            readers.Where(r => r.Kind is ExternalReaderKind.ClassScript or ExternalReaderKind.DummySpell).Select(r => r.Key).Distinct().Order());
+    }
+
+    private static string RepoRoot()
+    {
+        string? dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "ArcaneCore.slnx")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        return dir ?? throw new InvalidOperationException("repository root not found");
+    }
+
     [SpellScript(ScriptConsumer)]
     private sealed class FakeSpellScript : ISpellScript
     {

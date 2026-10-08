@@ -116,8 +116,10 @@ public sealed class RetaliationProc : IProcScript
 
 /// <summary>
 /// Magic Absorption (mage, SpellIconID 459; vmangos UnitAuraProcHandler.cpp:832-845, "only this spell have SpellIconID == 459 and dummy aura"): a
-/// mana user gains its percent of maximum mana (29442). The resist that triggers it is the spell_proc_event row's condition (PROC_EX_RESIST): with
-/// Spell.dbc alone the DUMMY effect only sees landed hits, so the talent does nothing until operators import the rows (docs/areas/procs.md).
+/// mana user gains its percent of maximum mana (29442). The resist that triggers it is the spell_proc_event row's condition (29441, procEx
+/// PROC_EX_RESIST, cooldown 1 s; mangos-classic mangos.sql:13839). Spell.dbc alone (procFlags TAKE_HARMFUL_SPELL, chance 100) would let every
+/// harmful spell that lands proc the DUMMY effect, so without a row the script requires the resist itself; since the engine's no-row check only
+/// passes hits, the talent then never procs (docs/areas/procs.md).
 /// </summary>
 public sealed class MagicAbsorptionProc : IProcScript
 {
@@ -133,6 +135,11 @@ public sealed class MagicAbsorptionProc : IProcScript
 
         Unit owner = context.Owner;
         if (owner.PowerType != PowerType.Mana || context.System.Store.Get(ManaSpell) is not { } mana)
+        {
+            return AuraProcResult.Failed;
+        }
+
+        if (context.System.ProcEvents.Find(context.Holder.Spell.Id) is null && (context.ProcExtra & ProcFlagsEx.Resist) == 0)
         {
             return AuraProcResult.Failed;
         }

@@ -155,6 +155,13 @@ internal static class BuiltInProcHandlers
                     return AuraProcResult.Failed; // "Spell %u not handled in BR"
                 }
 
+                // The talent's spell_proc_event row (27811, procEx PROC_EX_CRITICAL_HIT; mangos-classic mangos.sql:13824) limits it to critical hits;
+                // Spell.dbc alone (procFlags 0x2A8, chance 100) would heal on every melee or ranged hit taken, so without a row the case requires one.
+                if (system.ProcEvents.Find(aura.Id) is null && (c.ProcExtra & ProcFlagsEx.CriticalHit) == 0)
+                {
+                    return AuraProcResult.Failed;
+                }
+
                 basePoints0 = NonZero(Dither(c.Amount * (float)c.Aura.Amount / 100f / 3f, system.Random));
                 target = c.Owner;
                 break;

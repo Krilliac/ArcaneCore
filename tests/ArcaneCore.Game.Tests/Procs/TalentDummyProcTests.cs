@@ -243,6 +243,66 @@ public sealed class TalentDummyProcTests
         Assert.Equal((MagicAbsorptionMana, mage, mage, 60), (hit.SpellId, hit.Caster, hit.Target, hit.Value));
     }
 
+    /// <summary>
+    /// Spell.dbc gives 29441/29444 procFlags 0x20000 (TAKE_HARMFUL_SPELL) and chance 100; only the spell_proc_event row (procEx PROC_EX_RESIST,
+    /// mangos-classic mangos.sql:13839) limits the talent to resisted spells. Without the row a landed spell must not grant mana.
+    /// </summary>
+    [Theory]
+    [InlineData(ProcFlagsEx.NormalHit)]
+    [InlineData(ProcFlagsEx.CriticalHit)]
+    public void MagicAbsorption_WithoutASpellProcEventRow_ALandedSpellRestoresNoMana(ProcFlagsEx landed)
+    {
+        using TalentProcRig rig = NewRig();
+        Player mage = rig.AddPlayer(1, 0, 0);
+        Player priest = rig.AddPlayer(2, 5, 0, Race.Orc);
+        GiveMana(mage, maxMana: 3000);
+        rig.Apply(mage, MagicAbsorption);
+
+        rig.System.ProcDamageAndSpell(priest, new ProcEvent
+        {
+            Victim = mage,
+            VictimFlags = ProcFlags.TakeHarmfulSpell,
+            Extra = landed,
+            Amount = 200,
+            OriginalAmount = 200,
+            ProcSpell = rig.Kit.Store.Get(ShadowBolt),
+        });
+
+        Assert.Empty(rig.Probes);
+    }
+
+    /// <summary>
+    /// vmangos <c>HandleDummyAuraProc</c> holds the aura amount in a float (<c>float triggerAmount</c>, UnitAuraProcHandler.cpp:553), so
+    /// <c>rand_dither(triggerAmount * GetMaxPower(POWER_MANA) / 100)</c> dithers the fraction: 2% of 3010 = 60.2 restores 60 or 61, never always 60.
+    /// </summary>
+    [Fact]
+    public void MagicAbsorption_DithersTheFraction_AsVmangosFloatArithmeticDoes()
+    {
+        using TalentProcRig rig = NewRig();
+        Player mage = rig.AddPlayer(1, 0, 0);
+        Player priest = rig.AddPlayer(2, 5, 0, Race.Orc);
+        GiveMana(mage, maxMana: 3010);
+        rig.System.Random = new Random(459);
+        rig.UseRows(new SpellProcEventRecord(MagicAbsorption, 0, 0, 0, 0, 0, 0, (uint)ProcFlagsEx.Resist, 0, 0, 0));
+        rig.Apply(mage, MagicAbsorption);
+
+        for (int i = 0; i < 60; i++)
+        {
+            rig.System.ProcDamageAndSpell(priest, new ProcEvent
+            {
+                Victim = mage,
+                VictimFlags = ProcFlags.TakeHarmfulSpell,
+                Extra = ProcFlagsEx.Resist,
+                ProcSpell = rig.Kit.Store.Get(ShadowBolt),
+            });
+        }
+
+        Assert.Equal(60, rig.Probes.Count);
+        Assert.All(rig.Probes, hit => Assert.InRange(hit.Value, 60, 61));
+        Assert.Contains(rig.Probes, hit => hit.Value == 60);
+        Assert.Contains(rig.Probes, hit => hit.Value == 61);
+    }
+
     [Fact]
     public void MagicAbsorption_NeedsAManaUser()
     {

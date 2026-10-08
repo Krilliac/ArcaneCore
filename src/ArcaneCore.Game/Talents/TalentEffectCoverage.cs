@@ -98,25 +98,59 @@ public sealed class TalentCoverageReport
 public static class TalentEffectCoverage
 {
     /// <summary>
-    /// DUMMY auras read outside the script registries, by SpellIconID: Furor (238, ShapeshiftService.RollFuror) and Predatory Strikes (1563,
-    /// FormStatListener).
+    /// The DUMMY and OVERRIDE_CLASS_SCRIPTS auras a rule reads outside the script registries, each with the code line that reads it. A talent
+    /// listed here counts as handled, so TalentEffectCoverageTests scans every <see cref="ExternalReader.Site"/> for its
+    /// <see cref="ExternalReader.Pattern"/>: a rule that stops reading the aura fails that test instead of leaving the talent reported as handled.
+    /// Shatter (<see cref="SpellCritRules.ShatterBonuses"/>) and the built-in proc cases are read from their own tables.
     /// </summary>
-    private static readonly HashSet<uint> DummyIconReaders = [ShapeshiftService.FurorIconId, FormStatListener.PredatoryStrikesIconId];
+    public static IReadOnlyList<ExternalReader> ExternalReaders { get; } =
+    [
+        // Furor (ShapeshiftService.RollFuror) and Predatory Strikes (FormStatListener), by SpellIconID.
+        new(ExternalReaderKind.DummyIcon, ShapeshiftService.FurorIconId, 0, "Spells/Stances/ShapeshiftService.cs", @"SpellIconId != FurorIconId\b"),
+        new(ExternalReaderKind.DummyIcon, FormStatListener.PredatoryStrikesIconId, 0, "Stats/FormStatListener.cs", @"SpellIconId != PredatoryStrikesIconId\b"),
 
-    /// <summary>DUMMY auras read outside the script registries, by family and SpellIconID: Improved Life Tap (warlock 208, LifeTapScript).</summary>
-    private static readonly HashSet<(uint Family, uint Icon)> DummyFamilyIconReaders = [(SoulShardRules.WarlockFamily, LifeTapScript.ImprovedLifeTapIcon)];
+        // Improved Life Tap (LifeTapScript), by family and SpellIconID.
+        new(ExternalReaderKind.DummyFamilyIcon, LifeTapScript.ImprovedLifeTapIcon, SoulShardRules.WarlockFamily, "Spells/Warlock/LifeTapScript.cs",
+            @"SpellFamilyName != SoulShardRules\.WarlockFamily \|\| holder\.Spell\.SpellIconId != ImprovedLifeTapIcon\b"),
 
-    /// <summary>
-    /// DUMMY auras read outside the script registries, by spell id: Frost Warding (11189, 28332) and Improved Fire Ward (11094, 13043)
-    /// (HardcodedMods.WardMask), Improved Drain Mana (17864, 18393, DrainAuras).
-    /// </summary>
-    private static readonly HashSet<uint> DummySpellReaders = [11189, 28332, 11094, 13043, 17864, 18393];
+        // Frost Warding and Improved Fire Ward (HardcodedMods.WardMask, applied on the holder events).
+        new(ExternalReaderKind.DummySpell, 11189, 0, "Spells/Mods/HardcodedMods.cs", @"\b11189 or 28332 =>"),
+        new(ExternalReaderKind.DummySpell, 28332, 0, "Spells/Mods/HardcodedMods.cs", @"\b11189 or 28332 =>"),
+        new(ExternalReaderKind.DummySpell, 11094, 0, "Spells/Mods/HardcodedMods.cs", @"\b11094 or 13043 =>"),
+        new(ExternalReaderKind.DummySpell, 13043, 0, "Spells/Mods/HardcodedMods.cs", @"\b11094 or 13043 =>"),
+        new(ExternalReaderKind.DummySpell, 11189, 0, "Spells/Mods/HardcodedMods.cs", @"WardMask\(holder\.Spell\.Id\)"),
 
-    /// <summary>
-    /// The OVERRIDE_CLASS_SCRIPTS misc values a rule reads: Tactical Mastery (831-835, ShapeshiftService), Demonic Sacrifice (2228,
-    /// SummonService and ResurrectEffects); Shatter (<see cref="SpellCritRules.ShatterBonuses"/>) and the built-in proc cases are added below.
-    /// </summary>
-    private static readonly HashSet<int> ClassScriptReaders = [831, 832, 833, 834, 835, DemonicSacrificeScript.ClassScriptMisc];
+        // Improved Drain Mana (DrainAuras): the rank constants and the read.
+        new(ExternalReaderKind.DummySpell, 17864, 0, "Spells/Casters/Drain/DrainAuras.cs", @"ImprovedDrainManaRank1 = 17864;"),
+        new(ExternalReaderKind.DummySpell, 17864, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank1\)"),
+        new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"ImprovedDrainManaRank2 = 18393;"),
+        new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank2\)"),
+
+        // Tactical Mastery (ShapeshiftService.GetTacticalMasteryRage): the script table and the read on a stance change.
+        new(ExternalReaderKind.ClassScript, 831, 0, "Spells/Stances/ShapeshiftService.cs", @"\(831, 50\)"),
+        new(ExternalReaderKind.ClassScript, 832, 0, "Spells/Stances/ShapeshiftService.cs", @"\(832, 100\)"),
+        new(ExternalReaderKind.ClassScript, 833, 0, "Spells/Stances/ShapeshiftService.cs", @"\(833, 150\)"),
+        new(ExternalReaderKind.ClassScript, 834, 0, "Spells/Stances/ShapeshiftService.cs", @"\(834, 200\)"),
+        new(ExternalReaderKind.ClassScript, 835, 0, "Spells/Stances/ShapeshiftService.cs", @"\(835, 250\)"),
+        new(ExternalReaderKind.ClassScript, 831, 0, "Spells/Stances/ShapeshiftService.cs", @"GetTacticalMasteryRage\(target\)"),
+
+        // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
+        new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",
+            @"a\.MiscValue == DemonicSacrificeScript\.ClassScriptMisc"),
+        new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Spells/Effects/ResurrectEffects.cs",
+            @"OverrideClassScripts, MiscValue: 2228 \}"),
+    ];
+
+    private static readonly HashSet<uint> DummySpellReaders = KeysOf(ExternalReaderKind.DummySpell);
+
+    private static readonly HashSet<uint> DummyIconReaders = KeysOf(ExternalReaderKind.DummyIcon);
+
+    private static readonly HashSet<(uint Family, uint Icon)> DummyFamilyIconReaders
+        = ExternalReaders.Where(r => r.Kind == ExternalReaderKind.DummyFamilyIcon).Select(r => (r.Family, r.Key)).ToHashSet();
+
+    private static readonly HashSet<int> ClassScriptReaders = KeysOf(ExternalReaderKind.ClassScript).Select(key => (int)key).ToHashSet();
+
+    private static HashSet<uint> KeysOf(ExternalReaderKind kind) => ExternalReaders.Where(r => r.Kind == kind).Select(r => r.Key).ToHashSet();
 
     public static TalentCoverageReport Build(TalentCatalog catalog, SpellSystem spells)
     {
@@ -214,3 +248,25 @@ public static class TalentEffectCoverage
     private static IReadOnlySet<uint> InstalledSpellScripts(SpellSystem spells)
         => spells.Observers.OfType<SpellScriptDispatcher>().FirstOrDefault() is { } dispatcher ? dispatcher.Registry.SpellIds.ToHashSet() : [];
 }
+
+/// <summary>What an <see cref="ExternalReader"/> is keyed on.</summary>
+public enum ExternalReaderKind
+{
+    /// <summary>A DUMMY aura of the spell id <see cref="ExternalReader.Key"/>.</summary>
+    DummySpell,
+
+    /// <summary>A DUMMY aura of a spell with SpellIconID <see cref="ExternalReader.Key"/>.</summary>
+    DummyIcon,
+
+    /// <summary>A DUMMY aura of a spell of family <see cref="ExternalReader.Family"/> with SpellIconID <see cref="ExternalReader.Key"/>.</summary>
+    DummyFamilyIcon,
+
+    /// <summary>An OVERRIDE_CLASS_SCRIPTS aura of misc value <see cref="ExternalReader.Key"/>.</summary>
+    ClassScript,
+}
+
+/// <summary>
+/// One reading site of a DUMMY or OVERRIDE_CLASS_SCRIPTS talent aura outside the script registries: <see cref="Site"/> (a path under
+/// src/ArcaneCore.Game) holds a code line that matches the regular expression <see cref="Pattern"/>. A key may have several sites.
+/// </summary>
+public sealed record ExternalReader(ExternalReaderKind Kind, uint Key, uint Family, string Site, string Pattern);

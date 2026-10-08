@@ -76,18 +76,22 @@ The talents whose proc is scripted in vmangos, as `IProcScript`s registered by `
 | Eye for an Eye 9799, 25988 | proc script (id) | its percent of a critical magic spell's damage before absorbs and resists (`originalAmount`), at most half the owner's maximum health, as 25997 at the attacker; weapon specials never | UnitAuraProcHandler.cpp:577-593, 258-266 | no (the crit check is hard-coded) |
 | Sweeping Strikes 12292, 18765 | proc script (id) | a hit that dealt damage (amount > 1) repeats its damage before the victim's armor (`amount x 100 / CalcArmorReducedDamage(victim, 100)`) as 12723 on a random other unfriendly unit within 5 yards (8 for Whirlwind), skipping PvP-flagged players for an unflagged warrior; Execute with only the main target below 20%: an ordinary swing (26654); 12723 and 26654 never chain; one charge per strike | :594-656 | no |
 | Retaliation 20230 | proc script (id) | a swing from in front of the warrior, not stunned, confused, fleeing or feigning death: 22858 at the attacker; one charge per strike | :660-675 | no |
-| Magic Absorption (mage icon 459) | proc script (family and icon) | a mana user gains its percent of maximum mana (29442) | :832-845 | **yes**: the resist (PROC_EX_RESIST); without it the talent never procs |
+| Magic Absorption (mage icon 459) | proc script (family and icon) | a mana user gains its percent of maximum mana (29442) | :832-845 | **yes**: the resist (29441, procEx PROC_EX_RESIST, cooldown 1 s; mangos-classic mangos.sql:13839). Spell.dbc alone (TAKE_HARMFUL_SPELL, chance 100) would let every landed harmful spell proc, so without a row the script requires the resist itself, and since the no-row trigger check only passes hits, the talent never procs |
 | Master of Elements (mage icon 1920) | proc script (family and icon) | its percent of the spell's base cost (`manaCost + ManaCostPercentage x create mana / 100`) as 29077; nothing for a free spell | :849-862 | the fire-or-frost crit; without a row the script requires it itself |
 | Vampiric Embrace 15286 | proc script (id) | damage from the debuff's own caster makes that caster cast 15290 (the party heal) for the percent of the damage, at least 1 | :875-893 | shadow only; without a row the script requires a shadow spell |
 | Blade Flurry 13877 | proc script (id) | the hit's damage before armor as 22482 on a random other unfriendly unit within 5 yards; 22482 never chains | :951-971 | no |
 | Pyroclasm (warlock icon 1137) | PROC_TRIGGER_SPELL case | Hellfire (15 ticks), Rain of Fire (4) or Soul Fire (1) only; rank chance 13 / 26 over the ticks; stun 18093 on a living other victim | :1226-1262 | no |
 | Shadowguard (priest icon 19) | PROC_TRIGGER_SPELL case | rank 18137..19312 to damage 28377..28382 at the attacker; an unknown rank casts nothing | :1281-1306 | no |
-| Blessed Recovery (priest icon 1875) | PROC_TRIGGER_SPELL case | rank 27811/27815/27816 to heal 27813/27817/27818 on the priest for `rand_dither(amount x percent / 100 / 3)` | :1308-1330 | no |
+| Blessed Recovery (priest icon 1875) | PROC_TRIGGER_SPELL case | rank 27811/27815/27816 to heal 27813/27817/27818 on the priest for `rand_dither(amount x percent / 100 / 3)` | :1308-1330 | the crit (27811, procEx PROC_EX_CRITICAL_HIT; mangos.sql:13824); Spell.dbc alone (procFlags 0x2A8, chance 100) would heal on every melee or ranged hit taken, so without a row the case requires a critical hit itself |
 | Illumination (paladin icon 241) | PROC_TRIGGER_SPELL case | 20272 on the paladin with the healing spell's mana cost; Holy Shock's heal (25914/25913/25903) reads the cast rank (20473/20929/20930); an unknown Holy Shock heal casts nothing | :1468-1500 | the critical heal |
 | Ruthlessness (14157), Seal Fate (14189) | PROC_TRIGGER_SPELL case | the combo point is cast on the running spell's unit target after that spell finished, so a finisher's own point survives `Spell::finish` clearing its points; no running spell: no point | :1592-1615, Spell.cpp:4374-4395 | Seal Fate: the crit |
 
 Shatter (OVERRIDE_CLASS_SCRIPTS 849, 910-913) is not a proc: the magic crit roll reads it (`SpellCritRules.ScriptedCritBonus`, vmangos
 Unit.cpp:5259-5290): +10..50% against a frozen target for the caster's spells of the aura's family (all mage spells, 1.11+).
+
+The formulas dither in float, as vmangos does: both `HandleDummyAuraProc` and `HandleProcTriggerSpellAuraProc` hold the aura amount in a
+`float triggerAmount` (UnitAuraProcHandler.cpp:553, 1153), and `CalcArmorReducedDamage` returns a float (SpellCaster.h:342), so a fractional
+result (2% of 3010 mana = 60.2) gives 60 or 61, not always 60.
 
 Icon-keyed scripts (`SpellSystem.RegisterIconProcScript`) are matched against the proccing spell when it procs, not resolved from the spell
 table when they are registered: the world builds its spell system on an empty table and loads (and `.reload`s) it later.
@@ -133,8 +137,8 @@ name; classic-db Full_DB z2815 stores cooldowns in seconds, `ProcCooldownUnit.Se
 procFlags and procChance, which already covers most auras; PPM procs (Hand of Justice, Crusader-style talents), procEx-only procs (Shield Block,
 Flurry's crit requirement, reflect charges) and family-filtered talent procs need the operator's rows. Talents in particular: a family-filtered or
 PPM talent runs on its raw Spell.dbc procFlags until operators import the rows, so it may proc from spells and outcomes vmangos filters out (or,
-for a procEx-only condition such as Magic Absorption's resist, never). Master of Elements and Vampiric Embrace apply their row's condition
-themselves when no row is loaded; the startup talent report (`TalentEffectCoverage`) does not know about rows.
+for a procEx-only condition such as Magic Absorption's resist, never). Magic Absorption, Master of Elements, Vampiric Embrace and Blessed Recovery
+apply their row's condition themselves when no row is loaded; the startup talent report (`TalentEffectCoverage`) does not know about rows.
 
 Importing: `arcane-content-importer proc-events <dump>... --database <file>` (or `--provider` with `--connection-string`) replaces the table with
 the dump's build-5875 rows in one transaction; `--cooldown-unit seconds` for classic-db dumps before z2829, `--dry-run` writes nothing. The
@@ -206,8 +210,8 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 ## Tests
 
 `tests/ArcaneCore.Game.Tests/Procs/TalentDummyProcTests.cs` and `TalentProcTriggerTests.cs` (each talent proc with the vmangos base points,
-recipient, charges and filters; RED on 08ea5ff6), `Rogue/ComboPointProcDeferralTests.cs` (Ruthlessness' point survives its finisher),
-`Combat/ShatterCritTests.cs`, `Talents/TalentEffectCoverageTests.cs` (consumers of DUMMY and OVERRIDE_CLASS_SCRIPTS talents),
+recipient, charges and filters; RED on 08ea5ff6), `Rogue/ComboPointProcDeferralTests.cs` (Ruthlessness' point survives its finisher; no running cast, no point; the deferral off casts it at once),
+`Combat/ShatterCritTests.cs`, `Talents/TalentEffectCoverageTests.cs` (consumers of DUMMY and OVERRIDE_CLASS_SCRIPTS talents; every `ExternalReaders` site still reads its aura),
 `tests/ArcaneCore.Game.Tests/Procs/ProcEngineBehaviourTests.cs` (only pre-engine APIs: RED on 2ca2f4e1, 9/9),
 `ProcEngineTests.cs` (rows, charges, shields, kills, reflect charges, break chances, seams), `ProcEngineFidelityTests.cs` (leech and Improved
 Drain Mana ticks, the apply-time rule (old auras, a clock that moves inside the event, a refresh by the same hit), PROC_EX_REFLECT on reflected damage, heal procs before the heal, CAST_END alone,
