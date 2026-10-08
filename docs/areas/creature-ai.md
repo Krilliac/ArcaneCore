@@ -157,7 +157,8 @@ docs/integration/creature-ai.md.
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 11 (the spawner: the creature that summoned this one, else its owner), 12 and 15
     (no unit). Others fail the action.
   - **Still unsupported** in classic-db z2815: action 34 SET_INST_DATA (37 rows; no instance scripts exist to receive the data) and action 48
-    CHANGE_MOVEMENT (3 rows; the motion master has no "push random/waypoint over the default" API yet). Both stay in the startup warning.
+    CHANGE_MOVEMENT (3 rows; not ported: the relay MOVEMENT command added a push for random movement, `MotionMaster.MoveRandom`, but there
+    is no waypoint push). Both stay in the startup warning.
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
     unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) is not
     implemented (action 42 clamps the health; no classic-db z2815 row uses event 35).

@@ -259,11 +259,6 @@ public static partial class ContentImporterCli
     }
 
     /// <summary>
-    /// The cooldown unit of <c>spell_proc_event</c>: given, or (auto) read from the classic-db <c>db_version</c> text ("For Classic core
-    /// zNNNN"): seconds before z2829, milliseconds from it on. A dump whose revision cannot be read needs an explicit unit (fail closed:
-    /// guessing wrong makes every proc cooldown a thousand times off).
-    /// </summary>
-    /// <summary>
     /// The refresh's schema gate: a world already at this importer's schema passes; one behind it is refused (nothing written) unless
     /// <paramref name="migrate"/>, in which case it is upgraded first and the step is reported. Built together with a lane that raised the
     /// world schema, a silent upgrade here would migrate the live world before the server that needs it is deployed.
@@ -294,6 +289,11 @@ public static partial class ContentImporterCli
         }
     }
 
+    /// <summary>
+    /// The cooldown unit of <c>spell_proc_event</c>: given, or (auto) read from the classic-db <c>db_version</c> text ("For Classic core
+    /// zNNNN"): seconds before z2829, milliseconds from it on. A dump whose revision cannot be read needs an explicit unit (fail closed:
+    /// guessing wrong makes every proc cooldown a thousand times off).
+    /// </summary>
     internal static ProcCooldownUnit ResolveCooldownUnit(string? given, string? dbVersion)
     {
         switch ((given ?? "auto").ToLowerInvariant())
