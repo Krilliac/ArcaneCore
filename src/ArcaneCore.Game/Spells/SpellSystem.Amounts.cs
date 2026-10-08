@@ -24,7 +24,7 @@ public sealed partial class SpellSystem
     {
         SpellAmountStage? stage = context.Effect.AuraType switch
         {
-            AuraType.PeriodicDamage or AuraType.PeriodicLeech => SpellAmountStage.DamageOverTimeSnapshot,
+            AuraType.PeriodicDamage or AuraType.PeriodicLeech or AuraType.PeriodicHealthFunnel => SpellAmountStage.DamageOverTimeSnapshot, // HandlePeriodicHealthFunnel (SpellAuras.cpp:4474-4491) too
             AuraType.PeriodicHeal => SpellAmountStage.HealOverTimeSnapshot,
             AuraType.SchoolAbsorb => SpellAmountStage.AbsorbShield, // vmangos HandleSchoolAbsorb: int32 m_amount += bonus (truncation)
             _ => null,

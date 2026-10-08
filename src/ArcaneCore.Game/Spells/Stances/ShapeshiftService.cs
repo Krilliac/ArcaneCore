@@ -51,7 +51,13 @@ public sealed class ShapeshiftService
         (byte)ShapeshiftForm.BattleStance, (byte)ShapeshiftForm.DefensiveStance, (byte)ShapeshiftForm.BerserkerStance,
         DruidForms.Cat, DruidForms.Tree, DruidForms.Travel, DruidForms.Aquatic, DruidForms.Bear, DruidForms.DireBear, DruidForms.Moonkin,
         DruidForms.GhostWolf, DruidForms.Shadow, DruidForms.Stealth,
+        (byte)ShapeshiftForm.SpiritOfRedemption,
     ];
+
+    /// <summary>The linked spells of the Spirit of Redemption form, in vmangos order ("must be second", SpellAuras.cpp:5480-5483).</summary>
+    public const uint SpiritOfRedemptionBoost1 = 27792;
+
+    public const uint SpiritOfRedemptionBoost2 = 27795;
 
     private readonly SpellSystem _spells;
     private readonly ShapeshiftFormCatalog _forms;
@@ -131,6 +137,11 @@ public sealed class ShapeshiftService
         if (stance != 0)
         {
             return (stance, 0);
+        }
+
+        if (form == ShapeshiftForm.SpiritOfRedemption)
+        {
+            return (SpiritOfRedemptionBoost1, SpiritOfRedemptionBoost2);
         }
 
         FormBoosts boosts = FormBoostTable.Get((byte)form);

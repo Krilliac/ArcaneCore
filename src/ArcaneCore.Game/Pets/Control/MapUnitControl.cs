@@ -18,8 +18,19 @@ public sealed class MapUnitControl : IMapUpdater
 {
     private readonly Map _map;
     private readonly Dictionary<Unit, Link> _links = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Pending> _pending = [];
+    private readonly List<Pending> _due = [];
 
     private sealed record Link(CharmService Service, ObjectGuid Controller);
+
+    private sealed class Pending(Unit unit, uint delayMs, Action action)
+    {
+        public Unit Unit { get; } = unit;
+
+        public uint RemainingMs { get; set; } = delayMs;
+
+        public Action Action { get; } = action;
+    }
 
     internal MapUnitControl(Map map, WorldRuntime world)
     {
@@ -41,8 +52,20 @@ public sealed class MapUnitControl : IMapUpdater
 
     internal void Untrack(Unit target) => _links.Remove(target);
 
+    /// <summary>
+    /// vmangos <c>m_Events.AddLambdaEventAtOffset</c> for a unit of this map: <paramref name="action"/> runs in the map update once
+    /// <paramref name="delayMs"/> have passed (Spirit of Redemption's follow-up steps), unless the unit has left the map by then.
+    /// </summary>
+    public void Schedule(Unit unit, uint delayMs, Action action)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(action);
+        _pending.Add(new Pending(unit, delayMs, action));
+    }
+
     public void Update(Map map, uint diffMs)
     {
+        RunDue(diffMs);
         if (_links.Count == 0)
         {
             return;
@@ -181,6 +204,34 @@ public sealed class MapUnitControl : IMapUpdater
         combat.SetInCombatState(me, 0);
         combat.SetInCombatState(victim, 0);
         combat.SetInCombatState(controller, 0);
+    }
+
+    private void RunDue(uint diffMs)
+    {
+        if (_pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Pending pending in _pending)
+        {
+            pending.RemainingMs = pending.RemainingMs > diffMs ? pending.RemainingMs - diffMs : 0;
+            if (pending.RemainingMs == 0)
+            {
+                _due.Add(pending);
+            }
+        }
+
+        _pending.RemoveAll(static p => p.RemainingMs == 0);
+        foreach (Pending pending in _due)
+        {
+            if (ReferenceEquals(pending.Unit.Map, _map))
+            {
+                pending.Action();
+            }
+        }
+
+        _due.Clear();
     }
 
     /// <summary>vmangos Creature::SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0): a random entry of the controller's threat list.</summary>

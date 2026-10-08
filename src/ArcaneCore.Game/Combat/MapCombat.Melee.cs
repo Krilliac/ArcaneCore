@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
@@ -785,7 +786,15 @@ public sealed partial class MapCombat
             RewardRage(rager, damage, attacker: true, CombatEnvironment.For(_world));
         }
 
-        if (victim.Health <= damage)
+        // vmangos Unit::DealDamage (Unit.cpp:825-850): a unit with an invincibility threshold (Spirit of Redemption) never dies of damage
+        // and never drops below the threshold.
+        uint invincible = victim.InvincibilityHpThreshold;
+        if (invincible != 0 && victim.Health <= damage)
+        {
+            damage = victim.Health > invincible ? victim.Health - invincible : 0;
+        }
+
+        if (victim.Health <= damage && invincible == 0)
         {
             Kill(attacker, victim, durabilityLoss, threatSpell);
             if (duelEnded)
@@ -897,8 +906,14 @@ public sealed partial class MapCombat
             Hooks.OnKill(killer, victim);
         }
 
-        victim.Health = 0;
-        SetDeathState(victim, DeathState.JustDied);
+        // vmangos Unit::Kill (Unit.cpp:1108-1140): a priest with the Spirit of Redemption talent becomes the spirit instead of dying (anything
+        // but the spirit's own Suicide); the rest of the kill (credit, threat, PvP death, durability, the kill event) happens all the same.
+        bool spirit = victim is Player && SpellMitigation?.TryEnterSpiritOfRedemption(victim, spell) == true;
+        if (!spirit)
+        {
+            victim.Health = 0;
+            SetDeathState(victim, DeathState.JustDied);
+        }
 
         foreach (Unit holder in victim.Combat.ThreatenedByInternal.ToArray())
         {
@@ -907,7 +922,12 @@ public sealed partial class MapCombat
 
         if (victim is Player playerVictim)
         {
-            playerVictim.Combat.PvpDeath = playerTap is not null;
+            // remember victim PvP death at the original death, not at the Spirit of Redemption's timeout (Unit.cpp:1177-1180)
+            if (spell?.Id != Spells.SpellSystem.SpiritOfRedemptionSuicide)
+            {
+                playerVictim.Combat.PvpDeath = playerTap is not null;
+            }
+
             ApplyDeathDurability(playerVictim, durabilityLoss, durabilityPlayerTap, spell);
         }
         else
