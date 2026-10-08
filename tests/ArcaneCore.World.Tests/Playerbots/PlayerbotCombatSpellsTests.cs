@@ -85,17 +85,30 @@ public sealed class PlayerbotCombatSpellsTests
             var helper = new PlayerbotCombatSpells(session);
             uint before = await host.World.InvokeAsync(() => target.Health);
 
+            // The refusal is the 1.5 s global cooldown, started with the cast, so only its remainder is left
+            // when the damage lands. Polling for the damage from the test thread could use that remainder up on
+            // a loaded machine, so the repeat is issued from the world tick in which the damage landed.
+            var repeat = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void RepeatOnceLanded(uint diffMs)
+            {
+                if (target.Health < before && !repeat.Task.IsCompleted)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    repeat.TrySetResult(helper.Update(session.Player!, target, 0));
+                }
+            }
+
             Assert.True(await host.World.InvokeAsync(() =>
             {
+                host.World.Updated += RepeatOnceLanded;
                 session.ManagedBudget = new ManagedActionBudget(2);
                 return helper.Update(session.Player!, target, 0);
             }));
-            await host.WaitForWorldAsync(() => target.Health < before, "first spell completion");
-
-            bool repeated = await host.World.InvokeAsync(() =>
+            bool repeated = await repeat.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await host.World.InvokeAsync(() =>
             {
-                session.ManagedBudget = new ManagedActionBudget(2);
-                return helper.Update(session.Player!, target, 0);
+                host.World.Updated -= RepeatOnceLanded;
+                return true;
             });
 
             Assert.False(repeated);

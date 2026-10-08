@@ -84,10 +84,12 @@ public sealed class GmObjectNpcCommandTests
         public string Single => Assert.Single(Replies);
     }
 
-    private static async Task<Run> SendAsync(WorldTestClient client, string command)
+    private static async Task<Run> SendAsync(WorldTestClient client, string command, WorldOpcode answer = WorldOpcode.SmsgMessagechat)
     {
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectAsync(Quiet);
+        // Wait for the command's answer (a chat line, unless the caller names another packet) before collecting,
+        // so a slow world tick is not mistaken for an empty answer.
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectFromAsync(answer, Quiet);
         List<string> replies = [.. packets
             .Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.System)
             .Select(p => ChatMessage.Parse(p.Payload).Text)];
@@ -493,7 +495,7 @@ public sealed class GmObjectNpcCommandTests
         Assert.Equal("Database spawns cannot be deleted in game yet.", (await SendAsync(gm, ".npc delete")).Single);
         Assert.NotNull(await host.OnWorldAsync(() => CreatureSystem(scene).FindCreature(ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, WolfSpawn))));
         await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Npcinf")!.Selection = temporary.Guid);
-        await SendAsync(gm, ".npc delete");
+        await SendAsync(gm, ".npc delete", WorldOpcode.SmsgDestroyObject); // a temporary creature goes silently
         Assert.Null(await host.OnWorldAsync(() => CreatureSystem(scene).FindCreature(temporary.Guid)));
     }
 

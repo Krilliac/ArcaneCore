@@ -189,7 +189,7 @@ public sealed class TicketCommandTests
 
         Assert.StartsWith("Ticket 1 from", await ReplyAsync(gm, ".ticket close 1"), StringComparison.Ordinal);
 
-        string[] told = [.. (await one.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        string[] told = await one.CollectChatLinesAsync();
         Assert.Equal(["Your ticket has been closed by <GM>Gmaaa."], told);
     }
 

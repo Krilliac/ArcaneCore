@@ -76,7 +76,7 @@ public sealed class TicketTests
     {
         await client.CollectAsync();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        return await client.CollectChatLinesAsync();
     }
 
     internal static InMemoryGmAuditStore StoreOf(WorldTestHost host) => host.WorldServices.GetRequiredService<InMemoryGmAuditStore>();

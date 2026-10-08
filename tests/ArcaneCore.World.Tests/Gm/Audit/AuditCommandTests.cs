@@ -45,7 +45,7 @@ public sealed class AuditCommandTests
     {
         await client.CollectAsync();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        return await client.CollectChatLinesAsync();
     }
 
     private static string NotificationOf(byte[] payload) => new PacketReader(payload).ReadCString();
@@ -85,7 +85,8 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task APlayer_CannotRunAnyOfThem_AndTheyStayOutOfTheirCommandList()
     {
-        await using WorldTestHost host = Start(new Clock());
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
         await player.CollectAsync();
 
@@ -94,9 +95,14 @@ public sealed class AuditCommandTests
             Assert.Equal("This command is not available to you.", await ReplyAsync(player, command));
         }
 
+        // Those eleven commands trip the chat flood mute, which would answer .commands with a "You must wait"
+        // notification and no list at all; let the mute run out so the list is really read.
+        clock.Advance(60);
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
+        string[] listed = await player.CollectChatLinesAsync();
+        Assert.Contains(listed, line => line.Contains("commands", StringComparison.Ordinal));
         Assert.DoesNotContain(
-            (await player.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text),
+            listed,
             line => line.Contains("gm", StringComparison.Ordinal) || line.Contains("arcane", StringComparison.Ordinal) || line.Contains("ticket", StringComparison.Ordinal));
     }
 
