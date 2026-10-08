@@ -50,6 +50,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Charm, possession, mana burn, funnels and Spirit of Redemption | [unit-control](areas/unit-control.md) |
 | Mage, priest and warlock | [casters](areas/casters.md) |
 | Shaman and paladin (totems) | [class-shaman-paladin](areas/class-shaman-paladin.md) |
+| Class scripts (seals, Judgement, imbues, bleeds, Curse of Doom, class dummies, persistent area auras) | [class-scripts](areas/class-scripts.md) |
 | Rogue | [rogue](areas/rogue.md) |
 | Druid | [druid](areas/druid.md) |
 | Hunter | [hunter](areas/hunter.md) |

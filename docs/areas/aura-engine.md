@@ -41,7 +41,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
   (`spell_group` rows and `spell_template.custom` are vmangos world-DB data); the simplified rule in `docs/areas/spells.md` stands. `SpellInfo.CustomFlags`
   (POSITIVE/NEGATIVE bits) is the data seam and is empty until a data source fills it.
 - Visible-slot overflow eviction (16 debuffs), `IsNeedVisibleSlot` special cases, `UpdateAuraForGroup` party aura slots, area aura rank selection and
-  pet/owner areas, persistent area auras (no dynamic object entity exists), channel aura rules (per-second cost, range), heartbeat resist of crowd control,
+  pet/owner areas, channel aura rules (per-second cost, range), heartbeat resist of crowd control,
   interrupt sources (`Moving`, `Turning`, `Interacting`, ... have no trigger), holder permanence rules for passive-with-visual spells.
 - Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), spell modifier auras, percent stat auras,
   skill auras, creature spawn addon auras: owned by other wave-4 lanes or unscheduled; each row in the matrix names the owner.
@@ -50,7 +50,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 
 Levels: `Handler` = a handler is registered with the spell system; `Referenced` = no handler, but code outside the aura files names the type (this does
 not mean every vmangos consumer exists); `Unsupported` = nothing acts on it. The column "consumers" lists up to three source files that mention the type.
-Counts: Handler 113, Referenced 34, Unsupported 45, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
+Counts: Handler 139, Referenced 24, Unsupported 29, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
 disagrees with the live registrations of a composed world host.
 
 | Value | Aura type | Level | vmangos handler | Consumers | Owner of the gap |
@@ -198,7 +198,7 @@ disagrees with the live registrations of a composed world host.
 | 140 | ModRangedHaste | Handler | `HandleAuraModRangedHaste` (SpellAuras.cpp:205) | AttackSpeedAuras.cs |  |
 | 141 | ModRangedAmmoHaste | Handler | `HandleRangedAmmoHaste` (SpellAuras.cpp:206) | AttackSpeedAuras.cs |  |
 | 142 | ModBaseResistancePct | Handler | `HandleAuraModBaseResistancePercent` (SpellAuras.cpp:207) | PercentStatAuras.cs |  |
-| 143 | ModResistanceExclusive | Unsupported | `HandleAuraModResistanceExclusive` (SpellAuras.cpp:208) |  |  |
+| 143 | ModResistanceExclusive | Handler | `HandleAuraModResistanceExclusive` (SpellAuras.cpp:208) | ResistanceExclusiveAuras.cs |  |
 | 144 | SafeFall | Handler | `HandleAuraSafeFall` (SpellAuras.cpp:209) | FallObserver.cs, MovementFlagAuras.cs |  |
 | 145 | Charisma | Unsupported | `HandleUnused` (SpellAuras.cpp:210) |  |  |
 | 146 | Persuaded | Unsupported | `HandleUnused` (SpellAuras.cpp:211) |  |  |

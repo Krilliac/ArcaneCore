@@ -2,7 +2,9 @@
 
 Branch `claude/vw2-class-shaman-paladin`, built on `49448fd`. This lane delivers the **shaman totem
 system** and the spell-core primitives it needs. Paladin content (seals, judgement, blessings, auras, bubbles)
-and most shaman imbue content are **not** delivered; every reason is listed under "Not delivered".
+and most shaman imbue content were **not** delivered by this lane; the wave-2 class-scripts lane delivered seals, Judgement, the judgement procs,
+blessing/aura/seal stacking, Holy Light and Flash of Light, Blessing of Light, the resistance auras, Forbearance, Holy Shock, Hammer of Wrath,
+Consecration (persistent area auras) and the Flametongue/Rockbiter imbue procs: see [class-scripts](class-scripts.md).
 
 References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), **mangos-classic**
 `D:\refs\mangos-classic`, **wow_messages** `D:\refs\wow_messages`, **classic-db**
@@ -134,8 +136,8 @@ Each needs a primitive another lane owns, data this tree does not have, or was n
   service, immunity ledger or death lane: seals, Judgement, Holy Shock, Hammer of Wrath, blessings and Greater
   Blessings (target 61 now exists), paladin auras and Concentration, bubbles with Forbearance, Lay on Hands, Divine
   Intervention, creature-type targeting, Ghost Wolf, Lightning Shield, Reincarnation, Water Walking.
-- Consecration (persistent area aura), Far Sight, Sentry Totem camera,
-  Water Breathing: other lanes or no camera/breath system.
+- Far Sight, Sentry Totem camera, Water Breathing: other lanes or no camera/breath system (Consecration and the persistent
+  area auras: [class-scripts](class-scripts.md)).
 
 ## Tests
 - `tests/ArcaneCore.Game.Tests/ClassSpells`: `LocationTargetTests` (13), `ShockCooldownGuardTests` (a labelled GUARD,

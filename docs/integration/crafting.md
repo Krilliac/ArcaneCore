@@ -54,7 +54,7 @@ A drift test (`CraftingDocsTests`) fails when a key named here is not a real opt
 - `docs/areas/skills.md:100-110` and `docs/integration/skills.md:61-71` ("CREATE_ITEM unhandled", "no use-item").
 - `docs/areas/items.md:84-96` (use-item blocked on `SpellCast.CastItem`, charges never consumed, enchant slots raw).
 - `docs/areas/spells.md:154-155`, `:288` (CREATE_ITEM and reagents; `SpellInfo` carries no reagent fields).
-- `docs/areas/class-shaman-paladin.md:97-98`, `docs/areas/rogue.md:49`, `docs/areas/fishing-special-loot.md:93` (blocked on the enchant engine). Imbues and poisons still proc nothing (see the area doc).
+- `docs/areas/class-shaman-paladin.md:97-98`, `docs/areas/rogue.md:49`, `docs/areas/fishing-special-loot.md:93` (blocked on the enchant engine). Since then the COMBAT_SPELL enchantment effects (imbues, poisons) proc through `SpellSystem.HandleItemCombatProc`, and the Flametongue and Rockbiter proc scripts are delivered ([class-scripts](../areas/class-scripts.md)).
 
 ## Open questions for the integrator or the developer
 

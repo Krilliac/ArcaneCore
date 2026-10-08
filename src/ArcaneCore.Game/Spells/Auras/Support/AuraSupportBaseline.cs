@@ -151,7 +151,7 @@ public static partial class AuraSupport
         new(AuraType.ModRangedHaste, AuraSupportLevel.Handler, "HandleAuraModRangedHaste", 205, "AttackSpeedAuras.cs", ""),
         new(AuraType.ModRangedAmmoHaste, AuraSupportLevel.Handler, "HandleRangedAmmoHaste", 206, "AttackSpeedAuras.cs", ""),
         new(AuraType.ModBaseResistancePct, AuraSupportLevel.Handler, "HandleAuraModBaseResistancePercent", 207, "PercentStatAuras.cs", ""),
-        new(AuraType.ModResistanceExclusive, AuraSupportLevel.Unsupported, "HandleAuraModResistanceExclusive", 208, "", ""),
+        new(AuraType.ModResistanceExclusive, AuraSupportLevel.Handler, "HandleAuraModResistanceExclusive", 208, "ResistanceExclusiveAuras.cs", ""),
         new(AuraType.SafeFall, AuraSupportLevel.Handler, "HandleAuraSafeFall", 209, "FallObserver.cs, MovementFlagAuras.cs", ""),
         new(AuraType.Charisma, AuraSupportLevel.Unsupported, "HandleUnused", 210, "", ""),
         new(AuraType.Persuaded, AuraSupportLevel.Unsupported, "HandleUnused", 211, "", ""),
