@@ -178,7 +178,8 @@ public sealed class M6LogoutAndCommandTests
 
         // The vertical list in retail table order (Chat.cpp:2081-2116), "..." marking a group; ".help" shows
         // the help of ".help" first and then the same list. Commands above the caller are not listed.
-        string[] list = ["Commands available to you:", "    server ...", "    commands", "    help", "    save"];
+        // "modify ..." is listed for its player-level "xprate" (vmangos Chat.cpp:630, SEC_PLAYER).
+        string[] list = ["Commands available to you:", "    modify ...", "    server ...", "    commands", "    help", "    save"];
         await player.SendChatAsync(ChatType.Say, Language.Common, "!commands");
         foreach (string line in list)
         {

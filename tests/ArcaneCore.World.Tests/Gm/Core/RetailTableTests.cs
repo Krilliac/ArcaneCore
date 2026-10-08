@@ -144,6 +144,7 @@ public sealed class RetailTableTests
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
         Assert.Equal("Commands available to you:", (await player.ReadChatAsync()).Text);
+        Assert.Equal("    modify ...", (await player.ReadChatAsync()).Text); // its player-level "xprate" (vmangos Chat.cpp:630)
         Assert.Equal("    server ...", (await player.ReadChatAsync()).Text);
         Assert.Equal("    commands", (await player.ReadChatAsync()).Text);
         Assert.Equal("    help", (await player.ReadChatAsync()).Text);
