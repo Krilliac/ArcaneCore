@@ -195,3 +195,50 @@ public sealed class PositiveSpellImmunityCheck : ISpellCastCheck
             : SpellCastResult.CastOk;
     }
 }
+
+/// <summary>
+/// Holy Light and Flash of Light (SCRIPT_EFFECT in the build 5875 data; mangos-classic <c>Spell::EffectScriptEffect</c>, SpellEffects.cpp:4151-4171,
+/// vmangos SpellEffects.cpp:4485-4500 for Flash of Light): the rank's effect value is cast as the heal of 19968 (Holy Light) or 19993 (Flash of
+/// Light) at the living target, triggered, with the rank's id as the second base points ("send main spell id as basepoints for not used effect").
+/// Flash of Light dithers its value and adds the Libram of Divinity (28853: +53) and Libram of Light (28851: +83) bonuses of the caster (vmangos).
+/// </summary>
+[SpellScript(635, 639, 647, 1026, 1042, 3472, 10328, 10329, 25292, 19750, 19939, 19940, 19941, 19942, 19943)]
+public sealed class HolyLightScript : ISpellScript
+{
+    public const uint HolyLightHeal = 19968;
+    public const uint FlashOfLightHeal = 19993;
+    public const uint HolyLightIcon = 70;
+    public const uint FlashOfLightIcon = 242;
+    public const uint LibramOfDivinity = 28853;
+    public const uint LibramOfLight = 28851;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        if (context.Effect.Effect != SpellEffectName.ScriptEffect || !context.Target.IsAlive)
+        {
+            return;
+        }
+
+        SpellSystem system = context.System;
+        int heal;
+        uint healSpell;
+        if (context.Spell.SpellIconId == FlashOfLightIcon)
+        {
+            healSpell = FlashOfLightHeal;
+            heal = (int)Math.Floor(context.Value + system.Random.NextSingle()); // rand_dither(damage)
+            heal += system.HasAura(context.Caster, LibramOfDivinity) ? 53 : 0;
+            heal += system.HasAura(context.Caster, LibramOfLight) ? 83 : 0;
+        }
+        else if (context.Spell.SpellIconId == HolyLightIcon)
+        {
+            healSpell = HolyLightHeal;
+            heal = context.Value;
+        }
+        else
+        {
+            return;
+        }
+
+        system.CastCustomSpell(context.Caster, healSpell, SpellCastTargets.ForUnit(context.Target.Guid), heal, (int)context.Spell.Id);
+    }
+}

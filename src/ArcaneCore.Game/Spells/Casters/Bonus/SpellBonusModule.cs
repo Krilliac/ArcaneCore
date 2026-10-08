@@ -193,7 +193,8 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
                 return Math.Max(amount * percent, 0);
             }
 
-            return SpellBonusFormulas.AmountTaken(amount, Sum(target, AuraType.ModHealing, a => (a.MiscValue & mask) != 0), coefficient, stack, percent);
+            return SpellBonusFormulas.AmountTaken(amount, Sum(target, AuraType.ModHealing, a => (a.MiscValue & mask) != 0)
+                + Paladin.BlessingOfLightRules.TakenBonus(spells, target, spell), coefficient, stack, percent); // class-scripts lane: Unit.cpp:5364-5378
         }
 
         if (SpellBonusFormulas.IgnoresDamageTakenModifiers(spell))
