@@ -120,7 +120,8 @@ public sealed class DatabaseGuardSqliteLockTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            // Only this test's pool: ClearAllPools would checkpoint and rewrite other classes' WAL files mid-test.
+            TestDatabases.ClearSqlitePool($"Data Source={file}");
             for (int attempt = 0; ; attempt++)
             {
                 try

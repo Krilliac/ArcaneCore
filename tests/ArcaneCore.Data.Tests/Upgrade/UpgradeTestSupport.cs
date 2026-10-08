@@ -88,6 +88,29 @@ internal static partial class UpgradeTestSupport
         return Convert.ToHexString(SHA256.HashData(stream)) + "@" + File.GetLastWriteTimeUtc(path).Ticks.ToString(CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// <see cref="FileFingerprint"/> of a SQLite test database after its write-ahead log is folded into the file.
+    /// EF Core creates SQLite databases in WAL mode, so committed work sits in <c>-wal</c> until the last connection
+    /// closes and checkpoints it into the file. A plain fingerprint is then neither stable (any close of the last
+    /// pooled handle, by this test or another, rewrites the file with the same logical content) nor complete (a write
+    /// that is still in the WAL does not show). Clearing this database's own pool closes its idle handles, the last
+    /// close checkpoints, and the fingerprint covers every committed byte. Use it on both sides of a
+    /// "writes nothing" assertion.
+    /// </summary>
+    public static string SettledFileFingerprint(DatabaseConnectionOptions connection)
+    {
+        string path = SqlitePath(connection);
+        TestDatabases.ClearSqlitePool(connection.ConnectionString);
+        if (File.Exists(path + "-wal"))
+        {
+            // Not settled: a connection outside the pool still has the database open, so the WAL may hold writes the
+            // file does not. Comparing such fingerprints would prove nothing.
+            throw new InvalidOperationException($"{path} still has a write-ahead log after its pool was cleared; a connection is still open");
+        }
+
+        return FileFingerprint(path);
+    }
+
     public static string AuctionInsert(DbContext db, int id, int itemGuid) =>
         $"INSERT INTO {Quote(db, "auction")} ({Quote(db, "id")}, {Quote(db, "house_id")}, {Quote(db, "item_guid")}, {Quote(db, "item_id")}, {Quote(db, "item_count")}, " +
         $"{Quote(db, "seller_guid")}, {Quote(db, "start_bid")}, {Quote(db, "buyout_price")}, {Quote(db, "expire_time")}, {Quote(db, "buyer_guid")}, " +

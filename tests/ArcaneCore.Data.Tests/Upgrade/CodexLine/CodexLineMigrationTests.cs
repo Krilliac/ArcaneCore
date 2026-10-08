@@ -7,7 +7,6 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Characters;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -32,7 +31,8 @@ public sealed class CodexLineMigrationTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        // Every connection here is unpooled (CodexLineDatabase.ConnectionString), so there is no pool to clear. A
+        // ClearAllPools would close other classes' pooled handles and checkpoint their WAL files mid-test.
         try
         {
             Directory.Delete(_directory, recursive: true);
@@ -312,7 +312,6 @@ public sealed class CodexLineMigrationTests : IDisposable
     {
         string path = component == "characters" ? await NewCodexCharactersAsync(codexVersion) : await NewCodexWorldAsync(codexVersion);
         await CodexLineDatabase.ExecuteAsync(path, damage);
-        SqliteConnection.ClearAllPools();
         string fingerprint = UpgradeTestSupport.FileFingerprint(path);
         SchemaDefinition schema = component == "characters" ? CharacterDbContext.Schema : WorldDbContext.Schema;
 
@@ -334,7 +333,6 @@ public sealed class CodexLineMigrationTests : IDisposable
         Assert.Equal(DbUpgradeExitCodes.Refused, code);
         Assert.Contains(expected, error, StringComparison.Ordinal);
         Assert.Equal(codexVersion, await VersionAsync(path, component));
-        SqliteConnection.ClearAllPools();
         Assert.Equal(fingerprint, UpgradeTestSupport.FileFingerprint(path));
     }
 
@@ -354,7 +352,6 @@ public sealed class CodexLineMigrationTests : IDisposable
             Characters = new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = CodexLineDatabase.ConnectionString(characters) },
             World = new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = CodexLineDatabase.ConnectionString(world) },
         };
-        SqliteConnection.ClearAllPools();
         string[] fingerprints = [.. new[] { auth, characters, world }.Select(UpgradeTestSupport.FileFingerprint)];
 
         (int code, string output, string error) = await UpgradeTestSupport.RunCliAsync(options, "migrate-codex");
@@ -366,7 +363,6 @@ public sealed class CodexLineMigrationTests : IDisposable
         Assert.Contains("found Codex (0e07c29b) step 26 (NpcTemplateServiceMetadataModule) -> dropped by the merge", output, StringComparison.Ordinal);
         Assert.Contains("(1 rows)", output, StringComparison.Ordinal);
         Assert.Contains("dry run, nothing was changed", output, StringComparison.Ordinal);
-        SqliteConnection.ClearAllPools();
         Assert.Equal(fingerprints, new[] { auth, characters, world }.Select(UpgradeTestSupport.FileFingerprint));
 
         // plan and status show the same thing, read-only.

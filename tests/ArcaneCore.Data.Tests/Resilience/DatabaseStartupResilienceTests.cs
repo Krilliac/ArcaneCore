@@ -90,12 +90,13 @@ public sealed class DatabaseStartupResilienceTests
     {
         string directory = Path.Combine(Path.GetTempPath(), "arcanecore-resilience-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        string connectionString = $"Data Source={Path.Combine(directory, "auth.db")}";
         try
         {
             await using ServiceProvider provider = Build(
                 new ListLogger(),
                 ("Database:Provider", "Sqlite"),
-                ("Database:ConnectionString", $"Data Source={Path.Combine(directory, "auth.db")}"));
+                ("Database:ConnectionString", connectionString));
             int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<AuthDbInitializer>().InitializeAsync(), provider, new StringWriter());
             Assert.Equal(DbUpgradeExitCodes.Ok, exit);
 
@@ -109,7 +110,8 @@ public sealed class DatabaseStartupResilienceTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // Only this test's pool: ClearAllPools would checkpoint and rewrite other classes' WAL files mid-test.
+            TestDatabases.ClearSqlitePool(connectionString);
             Directory.Delete(directory, recursive: true);
         }
     }
