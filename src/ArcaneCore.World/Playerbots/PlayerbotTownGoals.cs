@@ -55,6 +55,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Explore;
 
+    /// <summary>NPCs a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
+    internal PlayerbotSuspensions? Suspensions { get; set; }
+
     internal uint TargetEntry { get; private set; }
 
     internal bool HasCandidate(Player player)
@@ -391,7 +394,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return null;
         return player.VisibleObjects.Select(guid => lookup.Find(player, guid))
             .Where(info => info is { IsAlive: true, IsHostile: false, IsInCombat: false }
-                && (info.NpcFlags & required) != 0 && !info.IsNotSelectable)
+                && (info.NpcFlags & required) != 0 && !info.IsNotSelectable
+                && Suspensions?.IsEntrySuspended(info.Entry, session.World.NowMs) != true)
             .Select(info => info!)
             .Where(info => HasUsefulService(player, services, info))
             .OrderBy(info => Distance(player, info))

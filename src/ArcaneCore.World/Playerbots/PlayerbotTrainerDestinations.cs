@@ -38,6 +38,9 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 
     internal uint TargetEntry { get; private set; }
 
+    /// <summary>Trainers a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
+    internal PlayerbotSuspensions? Suspensions { get; set; }
+
     internal bool HasCandidate(Player player)
     {
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is null
@@ -199,6 +202,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 
     private bool HasAffordableSpell(Player player, QuestNpcServices services, Destination destination)
     {
+        if (Suspensions?.IsEntrySuspended(destination.Entry, _session.World.NowMs) == true) return false;
         if (!CanApproachTrainer(player, services, _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates, destination.FactionTemplate)) return false;
         NpcInfo hint = new(ObjectGuid.WithEntry(HighGuid.Unit, destination.Entry, destination.Spawn.Guid), destination.Entry,
             destination.Spawn.Guid, NpcFlags.Trainer, destination.Spawn.MapId, destination.Spawn.X, destination.Spawn.Y,

@@ -43,6 +43,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotEquipment _equipment = new(session);
+    private readonly PlayerbotStallWatch _stall = new();
+    private readonly PlayerbotSuspensions _suspensions = new();
     private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
     private Task<string?>? _planTask;
     private string? _modelChoice;
@@ -71,16 +73,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
+    /// <summary>The current stall (<see cref="PlayerbotStallWatch"/>), or null while the bot makes progress.</summary>
+    internal string? StallReport => _stall.Report;
+
+    /// <summary>The last stall reported, kept after progress resumed.</summary>
+    internal string? LastStall => _stall.LastReport;
+
+    /// <summary>Stalls reported so far.</summary>
+    internal int StallCount => _stall.Count;
+
     internal void Update(uint elapsedMs)
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
             return;
         _destinations.SkipQuest ??= _quests.IsRefused;
+        _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         if (!player.IsInWorld) return;
 
         bool dead = !player.IsAlive;
         if (dead)
         {
+            _stall.Reset();
             if (!_deathIntentRetired)
             {
                 RetireDeathIntent();
@@ -133,6 +146,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
+
+        if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
+                (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
+            GiveUpStalledGoal(player);
 
         if (PlayerbotMotion.ConsumeLoop(player))
         {
@@ -413,6 +430,60 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             PlayerbotNavigation.GuidPayload(target.Guid.Value));
         if (_lootOpened) _lootStartedMs = (long)_session.World.Uptime.TotalMilliseconds;
         return;
+    }
+
+    /// <summary>
+    /// A new stall (<see cref="PlayerbotStallWatch"/>): set the goal's target aside for <see cref="PlayerbotSuspensions.SuspendMs"/>
+    /// and drop the intent, so the next decision picks something else. A quest goal sets its quest and its giver aside (a completed
+    /// quest whose ender cannot be reached no longer holds the bot at its giver for good), a vendor or trainer goal that NPC, a
+    /// fight its target; an exploring bot turns anywhere.
+    /// </summary>
+    private void GiveUpStalledGoal(Player player)
+    {
+        uint now = _session.World.NowMs;
+        switch (_goal)
+        {
+            case PlayerbotGoalKind.Quest:
+                _suspensions.SuspendQuest(QuestId, now);
+                _suspensions.SuspendEntry(TargetEntry, now);
+                break;
+            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train:
+                _suspensions.SuspendEntry(TargetEntry, now);
+                break;
+            case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
+                if (_target is { } target) MarkUnreachable(target);
+                break;
+            default:
+                _exploreRefusals = 3;
+                break;
+        }
+
+        _target = null;
+        _route = null;
+        _attacking = false;
+        _lootOpened = false;
+        PlayerbotMovementControl.Stop(_session, player);
+    }
+
+    /// <summary>What counts as progress for the stall watch besides moving.</summary>
+    private PlayerbotStallWatch.Fingerprint Fingerprint(Player player)
+    {
+        uint items = 0;
+        foreach (Item item in player.Inventory.AllItems) items += item.Count;
+        int quests = 0, rewarded = 0;
+        uint objectives = 0;
+        if (_session.Services.GetService<Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } state)
+        {
+            foreach (ArcaneCore.Game.Quests.QuestStatusData status in state.Quests.Statuses.Values)
+            {
+                quests++;
+                if (status.Rewarded) rewarded++;
+                foreach (uint count in status.CreatureOrGOCount) objectives += count;
+            }
+        }
+
+        int spells = _session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
+        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells);
     }
 
     private void RetireDeathIntent()

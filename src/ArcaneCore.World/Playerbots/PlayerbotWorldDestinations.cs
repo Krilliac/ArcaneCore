@@ -45,6 +45,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>Quests not worth a trip: the server refused their exchange lately (<see cref="PlayerbotQuestGoals.IsRefused"/>).</summary>
     internal Func<uint, bool>? SkipQuest { get; set; }
 
+    /// <summary>Quest givers and enders a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
+    internal PlayerbotSuspensions? Suspensions { get; set; }
+
+    private bool Suspended(uint entry) => Suspensions?.IsEntrySuspended(entry, _session.World.NowMs) == true;
+
     /// <summary>
     /// Advisory check for the brain's idle decision. This reports an ordinary,
     /// rewardable (Quests:RewardMode) quest destination that is currently eligible and offscreen;
@@ -78,6 +83,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool liveEligible = false;
         foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
+            if (Suspended(entry.Entry)) continue;
             if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, out _)) continue;
             liveEligible = true;
             // A visible eligible giver belongs to ordinary interaction handling.
@@ -162,6 +168,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
             if (++scanned > MaxEntryScan) break;
+            if (Suspended(entry.Entry)) continue;
             if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, out uint questId)) continue;
             if (VisibleTarget(player, entry.Entry, returnQuestId)) return false;
             attempted = true;

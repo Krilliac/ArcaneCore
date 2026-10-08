@@ -32,6 +32,13 @@ public sealed class PlayerbotOptions
     public float MoveSpeed { get; set; } = 7f;
 
     /// <summary>
+    /// Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience,
+    /// money, bags, quest log and spells did not change) before it reports a stall in <c>.playerbot list</c> and gives up its
+    /// goal (<see cref="PlayerbotStallWatch"/>; 10..86400).
+    /// </summary>
+    public int StallSeconds { get; set; } = 120;
+
+    /// <summary>
     /// How a bot's movement reaches the world (on by default). On: the bot reports its motion with the MSG_MOVE_* packets a 1.12
     /// client sends, dispatched through the ordinary movement handlers like any client's. Off: the server relocates the bot itself
     /// (the same locomotion observers) and sends its observers the same MSG_MOVE_* relay, skipping the opcode dispatch, the
@@ -101,6 +108,7 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: MaxRouteYards must be finite and > 0..100000.");
         if (!float.IsFinite(MoveSpeed) || MoveSpeed <= 0 || MoveSpeed > 100)
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
+        if (StallSeconds is < 10 or > 86_400) throw new InvalidOperationException($"{SectionName}: StallSeconds must be 10..86400.");
         if (AllowedMaps is null || AllowedMaps.Length == 0 || AllowedMaps.Distinct().Count() != AllowedMaps.Length)
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
         if (FaultBackoffSeconds is < 1 or > 3600 || MaxFaults is < 1 or > 100 || FaultWindowSeconds is < 1 or > 604_800)

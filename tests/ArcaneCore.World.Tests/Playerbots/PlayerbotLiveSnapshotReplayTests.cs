@@ -159,7 +159,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         {
                             PlayerbotBrain? brain = bots.FindBrain(watch.BotId);
                             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")}"));
+                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")} {brain?.StallReport}"));
                         }
                     }
 

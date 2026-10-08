@@ -38,6 +38,9 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
 
     /// <summary>Whether the bot is following a route (PlayerbotMotion), and how many loops it gave up so far.</summary>
     public bool Following { get; init; }
+
+    /// <summary>The current stall (<see cref="PlayerbotStallWatch"/>), else the last one prefixed "last ", else null.</summary>
+    public string? Stall { get; init; }
     public int LoopsGivenUp { get; init; }
 
     /// <summary>The master's name while the bot's party AI drives it (it is in a real player's group), otherwise null.</summary>
@@ -99,6 +102,7 @@ internal static class PlayerbotInspector
             MovementTimeMs = player.Movement.Time,
             Following = PlayerbotMotion.IsActive(player),
             LoopsGivenUp = PlayerbotMotion.LoopCount(player),
+            Stall = brain.StallReport ?? (brain.LastStall is { } last ? "last " + last : null),
             Master = partyDriven ? party!.MasterName : null,
             PartyMode = partyDriven ? party!.Mode : null,
         };

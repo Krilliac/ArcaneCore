@@ -878,6 +878,7 @@ How to read the tables:
 | `World:Playerbots:Scenarios:Enabled` | `bool` | `false` | - | Let an Administrator run registered bot scenarios against the live world (off by default). |
 | `World:Playerbots:Scenarios:MaxDurationSeconds` | `int` | `120` | - | Wall-clock bound of one scenario run in seconds (5..600). |
 | `World:Playerbots:Scenarios:StepTimeoutSeconds` | `int` | `20` | - | Default bound of one WaitUntil step in seconds (1..300). |
+| `World:Playerbots:StallSeconds` | `int` | `120` | - | Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400). |
 | `World:Playerbots:ThinkIntervalMs` | `int` | `500` | - | Milliseconds between two decisions of a bot (50..60000). |
 
 ## `World:Social`

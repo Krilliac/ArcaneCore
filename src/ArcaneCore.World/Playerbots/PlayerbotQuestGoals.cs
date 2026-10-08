@@ -35,6 +35,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private const int MaxRefused = 64;
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Quest;
+
+    /// <summary>Quest givers and quests a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
+    internal PlayerbotSuspensions? Suspensions { get; set; }
     internal uint QuestId { get; private set; }
     internal uint TargetEntry { get; private set; }
     internal uint PreferredCreatureEntry { get; private set; }
@@ -189,6 +192,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 continue;
             if (_stage != Stage.None && npc.Guid != _stageNpc)
                 continue;
+            if (Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true)
+                continue;
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
@@ -258,6 +263,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <summary>Whether the server refused this quest's exchange lately (<see cref="RefusedQuestMs"/>); travel to it is pointless too.</summary>
     internal bool IsRefused(uint questId)
     {
+        if (Suspensions?.IsQuestSuspended(questId, _session.World.NowMs) == true) return true;
         if (!_refused.TryGetValue(questId, out uint until)) return false;
         if (unchecked((int)(until - _session.World.NowMs)) > 0) return true;
         _refused.Remove(questId);
