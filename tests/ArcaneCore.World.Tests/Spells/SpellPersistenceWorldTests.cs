@@ -139,15 +139,33 @@ public sealed class SpellPersistenceWorldTests
 
         await host.OnWorldAsync(() => Assert.Equal(SpellCastResult.CastOk,
             spells.System.CastSpell(caster, SlowBolt, SpellCastTargets.ForUnit(attacker.Guid), triggered: false)));
-        await Task.Delay(1000);
-        (int before, int after, int pushbacks) = await host.OnWorldAsync(() =>
+        // Hit the caster once at least a second of the cast has run, so the 1000 ms pushback is not capped at the
+        // cast time. The check and the hit share one world-thread call: a wall-clock sleep could let a loaded
+        // machine run the cast to its end before the hit.
+        (int before, int after, int pushbacks)? hit = null;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (hit is null && DateTime.UtcNow < deadline)
         {
-            SpellCast cast = spells.System.GetState(caster.Guid)!.CurrentCast!;
-            int timer = cast.Timer;
-            caster.Map!.FindUpdater<MapCombat>()!.DealDamage(attacker, caster, 1);
-            return (timer, cast.Timer, cast.PushbackCount);
-        });
+            hit = await host.OnWorldAsync<(int, int, int)?>(() =>
+            {
+                SpellCast cast = spells.System.GetState(caster.Guid)!.CurrentCast!;
+                int timer = cast.Timer;
+                if (timer > cast.CastTime - 1000)
+                {
+                    return null;
+                }
 
+                caster.Map!.FindUpdater<MapCombat>()!.DealDamage(attacker, caster, 1);
+                return (timer, cast.Timer, cast.PushbackCount);
+            });
+            if (hit is null)
+            {
+                await Task.Delay(10);
+            }
+        }
+
+        Assert.NotNull(hit);
+        (int before, int after, int pushbacks) = hit.Value;
         Assert.InRange(before, 1, 2500);
         Assert.Equal(before + 1000, after); // the first pushback of a cast is 1000 ms (vmangos Spell::GetNextDelayAtDamageMsTime)
         Assert.Equal(1, pushbacks);
