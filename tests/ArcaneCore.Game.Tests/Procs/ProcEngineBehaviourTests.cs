@@ -230,9 +230,29 @@ public sealed class ProcEngineBehaviourTests
     }
 
     [Fact]
-    public void WyvernStingsSleep_EndsOnTheDamageThatProcsIt_NotOnTheInterruptPath()
+    public void WyvernStingsSleep_ByDefault_SurvivesItsDamageProc_AsInVmangos()
+    {
+        // vmangos: the damage break skips procFlags auras (checkProcFlags, Unit.cpp:3739), MOD_STUN's proc handler is HandleNULLProc
+        // (UnitAuraProcHandler.cpp:51) and Wyvern Sting has no charges to spend (Unit.cpp:4330-4335), so the sleep outlasts the hit.
+        using SpellTestKit kit = NewKit();
+        Assert.False(kit.System.AuraOptions.DamageProcCancelsAura);
+        (Player attacker, _) = kit.AddPlayer(1);
+        (Player victim, _) = kit.AddPlayer(2, 2);
+        ApplyEarlier(kit, victim, WyvernStingRank1);
+
+        kit.System.OnDamageTaken(victim, attacker, 10, periodic: false); // a bare damage break: procFlags auras are the proc engine's
+        Assert.True(kit.System.HasAura(victim, WyvernStingRank1));
+
+        kit.System.CastSpell(attacker, Hit, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
+        Assert.True(victim.Health < victim.MaxHealth);
+        Assert.True(kit.System.HasAura(victim, WyvernStingRank1));
+    }
+
+    [Fact]
+    public void WyvernStingsSleep_WithTheOptIn_EndsOnTheDamageThatProcsIt_NotOnTheInterruptPath()
     {
         using SpellTestKit kit = NewKit();
+        kit.System.AuraOptions = new AuraOptions { DamageProcCancelsAura = true };
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         ApplyEarlier(kit, victim, WyvernStingRank1);

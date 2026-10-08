@@ -362,6 +362,7 @@ public sealed class ProcEngineFidelityTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
+        kit.System.AuraOptions = new AuraOptions { DamageProcCancelsAura = true }; // the opt-in cancel; the vmangos default never cancels
         RuleTestSupport.Apply(kit, victim, SleepLike);
         kit.System.RegisterProcHandler(SpellHandlerModuleTests.FixtureAura, (in AuraProcContext context) => AuraProcResult.Failed);
 

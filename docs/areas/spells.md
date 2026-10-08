@@ -42,7 +42,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 - Effects: school damage, heal, apply aura, energize, teleport units (database position, home bind, caster destination), learn spell, trigger spell and dummy, each with its combat-log packet (SPELLNONMELEEDAMAGELOG, SPELLHEALLOG, SPELLENERGIZELOG). `RegisterEffect` lets other areas add more.
 - Auras:
   - Holders with durations (minimum 300 ms), permanent and passive auras, stacking up to StackAmount, and replacement rules.
-  - Visible slots (positive 0–31, negative 32–47) and the update fields UNIT_FIELD_AURA, AURAFLAGS (a nibble per slot), AURALEVELS and AURAAPPLICATIONS.
+  - Visible slots (positive 0–31, negative 32–47) and the update fields UNIT_FIELD_AURA, AURAFLAGS (a nibble per slot), AURALEVELS and AURAAPPLICATIONS (`charges * stacks - 1`, clamped, rewritten on every stack or charge change).
   - SMSG_UPDATE_AURA_DURATION and periodic ticks with SMSG_PERIODICAURALOG.
   - Handlers: periodic damage (flat and percent), periodic heal and OBS_MOD_HEALTH, periodic energize and OBS_MOD_MANA, periodic trigger spell, root, stun and dummy. `RegisterAura` lets other areas add more.
 
