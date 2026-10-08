@@ -57,6 +57,14 @@ public interface IBattlegroundPresence
 {
     /// <summary>The status of the match <paramref name="player"/> is bound to, or null when it is in none.</summary>
     BattlegroundStatus? MatchStatusOf(ObjectGuid player);
+
+    /// <summary>
+    /// The player released its spirit; called before the ghost form is applied (vmangos Player::BuildPlayerRepop, Player.cpp:4586-4589: "Waiting
+    /// to Resurrect", spell 2584, is cast when the player is in a battleground). Nothing by default.
+    /// </summary>
+    void OnSpiritReleased(Player player)
+    {
+    }
 }
 
 /// <summary>

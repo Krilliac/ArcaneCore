@@ -73,13 +73,20 @@ public sealed class WorldDefenseRankTests
     }
 
     [Fact]
-    public void Without_the_honor_feature_everyone_is_unranked_as_before()
+    public void With_honor_disabled_WorldDefense_has_no_rank_gate_and_carries_rank_0()
     {
+        // Honor disabled: no rank source is registered, so no player could ever reach rank 15 and the gate does not apply.
         using var f = new SocialFixture();
         Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
         f.Context.Channels.Join(a, "WorldDefense", string.Empty);
+        f.Context.Channels.Join(b, "WorldDefense", string.Empty);
         f.ClearAll();
+
         f.Context.Channels.Say(a, "WorldDefense", "inc", Language.Common);
-        Assert.Equal([ChatNotify.Muted], Notifies(f, a));
+
+        Assert.Empty(Notifies(f, a));
+        byte[] message = Assert.Single(f.Sent(b, WorldOpcode.SmsgMessagechat));
+        Assert.Equal(0u, BitConverter.ToUInt32(message, 1 + 4 + "WorldDefense".Length + 1));
     }
 }
