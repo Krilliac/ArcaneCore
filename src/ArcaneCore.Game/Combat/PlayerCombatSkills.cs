@@ -113,7 +113,10 @@ public static class PlayerCombatSkills
     /// the victim is alive before the swing's damage (the roll precedes DealMeleeDamage). Spell weapon-damage skill-ups (a procSpell requiring a weapon) wait for the
     /// spell item data.
     /// </summary>
-    public static void OnMeleeResolved(Unit attacker, Unit victim, WeaponAttackType attackType, MeleeHitOutcome outcome, ShapeshiftFormCatalog? forms = null)
+    /// <param name="worldBossLevelDiff">The levels a world boss counts above the player (vmangos CONFIG_UINT32_WORLD_BOSS_LEVEL_DIFF; the world's
+    /// <see cref="CombatEnvironment.WorldBossLevelDiff"/>).</param>
+    public static void OnMeleeResolved(Unit attacker, Unit victim, WeaponAttackType attackType, MeleeHitOutcome outcome, ShapeshiftFormCatalog? forms = null,
+        int worldBossLevelDiff = CombatConstants.WorldBossLevelDiff)
     {
         if (outcome == MeleeHitOutcome.Evade)
         {
@@ -141,7 +144,7 @@ public static class PlayerCombatSkills
             victimSkills.UpdateCombatSkills(new CombatSkillContext(
                 Defence: true,
                 Attack: SkillAttack.Base,
-                VictimLevel: (uint)attacker.EffectiveLevelAgainst(victim, CombatConstants.WorldBossLevelDiff), // GetLevelForTarget (Player.cpp:5370)
+                VictimLevel: (uint)attacker.EffectiveLevelAgainst(victim, worldBossLevelDiff), // GetLevelForTarget (Player.cpp:5370)
                 VictimIsPlayerControlled: attacker.IsCharmerOrOwnerPlayerOrPlayerItself,
                 ShapeShifted: FormQueries.IsShapeShifted(defendingPlayer, forms),
                 WeaponSkillId: 0,

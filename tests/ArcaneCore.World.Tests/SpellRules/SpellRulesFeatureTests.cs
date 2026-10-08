@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
@@ -62,6 +63,18 @@ public sealed class SpellRulesFeatureTests
         Assert.Equal((1f, 2, true, false, 9000u, false), (bound.MagicHitFloorPercent, bound.WorldBossLevelDiff, bound.IgnoreHolyResistance, bound.DiminishingReturns, bound.DiminishingResetMs, bound.ImmunityEnforcement));
         Assert.Equal((22f, 3, false, true, 15_000u, true), (defaults.MagicHitFloorPercent, defaults.WorldBossLevelDiff, defaults.IgnoreHolyResistance, defaults.DiminishingReturns, defaults.DiminishingResetMs, defaults.ImmunityEnforcement));
         Assert.False(defaults.CreatureSpellCrit);
+    }
+
+    [Fact]
+    public async Task CoreFeature_HandsTheConfiguredWorldBossLevelDiff_ToTheMeleeCode()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SpellRules:WorldBossLevelDiff"] = "7",
+            }).Build()));
+
+        Assert.Equal(7, await host.OnWorldAsync(() => CombatEnvironment.For(host.World).WorldBossLevelDiff));
     }
 
     [Fact]

@@ -28,7 +28,7 @@ References (`D:\refs`): **vmangos** is primary; **mangos-classic** and **classic
 | Key | Default | Meaning |
 |---|---|---|
 | `MagicHitFloorPercent` | 22 | Lowest base magic hit chance (vmangos `SpellCaster.cpp:829-834`, from a classic duel test). 1 reproduces cmangos-classic (`Unit.cpp:3861`) |
-| `WorldBossLevelDiff` | 3 | Levels a world boss counts above its target (`World.cpp:744`) |
+| `WorldBossLevelDiff` | 3 | Levels a world boss counts above its target (`World.cpp:744`): the spell hit and resist level difference, and (through `CombatEnvironment.WorldBossLevelDiff`) the defense skill-up of a world boss's white swing. Limit: the melee hit table's skill maximum (`MeleeHitTable.SkillMaxForLevel`, reached through the shared `CombatHooks`) and stealth detection still use the constant 3 |
 | `CreatureSpellCrit` | false | Creatures that are not player-owned never crit with spells (`Unit.cpp:5216-5219`); true restores a 5% crit |
 | `ResistTablePath` | unset | File with the retail partial-resist outcome table (`Unit.cpp:1885-1918`); unset uses the quarter-step approximation |
 | `IgnoreHolyResistance` | false | vmangos resists holy damage (`Unit.cpp:1936-1946`); true is the cmangos rule (`Unit.cpp:3917`) |

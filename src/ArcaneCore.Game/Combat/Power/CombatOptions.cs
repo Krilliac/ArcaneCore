@@ -153,6 +153,7 @@ public sealed class CombatEnvironment
     private IPowerAuraSource? _auras;
     private IMeleeSpellHooks? _meleeSpells;
     private ShapeshiftFormCatalog? _shapeshiftForms;
+    private int _worldBossLevelDiff = CombatConstants.WorldBossLevelDiff;
 
     public CombatEnvironment(CombatOptions options, IPowerAuraSource? auras = null, IMeleeSpellHooks? meleeSpells = null)
         : this(options, auras, meleeSpells, frozen: false)
@@ -205,6 +206,21 @@ public sealed class CombatEnvironment
         {
             ThrowIfFrozen();
             _shapeshiftForms = value;
+        }
+    }
+
+    /// <summary>
+    /// The levels a world boss counts above its target in the melee code (vmangos <c>CONFIG_UINT32_WORLD_BOSS_LEVEL_DIFF</c>, World.cpp:744,
+    /// read by SpellCaster::GetLevelForTarget): the configured <c>SpellRules:WorldBossLevelDiff</c>, which the spell rules feature sets here
+    /// (default 3, <see cref="CombatConstants.WorldBossLevelDiff"/>).
+    /// </summary>
+    public int WorldBossLevelDiff
+    {
+        get => _worldBossLevelDiff;
+        set
+        {
+            ThrowIfFrozen();
+            _worldBossLevelDiff = value;
         }
     }
 
