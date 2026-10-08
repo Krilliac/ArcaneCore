@@ -137,6 +137,12 @@ item), `mail-item` (persisted letter with item, delivery delay, take), `melee-ki
 kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
 
+Teleport and death lane (wave 2): `pet-teleport` (`PetTeleportScenarioTests`: a hunter bot's pet comes back at its side after a far
+teleport to Kalimdor, the hunter gets its pet bar again and a watcher bot's client is sent the pet; the content creates warriors only,
+so the bot's class byte is set to hunter on the world thread) and `raid-lock` (`RaidLockScenarioTests`: two bots form a raid group with
+CMSG_GROUP_RAID_CONVERT, Molten Core is added to the map registry on the world thread, the leader is locked inside, the stored
+`group_instance` row is read back from SQLite, and the member who was outside enters the same instance and is locked too).
+
 ## MockClient playbot (external protocol client)
 
 `arcane-mock playbot` runs one external build-5875 client against an owned numeric

@@ -92,7 +92,9 @@ inert default.
   mode, the accurate-PvP reputation values of patches before 1.10, `BattleGround::HandleCommand`, the item reward by mail for a full bag
   (marks are cast spells here, as in vmangos for 1.12).
 - **Resurrection.** The 30 s spirit-guide wave is not battleground code (vmangos `RESURRECTION_INTERVAL` is unused): it is the spirit-healer channel
-  spell 22011 and the "Waiting to Resurrect" aura 2584. Nothing here models it; `BuildAreaSpiritHealerTime` is only the packet.
+  spell 22011 and the "Waiting to Resurrect" aura 2584. The wave's effect, SPELL_EFFECT_SPIRIT_HEAL (`SpiritHealEffect`, with the pet
+  re-summon), is in the death area; the 2584 cast at release and the guide's channel are not modelled yet; `BuildAreaSpiritHealerTime`
+  is only the packet. The released body of a player in a battleground carries CORPSE_FLAG_LOOTABLE (insignia).
 
 ## Open questions
 

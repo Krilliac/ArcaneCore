@@ -124,10 +124,17 @@ own wording.
 
 ## Limits (not delivered)
 
-- **Bones and corpse appearance.** A resurrected player's corpse leaves the world; bones objects, `Death.Bones.*`, the 60-minute bones
-  expiry, the 3-day corpse expiry and the corpse's equipment/guild/helm fields (`CORPSE_FIELD_ITEM`, vmangos CreateCorpse) are not modelled.
-- **Battlegrounds.** `IGraveyardOverride` is the seam; the "waiting to resurrect" spell, the area spirit healer queue and the 100% reclaim
-  belong to the battleground area. A spirit in a battleground map stays where it is without an override.
+- **Bones.** A resurrected player's corpse leaves the world; bones objects, `Death.Bones.*`, the 60-minute bones expiry and the 3-day
+  corpse expiry are not modelled. The corpse's appearance is (wave 2, vmangos Player::CreateCorpse, Player.cpp:4719-4782): every
+  equipped item as `CORPSE_FIELD_ITEM + slot` = display id | inventory type << 24, `CORPSE_FIELD_GUILD`, the hide helm/cloak flags
+  of PLAYER_FLAGS and, for a player in a battleground (bound to a match or on a battleground map), `CORPSE_FLAG_LOOTABLE`. A body
+  restored at login is dressed from the character the same way (vmangos Corpse::LoadFromDB reads the character row).
+- **Battlegrounds.** `IGraveyardOverride` is the seam; the "waiting to resurrect" cast at release, the area spirit healer queue and the
+  100% reclaim belong to the battleground area. A spirit in a battleground map stays where it is without an override.
+  SPELL_EFFECT_SPIRIT_HEAL (117) is here (wave 2, `SpiritHealEffect`, vmangos Spell::EffectSpiritHeal, SpellEffects.cpp:5821-5846): a
+  dead player with Waiting to Resurrect (2584) loses it, is sent to its graveyard first when its match is not in progress (not a game
+  master), comes back at full health without its corpse (`MapCombat.ResurrectBySpiritGuide`) and its pet comes back
+  (`SpellSystem.PlayerSpiritHealed`, docs/integration/pets.md).
 - **Hot reload and GM link editing.** `WorldGraveyards.Build`/`Replace` swap the catalog atomically, but nothing registers a
   `.reload game_graveyard_zone` yet, and `.linkgrave` (which writes the database in vmangos) and the dead `.unstuck` branch are not provided.
 - **Offline `.revive`** answers "Player not found!" (vmangos converts the offline corpse); the pet branch of RESURRECT_NEW (a dead pet target)
@@ -137,7 +144,8 @@ own wording.
   the creature corpse decay timer are not in the content; the npc flags stand in for the healers' ghost aura 9036 (not imported).
 - **Saved zone.** A spirit that logs out is saved at its graveyard's position but with its old zone id.
 - **Revival at a dungeon door** happens when the far teleport is accepted; vmangos does it before the entry check.
-- **Spirit of Redemption, Soulstone creation, pet re-summon after resurrection** belong to the spell, warlock/priest and pet lanes.
+- **Spirit of Redemption and Soulstone creation** belong to the spell and warlock/priest lanes. The pet re-summon after a spirit
+  guide's resurrection is done (above); other resurrections do not bring a pet back, as in vmangos.
 - **Resurrection sickness** uses spell 15007 for every race (vmangos reads `ChrRaces.resSicknessSpellId`); its -75% stat auras (79, 80, 101)
   have no handlers yet.
 
