@@ -90,12 +90,13 @@ public sealed partial class SpellSystem
         SetPower(target, power, current - burned);
         uint gain = Dither(burned * spell.Effects[aura.EffectIndex].MultipleValue);
 
-        // vmangos SpellCaster::CalculateSpellDamage (SpellCaster.cpp:1229-1277): the done/taken bonus, then the critical bonus.
+        // vmangos rolls IsSpellCrit on every tick, whatever was burned (SpellAuras.cpp:6335), then SpellCaster::CalculateSpellDamage
+        // (SpellCaster.cpp:1229-1277): the done/taken bonus, then the critical bonus; a crit marks the log even at zero damage.
+        bool crit = CombatRules.RollCrit(this, caster, target, spell);
         float bonused = AmountModifier is { } modifier && gain > 0
             ? modifier.Modify(SpellAmountStage.DirectDamage, caster, target, spell, aura.EffectIndex, gain, 1)
             : gain;
         uint amount = (uint)Math.Max(0f, bonused);
-        bool crit = amount > 0 && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)
         {
             amount = CombatRules is ISpellCritAmounts exact

@@ -249,6 +249,34 @@ public sealed class CharmPossessTests
     }
 
     [Fact]
+    public void DismissingAPossessedHuntersPet_DoesNothing_BecauseVmangosKeysOnThePetsOwnKind()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, _) = kit.AddPlayer(1, 5, 5);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(hunter, PetSpell));
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        (Player priest, FakeSession priestSession) = kit.AddPlayer(2, 8, 5);
+        priest.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Priest);
+        priest.FactionTemplate = 2; // an enemy of the hunter and its pet
+        hunter.UnitFlags |= UnitFlags.Pvp;
+        pet.UnitFlags |= UnitFlags.Pvp;
+
+        Assert.Equal(SpellCastResult.CastOk, CastAt(kit, priest, PossessSpell, pet));
+        Assert.Equal(priest.Guid, pet.CharmerGuid);
+        priestSession.Clear();
+
+        // vmangos Unit::HandlePetCommand COMMAND_DISMISS (Unit.cpp:8758-8769): a Pet whose GetPetType() is HUNTER_PET is left alone, whoever
+        // controls it; the possessing priest (an unmodified client can send this with /script PetDismiss()) must not despawn it.
+        kit.Controller.HandleAction(priest, PetPackets.ReadAction(PetAction(pet.Guid, (uint)CommandState.Dismiss, ActionType.Command)));
+
+        Assert.Same(pet, kit.Creatures.FindCreature(pet.Guid));
+        Assert.Equal(pet.Guid, hunter.PetGuid);
+        Assert.Equal(priest.Guid, pet.CharmerGuid);
+        Assert.True(kit.Spells.System.HasAura(pet, PossessSpell));
+    }
+
+    [Fact]
     public void TheCharmersDeath_EndsTheCharm()
     {
         using PetTestKit kit = Kit();

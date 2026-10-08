@@ -1,10 +1,15 @@
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Reflection;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Pets.CharmPossessTests;
@@ -130,6 +135,124 @@ public sealed class UnitControlTests
         Assert.True(charms.HandleSetActiveMover(hunter, hunter.Guid));
         Assert.Null(kit.Creatures.FindCreature(pet.Guid));
         Assert.True(hunter.PetGuid.IsEmpty);
+    }
+
+    private static ConcurrentQueue<PersistentPetSnapshot> RecordSaves(PetTestKit kit)
+    {
+        var saves = new ConcurrentQueue<PersistentPetSnapshot>();
+        kit.Service.SavePersistence = (snapshot, _) =>
+        {
+            saves.Enqueue(snapshot);
+            return Task.CompletedTask;
+        };
+        return saves;
+    }
+
+    [Fact]
+    public async Task EyesOfTheBeast_APetDismissedFarAway_IsSavedFirst()
+    {
+        using PetTestKit kit = Kit();
+        ArcaneCore.Game.Spells.Utility.Targets.PetTargets.Install(kit.Spells.System);
+        (Player hunter, _) = kit.AddPlayer(1, 5, 5);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(hunter, PetSpell);
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        CharmService charms = kit.Service.Charms;
+        ConcurrentQueue<PersistentPetSnapshot> saves = RecordSaves(kit);
+
+        kit.Cast(hunter, EyesOfTheBeast);
+        Assert.True(charms.HandleSetActiveMover(hunter, pet.Guid));
+        pet.Relocate(5 + 110, 5, 83.5f, 0, kit.Spells.Now);
+        pet.Health = 37;
+        kit.Spells.System.RemoveAuras(pet, EyesOfTheBeast);
+        Assert.True(charms.HandleSetActiveMover(hunter, hunter.Guid));
+        await kit.Service.FlushCharacterAsync(1);
+
+        // vmangos HandleSetActiveMoverOpcode: RemovePet(PET_SAVE_REAGENTS), which Pet::SavePetToDB stores as PET_SAVE_NOT_IN_SLOT
+        Assert.Null(kit.Creatures.FindCreature(pet.Guid));
+        PersistentPetSnapshot saved = Assert.Single(saves);
+        Assert.Equal(37u, saved.Health);
+        Assert.Equal(pet.Summon!.Charm!.PetNumber, saved.PetNumber);
+    }
+
+    [Fact]
+    public async Task TheLeash_SavesAHuntersPetBeforeItGoes()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, _) = kit.AddPlayer(1, 5, 5);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(hunter, PetSpell);
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        ConcurrentQueue<PersistentPetSnapshot> saves = RecordSaves(kit);
+
+        pet.Health = 29;
+        pet.Relocate(5 + 150, 5, 83.5f, 0, kit.Spells.Now);
+        kit.Run(500);
+        await kit.Service.FlushCharacterAsync(1);
+
+        // vmangos Pet::Update (Pet.cpp:666-674): beyond 120 yd, Unsummon(PET_SAVE_REAGENTS), saved as PET_SAVE_NOT_IN_SLOT
+        Assert.Null(kit.Creatures.FindCreature(pet.Guid));
+        Assert.Equal(29u, Assert.Single(saves).Health);
+    }
+
+    [Fact]
+    public void MoveNotActiveMover_IgnoresAMovedPlayerBeingTeleported_NotTheController()
+    {
+        using PetTestKit kit = Kit();
+        (Player priest, _) = kit.AddPlayer(1, 5, 5);
+        (Player victim, _) = kit.AddPlayer(2, 8, 5);
+        victim.UnitFlags |= UnitFlags.Pvp;
+        priest.FactionTemplate = 2;
+        CharmService charms = kit.Service.Charms;
+
+        void PossessAndRelease()
+        {
+            Assert.Equal(SpellCastResult.CastOk, CastAt(kit, priest, PossessSpell, victim));
+            Assert.True(charms.HandleSetActiveMover(priest, victim.Guid));
+            kit.Spells.System.RemoveAuras(victim, PossessSpell);
+        }
+
+        // vmangos HandleMoveNotActiveMoverOpcode (MovementHandler.cpp:935-939): pPlayerMover->IsBeingTeleported(), the moved player
+        PossessAndRelease();
+        Assert.Null(CharmService.HandleMoveNotActiveMover(priest, victim.Guid, isBeingTeleported: p => ReferenceEquals(p, victim)));
+        Assert.True(priest.ClientMoverGuid.IsEmpty); // the client mover is cleared before the check, as in vmangos
+
+        PossessAndRelease();
+        Assert.Same(victim, CharmService.HandleMoveNotActiveMover(priest, victim.Guid, isBeingTeleported: p => ReferenceEquals(p, priest)));
+    }
+
+    [Fact]
+    public void TheWorldWideCharmService_HoldsNoMap_AndACharmStillDefendsItsCharmer()
+    {
+        using PetTestKit kit = Kit();
+        (Player player, _) = kit.AddPlayer(1, 5, 5);
+        Creature mob = Mob(kit);
+        Creature enemy = Mob(kit, 6, 6);
+        Assert.Equal(SpellCastResult.CastOk, CastAt(kit, player, CharmSpell, mob));
+
+        // vmangos PetAI::OwnerAttackedBy: the charm (defensive) answers whoever hits its charmer, once it has come back to it (a charm
+        // starts as "returning after a follow command", HandleModCharm, and PetAI::CanAttack ignores attacks until it arrives)
+        for (int i = 0; i < 50 && mob.GetCharmInfo()!.IsReturning; i++)
+        {
+            kit.Run(100);
+        }
+
+        Assert.False(mob.GetCharmInfo()!.IsReturning);
+        kit.Map.Combat.DealDamage(enemy, player, 1);
+        Assert.Same(enemy, mob.Combat.Victim);
+
+        // one CharmService serves every map: anything of a map it kept (a MapCombat it subscribed to) would keep an unloaded instance
+        // map alive for ever, so nothing reachable from its fields may be a map or a map system.
+        CharmService charms = kit.Service.Charms;
+        foreach (FieldInfo field in typeof(CharmService).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            object? value = field.GetValue(charms);
+            Assert.False(value is Map or IMapUpdater, field.Name);
+            if (value is IEnumerable items and not string)
+            {
+                Assert.DoesNotContain(items.Cast<object?>(), item => item is Map or IMapUpdater);
+            }
+        }
     }
 
     [Fact]

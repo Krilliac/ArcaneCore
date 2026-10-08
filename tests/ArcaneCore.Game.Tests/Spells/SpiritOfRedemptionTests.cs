@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -131,6 +132,46 @@ public sealed class SpiritOfRedemptionTests
         Assert.False(priest.IsAlive);
         Assert.Equal(0u, priest.Health);
         Assert.Equal(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
+    }
+
+    [Fact]
+    public void TheSpirit_LosesNothingToANonLethalHit()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player priest, Player enemy) = Setup(kit, talent: true);
+        priest.MaxHealth = 1000;
+        priest.Health = 400;
+        Bolt_(kit, enemy, priest); // 500 on 400: the spirit, healed to 1000 with a threshold of 1000
+        Assert.True(kit.System.HasAura(priest, Linked2));
+        Assert.Equal(1000u, priest.Health);
+
+        // vmangos Unit::DealDamage (Unit.cpp:844-848): health above the threshold loses at most the part above it, so nothing here,
+        // even though 500 on 1000 health is not a killing blow.
+        Bolt_(kit, enemy, priest);
+        Assert.Equal(1000u, priest.Health);
+        Assert.True(priest.IsAlive);
+    }
+
+    [Fact]
+    public void AnInvincibilityThreshold_ClampsEveryHit_LethalOrNot()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player priest, Player enemy) = Setup(kit, talent: false);
+        priest.MaxHealth = 1000;
+        priest.Health = 1000;
+        priest.InvincibilityHpThreshold = 300;
+        MapCombat combat = kit.World.GetMap(0).Combat;
+
+        combat.DealDamage(enemy, priest, 800); // not lethal, but it would cross the threshold: min(1000 - 300, 800)
+        Assert.Equal(300u, priest.Health);
+
+        combat.DealDamage(enemy, priest, 800); // at the threshold: nothing
+        Assert.Equal(300u, priest.Health);
+        Assert.True(priest.IsAlive);
+
+        priest.InvincibilityHpThreshold = 0;
+        combat.DealDamage(enemy, priest, 100);
+        Assert.Equal(200u, priest.Health);
     }
 
     [Fact]

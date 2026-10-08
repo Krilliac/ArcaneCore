@@ -301,14 +301,7 @@ public sealed partial class CharmService
 
     // --- the map registry -------------------------------------------------------------------------------------
 
-    private void Track(Unit controller, Unit target)
-    {
-        if (target.Map is { } map)
-        {
-            SubscribeCombat(map);
-            Registry(target)?.Track(this, controller, target);
-        }
-    }
+    private void Track(Unit controller, Unit target) => Registry(target)?.Track(this, controller, target);
 
     private static void Untrack(Unit target) => Registry(target)?.Untrack(target);
 }

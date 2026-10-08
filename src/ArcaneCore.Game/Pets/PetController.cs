@@ -273,14 +273,17 @@ public sealed class PetController
             case CommandState.Dismiss:
                 // vmangos: dismissing a summoned pet is like killing it; a mini pet or guardian just goes. "Hunter pets are
                 // dismissed with a spell with a cast time" (Dismiss Pet, SPELL_EFFECT_DISMISS_PET), so the command leaves them.
-                // A charmed creature is released by its charmer (pCharmer->Uncharm(), Unit.cpp:8758-8769; review finding 32).
-                if (pet.Summon is null)
+                // A charmed creature that is not a vmangos Pet (Pet, Guardian or MiniPet here) is released by its charmer (pCharmer->Uncharm(),
+                // Unit.cpp:8758-8769; review finding 32).
+                if (pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian or SummonKind.MiniPet } links)
                 {
                     _summons.Charms.Uncharm(owner);
                     break;
                 }
 
-                if (pet.Summon?.Kind == SummonKind.Pet && owner is Player { Class: Class.Hunter })
+                // GetPetType() == HUNTER_PET is the pet's own kind: its owner's class, not that of whoever controls it now (a priest's
+                // Mind Control on a hunter's pet).
+                if (links.Kind == SummonKind.Pet && pet.GetOwner() is Player { Class: Class.Hunter })
                 {
                     break;
                 }

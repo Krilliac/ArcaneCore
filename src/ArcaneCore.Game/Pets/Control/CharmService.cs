@@ -36,7 +36,6 @@ public sealed partial class CharmService
     private readonly Func<Map, CreatureMapSystem?> _systems;
     private readonly Func<uint> _nextPetNumber;
     private readonly Random _random;
-    private readonly HashSet<MapCombat> _combatSubscriptions = [];
     private SpellSystem? _spells;
     private bool _installed;
 
@@ -441,45 +440,11 @@ public sealed partial class CharmService
         }
     }
 
-    /// <summary>The map control registry of a unit's map (null outside a map).</summary>
-    private static MapUnitControl? Registry(Unit unit) => unit.Map?.FindUpdater<MapUnitControl>();
-
     /// <summary>
-    /// vmangos PetAI::OwnerAttacked / OwnerAttackedBy for charmed creatures (the pets of the summon service hear them through
-    /// <see cref="PetMapSystem"/>): subscribe the map's damage event once.
+    /// The map control registry of a unit's map (null outside a map). It also relays the map's damage to the charmed creatures
+    /// (<see cref="MapUnitControl"/>): the subscription lives with the map, so this world-wide service never holds one.
     /// </summary>
-    private void SubscribeCombat(Map map)
-    {
-        if (map.FindUpdater<MapCombat>() is { } combat && _combatSubscriptions.Add(combat))
-        {
-            combat.DamageDealt += OnDamageDealt;
-        }
-    }
-
-    private static void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
-    {
-        if (Registry(victim) is not { } registry || registry.Count == 0)
-        {
-            return;
-        }
-
-        foreach (Unit controlled in registry.Controlled.ToArray())
-        {
-            if (controlled is not Creature { AI: PetAI ai, Summon: null } charmed || !charmed.IsAlive)
-            {
-                continue;
-            }
-
-            if (charmed.CharmerGuid == victim.Guid)
-            {
-                ai.OwnerAttackedBy(attacker);
-            }
-            else if (charmed.CharmerGuid == attacker.Guid)
-            {
-                ai.OwnerAttacked(victim);
-            }
-        }
-    }
+    private static MapUnitControl? Registry(Unit unit) => unit.Map?.FindUpdater<MapUnitControl>();
 
     // --- events ---------------------------------------------------------------------------------------------
 

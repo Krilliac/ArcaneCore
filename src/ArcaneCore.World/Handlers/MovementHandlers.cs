@@ -63,8 +63,9 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         var oldMover = new ObjectGuid(reader.ReadUInt64());
         MovementInfo movement = MovementInfo.Read(ref reader);
-        if (CharmService.HandleMoveNotActiveMover(player, oldMover) is not { } unit || !IsAcceptable(session, movement)
-            || session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
+        // vmangos ignores the block while the moved player (pPlayerMover), not the sender, is being teleported.
+        Game.Teleport.TeleportService teleports = session.Services.GetRequiredService<TeleportFeature>().Teleports;
+        if (CharmService.HandleMoveNotActiveMover(player, oldMover, teleports.IsBeingTeleported) is not { } unit || !IsAcceptable(session, movement))
         {
             return;
         }

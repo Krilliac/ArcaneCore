@@ -786,14 +786,10 @@ public sealed partial class MapCombat
             RewardRage(rager, damage, attacker: true, CombatEnvironment.For(_world));
         }
 
-        // vmangos Unit::DealDamage (Unit.cpp:825-850): a unit with an invincibility threshold (Spirit of Redemption) never dies of damage
-        // and never drops below the threshold.
+        // vmangos Unit::DealDamage (Unit.cpp:825-850): a unit with an invincibility threshold (Spirit of Redemption) never dies of damage,
+        // and every hit, lethal or not, takes at most the health above the threshold (nothing at or below it). Only the health change is
+        // clamped: threat, rage and the returned damage keep the full amount, as in vmangos.
         uint invincible = victim.InvincibilityHpThreshold;
-        if (invincible != 0 && victim.Health <= damage)
-        {
-            damage = victim.Health > invincible ? victim.Health - invincible : 0;
-        }
-
         if (victim.Health <= damage && invincible == 0)
         {
             Kill(attacker, victim, durabilityLoss, threatSpell);
@@ -805,7 +801,10 @@ public sealed partial class MapCombat
             return damage;
         }
 
-        victim.Health -= damage;
+        if (victim.Health > invincible)
+        {
+            victim.Health -= Math.Min(victim.Health - invincible, damage);
+        }
         bool attackedBy = !SuppressesSpellThreat(attacker, victim, threatSpell); // before this damage's threat creates an entry
 
         if (direct && combatLink)

@@ -134,6 +134,59 @@ public sealed class PowerBurnTests
         Assert.Empty(sink.Damage);
     }
 
+    private sealed class AlwaysCritRules : ISpellCombatRules
+    {
+        public int CritRolls { get; private set; }
+
+        public SpellMissInfo RollHit(SpellSystem system, Unit caster, Unit target, SpellInfo spell) => SpellMissInfo.None;
+
+        public bool RollCrit(SpellSystem system, Unit caster, Unit target, SpellInfo spell)
+        {
+            CritRolls++;
+            return true;
+        }
+
+        public float CritMultiplier(SpellInfo spell) => 1.5f;
+
+        public uint RollPartialResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage) => 0;
+
+        public uint ApplyArmor(Unit caster, Unit target, SpellInfo spell, uint damage) => damage;
+    }
+
+    [Fact]
+    public void IgniteMana_RollsTheCritEveryTick_EvenWhenNothingIsLeftToBurn()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit, targetMana: 1000);
+        SpellSystem.SetPower(target, PowerType.Mana, 0); // a mana user with an empty pool
+        var rules = new AlwaysCritRules();
+        kit.System.CombatRules = rules;
+        FakeSession observer = kit.AddPlayer(4, 11, 0).Session;
+
+        kit.System.CastSpell(caster, IgniteMana, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        observer.Clear();
+        int before = rules.CritRolls;
+        kit.Advance(9000);
+
+        // vmangos (SpellAuras.cpp:6335-6336): IsSpellCrit is rolled before CalculateSpellDamage on every tick, whatever was burned, and a
+        // crit marks the zero-damage log too.
+        Assert.Equal(3, rules.CritRolls - before);
+        Assert.Equal([(IgniteMana, 0u, true), (IgniteMana, 0u, true), (IgniteMana, 0u, true)], sink.Damage);
+        byte[] log = SpellTestKit.Packets(observer, WorldOpcode.SmsgSpellnonmeleedamagelog).First();
+        var r = new PacketReader(log);
+        r.ReadPackedGuid();
+        r.ReadPackedGuid();
+        Assert.Equal(IgniteMana, r.ReadUInt32());
+        Assert.Equal(0u, r.ReadUInt32());
+        r.ReadByte();
+        r.ReadUInt32();
+        r.ReadUInt32();
+        r.ReadByte();
+        r.ReadByte();
+        r.ReadUInt32();
+        Assert.NotEqual(0u, r.ReadUInt32() & 0x2u); // SPELL_HIT_TYPE_CRIT in the hit info
+    }
+
     [Fact]
     public void HealthFunnel_DamagesTheTarget_AndHealsTheCasterTheDamageTimesTheMultiple()
     {

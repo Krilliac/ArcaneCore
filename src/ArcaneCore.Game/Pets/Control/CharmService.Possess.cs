@@ -216,9 +216,10 @@ public sealed partial class CharmService
 
     /// <summary>
     /// vmangos WorldSession::HandleSetActiveMoverOpcode (MovementHandler.cpp:851-891): a mismatch with the server's mover is logged and
-    /// the client's mover is taken as the server's; a creature mover that is rooted gets its root again; when the client leaves the pet it
-    /// moved with Eyes of the Beast, the pet loses the possessed state and flag (PetAI then brings it back), and a pet beyond the grid
-    /// activation distance (here the visibility distance) is dismissed. Returns false on a mismatch.
+    /// the client's mover is taken as the server's; when the client leaves the pet it moved with Eyes of the Beast, the pet loses the
+    /// possessed state and flag (PetAI then brings it back), and a pet beyond the grid activation distance (here the visibility distance)
+    /// is saved and dismissed (RemovePet(PET_SAVE_REAGENTS), stored as PET_SAVE_NOT_IN_SLOT). Not ported: vmangos re-sends the root
+    /// movement flag to the new controller of a rooted creature mover (docs/areas/unit-control.md, Limits). Returns false on a mismatch.
     /// </summary>
     public bool HandleSetActiveMover(Player player, ObjectGuid guid, SummonService? summons = null)
     {
@@ -243,6 +244,7 @@ public sealed partial class CharmService
                 pet.UnitFlags &= ~UnitFlags.Possessed;
                 if (!WithinDistance(pet, player, Maps.Map.VisibilityRange))
                 {
+                    summons?.QueueCurrentPetSave(player);
                     summons?.Unsummon(pet);
                 }
             }
@@ -255,10 +257,13 @@ public sealed partial class CharmService
 
     /// <summary>
     /// vmangos WorldSession::HandleMoveNotActiveMoverOpcode (MovementHandler.cpp:893-913, build &gt; 1.9.4): the client gives up a mover; it
-    /// must be the one it last named, and not the server's current mover unless that is the player itself. Returns the unit the final
-    /// movement block belongs to (the caller relocates and relays it), or null when the packet is refused.
+    /// must be the one it last named, and not the server's current mover unless that is the player itself. The client mover is then
+    /// cleared, and a moved player that is being teleported is left to its teleport acknowledgement (vmangos checks the moved player,
+    /// pPlayerMover, not the controlling one). Returns the unit the final movement block belongs to (the caller relocates and relays it),
+    /// or null when the packet is refused.
     /// </summary>
-    public static Unit? HandleMoveNotActiveMover(Player player, ObjectGuid oldMover)
+    /// <param name="isBeingTeleported">vmangos Player::IsBeingTeleported (the world's teleport service); null: nobody is.</param>
+    public static Unit? HandleMoveNotActiveMover(Player player, ObjectGuid oldMover, Func<Player, bool>? isBeingTeleported = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         UnitControlState state = UnitControl.State(player);
@@ -275,7 +280,12 @@ public sealed partial class CharmService
 
         state.ClientMover = default;
         state.ClientMoverKnown = true;
-        return player.Map?.FindObject(oldMover) as Unit;
+        if (player.Map?.FindObject(oldMover) is not Unit moved)
+        {
+            return null;
+        }
+
+        return moved is Player movedPlayer && isBeingTeleported?.Invoke(movedPlayer) == true ? null : moved;
     }
 
     /// <summary>

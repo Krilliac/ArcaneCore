@@ -20,6 +20,7 @@ public sealed class MapUnitControl : IMapUpdater
     private readonly Dictionary<Unit, Link> _links = new(ReferenceEqualityComparer.Instance);
     private readonly List<Pending> _pending = [];
     private readonly List<Pending> _due = [];
+    private bool _combatSubscribed;
 
     private sealed record Link(CharmService Service, ObjectGuid Controller);
 
@@ -48,7 +49,50 @@ public sealed class MapUnitControl : IMapUpdater
     /// <summary>The GUID of the unit that controls <paramref name="unit"/>, or empty.</summary>
     public ObjectGuid ControllerOf(Unit unit) => _links.TryGetValue(unit, out Link? link) ? link.Controller : default;
 
-    internal void Track(CharmService service, Unit controller, Unit target) => _links[target] = new Link(service, controller.Guid);
+    internal void Track(CharmService service, Unit controller, Unit target)
+    {
+        _links[target] = new Link(service, controller.Guid);
+        SubscribeCombat();
+    }
+
+    /// <summary>
+    /// vmangos PetAI::OwnerAttacked / OwnerAttackedBy for charmed creatures (the pets of the summon service hear them through
+    /// <see cref="PetMapSystem"/>): this map's damage event, subscribed once at the first charm. The subscription is per map (the map's
+    /// combat and this registry live and die together), so nothing world-wide keeps an unloaded instance map alive.
+    /// </summary>
+    private void SubscribeCombat()
+    {
+        if (!_combatSubscribed && _map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.DamageDealt += OnDamageDealt;
+            _combatSubscribed = true;
+        }
+    }
+
+    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
+    {
+        if (_links.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Unit controlled in _links.Keys.ToArray())
+        {
+            if (controlled is not Creature { AI: PetAI ai, Summon: null } charmed || !charmed.IsAlive)
+            {
+                continue;
+            }
+
+            if (charmed.CharmerGuid == victim.Guid)
+            {
+                ai.OwnerAttackedBy(attacker);
+            }
+            else if (charmed.CharmerGuid == attacker.Guid)
+            {
+                ai.OwnerAttacked(victim);
+            }
+        }
+    }
 
     internal void Untrack(Unit target) => _links.Remove(target);
 

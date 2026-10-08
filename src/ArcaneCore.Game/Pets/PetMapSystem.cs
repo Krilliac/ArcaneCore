@@ -198,6 +198,13 @@ public sealed class PetMapSystem : IMapUpdater
         if (owner is null || (!IsWithinLeash(pet, owner, Options) && owner.CharmGuid != pet.Guid)
             || (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid))
         {
+            // vmangos Unsummon(PET_SAVE_REAGENTS), which SavePetToDB stores as PET_SAVE_NOT_IN_SLOT: the owner's current pet is saved
+            // first (a pet that is no longer the owner's current one is not, as it is not captured as current).
+            if (owner is Player petOwner && links.Kind == SummonKind.Pet && petOwner.PetGuid == pet.Guid)
+            {
+                _service?.QueueCurrentPetSave(petOwner);
+            }
+
             _service?.Unsummon(pet);
             return;
         }
