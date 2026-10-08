@@ -16,7 +16,7 @@ constant was added, so no `ICharacterDataCleanup` is involved.
 | Bootstrapper options | `SchemaBootstrapper.cs` | `EnsureAsync(db, definition, SchemaUpgradeOptions, ...)`: policy (checked before the database is created and again under the lock), lock timeout, per-step progress. The old overloads are unchanged and still throw exactly `SchemaMismatchException` |
 | Probes | `ServerProbe.cs` | Server product/version + qualification warning, other-session count, schema-lock-held |
 | Backup | `BackupAdvisor.cs` | `mysqldump` / `pg_dump` command lines (password only as `MYSQL_PWD` / `PGPASSWORD`), verified SQLite `VACUUM INTO` copy with `RepositoryPathGuard` |
-| CLI | `Cli/DbUpgradeCli.cs`, `DbUpgradeArguments.cs`, `DbUpgradeExitCodes.cs`, `PlanFormatter.cs`, `tools/ArcaneCore.DbUpgrade` | `status`, `plan [--script] [--json]`, `check`, `upgrade`, `backup-info`; exit codes 0-8 |
+| CLI | `Cli/DbUpgradeCli.cs`, `DbUpgradeArguments.cs`, `DbUpgradeExitCodes.cs`, `PlanFormatter.cs`, `tools/ArcaneCore.DbUpgrade` | `status`, `plan [--script] [--json]`, `check`, `upgrade`, `migrate-codex [--apply]`, `backup-info`; exit codes 0-8 |
 | Start-up policy | `DatabaseUpgradeOptions.cs`, `DatabaseOptions.Upgrade`, the three initializers, World/Realm/AccountTool `Program.cs` | `Database:Upgrade:Policy` and `LockTimeoutSeconds`; a refusal is one scrubbed line and exit 4 or 7; `arcane-account db ...` forwards to `arcane-db` before the auth schema is initialized |
 
 Reused from the content-import lane (on the base): `ConnectionStringRedactor`, `RepositoryPathGuard`, `UsageException`.

@@ -66,6 +66,12 @@ public sealed class SchemaDefinition
     /// <summary>Upgrade steps for versions 2..CurrentVersion, in order.</summary>
     public IReadOnlyList<SchemaStep> Steps { get; init; } = [];
 
+    /// <summary>
+    /// Other development lines whose databases this build migrates to its own numbering once (the Codex line before
+    /// the 2026-10-07 merge, <see cref="CodexLine"/>); empty for a component no other line renumbered.
+    /// </summary>
+    public IReadOnlyList<ForeignLine> ForeignLines { get; init; } = [];
+
     public string VersionTable => Component + "_schema";
 }
 
@@ -222,6 +228,23 @@ public static class SchemaBootstrapper
             options.Report(definition, version.Value);
         }
 
+        if (version > CreatingVersion && definition.ForeignLines.Count > 0)
+        {
+            // A database another line created records that line's numbers; migrate it to ours once, before the step
+            // loop reads those numbers as this build's steps (or refuse a database that matches neither line).
+            ForeignLineDetection detection = await ForeignLineDetector.DetectAsync(db, definition, version.Value, ct).ConfigureAwait(false);
+            if (detection.Refusal is not null)
+            {
+                throw new SchemaMismatchException(detection.Refusal);
+            }
+
+            if (detection.Match is { } match)
+            {
+                version = await MigrateForeignLineAsync(db, definition, match, logger, ct).ConfigureAwait(false);
+                options.Report(definition, version.Value);
+            }
+        }
+
         if (version > definition.CurrentVersion)
         {
             throw new SchemaMismatchException(SchemaChangeDecider.NewerMessage(definition, version.Value));
@@ -248,6 +271,105 @@ public static class SchemaBootstrapper
                 $"The {definition.Component} schema is at version {version} but this build needs " +
                 $"{definition.CurrentVersion} and has no upgrade path.");
         }
+    }
+
+    /// <summary>
+    /// The operator's one-shot migration of a database another line created (<see cref="SchemaDefinition.ForeignLines"/>)
+    /// to this build's numbering, without the ordinary upgrade that normally follows it (arcane-db migrate-codex --apply).
+    /// Under the schema lock: detect again, then migrate. Returns what was migrated, or null when the database is not
+    /// another line's (missing, fresh, without a version, or already on this build's numbering).
+    /// </summary>
+    /// <exception cref="SchemaMismatchException">The database matches neither line, or the lock wait ran out.</exception>
+    public static async Task<ForeignLineMatch?> MigrateForeignLineAsync(
+        DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(options);
+        var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
+        if (definition.ForeignLines.Count == 0 || !await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, options.LockTimeout, cancellationToken, logger)
+                .ConfigureAwait(false);
+            ForeignLineMatch? migrated = null;
+            int? version = await ReadRecordedVersionAsync(db, definition, cancellationToken).ConfigureAwait(false);
+            if (version > CreatingVersion)
+            {
+                ForeignLineDetection detection = await ForeignLineDetector.DetectAsync(db, definition, version.Value, cancellationToken).ConfigureAwait(false);
+                if (detection.Refusal is not null)
+                {
+                    throw new SchemaMismatchException(detection.Refusal);
+                }
+
+                if (detection.Match is { } match)
+                {
+                    int merged = await MigrateForeignLineAsync(db, definition, match, logger, cancellationToken).ConfigureAwait(false);
+                    options.Report(definition, merged);
+                    migrated = match;
+                }
+            }
+
+            await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
+            return migrated;
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Apply this build's steps after the divergence up to the merged version (each change idempotent: the foreign
+    /// line's tables are verified against the model, the steps it never had are created), run the data moves, then
+    /// record the merged version. On SQLite all of it commits or none; elsewhere a rerun converges, because the
+    /// version row is written last and the detection accepts this build's objects beside the foreign ones.
+    /// </summary>
+    private static async Task<int> MigrateForeignLineAsync(
+        DbContext db, SchemaDefinition definition, ForeignLineMatch match, ILogger? logger, CancellationToken ct)
+    {
+        logger?.LogWarning(
+            "The {Component} database was created by the {Line} line (schema version {ForeignVersion}); migrating it once to this build's numbering " +
+            "(schema version {MergedVersion}). Found: {Evidence}",
+            definition.Component, match.Line.Name, match.ForeignVersion, match.MergedVersion, string.Join("; ", match.Evidence));
+        // A move whose step lies outside the migrated range would silently not run; the line definition forbids it.
+        Invariant.Assert(match.DataMoves.All(m => match.Steps.Any(s => s.Version == m.AfterMergedVersion)),
+            $"{definition.Component}: a {match.Line.Name} data move follows a step outside the migrated range");
+        long moved = 0;
+        foreach (SchemaStep step in match.Steps)
+        {
+            await ApplyStepAsync(db, definition, step, ct).ConfigureAwait(false);
+            foreach (ForeignLineDataMove move in match.DataMoves.Where(m => m.AfterMergedVersion == step.Version))
+            {
+                long rows = await move.ApplyAsync(db, ct).ConfigureAwait(false);
+                moved += rows;
+                logger?.LogInformation("{Component} migration: {Move} ({Rows} rows)", definition.Component, move.Description, rows);
+            }
+        }
+
+        await WriteVersionAsync(db, match.MergedVersion, ct).ConfigureAwait(false);
+        logger?.LogWarning(
+            "Migrated the {Component} database from {Line} schema version {ForeignVersion} to schema version {MergedVersion} " +
+            "({Steps} steps verified or applied, {Rows} rows moved); every row was kept",
+            definition.Component, match.Line.Name, match.ForeignVersion, match.MergedVersion, match.Steps.Count, moved);
+        return match.MergedVersion;
+    }
+
+    /// <summary>The recorded version without the side effects of <see cref="TryReadVersionAsync"/> (it writes nothing); null without a row.</summary>
+    private static async Task<int?> ReadRecordedVersionAsync(DbContext db, SchemaDefinition definition, CancellationToken ct)
+    {
+        if (!await SchemaCatalog.TableExistsAsync(db, definition.VersionTable, ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        SchemaVersionRow? row = await db.Set<SchemaVersionRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, ct).ConfigureAwait(false);
+        return row?.Version;
     }
 
     private static async Task<int?> TryReadVersionAsync(DbContext db, SchemaDefinition definition, CancellationToken ct)

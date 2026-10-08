@@ -17,7 +17,8 @@ internal sealed record ComponentJson(
     string? Server,
     bool? ServerQualified,
     int? OtherSessions,
-    bool? SchemaLockHeld);
+    bool? SchemaLockHeld,
+    string? ForeignLine = null);
 
 internal sealed record ActionJson(string Object, string Table, string? Name, string Decision, string Detail, long DuplicateGroups);
 
@@ -43,7 +44,8 @@ internal static class PlanFormatter
         => new(
             plan.Component, provider, target, plan.State.ToString(), plan.DatabaseVersion, plan.CodeVersion, plan.PendingVersions, plan.FirstRefusal,
             [.. plan.Actions.Select(a => new ActionJson(a.Object.ToString(), a.Table, a.Name, a.Decision.ToString(), a.Detail, a.DuplicateGroups))],
-            server is null ? null : $"{server.Product} {server.Version}", server?.Qualified, sessions, lockHeld);
+            server is null ? null : $"{server.Product} {server.Version}", server?.Qualified, sessions, lockHeld,
+            plan.ForeignLine?.Describe(plan.Component));
 
     public static DriftJson ToJson(DriftReport report)
         => new(
@@ -71,7 +73,8 @@ internal static class PlanFormatter
             : plan.State is SchemaState.Missing or SchemaState.Fresh or SchemaState.Creating or SchemaState.NoVersionRow
                 ? $", will create schema version {plan.PendingVersions[^1]}"
                 : $", pending: {string.Join(", ", plan.PendingVersions)}";
-        return $"{plan.Component,-10} state {plan.State}, database version {have}, code version {plan.CodeVersion}{pending}";
+        string line = plan.ForeignLine is { } foreign ? $" ({foreign.Line.Name} numbering)" : string.Empty;
+        return $"{plan.Component,-10} state {plan.State}, database version {have}{line}, code version {plan.CodeVersion}{pending}";
     }
 
     /// <summary>The human plan: summary, every non-trivial action per step, and refusals.</summary>
@@ -106,6 +109,12 @@ internal static class PlanFormatter
     public static void WriteScript(TextWriter writer, SchemaPlan plan)
     {
         writer.WriteLine($"-- {Summary(plan)}");
+        if (plan.ForeignLine is { DataMoves.Count: > 0 } foreign)
+        {
+            // The data moves are statements the apply runs that this script does not render.
+            writer.WriteLine($"-- NOT RENDERED (run by 'arcane-db upgrade' or 'arcane-db migrate-codex --apply'): {OneLine(string.Join("; ", foreign.DataMoves.Select(m => m.Description)))}");
+        }
+
         if (plan.Refusal is not null)
         {
             writer.WriteLine($"-- REFUSED: {OneLine(plan.Refusal)}");

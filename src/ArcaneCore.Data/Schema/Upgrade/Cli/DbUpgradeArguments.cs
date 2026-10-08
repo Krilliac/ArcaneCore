@@ -12,9 +12,9 @@ internal sealed class DbUpgradeArguments
     internal static readonly string[] ValueOptions = ["--component", "--lock-timeout", "--backup-dir"];
 
     internal static readonly string[] Flags =
-        ["--confirm-backup", "--allow-active-sessions", "--script", "--json", "--no-fail-on-pending"];
+        ["--confirm-backup", "--allow-active-sessions", "--script", "--json", "--no-fail-on-pending", "--apply"];
 
-    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "backup-info"];
+    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "migrate-codex", "backup-info"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
@@ -22,6 +22,7 @@ internal sealed class DbUpgradeArguments
         ["plan"] = ["--component", "--script", "--json", "--no-fail-on-pending"],
         ["check"] = ["--component", "--json"],
         ["upgrade"] = ["--component", "--lock-timeout", "--confirm-backup", "--backup-dir", "--allow-active-sessions"],
+        ["migrate-codex"] = ["--component", "--apply", "--lock-timeout", "--confirm-backup", "--backup-dir", "--allow-active-sessions"],
         ["backup-info"] = ["--component"],
     };
 

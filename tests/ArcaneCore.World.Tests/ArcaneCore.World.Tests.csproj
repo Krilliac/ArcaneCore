@@ -19,6 +19,12 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
   </ItemGroup>
 
+  <!-- Codex-line databases (schema of commit 0e07c29b) for the renumbering migration's bot-load test, shared with ArcaneCore.Data.Tests. -->
+  <ItemGroup>
+    <Compile Include="..\ArcaneCore.Data.Tests\Upgrade\CodexLine\CodexLineDatabase.cs" Link="Playerbots\CodexLine\CodexLineDatabase.cs" />
+    <EmbeddedResource Include="..\ArcaneCore.Data.Tests\Upgrade\CodexLine\*.sql" LogicalName="CodexLine/%(Filename)%(Extension)" Link="Playerbots\CodexLine\%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
   <ItemGroup>
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />

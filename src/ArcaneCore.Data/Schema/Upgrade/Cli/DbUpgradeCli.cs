@@ -35,6 +35,8 @@ public static class DbUpgradeCli
           plan          read-only dry run: what upgrade would create, change or refuse (--script prints the exact SQL)
           check         compare the database with the model (tables, columns, indexes, version row, engine settings)
           upgrade       back up (acknowledge it), apply every pending step in the order auth, characters, world, then check
+          migrate-codex find databases the Codex line created (before the 2026-10-07 merge renumbered its schema steps) and
+                        report their one-shot migration to this build's numbering; --apply runs only that migration
           backup-info   print how to back each database up
 
         options:
@@ -42,10 +44,11 @@ public static class DbUpgradeCli
           --script                                plan: print the SQL (every non-SQL line is a -- comment)
           --json                                  status, plan, check: machine-readable output
           --no-fail-on-pending                    status, plan: exit 0 when an upgrade is pending (for set -e scripts)
-          --confirm-backup                        upgrade: you have a backup of every database with pending steps
-          --backup-dir <directory>                upgrade: also write a verified copy of each SQLite database there
-          --allow-active-sessions                 upgrade: do not refuse when other sessions are connected
-          --lock-timeout <seconds>                upgrade: how long to wait for another process's schema lock (default 60)
+          --apply                                 migrate-codex: migrate (without it the command is a read-only dry run)
+          --confirm-backup                        upgrade, migrate-codex: you have a backup of every database with pending steps
+          --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there
+          --allow-active-sessions                 upgrade, migrate-codex: do not refuse when other sessions are connected
+          --lock-timeout <seconds>                upgrade, migrate-codex: how long to wait for another process's schema lock (default 60)
 
         configuration: the Database section (appsettings.json, environment variables such as
         Database__Characters__ConnectionString); a host option --config <file> names another JSON file.
@@ -92,6 +95,7 @@ public static class DbUpgradeCli
                 "plan" => await run.PlanAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "check" => await run.CheckAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "upgrade" => await run.UpgradeAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "migrate-codex" => await run.MigrateCodexAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "backup-info" => run.BackupInfo(arguments),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
@@ -366,6 +370,93 @@ public static class DbUpgradeCli
             {
                 await _err.WriteLineAsync("error: the database differs from the model after the upgrade; see the findings above").ConfigureAwait(false);
                 return DbUpgradeExitCodes.Drift;
+            }
+
+            return DbUpgradeExitCodes.Ok;
+        }
+
+        /// <summary>
+        /// The one-shot migration of Codex-line databases (<see cref="CodexLine"/>): a read-only report by default; with
+        /// --apply, after the backup gate, only the migration to this build's numbering (the steps after it are the
+        /// ordinary 'upgrade', which a daemon start with the Always policy also runs). A database that matches neither
+        /// line, or any other refusal in a selected component's plan, stops everything before anything is written.
+        /// </summary>
+        public async Task<int> MigrateCodexAsync(DbUpgradeArguments a, CancellationToken ct)
+        {
+            bool apply = a.Flag("--apply");
+            TimeSpan lockTimeout = a.LockTimeout();
+            string? backupDir = a.Value("--backup-dir");
+            Target[] targets = [.. Targets(a, readOnly: !apply)];
+            var plans = new List<(Target Target, SchemaPlan Plan)>();
+            foreach (Target target in targets)
+            {
+                SchemaPlan plan = await GuardAsync(target, ct, db => SchemaPlanner.PlanAsync(db, target.Spec.Schema, includeScript: false, ct)).ConfigureAwait(false);
+                plans.Add((target, plan));
+                if (plan.ForeignLine is { } match)
+                {
+                    await _out.WriteLineAsync($"{target.Spec.Name}: Codex-line database: {match.Describe(target.Spec.Name)}").ConfigureAwait(false);
+                    foreach (string evidence in match.Evidence)
+                    {
+                        await _out.WriteLineAsync($"  found {evidence}").ConfigureAwait(false);
+                    }
+
+                    PlanFormatter.WriteText(_out, plan);
+                }
+                else if (!plan.IsRefused)
+                {
+                    await _out.WriteLineAsync($"{target.Spec.Name}: not a Codex-line database ({PlanFormatter.Summary(plan).Trim()})").ConfigureAwait(false);
+                }
+            }
+
+            foreach ((Target target, SchemaPlan plan) in plans.Where(p => p.Plan.IsRefused))
+            {
+                await _err.WriteLineAsync($"error: {target.Spec.Name}: refused: {Scrub(plan.FirstRefusal!)}").ConfigureAwait(false);
+            }
+
+            if (plans.Any(p => p.Plan.IsRefused))
+            {
+                await _err.WriteLineAsync("nothing was changed").ConfigureAwait(false);
+                return DbUpgradeExitCodes.Refused;
+            }
+
+            var pending = plans.Where(p => p.Plan.ForeignLine is not null).ToList();
+            if (pending.Count == 0)
+            {
+                await _out.WriteLineAsync("nothing to migrate: no selected database was created by the Codex line").ConfigureAwait(false);
+                return DbUpgradeExitCodes.Ok;
+            }
+
+            if (!apply)
+            {
+                await _out.WriteLineAsync("dry run, nothing was changed: back up, then run 'arcane-db migrate-codex --apply' " +
+                    "(or 'arcane-db upgrade', or start the server with Database:Upgrade:Policy Always: each migrates first)").ConfigureAwait(false);
+                return DbUpgradeExitCodes.UpgradePending;
+            }
+
+            int gate = await BackupGateAsync(pending, a, backupDir, ct).ConfigureAwait(false);
+            if (gate != DbUpgradeExitCodes.Ok)
+            {
+                return gate;
+            }
+
+            foreach ((Target target, SchemaPlan _) in pending)
+            {
+                var options = new SchemaUpgradeOptions { LockTimeout = lockTimeout, Progress = new LineProgress(_out) };
+                ForeignLineMatch? migrated = await GuardAsync(target, ct, async db =>
+                {
+                    if (!a.Flag("--allow-active-sessions") && await ServerProbe.CountOtherSessionsAsync(db, ct).ConfigureAwait(false) is int others and > 0)
+                    {
+                        throw new SchemaActiveSessionsException(
+                            $"{others} other session(s) are connected to the {target.Spec.Name} database. Stop every ArcaneCore daemon and tool first, " +
+                            "or pass --allow-active-sessions if you know they are idle.", others);
+                    }
+
+                    return await SchemaBootstrapper.MigrateForeignLineAsync(db, target.Spec.Schema, options, logger: null, ct).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+                await _out.WriteLineAsync(migrated is null
+                    ? $"{target.Spec.Name}: nothing migrated (another process migrated it after the dry run)"
+                    : $"{target.Spec.Name}: migrated from {migrated.Line.Name} schema version {migrated.ForeignVersion} to schema version {migrated.MergedVersion}; " +
+                      $"'arcane-db upgrade' (or a server start) applies the steps after it").ConfigureAwait(false);
             }
 
             return DbUpgradeExitCodes.Ok;

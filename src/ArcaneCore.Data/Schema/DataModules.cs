@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,14 +65,16 @@ public static class DataModules
     /// <summary>
     /// A component's schema definition: <paramref name="inlineSteps"/> plus one step per module
     /// (by default the discovered modules of <paramref name="component"/>). The current version is
-    /// the highest step; versions must run 2, 3, … without gaps or duplicates.
+    /// the highest step; versions must run 2, 3, … without gaps or duplicates. <paramref name="foreignLines"/> are the
+    /// other lines' numberings this component migrates from (<see cref="SchemaDefinition.ForeignLines"/>).
     /// </summary>
     public static SchemaDefinition Compose(
         DatabaseComponent component,
         string name,
         IReadOnlyList<string> version1Tables,
         IReadOnlyList<SchemaStep> inlineSteps,
-        IEnumerable<IDataModule>? modules = null)
+        IEnumerable<IDataModule>? modules = null,
+        IReadOnlyList<ForeignLine>? foreignLines = null)
     {
         var steps = new List<SchemaStep>(inlineSteps);
         foreach (IDataModule module in modules ?? For(component))
@@ -114,6 +117,7 @@ public static class DataModules
             CurrentVersion = steps.Count + 1,
             Version1Tables = version1Tables,
             Steps = steps,
+            ForeignLines = foreignLines ?? [],
         };
     }
 
