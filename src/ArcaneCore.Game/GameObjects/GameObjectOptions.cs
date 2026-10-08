@@ -31,4 +31,14 @@ public sealed class GameObjectOptions
     /// create block then carries the progress through their cycle. Empty (the default): their progress stays 0, as vmangos without the data.
     /// </summary>
     public string? TransportAnimationDbcPath { get; set; }
+
+    /// <summary>
+    /// Seconds one dungeon chest loot settlement may take end to end (the taker's save, the instance write drain, the loot transaction)
+    /// before it is abandoned: a take that never started is refused to the client as usual, one whose outcome cannot be read kicks the
+    /// taker. Operational, not a gameplay rule: 5 is the shipped value. Valid range 1-300.
+    /// </summary>
+    public int LootSettlementBudgetSeconds { get; set; } = 5;
+
+    /// <summary><see cref="LootSettlementBudgetSeconds"/> as a duration, never below one second.</summary>
+    public TimeSpan LootSettlementBudget => TimeSpan.FromSeconds(Math.Max(1, LootSettlementBudgetSeconds));
 }

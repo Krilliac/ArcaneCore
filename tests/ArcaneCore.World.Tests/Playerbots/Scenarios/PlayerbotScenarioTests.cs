@@ -50,6 +50,101 @@ public sealed class PlayerbotScenarioTests
         Assert.Equal(0u, letter.ItemGuid); // taken
     }
 
+    /// <summary>
+    /// A letter deletion whose outcome cannot be read (the commit's acknowledgement is lost and the reconciliation read fails too) still
+    /// answers the client: SMSG_SEND_MAIL_RESULT (Deleted, INTERNAL_ERROR). The deletion freezes no character, so nobody is kicked;
+    /// before the change the client got no reply at all.
+    /// </summary>
+    [Fact]
+    public async Task Mail_DeleteWithAnUnknownOutcome_IsAnsweredWithAnInternalError()
+    {
+        var faults = new UnreadableDeleteStore.Faults();
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
+            services.AddScoped<IEconomyStore>(sp => new UnreadableDeleteStore(
+                new Data.Economy.EfEconomyStore(sp.GetRequiredService<Data.Characters.CharacterDbContext>()), faults)));
+        await world.RunPassingAsync(new DelegateScenario("mail-delete-unknown", async context =>
+        {
+            (ScenarioBot a, ScenarioBot b) = await PlayerbotScenarioCatalog.PairAsync(context);
+            await context.StepAsync("A sends B a text letter", async () =>
+            {
+                await context.GiveMoneyAsync(a, 100);
+                long mark = a.Mark();
+                ScenarioContext.Expect(await a.SendMailAsync(Mailbox, b.Name, "scenario", "just words"), "send mail refused");
+                MailResultView sent = await a.WaitForPacketAsync(WorldOpcode.SmsgSendMailResult, ScenarioDecoders.MailResult, since: mark);
+                ScenarioContext.ExpectEqual(MailResult.Ok, sent.Result, "send mail result");
+            });
+            await context.StepAsync("B deletes it and the lost outcome is answered", async () =>
+            {
+                long mark = b.Mark();
+                ScenarioContext.Expect(await b.GetMailListAsync(Mailbox), "mail list refused");
+                ScenarioContext.ExpectEqual(1, await b.WaitForPacketAsync(WorldOpcode.SmsgMailListResult, ScenarioDecoders.MailListCount, since: mark),
+                    "letters listed for B");
+                uint mailId;
+                await using (AsyncServiceScope scope = context.Services.CreateAsyncScope())
+                {
+                    mailId = (await scope.ServiceProvider.GetRequiredService<IEconomyStore>().GetMailsAsync((int)b.Guid.Low)).Single().Id;
+                }
+
+                long deleted = b.Mark();
+                ScenarioContext.Expect(await b.SendAsync(WorldOpcode.CmsgMailDelete, ScenarioPackets.GuidUInt32(Mailbox.Value, mailId)), "delete refused");
+                MailResultView result = await b.WaitForPacketAsync(WorldOpcode.SmsgSendMailResult, ScenarioDecoders.MailResult,
+                    r => r.Action == MailAction.Deleted, deleted);
+                ScenarioContext.ExpectEqual(MailResult.InternalError, result.Result, "delete result");
+                ScenarioContext.Expect(await b.ReadAsync(p => p.IsInWorld), "B was kicked");
+            });
+        }));
+        Assert.True(faults.Lost, "the seam never lost a deletion's outcome");
+    }
+
+    /// <summary>The economy store with every letter deletion's outcome unreadable: the commit throws and so does the reconciliation read.</summary>
+    private sealed class UnreadableDeleteStore(IEconomyStore inner, UnreadableDeleteStore.Faults faults) : IEconomyStore
+    {
+        public sealed class Faults
+        {
+            public Guid Operation;
+            public bool Lost;
+        }
+
+        public Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+        {
+            if (!request.Changes.Any(c => c is DeleteMail))
+            {
+                return inner.CommitAsync(request, cancellationToken);
+            }
+
+            faults.Operation = request.OperationId;
+            faults.Lost = true;
+            throw new TimeoutException("the deletion's acknowledgement was lost");
+        }
+
+        public Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+            => operationId == faults.Operation ? throw new TimeoutException("the reconciliation read failed")
+                : inner.IsCommittedAsync(operationId, cancellationToken);
+
+        public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+            => inner.GetMailsAsync(receiverId, cancellationToken);
+
+        public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+            => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+        public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+            => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+        public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+            => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+        public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+            => inner.GetAuctionsAsync(cancellationToken);
+
+        public Task<IReadOnlyDictionary<uint, Kernel.Items.ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+            CancellationToken cancellationToken = default) => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+        public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+            => inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+
+        public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default) => inner.GetIdSeedAsync(cancellationToken);
+    }
+
     [Fact]
     public async Task Duel_IsFoughtToCompletion()
     {
@@ -91,10 +186,27 @@ public sealed class PlayerbotScenarioTests
         Assert.True(store.Delayed, "the seam never held a commit");
     }
 
-    /// <summary>Holds every quest reward commit for a fixed wall time before it reaches the database, as a loaded SQLite file can.</summary>
-    private sealed class SlowQuestRewardCommit(TimeSpan delay)
+    /// <summary>
+    /// A reward settlement that runs out of its budget is refused to the client, never left unanswered: SMSG_QUESTGIVER_QUEST_FAILED
+    /// and SMSG_GOSSIP_COMPLETE (the window closes), nothing granted, the quest still complete and unrewarded; the player turns it in
+    /// again and is rewarded. Before the change the client got nothing at all and waited on its offer window.
+    /// </summary>
+    [Fact]
+    public async Task Quest_ASettlementOutOfBudget_IsRefusedToTheClient_AndTheTurnInCanBeRetried()
+    {
+        var store = new SlowQuestRewardCommit(TimeSpan.FromSeconds(4), firstOnly: true);
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
+            services.AddScoped<ICharacterQuestRewardStore>(sp => store.Wrap(
+                new Data.Quests.EfCharacterQuestRewardStore(sp.GetRequiredService<Data.Characters.CharacterDbContext>()))));
+        await world.RunPassingAsync(new RefusedRewardRetryScenario());
+        Assert.True(store.Delayed, "the seam never held a commit");
+    }
+
+    /// <summary>Holds quest reward commits (every one, or only the first) for a fixed wall time before they reach the database, cancellably, as a loaded SQLite file can.</summary>
+    private sealed class SlowQuestRewardCommit(TimeSpan delay, bool firstOnly = false)
     {
         private readonly TimeSpan _delay = delay;
+        private readonly bool _firstOnly = firstOnly;
         private int _commits;
 
         public bool Delayed => Volatile.Read(ref _commits) > 0;
@@ -105,8 +217,11 @@ public sealed class PlayerbotScenarioTests
         {
             public async Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
             {
-                Interlocked.Increment(ref owner._commits);
-                await Task.Delay(owner._delay, cancellationToken);
+                if (Interlocked.Increment(ref owner._commits) == 1 || !owner._firstOnly)
+                {
+                    await Task.Delay(owner._delay, cancellationToken);
+                }
+
                 return await inner.CommitAsync(request, cancellationToken);
             }
         }
@@ -398,6 +513,67 @@ internal sealed class MeleeKillScenario : IPlayerbotScenario
             await context.WaitUntilAsync("A left combat", () => !a.RequirePlayerForTests().Combat.IsInCombat || a.RequirePlayerForTests().Combat.Victim is null);
         });
     }
+}
+
+/// <summary>
+/// The kill quest whose first reward settlement runs out of a one-second budget (the test's store holds that commit longer): the client
+/// is told the turn-in failed and its window closes, nothing is granted, the quest stays complete; with the budget back the retry is
+/// rewarded.
+/// </summary>
+internal sealed class RefusedRewardRetryScenario : IPlayerbotScenario
+{
+    public string Name => "kill-quest-refused-reward";
+
+    public string Description => "accept, kill, turn in out of budget (refused), turn in again";
+
+    public async Task RunAsync(ScenarioContext context)
+    {
+        QuestNpcFeature quests = context.Services.GetRequiredService<QuestNpcFeature>();
+        ScenarioBot a = await context.StepAsync("login", () => context.LoginAsync(PlayerbotScenarioCatalog.BotA));
+        uint money = await a.ReadAsync(p => p.Money);
+        await context.StepAsync("accept and complete the quest", async () =>
+        {
+            await context.PlaceAsync(a, 0, StartX, StartY, StartZ, 0f);
+            await context.WaitUntilAsync("the marshal is visible", () => a.RequirePlayerForTests().VisibleObjects.Contains(Giver));
+            ScenarioContext.Expect(await a.QuestHelloAsync(Giver), "hello refused");
+            ScenarioContext.Expect(await a.AcceptQuestAsync(Giver, KillQuest), "accept refused");
+            await TestSteps.ApproachAsync(context, a, Kobold, KoboldX, KoboldY);
+            ScenarioContext.Expect(await a.AttackAsync(Kobold), "attack refused");
+            await context.WaitUntilAsync("the objective is complete", () => StateOf(context, a) is (QuestStatus.Complete, false), TimeSpan.FromSeconds(90));
+            await context.PlaceAsync(a, 0, StartX, StartY, StartZ, 0f);
+            await context.WaitUntilAsync("out of combat", () => !a.RequirePlayerForTests().Combat.IsInCombat, TimeSpan.FromSeconds(30));
+        });
+        await context.StepAsync("a turn-in whose settlement runs out of budget is refused to the client", async () =>
+        {
+            quests.Options.SettlementBudgetSeconds = 1;
+            long mark = a.Mark();
+            ScenarioContext.Expect(await a.CompleteQuestAsync(Giver, KillQuest), "complete refused");
+            ScenarioContext.Expect(await a.ChooseQuestRewardAsync(Giver, KillQuest), "choose reward refused");
+            (uint quest, uint reason) = await a.WaitForPacketAsync(WorldOpcode.SmsgQuestgiverQuestFailed,
+                p => (BitConverter.ToUInt32(p, 0), BitConverter.ToUInt32(p, 4)), since: mark);
+            ScenarioContext.ExpectEqual((KillQuest, (uint)QuestInvalidReason.DontHaveReq), (quest, reason), "quest failed packet");
+            await a.WaitForPacketAsync(WorldOpcode.SmsgGossipComplete, p => p, since: mark);
+            await quests.WaitForSettlementAsync((int)a.Guid.Low, context.CancellationToken);
+            ScenarioContext.Expect(a.Received(WorldOpcode.SmsgQuestgiverQuestComplete, p => p, mark).Count == 0, "a refused reward was reported complete");
+            ScenarioContext.Expect(await context.ReadAsync(() => StateOf(context, a)) is (QuestStatus.Complete, false), "the quest is no longer ready to turn in");
+            await context.ExpectMoneyAsync(a, money);
+        });
+        await context.StepAsync("the retry is rewarded", async () =>
+        {
+            quests.Options.SettlementBudgetSeconds = (int)ScenarioTestWorld.DefaultStepTimeout.TotalSeconds;
+            long mark = a.Mark();
+            ScenarioContext.Expect(await a.CompleteQuestAsync(Giver, KillQuest), "complete refused");
+            ScenarioContext.Expect(await a.ChooseQuestRewardAsync(Giver, KillQuest), "choose reward refused");
+            await a.WaitForPacketAsync(WorldOpcode.SmsgQuestgiverQuestComplete, ScenarioDecoders.QuestComplete, q => q.Quest == KillQuest, mark);
+            await quests.WaitForSettlementAsync((int)a.Guid.Low, context.CancellationToken);
+            await context.WaitUntilAsync("the quest is rewarded", () => StateOf(context, a) is (_, true));
+            await context.ExpectMoneyAsync(a, money + KillQuestMoney);
+        });
+    }
+
+    private static (QuestStatus, bool)? StateOf(ScenarioContext context, ScenarioBot bot)
+        => context.Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(bot.RequirePlayerForTests())?.Quests.Get(KillQuest)
+            is { } entry ? (entry.Status, entry.Rewarded) : null;
 }
 
 /// <summary>Accept the kill quest at the marshal, kill the kobold, turn the quest in and be rewarded.</summary>

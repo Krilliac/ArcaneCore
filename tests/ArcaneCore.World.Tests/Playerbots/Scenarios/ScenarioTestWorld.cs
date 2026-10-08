@@ -15,7 +15,9 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -52,6 +54,13 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         // nothing was rewarded, no SMSG_QUESTGIVER_QUEST_COMPLETE was sent, and the scenario timed out after 30 s. Match the
         // settlement budget to the scenario step timeout so only the scenario's own bound decides.
         quests.SettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        // The economy (auction, mail, trade) and dungeon chest loot settlements have the same kind of wall-clock budget: under load an
+        // auction cancel answered DATABASE once its commit outlasted 5 s.
+        host.WorldServices.GetRequiredService<EconomyFeature>().Options.SettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        if (host.WorldServices.GetService<GameObjectLootFeature>() is { } loot)
+        {
+            loot.ObjectOptions.LootSettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        }
     }
 
     /// <summary>The step timeout of <see cref="RunAsync"/> without options (and of most scenario tests).</summary>

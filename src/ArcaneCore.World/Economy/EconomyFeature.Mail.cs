@@ -394,8 +394,9 @@ public sealed partial class EconomyFeature
                 SendMailResult(session, mailId, MailAction.ReturnedToSender, MailResult.Ok);
                 Deliver(returned);
             }
-            else if (outcome != EconomyOutcome.Unknown)
+            else
             {
+                // No actor is frozen here, so an unknown outcome kicks nobody: the client still gets its failure reply.
                 SendMailResult(session, mailId, MailAction.ReturnedToSender, MailResult.InternalError);
             }
         }, () => SendMailResult(session, mailId, MailAction.ReturnedToSender, MailResult.InternalError));
@@ -432,8 +433,9 @@ public sealed partial class EconomyFeature
                 RemoveMail(IdOf(player), mailId);
                 SendMailResult(session, mailId, MailAction.Deleted, MailResult.Ok);
             }
-            else if (outcome != EconomyOutcome.Unknown)
+            else
             {
+                // No actor is frozen here, so an unknown outcome kicks nobody: the client still gets its failure reply.
                 SendMailResult(session, mailId, MailAction.Deleted, MailResult.InternalError);
             }
         }, () => SendMailResult(session, mailId, MailAction.Deleted, MailResult.InternalError));

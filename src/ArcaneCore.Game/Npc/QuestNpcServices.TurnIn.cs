@@ -129,6 +129,20 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
+    /// A chosen reward that was not stored (its settlement ran out of budget, the store refused it, or no settlement slot was
+    /// free): nothing was granted and the quest is still ready to turn in. The client is told the turn-in failed
+    /// (SMSG_QUESTGIVER_QUEST_FAILED with vmangos' default reason, INVALIDREASON_DONT_HAVE_REQ = 0, QuestDef.h) and its quest
+    /// window is closed (SMSG_GOSSIP_COMPLETE, as PlayerMenu::CloseGossip), so the player can talk to the giver again and retry.
+    /// vmangos rewards synchronously and has no such case; without a reply the client would keep waiting on its offer window.
+    /// </summary>
+    public void RefuseUnsettledReward(Player player, uint questId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(questId, QuestInvalidReason.DontHaveReq));
+        CloseGossip(player);
+    }
+
+    /// <summary>
     /// A refused reward (Player.cpp:12741-12818, QuestHandler.cpp:262-271): the client has just been told why (items,
     /// money, bag space) and the offer window is sent again so the player can retry after making room.
     /// </summary>

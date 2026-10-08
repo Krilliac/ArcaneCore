@@ -41,6 +41,10 @@ public sealed class WorldConfigChecks : IConfigCheck
         Range(issues, configuration, "World:CharactersPerRealm", 10, 1, 10, "1-10 (vmangos CharactersPerRealm allows at most 10)");
         Range(issues, configuration, "World:AutosaveIntervalMs", 900000, 0, int.MaxValue, "0 to disable, or a positive number of milliseconds (vmangos PlayerSave.Interval 900000)");
         Range(issues, configuration, "World:UpdateCompressionThreshold", 128, 0, int.MaxValue, "0 to disable, or a byte count (vmangos Compression.Update.Size 128)");
+        foreach (string key in new[] { "Quests:SettlementBudgetSeconds", "Economy:SettlementBudgetSeconds", "GameObjects:LootSettlementBudgetSeconds" })
+        {
+            Range(issues, configuration, key, 5, 1, 300, "1-300 seconds of wall time one settlement may take before it is refused (5 is the shipped value)");
+        }
         foreach (string key in new[] { "SlowWorldUpdate", "SlowMapUpdate", "SlowPackets" })
         {
             Range(issues, configuration, $"PerformanceLog:{key}", 0, 0, int.MaxValue, "0 to disable, or a threshold in milliseconds");

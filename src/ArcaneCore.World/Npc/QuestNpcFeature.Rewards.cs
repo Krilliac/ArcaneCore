@@ -85,6 +85,7 @@ public sealed partial class QuestNpcFeature
             if (_settlements.Count >= MaxConcurrentSettlements)
             {
                 _logger.LogWarning("quest reward settlement capacity reached; character {Character} remains active", id);
+                Services.RefuseUnsettledReward(player, questId);
                 return;
             }
 
@@ -108,6 +109,7 @@ public sealed partial class QuestNpcFeature
             if (!player.BeginQuestSettlement(operationId))
             {
                 saves.ResumeCharacter(id);
+                Services.RefuseUnsettledReward(player, questId);
                 return;
             }
 
@@ -122,12 +124,16 @@ public sealed partial class QuestNpcFeature
         int id = operation.Request.Before.Id;
         RewardOutcome outcome = RewardOutcome.NotStarted;
         bool transactionStarted = false;
+        TimeSpan allowed = Options.SettlementBudget;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(_settlementStop.Token);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long savedMs = -1, drainedMs = -1;
         try
         {
-            using var budget = CancellationTokenSource.CreateLinkedTokenSource(_settlementStop.Token);
-            budget.CancelAfter(Options.SettlementBudget);
+            budget.CancelAfter(allowed);
             // These tasks remain observed even if a store ignores cooperative cancellation.
             await operation.Saves.SaveForSettlementAsync(operation.Request.Before, budget.Token).ConfigureAwait(false);
+            savedMs = clock.ElapsedMilliseconds;
             budget.Token.ThrowIfCancellationRequested();
             await Persistence.FlushCharacterAsync(id).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
@@ -147,6 +153,7 @@ public sealed partial class QuestNpcFeature
                 await reputationFeature.FlushCharacterAsync(id).WaitAsync(budget.Token).ConfigureAwait(false);
             }
 
+            drainedMs = clock.ElapsedMilliseconds;
             budget.Token.ThrowIfCancellationRequested();
             operation.Saves.QuarantineCharacter(id);
             Persistence.QuarantineCharacter(id);
@@ -162,7 +169,19 @@ public sealed partial class QuestNpcFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogError(ex, "quest reward settlement failed for character {Character}, quest {Quest}", id, operation.Plan.QuestId);
+            if (budget.IsCancellationRequested && !_settlementStop.IsCancellationRequested)
+            {
+                // Timings in ms since the settlement began; -1: that phase was not reached.
+                _logger.LogWarning("quest reward settlement for character {Character}, quest {Quest} ran out of its {Budget}s budget after "
+                    + "{Elapsed} ms (saved at {Saved} ms, drains done at {Drained} ms, transaction started: {Started}); the reward is refused "
+                    + "unless the stored rows show it committed", id, operation.Plan.QuestId, allowed.TotalSeconds, clock.ElapsedMilliseconds,
+                    savedMs, drainedMs, transactionStarted);
+            }
+            else
+            {
+                _logger.LogError(ex, "quest reward settlement failed for character {Character}, quest {Quest}", id, operation.Plan.QuestId);
+            }
+
             if (transactionStarted && outcome != RewardOutcome.After)
             {
                 outcome = RewardOutcome.Unknown;
@@ -245,6 +264,8 @@ public sealed partial class QuestNpcFeature
                     player.EndQuestSettlement(operation.OperationId);
                     Persistence.ResumeCharacter(id);
                     operation.Saves.ResumeCharacter(id);
+                    // Nothing was granted and the quest is still ready to turn in: tell the client, never leave it waiting.
+                    Services.RefuseUnsettledReward(player, operation.Plan.QuestId);
                 }
             }
             else if (current)

@@ -683,7 +683,8 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (outcome != LootOutcome.After)
         {
-            if (outcome != LootOutcome.Unknown && opener.IsInWorld)
+            // The open has no frozen actor, so an unknown outcome (the key stays blocked) kicks nobody: refuse it like the others.
+            if (opener.IsInWorld)
             {
                 Refuse(opener, fresh.Source);
             }

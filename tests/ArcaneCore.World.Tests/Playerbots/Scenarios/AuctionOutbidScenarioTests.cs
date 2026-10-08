@@ -49,10 +49,33 @@ public sealed class AuctionOutbidScenarioTests
         Assert.True(store.Delayed, "the seam never held a commit");
     }
 
-    /// <summary>Holds the first economy commit's result (the listing) for a fixed wall time; every other call goes straight through.</summary>
-    private sealed class SlowFirstCommit(TimeSpan delay)
+    /// <summary>
+    /// The cancellation's commit held 7 s before it reaches the database, cancellably, as a loaded SQLite file holds it: longer than the
+    /// shipped 5 s economy settlement budget, well inside the 30 s step timeout. Under full suite load the cancel once answered
+    /// "cancel result: expected Ok, got Database": the settlement budget (now Economy:SettlementBudgetSeconds) gave up first.
+    /// </summary>
+    [Fact]
+    public async Task Outbid_Passes_WhenTheCancelCommitIsSlowerThanTheShippedSettlementBudget()
+    {
+        var store = new SlowFirstCommit(TimeSpan.FromSeconds(7), holdBefore: request => request.Changes.Any(c => c is DeleteAuction));
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
+        {
+            services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer());
+            services.AddScoped<IEconomyStore>(sp => store.Wrap(new EfEconomyStore(sp.GetRequiredService<CharacterDbContext>())));
+        });
+        await world.RunPassingAsync(new AuctionOutbidScenario());
+        Assert.True(store.Delayed, "the seam never held a commit");
+    }
+
+    /// <summary>
+    /// Holds the first economy commit's result (the listing) for a fixed wall time after it committed, ignoring cancellation; or, with
+    /// <c>holdBefore</c>, holds each matching commit before it reaches the database, honouring the settlement's cancellation. Every other
+    /// call goes straight through.
+    /// </summary>
+    private sealed class SlowFirstCommit(TimeSpan delay, Func<EconomyCommitRequest, bool>? holdBefore = null)
     {
         private readonly TimeSpan _delay = delay;
+        private readonly Func<EconomyCommitRequest, bool>? _holdBefore = holdBefore;
         private int _commits;
 
         public bool Delayed => Volatile.Read(ref _commits) > 0;
@@ -63,6 +86,17 @@ public sealed class AuctionOutbidScenarioTests
         {
             public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
             {
+                if (owner._holdBefore is { } holdBefore)
+                {
+                    if (holdBefore(request))
+                    {
+                        Interlocked.Increment(ref owner._commits);
+                        await Task.Delay(owner._delay, cancellationToken);
+                    }
+
+                    return await inner.CommitAsync(request, cancellationToken);
+                }
+
                 EconomyCommitResult result = await inner.CommitAsync(request, cancellationToken);
                 if (Interlocked.Increment(ref owner._commits) == 1)
                 {
