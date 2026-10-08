@@ -46,6 +46,38 @@ public sealed partial class GameObjectMapSystem
         }
     }
 
+    /// <summary>
+    /// An instance script's door or button use (ScriptDev2 <c>ScriptedInstance::DoUseDoorOrButton</c>, mangos-classic
+    /// AI/ScriptDevAI/include/sc_instance.cpp:15-32): a ready door or button is used (GameObject::UseDoorOrButton: its state flips, it is in use
+    /// and comes back after <paramref name="withRestoreTimeSeconds"/>, the template's auto-close time when 0, never when both are 0); an active
+    /// one is reset (GameObject::ResetDoorOrButton). No lock is checked and no linked trap fires. Other types and objects this system does not
+    /// track are refused.
+    /// </summary>
+    public GameObjectUseResult ToggleDoorOrButton(GameObject go, uint withRestoreTimeSeconds = 0)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        if (!Tracks(go))
+        {
+            return GameObjectUseResult.NotFound;
+        }
+
+        if (go.Type is not (GameObjectType.Door or GameObjectType.Button))
+        {
+            return GameObjectUseResult.Unsupported;
+        }
+
+        switch (go.LootState)
+        {
+            case GameObjectLootState.Ready:
+                return ActivateDoorOrButton(go, withRestoreTimeSeconds != 0 ? withRestoreTimeSeconds : go.Template.AutoCloseSeconds());
+            case GameObjectLootState.Activated:
+                ResetToReady(go);
+                return GameObjectUseResult.Ok;
+            default:
+                return GameObjectUseResult.InUse;
+        }
+    }
+
     /// <summary>SMSG_GAMEOBJECT_CUSTOM_ANIM with <paramref name="animId"/> to everyone who sees the object (cmangos SendGameObjectCustomAnim).</summary>
     public void SendCustomAnim(GameObject go, uint animId)
     {

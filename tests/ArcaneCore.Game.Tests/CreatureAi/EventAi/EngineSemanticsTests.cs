@@ -346,19 +346,21 @@ public sealed class EngineSemanticsTests
     // --- spawned and unsupported conditions ----------------------------------------------------------
 
     [Fact]
-    public void SpawnedEvent_HonoursTheMapCondition_AndListsTheZoneConditionAsUnsupported()
+    public void SpawnedEvent_HonoursTheMapAndZoneConditions_AndOnlyAnUnknownConditionIsUnsupported()
     {
-        // Condition 0 always, 1 the creature's map id (cmangos SpawnedEventConditionsCheck, :1902-1927); 2 needs a zone lookup.
+        // Condition 0 always, 1 the creature's map id, 2 its zone or area (cmangos SpawnedEventConditionsCheck, :1902-1927); any other
+        // condition never fires. A death condition is a conditions-table id (CheckEvent :327-339), not an unsupported part.
         using Fight f = Start(
         [
             Row(1, EventAiEventType.Spawned, 0, p1: 0, a1: Cast(995)),
             Row(2, EventAiEventType.Spawned, 0, p1: 1, p2: 0, a1: Cast(996)),   // on map 0: fires
             Row(3, EventAiEventType.Spawned, 0, p1: 1, p2: 1, a1: Cast(997)),   // on map 1: does not
-            Row(4, EventAiEventType.Spawned, 0, p1: 2, p2: 12, a1: Cast(998)),  // zone: unsupported
-            Row(5, EventAiEventType.Death, 0, p1: 77, a1: Cast(999)),            // death condition: unsupported
+            Row(4, EventAiEventType.Spawned, 0, p1: 2, p2: 12, a1: Cast(998)),  // zone 12: the test terrain knows no zone, so it does not
+            Row(5, EventAiEventType.Death, 0, p1: 77, a1: Cast(999)),            // death condition: not this event
+            Row(6, EventAiEventType.Spawned, 0, p1: 3, a1: Cast(994)),          // no such condition
         ]);
 
         Assert.Equal([995u, 996u], f.Spells.Casts.Select(c => c.Spell).Order());
-        Assert.Equal(["spawned condition 2 (row 4)", "death condition 77 (row 5)"], f.Ai.Unsupported);
+        Assert.Equal(["spawned condition 3 (row 6)"], f.Ai.Unsupported);
     }
 }

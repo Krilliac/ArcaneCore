@@ -247,13 +247,19 @@ public sealed class CreatureAiServices
     public GuardPostTable GuardPosts { get; init; } = new();
 
     /// <summary>
-    /// The conditions table (cmangos IsConditionSatisfied) for EventAI rows that carry a condition id (EVENT_T_RECEIVE_EMOTE); null: such
-    /// rows never fire and are reported. Bound from the world's condition feature.
+    /// The conditions table (cmangos IsConditionSatisfied) for EventAI rows that carry a condition id (EVENT_T_RECEIVE_EMOTE, EVENT_T_DEATH,
+    /// EVENT_T_OOC_LOS); null: such rows never fire. Bound from the world's condition feature.
     /// </summary>
     public Npc.IConditionEvaluator? Conditions { get; init; }
 
     /// <summary>The area id a creature stands in (vmangos GetAreaId); null asks the map's terrain (<c>Map.GetZoneAndAreaId</c>).</summary>
     public Func<Creature, uint>? AreaOf { get; init; }
+
+    /// <summary>
+    /// The zone and area a creature stands in (cmangos GetZoneAndAreaId; the EventAI SPAWNED zone condition); null asks the map's terrain
+    /// (<c>Map.GetZoneAndAreaId</c>).
+    /// </summary>
+    public Func<Creature, (uint ZoneId, uint AreaId)>? ZoneAndAreaOf { get; init; }
 
     /// <summary>
     /// A creature's team (vmangos Unit::GetTeam, Unit.cpp:4960-4973: its faction's Faction.dbc team field, 469 Alliance or 67 Horde;

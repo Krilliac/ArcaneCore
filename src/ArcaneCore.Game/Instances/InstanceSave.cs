@@ -41,6 +41,14 @@ public sealed class InstanceSave
 
     public bool HasBinds => Players.Count > 0 || Groups.Count > 0 || StoredGroupLeaders.Count > 0;
 
+    /// <summary>
+    /// The instance script's save string (vmangos <c>instance.data</c>, written by InstanceData::SaveToDB, Maps/InstanceData.cpp:24-40, and read
+    /// back by Map::CreateInstanceData, Maps/Map.cpp:2001-2022), or null when the script never saved. It lives with the save, so an instance
+    /// map that is unloaded and created again loads it. It goes to <see cref="IInstancePersistence.InstanceDataSaved"/>; the characters
+    /// database has no column for it yet, so it does not outlive a restart (docs/integration/eventai-instance-20261008.md).
+    /// </summary>
+    public string? Data { get; internal set; }
+
     /// <summary>Whether this save has been reset or deleted (its id is never handed out again).</summary>
     public bool IsDeleted { get; internal set; }
 
@@ -81,6 +89,14 @@ public interface IInstancePersistence
     void RaidResetTimeChanged(uint mapId, long resetTime);
 
     void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId);
+
+    /// <summary>
+    /// The instance script saved its state (<see cref="InstanceSave.Data"/>; vmangos InstanceData::SaveToDB: <c>UPDATE instance SET data</c>).
+    /// Nothing by default: the characters database has no <c>instance.data</c> column yet.
+    /// </summary>
+    void InstanceDataSaved(InstanceSave save)
+    {
+    }
 
     /// <summary>A group became permanently bound; stored under its leader's character id (vmangos Group::BindToInstance → <c>group_instance</c>).</summary>
     void GroupBound(uint leaderCharacterId, uint instanceId, bool permanent)

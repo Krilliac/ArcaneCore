@@ -283,6 +283,9 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.Motion.Initialize(CreateMovementGenerator(creature), this, start: creature.DeathState == CreatureDeathState.Alive);
+
+        // vmangos Creature::AddToWorld -> ZoneScript::OnCreatureCreate: the instance script hears of every creature placed in its map.
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureCreate(creature);
         CreateAi(creature);
         if (creature.DeathState == CreatureDeathState.Alive)
         {

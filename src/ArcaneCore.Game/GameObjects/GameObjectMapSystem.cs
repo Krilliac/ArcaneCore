@@ -1021,6 +1021,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             IndexRitual(go, tracked: true);
             list.Add(go);
             ConfigureQuestFlags(go);
+            NotifyInstanceScript(go);
             if (DurableKeyOf(go) is { } durableKey)
             {
                 // The stored chest decides: a consumed one stays despawned until its stored respawn
@@ -1134,9 +1135,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         IndexRitual(go, tracked: true);
         GridListOf(go.X, go.Y).Add(go);
         ConfigureQuestFlags(go);
+        NotifyInstanceScript(go);
         go.ClearChangedFields();
         Map.AddObject(go);
     }
+
+    /// <summary>
+    /// vmangos GameObject::AddToWorld -> ZoneScript::OnGameObjectCreate: the instance script hears of every object placed in its map, before
+    /// anyone sees it (a door of a finished encounter is created open).
+    /// </summary>
+    private void NotifyInstanceScript(GameObject go) => Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectCreate(go);
 
     // --- quest dynamic flags -----------------------------------------------------------------
 
