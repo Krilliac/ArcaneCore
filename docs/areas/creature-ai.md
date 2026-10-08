@@ -286,8 +286,9 @@ point's wait, `WaypointReached` on each; `SetEscortPaused` holds it at a point; 
 escort runs back to where the fight began (point `PointLastPoint`, not home) and goes on; `Stop` ends it where it stands; at the end of the
 path it disappears (or loops home, or respawns at once). The script hooks are `Reset` (the spawn, every evade, every respawn),
 `JustSpawned` (the work a ScriptDev constructor does, once the map placed the creature), `JustRespawned`, `Aggro` and `UpdateEscortAI`.
-The escort points are vmangos `script_waypoint` (one path per entry, ordered by point): here the entry's `creature_movement_template`
-path 0 (`EscortAI.EscortPathId`), keyed by entry and point, where such rows import (the world schema has no `script_waypoint` table). An
+The escort points are vmangos `script_waypoint` (one path per entry, ordered by point): imported into `creature_movement_template`
+under path `0x80000000 | PathId`, separate from an ordinary creature's movement path. `EscortAI.Start(pathId)` selects that path;
+the old path-0 lookup remains a fallback for manually supplied points. The world schema has no `script_waypoint` table. An
 entry without points does not start, and the map logs it once per entry. Not ported, since no script here escorts a player: the escorted
 player, its quest, the assist of the player in combat and the distance check that fails the escort.
 

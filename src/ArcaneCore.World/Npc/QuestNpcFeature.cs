@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
@@ -97,6 +99,10 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             FactionTemplates = factions;
             Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions,
                 _services.GetService<Reputation.ReputationFeature>()?.Service, progression: true);
+            var sfkPrisoners = new ShadowfangPrisonerGossip();
+            Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAda, sfkPrisoners);
+            Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAsh, sfkPrisoners);
+            Services.RegisterGossipScript(WailingCavernsInstance.NpcDisciple, new DiscipleOfNaralexGossip());
         }
 
         _world = world;
@@ -239,6 +245,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         }
 
         Services.CompleteLoad(Services.Track(player), data);
+        // A login inside a dungeon joins its map before this persisted quest journal is restored.
+        // Re-run ScriptDev2 OnPlayerEnter now so a completed, unrewarded chest quest can respawn its chest.
+        player.Map?.FindUpdater<InstanceData>()?.OnPlayerEnter(player);
         // Item-collect objectives follow the live inventory (vmangos ItemAddedQuestCheck /
         // ItemRemovedQuestCheck); counters are reconciled with the loaded bags first.
         RemoveItemListener(player);

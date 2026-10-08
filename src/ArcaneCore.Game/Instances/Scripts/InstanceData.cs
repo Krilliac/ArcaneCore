@@ -47,6 +47,9 @@ public abstract class InstanceData : IMapUpdater
     /// <summary>Where <see cref="SaveToDB"/> sends the save string; <see cref="InstanceManager"/> stores it on the instance save.</summary>
     internal Action<InstanceData, string>? Saving { get; set; }
 
+    /// <summary>The live quest journal's completed, unrewarded predicate; false until its world feature supplies it.</summary>
+    internal Func<Player, uint, bool> QuestCompleteUnrewarded { get; set; } = static (_, _) => false;
+
     /// <summary>Diagnostics (the parts of a script that are not ported are logged at debug level).</summary>
     public ILogger Logger { get; internal set; } = NullLogger.Instance;
 
@@ -99,6 +102,16 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>ScriptDev2 InstanceData::OnCreatureDeath: a creature of this map died, after its AI death hook.</summary>
+    public virtual void OnCreatureDeath(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 InstanceData::OnPlayerEnter, after the player joins this map.</summary>
+    public virtual void OnPlayerEnter(Player player)
+    {
+    }
+
     /// <summary>vmangos <c>OnObjectCreate</c>: a game object was added to the instance map (grid load, summon); it is not visible yet.</summary>
     public virtual void OnObjectCreate(GameObject go)
     {
@@ -110,6 +123,8 @@ public abstract class InstanceData : IMapUpdater
     }
 
     void IMapUpdater.Update(Map map, uint diffMs) => Update(diffMs);
+
+    void IMapUpdater.OnPlayerAdding(Map map, Player player) => OnPlayerEnter(player);
 
     void IMapUpdater.OnPlayerRemoved(Map map, Player player)
     {

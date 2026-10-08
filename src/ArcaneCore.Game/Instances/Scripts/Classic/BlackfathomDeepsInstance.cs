@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class BlackfathomDeepsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class BlackfathomDeepsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 48;
     public const int MaxEncounter = 3;
@@ -55,7 +55,7 @@ public sealed class BlackfathomDeepsInstance(Map instance) : ScriptedInstance(in
                 Encounters[1] = data;
                 if (data == EncounterState.InProgress)
                 {
-                    NotPorted(type, data, "(the shrine waves)");
+                    QueueNextWave();
                 }
                 else if (data == EncounterState.Done)
                 {

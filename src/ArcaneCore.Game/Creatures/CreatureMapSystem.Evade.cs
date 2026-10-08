@@ -114,5 +114,6 @@ public sealed partial class CreatureMapSystem
         _ai.Spells?.Interrupt(creature);
         ResetAiState(creature);
         creature.AI?.OnDeath(killer);
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDeath(creature);
     }
 }

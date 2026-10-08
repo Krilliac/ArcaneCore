@@ -8,6 +8,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
@@ -97,6 +98,8 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>());
         _writes.Start();
         _manager = new InstanceManager(world, Options, _writes, logger: loggers.CreateLogger<InstanceManager>());
+        QuestNpcFeature? questFeature = services.GetService<QuestNpcFeature>();
+        _manager.QuestCompleteUnrewarded = (player, questId) => questFeature?.Services.IsCurrent(player, questId, 2) == true;
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;

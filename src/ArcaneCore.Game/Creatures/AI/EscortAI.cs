@@ -26,8 +26,11 @@ public abstract class EscortAI : CreatureAI
     /// <summary>The point id of the run home of a looping escort (POINT_HOME).</summary>
     public const uint PointHome = 0xFFFFFE;
 
-    /// <summary>The <c>creature_movement_template</c> path that holds an entry's escort points.</summary>
+    /// <summary>Legacy fallback path for tests and manually loaded escorts.</summary>
     public const uint EscortPathId = 0;
+
+    /// <summary>ScriptDev2 script_waypoint paths imported into creature_movement_template with a separate namespace.</summary>
+    public const uint ScriptWaypointPathBit = 0x8000_0000;
 
     /// <summary>The default delay before the first waypoint (m_uiDelayBeforeTheFirstWaypoint, 2.5 s).</summary>
     public const uint DefaultDelayBeforeFirstWaypointMs = 2500;
@@ -98,7 +101,7 @@ public abstract class EscortAI : CreatureAI
     /// loaded, the NPC flags cleared, the walk mode set and the first point waits <see cref="DelayBeforeFirstWaypointMs"/>... from the last
     /// reset of the timer (the constructor or a respawn), as in vmangos.
     /// </summary>
-    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false)
+    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false, uint pathId = EscortPathId)
     {
         if (Me.Combat.IsInCombat || HasEscortState(EscortState.Escorting))
         {
@@ -108,7 +111,8 @@ public abstract class EscortAI : CreatureAI
         _waypoints.Clear();
         if (System is { } system)
         {
-            _waypoints.AddRange(system.Content.GetEntryWaypoints(Me.Template.Entry, EscortPathId));
+            IReadOnlyList<CreatureWaypoint> scripted = system.Content.GetEntryWaypoints(Me.Template.Entry, ScriptWaypointPathBit | pathId);
+            _waypoints.AddRange(scripted.Count > 0 ? scripted : system.Content.GetEntryWaypoints(Me.Template.Entry, pathId));
         }
 
         if (_waypoints.Count == 0)

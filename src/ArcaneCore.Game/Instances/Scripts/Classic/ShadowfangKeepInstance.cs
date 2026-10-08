@@ -15,7 +15,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class ShadowfangKeepInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 33;
     public const int MaxEncounter = 6;
@@ -70,7 +70,7 @@ public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(inst
             case TypeRethilgore:
                 if (data == EncounterState.Done)
                 {
-                    NotPorted(type, data, "(Ada's and Ash's speech)");
+                    PrisonersSpeak();
                 }
 
                 Encounters[1] = data;
@@ -78,7 +78,7 @@ public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(inst
             case TypeFenrus:
                 if (data == EncounterState.Done)
                 {
-                    NotPorted(type, data, "(Archmage Arugal's summon and dialogue)");
+                    SummonArugalForFenrus();
                 }
 
                 Encounters[2] = data;

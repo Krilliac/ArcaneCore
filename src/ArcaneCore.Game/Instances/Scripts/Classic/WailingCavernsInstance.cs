@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class WailingCavernsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class WailingCavernsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 43;
     public const int MaxEncounter = 6;
@@ -38,7 +38,7 @@ public sealed class WailingCavernsInstance(Map instance) : ScriptedInstance(inst
         {
             if (Encounters[4] == EncounterState.NotStarted)
             {
-                NotPorted(type, data, "(the Disciple of Naralex's intro yell)");
+                SpeakDiscipleIntro();
             }
 
             Encounters[4] = EncounterState.Special;
