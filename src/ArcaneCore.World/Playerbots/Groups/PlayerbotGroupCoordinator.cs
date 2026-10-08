@@ -13,6 +13,7 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -340,7 +341,43 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     {
         if (goal.QuestId == 0) return true;
         if (QuestState(player) is not { } state) return false;
-        return state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete } && !ObjectiveDone(player, goal.ObjectiveEntry);
+        return state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete } && !GoalDone(player, goal);
+    }
+
+    /// <summary>The goal's objective is done for the bot: its quest item count (<see cref="PlayerbotGroupGoal.ObjectiveItem"/>), else its kills.</summary>
+    internal bool GoalDone(Player player, PlayerbotGroupGoal goal)
+        => goal.ObjectiveItem != 0 ? ItemObjectiveDone(player, goal.ObjectiveItem) : ObjectiveDone(player, goal.ObjectiveEntry);
+
+    /// <summary>Whether every unfinished quest in the bot's log that asks for <paramref name="item"/> has its count in the bags.</summary>
+    internal bool ItemObjectiveDone(Player player, uint item)
+    {
+        QuestNpcServices? quests = services.GetService<QuestNpcFeature>()?.Services;
+        if (quests is null || QuestState(player) is not { } state || item == 0) return true;
+        uint have = player.Inventory.GetItemCount(item);
+        foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
+        {
+            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest) continue;
+            for (int index = 0; index < quest.ReqItemId.Count; index++)
+                if (quest.ReqItemId[index] == item && have < quest.ReqItemCount[index]) return false;
+        }
+
+        return true;
+    }
+
+    private LootContent? _dropIndexOf;
+    private Dictionary<uint, uint[]> _dropIndex = [];
+
+    /// <summary>The creatures that drop <paramref name="item"/> (<see cref="PlayerbotGroupContent.DropIndex"/>, rebuilt when the loot tables are reloaded).</summary>
+    internal IReadOnlyList<uint> DroppersOf(uint item)
+    {
+        if (services.GetService<GameObjects.GameObjectLootFeature>()?.LootContent is not { } loot) return [];
+        if (!ReferenceEquals(loot, _dropIndexOf))
+        {
+            _dropIndex = PlayerbotGroupContent.DropIndex(loot);
+            _dropIndexOf = loot;
+        }
+
+        return _dropIndex.GetValueOrDefault(item) ?? [];
     }
 
     private PlayerNpcState? QuestState(Player player)
@@ -382,6 +419,21 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                 if (raw <= 0 || status.CreatureOrGOCount[index] >= quest.ReqCreatureOrGOCount[index]) continue;
                 uint entry = (uint)raw;
                 if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
+            }
+
+            // A quest item dropped only inside an instance (a dungeon quest that asks for a boss's head and nothing else): the goal is the
+            // creature that drops it, in that instance, like a creature objective. A drop from creatures on the bot's own map is the brain's
+            // solo work, as before.
+            for (int index = 0; index < quest.ReqItemId.Count; index++)
+            {
+                uint item = quest.ReqItemId[index];
+                if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
+                foreach (uint dropper in DroppersOf(item))
+                {
+                    if (creatures.GetSpawns(player.MapId, dropper).Count > 0) continue;
+                    if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
+                        return goal with { ObjectiveItem = item };
+                }
             }
         }
 
@@ -801,7 +853,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         group.UpdateObjective(_world!);
         if (!group.HadQuest) return group.ObjectiveKilled;
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
-            if (_world!.FindOnlinePlayer(member.Guid) is { } player && !ObjectiveDone(player, group.Goal.ObjectiveEntry)) return false;
+            if (_world!.FindOnlinePlayer(member.Guid) is { } player && !GoalDone(player, group.Goal)) return false;
         return true;
     }
 

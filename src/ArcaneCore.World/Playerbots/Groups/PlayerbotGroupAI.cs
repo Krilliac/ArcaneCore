@@ -576,7 +576,10 @@ internal sealed class PlayerbotGroupAI
         return best;
     }
 
-    /// <summary>The nearest corpse whose round-robin loot this bot holds: walk to it and open it.</summary>
+    /// <summary>
+    /// The nearest corpse with something for this bot: the round-robin loot it holds, or a quest item it needs (vmangos shows a quest
+    /// drop to every member who needs it, whoever holds the corpse: <c>LootItem::AllowedForPlayer</c>). Walk to it and open it.
+    /// </summary>
     private bool LootHeld(Player player, uint interval)
     {
         if (player.Map is not { } map || _session.Services.GetService<GameObjectLootFeature>()?.FindSystem(map)?.Loot is not { } loot) return false;
@@ -585,7 +588,7 @@ internal sealed class PlayerbotGroupAI
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature { IsAlive: false } corpse) continue;
-            if (loot.FindLoot(guid) is not { } bag || bag.Owner != player.Guid || bag.IsClosed || bag.IsEmpty) continue;
+            if (loot.FindLoot(guid) is not { } bag || bag.IsClosed || bag.IsEmpty || !bag.HasSomethingFor(player)) continue;
             if (_lootTries.TryGetValue(guid, out int tries) && tries >= 3) continue;
             float distance = Distance(player, corpse);
             if (distance <= best) { best = distance; nearest = corpse; }

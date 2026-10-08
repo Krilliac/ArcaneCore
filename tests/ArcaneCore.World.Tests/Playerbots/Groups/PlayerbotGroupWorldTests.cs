@@ -189,6 +189,36 @@ public sealed class PlayerbotGroupWorldTests
         });
     }
 
+    /// <summary>
+    /// A dungeon quest that asks only for an item (the boss's trophy, a quest drop through a reference loot table) is group content too:
+    /// the coordinator maps the item to the creature that drops it inside The Deadmines, the group goes in, kills the boss, each member
+    /// loots its own copy of the quest drop (whoever holds the corpse), and the group walks out once everyone has it. Before, only
+    /// creature objectives made a goal, and the bots never grouped for it.
+    /// </summary>
+    [Fact]
+    public async Task ADungeonQuestForAnItemOnly_IsGroupContent_AtTheCreatureThatDropsIt_AndEveryMemberLootsIt()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonItemQuest], dungeon: true);
+        var tank = await world.AddBotAsync("Trophytank", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Trophyprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Trophymage", Human, Mage, 12, [Fireball], EntranceArea);
+        (Guid Id, string Name)[] bots = [tank, healer, mage];
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(PlayerbotGroupGoalKind.Dungeon, group.Goal.Kind);
+        Assert.Equal((36u, BossEntry, BossTrophy, DungeonItemQuest), (group.Goal.MapId, group.Goal.ObjectiveEntry, group.Goal.ObjectiveItem, group.Goal.QuestId));
+
+        Assert.True(await world.RunUntilAsync(480_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.Equal(1, world.Coordinator.Totals.Completed);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.All(bots, b => Assert.Equal(0u, world.Player(b.Id).MapId));
+            Assert.All(bots, b => Assert.Equal(1u, world.Player(b.Id).Inventory.GetItemCount(BossTrophy)));
+            return true;
+        });
+    }
+
     [Fact]
     public async Task AWipe_TheSurvivorRetreats_ResurrectsTheDead_AndTheGroupRegroups()
     {
