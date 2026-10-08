@@ -54,7 +54,10 @@ lane was written, and the realm test project is the lightest one that references
 
 The measure is the **frame time**: the interval between two consecutive tick starts, exactly vmangos' "Slow world update" measure. A tick that
 fits its budget shows as the tick interval (sleep included), one that does not shows as its real length, so overruns and hangs are measured
-exactly while the sub-budget distribution floors at the interval. The existing `WorldRuntime.WorldTick` event is raised at the start of each
+exactly. The sub-budget distribution does not floor at the interval: the drift-compensated loop (`WorldTickScheduler`) follows an
+oversleeping wait with a shorter one, and when the wait overslept a whole interval or more it starts the tick due now at once (as vmangos'
+WorldRunnable skips the sleep after an overrun). A tick interval below the OS wait granularity (the 5 ms test hosts on the ~15.6 ms Windows
+timer) therefore gives an even split of ~15.6 ms and ~0 ms frames, whose p50 can land on either side; the mean frame is the tick rate. The existing `WorldRuntime.WorldTick` event is raised at the start of each
 tick, which is why the frame, not the body, is what the feed can see without editing `Game/`; the body percentiles of the runtime's own
 recorder are appended to each line so both views are on one line.
 

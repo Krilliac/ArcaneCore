@@ -63,7 +63,11 @@ public sealed class TickWatchdogFeatureTests
         RingStats stats = monitor.Stats(out long[] buffer);
         System.Buffers.ArrayPool<long>.Shared.Return(buffer);
         Assert.True(stats.Samples >= 50);
-        Assert.InRange(stats.P50, 4_000, 60_000); // 5 ms frames, generous for a loaded CI box
+        // The mean frame, not the median: the 5 ms test tick is shorter than a Windows wait's ~15.6 ms granularity, so the drift-compensated
+        // loop (WorldTickScheduler, like vmangos WorldRunnable's "no sleep after an overrun") alternates an oversleeping wait (a ~15.6 ms frame)
+        // with an immediate tick (a ~0.1 ms frame). The median of that even split lands on either side; the mean is the tick rate (~7.8 ms
+        // on the coarse timer, 5 ms on a fine one). Generous for a loaded CI box.
+        Assert.InRange(stats.Mean, 4_000, 60_000);
         Assert.True(monitor.IsAlive(WatchdogClock.System.NowMicros, out _));
         Assert.Equal(0, monitor.HangsCompleted);
 
