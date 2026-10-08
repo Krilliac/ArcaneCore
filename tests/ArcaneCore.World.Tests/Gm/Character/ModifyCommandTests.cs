@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Progression;
+using ArcaneCore.World.Tests.Talents;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -136,6 +137,32 @@ public sealed class ModifyCommandTests
         Assert.Equal($"You changed level of {Link("Lvlvic")} to 3.", await Run(gm, ".levelup Lvlvic"));
         Assert.Equal("Player not found!", await Run(gm, ".levelup Nobodyhere"));
         Assert.StartsWith("Syntax:", (await Run(gm, ".levelup 2 Lvlvic"))!);
+    }
+
+    /// <summary>
+    /// vmangos HandleCharacterLevel: GiveLevel then InitTalentForLevel (CharacterCommands.cpp:1853-1854), so the points follow the
+    /// new level both ways, and a level-down below the spent points resets the talents of a non-administrator (Player.cpp:3236-3243).
+    /// </summary>
+    [Fact]
+    public async Task LevelUp_RecomputesTheTalentPoints_AndALevelDownResetsAnOverspend()
+    {
+        await using WorldTestHost host = TalentResetWorldTests.Start(new TalentWorldFixture());
+        await using WorldTestClient gm = await host.EnterWorldAsync("LVTGM", "Lvtgm", AccountSecurity.GameMaster);
+        (WorldTestClient victim, _) = await TalentResetWorldTests.EnterAsync(host, "LVTVIC");   // level 12: three points
+        await using WorldTestClient victimScope = victim;
+        await gm.CollectAsync();
+
+        Assert.Equal($"You changed level of {Link("Lvtvic")} to 14.", await Run(gm, ".levelup Lvtvic 2"));
+        Assert.Equal(5u, await host.OnWorldAsync(() => TalentResetWorldTests.FreePoints(host, "LVTVIC")));
+
+        await victim.SendAsync(WorldOpcode.CmsgLearnTalent, TalentResetWorldTests.LearnTalent(1, 2));   // three points spent
+        await victim.ReadUntilAsync(WorldOpcode.SmsgLearnedSpell);
+        Assert.Equal(2u, await host.OnWorldAsync(() => TalentResetWorldTests.FreePoints(host, "LVTVIC")));
+
+        Assert.Equal($"You changed level of {Link("Lvtvic")} to 10.", await Run(gm, ".levelup Lvtvic -4"));   // one point allowed
+
+        Assert.False(await host.OnWorldAsync(() => TalentResetWorldTests.Knows(host, "LVTVIC", TalentWorldFixture.T1R3)));
+        Assert.Equal(1u, await host.OnWorldAsync(() => TalentResetWorldTests.FreePoints(host, "LVTVIC")));
     }
 
     [Fact]

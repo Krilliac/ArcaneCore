@@ -6,11 +6,21 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Characters.Rename;
 
-/// <summary>The bits of vmangos' <c>characters.at_login</c> (AtLoginFlags, Player.h:600); only the rename bit is used here.</summary>
+/// <summary>
+/// The bits of mangos' <c>characters.at_login</c> (AtLoginFlags, mangos-classic Entities/Player.h:497-508): the rename bit and the
+/// talent reset bit are used.
+/// </summary>
 public static class CharacterAtLoginFlags
 {
     /// <summary>AT_LOGIN_RENAME: "Rename character at login".</summary>
     public const uint Rename = 0x01;
+
+    /// <summary>
+    /// AT_LOGIN_RESET_TALENTS: reset the talents for free at the next login (<c>.reset talents</c> on an offline character,
+    /// <c>.reset all talents</c>). vmangos keeps the same request as CHARACTER_FLAG_RESET_TALENTS_ON_LOGIN (0x100) in
+    /// <c>characters.character_flags</c> (Player.h:296), a column the characters row here does not have (docs/areas/talents.md).
+    /// </summary>
+    public const uint ResetTalents = 0x04;
 }
 
 /// <summary>The result of <see cref="ICharacterRenameStore.RenameAsync"/>.</summary>

@@ -23,6 +23,9 @@ public sealed partial class TalentService
             return false;
         }
 
+        // vmangos clears CHARACTER_FLAG_RESET_TALENTS_ON_LOGIN first, whatever happens next ("not need after this call",
+        // Player.cpp:4077-4078); the flag is the world feature's, so it hears of the attempt.
+        ResetAttempted?.Invoke(player);
         if (UsedPoints(player) == 0)
         {
             UpdateFreeTalentPoints(player, resetIfNeed: false);   // vmangos: "for fix if need counter"
