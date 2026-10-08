@@ -47,6 +47,7 @@ public sealed partial class GmAuditFeature(
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        _lastTicketChange = NowUnixSeconds; // vmangos TicketMgr::TicketMgr starts _lastChange at time(nullptr)
         if (configuration is not null)
         {
             GmOptions options = GmOptions.Bind(configuration);

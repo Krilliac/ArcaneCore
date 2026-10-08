@@ -230,7 +230,7 @@ public sealed class TicketCommandTests
         await one.SendAsync(WorldOpcode.CmsgGmticketGetticket, []);
         var reader = new PacketReader(await one.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket));
         Assert.Equal((GmTicketHandlers.StatusHasTicket, "stored and open"), (reader.ReadUInt32(), reader.ReadCString()));
-        Assert.Equal(GmTicketHandlers.ResponseAlreadyExists, await CreateAsync(one, "another"));
+        Assert.Equal(GmTicketHandlers.ResponseCreateError, await CreateAsync(one, "another"));   // vmangos: CREATE_ERROR, not ALREADY_EXIST
 
         Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(two, "mine"));
         Assert.Equal(10, AuditOf(host).OpenTicketOf(2)!.Id);

@@ -12,16 +12,17 @@ namespace ArcaneCore.World.Gm.Audit;
 
 /// <summary>
 /// The player side of GM tickets: <c>CMSG_GMTICKET_GETTICKET</c>, <c>_CREATE</c>, <c>_UPDATETEXT</c> and <c>_DELETETICKET</c>
-/// (mangos-zero GMTicketHandler.cpp:77-300; the handler of the ticket status poll moved here from
-/// <see cref="PlayerHandlers"/>, with the same "no ticket" answer when there is none). The ticket belongs to the
-/// character; the position stored is the one the SERVER knows for the player, the position fields of the packet are
-/// skipped.
+/// (vmangos Handlers/GMTicketHandler.cpp; the handler of the ticket status poll moved here from <see cref="PlayerHandlers"/>).
+/// The ticket belongs to the character; the position stored is the one the SERVER knows for the player, the position
+/// fields of the packet are skipped.
 /// <para>
-/// UNVERIFIED against a retail 1.12.1 client: the layouts below are mangos-zero's (<c>u8 category, u32 map, 3 x f32,
-/// cstring text, cstring reserved</c> for create, and the status-6 ticket answer <c>u32 6, cstring text, u8 7, 3 x f32 0,
-/// 2 x u8 0</c>), a core that targets 1.12 but whose source is the only evidence here. A create packet shorter than
-/// the fixed part is answered with the create-error code and stores nothing. The response codes (1 exists, 2 created, 3
-/// error, 4 updated, 5 update error, 9 deleted) are mangos-zero's GMTicketMgr.h:39-46 and likewise unverified on the wire.
+/// Layouts are the 1.12 ones of vmangos Server/Packets/GmTicket.cpp and wow_messages <c>gamemaster/*.wowm</c>, which agree:
+/// create is <c>u8 type, u32 map, 3 x f32, cstring text, cstring reserved</c> (a harassment report may append chat data,
+/// which is not read); update is <c>u8 type, cstring text</c>; the status of an open ticket is <c>u32 6, cstring text,
+/// u8 type, f32 days since its last change, f32 days since the oldest open ticket's last change, f32 days since the queue
+/// last changed, u8 escalation (0), u8 read by a GM (0)</c>; responses are one u32 (2 created, 3 create error, 4 updated,
+/// 5 update error, 9 deleted). The rules are vmangos': an unknown type (11 or more) makes create silent, a second ticket is
+/// a create error, withdrawing without a ticket is answered with nothing. Not yet confirmed against a retail 1.12.1 client.
 /// </para>
 /// <para>
 /// The three mutations are rate limited per account (<see cref="GmOptions.TicketMutationsPerMinute"/>, ArcaneCore's own,
@@ -31,9 +32,10 @@ namespace ArcaneCore.World.Gm.Audit;
 /// </summary>
 public sealed class GmTicketHandlers : IOpcodeHandlerGroup
 {
-    /// <summary>SMSG_GMTICKET_GETTICKET status: the player has an open ticket (mangos-zero SendGMTicketGetTicket, status 0x06).</summary>
+    /// <summary>SMSG_GMTICKET_GETTICKET status: the player has an open ticket (vmangos GMTICKET_STATUS_HASTEXT, 0x06).</summary>
     public const uint StatusHasTicket = 0x06;
 
+    /// <summary>wow_messages GmTicketResponse ALREADY_EXIST; vmangos' 1.12 handler never sends it (a second ticket is a create error).</summary>
     public const uint ResponseAlreadyExists = 1;
     public const uint ResponseCreated = 2;
     public const uint ResponseCreateError = 3;
@@ -41,8 +43,13 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
     public const uint ResponseUpdateError = 5;
     public const uint ResponseDeleted = 9;
 
+    /// <summary>vmangos SharedDefines.h TicketType GMTICKET_MAX: types run 1 (stuck) to 10 (character).</summary>
+    public const byte TicketTypeLimit = 11;
+
     /// <summary>Bytes before the ticket text in CMSG_GMTICKET_CREATE: u8 category, u32 map, 3 x f32.</summary>
     private const int CreateFixedBytes = 1 + 4 + 12;
+
+    private const float SecondsPerDay = 86400f;
 
     public void Register(OpcodeTable table)
     {
@@ -52,20 +59,26 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgGmticketDeleteticket, HandleDeleteTicket);
     }
 
-    /// <summary>SMSG_GMTICKET_GETTICKET for an open ticket (mangos-zero SendGMTicketGetTicket, status 6).</summary>
-    public static byte[] BuildTicketStatus(string text)
+    /// <summary>
+    /// SMSG_GMTICKET_GETTICKET for an open ticket (vmangos GmTicket::FillPacket and GmTicketGetTicket::AppendBodyTo). The ages
+    /// are days, vmangos GetAge: <c>float(time(nullptr) - t) / float(DAY)</c>.
+    /// </summary>
+    public static byte[] BuildTicketStatus(GmTicketRecord ticket, long now, long? oldestOpenUpdatedAt, long lastQueueChange)
     {
-        var writer = new PacketWriter(32 + text.Length);
+        ArgumentNullException.ThrowIfNull(ticket);
+        var writer = new PacketWriter(32 + ticket.Text.Length);
         writer.WriteUInt32(StatusHasTicket);
-        writer.WriteCString(text);
-        writer.WriteByte(0x7);       // ticket category as mangos-zero sends it
-        writer.WriteSingle(0);       // tickets in queue
-        writer.WriteSingle(0);
-        writer.WriteSingle(0);
-        writer.WriteByte(0);
-        writer.WriteByte(0);
+        writer.WriteCString(ticket.Text);
+        writer.WriteByte(ticket.Category);
+        writer.WriteSingle(Age(now, ticket.UpdatedAt));
+        writer.WriteSingle(oldestOpenUpdatedAt is { } oldest ? Age(now, oldest) : 0f);
+        writer.WriteSingle(Age(now, lastQueueChange));
+        writer.WriteByte(0); // escalation: GMTICKET_ASSIGNEDTOGM_STATUS_NOT_ASSIGNED (no escalation queue here)
+        writer.WriteByte(0); // read by a GM: GMTICKET_OPENEDBYGM_STATUS_NOT_OPENED (viewing is not tracked)
         return writer.ToArray();
     }
+
+    private static float Age(long now, long then) => Math.Max(0, now - then) / SecondsPerDay;
 
     private static byte[] BuildResponse(uint code)
     {
@@ -76,14 +89,22 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
 
     private static GmAuditFeature Audit(WorldSession session) => session.Services.GetRequiredService<GmAuditFeature>();
 
+    private static byte[] StatusOf(GmAuditFeature audit, int characterId)
+        => audit.OpenTicketOf(characterId) is { } ticket
+            ? BuildTicketStatus(ticket, audit.NowUnixSeconds, audit.OldestOpenTicketUpdatedAt(), audit.LastTicketChange)
+            : MiscPackets.BuildNoGmTicket();
+
+    /// <summary>vmangos HandleGMTicketGetTicketOpcode: the time response, then the ticket status.</summary>
     private static void HandleGetTicket(WorldSession session, Player player, byte[] payload)
     {
         session.Send(WorldOpcode.SmsgQueryTimeResponse, QueryPackets.BuildQueryTimeResponse(DateTimeOffset.UtcNow));
-        session.Send(WorldOpcode.SmsgGmticketGetticket, Audit(session).OpenTicketOf((int)player.Guid.Low) is { } ticket
-            ? BuildTicketStatus(ticket.Text)
-            : MiscPackets.BuildNoGmTicket());
+        session.Send(WorldOpcode.SmsgGmticketGetticket, StatusOf(Audit(session), (int)player.Guid.Low));
     }
 
+    /// <summary>
+    /// vmangos HandleGMTicketCreateOpcode: an unknown type is ignored without an answer; a character that already has an open
+    /// ticket gets CREATE_ERROR (the response it starts with); a new ticket is CREATE_SUCCESS and staff are told.
+    /// </summary>
     private static void HandleCreate(WorldSession session, Player player, byte[] payload)
     {
         GmAuditFeature audit = Audit(session);
@@ -102,6 +123,11 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
 
         var reader = new PacketReader(payload);
         byte category = reader.ReadByte();
+        if (category >= TicketTypeLimit)
+        {
+            return; // vmangos: "if (packet.ticketType >= GMTICKET_MAX) return;"
+        }
+
         reader.Skip(4 + 12); // map and position: the server's own are stored
         string text = CleanText(reader.ReadCString());
         if (text.Length == 0)
@@ -113,15 +139,15 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
         GmTicketRecord? ticket = audit.CreateTicket((int)player.Guid.Low, text, category, player.MapId, player.X, player.Y, player.Z);
         if (ticket is null)
         {
-            session.Send(WorldOpcode.SmsgGmticketCreate, BuildResponse(ResponseAlreadyExists));
+            session.Send(WorldOpcode.SmsgGmticketCreate, BuildResponse(ResponseCreateError));
             return;
         }
 
-        session.Send(WorldOpcode.SmsgQueryTimeResponse, QueryPackets.BuildQueryTimeResponse(DateTimeOffset.UtcNow));
         session.Send(WorldOpcode.SmsgGmticketCreate, BuildResponse(ResponseCreated));
         NotifyStaff(session, GmAuditStrings.TicketNew(GmStrings.PlayerLink(player.Name), ticket.Id));
     }
 
+    /// <summary>vmangos HandleGMTicketUpdateTextOpcode: <c>u8 type, cstring text</c>; both replace the ticket's (SetMessage, SetTicketType).</summary>
     private static void HandleUpdateText(WorldSession session, Player player, byte[] payload)
     {
         GmAuditFeature audit = Audit(session);
@@ -132,10 +158,19 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        if (payload.Length < 1)
+        {
+            session.Send(WorldOpcode.SmsgGmticketUpdatetext, BuildResponse(ResponseUpdateError));
+            return;
+        }
+
         var reader = new PacketReader(payload);
+        byte type = reader.ReadByte();
         string text = CleanText(reader.ReadCString());
         bool changed = false;
-        GmTicketRecord? ticket = text.Length == 0 ? null : audit.UpdateTicketText((int)player.Guid.Low, text, out changed);
+        // vmangos stores the type as sent; a value outside 1-10 is kept out here, so the stored type stays one the client knows.
+        byte? category = type is >= 1 and < TicketTypeLimit ? type : null;
+        GmTicketRecord? ticket = text.Length == 0 ? null : audit.UpdateTicketText((int)player.Guid.Low, text, category, out changed);
         session.Send(WorldOpcode.SmsgGmticketUpdatetext, BuildResponse(ticket is null ? ResponseUpdateError : ResponseUpdated));
         if (ticket is not null && changed)
         {
@@ -144,19 +179,24 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
         }
     }
 
+    /// <summary>vmangos HandleGMTicketDeleteTicketOpcode: with a ticket, TICKET_DELETED then the no-ticket status; without one, nothing.</summary>
     private static void HandleDeleteTicket(WorldSession session, Player player, byte[] payload)
     {
         GmAuditFeature audit = Audit(session);
         if (!audit.TryAdmitTicketMutation(player.AccountId))
         {
             // Nothing was deleted, so the deleted code is not sent; the client is given the ticket's real state instead
-            // (the same status answer that follows a delete). UNVERIFIED on a retail client, as the layouts above.
-            session.Send(WorldOpcode.SmsgGmticketGetticket, audit.OpenTicketOf((int)player.Guid.Low) is { } open ? BuildTicketStatus(open.Text) : MiscPackets.BuildNoGmTicket());
+            // (the same status answer that follows a delete).
+            session.Send(WorldOpcode.SmsgGmticketGetticket, StatusOf(audit, (int)player.Guid.Low));
             player.SendSystemMessage(GmAuditStrings.TicketTooFast);
             return;
         }
 
-        audit.DeleteTicketOf((int)player.Guid.Low);
+        if (!audit.DeleteTicketOf((int)player.Guid.Low))
+        {
+            return;
+        }
+
         session.Send(WorldOpcode.SmsgGmticketDeleteticket, BuildResponse(ResponseDeleted));
         session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
     }
