@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 4 | `account`, `realmlist` |
-| `characters` | 41 | `characters` |
-| `world` | 41 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 42 | `characters` |
+| `world` | 42 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -65,6 +65,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 39 | `Characters.Battlegrounds.CharacterBattlegroundDataModule` | creates `character_battleground_data` | yes |
 | 40 | `Characters.Transports.CharacterTransportDataModule` | adds columns `characters.transport_guid`, `characters.transport_x`, `characters.transport_y`, `characters.transport_z`, `characters.transport_o` | yes |
 | 41 | `Characters.AntiCheat.AntiCheatDataModule` | creates `character_anticheat_log` | yes |
+| 42 | `Instances.InstanceScriptDataModule` | adds columns `instance.data` | yes |
 
 ## `world`
 
@@ -110,5 +111,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 39 | `World.Procs.SpellProcEventDataModule` | creates `spell_proc_event` |
 | 40 | `World.Battlegrounds.BattlegroundWorldDataModule` | creates `battleground_template`, `creature_battleground`, `gameobject_battleground`, `battlemaster_entry` |
 | 41 | `World.Transports.TransportWorldDataModule` | creates `transports` |
+| 42 | `World.Creatures.DbScriptDataModule` | creates `dbscripts_on_quest_start`, `dbscripts_on_quest_end`, `dbscripts_on_gossip`, `dbscripts_on_event`, `script_waypoint`; adds columns `quest_template.StartScript`, `quest_template.CompleteScript`, `gossip_menu.script_id`, `gossip_menu_option.action_script_id` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

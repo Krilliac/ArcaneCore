@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 22 |
-| `GameMaster` | 3 | 152 |
-| `Administrator` | 6 | 216 |
+| `GameMaster` | 3 | 160 |
+| `Administrator` | 6 | 225 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -63,6 +63,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.honor reset` | 4 | Administrator | declared retail level | Syntax: .honor reset Forget all honor of the selected player (or yourself). |
 | `.go` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Teleport to a position. |
 | `.go xyz` | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there. |
+| `.go creature` | 2 | GameMaster | declared retail level | Syntax: .go creature #spawn_guid\|id #entry\|#name Teleport to a creature spawn. |
+| `.go object` | 2 | GameMaster | declared retail level | Syntax: .go object #spawn_guid\|id #entry\|#name Teleport to a game object spawn. |
 | `.gobject` ... | 2 | GameMaster | declared retail level | Syntax: .gobject $subcommand Type .gobject to see the list of possible subcommands or .help gobject $subcommand to see info on subcommands. |
 | `.gobject add` | 3 | GameMaster | declared retail level | Syntax: .gobject add #entry [#despawnSeconds] Place a game object where you stand. It is not saved: it is gone after a restart (or after #despawnSeconds). |
 | `.gobject delete` | 3 | GameMaster | declared retail level | Syntax: .gobject delete #guid Remove a game object that was placed with .gobject add. Database spawns are refused. |
@@ -101,6 +103,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.lookup event` | 2 | GameMaster | declared retail level | Syntax: .lookup event $namepart List the events whose description contains the text. |
 | `.modify` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify $subcommand |
 | `.modify money` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify money #money Add or remove money to the selected player; negative values take money (all of it when it would reach zero). |
+| `.modify speed` | 2 | GameMaster | declared retail level | Syntax: .modify speed #rate Set the selected player's run speed rate. |
+| `.modify scale` | 3 | GameMaster | declared retail level | Syntax: .modify scale #scale Set the selected unit's model scale (0 exclusive to 100 inclusive). |
 | `.modify hp` | 3 | GameMaster | declared retail level | Syntax: .modify hp #newhp [#newmaxhp] Change the HP (and maximum HP) of the selected player, or yours. |
 | `.modify mana` | 3 | GameMaster | declared retail level | Syntax: .modify mana #newmana [#newmaxmana] Change the mana (and maximum mana) of the selected player, or yours. |
 | `.modify energy` | 3 | GameMaster | declared retail level | Syntax: .modify energy #newenergy [#newmaxenergy] Change the energy (and maximum energy) of the selected player, or yours. |
@@ -119,6 +123,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.npc playemote` | 3 | GameMaster | declared retail level | Syntax: .npc playemote #emote Make the selected creature play an emote animation. The id is not checked against the client's emote table. |
 | `.npc info` | 2 | GameMaster | declared retail level | Syntax: .npc info Show the details of the selected creature. |
 | `.npc near` | 2 | GameMaster | declared retail level | Syntax: .npc near [#radius] List the creatures within #radius yards (default 10), nearest first. |
+| `.npc set` ... | 3 | GameMaster | declared retail level | Syntax: .npc set $subcommand |
+| `.npc set flag` | 3 | GameMaster | declared retail level | Syntax: .npc set flag #flags Change the selected creature's NPC service flags for its current life. |
 | `.quest` ... | 3 | GameMaster | declared retail level | Syntax: .quest $subcommand Type .quest to see the list of possible subcommands or .help quest $subcommand to see info on subcommands. |
 | `.quest add` | 6 | Administrator | declared retail level | Syntax: .quest add #quest_id\|[$quest_title]\|#shift-click-quest-link Add the quest to the log of the selected player (or yourself) without its requirements; a quest started by an item is refused. |
 | `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |
@@ -145,6 +151,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
+| `.aura` | 4 | Administrator | declared retail level | Syntax: .aura #spell Apply a spell's auras to the selected unit or yourself. |
 | `.unaura` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unaura #spell\|all — remove auras from the selected player or yourself. |
 | `.announce` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .announce $MessageToBroadcast Send a global message to all players online in chat log. |
 | `.notify` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .notify $MessageToBroadcast Send a global message to all players online in screen. |
@@ -152,6 +159,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.namego` | 2 | GameMaster | declared retail level | Syntax: .namego [$charactername] Teleport the given character, or the selected one, to you. |
 | `.gocorpse` | 3 | GameMaster | stored level through the map | Syntax: .gocorpse [$playername] Teleport to the corpse of the selected player (or the named one, or yourself). |
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands Display a list of the commands available to you. |
+| `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
 | `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
@@ -188,6 +196,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.hidearea` | 1 | Moderator | stored level through the map | Syntax: .hidearea #areaid - toggle an area's explored bit on the selected player (vmangos XORs it). |
 | `.additem` | 3 | GameMaster | declared retail level | Syntax: .additem #itemId\|[#itemName]\|#shift-click-item-link #itemCount Adds the item to the selected player (or yourself); a negative count removes items, bank included in the check. |
 | `.deleteitem` | 3 | GameMaster | declared retail level | Syntax: .deleteitem #itemId\|[#itemName]\|#shift-click-item-link #itemCount [#playerName] Removes items from the named or selected player (or yourself), bank included. |
+| `.additemset` | 3 | GameMaster | declared retail level | Syntax: .additemset #itemset\|#itemset-link Give every item in a set to the selected player or yourself. |
 | `.wchange` | 6 | Administrator | stored level through the map | Syntax: .wchange #weathertype #status — set the weather of your zone. Type: 0 fine, 1 rain, 2 snow, 3 sandstorm; status 0..1. |
 | `.ticket` ... | 3 | GameMaster | stored level through the map | Syntax: .ticket [$subcommand] Without a subcommand, show how many tickets are open. |
 | `.ticket list` | 3 | GameMaster | stored level through the map | Syntax: .ticket list List the open tickets, oldest first (at most 50). |
@@ -203,6 +212,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.respawn` | 3 | GameMaster | declared retail level | Syntax: .respawn [#radius] Respawn the dead creatures and the despawned game objects within #radius yards (default 100) without waiting for their timers. Temporary objects and chests kept by an instance are left alone. |
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
+| `.damage` | 3 | GameMaster | declared retail level | Syntax: .damage #amount Deal direct physical damage to the selected unit. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
 | `.anticheat` ... | 3 | GameMaster | stored level through the map | Anticheat scores, reports and settings. |
 | `.anticheat status` | 3 | GameMaster | stored level through the map | Syntax: .anticheat status [$name] Show the anticheat settings and the live score of the character (or the selected player, or you). |
