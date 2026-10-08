@@ -52,6 +52,12 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         }
     }
 
+    public void RemoveAuras(Unit unit, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        Spells.RemoveAuras(unit, spellId);
+    }
+
     public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered)
     {
         ArgumentNullException.ThrowIfNull(caster);

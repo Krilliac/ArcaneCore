@@ -44,6 +44,7 @@ public sealed partial class CreatureMapSystem
 
         OnAiDeath(creature, killer);
         NotifySummonerOfDeath(creature);
+        DespawnCorpseOfSummon(creature);
         StopMoving(creature);
         creature.Health = 0;
         creature.NpcFlags = 0;
@@ -293,6 +294,7 @@ public sealed partial class CreatureMapSystem
     private void RemoveFromWorld(Creature creature)
     {
         _creatures.Remove(creature.Guid);
+        _corpseDespawns.Remove(creature);
         _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
         NotifySummonerOfRemoval(creature);
         ForgetAi(creature);

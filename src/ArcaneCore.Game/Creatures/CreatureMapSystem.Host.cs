@@ -47,6 +47,9 @@ public sealed partial class CreatureMapSystem
 
     public void InterruptCast(Creature creature) => _ai.Spells?.Interrupt(creature);
 
+    /// <summary>vmangos Unit::RemoveAurasDueToSpell through the creature spell seam (nothing without a spell system).</summary>
+    public void RemoveAuras(Unit unit, uint spellId) => _ai.Spells?.RemoveAuras(unit, spellId);
+
     /// <summary>A uniform random integer in [min, max] (EventAI chances, timers and choices).</summary>
     public int RandomInt(int min, int max) => min >= max ? min : (int)_random.NextInt64(min, (long)max + 1);
 
@@ -126,6 +129,13 @@ public sealed partial class CreatureMapSystem
 
     private void CreateAi(Creature creature)
     {
+        if (CreateEntryAi(creature) is { } scripted)
+        {
+            creature.AI = scripted; // a script AI of this map for the entry (CreatureMapSystem.ScriptedAi.cs)
+            ResetGuardCall(creature);
+            return;
+        }
+
         CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown, _options.ImplicitEventAi);
         string aiName = creature.Template.AIName;
         if (unknown && _reportedAi.Add($"name:{aiName}"))

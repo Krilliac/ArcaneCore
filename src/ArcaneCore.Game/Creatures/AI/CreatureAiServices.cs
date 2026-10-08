@@ -120,6 +120,11 @@ public interface ICreatureSpellCaster
 
     bool HasAura(Unit unit, uint spellId);
 
+    /// <summary>Remove every aura of <paramref name="spellId"/> from <paramref name="unit"/> (vmangos Unit::RemoveAurasDueToSpell). Nothing by default.</summary>
+    void RemoveAuras(Unit unit, uint spellId)
+    {
+    }
+
     /// <summary>Stop the cast or channel in progress (evade, death).</summary>
     void Interrupt(Creature caster);
 
