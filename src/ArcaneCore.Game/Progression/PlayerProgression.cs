@@ -41,7 +41,11 @@ public sealed class PlayerProgression : IQuestExperience
     /// </summary>
     public void UseLevelStats(IPlayerLevelStatsSource source) => Stats = source ?? throw new ArgumentNullException(nameof(source));
 
-    /// <summary>Raised on the world thread after a level-up has been applied (persistence requests a save).</summary>
+    /// <summary>
+    /// Raised on the world thread after a level change has been applied: once per <see cref="GiveLevel"/> that changes the level
+    /// (up or down) and once per <see cref="GiveXp(Player, uint, ObjectGuid)"/> that levels up, for the level it ends on.
+    /// Subscribers: talents (vmangos GiveLevel calls InitTalentForLevel, Player.cpp:3197), skills and persistence (a save).
+    /// </summary>
     public event Action<Player>? LevelChanged;
 
     /// <summary>
@@ -101,8 +105,7 @@ public sealed class PlayerProgression : IQuestExperience
         while (next > 0 && newXp >= next && player.Level < Options.MaxPlayerLevel)
         {
             newXp -= next;
-            GiveLevel(player, (byte)(player.Level + 1));
-            leveled = true;
+            leveled |= ApplyLevel(player, (byte)(player.Level + 1));
             next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
         }
 
@@ -146,9 +149,21 @@ public sealed class PlayerProgression : IQuestExperience
     public void GiveLevel(Player player, byte level)
     {
         ArgumentNullException.ThrowIfNull(player);
+        if (ApplyLevel(player, level))
+        {
+            LevelChanged?.Invoke(player);
+        }
+    }
+
+    /// <summary>
+    /// The body of <see cref="GiveLevel"/> without the event, so <see cref="GiveXp(Player, uint, ObjectGuid)"/> raises
+    /// <see cref="LevelChanged"/> once for a gain of several levels. False: the level did not change.
+    /// </summary>
+    private bool ApplyLevel(Player player, byte level)
+    {
         if (level == player.Level || level == 0)
         {
-            return;
+            return false;
         }
 
         State state = _states.GetValue(player, _ => new State());
@@ -204,6 +219,7 @@ public sealed class PlayerProgression : IQuestExperience
         player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Happiness, 0);
         SetRestBonus(player, state.RestBonus);
         BaseValuesApplied?.Invoke(player);
+        return true;
     }
 
     /// <summary>
