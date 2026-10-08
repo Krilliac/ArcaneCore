@@ -223,7 +223,10 @@ that Map.dbc does not list included). Map.dbc gives the id, the instance type (f
 values of vmangos `map_type`), the enUS name (field 4) and the linked zone (field 19, `m_areaTableID`); cmangos `MapEntryfmt` and
 `DBCStructure.h:572-603`. The columns Map.dbc does not carry come from the dump: classic-db `instance_template` (`parent`, `maxPlayers`,
 `reset_delay`, `ghostEntranceMap/X/Y`, `ScriptName`; cmangos stores the ghost map unsigned, so its (0, 0, 0) is read as vmangos' -1, no
-entrance) or vmangos `map_template` (the newest `patch` up to 10). Both tables are replaced as a whole; every parent area must exist and
+entrance) or vmangos `map_template` (the newest `patch` up to 10). Where vmangos deliberately differs from classic-db its value is taken
+and printed (`instance data: map 229 reset_delay 3 -> 0 (...)`): Blackrock Spire has no global reset (vmangos
+`old_migrations/20170917193208_world.sql`, "Blackrock Spire no reset"; with classic-db's 3 the world would reset map 229 and send everyone
+inside home every three days). Both tables are replaced as a whole; every parent area must exist and
 none may cycle. A dungeon or raid without an instance row keeps player limit 0 (no cap), no reset and no ghost entrance, with a warning
 (classic-db z2815: 29 CashTest, 44 the unused Monastery, 269 Caverns of Time). `refresh --dbc-dir` writes them (the live path);
 `import-map-dbc <Map.dbc> <AreaTable.dbc> [--dump <file>] [--replace]` writes only these two tables (refused over existing rows without
@@ -233,8 +236,8 @@ On the live world copy (2026-10-08, `docs/integration/instance-maps-20261008.md`
 areas instead of 2 and 970; the world's 47 "unknown target map" and 56 "not existing zone id" warnings are gone, and the `dungeon`
 scenario enters a Deadmines instance through trigger 78. Against vmangos' own `map_template` (the 1.12 rows) the imported rows differ
 only in: the battleground player limits (cmangos 0, vmangos 40/10/15; neither core caps a battleground map by them), map 37 (unused),
-Blackrock Spire's `reset_delay` (classic-db 3 days, vmangos 0 since its 2017 fix "Blackrock Spire no reset": with 3 the world schedules
-a global reset of map 229 every three days), Onyxia's script name and one name's spacing (`<unused>StormwindPrison`, the DBC's).
+Onyxia's script name and one name's spacing (`<unused>StormwindPrison`, the DBC's). Blackrock Spire's `reset_delay` matches vmangos (0)
+through the correction above; the maps with a reset delay are the seven raids.
 
 ## Verified against the real classic-db dump
 
