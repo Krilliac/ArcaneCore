@@ -148,6 +148,9 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
   with the source within one spell update when the pet is unsummoned. A revived pet does not get the auras back until the next summon or learned talent
   (vmangos Pet.cpp:658 casts them when the pet comes alive; the revive path is the creatures area's). A warlock demon removed by a respec gives no soul shard
   back (the summon does not charge it either). Mana Tide's build 5875 row does not use the script (above).
+- A warlock demon brought back after a teleport or a mount (`SummonService.TemporaryUnsummon.cs`, `RestoreSummonedPet`, outside this lane) does not take
+  the owner's pet auras yet; one call to `PetAuraService.CastPetAuras(pet, current: true)` there closes it (vmangos Pet::LoadPetFromDB, Pet.cpp:357). A
+  hunter's pet comes back through `RestoreCurrentPet` and takes them.
 - Real data: Spell.dbc / `spell_template` (every id above), SpellItemEnchantment.dbc for the imbues, `spell_proc_event` and
   `spell_proc_item_enchant` rows for PPM procs, and creature 11859 (Doomguard) in `creature_template`. The tests use synthetic rows with the real ids,
   families, flags and effect kinds.
