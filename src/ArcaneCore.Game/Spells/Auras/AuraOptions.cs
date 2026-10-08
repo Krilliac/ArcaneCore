@@ -23,11 +23,18 @@ public sealed class AuraOptions
     public bool HarmfulAurasExpireOffline { get; set; }
 
     /// <summary>
-    /// Set once a proc engine exists that breaks procFlags crowd control on damage (vmangos Unit.cpp:688-692); the damage break then skips
-    /// every aura whose spell has procFlags (vmangos <c>checkProcFlags</c>, Unit.cpp:735-745, 895-906). Default false: this engine has no proc
-    /// engine, so the damage break itself keeps removing procFlags auras, otherwise Polymorph, Sap, Gouge and Freezing Trap could not be
-    /// broken. In that mode <see cref="SpellSystem.DamageBreakExemptSpells"/> (Wyvern Sting and Prowl, which vmangos leaves alone because
-    /// of their procFlags) are still spared, so they do not break on the hit their own effect causes.
+    /// The damage break skips every aura whose spell has procFlags (vmangos <c>checkProcFlags</c>, Unit.cpp:735-745, 895-906): such auras end through
+    /// the proc engine instead (their charges, the root, pacify-silence and fear break chances, docs/areas/procs.md). Default true, the vmangos
+    /// rule, now that the proc engine exists. False removes procFlags auras on the damage break too (the engine's behaviour before procs existed).
+    /// Checked against the build 5875 Spell.dbc: Polymorph, Sap, Gouge, Freezing Trap and druid Prowl carry no procFlags and break on the interrupt
+    /// path either way; Wyvern Sting (TAKEN_ANY_DAMAGE) and the hunter pet's Prowl (melee flags, one charge) are the damage-cancel auras that do.
     /// </summary>
-    public bool ProcEngineBreaksDamageAuras { get; set; }
+    public bool ProcEngineBreaksDamageAuras { get; set; } = true;
+
+    /// <summary>
+    /// An aura that breaks on damage (AuraInterruptFlags DAMAGE) and procs on TAKEN_ANY_DAMAGE (Wyvern Sting's sleep) ends when its damage proc fires.
+    /// vmangos has no proc handler for its aura type and keeps it (HandleNULLProc, no charges); the spell's tooltip says "Any damage will cancel the
+    /// effect". Default true; false is the literal vmangos behaviour.
+    /// </summary>
+    public bool DamageProcCancelsAura { get; set; } = true;
 }

@@ -105,7 +105,7 @@ public sealed partial class SpellSystem
     };
 
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
-    private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null)
+    private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null, bool reflected = false)
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
@@ -131,7 +131,7 @@ public sealed partial class SpellSystem
 
         // Damage and healing dealt by the effect handlers is credited to this target's outcome; a nested
         // triggered cast builds its own and restores ours.
-        var outcome = new OutcomeBuilder(cast, target, effectMask);
+        var outcome = new OutcomeBuilder(cast, target, effectMask) { Reflected = reflected };
         OutcomeBuilder? outer = _outcome;
         _outcome = outcome;
         try
@@ -171,7 +171,16 @@ public sealed partial class SpellSystem
             if (holder is not null && !holder.IsEmpty
                 && (application is null || ApplicationRules.All(rule => rule.AcceptHolder(application, holder))))
             {
+                holder.IsReflected = reflected;
                 AddAuraHolder(holder);
+            }
+
+            // The hit's procs when no direct damage fired them (heals, auras, utility; vmangos Spell.cpp:1349-1532).
+            if (!outcome.ProcsDone)
+            {
+                outcome.ProcsDone = true;
+                FireSpellHitProcs(cast, target, reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, 0, 0, outcome.Critical, 0, effectMask, reflected,
+                    healing: outcome.Healing);
             }
 
             FlushQueuedMeleeSpellDamage(outcome);
@@ -233,6 +242,16 @@ public sealed partial class SpellSystem
             amount = CombatRules is Rules.ISpellCritAmounts exact
                 ? exact.CriticalHeal(this, context.Caster, context.Target, context.Spell, amount)
                 : (uint)(amount * CombatRules.CritMultiplier(context.Spell));
+        }
+
+        // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1335-1352): the cast's heal procs fire before DealHeal, with the whole heal (overheal
+        // included) as both amounts. The cast's own hit on this target procs once, here.
+        if (_outcome is { ProcsDone: false } hit && ReferenceEquals(hit.Target, context.Target) && ReferenceEquals(hit.Cast.Caster, context.Caster)
+            && hit.Cast.Spell.Id == context.Spell.Id && amount > 0 && context.Target.IsAlive)
+        {
+            hit.ProcsDone = true;
+            FireSpellHitProcs(hit.Cast, context.Target, hit.Reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, 0, 0, crit, 0, hit.EffectMask, hit.Reflected,
+                healing: amount);
         }
 
         uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount, periodic: false);

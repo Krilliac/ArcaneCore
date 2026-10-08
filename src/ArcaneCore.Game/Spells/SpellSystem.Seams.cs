@@ -209,6 +209,12 @@ public sealed partial class SpellSystem
 
         public bool Critical { get; set; }
 
+        /// <summary>The target's procs already ran (the first direct damage fires them before the sink, Spell.cpp:1444-1456).</summary>
+        public bool ProcsDone { get; set; }
+
+        /// <summary>The effects land on the caster because the target reflected the spell (vmangos isReflected).</summary>
+        public bool Reflected { get; init; }
+
         public bool MeleeSpellPacketEligible { get; } = cast.Spell.IsNextMeleeSwing && ReferenceEquals(cast.Caster.Combat.Victim, target);
 
         public List<MeleeSpellDamageComponent> MeleeSpellDamage { get; } = [];

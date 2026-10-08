@@ -218,7 +218,8 @@ internal static class ScenarioTestContent
             Entry = LinenCloth, Name = "Linen Cloth", Class = 7, SubClass = 0, Quality = 1, Stackable = 20, SellPrice = 13,
         });
         services.AddSingleton<IItemTemplateSource>(items);
-        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(DuelWorldHost.Content()));
+        SpellContent duel = DuelWorldHost.Content();
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells] }));
         var store = new ContentStore();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddSingleton<IQuestContentStore>(store);

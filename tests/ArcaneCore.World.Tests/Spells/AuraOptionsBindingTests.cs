@@ -23,16 +23,19 @@ public sealed class AuraOptionsBindingTests
     }
 
     [Fact]
-    public void ProcEngineBreaksDamageAuras_IsABoundKey_DefaultingToNoProcEngine()
+    public void ProcEngineBreaksDamageAuras_IsABoundKey_DefaultingToTheProcEngine()
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Auras:ProcEngineBreaksDamageAuras"] = "true",
+            ["Auras:ProcEngineBreaksDamageAuras"] = "false",
+            ["Auras:DamageProcCancelsAura"] = "false",
         }).Build();
 
-        Assert.False(new AuraOptions().ProcEngineBreaksDamageAuras);
-        Assert.False(SpellRulesAuraEngineFeature.BindOptions(null).ProcEngineBreaksDamageAuras);
-        Assert.True(SpellRulesAuraEngineFeature.BindOptions(configuration).ProcEngineBreaksDamageAuras);
+        Assert.True(new AuraOptions().ProcEngineBreaksDamageAuras);
+        Assert.True(SpellRulesAuraEngineFeature.BindOptions(null).ProcEngineBreaksDamageAuras);
+        Assert.False(SpellRulesAuraEngineFeature.BindOptions(configuration).ProcEngineBreaksDamageAuras);
+        Assert.True(new AuraOptions().DamageProcCancelsAura);
+        Assert.False(SpellRulesAuraEngineFeature.BindOptions(configuration).DamageProcCancelsAura);
     }
 
     [Fact]

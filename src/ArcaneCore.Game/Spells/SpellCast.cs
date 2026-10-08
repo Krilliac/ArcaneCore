@@ -71,6 +71,9 @@ public sealed class SpellCast
     /// </summary>
     internal bool AutoRepeatShot { get; set; }
 
+    /// <summary>How many targets the proc engine has seen for this cast (vmangos Spell::m_targetNum): a secondary target's melee ability counts as a spell for the attacker.</summary>
+    internal int ProcTargetCount { get; set; }
+
     /// <summary>The original spell/aura behind a trigger (vmangos m_triggeredBySpellInfo).</summary>
     public SpellInfo? TriggeringSpell { get; }
 

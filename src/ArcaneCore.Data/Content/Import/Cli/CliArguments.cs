@@ -11,7 +11,7 @@ internal sealed class CliArguments
 {
     private static readonly string[] s_valueOptions =
         ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--class-mask-file",
-            "--player-stats-migrations-dir"];
+            "--player-stats-migrations-dir", "--cooldown-unit"];
 
     private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose"];
 
@@ -23,6 +23,7 @@ internal sealed class CliArguments
         ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
+        ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

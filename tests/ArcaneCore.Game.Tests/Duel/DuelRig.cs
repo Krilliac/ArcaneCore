@@ -19,6 +19,8 @@ internal sealed class DuelRig : IDisposable
     public const uint DebuffA = 930301;
     public const uint DebuffB = 930302;
     public const uint Buff = 930303;
+    public const uint ReflectableDebuff = 930304;
+    public const uint ReflectAura = 930305;
     public const uint DuelSpell = 7266;
 
     public Spells.SpellTestKit Kit { get; }
@@ -77,6 +79,23 @@ internal sealed class DuelRig : IDisposable
             {
                 Duration = new SpellDuration(60000, 0, 60000),
                 SpellVisual = 1,
+            },
+            // A reflectable magic damage-over-time spell and a 100% reflect aura (proc-engine lane: reflected holders and the duel).
+            Spell(ReflectableDebuff, Effect(SpellEffectName.ApplyAura, 4, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicDamage, amplitude: 3000)) with
+            {
+                Duration = new SpellDuration(60000, 0, 60000),
+                Attributes = SpellAttributes.AuraIsDebuff,
+                DamageClass = SpellDamageClass.Magic,
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
+            Spell(ReflectAura, Effect(SpellEffectName.ApplyAura, 100, SpellImplicitTarget.UnitCaster, AuraType.ReflectSpells)) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
             });
         Map = World.GetMap(0);
         (A, SessionA) = Kit.AddPlayer(1, 10, 10);

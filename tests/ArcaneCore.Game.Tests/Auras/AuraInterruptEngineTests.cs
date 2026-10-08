@@ -18,7 +18,7 @@ public sealed class AuraInterruptEngineTests
     private const uint SelfBreakingDot = 944003;
     private const uint Hit = 944004;
     private const uint StealthLike = 944005;
-    private const uint WyvernStingRank1 = 19386; // the real ids: DamageBreakExemptSpells is keyed by spell id
+    private const uint WyvernStingRank1 = 19386; // the real ids, which the replaced id exemption keyed on
     private const uint ProwlRank1 = 5215;
     private const AuraType Probe = SpellHandlerModuleTests.FixtureAura;
 
@@ -72,11 +72,11 @@ public sealed class AuraInterruptEngineTests
     }
 
     [Fact]
-    public void DamageBreak_WithoutAProcEngine_StillBreaksCrowdControlShapedAurasThatCarryProcFlags()
+    public void DamageBreak_WithTheProcEngineSwitchedOff_AlsoBreaksProcFlagAuras()
     {
-        // Real Polymorph, Sap, Gouge and Freezing Trap carry AuraInterruptFlags.Damage and TAKEN_ANY_DAMAGE procFlags (vmangos Unit.cpp:688-692);
-        // vmangos breaks them in the proc engine. This engine has none, so the break must stay on the interrupt path by default.
+        // Auras:ProcEngineBreaksDamageAuras = false is the engine's behaviour before the proc engine: the interrupt path ignores procFlags.
         using SpellTestKit kit = NewKit();
+        kit.System.AuraOptions = new AuraOptions { ProcEngineBreaksDamageAuras = false };
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, ProcSleep, SpellCastTargets.ForSelf(), triggered: true);
@@ -161,12 +161,12 @@ public sealed class AuraInterruptEngineTests
     }
 
     [Fact]
-    public void DamageBreak_WithoutAProcEngine_SparesWyvernStingAndProwl_ButStillBreaksOtherProcFlagAuras()
+    public void DamageBreak_ByDefault_IsVmangosCheckProcFlags_ForEveryProcFlagAura_NotAnIdList()
     {
-        // The retail-safe default (vmangos checkProcFlags skips these two because of their procFlags): the hit their own effect causes
-        // must not remove them, while the engine keeps the crowd control shape (ProcSleep) breakable.
+        // The proc engine exists, so the damage break skips every procFlags aura (Unit.cpp:735-745, 895-906) and breaks every aura without
+        // them; no spell is special-cased by id any more (Wyvern Sting ends through its damage proc, ProcEngineBehaviourTests).
         using SpellTestKit kit = NewKit();
-        Assert.False(kit.System.AuraOptions.ProcEngineBreaksDamageAuras);
+        Assert.True(kit.System.AuraOptions.ProcEngineBreaksDamageAuras);
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, WyvernStingRank1, SpellCastTargets.ForSelf(), triggered: true);
@@ -177,16 +177,8 @@ public sealed class AuraInterruptEngineTests
         kit.System.OnDamageTaken(victim, attacker, 10, periodic: false);
 
         Assert.True(kit.System.HasAura(victim, WyvernStingRank1));
-        Assert.True(kit.System.HasAura(victim, ProwlRank1));
-        Assert.False(kit.System.HasAura(victim, ProcSleep));
+        Assert.True(kit.System.HasAura(victim, ProwlRank1)); // this fixture gives it procFlags; the real druid Prowl has none
+        Assert.True(kit.System.HasAura(victim, ProcSleep));
         Assert.False(kit.System.HasAura(victim, Sleep));
-    }
-
-    [Fact]
-    public void DamageBreakExemptSpells_ListEveryRankOfWyvernStingAndProwl()
-    {
-        Assert.Equivalent(
-            new uint[] { 19386, 24131, 24132, 24133, 24134, 24135, 5215, 6783, 9913 },
-            SpellSystem.DamageBreakExemptSpells, strict: false);
     }
 }

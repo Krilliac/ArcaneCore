@@ -114,6 +114,12 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             return SpellMissInfo.Immune;
         }
 
+        // "Try victim reflect spell" (SpellCaster.cpp:197-212), before the hit tables (proc engine lane, SpellSystem.Reflect.cs).
+        if (system.RollSpellReflect(caster, target, spell))
+        {
+            return SpellMissInfo.Reflect;
+        }
+
         switch (RangedSpellFacts.HitDamageClass(spell)) // ranged (autorepeat lane): wands roll on the ranged table (SpellCaster.cpp:215-232)
         {
             case SpellDamageClass.Magic:

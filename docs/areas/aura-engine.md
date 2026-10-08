@@ -12,7 +12,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 | Lifecycle | `AuraRemoveMode` on every holder (`SpellAuraHolder.RemoveMode`, set before the remove handlers and `HolderRemoved`); produced: Stack (replacement), Cancel, Dispel, Death, Expire. Same-caster recast refreshes the SAME holder in place (slot, duration, periodic timer, changed amounts re-applied; no `HolderRemoved`/`HolderAdded`, so diminishing returns do not see the aura end). One `ModStackAmount`/`SetStackAmount` shared by the cast path and dispel stack removal, using the one-stack `SpellAura.UnitAmount` and re-applying through the handler (dispel used to rewrite the amount without calling the handler). | `SpellSystem.Auras.cs`, `SpellSystem.Dispel.cs`, `AuraRemoveMode.cs` | `Unit.cpp:3138-3154, 3817-3873`, `SpellAuras.cpp:311-394, 6942-6999` |
 | Food and drink | The player regen tick reads `ModRegen` (food: amount * 2000 / period, period 5000 ms when the spell has no amplitude), `ModPowerRegen` (mp5 for mana), `ModHealthRegenPercent`, `ModHealthRegenInCombat`, `ModRegenDuringCombat`, `ModManaRegenInterrupt` (percentage of the spirit regen inside the five-second rule) and `ModPowerRegenPercent` on the spirit part. `STANDING_CANCELS` auras sit the target down on apply and are removed when the target stands up. | `Combat/Power/RegenModifiers.cs` (the warlock-mage lane's pure regen functions; this lane's duplicate RegenAuraRules was removed at integration), `MapCombat.Regen.cs`, `IPowerAuraSource.GetAuras` | `Player.cpp:2269-2400`, `StatSystem.cpp:642-660`, `SpellAuras.cpp:4795-4866, 6803-6806`, `Unit.cpp:9302-9310` |
 | Periodic timing | At most one tick per update with the vmangos drift clamp; `ObsModMana` without an amplitude ticks every 1000 ms; the totem passives, Immolation Trap Effect, Mark of Frost/Nature and the Stoneclaw rule tick at the first update; a channel pushback re-aligns the tick timer to the remaining duration. | `Auras/Periodic/PeriodicTiming.cs` | `SpellAuras.cpp:528-572, 8053-8110` |
-| Damage break | The damage break goes through `RemoveAurasWithInterruptFlags(DAMAGE_CANCELS, damaging spell, checkProcFlags)`: the aura of the spell that dealt the damage survives, and auras whose spell has procFlags survive only when `Auras:ProcEngineBreaksDamageAuras` is set (default off: there is no proc engine yet, which in vmangos breaks procFlags crowd control per `Unit.cpp:688-692`, so Polymorph, Sap, Gouge and Freezing Trap keep breaking on the interrupt path; Wyvern Sting and Prowl are exempted by spell id in that mode, `SpellSystem.DamageBreakExemptSpells`, so they do not break on their own hit); the unused `NonPeriodicDamage` bit left the mask. | `SpellSystem.Combat.cs`, `AuraInterrupt/SpellSystem.AuraInterrupt.cs` | `Unit.cpp:3735-3751, 735-745, 895-906` |
+| Damage break | The damage break goes through `RemoveAurasWithInterruptFlags(DAMAGE_CANCELS, damaging spell, checkProcFlags)`: the aura of the spell that dealt the damage survives (for a spell a proc is casting, the spell whose hit made it proc), and auras whose spell has procFlags are left to the proc engine (`Auras:ProcEngineBreaksDamageAuras`, default on: their charges, break chances and `Auras:DamageProcCancelsAura`, docs/areas/procs.md). The build 5875 Spell.dbc gives Polymorph, Sap, Gouge, Freezing Trap and druid Prowl no procFlags, so they break here; Wyvern Sting ends on its damage proc. The id exemption that spared Wyvern Sting and Prowl before the proc engine existed is gone. | `SpellSystem.Combat.cs`, `AuraInterrupt/SpellSystem.AuraInterrupt.cs`, `Procs/SpellSystem.Procs.cs` | `Unit.cpp:3735-3751, 735-745, 895-906` |
 | Persistence | Offline time is subtracted only for `ATTR_EX4_AURA_EXPIRES_OFFLINE` spells; auras cancelled by leaving or entering the world and bind sight, possess, charm, far sight and AoE charm are never saved; charges are zeroed for a spell without `procCharges`. | `SpellSystem.Persistence.cs`, `SpellAuraHolder.IsNeverSaved` | `Player.cpp:15356-15425, 16618-16675`, `SpellEntry.h:1092` |
 | Support matrix | One row for each of the 193 aura types (see below), with a totality test and a test against the live registrations of a composed world host. | `Auras/Support/*` | `SpellAuras.cpp:63-258` |
 
@@ -22,6 +22,8 @@ every deliberate difference sits behind the `Auras` configuration section (class
 |---|---|---|
 | `Auras:PeriodicCatchUp` | `false` | `true` delivers every missed periodic tick in one update (the engine's earlier behaviour). |
 | `Auras:HarmfulAurasExpireOffline` | `false` | `true` restores the cmangos rule that harmful auras keep counting down while the player is offline. |
+| `Auras:ProcEngineBreaksDamageAuras` | `true` | `false` lets the damage break remove procFlags auras too (the engine before the proc engine). |
+| `Auras:DamageProcCancelsAura` | `true` | `false` keeps Wyvern Sting's sleep through its damage proc, as vmangos does (docs/areas/procs.md). |
 
 ## Deviations from vmangos (documented, deliberate)
 
@@ -41,7 +43,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 - Visible-slot overflow eviction (16 debuffs), `IsNeedVisibleSlot` special cases, `UpdateAuraForGroup` party aura slots, area aura rank selection and
   pet/owner areas, persistent area auras (no dynamic object entity exists), channel aura rules (per-second cost, range), heartbeat resist of crowd control,
   interrupt sources (`Moving`, `Turning`, `Interacting`, ... have no trigger), holder permanence rules for passive-with-visual spells.
-- Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), proc trigger auras and charge consumption, spell modifier auras, percent stat auras,
+- Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), spell modifier auras, percent stat auras,
   skill auras, creature spawn addon auras: owned by other wave-4 lanes or unscheduled; each row in the matrix names the owner.
 - `CMSG_CANCEL_AURA` possess exception (remote control is not modelled: a player is always its own mover).
 
@@ -49,7 +51,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 
 Levels: `Handler` = a handler is registered with the spell system; `Referenced` = no handler, but code outside the aura files names the type (this does
 not mean every vmangos consumer exists); `Unsupported` = nothing acts on it. The column "consumers" lists up to three source files that mention the type.
-Counts: Handler 57, Referenced 44, Unsupported 91, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
+Counts: Handler 106, Referenced 36, Unsupported 50, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
 disagrees with the live registrations of a composed world host.
 
 | Value | Aura type | Level | vmangos handler | Consumers | Owner of the gap |
@@ -63,17 +65,17 @@ disagrees with the live registrations of a composed world host.
 | 6 | ModCharm | Referenced | `HandleModCharm` (SpellAuras.cpp:71) | SpellSystem.Dispel.cs | warlock-mage-utility |
 | 7 | ModFear | Handler | `HandleModFear` (SpellAuras.cpp:72) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
 | 8 | PeriodicHeal | Handler | `HandlePeriodicHeal` (SpellAuras.cpp:73) | SpellCoefficients.cs, SpellInfoRuleExtensions.cs, SpellPackets.cs |  |
-| 9 | ModAttackspeed | Unsupported | `HandleModAttackSpeed` (SpellAuras.cpp:74) |  |  |
-| 10 | ModThreat | Referenced | `HandleModThreat` (SpellAuras.cpp:75) | SpellThreat.cs | threat-and-aggro |
-| 11 | ModTaunt | Unsupported | `HandleModTaunt` (SpellAuras.cpp:76) |  | threat-and-aggro |
+| 9 | ModAttackspeed | Handler | `HandleModAttackSpeed` (SpellAuras.cpp:74) | AttackSpeedAuras.cs |  |
+| 10 | ModThreat | Handler | `HandleModThreat` (SpellAuras.cpp:75) | SpellSystem.Auras.cs, SpellThreatModifiers.cs, SpellThreat.cs | threat-and-aggro |
+| 11 | ModTaunt | Handler | `HandleModTaunt` (SpellAuras.cpp:76) | ThreatAuras.cs |  |
 | 12 | ModStun | Handler | `HandleAuraModStun` (SpellAuras.cpp:77) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
 | 13 | ModDamageDone | Referenced | `HandleModDamageDone` (SpellAuras.cpp:78) | SpellBonusModule.cs |  |
 | 14 | ModDamageTaken | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:79) | SpellBinary.cs, SpellBonusModule.cs |  |
-| 15 | DamageShield | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:80) |  |  |
+| 15 | DamageShield | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:80) | SpellSystem.Auras.cs, SpellSystem.CombatProcs.cs |  |
 | 16 | ModStealth | Handler | `HandleModStealth` (SpellAuras.cpp:81) | GeneralCastChecks.cs, SpellSystem.AuraInterrupt.cs, StealthAuras.cs |  |
 | 17 | ModStealthDetect | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:82) | StealthDetection.cs, StealthFeature.cs |  |
-| 18 | ModInvisibility | Referenced | `HandleInvisibility` (SpellAuras.cpp:83) | SpellSystem.AuraInterrupt.cs | stealth/detection (not scheduled) |
-| 19 | ModInvisibilityDetection | Unsupported | `HandleInvisibilityDetect` (SpellAuras.cpp:84) |  | stealth/detection (not scheduled) |
+| 18 | ModInvisibility | Handler | `HandleInvisibility` (SpellAuras.cpp:83) | ../../Stealth/InvisibilityAuras.cs |  |
+| 19 | ModInvisibilityDetection | Handler | `HandleInvisibilityDetect` (SpellAuras.cpp:84) | ../../Stealth/InvisibilityAuras.cs |  |
 | 20 | ObsModHealth | Handler | `HandleAuraModTotalHealthPercentRegen` (SpellAuras.cpp:85) | SpellPackets.cs, SpellSystem.Auras.cs |  |
 | 21 | ObsModMana | Handler | `HandleAuraModTotalManaPercentRegen` (SpellAuras.cpp:86) | PeriodicTiming.cs, SpellPackets.cs, SpellSystem.Auras.cs |  |
 | 22 | ModResistance | Handler | `HandleAuraModResistance` (SpellAuras.cpp:87) | SpellBinary.cs, StatAuras.cs |  |
@@ -82,30 +84,30 @@ disagrees with the live registrations of a composed world host.
 | 25 | ModPacify | Handler | `HandleAuraModPacify` (SpellAuras.cpp:90) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
 | 26 | ModRoot | Handler | `HandleAuraModRoot` (SpellAuras.cpp:91) | CcAuraHandlers.cs, SpellBinary.cs, SpellCoefficients.cs |  |
 | 27 | ModSilence | Handler | `HandleAuraModSilence` (SpellAuras.cpp:92) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
-| 28 | ReflectSpells | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:93) |  |  |
+| 28 | ReflectSpells | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:93) | SpellSystem.Auras.cs, SpellSystem.Reflect.cs |  |
 | 29 | ModStat | Handler | `HandleAuraModStat` (SpellAuras.cpp:94) | StatAuras.cs |  |
-| 30 | ModSkill | Unsupported | `HandleAuraModSkill` (SpellAuras.cpp:95) |  | aura-skill-bonus (not scheduled) |
+| 30 | ModSkill | Handler | `HandleAuraModSkill` (SpellAuras.cpp:95) | SkillAuras.cs |  |
 | 31 | ModIncreaseSpeed | Handler | `HandleAuraModIncreaseSpeed` (SpellAuras.cpp:96) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 32 | ModIncreaseMountedSpeed | Handler | `HandleAuraModIncreaseMountedSpeed` (SpellAuras.cpp:97) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 33 | ModDecreaseSpeed | Handler | `HandleAuraModDecreaseSpeed` (SpellAuras.cpp:98) | SpeedAuras.cs, SpellBinary.cs, SpellCoefficients.cs |  |
-| 34 | ModIncreaseHealth | Unsupported | `HandleAuraModIncreaseHealth` (SpellAuras.cpp:99) |  | aura-stat-percent (not scheduled) |
-| 35 | ModIncreaseEnergy | Unsupported | `HandleAuraModIncreaseEnergy` (SpellAuras.cpp:100) |  | aura-stat-percent (not scheduled) |
+| 34 | ModIncreaseHealth | Handler | `HandleAuraModIncreaseHealth` (SpellAuras.cpp:99) | PercentStatAuras.cs |  |
+| 35 | ModIncreaseEnergy | Handler | `HandleAuraModIncreaseEnergy` (SpellAuras.cpp:100) | PercentStatAuras.cs |  |
 | 36 | ModShapeshift | Handler | `HandleAuraModShapeshift` (SpellAuras.cpp:101) | ShapeshiftService.cs | druid-forms |
 | 37 | EffectImmunity | Handler | `HandleAuraModEffectImmunity` (SpellAuras.cpp:102) | ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 38 | StateImmunity | Handler | `HandleAuraModStateImmunity` (SpellAuras.cpp:103) | ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 39 | SchoolImmunity | Handler | `HandleAuraModSchoolImmunity` (SpellAuras.cpp:104) | CasterAuraGate.cs, ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 40 | DamageImmunity | Handler | `HandleAuraModDmgImmunity` (SpellAuras.cpp:105) | ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 41 | DispelImmunity | Handler | `HandleAuraModDispelImmunity` (SpellAuras.cpp:106) | CasterAuraGate.cs, ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
-| 42 | ProcTriggerSpell | Unsupported | `HandleAuraProcTriggerSpell` (SpellAuras.cpp:107) |  | proc engine (not scheduled) |
-| 43 | ProcTriggerDamage | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:108) |  | proc engine (not scheduled) |
+| 42 | ProcTriggerSpell | Handler | `HandleAuraProcTriggerSpell` (SpellAuras.cpp:107) | BuiltInProcHandlers.cs, SpellSystem.Auras.cs, SpellSystem.Procs.cs |  |
+| 43 | ProcTriggerDamage | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:108) | BuiltInProcHandlers.cs, SpellSystem.Auras.cs |  |
 | 44 | TrackCreatures | Handler | `HandleAuraTrackCreatures` (SpellAuras.cpp:109) | RangedHandlers.cs, SpellInfo.cs, TrackingAuras.cs |  |
 | 45 | TrackResources | Handler | `HandleAuraTrackResources` (SpellAuras.cpp:110) | RangedHandlers.cs, SpellInfo.cs, TrackingAuras.cs |  |
 | 46 | ModParrySkill | Unsupported | `HandleUnused` (SpellAuras.cpp:111) |  |  |
-| 47 | ModParryPercent | Unsupported | `HandleAuraModParryPercent` (SpellAuras.cpp:112) |  | aura-stat-ledger (not scheduled) |
+| 47 | ModParryPercent | Handler | `HandleAuraModParryPercent` (SpellAuras.cpp:112) | PercentStatAuras.cs |  |
 | 48 | ModDodgeSkill | Unsupported | `HandleUnused` (SpellAuras.cpp:113) |  |  |
-| 49 | ModDodgePercent | Unsupported | `HandleAuraModDodgePercent` (SpellAuras.cpp:114) |  | aura-stat-ledger (not scheduled) |
+| 49 | ModDodgePercent | Handler | `HandleAuraModDodgePercent` (SpellAuras.cpp:114) | PercentStatAuras.cs |  |
 | 50 | ModBlockSkill | Unsupported | `HandleUnused` (SpellAuras.cpp:115) |  |  |
-| 51 | ModBlockPercent | Unsupported | `HandleAuraModBlockPercent` (SpellAuras.cpp:116) |  | aura-stat-ledger (not scheduled) |
+| 51 | ModBlockPercent | Handler | `HandleAuraModBlockPercent` (SpellAuras.cpp:116) | PercentStatAuras.cs |  |
 | 52 | ModCritPercent | Referenced | `HandleAuraModCritPercent` (SpellAuras.cpp:117) | SpellCombatRules.cs |  |
 | 53 | PeriodicLeech | Handler | `HandlePeriodicLeech` (SpellAuras.cpp:118) | DrainAuras.cs, SpellCoefficients.cs, SpellInfoRuleExtensions.cs |  |
 | 54 | ModHitChance | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:119) |  |  |
@@ -128,49 +130,49 @@ disagrees with the live registrations of a composed world host.
 | 71 | ModSpellCritChanceSchool | Referenced | `HandleModSpellCritChanceSchool` (SpellAuras.cpp:136) | SpellCombatRules.cs |  |
 | 72 | ModPowerCostSchoolPct | Handler | `HandleModPowerCostPCT` (SpellAuras.cpp:137) | PowerCostAuras.cs |  |
 | 73 | ModPowerCostSchool | Handler | `HandleModPowerCost` (SpellAuras.cpp:138) | PowerCostAuras.cs |  |
-| 74 | ReflectSpellsSchool | Unsupported | `HandleReflectSpellsSchool` (SpellAuras.cpp:139) |  |  |
+| 74 | ReflectSpellsSchool | Handler | `HandleReflectSpellsSchool` (SpellAuras.cpp:139) | BuiltInProcHandlers.cs, SpellSystem.Auras.cs, SpellSystem.Reflect.cs |  |
 | 75 | ModLanguage | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:140) | ChatLanguageQueries.cs |  |
 | 76 | FarSight | Unsupported | `HandleFarSight` (SpellAuras.cpp:141) |  |  |
 | 77 | MechanicImmunity | Handler | `HandleModMechanicImmunity` (SpellAuras.cpp:142) | CasterAuraGate.cs, ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 78 | Mounted | Handler | `HandleAuraMounted` (SpellAuras.cpp:143) | MountAura.cs, MountService.cs |  |
 | 79 | ModDamagePercentDone | Referenced | `HandleModDamagePercentDone` (SpellAuras.cpp:144) | SpellBonusModule.cs |  |
-| 80 | ModPercentStat | Unsupported | `HandleModPercentStat` (SpellAuras.cpp:145) |  | aura-stat-percent (not scheduled) |
+| 80 | ModPercentStat | Handler | `HandleModPercentStat` (SpellAuras.cpp:145) | PercentStatAuras.cs |  |
 | 81 | SplitDamagePct | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:146) | SpellSystem.Mitigation.cs |  |
 | 82 | WaterBreathing | Handler | `HandleWaterBreathing` (SpellAuras.cpp:147) | WaterBreathingAuras.cs |  |
-| 83 | ModBaseResistance | Unsupported | `HandleModBaseResistance` (SpellAuras.cpp:148) |  | aura-stat-percent (not scheduled) |
-| 84 | ModRegen | Referenced | `HandleModRegen` (SpellAuras.cpp:149) | RegenModifiers.cs |  |
-| 85 | ModPowerRegen | Referenced | `HandleModPowerRegen` (SpellAuras.cpp:150) | RegenModifiers.cs |  |
-| 86 | ChannelDeathItem | Unsupported | `HandleChannelDeathItem` (SpellAuras.cpp:151) |  | warlock-mage-utility |
+| 83 | ModBaseResistance | Handler | `HandleModBaseResistance` (SpellAuras.cpp:148) | PercentStatAuras.cs |  |
+| 84 | ModRegen | Handler | `HandleModRegen` (SpellAuras.cpp:149) | FoodDrinkAuras.cs, RegenModifiers.cs |  |
+| 85 | ModPowerRegen | Handler | `HandleModPowerRegen` (SpellAuras.cpp:150) | SpellSystem.PowerRegenAuras.cs, RegenModifiers.cs |  |
+| 86 | ChannelDeathItem | Handler | `HandleChannelDeathItem` (SpellAuras.cpp:151) | ../Warlock/ChannelDeathItemAura.cs |  |
 | 87 | ModDamagePercentTaken | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:152) | SpellBonusModule.cs |  |
-| 88 | ModHealthRegenPercent | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:153) | MapCombat.Regen.cs |  |
+| 88 | ModHealthRegenPercent | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:153) | HealthRegenPercentAuras.cs, MapCombat.Regen.cs |  |
 | 89 | PeriodicDamagePercent | Handler | `HandlePeriodicDamagePCT` (SpellAuras.cpp:154) | SpellInfoRuleExtensions.cs, SpellPackets.cs, SpellSystem.Auras.cs |  |
 | 90 | ModResistChance | Unsupported | `HandleUnused` (SpellAuras.cpp:155) |  |  |
 | 91 | ModDetectRange | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:156) |  |  |
 | 92 | PreventsFleeing | Referenced | `HandlePreventFleeing` (SpellAuras.cpp:157) | CcAuraHandlers.cs, CcState.cs |  |
 | 93 | ModUnattackable | Unsupported | `HandleModUnattackable` (SpellAuras.cpp:158) |  |  |
 | 94 | InterruptRegen | Referenced | `HandleInterruptRegen` (SpellAuras.cpp:159) | MapCombat.Regen.cs |  |
-| 95 | Ghost | Unsupported | `HandleAuraGhost` (SpellAuras.cpp:160) |  | graveyards-resurrection |
-| 96 | SpellMagnet | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:161) |  |  |
+| 95 | Ghost | Handler | `HandleAuraGhost` (SpellAuras.cpp:160) | GhostAuras.cs |  |
+| 96 | SpellMagnet | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:161) | ../Magnet/SpellMagnetAuras.cs |  |
 | 97 | ManaShield | Referenced | `HandleManaShield` (SpellAuras.cpp:162) | SpellSystem.Mitigation.cs |  |
-| 98 | ModSkillTalent | Unsupported | `HandleAuraModSkill` (SpellAuras.cpp:163) |  | aura-skill-bonus (not scheduled) |
+| 98 | ModSkillTalent | Handler | `HandleAuraModSkill` (SpellAuras.cpp:163) | SkillAuras.cs |  |
 | 99 | ModAttackPower | Handler | `HandleAuraModAttackPower` (SpellAuras.cpp:164) | StatAuras.cs |  |
 | 100 | AurasVisible | Unsupported | `HandleAurasVisible` (SpellAuras.cpp:165) |  |  |
-| 101 | ModResistancePct | Unsupported | `HandleModResistancePercent` (SpellAuras.cpp:166) |  | aura-stat-percent (not scheduled) |
+| 101 | ModResistancePct | Handler | `HandleModResistancePercent` (SpellAuras.cpp:166) | PercentStatAuras.cs |  |
 | 102 | ModMeleeAttackPowerVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:167) |  |  |
-| 103 | ModTotalThreat | Unsupported | `HandleAuraModTotalThreat` (SpellAuras.cpp:168) |  | threat-and-aggro |
+| 103 | ModTotalThreat | Handler | `HandleAuraModTotalThreat` (SpellAuras.cpp:168) | ThreatAuras.cs |  |
 | 104 | WaterWalk | Handler | `HandleAuraWaterWalk` (SpellAuras.cpp:169) | MovementFlagAuras.cs |  |
 | 105 | FeatherFall | Handler | `HandleAuraFeatherFall` (SpellAuras.cpp:170) | FallObserver.cs, MovementFlagAuras.cs |  |
 | 106 | Hover | Handler | `HandleAuraHover` (SpellAuras.cpp:171) | FallObserver.cs, MovementFlagAuras.cs |  |
-| 107 | AddFlatModifier | Unsupported | `HandleAddModifier` (SpellAuras.cpp:172) |  | spell-modifier-engine |
-| 108 | AddPctModifier | Unsupported | `HandleAddModifier` (SpellAuras.cpp:173) |  | spell-modifier-engine |
-| 109 | AddTargetTrigger | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:174) |  | proc engine (not scheduled) |
+| 107 | AddFlatModifier | Handler | `HandleAddModifier` (SpellAuras.cpp:172) | ../Mods/SpellModModule.cs |  |
+| 108 | AddPctModifier | Handler | `HandleAddModifier` (SpellAuras.cpp:173) | ../Mods/SpellModModule.cs |  |
+| 109 | AddTargetTrigger | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:174) | BuiltInProcHandlers.cs, SpellSystem.Auras.cs, SpellSystem.SpellProcs.cs |  |
 | 110 | ModPowerRegenPercent | Referenced | `HandleModPowerRegenPCT` (SpellAuras.cpp:175) | CombatOptions.cs |  |
 | 111 | AddCasterHitTrigger | Unsupported | `HandleUnused` (SpellAuras.cpp:176) |  |  |
 | 112 | OverrideClassScripts | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:177) | ShapeshiftService.cs | druid-forms |
 | 113 | ModRangedDamageTaken | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:178) |  |  |
 | 114 | ModRangedDamageTakenPct | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:179) |  |  |
 | 115 | ModHealing | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:180) | SpellBonusModule.cs |  |
-| 116 | ModRegenDuringCombat | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:181) | MapCombat.Regen.cs |  |
+| 116 | ModRegenDuringCombat | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:181) | CombatHealthRegenAuras.cs, MapCombat.Regen.cs |  |
 | 117 | ModMechanicResistance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:182) | MechanicResistRule.cs, SpellCombatRules.cs |  |
 | 118 | ModHealingPct | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:183) | DirectCombatEffects.cs, SpellBonusModule.cs |  |
 | 119 | SharePetTracking | Unsupported | `HandleUnused` (SpellAuras.cpp:184) |  |  |
@@ -186,17 +188,17 @@ disagrees with the live registrations of a composed world host.
 | 129 | ModSpeedAlways | Handler | `HandleAuraModIncreaseSpeed` (SpellAuras.cpp:194) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 130 | ModMountedSpeedAlways | Handler | `HandleAuraModIncreaseMountedSpeed` (SpellAuras.cpp:195) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 131 | ModRangedAttackPowerVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:196) |  |  |
-| 132 | ModIncreaseEnergyPercent | Unsupported | `HandleAuraModIncreaseEnergyPercent` (SpellAuras.cpp:197) |  | aura-stat-percent (not scheduled) |
-| 133 | ModIncreaseHealthPercent | Unsupported | `HandleAuraModIncreaseHealthPercent` (SpellAuras.cpp:198) |  | aura-stat-percent (not scheduled) |
-| 134 | ModManaRegenInterrupt | Referenced | `HandleAuraModRegenInterrupt` (SpellAuras.cpp:199) | RegenModifiers.cs |  |
+| 132 | ModIncreaseEnergyPercent | Handler | `HandleAuraModIncreaseEnergyPercent` (SpellAuras.cpp:197) | PercentStatAuras.cs |  |
+| 133 | ModIncreaseHealthPercent | Handler | `HandleAuraModIncreaseHealthPercent` (SpellAuras.cpp:198) | PercentStatAuras.cs |  |
+| 134 | ModManaRegenInterrupt | Handler | `HandleAuraModRegenInterrupt` (SpellAuras.cpp:199) | ManaRegenInterruptAuras.cs, RegenModifiers.cs |  |
 | 135 | ModHealingDone | Referenced | `HandleModHealingDone` (SpellAuras.cpp:200) | SpellBonusModule.cs |  |
 | 136 | ModHealingDonePercent | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:201) | DirectCombatEffects.cs, SpellBonusModule.cs |  |
-| 137 | ModTotalStatPercentage | Unsupported | `HandleModTotalPercentStat` (SpellAuras.cpp:202) |  | aura-stat-percent (not scheduled) |
-| 138 | ModMeleeHaste | Unsupported | `HandleModMeleeSpeedPct` (SpellAuras.cpp:203) |  | needs an attack-speed primitive (not scheduled) |
-| 139 | ForceReaction | Unsupported | `HandleForceReaction` (SpellAuras.cpp:204) |  |  |
-| 140 | ModRangedHaste | Unsupported | `HandleAuraModRangedHaste` (SpellAuras.cpp:205) |  | ranged-combat |
-| 141 | ModRangedAmmoHaste | Unsupported | `HandleRangedAmmoHaste` (SpellAuras.cpp:206) |  | ranged-combat |
-| 142 | ModBaseResistancePct | Unsupported | `HandleAuraModBaseResistancePercent` (SpellAuras.cpp:207) |  | aura-stat-percent (not scheduled) |
+| 137 | ModTotalStatPercentage | Handler | `HandleModTotalPercentStat` (SpellAuras.cpp:202) | PercentStatAuras.cs |  |
+| 138 | ModMeleeHaste | Handler | `HandleModMeleeSpeedPct` (SpellAuras.cpp:203) | AttackSpeedAuras.cs |  |
+| 139 | ForceReaction | Handler | `HandleForceReaction` (SpellAuras.cpp:204) | ../ReputationSpellHandlers.cs |  |
+| 140 | ModRangedHaste | Handler | `HandleAuraModRangedHaste` (SpellAuras.cpp:205) | AttackSpeedAuras.cs |  |
+| 141 | ModRangedAmmoHaste | Handler | `HandleRangedAmmoHaste` (SpellAuras.cpp:206) | AttackSpeedAuras.cs |  |
+| 142 | ModBaseResistancePct | Handler | `HandleAuraModBaseResistancePercent` (SpellAuras.cpp:207) | PercentStatAuras.cs |  |
 | 143 | ModResistanceExclusive | Unsupported | `HandleAuraModResistanceExclusive` (SpellAuras.cpp:208) |  |  |
 | 144 | SafeFall | Handler | `HandleAuraSafeFall` (SpellAuras.cpp:209) | FallObserver.cs, MovementFlagAuras.cs |  |
 | 145 | Charisma | Unsupported | `HandleUnused` (SpellAuras.cpp:210) |  |  |
@@ -204,24 +206,24 @@ disagrees with the live registrations of a composed world host.
 | 147 | MechanicImmunityMask | Handler | `HandleModMechanicImmunityMask` (SpellAuras.cpp:212) | CasterAuraGate.cs, ImmunityAuraHandlers.cs, ImmunityRules.cs |  |
 | 148 | RetainComboPoints | Referenced | `HandleAuraRetainComboPoints` (SpellAuras.cpp:213) | ComboPointService.cs |  |
 | 149 | ResistPushback | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:214) | SpellSystem.Pushback.cs |  |
-| 150 | ModShieldBlockvaluePct | Unsupported | `HandleShieldBlockValue` (SpellAuras.cpp:215) |  |  |
+| 150 | ModShieldBlockvaluePct | Handler | `HandleShieldBlockValue` (SpellAuras.cpp:215) | PercentStatAuras.cs |  |
 | 151 | TrackStealthed | Handler | `HandleAuraTrackStealthed` (SpellAuras.cpp:216) | RangedHandlers.cs, SpellInfo.cs, TrackingAuras.cs |  |
 | 152 | ModDetectedRange | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:217) |  |  |
 | 153 | SplitDamageFlat | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:218) | SpellSystem.Mitigation.cs |  |
 | 154 | ModStealthLevel | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:219) | StealthDetection.cs, StealthFeature.cs |  |
 | 155 | ModWaterBreathing | Handler | `HandleModWaterBreathing` (SpellAuras.cpp:220) | WaterBreathingAuras.cs |  |
-| 156 | ModReputationGain | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:221) |  | reputation-factions |
+| 156 | ModReputationGain | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:221) | ../ReputationSpellHandlers.cs |  |
 | 157 | PetDamageMulti | Unsupported | `HandleUnused` (SpellAuras.cpp:222) |  |  |
-| 158 | ModShieldBlockvalue | Unsupported | `HandleShieldBlockValue` (SpellAuras.cpp:223) |  |  |
-| 159 | NoPvpCredit | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:224) |  | honor-pvp-ranks |
+| 158 | ModShieldBlockvalue | Handler | `HandleShieldBlockValue` (SpellAuras.cpp:223) | PercentStatAuras.cs |  |
+| 159 | NoPvpCredit | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:224) | ../../Honor/HonorSpellEffects.cs |  |
 | 160 | ModAoeAvoidance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:225) | SpellCombatRules.cs |  |
-| 161 | ModHealthRegenInCombat | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:226) | MapCombat.Regen.cs |  |
+| 161 | ModHealthRegenInCombat | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:226) | CombatFlatHealthRegenAuras.cs, MapCombat.Regen.cs |  |
 | 162 | PowerBurnMana | Unsupported | `HandleAuraPowerBurn` (SpellAuras.cpp:227) |  |  |
 | 163 | ModCritDamageBonus | Unsupported | `HandleUnused` (SpellAuras.cpp:228) |  |  |
 | 164 | Unk164 | Unsupported | `HandleUnused` (SpellAuras.cpp:229) |  |  |
 | 165 | MeleeAttackPowerAttackerBonus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:230) |  |  |
-| 166 | ModAttackPowerPct | Unsupported | `HandleAuraModAttackPowerPercent` (SpellAuras.cpp:231) |  | aura-stat-percent (not scheduled) |
-| 167 | ModRangedAttackPowerPct | Unsupported | `HandleAuraModRangedAttackPowerPercent` (SpellAuras.cpp:232) |  | aura-stat-percent (not scheduled) |
+| 166 | ModAttackPowerPct | Handler | `HandleAuraModAttackPowerPercent` (SpellAuras.cpp:231) | PercentStatAuras.cs |  |
+| 167 | ModRangedAttackPowerPct | Handler | `HandleAuraModRangedAttackPowerPercent` (SpellAuras.cpp:232) | PercentStatAuras.cs |  |
 | 168 | ModDamageDoneVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:233) |  |  |
 | 169 | ModCritPercentVersus | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:234) | SpellCombatRules.cs |  |
 | 170 | DetectAmore | Unsupported | `HandleDetectAmore` (SpellAuras.cpp:235) |  |  |
@@ -244,7 +246,7 @@ disagrees with the live registrations of a composed world host.
 | 187 | ModAttackerMeleeCritChance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:252) | SpellCombatRules.cs |  |
 | 188 | ModAttackerRangedCritChance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:253) | SpellCombatRules.cs |  |
 | 189 | ModRating | Unsupported | `HandleUnused` (SpellAuras.cpp:254) |  |  |
-| 190 | ModFactionReputationGain | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:255) |  | reputation-factions |
+| 190 | ModFactionReputationGain | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:255) | ../ReputationSpellHandlers.cs |  |
 | 191 | UseNormalMovementSpeed | Handler | `HandleAuraModUseNormalSpeed` (SpellAuras.cpp:256) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 192 | AuraSpell | Unsupported | `HandleAuraAuraSpell` (SpellAuras.cpp:258) |  |  |
 

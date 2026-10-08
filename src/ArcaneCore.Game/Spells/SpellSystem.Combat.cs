@@ -75,10 +75,27 @@ public sealed partial class SpellSystem
         }
 
         uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
+        uint original = amount;
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
         amount -= absorbed;
         SpellCast? packetCast = _outcome?.Cast;
-        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target), critical: crit);
+        // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1444-1456): "Damage is done after procs so it can trigger auras on the victim that affect
+        // the caster in case of killing blow". The cast's own hit on this target procs once, here, before the sink.
+        bool reflected = false;
+        if (_outcome is { } hit && ReferenceEquals(hit.Target, target) && ReferenceEquals(hit.Cast.Caster, caster) && hit.Cast.Spell.Id == spell.Id)
+        {
+            reflected = hit.Reflected && ReferenceEquals(caster, target);
+            if (!hit.ProcsDone)
+            {
+                hit.ProcsDone = true;
+                // A reflected hit procs with PROC_EX_REFLECT plus the hit bits (CreateProcExtendMask falls through from REFLECT, Unit.cpp:8811-8828).
+                FireSpellHitProcs(hit.Cast, target, hit.Reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, amount, original + resisted, crit, absorbed,
+                    hit.EffectMask, hit.Reflected);
+            }
+        }
+
+        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target), critical: crit,
+            durabilityLoss: true, reflected: reflected);
         OnDamageTaken(target, caster, dealt, periodic: false, absorbed, spell.Id);
         RecordDamage(caster, target, spell, dealt, crit);
         uint spellHitInfo = crit ? SpellHitTypeCrit : 0;
@@ -141,7 +158,7 @@ public sealed partial class SpellSystem
 
         // vmangos Unit.cpp:735-745 / 895-906: RemoveAurasWithInterruptFlags(DAMAGE_CANCELS, damaging spell, checkProcFlags). The aura
         // of the spell that did the damage stays (a DoT with the flag does not cancel itself) and so does any aura whose spell
-        // has procFlags (Wyvern Sting, Prowl).
+        // has procFlags (Wyvern Sting): the proc engine ends those.
         if (damage == 0)
         {
             BreakAurasOnDamage(victim, sourceSpellId);
@@ -166,15 +183,15 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// The damage break of <see cref="OnDamageTaken"/>. With a proc engine (<see cref="AuraOptions.ProcEngineBreaksDamageAuras"/>) every
-    /// procFlags aura is skipped, as vmangos does. Without one only <see cref="DamageBreakExemptSpells"/> (Wyvern Sting, Prowl) are spared,
-    /// so Polymorph, Sap, Gouge and Freezing Trap still break here.
+    /// The damage break of <see cref="OnDamageTaken"/> (vmangos Unit.cpp:735-745, 895-906): every procFlags aura is skipped
+    /// (<see cref="AuraOptions.ProcEngineBreaksDamageAuras"/>, default on) because the proc engine ends those (charges, break chances,
+    /// <see cref="AuraOptions.DamageProcCancelsAura"/>). "Prevent item procs from breaking the CC that caused them" (Unit.cpp:896-905): when the
+    /// damage comes from a spell a PROC_TRIGGER_SPELL aura is casting, the spell whose hit made that aura proc is the exception instead.
     /// </summary>
     private void BreakAurasOnDamage(Unit victim, uint sourceSpellId)
     {
-        bool procEngine = AuraOptions.ProcEngineBreaksDamageAuras;
-        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: procEngine,
-            exemptSpells: procEngine ? null : DamageBreakExemptSpells);
+        uint except = sourceSpellId != 0 && _procCastParent is { } parent && parent.SpellId == sourceSpellId ? parent.ParentSpellId : sourceSpellId;
+        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, except, checkProcFlags: AuraOptions.ProcEngineBreaksDamageAuras);
     }
 
     /// <summary>

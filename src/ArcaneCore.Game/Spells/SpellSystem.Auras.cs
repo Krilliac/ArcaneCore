@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Game.Spells.Rules.Immunity;
@@ -46,7 +47,26 @@ public sealed partial class SpellSystem
         [AuraType.PeriodicEnergize] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.ObsModMana] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.PeriodicTriggerSpell] = new AuraHandler(null, static (s, h, a) => s.TickTriggerSpell(h, a)),
+
+        // The proc engine (Spells/Procs, docs/areas/procs.md) reads these when an event happens; applying them changes nothing
+        // (vmangos HandleNoImmediateEffect / HandleAuraProcTriggerSpell, SpellAuras.cpp:80, 93, 107-108, 174).
+        [AuraType.DamageShield] = new AuraHandler(null, null),
+        [AuraType.ReflectSpells] = new AuraHandler(null, null),
+        [AuraType.ProcTriggerSpell] = new AuraHandler(null, null),
+        [AuraType.ProcTriggerDamage] = new AuraHandler(null, null),
+        [AuraType.AddTargetTrigger] = new AuraHandler(null, null),
+
+        // vmangos Aura::HandleReflectSpellsSchool (SpellAuras.cpp:5422-5431): the caster's RESIST_MISS_CHANCE spell mods raise the chance.
+        [AuraType.ReflectSpellsSchool] = new AuraHandler(static (s, h, a, apply) => s.ApplyReflectSchoolMods(h, a, apply), null),
     }));
+
+    private void ApplyReflectSchoolMods(SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (apply && ResolveAuraCaster(holder) is { } caster && caster.GetCharmerOrOwnerPlayerOrSelf() is { } modOwner)
+        {
+            aura.Amount = (int)SpellModifiers.Apply(modOwner, holder.Spell, SpellModOp.ResistMissChance, aura.Amount);
+        }
+    }
 
     /// <summary>vmangos Spell::EffectApplyAura: add this effect's aura to the target's pending holder.</summary>
     private void EffectApplyAura(SpellEffectContext context)
@@ -134,6 +154,7 @@ public sealed partial class SpellSystem
         }
 
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
+        holder.AppliedAtMs = NowMs;
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
         SitDownForStandingCancelsAura(holder);
@@ -574,9 +595,16 @@ public sealed partial class SpellSystem
         }
 
         uint resisted = ApplyResist(caster, target, holder.Spell, ref amount, periodic: true);
+        uint original = amount + resisted;
         uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell);
         amount -= absorbed;
-        uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
+        if (ResolveAuraCaster(holder) is { } procCaster)
+        {
+            FirePeriodicDamageProcs(procCaster, target, holder.Spell, amount, original); // SpellAuras.cpp:5902-5917, before the damage
+        }
+
+        uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
+            reflected: holder.IsReflected && ReferenceEquals(caster, target));
         OnDamageTaken(target, caster, dealt, periodic: true, absorbed, holder.Spell.Id);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
@@ -632,7 +660,14 @@ public sealed partial class SpellSystem
         }
 
         amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
+        bool wasFull = target.Health >= target.MaxHealth;
         uint healed = Damage.Heal(caster, target, holder.Spell, amount, periodic: true);
+        if (ResolveAuraCaster(holder) is { } procCaster)
+        {
+            // SpellAuras.cpp:6060-6085: a tick on a full target still procs (amount 1).
+            FirePeriodicHealProcs(procCaster, target, holder.Spell, wasFull ? 1 : healed, amount);
+        }
+
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
     }
