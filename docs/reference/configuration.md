@@ -19,6 +19,7 @@ How to read the tables:
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
+- [`ClientData`](#clientdata)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -148,6 +149,13 @@ How to read the tables:
 | `CharacterCreation:StartPlayerMoney` | `long` | `0` | - | vmangos StartPlayerMoney in copper (default 0), clamped to 0..MAX_MONEY_AMOUNT (World.cpp:674). |
 | `CharacterCreation:StrictPlayerNames` | `uint` | `0` | - | vmangos StrictPlayerNames (0 any one script, bit 1 basic Latin, bit 2 realm zone script). |
 
+## `ClientData`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ClientData:DbcDirectory` | `string` | `""` | - | A directory holding the client's DBFilesClient *.dbc files (build 5875, extracted by the developer; none ships with the server). Set, every DBC consumer whose own path key (for example `Combat:ShapeshiftFormDbcPath`) is unset or empty reads the file of that name in this directory (for example SpellShapeshiftForm.dbc); a key that is set still wins. Each file is checked at start against the vmangos layout (field count and record size) and logged on one line: loaded, missing or format mismatch. A missing or mismatched file is not handed to its consumer, which keeps its built-in table or stays off, with a warning. Empty (the default): only the per-file keys are read, as before. |
+| `ClientData:Strict` | `bool` | `false` | - | Make a client data problem fatal: a missing or mismatched DBC under `DbcDirectory`, a configured per-file path whose file is missing or has another layout, or a `DbcDirectory` that does not exist refuses start-up (exit code 78, like any configuration error) instead of a warning. Default false. |
+
 ## `Combat`
 
 | Key | Type | Default | Reload | Meaning |
@@ -257,7 +265,7 @@ How to read the tables:
 | `Economy:AllowDeleteWithAttachments` | `bool` | `false` | - | Letters with an item or money may be deleted by the receiver, destroying the attachment, as vmangos does (MailHandler.cpp:469-491 refuses only cash on delivery). Default false: only emptied letters can be deleted, the pre-lane behaviour, since no retail source shows attachments being destroyable. |
 | `Economy:AuctionAccountConcurrentLimit` | `uint` | `0` | - | Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538, AuctionHouseHandler.cpp:274-280). A listing counts from acceptance: while it settles, and while an unknown outcome is recovered. 0 = unlimited (default). |
 | `Economy:AuctionDepositMin` | `uint` | `0` | - | Minimum deposit in copper (vmangos CONFIG_UINT32_AUCTION_DEPOSIT_MIN, default 0). |
-| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 15, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 15, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 75, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7. |
+| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 25, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875 client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one. |
 | `Economy:AuctionRateCut` | `float` | `1` | - | Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0). |
 | `Economy:AuctionRateDeposit` | `float` | `1` | - | Rate.Auction.Deposit multiplier (vmangos World.cpp:535, default 1.0). |
 | `Economy:AuctionRateTime` | `float` | `1` | - | Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0). |

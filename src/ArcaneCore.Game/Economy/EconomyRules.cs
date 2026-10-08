@@ -26,8 +26,8 @@ public sealed record AuctionHouseEntry(uint Id, uint DepositPercent, uint CutPer
 
 /// <summary>
 /// Economy configuration (section <c>Economy</c>). Defaults follow vmangos/cMaNGOS behavior; the
-/// auction-house percentages are AuctionHouse.dbc-style values and should be checked against the
-/// extracted 1.12.1 DBC before acceptance (docs/integration/economy.md).
+/// auction-house percentages are the extracted 1.12.1 AuctionHouse.dbc values (checked against the client file by
+/// AuctionHouseDbcAgreementTests when ARCANECORE_TEST_DBC_DIR is set; docs/integration/economy.md).
 /// </summary>
 public sealed class EconomyOptions
 {
@@ -133,12 +133,15 @@ public sealed class EconomyOptions
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 
-    /// <summary>The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7.</summary>
+    /// <summary>
+    /// The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875
+    /// client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one.
+    /// </summary>
     public List<AuctionHouseEntry> AuctionHouses { get; set; } =
     [
-        new(AuctionHouseRules.AllianceHouse, 15, 5),
-        new(AuctionHouseRules.HordeHouse, 15, 5),
-        new(AuctionHouseRules.NeutralHouse, 75, 15),
+        new(AuctionHouseRules.AllianceHouse, 5, 5),
+        new(AuctionHouseRules.HordeHouse, 5, 5),
+        new(AuctionHouseRules.NeutralHouse, 25, 15),
     ];
 
     /// <summary>
