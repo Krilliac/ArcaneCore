@@ -119,15 +119,28 @@ internal static class DeadminesTestContent
 
     public const float InsideFloor = 61.78f;
 
+    /// <summary>
+    /// The bot content only: a teleport trigger on Eastern Kingdoms to <see cref="TramMap"/> (like the Deeprun Tram entrances, a map
+    /// that is neither a continent in AllowedMaps nor a dungeon), west of the entrance, away from every walk the tests make.
+    /// </summary>
+    public const uint TramTrigger = 9101;
+
+    /// <summary>The bot content only: a trigger without a teleport (a tavern or quest exploration point) north of <see cref="TramTrigger"/>.</summary>
+    public const uint TavernTrigger = 9102;
+
+    /// <summary>The Deeprun Tram's map (vmangos map_template: MapType 0, not a dungeon).</summary>
+    public const uint TramMap = 369;
+
     public static void Register(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10));
 
     /// <summary>
     /// The content for the bot movement and recovery tests: the dungeon with its linked zone as an area row, a graveyard for that
-    /// zone outside (<see cref="Graveyard"/>) and a spirit healer standing at it. The creature store replaces the scenario creatures.
+    /// zone outside (<see cref="Graveyard"/>) and a spirit healer standing at it, plus <see cref="TramTrigger"/> (to
+    /// <see cref="TramMap"/>) and <see cref="TavernTrigger"/>. The creature store replaces the scenario creatures.
     /// </summary>
     public static void RegisterForBots(IServiceCollection services)
     {
-        services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10, withZone: true));
+        services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10, forBots: true));
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
         services.AddSingleton<ICreatureDataStore>(new SpiritHealers());
     }
@@ -154,22 +167,35 @@ internal static class DeadminesTestContent
             => Task.FromResult(new MapContent(Continents, [], [], [], []));
     }
 
-    private sealed class Maps(uint playerLimit, bool withZone = false) : IMapDataStore
+    private static readonly MapTemplate[] BotMaps = [new MapTemplate(TramMap, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Deeprun Tram", "")];
+
+    private static readonly AreaTriggerTemplate[] BotTriggers =
+    [
+        new AreaTriggerTemplate(TramTrigger, 0, -11300f, 1679.6f, 24.6f, 5f, 0, 0, 0, 0, "Tram entrance"),
+        new AreaTriggerTemplate(TavernTrigger, 0, -11300f, 1720f, 24.6f, 5f, 0, 0, 0, 0, "Tavern"),
+    ];
+
+    private static readonly AreaTriggerTeleport[] BotTeleports = [new AreaTriggerTeleport(TramTrigger, "Deeprun Tram", "", 0, TramMap, 4.6f, 28.2f, -4.3f, 0f)];
+
+    private sealed class Maps(uint playerLimit, bool forBots = false) : IMapDataStore
     {
         public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
             [
                 .. Continents,
                 new MapTemplate(DungeonEntryScenario.Deadmines, 0, MapType.Instance, DeadminesZone, playerLimit, 0, 0, -11208.4f, 1672.3f, "The Deadmines", ""),
+                .. (forBots ? BotMaps : []),
             ],
-            withZone ? [new AreaTemplate(DeadminesZone, DungeonEntryScenario.Deadmines, 0, 0, 0, 18, "The Deadmines", 0, 0)] : [],
+            forBots ? [new AreaTemplate(DeadminesZone, DungeonEntryScenario.Deadmines, 0, 0, 0, 18, "The Deadmines", 0, 0)] : [],
             [
                 new AreaTriggerTemplate(DungeonEntryScenario.EntranceTrigger, 0, -11208.6f, 1679.6f, 24.6f, 0f, 5f, 10f, 8f, 1.5f, "Deadmines Entrance"),
                 new AreaTriggerTemplate(DungeonEntryScenario.ExitTrigger, DungeonEntryScenario.Deadmines, -14.6f, -390.5f, 62.4f, 5f, 0, 0, 0, 0, "Deadmines Exit"),
+                .. (forBots ? BotTriggers : []),
             ],
             [
                 new AreaTriggerTeleport(DungeonEntryScenario.EntranceTrigger, "Deadmines - Entering", "You must be at least level 10 to enter.", 10,
                     DungeonEntryScenario.Deadmines, -16.4f, -383.07f, 61.78f, 1.9f),
                 new AreaTriggerTeleport(DungeonEntryScenario.ExitTrigger, "Deadmines - Exiting", "", 0, 0, -11208.7f, 1675.9f, 24.5733f, 4.71239f),
+                .. (forBots ? BotTeleports : []),
             ],
             []));
     }

@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -47,6 +48,46 @@ public sealed class PlayerbotMapPolicyTests
     [MemberData(nameof(Matrix))]
     public void Allows(uint[] allowed, uint mapId, MapTemplate? template, bool current, bool expected)
         => Assert.Equal(expected, PlayerbotMapPolicy.Allows(allowed, mapId, template, current));
+
+    public static TheoryData<uint[]?, uint?, bool, bool, bool> Triggers => new()
+    {
+        // allowed maps, teleport target (null: none), controller opted in, ghost's body behind it -> reported
+        { [0, 1], null, false, false, true },   // a tavern or quest exploration trigger
+        { [0, 1], 0u, false, false, true },     // a teleport within the allowed continents
+        { [0, 1], 1u, false, false, true },
+        { [0, 1], 369u, false, false, false },  // the Deeprun Tram: neither listed nor a dungeon
+        { [0, 1], 36u, false, false, false },   // a dungeon entrance
+        { [0, 1, 36], 36u, false, false, true },
+        { [0, 1], 36u, true, false, true },     // a controller brings the bot back
+        { [0, 1], 36u, false, true, true },     // a ghost walking to its body
+        { [], 0u, false, false, false },        // the login gate is AllowedMaps.Contains: an empty list admits nothing
+        { null, 0u, false, false, false },      // no route started yet: no list known
+    };
+
+    [Theory]
+    [MemberData(nameof(Triggers))]
+    public void AllowsTrigger(uint[]? allowed, uint? target, bool optedIn, bool leadsToCorpse, bool expected)
+        => Assert.Equal(expected, PlayerbotMapPolicy.AllowsTrigger(allowed, target, optedIn, leadsToCorpse));
+
+    [Theory]
+    [InlineData(36u, 36u, true)]    // the body's own dungeon
+    [InlineData(409u, 230u, true)]  // Molten Core is nested in Blackrock Depths
+    [InlineData(409u, 409u, true)]
+    [InlineData(230u, 409u, false)] // not the other way round
+    [InlineData(36u, 0u, false)]    // a parent of 0 is none (GhostEntryRules)
+    [InlineData(0u, 0u, true)]      // a body on the continent the teleport leads to
+    [InlineData(0u, 36u, false)]
+    [InlineData(999u, 999u, true)]  // unknown to the registry: only the map itself
+    [InlineData(999u, 0u, false)]
+    public void LeadsTo(uint corpseMap, uint target, bool expected)
+    {
+        var registry = new MapRegistry(
+        [
+            Dungeon, Raid,
+            new MapTemplate(230, 0, MapType.Instance, 1584, 5, 0, 0, 0, 0, "Blackrock Depths", ""),
+        ]);
+        Assert.Equal(expected, PlayerbotMapPolicy.LeadsTo(registry, corpseMap, target));
+    }
 
     /// <summary>
     /// A bot standing in The Deadmines instance with the default AllowedMaps [0, 1] plans and follows a route there, and may stay

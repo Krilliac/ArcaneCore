@@ -208,7 +208,7 @@ internal static class PlayerbotMotion
         state.MoveSpeedCap = options.MoveSpeed;
         state.RenewedMs = now;
         state.LeaseMs = Lease(options);
-        PlayerbotAreaTriggers.Begin(session, player, map, current);
+        PlayerbotAreaTriggers.Begin(session, player, map, current, options);
         if (state.Loops.OnRoute(route.Points[^1], now) is { } loop)
         {
             GiveUp(session, player, state, loop, now);

@@ -49,6 +49,17 @@ public sealed class DungeonBotScenarioTests
     }
 
     [Fact]
+    public async Task ABotWalkingAcrossTheEntranceTrigger_WithoutConsent_StaysOutside()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+
+        ScenarioReport report = await world.RunPassingAsync(new DungeonBotWalkPastEntranceScenario());
+
+        Assert.Contains($"{ScenarioDungeonBots.BotName} walked past the entrance and stayed outside", report.ToString());
+        AssertBack(world, report);
+    }
+
+    [Fact]
     public async Task ABotKilledInside_ReleasesOutside_WalksInAsAGhost_AndIsResurrectedAtTheEntrance()
     {
         await using ScenarioTestWorld world = await StartAsync();
@@ -67,7 +78,7 @@ public sealed class DungeonBotScenarioTests
 
         ScenarioReport report = await world.RunPassingAsync(new DungeonBotSpiritHealerScenario());
 
-        Assert.Contains($"{ScenarioDungeonBots.BotName} came back at the spirit healer, not at its body", report.ToString());
+        Assert.Contains($"{ScenarioDungeonBots.BotName} came back beside the spirit healer, not at its body", report.ToString());
         AssertBack(world, report);
     }
 
@@ -78,7 +89,9 @@ public sealed class DungeonBotScenarioTests
 
         foreach (IPlayerbotScenario scenario in new IPlayerbotScenario[]
         {
-            new DungeonBotGhostEntranceScenario(), new DungeonBotSpiritHealerScenario(), new DungeonBotWalkInsideScenario(),
+            // The consent of walk-into-entrance is taken away by its cleanup: walk-past-entrance right after it stays outside.
+            new DungeonBotGhostEntranceScenario(), new DungeonBotWalkIntoEntranceScenario(), new DungeonBotWalkPastEntranceScenario(),
+            new DungeonBotSpiritHealerScenario(), new DungeonBotWalkInsideScenario(),
         })
         {
             ScenarioReport report = await world.RunPassingAsync(scenario);
@@ -90,7 +103,7 @@ public sealed class DungeonBotScenarioTests
     public void TheDungeonBotScenarios_AreListedByName()
     {
         IServiceProvider none = new ServiceCollection().BuildServiceProvider();
-        foreach (string name in new[] { "dungeon-bot-walk-inside", "dungeon-bot-walk-into-entrance", "dungeon-bot-ghost-entrance", "dungeon-bot-spirit-healer" })
+        foreach (string name in new[] { "dungeon-bot-walk-inside", "dungeon-bot-walk-into-entrance", "dungeon-bot-walk-past-entrance", "dungeon-bot-ghost-entrance", "dungeon-bot-spirit-healer" })
             Assert.NotNull(PlayerbotScenarioCatalog.Find(none, name));
     }
 
