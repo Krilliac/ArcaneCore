@@ -38,6 +38,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>Quest givers and quests a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
     internal PlayerbotSuspensions? Suspensions { get; set; }
+
+    /// <summary>
+    /// Objectives the bot leaves to a group (quest id, creature entry): not chosen as the creature to hunt alone, so the bot goes on
+    /// with what it can do by itself while it waits for partners (<see cref="Groups.PlayerbotGroupCoordinator"/>).
+    /// </summary>
+    internal Func<uint, uint, bool>? HeldForGroup { get; set; }
     internal uint QuestId { get; private set; }
     internal uint TargetEntry { get; private set; }
     internal uint PreferredCreatureEntry { get; private set; }
@@ -239,11 +245,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { } quest)
                 continue;
+            if (Suspensions?.IsQuestSuspended(questId, _session.World.NowMs) == true)
+                continue;
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
             {
                 int entry = quest.ReqCreatureOrGOId[index];
                 uint required = quest.ReqCreatureOrGOCount[index];
-                if (entry > 0 && status.CreatureOrGOCount[index] < required)
+                if (entry > 0 && status.CreatureOrGOCount[index] < required
+                    && HeldForGroup?.Invoke(questId, (uint)entry) != true
+                    && Suspensions?.IsEntrySuspended((uint)entry, _session.World.NowMs) != true)
                 {
                     PreferredCreatureEntry = (uint)entry;
                     return;

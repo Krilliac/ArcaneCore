@@ -79,6 +79,18 @@ internal sealed class PlayerbotRisk
     /// <summary>Waiting to recover before the next pull.</summary>
     internal bool Waiting => _waitUntilMs != 0;
 
+    /// <summary>
+    /// The last quest objective the bot passed over as too strong for it alone but feasible for a small group
+    /// (<see cref="PlayerbotRiskModel.NeededGroupSize"/>): the group coordinator turns it into a "needs a group" goal. Null when none.
+    /// </summary>
+    internal PlayerbotGroupSignal? GroupSignal { get; private set; }
+
+    /// <summary>The largest group a pull is weighed for (a party; raids come from the content's own flags).</summary>
+    internal const int MaxSignalGroupSize = 5;
+
+    /// <summary>Forget the group signal (the coordinator took it).</summary>
+    internal void ClearGroupSignal() => GroupSignal = null;
+
     /// <summary>The line BOTINSPECT and <c>.playerbot status</c> show: the retreat, else the fight, else the last pull verdict.</summary>
     internal string Report
     {
@@ -195,6 +207,14 @@ internal sealed class PlayerbotRisk
 
         PlayerbotEngagementFacts facts = Facts(player, target, questObjective, out Vector3 spot, out List<PlayerbotThreat> pathThreats);
         PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
+        // Too strong alone, but a few players would take it: a "needs a group of N" goal instead of abandoning the objective.
+        if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled
+            && PlayerbotRiskModel.NeededGroupSize(facts, _options.Risk, MaxSignalGroupSize) is var size and > 1)
+        {
+            verdict = verdict with { Reason = $"group-of-{size}" };
+            GroupSignal = new PlayerbotGroupSignal(target.Entry, size, player.MapId, new Vector3(target.X, target.Y, target.Z), now);
+        }
+
         if (verdict.Decision == PlayerbotEngageDecision.Detour)
         {
             detour = FindDetour(player, target, spot, pathThreats);
@@ -451,3 +471,6 @@ internal sealed class PlayerbotRisk
         return false;
     }
 }
+
+/// <summary>A quest objective too strong for the bot alone, feasible for <paramref name="Size"/> players (<see cref="PlayerbotRisk.GroupSignal"/>).</summary>
+internal readonly record struct PlayerbotGroupSignal(uint Entry, int Size, uint MapId, Vector3 At, uint AtMs);

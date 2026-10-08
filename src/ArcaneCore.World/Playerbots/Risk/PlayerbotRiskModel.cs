@@ -77,6 +77,12 @@ internal sealed record PlayerbotEngagementFacts
 
     /// <summary>The bot retreated from or died to this very creature within its danger memory.</summary>
     public bool Remembered { get; init; }
+
+    /// <summary>
+    /// The players who would take the fight together (1 alone). A group of N deals N times the damage and shares the damage taken
+    /// over N players' health (the healer's heals stand in for its own damage), so the risk falls roughly with N squared.
+    /// </summary>
+    public int GroupSize { get; init; } = 1;
 }
 
 /// <summary>The verdict on one candidate target, shown in BOTINSPECT and <c>.playerbot status</c>.</summary>
@@ -124,6 +130,9 @@ internal static class PlayerbotRiskModel
     /// <summary>The reward a quest objective adds.</summary>
     internal const float QuestReward = 2f;
 
+    /// <summary>A group may take an elite this many more levels above its members than a bot alone (<see cref="EliteLevelMargin"/>).</summary>
+    internal const int GroupEliteLevelMargin = 3;
+
     /// <summary>The bot's damage per second before it has fought (a rough 1.12 figure: a level 10 bot deals about 20).</summary>
     internal static float PriorBotDps(byte level) => 2f + (1.8f * Math.Max((byte)1, level));
 
@@ -151,7 +160,8 @@ internal static class PlayerbotRiskModel
         // A creature with a spell that kills the bot outright is never worth it, quest or not: no estimate of rates covers a one-shot.
         if (facts.Enemies.Any(enemy => enemy.Lethal))
             return new(target.Entry, float.PositiveInfinity, reward, PlayerbotEngageDecision.Avoid, "lethal", adds);
-        if (target.Elite && target.Level >= facts.BotLevel + EliteLevelMargin && !facts.QuestObjective)
+        int eliteMargin = EliteLevelMargin + (facts.GroupSize > 1 ? GroupEliteLevelMargin : 0);
+        if (target.Elite && target.Level >= facts.BotLevel + eliteMargin && !facts.QuestObjective)
             return Verdict(PlayerbotEngageDecision.Avoid, "elite-above");
         if (risk <= accept) return Verdict(PlayerbotEngageDecision.Engage, adds > 0 ? $"ok-with-{adds}-adds" : "ok");
 
@@ -173,6 +183,32 @@ internal static class PlayerbotRiskModel
         }
 
         return Verdict(PlayerbotEngageDecision.Avoid, target.Elite ? "elite" : "too-strong");
+    }
+
+    /// <summary>
+    /// The smallest group (2 to <paramref name="maxSize"/>) that would take a fight the bot alone would not
+    /// (<see cref="PlayerbotEngagementFacts.GroupSize"/>): 0 when the bot can take it alone, when no group up to that size could, or
+    /// when the reason is not strength (a creature that kills outright, one the bot remembers fleeing from).
+    /// </summary>
+    internal static int NeededGroupSize(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options, int maxSize)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        ArgumentNullException.ThrowIfNull(options);
+        if (facts.Enemies.Count == 0 || facts.Remembered || facts.Enemies.Any(enemy => enemy.Lethal)) return 0;
+        PlayerbotEngagementFacts alone = facts with { GroupSize = 1 };
+        if (Assess(alone, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Rest or PlayerbotEngageDecision.Detour)
+            return 0;
+        for (int size = 2; size <= Math.Min(maxSize, 40); size++)
+        {
+            // Judged at full health and mana: a group rests before it pulls.
+            PlayerbotEngagementFacts group = facts with
+            {
+                GroupSize = size, BotHealth = facts.BotMaxHealth, BotManaPct = facts.BotManaPct is null ? null : 100f,
+            };
+            if (Assess(group, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Detour) return size;
+        }
+
+        return 0;
     }
 
     /// <summary>The risk a reward justifies: <c>Tolerance x min(0.9, 0.4 + 0.2 x reward)</c>.</summary>
@@ -198,7 +234,8 @@ internal static class PlayerbotRiskModel
     {
         if (enemies.Count == 0) return 0;
         if (health == 0) return float.PositiveInfinity;
-        float dps = MathF.Max(0.1f, facts.BotDps * ManaFactor(facts.ManaDependence, manaPct));
+        int players = Math.Max(1, facts.GroupSize);
+        float dps = MathF.Max(0.1f, facts.BotDps * ManaFactor(facts.ManaDependence, manaPct)) * players;
         float elapsed = 0, taken = 0;
         foreach (RiskEnemy enemy in enemies.OrderBy(e => e.Health))
         {
@@ -206,7 +243,7 @@ internal static class PlayerbotRiskModel
             taken += enemy.Dps * elapsed;
         }
 
-        float risk = taken / health;
+        float risk = taken / ((float)health * players);
         risk *= 1f + (0.5f * Math.Max(0, facts.DangerHits));
         if (facts.ReadyEscapes > 0) risk *= 0.9f;
         return risk;

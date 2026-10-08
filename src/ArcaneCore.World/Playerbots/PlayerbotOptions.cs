@@ -82,6 +82,9 @@ public sealed class PlayerbotOptions
     /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
     public PlayerbotRiskOptions Risk { get; set; } = new();
 
+    /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
+    public PlayerbotGroupOptions Groups { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -125,6 +128,8 @@ public sealed class PlayerbotOptions
         Party.Validate();
         if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
         Risk.Validate();
+        if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
+        Groups.Validate();
     }
 }
 
