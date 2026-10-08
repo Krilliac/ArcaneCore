@@ -142,7 +142,7 @@ training trip), and a creature entry present at two deaths is set aside for targ
 (`PlayerbotBrain.RecordDeath`): the attackers it captures at each living update are the loop breaker's entries and the risk's
 danger memory alike, and the errand it keeps is the one both set aside, the risk at the first death (within 30 seconds of the
 errand), the loop breaker at the third. Target choice skips both the set-aside entries and the remembered creatures. With the
-estimate and the hazards, the live replay no longer reaches the loop breaker (below).
+estimate and the hazards, the live replay of the 2026-10-08 rehearsal no longer reaches the loop breaker (0 death loops in 5 runs, against 27 reports in 5 runs without them).
 
 ## Party bots
 
