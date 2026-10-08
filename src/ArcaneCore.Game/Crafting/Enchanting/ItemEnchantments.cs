@@ -18,7 +18,7 @@ public static class EnchantSlots
     /// <summary>The slots below this are shown on the inspect window and in the visible item fields (vmangos <c>MAX_INSPECTED_ENCHANTMENT_SLOT</c>).</summary>
     public const int MaxInspected = 2;
 
-    /// <summary>Random-property slots 0-3 (vmangos PROP_ENCHANTMENT_SLOT_0..3, 3-6): item random suffixes, not delivered.</summary>
+    /// <summary>Random-property slots 0-3 (vmangos PROP_ENCHANTMENT_SLOT_0..3, 3-6): the enchantments of an item random suffix (ItemRandomProperties.Apply writes slots 3-5).</summary>
     public const int Property0 = 3;
 
     /// <summary>vmangos <c>MAX_ENCHANTMENT_SLOT</c>.</summary>
