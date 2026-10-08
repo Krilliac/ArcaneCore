@@ -20,7 +20,7 @@ No retail data is copied: every spell in the tests is a synthetic talent shape.
 | Client | `SpellModPackets.cs`, `SpellModClientSync.cs` | SMSG_SET_FLAT_SPELL_MODIFIER (0x266) and SMSG_SET_PCT_SPELL_MODIFIER (0x267). |
 | Owners | `ISpellModOwnerResolver.cs`, `PetTotemModOwner.cs` | `GetSpellModOwner`: a pet or totem reads its owner's mods. |
 | Masks | `IClassMaskSource.cs`, `World/Spells/Mods/FileClassMaskSource.cs`, `Data/Content/Import/Mappers/SpellAffectDumpImporter.cs`, `arcane-content-importer class-masks` | 64-bit class masks from an overlay file. |
-| Report | `TalentModCoverage.cs` | How many talent rank spells carry a modifier and which cannot work. |
+| Report | `TalentModCoverage.cs` | How many talent rank spells carry a modifier, which cannot work, and which use an operation nothing reads (`Readers`). |
 | World | `World/Spells/SpellModFeature.cs` | Binds `Spells:Mods`, loads the overlay, logs the mask report. |
 | Pipeline sites | `SpellSystem.Mods.cs` and one-line calls in `SpellSystem.cs`, `.Seams.cs`, `.Targeting.cs`, `.AreaAuras.cs`, `.Effects.cs`, `.Combat.cs`, `SpellCombatRules.cs`, `Effects/SpellThreat.cs`, `Casters/Bonus/SpellBonusModule.cs`, `Casters/Drain/DrainAuras.cs`, `SpellCast.cs` | See the site table below. |
 
@@ -119,11 +119,14 @@ count. `SpellModFeature` and `TalentModCoverage` print the numbers, which is the
 
 ## Limits and open questions
 
-- **Operations not wired** (nothing in the base reads them yet): SPEED, HASTE and ATTACK_POWER on an aura's own amount
-  (`SpellAuras.cpp:3982`, `:4016`, `:5086-5219`; the haste handlers belong to the aura-engine lane) and CHARGES at holder creation
-  (`:6693`) (the holder constructor is another lane's file),
-  CHANCE_OF_SUCCESS (proc chance, `UnitAuraProcHandler.cpp:490`; there is no proc dispatcher), the aura-level RESIST_MISS_CHANCE
-  (`:5430`), the mana drain effect's MULTIPLE_VALUE (no such effect handler yet). The engine already answers every operation, so wiring is a one-line call at the site.
+- **Operations not wired** (nothing in the base reads them yet): SPEED and ATTACK_POWER on an aura's own amount (`SpellAuras.cpp:3982`,
+  `:5086-5219`) and CHARGES at holder creation (`:6693`) (the holder constructor is another lane's file). `TalentModCoverage` reports the
+  talent modifier effects that use them ("nothing reads it"); its `Readers` list names the reading site of every other operation and a test
+  compares that list with the reads in the source, so wiring one of these three updates the list in the same change. The operations this list
+  once named are wired: HASTE (`AttackSpeedAuras`, `:4016`), CHANCE_OF_SUCCESS (the proc chance, `SpellSystem.Procs.cs` and
+  `SpellSystem.ItemCombatProcs.cs`, `UnitAuraProcHandler.cpp:490`), the aura-level RESIST_MISS_CHANCE (`SpellSystem.Auras.cs`
+  `ApplyReflectSchoolMods`, `:5430`) and MULTIPLE_VALUE (`DrainAuras`, `SpellSystem.PowerBurn.cs`, `SpellSystem.Combat.cs`,
+  `SpellSystem.Mitigation.cs`). The engine already answers every operation, so wiring is a one-line call at the site.
 - **Radius** is not applied to caster-relative destination points (`SelectCasterRelativeLocation`) or persistent area auras
   (dynamic objects do not exist yet).
 - **Charges**: a charge is only spent by the cast-time read, the cost and what runs inside `Cast()`. vmangos also spends at the first

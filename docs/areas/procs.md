@@ -50,7 +50,7 @@ Every aura type without one procs as `HandleNULLProc` (OK).
 
 | Aura type | Handler | vmangos |
 |---|---|---|
-| ProcTriggerSpell (42) | EffectTriggerSpell (Aegis of Preservation, Mana Drain, Talisman of Ascendance, Persistent Shield remaps); no extra-attack spell while extra attacks are pending (except 20178); Curse of Mending / Improved Lay on Hands on the victim; Rogue Setup on the main target only; positive spells on the owner, others on the victim | UnitAuraProcHandler.cpp:1147-1624 |
+| ProcTriggerSpell (42) | EffectTriggerSpell (Aegis of Preservation, Mana Drain, Talisman of Ascendance, Persistent Shield remaps); the talent cases ("Talent procs": Pyroclasm, Shadowguard, Blessed Recovery, Illumination); no extra-attack spell while extra attacks are pending (except 20178); Curse of Mending / Improved Lay on Hands on the victim; Rogue Setup on the main target only; Ruthlessness and Seal Fate after the cast; positive spells on the owner, others on the victim | UnitAuraProcHandler.cpp:1147-1624 |
 | ProcTriggerDamage (43) | the aura spell's hit roll (no reflect; a miss sends SMSG_PROCRESIST and counts), its effect value through the spell damage bonuses, non-critical spell damage | :1626-1676 |
 | AddTargetTrigger (109) | effect 0 base points as a percent (Blizzard / 8); the victim casts the trigger on itself, the owner on itself for Wolfshead Helm, Frosty Zap, Relentless Strikes | :1799-1843 |
 | ReflectSpellsSchool (74) | the spell's school must be in the aura's mask | :1778-1782 |
@@ -63,7 +63,34 @@ Every aura type without one procs as `HandleNULLProc` (OK).
 | ModCastingSpeedNotStack (65), ModPowerCostSchool(Pct) (72, 73), MechanicImmunity (77), ModMechanicResistance (117) | filters | :1772-1797 |
 | OverrideClassScripts (112) | script ids 4309 (Nightfall), 836/988/989 (Improved Blizzard), 4086/4087 (Improved Mend Pet), 3656 (Corrupted Healing); other ids count the charge | :1678-1770 |
 | ModPowerRegen (85), ResistPushback (149) | CANT_TRIGGER | table |
-| Dummy (4) | OK (charge counting); class scripts handle the rest | :550-1145 |
+| Dummy (4) | OK (charge counting); the talent and class proc scripts handle the rest | :550-1145 |
+
+## Talent procs
+
+The talents whose proc is scripted in vmangos, as `IProcScript`s registered by `TalentProcScriptsModule`
+(`src/ArcaneCore.Game/Spells/Procs/Talents/`) or as cases of the built-in PROC_TRIGGER_SPELL handler. "Row" is what the talent needs from its
+`spell_proc_event` row (see Data below).
+
+| Talent | Registered as | What the proc does | vmangos | Row |
+|---|---|---|---|---|
+| Eye for an Eye 9799, 25988 | proc script (id) | its percent of a critical magic spell's damage before absorbs and resists (`originalAmount`), at most half the owner's maximum health, as 25997 at the attacker; weapon specials never | UnitAuraProcHandler.cpp:577-593, 258-266 | no (the crit check is hard-coded) |
+| Sweeping Strikes 12292, 18765 | proc script (id) | a hit that dealt damage (amount > 1) repeats its damage before the victim's armor (`amount x 100 / CalcArmorReducedDamage(victim, 100)`) as 12723 on a random other unfriendly unit within 5 yards (8 for Whirlwind), skipping PvP-flagged players for an unflagged warrior; Execute with only the main target below 20%: an ordinary swing (26654); 12723 and 26654 never chain; one charge per strike | :594-656 | no |
+| Retaliation 20230 | proc script (id) | a swing from in front of the warrior, not stunned, confused, fleeing or feigning death: 22858 at the attacker; one charge per strike | :660-675 | no |
+| Magic Absorption (mage icon 459) | proc script (family and icon) | a mana user gains its percent of maximum mana (29442) | :832-845 | **yes**: the resist (PROC_EX_RESIST); without it the talent never procs |
+| Master of Elements (mage icon 1920) | proc script (family and icon) | its percent of the spell's base cost (`manaCost + ManaCostPercentage x create mana / 100`) as 29077; nothing for a free spell | :849-862 | the fire-or-frost crit; without a row the script requires it itself |
+| Vampiric Embrace 15286 | proc script (id) | damage from the debuff's own caster makes that caster cast 15290 (the party heal) for the percent of the damage, at least 1 | :875-893 | shadow only; without a row the script requires a shadow spell |
+| Blade Flurry 13877 | proc script (id) | the hit's damage before armor as 22482 on a random other unfriendly unit within 5 yards; 22482 never chains | :951-971 | no |
+| Pyroclasm (warlock icon 1137) | PROC_TRIGGER_SPELL case | Hellfire (15 ticks), Rain of Fire (4) or Soul Fire (1) only; rank chance 13 / 26 over the ticks; stun 18093 on a living other victim | :1226-1262 | no |
+| Shadowguard (priest icon 19) | PROC_TRIGGER_SPELL case | rank 18137..19312 to damage 28377..28382 at the attacker; an unknown rank casts nothing | :1281-1306 | no |
+| Blessed Recovery (priest icon 1875) | PROC_TRIGGER_SPELL case | rank 27811/27815/27816 to heal 27813/27817/27818 on the priest for `rand_dither(amount x percent / 100 / 3)` | :1308-1330 | no |
+| Illumination (paladin icon 241) | PROC_TRIGGER_SPELL case | 20272 on the paladin with the healing spell's mana cost; Holy Shock's heal (25914/25913/25903) reads the cast rank (20473/20929/20930); an unknown Holy Shock heal casts nothing | :1468-1500 | the critical heal |
+| Ruthlessness (14157), Seal Fate (14189) | PROC_TRIGGER_SPELL case | the combo point is cast on the running spell's unit target after that spell finished, so a finisher's own point survives `Spell::finish` clearing its points; no running spell: no point | :1592-1615, Spell.cpp:4374-4395 | Seal Fate: the crit |
+
+Shatter (OVERRIDE_CLASS_SCRIPTS 849, 910-913) is not a proc: the magic crit roll reads it (`SpellCritRules.ScriptedCritBonus`, vmangos
+Unit.cpp:5259-5290): +10..50% against a frozen target for the caster's spells of the aura's family (all mage spells, 1.11+).
+
+Icon-keyed scripts (`SpellSystem.RegisterIconProcScript`) are matched against the proccing spell when it procs, not resolved from the spell
+table when they are registered: the world builds its spell system on an empty table and loads (and `.reload`s) it later.
 
 ## Damage shields and reflection
 
@@ -104,7 +131,10 @@ name; classic-db Full_DB z2815 stores cooldowns in seconds, `ProcCooldownUnit.Se
 (`SpellProcEventContent.Resolve`: higher ranks inherit the first rank's row, only PPM rows may stand for a higher rank), `SpellProcFeature`
 (loads it when a store is registered) and `.reload spell_proc_event`. Nothing is bundled: without rows every proc aura runs on its Spell.dbc
 procFlags and procChance, which already covers most auras; PPM procs (Hand of Justice, Crusader-style talents), procEx-only procs (Shield Block,
-Flurry's crit requirement, reflect charges) and family-filtered talent procs need the operator's rows.
+Flurry's crit requirement, reflect charges) and family-filtered talent procs need the operator's rows. Talents in particular: a family-filtered or
+PPM talent runs on its raw Spell.dbc procFlags until operators import the rows, so it may proc from spells and outcomes vmangos filters out (or,
+for a procEx-only condition such as Magic Absorption's resist, never). Master of Elements and Vampiric Embrace apply their row's condition
+themselves when no row is loaded; the startup talent report (`TalentEffectCoverage`) does not know about rows.
 
 Importing: `arcane-content-importer proc-events <dump>... --database <file>` (or `--provider` with `--connection-string`) replaces the table with
 the dump's build-5875 rows in one transaction; `--cooldown-unit seconds` for classic-db dumps before z2829, `--dry-run` writes nothing. The
@@ -117,8 +147,13 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 ## Seams for other lanes
 
 - `SpellSystem.RegisterProcScript(spellId, IProcScript)`: vmangos `AuraScript::OnCheckProc` / `OnProc` for one aura spell (seals, Judgement of
-  Light/Wisdom, Lightning Shield, Sweeping Strikes, Vengeance, Blessed Recovery, Pyroclasm, the dummy proc auras). Return null to fall back to
-  the generic check or the aura type's handler. One script per spell.
+  Light/Wisdom, the dummy-aura talents). Return null to fall back to the generic check or the aura type's handler. One script per spell.
+- `SpellSystem.RegisterIconProcScript(family, icon, IProcScript)`: the same for every aura spell of a family and SpellIconID (the talents vmangos
+  recognises by icon); a script registered for the spell's id comes first. `FindProcScript(SpellInfo)` resolves both.
+- `SpellSystem.EnablePostFinishProcs()` / `RunPostFinishProcs(cast)`: the post-finish deferral (Ruthlessness, Seal Fate); the combo point
+  service enables it and runs the deferred casts right after it cleared a finisher's points.
+- The talent coverage report counts a DUMMY or OVERRIDE_CLASS_SCRIPTS talent as handled through these registries (and the periodic and spell
+  script ones), so a lane that registers a script needs no change to the report.
 - `SpellSystem.RegisterProcHandler(AuraType, AuraProcHandler)`: replace or add an aura type's handler (vmangos `AuraProcHandler[]`).
 - `SpellSystem.ProcDamageAndSpell(actor, ProcEvent)`: offer an event from a new hit path (pet attacks, totems, game objects).
 - `SpellSystem.TriggerProccedSpell` / `CastProcSpell`: cast like vmangos TriggerProccedSpell / CastCustomSpell with triggeredByAura.
@@ -126,6 +161,12 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 
 ## Deviations (deliberate)
 
+- The Ruthlessness and Seal Fate point is cast right after the running spell's finish step, not one batching interval (400 ms) later as
+  vmangos' lambda event does; the order (after the finisher's points are cleared) is the same.
+- The random target of Sweeping Strikes and Blade Flurry (`SelectRandomUnfriendlyTarget`) does not test the owner's sight of the unit (vmangos
+  `CanSeeInWorld`: stealth and invisibility); dead, friendly, out-of-line-of-sight and (for Sweeping Strikes) PvP-enabling units are skipped.
+- Shatter's frozen test reads AURA_STATE_FROZEN and, as well, any frost-school stun or root aura on the target: vmangos sets the state from those
+  auras (SpellAuras.cpp:3565, 3807), which the ArcaneCore aura handlers do not do yet.
 - No spell batching: procs run at once (vmangos `Spell.ProcDelay` 400 ms default runs most attacker procs one batch later). The apply-time rule
   (Unit.cpp:8958, `GetAuraApplyTime() >= procTime`) is kept as "applied by this event" without a clock: `SpellSystem.BeginProcEvent` gives each
   outer event (a cast with its cast-end procs, every target's hit and the casts they trigger; a white swing with its damage, kill and weapon
@@ -154,9 +195,9 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 - PERIODIC_HEALTH_FUNNEL (pets lane) and POWER_BURN_MANA are unsupported auras, so their ticks fire no procs yet (vmangos SpellAuras.cpp:5928,
   6300-6354); absorbs of a leech tick are not modelled (DrainAuras).
 
-- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers go through `RegisterProcScript`: Seal of
-  Righteousness and Judgement of Light/Wisdom are delivered ([class-scripts](class-scripts.md)); Illumination, Lightning Shield, Pyroclasm, Shadowguard,
-  Blessed Recovery, set bonuses and Sweeping Strikes are not yet.
+- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers: Seal of Righteousness and Judgement of
+  Light/Wisdom ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered; Lightning Shield, the remaining dummy cases
+  (Clean Escape, Unstable Power, the trinkets) and the set-bonus class scripts are not yet.
 - Wyvern Sting's wake-up damage over time (24131/24134/24135 on removal, vmangos spell_hunter.cpp) is a hunter class script.
 - Pet melee and pet spells offer their events only through the same map combat and spell paths (no owner-side procs).
 - SPELL_ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET (ADD_TARGET_TRIGGER on the selected target only) and SPELLMOD_CHARGES on new holders.
@@ -164,6 +205,9 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 
 ## Tests
 
+`tests/ArcaneCore.Game.Tests/Procs/TalentDummyProcTests.cs` and `TalentProcTriggerTests.cs` (each talent proc with the vmangos base points,
+recipient, charges and filters; RED on 08ea5ff6), `Rogue/ComboPointProcDeferralTests.cs` (Ruthlessness' point survives its finisher),
+`Combat/ShatterCritTests.cs`, `Talents/TalentEffectCoverageTests.cs` (consumers of DUMMY and OVERRIDE_CLASS_SCRIPTS talents),
 `tests/ArcaneCore.Game.Tests/Procs/ProcEngineBehaviourTests.cs` (only pre-engine APIs: RED on 2ca2f4e1, 9/9),
 `ProcEngineTests.cs` (rows, charges, shields, kills, reflect charges, break chances, seams), `ProcEngineFidelityTests.cs` (leech and Improved
 Drain Mana ticks, the apply-time rule (old auras, a clock that moves inside the event, a refresh by the same hit), PROC_EX_REFLECT on reflected damage, heal procs before the heal, CAST_END alone,
@@ -171,4 +215,5 @@ the opt-in damage-proc cancel on a failed proc), `AuraChargeReplicationTests.cs`
 spent proc or shield charge, with stacks, clamped), `Auras/AuraInterruptEngineTests.cs`,
 `Duel/DuelCompletionTests.cs`; `tests/ArcaneCore.Data.Tests/Procs/*` (import, rank fill, the build-range load and the schema step on every provider, the `proc-events` command);
 `tests/ArcaneCore.World.Tests/Spells/SpellProcFeatureTests.cs` (load, reload, kills on a map) and the playerbot scenarios
-`Playerbots/Scenarios/ProcScenarioTests.cs` (damage shield in a duel; reflected lethal bolt ends the duel at 1 health).
+`Playerbots/Scenarios/ProcScenarioTests.cs` (damage shield in a duel; reflected lethal bolt ends the duel at 1 health; Retaliation strikes back
+a dueling warrior and spends a charge).
