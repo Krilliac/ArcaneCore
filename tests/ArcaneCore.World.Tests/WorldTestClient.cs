@@ -153,6 +153,42 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Read (up to the read timeout) until the first <paramref name="first"/> packet, then collect everything that
+    /// follows it until <paramref name="quiet"/> passes with nothing new. Every packet read is returned, including
+    /// those that arrived before <paramref name="first"/>. Use this, not <see cref="CollectAsync"/>, right after
+    /// sending a request: a loaded machine can take longer than the quiet window to answer at all.
+    /// </summary>
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectFromAsync(WorldOpcode first, TimeSpan? quiet = null)
+    {
+        var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        while (true)
+        {
+            (WorldOpcode Opcode, byte[] Payload) packet;
+            try
+            {
+                packet = await ReadAsync();
+            }
+            catch (OperationCanceledException ex)
+            {
+                throw new TimeoutException($"timed out waiting for {first}; read {packets.Count} other packets: {string.Join(", ", packets.TakeLast(12).Select(p => p.Opcode))}", ex);
+            }
+
+            packets.Add(packet);
+            if (packet.Opcode == first)
+            {
+                break;
+            }
+        }
+
+        packets.AddRange(await CollectAsync(quiet));
+        return packets;
+    }
+
+    /// <summary>The text of every chat line answering a request: waits for the first, then collects the rest.</summary>
+    internal async Task<string[]> CollectChatLinesAsync()
+        => [.. (await CollectFromAsync(WorldOpcode.SmsgMessagechat)).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+
     /// <summary>CMSG_MESSAGECHAT: u32 type, u32 language, [target], message.</summary>
     public Task SendChatAsync(ChatType type, Language language, string message, string? target = null)
     {

@@ -97,8 +97,7 @@ public sealed class ReputationAuraInspectionTests
         });
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".auras");
-        List<string> lines = (await gm.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat)
-            .Select(p => ChatMessage.Parse(p.Payload).Text).ToList();
+        string[] lines = await gm.CollectChatLinesAsync();
         Assert.Contains(lines, line => line.Contains("Active auras on Aurabound: page 1, 12 shown of 13", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.Contains("Additional aura holders available on page 2.", StringComparison.Ordinal));
 
