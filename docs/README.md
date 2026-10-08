@@ -68,6 +68,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Creature AI and movement | [creature-ai](areas/creature-ai.md) |
 | Grids, maps and terrain | [grid-terrain](areas/grid-terrain.md) |
 | Collision and pathing | [collision-pathing](areas/collision-pathing.md) |
+| GM debug drawing (`.debug vis`: LoS, paths, waypoints, cells) | [debug-draw](areas/debug-draw.md) |
 | Locomotion, falls and environment | [locomotion](areas/locomotion.md) |
 | World state and exploration | [world-state](areas/world-state.md) |
 | Instances and bosses | [instances](areas/instances.md) |

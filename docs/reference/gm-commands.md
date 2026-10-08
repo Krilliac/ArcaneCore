@@ -30,6 +30,19 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character rename` | 3 | GameMaster | declared retail level | Syntax: .character rename [$name] Request a rename of the selected character, or the named one (online or not); the player is asked for a new name at the character screen. |
+| `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
+| `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
+| `.debug vis los` | 3 | GameMaster | declared retail level | Syntax: .debug vis los Draw the line of sight from you to the selected unit through the vmap collision (green clear; red up to the hit, a reticle at the hit, small red dots for the hidden rest). |
+| `.debug vis path` | 3 | GameMaster | declared retail level | Syntax: .debug vis path Draw the path the pathfinder (navmesh) finds from you to the selected unit: blue corners and dots, red corners when it is incomplete, missing or a straight line. |
+| `.debug vis waypoints` | 3 | GameMaster | declared retail level | Syntax: .debug vis waypoints Draw the waypoint path of the selected creature (creature_movement, else creature_movement_template), with its nodes listed. |
+| `.debug vis cells` | 3 | GameMaster | declared retail level | Syntax: .debug vis cells [#radius] Mark the map cell corners (33.3 yards) within #radius cells (default 2, at most 5) on the floor; a grid corner (533.3 yards) has a red flag. |
+| `.debug vis collision` | 3 | GameMaster | declared retail level | Syntax: .debug vis collision [#yards] Cast a ray straight ahead at eye height (default 40 yards) and mark where the vmap collision stops it. |
+| `.debug vis height` | 3 | GameMaster | declared retail level | Syntax: .debug vis height Mark the floor under you and print the terrain, model, water and floor heights, zone, area and indoor state. |
+| `.debug vis range` | 3 | GameMaster | declared retail level | Syntax: .debug vis range [#yards] Mark a circle of #yards around you on the floor (default the visibility distance, 100 yards). |
+| `.debug vis spawns` | 3 | GameMaster | declared retail level | Syntax: .debug vis spawns [#yards] Mark the spawn points of the creatures spawned within #yards (default 40), nearest first. |
+| `.debug vis kit` | 3 | GameMaster | declared retail level | Syntax: .debug vis kit #kitid Play a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked). |
+| `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
+| `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
 | `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |
