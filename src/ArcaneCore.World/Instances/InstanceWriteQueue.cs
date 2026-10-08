@@ -55,6 +55,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     public void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId)
         => Enqueue(store => store.SaveLastInstanceAsync(new CharacterLastInstanceRecord((int)characterId, mapId, instanceId)));
 
+    /// <summary>A stored group bind (vmangos <c>group_instance</c>), under the leader's character id.</summary>
+    public void GroupBound(uint leaderCharacterId, uint instanceId, bool permanent)
+        => Enqueue(store => store.SaveGroupBindAsync(new GroupInstanceBindRecord((int)leaderCharacterId, instanceId, permanent)));
+
+    public void GroupUnbound(uint leaderCharacterId, uint instanceId) => Enqueue(store => store.DeleteGroupBindAsync((int)leaderCharacterId, instanceId));
+
     /// <summary>Delete a character's binds and last instance (queued by the character delete hook).</summary>
     public void CharacterDeleted(int characterId) => Enqueue(store => store.DeleteCharacterAsync(characterId));
 

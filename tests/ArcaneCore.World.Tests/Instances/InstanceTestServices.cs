@@ -61,6 +61,12 @@ internal sealed class InMemoryInstanceStore : IInstanceStore
 
     public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Record($"delete character {characterId}");
 
+    public Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default)
+        => Record($"group bind {bind.LeaderCharacterId} {bind.InstanceId} {bind.Permanent}");
+
+    public Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default)
+        => Record($"group unbind {leaderCharacterId} {instanceId}");
+
     private Task Record(string write)
     {
         Writes.Enqueue(write);

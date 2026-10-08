@@ -500,6 +500,7 @@ public sealed partial class SummonService
         owner.SetPetGuid(pet.Guid);
         owner.Session.Send(WorldOpcode.SmsgPetSpells,
             PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+        RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         return pet;
     }
 }

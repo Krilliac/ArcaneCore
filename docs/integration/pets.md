@@ -190,7 +190,7 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 | faction and PvP rules (`Combat/FactionCombatHooks.cs`, lines 31-32 list it as missing) | hostility of a pet or totem is its owner's: `Object.cpp:3745-3815`; copy of the owner faction is already on the unit, the player-controlled and PvP flags too | `Object.cpp:3745-3815` |
 | stats (stats-combat-formulas lane) | the owner's stat inheritance for a pet (`Pet::UpdateAllStats`), `CreatureClassLevelStats` for pets without `pet_levelstats` | `Pet.cpp:1274-1480` |
 | mounts (the owner's lane) | `PetController.SetEnabled(pet, false/true)` on mount and dismount (greys the bar) | `Player.cpp:18214`, `18249` |
-| teleports and logout (teleport, character lanes) | re-summon of a pet unsummoned by a far teleport or a logout needs the pet store (P7) | `UnsummonPetTemporaryIfAny` |
+| teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet through the pet store (P7), a demon is not stored | `UnsummonPetTemporaryIfAny` |
 
 ## Configuration (`Pets`, every default is the retail value)
 
@@ -261,9 +261,23 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
 * **Pet stats and name.** A summoned pet keeps its template health and damage: `InitStatsForLevel`
   (`Pet.cpp:1274-1480`) needs the stats lane's per-class level stats and the `pet_levelstats` data
   (a World table, planned P4). The pet name and `UNIT_FIELD_PETNUMBER` are not generated.
-* **Map change.** A pet or totem is unsummoned when its owner leaves the map (including a far
-  teleport). vmangos re-summons a temporarily unsummoned pet after the transfer
-  (`UnsummonPetTemporaryIfAny`); that belongs with pet persistence (P7).
+* **Map change (wave 2).** A far teleport puts the controlled pet away before the owner leaves its map and brings it back in the
+  new map; a same-map teleport does so when the pet is beyond the grid activation distance of the destination
+  (`PetTeleportFollow`, `SummonService.UnsummonPetTemporarily` / `ResummonTemporarilyUnsummonedPet`; vmangos
+  `UnsummonPetTemporaryIfAny`, `ResummonPetTemporaryUnSummonedIfAny`, Player.cpp:1911-1921, 2045-2048, 20911-20940,
+  MovementHandler.cpp:197-198, 274-284). A hunter pet comes back from its current-pet snapshot; a demon or other summoned pet keeps
+  its pet number, health, mana, react state, name, spells and bar (held in memory, since demons are not stored). Totems, guardians
+  and mini pets are unsummoned and stay gone (vmangos `RemoveFromWorld`); a temporary summon and a dead pet are not brought back (a
+  dead hunter pet stays dead in its snapshot, where Revive Pet finds it; vmangos would reload it as a corpse). Not done: the taxi,
+  mount and possess triggers of the same pair.
+* **Spirit guide re-summon (wave 2).** `SummonService.AutoReSummonPet` (vmangos `Player::AutoReSummonPet`, Player.cpp:1580-1628) runs
+  on `SpellSystem.PlayerSpiritHealed` (SPELL_EFFECT_SPIRIT_HEAL): the last demon or loaded permanent pet (`m_petEntry`, `m_petSpell`)
+  comes back alive at full health when the summoning spell's reagents are in the bags (they are taken). A hunter's abandon forgets
+  it. A warlock gets a fresh demon of that entry. A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard
+  does not apply to it.
+* **Reagents back (wave 2).** A pet whose owner dies, that lost its owner, was left beyond the leash or whose owner has no pet any
+  more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). Not done: the
+  talent reset, taxi and far-control triggers of the same mode.
 * **Pet data gaps.** A pet whose creature has no `pet_levelstats` row keeps its template health, damage,
   armor and stats: vmangos falls back to `creature_classlevelstats` (`GetClassLevelStats`), a table of the
   stats lane that this build does not have. Not ported: the owner's stat inheritance and `UpdateAllStats`

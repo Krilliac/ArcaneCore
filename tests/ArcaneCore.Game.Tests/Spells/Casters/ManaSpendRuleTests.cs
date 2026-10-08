@@ -145,6 +145,8 @@ public sealed class ManaSpendRuleTests
         Assert.True(player.Combat.LastManaUseTimer > 0, "the timer must not run out during the channel");
 
         kit.Advance(5000);
+        Assert.Null(kit.System.GetState(player.Guid)?.CurrentCast);
+        kit.Advance(1000); // the channel values of a normal end go 1000 ms later (vmangos ChannelResetEvent)
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitChannelSpell));
         kit.World.RunTick(5000);
         Assert.Equal(0u, player.Combat.LastManaUseTimer);

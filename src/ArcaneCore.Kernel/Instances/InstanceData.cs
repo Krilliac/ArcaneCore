@@ -10,6 +10,13 @@ public sealed record InstanceRecord(uint Id, uint MapId, long ResetTime);
 /// <summary>A character's bind to an instance (vmangos <c>character_instance</c>: guid, instance, permanent).</summary>
 public sealed record CharacterInstanceBindRecord(int CharacterId, uint InstanceId, bool Permanent);
 
+/// <summary>
+/// A group's bind to an instance, stored under the character id of the group's leader (vmangos <c>group_instance</c>: leader_guid,
+/// instance, permanent). Only permanent group binds are stored here: groups themselves are not stored yet, and a temporary bind of a
+/// group that no longer exists would only keep its instance alive.
+/// </summary>
+public sealed record GroupInstanceBindRecord(int LeaderCharacterId, uint InstanceId, bool Permanent);
+
 /// <summary>The next global reset of a raid map (vmangos <c>instance_reset</c>: mapid, resettime), Unix seconds.</summary>
 public sealed record InstanceResetRecord(uint MapId, long ResetTime);
 
@@ -28,6 +35,9 @@ public sealed record InstanceStoreSnapshot(
     IReadOnlyList<CharacterLastInstanceRecord> LastInstances)
 {
     public static InstanceStoreSnapshot Empty { get; } = new([], [], [], []);
+
+    /// <summary>The stored group binds (vmangos <c>group_instance</c>); empty when the store has none.</summary>
+    public IReadOnlyList<GroupInstanceBindRecord> GroupBinds { get; init; } = [];
 }
 
 /// <summary>
@@ -46,7 +56,7 @@ public interface IInstanceStore
     /// <summary>Insert or update an instance row.</summary>
     Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default);
 
-    /// <summary>Delete an instance with all its character binds and last-instance references.</summary>
+    /// <summary>Delete an instance with all its character binds and last-instance references; a stored body in it keeps its place but its instance becomes 0.</summary>
     Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>Insert or update a character bind (one bind per character and instance).</summary>
@@ -54,6 +64,12 @@ public interface IInstanceStore
 
     /// <summary>Delete a character bind (a missing bind is a no-op).</summary>
     Task DeleteBindAsync(int characterId, uint instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Insert or update a stored group bind (one per leader and instance).</summary>
+    Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>Delete a stored group bind (a missing bind is a no-op).</summary>
+    Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     /// <summary>Insert or update a raid map's next global reset time.</summary>
     Task SaveResetTimeAsync(InstanceResetRecord reset, CancellationToken cancellationToken = default);

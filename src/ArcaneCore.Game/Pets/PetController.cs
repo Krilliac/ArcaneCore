@@ -508,6 +508,7 @@ public sealed class PetController
             && player.PetGuid == pet.Guid)
         {
             _summons.QueueDeletePet(player);
+            _summons.ForgetPetForSpiritHealer(player); // PET_SAVE_AS_DELETED: "do not rez the pet in BG"
         }
 
         _summons.Unsummon(pet);

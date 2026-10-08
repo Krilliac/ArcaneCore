@@ -33,7 +33,10 @@ When a server and the docs disagree, the server wins and the conflict is listed 
   - After the cast time: re-check, cooldowns, power, SMSG_CAST_RESULT, SMSG_SPELL_GO, effects.
   - Movement interrupts per vmangos.
   - CMSG_CANCEL_CAST, CMSG_CANCEL_CHANNELLING and CMSG_CANCEL_AURA follow vmangos rules. On cancel: SMSG_SPELL_FAILED_OTHER, CAST_RESULT INTERRUPTED, and the GCD is reset.
-  - Channels: MSG_CHANNEL_START/UPDATE, `UNIT_FIELD_CHANNEL_OBJECT` and `UNIT_CHANNEL_SPELL`.
+  - Channels: MSG_CHANNEL_START/UPDATE, `UNIT_FIELD_CHANNEL_OBJECT` and `UNIT_CHANNEL_SPELL`. An interrupted channel clears the fields and
+    sends the zero MSG_CHANNEL_UPDATE at once; a channel that ends normally (its timer, `FinishChannel`) keeps them for 1000 ms
+    (vmangos Spell::SendChannelUpdate and ChannelResetEvent, Spell.cpp:4801-4823, 8341-8357), and a new channel in that second resets
+    them first (Spell.cpp:3463-3469).
 - Cooldowns: per spell, per category, and GCD by StartRecoveryCategory. Also SMSG_SPELL_COOLDOWN, SMSG_CLEAR_COOLDOWN, and running cooldowns in SMSG_INITIAL_SPELLS.
 - Targets: `SpellCastTargets` reads and writes every 1.12 flag. Selection covers caster, explicit unit, self-cast and none.
 - Effects: school damage, heal, apply aura, energize, teleport units (database position, home bind, caster destination), learn spell, trigger spell and dummy, each with its combat-log packet (SPELLNONMELEEDAMAGELOG, SPELLHEALLOG, SPELLENERGIZELOG). `RegisterEffect` lets other areas add more.

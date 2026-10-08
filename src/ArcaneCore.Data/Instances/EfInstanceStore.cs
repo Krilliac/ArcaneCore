@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Kernel.Instances;
@@ -23,16 +24,26 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
             .Where(l => !db.Characters.Any(c => c.Id == l.CharacterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
+        // The group_instance half of CleanupInstances: rows of a deleted leader or of a missing instance.
+        await db.Set<GroupInstanceRow>()
+            .Where(b => !db.Characters.Any(c => c.Id == b.LeaderCharacterId) || !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
         List<InstanceRow> instances = await db.Set<InstanceRow>().AsNoTracking().OrderBy(i => i.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CharacterInstanceRow> binds = await db.Set<CharacterInstanceRow>().AsNoTracking()
             .OrderBy(b => b.CharacterId).ThenBy(b => b.InstanceId).ToListAsync(cancellationToken).ConfigureAwait(false);
         List<InstanceResetRow> resets = await db.Set<InstanceResetRow>().AsNoTracking().OrderBy(r => r.MapId).ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CharacterLastInstanceRow> last = await db.Set<CharacterLastInstanceRow>().AsNoTracking().OrderBy(l => l.CharacterId).ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<GroupInstanceRow> groupBinds = await db.Set<GroupInstanceRow>().AsNoTracking()
+            .OrderBy(b => b.LeaderCharacterId).ThenBy(b => b.InstanceId).ToListAsync(cancellationToken).ConfigureAwait(false);
         return new InstanceStoreSnapshot(
             [.. instances.Select(i => new InstanceRecord((uint)i.Id, (uint)i.MapId, i.ResetTime))],
             [.. binds.Select(b => new CharacterInstanceBindRecord(b.CharacterId, (uint)b.InstanceId, b.Permanent))],
             [.. resets.Select(r => new InstanceResetRecord((uint)r.MapId, r.ResetTime))],
-            [.. last.Select(l => new CharacterLastInstanceRecord(l.CharacterId, (uint)l.MapId, (uint)l.InstanceId))]);
+            [.. last.Select(l => new CharacterLastInstanceRecord(l.CharacterId, (uint)l.MapId, (uint)l.InstanceId))])
+        {
+            GroupBinds = [.. groupBinds.Select(b => new GroupInstanceBindRecord(b.LeaderCharacterId, (uint)b.InstanceId, b.Permanent))],
+        };
     }
 
     public async Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default)
@@ -55,6 +66,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         int id = (int)instanceId;
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterInstanceRow>().Where(b => b.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GroupInstanceRow>().Where(b => b.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterLastInstanceRow>().Where(l => l.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
         // Consumed/remaining chest loot lives and dies with its logical instance save. This is
@@ -65,6 +77,12 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
 
         // The dead creatures of a reset instance come back with it (vmangos MapPersistentState deletes its creature_respawn rows).
         await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        // A body in the instance stays (vmangos DeleteInstanceFromDB leaves the corpse table alone) but stops naming it: the id
+        // can be handed out again after a restart. Instance 0 keeps the body out of every instance of the map
+        // (InstanceManager.ForgetDeletedInstanceOfBodies does the same to the bodies of online ghosts).
+        await db.Set<CharacterCorpseRow>().Where(r => r.InstanceId == instanceId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.InstanceId, 0u), cancellationToken).ConfigureAwait(false);
         await db.Set<InstanceRow>().Where(i => i.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -91,6 +109,32 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         int id = (int)instanceId;
         await db.Set<CharacterInstanceRow>()
             .Where(b => b.CharacterId == characterId && b.InstanceId == id)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(bind);
+        int instanceId = (int)bind.InstanceId;
+        GroupInstanceRow? row = await db.Set<GroupInstanceRow>()
+            .FirstOrDefaultAsync(b => b.LeaderCharacterId == bind.LeaderCharacterId && b.InstanceId == instanceId, cancellationToken).ConfigureAwait(false);
+        if (row is null)
+        {
+            db.Set<GroupInstanceRow>().Add(new GroupInstanceRow { LeaderCharacterId = bind.LeaderCharacterId, InstanceId = instanceId, Permanent = bind.Permanent });
+        }
+        else
+        {
+            row.Permanent = bind.Permanent;
+        }
+
+        await SaveAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default)
+    {
+        int id = (int)instanceId;
+        await db.Set<GroupInstanceRow>()
+            .Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -133,6 +177,8 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         await db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterLastInstanceRow>().Where(l => l.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

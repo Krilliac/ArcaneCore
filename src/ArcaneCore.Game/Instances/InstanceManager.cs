@@ -46,6 +46,12 @@ public sealed partial class InstanceManager : IMapResolver
     private readonly Dictionary<uint, InstanceSave> _saves = [];
     private readonly Dictionary<ObjectGuid, Dictionary<uint, InstanceBind>> _playerBinds = [];
     private readonly Dictionary<uint, Dictionary<uint, InstanceBind>> _groupBinds = [];
+
+    // Permanent group binds that are stored, with the leader (character id) the row is stored under (vmangos group_instance.leader_guid).
+    private readonly Dictionary<(uint GroupId, uint InstanceId), uint> _storedGroupBinds = [];
+
+    // Stored permanent group binds loaded at startup that no group has taken back yet, by leader character id.
+    private readonly Dictionary<uint, List<InstanceSave>> _pendingGroupBinds = [];
     private readonly Dictionary<Map, InstanceMapState> _mapStates = [];
     private readonly Dictionary<ObjectGuid, PlayerState> _players = [];
     private readonly Dictionary<ObjectGuid, (uint MapId, uint InstanceId)> _lastInstance = [];
@@ -116,7 +122,8 @@ public sealed partial class InstanceManager : IMapResolver
     {
         long now = Now;
         InitializeRaidSchedules(snapshot.ResetTimes);
-        var boundIds = snapshot.Binds.Select(b => b.InstanceId).ToHashSet();
+        var boundIds = snapshot.Binds.Select(b => b.InstanceId)
+            .Concat(snapshot.GroupBinds.Where(b => b.Permanent).Select(b => b.InstanceId)).ToHashSet();
         foreach (InstanceRecord record in snapshot.Instances)
         {
             _nextInstanceId = Math.Max(_nextInstanceId, record.Id + 1);
@@ -170,6 +177,8 @@ public sealed partial class InstanceManager : IMapResolver
                 save.CanReset = false;
             }
         }
+
+        LoadStoredGroupBinds(snapshot.GroupBinds);
 
         foreach (InstanceSave save in _saves.Values.Where(s => !s.HasBinds).ToArray())
         {
@@ -453,6 +462,7 @@ public sealed partial class InstanceManager : IMapResolver
 
         _lastInstance.Remove(player);
         _players.Remove(player);
+        ForgetStoredGroupBindsOfLeader(player.Counter);
     }
 
     // ---- group events (wired to GroupManager by the world feature) ----------------------
@@ -467,6 +477,7 @@ public sealed partial class InstanceManager : IMapResolver
         if (group.IsLeader(member) && group.MemberCount <= 1)
         {
             ConvertInstancesToGroup(member, group);
+            RestoreStoredGroupBinds(group);
             return;
         }
 
@@ -533,6 +544,11 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         ResetGroupInstances(group, disband: true, null);
+        foreach (InstanceBind left in GetGroupBinds(group))
+        {
+            ForgetStoredGroupBind(group.Id, left.Save.InstanceId, persist: true); // vmangos Group::Disband: DELETE FROM group_instance
+        }
+
         _groupBinds.Remove(group.Id);
     }
 
@@ -858,6 +874,120 @@ public sealed partial class InstanceManager : IMapResolver
         if (permanent)
         {
             save.CanReset = false;
+            StoreGroupBind(group, save);
+        }
+        else
+        {
+            ForgetStoredGroupBind(group.Id, save.InstanceId, persist: true);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Group::BindToInstance (Group.cpp:2231-2250): the permanent bind is written under the group's leader. A row stored under
+    /// another leader (the leader changed since) moves to the current one.
+    /// </summary>
+    private void StoreGroupBind(Group group, InstanceSave save)
+    {
+        uint leader = group.LeaderGuid.Counter;
+        (uint, uint) key = (group.Id, save.InstanceId);
+        if (_storedGroupBinds.TryGetValue(key, out uint stored))
+        {
+            if (stored == leader)
+            {
+                return;
+            }
+
+            _persistence.GroupUnbound(stored, save.InstanceId);
+        }
+
+        _storedGroupBinds[key] = leader;
+        _persistence.GroupBound(leader, save.InstanceId, permanent: true);
+    }
+
+    private void ForgetStoredGroupBind(uint groupId, uint instanceId, bool persist)
+    {
+        if (_storedGroupBinds.Remove((groupId, instanceId), out uint leader) && persist)
+        {
+            _persistence.GroupUnbound(leader, instanceId);
+        }
+    }
+
+    // vmangos ObjectMgr::LoadGroups, group_instance part (ObjectMgr.cpp:5463-5513): a row of an instance that is gone is dropped.
+    private void LoadStoredGroupBinds(IReadOnlyList<GroupInstanceBindRecord> rows)
+    {
+        foreach (GroupInstanceBindRecord row in rows)
+        {
+            uint leader = (uint)row.LeaderCharacterId;
+            if (!row.Permanent || !_saves.TryGetValue(row.InstanceId, out InstanceSave? save))
+            {
+                _persistence.GroupUnbound(leader, row.InstanceId);
+                continue;
+            }
+
+            if (!_pendingGroupBinds.TryGetValue(leader, out List<InstanceSave>? pending))
+            {
+                pending = [];
+                _pendingGroupBinds[leader] = pending;
+            }
+
+            if (pending.Any(p => p.MapId == save.MapId))
+            {
+                _persistence.GroupUnbound(leader, row.InstanceId); // one bind per map and group (vmangos keeps the first loaded)
+                continue;
+            }
+
+            pending.Add(save);
+            save.StoredGroupLeaders.Add(leader);
+            save.CanReset = false;
+        }
+    }
+
+    /// <summary>
+    /// Give the stored permanent binds of <paramref name="group"/>'s leader back to the group (vmangos attaches the <c>group_instance</c>
+    /// rows of a leader to the group it reloads, ObjectMgr.cpp:5463-5513). Groups are not stored yet, so this runs when the leader
+    /// forms a group (<see cref="OnGroupMemberAdded"/>); a group loader calls it for every group it restores. A stored bind to a map
+    /// the group is already permanently bound to elsewhere is dropped. Members become permanently bound as they enter
+    /// (<see cref="BindPlayerOrGroupOnEnter"/>).
+    /// </summary>
+    public void RestoreStoredGroupBinds(Group group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        uint leader = group.LeaderGuid.Counter;
+        if (!_pendingGroupBinds.Remove(leader, out List<InstanceSave>? pending))
+        {
+            return;
+        }
+
+        foreach (InstanceSave save in pending)
+        {
+            save.StoredGroupLeaders.Remove(leader);
+            if (save.IsDeleted)
+            {
+                continue;
+            }
+
+            if (GetGroupBind(group, save.MapId) is { Permanent: true } existing && existing.Save != save)
+            {
+                _persistence.GroupUnbound(leader, save.InstanceId);
+                ForgetIfUnused(save);
+                continue;
+            }
+
+            _storedGroupBinds[(group.Id, save.InstanceId)] = leader; // the row is there already
+            BindGroup(group, save, permanent: true);
+        }
+    }
+
+    // A deleted character's stored group binds (the rows go with the character's data, GroupInstanceBindDataModule).
+    private void ForgetStoredGroupBindsOfLeader(uint leader)
+    {
+        if (_pendingGroupBinds.Remove(leader, out List<InstanceSave>? pending))
+        {
+            foreach (InstanceSave save in pending)
+            {
+                save.StoredGroupLeaders.Remove(leader);
+                ForgetIfUnused(save);
+            }
         }
     }
 
@@ -890,6 +1020,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         save.Groups.Remove(group.Id);
+        ForgetStoredGroupBind(group.Id, save.InstanceId, persist: true);
         ForgetIfUnused(save);
     }
 
@@ -936,22 +1067,24 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             Map? map = _world.FindMap(save.MapId, save.InstanceId);
-            if (map is { PlayerCount: > 0 })
+            if (map is { PlayerCount: > 0 } || map is { TransitCount: > 0 })
             {
-                // Someone else is inside (the player itself was skipped above). The save is theirs too:
-                // do not delete it under them. A group join drops just the joiner's own bind, as vmangos
-                // does. A reset request is an ArcaneCore choice: it is refused the way the group reset
-                // refuses an occupied instance (SMSG_INSTANCE_RESET_FAILED, the players inside are asked
-                // to leave) and the requester stays bound. vmangos Player::ResetInstances instead sends
-                // SMSG_INSTANCE_RESET and drops only the requester's bind, which reports a reset that did
-                // not happen and leaves the requester free to make a new instance beside the occupied one.
+                // Someone else is inside (the player itself was skipped above), or is still on its way out: a far
+                // teleport that is not acknowledged yet can fail and send that player back in (vmangos
+                // HandleReturnOnTeleportFail), which is why the timed reset waits for TransitCount too (UpdateSchedule).
+                // The save is theirs too: do not delete it under them. A group join drops just the joiner's own bind, as
+                // vmangos does. A reset request is an ArcaneCore choice: it is refused the way the group reset refuses an
+                // occupied instance (SMSG_INSTANCE_RESET_FAILED, the players inside are asked to leave, at most once per
+                // InstanceOptions.ResetRefusedNoticeSeconds) and the requester stays bound. vmangos Player::ResetInstances
+                // instead sends SMSG_INSTANCE_RESET and drops only the requester's bind, which reports a reset that did not
+                // happen and leaves the requester free to make a new instance beside the occupied one.
                 if (groupJoin)
                 {
                     RemovePlayerBind(player.Guid, save);
                 }
                 else
                 {
-                    ResetLoadedMap(map, global: false, notifyInside: true);
+                    AskToLeaveForReset(map, rateLimited: true);
                     player.Session.Send(WorldOpcode.SmsgInstanceResetFailed, InstancePackets.BuildInstanceResetFailed(InstanceResetFailedReason.General, save.MapId));
                 }
 
@@ -1038,10 +1171,7 @@ public sealed partial class InstanceManager : IMapResolver
         {
             if (notifyInside)
             {
-                foreach (Player player in map.Players)
-                {
-                    SystemMessage(player, "Please leave the instance so it can be reset.");
-                }
+                AskToLeaveForReset(map, rateLimited: false);
             }
             else
             {
@@ -1064,6 +1194,29 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         return map.PlayerCount == 0;
+    }
+
+    /// <summary>
+    /// vmangos Player::SendResetFailedNotify (LANG_LEAVE_TO_RESET_INSTANCE, Player.cpp:17077-17080) to everyone inside. The refused
+    /// personal reset sends it at most once per <see cref="InstanceOptions.ResetRefusedNoticeSeconds"/> per instance map.
+    /// </summary>
+    private void AskToLeaveForReset(Map map, bool rateLimited)
+    {
+        if (rateLimited && _options.ResetRefusedNoticeSeconds > 0 && _mapStates.TryGetValue(map, out InstanceMapState? state))
+        {
+            long now = Now;
+            if (state.LastRefusedResetNotice is long last && now - last < _options.ResetRefusedNoticeSeconds)
+            {
+                return;
+            }
+
+            state.LastRefusedResetNotice = now;
+        }
+
+        foreach (Player player in map.Players)
+        {
+            SystemMessage(player, "Please leave the instance so it can be reset.");
+        }
     }
 
     // Unbind everyone and delete the save (vmangos DungeonPersistentState::DeleteFromDB + UnbindThisState).
@@ -1096,6 +1249,12 @@ public sealed partial class InstanceManager : IMapResolver
             }
         }
 
+        foreach (uint groupId in save.Groups)
+        {
+            ForgetStoredGroupBind(groupId, save.InstanceId, persist: false); // the instance delete removes the rows
+        }
+
+        ForgetPendingGroupLeaders(save, persist: false);
         save.Players.Clear();
         save.Groups.Clear();
         DeleteSave(save);
@@ -1130,7 +1289,32 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             save.Groups.Remove(groupId);
+            ForgetStoredGroupBind(groupId, save.InstanceId, persist: true);
         }
+
+        ForgetPendingGroupLeaders(save, persist: true);
+    }
+
+    private void ForgetPendingGroupLeaders(InstanceSave save, bool persist)
+    {
+        foreach (uint leader in save.StoredGroupLeaders.ToArray())
+        {
+            if (_pendingGroupBinds.TryGetValue(leader, out List<InstanceSave>? pending))
+            {
+                pending.Remove(save);
+                if (pending.Count == 0)
+                {
+                    _pendingGroupBinds.Remove(leader);
+                }
+            }
+
+            if (persist)
+            {
+                _persistence.GroupUnbound(leader, save.InstanceId);
+            }
+        }
+
+        save.StoredGroupLeaders.Clear();
     }
 
     private void DeleteSave(InstanceSave save)
@@ -1142,9 +1326,28 @@ public sealed partial class InstanceManager : IMapResolver
 
         save.IsDeleted = true;
         _saves.Remove(save.InstanceId);
+        ForgetDeletedInstanceOfBodies(save);
         _persistence.InstanceDeleted(save.InstanceId);
         _logger.LogDebug("deleted {Save}", save);
         InstanceDeleted?.Invoke(save.InstanceId);
+    }
+
+    /// <summary>
+    /// The bodies of online ghosts in the deleted instance stay where they are (vmangos keeps a corpse whatever happens to its
+    /// instance), but they no longer name it: instance ids are handed out again after a restart, and a stale id would put the body
+    /// into somebody else's new instance. Instance 0 never matches a dungeon map again (MapCombat.AdoptBodiesLeftOutside,
+    /// MapCombat.RestoreGhost); entering the dungeon still revives the ghost (ReviveForDungeonEntry compares the map only). The
+    /// stored corpse rows get the same change with the instance's delete (IInstanceStore.DeleteInstanceAsync).
+    /// </summary>
+    private void ForgetDeletedInstanceOfBodies(InstanceSave save)
+    {
+        foreach (Player player in _world.OnlinePlayers)
+        {
+            if (player.Combat.Corpse is { } body && body.MapId == save.MapId && body.InstanceId == save.InstanceId)
+            {
+                body.InstanceId = 0;
+            }
+        }
     }
 
     private void OnMapUnloading(Map map)
@@ -1425,6 +1628,9 @@ public sealed class InstanceMapState
 
     /// <summary>Reset (delete) the save when the map unloads; nobody may enter meanwhile (vmangos <c>m_resetAfterUnload</c>).</summary>
     public bool ResetAfterUnload { get; internal set; }
+
+    /// <summary>Unix seconds of the last "please leave" notice of a refused personal reset (<see cref="InstanceOptions.ResetRefusedNoticeSeconds"/>).</summary>
+    internal long? LastRefusedResetNotice { get; set; }
 
     internal Action<Unit?, Unit>? KillHandler { get; set; }
 }

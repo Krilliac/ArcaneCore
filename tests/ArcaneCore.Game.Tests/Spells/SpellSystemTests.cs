@@ -354,8 +354,9 @@ public sealed class SpellSystemTests
 
         kit.Advance(5000);
 
-        Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitChannelSpell));
         Assert.Null(kit.System.GetState(player.Guid)?.CurrentCast);
+        kit.Advance(1000); // a normal end clears the channel values 1000 ms later (vmangos ChannelResetEvent)
+        Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitChannelSpell));
     }
 
     [Fact]

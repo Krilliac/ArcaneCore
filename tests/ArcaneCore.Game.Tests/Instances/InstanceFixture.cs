@@ -39,6 +39,7 @@ internal sealed class RecordingInstancePersistence : IInstancePersistence
         Calls.Add($"delete {instanceId}");
         Instances.Remove(instanceId);
         Binds.RemoveWhere(b => b.Instance == instanceId);
+        GroupBinds.RemoveWhere(b => b.Instance == instanceId);
     }
 
     public void PlayerBound(uint characterId, uint instanceId, bool permanent)
@@ -57,6 +58,22 @@ internal sealed class RecordingInstancePersistence : IInstancePersistence
     public void RaidResetTimeChanged(uint mapId, long resetTime) => ResetTimes[mapId] = resetTime;
 
     public void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId) => Last[characterId] = (mapId, instanceId);
+
+    /// <summary>Stored group binds, keyed by the leader's character id (vmangos <c>group_instance</c>).</summary>
+    public HashSet<(uint Leader, uint Instance, bool Permanent)> GroupBinds { get; } = [];
+
+    public void GroupBound(uint leaderCharacterId, uint instanceId, bool permanent)
+    {
+        Calls.Add($"group bind {leaderCharacterId} {instanceId} {permanent}");
+        GroupBinds.RemoveWhere(b => b.Leader == leaderCharacterId && b.Instance == instanceId);
+        GroupBinds.Add((leaderCharacterId, instanceId, permanent));
+    }
+
+    public void GroupUnbound(uint leaderCharacterId, uint instanceId)
+    {
+        Calls.Add($"group unbind {leaderCharacterId} {instanceId}");
+        GroupBinds.RemoveWhere(b => b.Leader == leaderCharacterId && b.Instance == instanceId);
+    }
 }
 
 /// <summary>

@@ -74,6 +74,10 @@ gtker/wow_messages (1.12). Behaviour follows vmangos unless a gap below says oth
     - A leader change drops permanent group binds. It also drops a temporary group bind if
       the new leader has its own bind there (the old leader keeps that instance). The new
       leader's binds become the group's.
+    - A permanent group bind is stored under the group's leader (`group_instance`, below) and moves to the new leader on a
+      leader change; the stored binds of a leader are given back to the next group that leader forms
+      (`InstanceManager.RestoreStoredGroupBinds`, which a group loader calls per restored group once groups are stored).
+      Members who were outside become permanently bound as they enter (review finding 89).
     - A grouped player who worldports out of a dungeon loses its personal temporary save of
       it, which the group's save replaces (`ResetPersonalInstanceOnLeaveDungeon`).
   - **Raid lockouts.**
@@ -145,9 +149,19 @@ transaction; an instance nobody is bound to any more is dropped at the next load
 `BranchSchemaVersion = 8` is active; the reserved-v9 marker is historical.
 Spell state follows at v9 and economy at v10. Source histories retain provisional allocations.
 
-Group binds are kept in memory only, because groups themselves are not persisted in this
-codebase. After a restart only character binds remain, so a dungeon only its group was bound
-to is dropped at load.
+**Group binds (review finding 89), characters v35.** `GroupInstanceBindDataModule` adds `group_instance` (leader character id,
+instance, permanent; vmangos `group_instance` keyed by `leader_guid`). Only permanent group binds are written: groups themselves are
+not stored yet, and a temporary bind of a group that no longer exists would only keep its instance alive. Writes follow vmangos
+(`Group::BindToInstance` inserts, `UnbindInstance`, the leader change and the disband delete, the instance delete takes its rows,
+MapPersistentStateMgr.cpp:756); `LoadAsync` drops rows of a deleted leader or a missing instance, and the leader's character deletion
+removes them (`ICharacterDataCleanup`). A stored bind keeps its save alive at load until a group takes it back. Temporary group binds
+stay in memory only, so after a restart a dungeon only a group was temporarily bound to is dropped at load.
+
+**Bodies in an instance.** A deleted instance keeps the bodies lying in it (vmangos `DeleteInstanceFromDB` leaves `corpse` alone) but
+their `character_corpse.InstanceId` becomes 0, online and in storage (`InstanceManager.ForgetDeletedInstanceOfBodies`,
+`EfInstanceStore.DeleteInstanceAsync`): instance ids are handed out again after a restart, and a stale id would put the body into
+somebody else's new instance. A body with instance 0 never goes into a dungeon instance again; entering the dungeon still revives
+the ghost (`ReviveForDungeonEntry` compares the map).
 
 ## Durable chest loot (handoff item 4)
 
@@ -268,7 +282,9 @@ All of these are minimal and additive unless stated otherwise.
 
 - **Character deletion** uses the #21 seams (above). A save left without binds is deleted at
   once, or when its map unloads.
-- **Group binds are not persisted**, because groups are in-memory only.
+- **Groups are not persisted**, so a stored permanent group bind comes back only when its leader forms a group again (or a future
+  group loader restores the group and calls `RestoreStoredGroupBinds`). A member who forms a group of its own after a restart is
+  not locked unless it was inside at the kill (its own permanent bind).
 - **Instance contents do not persist across an unload or restart.** This covers creature
   deaths, respawn timers and boss state (vmangos `creature_respawn` / instance data, and
   `InstanceData` scripts). A re-created map respawns everything.
@@ -277,6 +293,14 @@ All of these are minimal and additive unless stated otherwise.
   graveyards (those serve released spirits, docs/areas/graveyards-resurrection.md).
 - The **"leave the instance to reset it" system message** text is ArcaneCore's own wording.
   It is not the vmangos `LANG_LEAVE_TO_RESET_INSTANCE` string, which could not be verified.
+- **Refused personal reset (ArcaneCore choice).** vmangos `Player::ResetInstances` drops the requester's bind of an occupied
+  instance and reports a reset; here it is refused (SMSG_INSTANCE_RESET_FAILED) while a player is inside or still on its way out
+  (a far teleport out that is not acknowledged yet, `Map.TransitCount`, as the timed reset already waits for). The players inside
+  are asked to leave at most once per `World:Instances:ResetRefusedNoticeSeconds` (10 s; 0 = every refusal), because the
+  requester can repeat CMSG_RESET_INSTANCES at will.
+- **An instance map that unloads** takes an online ghost's body out of the map but not away from the ghost (vmangos keeps
+  corpses in `ObjectAccessor`); the next map of that instance puts it back (`MapCombat.AdoptBodiesLeftOutside`, vmangos
+  `ObjectAccessor::AddCorpsesToGrid`).
 - **Not modelled:**
   - Corpses inside instances (`CanPlayerEnter` corpse rules).
   - The 1.12 "too many instances" (5 per hour) limit.

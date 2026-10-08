@@ -44,6 +44,14 @@ public sealed class InstanceOptions
     /// </summary>
     public int PerHourLimit { get; set; } = 5;
 
+    /// <summary>
+    /// Seconds between two "Please leave the instance so it can be reset." notices to the players inside an instance that a refused
+    /// personal reset asks to leave (an ArcaneCore limit: the refusal itself is an ArcaneCore choice, see docs/integration/instances.md,
+    /// and the requester can repeat CMSG_RESET_INSTANCES at will). The requester still gets SMSG_INSTANCE_RESET_FAILED every time.
+    /// 0 sends the notice on every refusal.
+    /// </summary>
+    public int ResetRefusedNoticeSeconds { get; set; } = 10;
+
     /// <summary>Let players enter raids without a raid group (vmangos <c>Instance.IgnoreRaid</c>, default off).</summary>
     public bool IgnoreRaidGroup { get; set; }
 

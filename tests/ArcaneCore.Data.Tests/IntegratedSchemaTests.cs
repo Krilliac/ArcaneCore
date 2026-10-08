@@ -139,6 +139,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(EconomyItemsLaneSchemaGap37), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap37.Version),
             (typeof(EconomyItemsLaneSchemaGap38), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap38.Version),
             (typeof(ItemGiftDataModule), DatabaseComponent.Characters, ItemGiftDataModule.Version),
+            (typeof(GroupInstanceBindDataModule), DatabaseComponent.Characters, GroupInstanceBindDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

@@ -106,7 +106,7 @@ Commits are lane commits, reachable from the merge commit of their lane (listed 
 | 86 | fixed | spell-auras | 7f6811e8 | PetPowerTests: LifeTap_FizzlesAtTheCastCheck_WhenHealthEqualsTheCost, LifeTap_PassesTheCheckAndTaps_WhenHealthIsOneAboveTheCost |
 | 87 | fixed | instances-death | def5ba92 | BindCreditTests.RaidBossKilledByAPet_WithTheDefaultResolver_CreditsItsOwner |
 | 88 | fixed | instances-death | def5ba92 | BindCreditTests: NormalDungeonKill_OfACreatureWithoutARespawnTimer_CountsItsCorpseTime, NormalDungeonKill_MeasuresTheRespawnTimeAgainstTheMapClock |
-| 89 | deferred | instances-death | none | none. Needs group persistence first (group, group_member and group_instance tables plus a reload) |
+| 89 | fixed (wave 2, teleport-death lane) | teleport-death | claude/w2-teleport-death | GroupBindPersistenceTests (6), GroupInstanceBindStoreTests (4), InstanceGroupBindWriteTests, RaidLockScenarioTests. Permanent group binds are stored under the leader (`group_instance`, characters v35) and given back to the leader's next group; groups themselves are still not stored |
 | 90 | fixed | instances-death | 4c5114c1 | InstanceEnterLimiterTests.InstanceZero_IsNeverRecorded_SoItCannotBecomeAFreeReEntry |
 | 91 | already_fixed | economy | in base (trade enchant deferral) | existing TradePendingSpellTests, TradeEnchantPlanningTests, TradeItemUsePlanningTests; MockClient TradeEnchantSettlementTests, TradeItemEnchantSettlementTests, TradeEnchantCommitFailureTests |
 | 92 | fixed | economy | fcecfe44 | PlayerInventoryEconomyTests.CanBeTraded_RefusesAnItemCarryingAnEnchantmentThatCanSoulbind |

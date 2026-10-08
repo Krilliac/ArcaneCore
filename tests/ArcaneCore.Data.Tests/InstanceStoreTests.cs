@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
@@ -158,6 +159,36 @@ public sealed class InstanceStoreTests : IAsyncLifetime
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
+
+    /// <summary>
+    /// A deleted instance leaves the bodies in it (vmangos never deletes a corpse with its instance), but they stop naming it:
+    /// instance ids are handed out again after a restart, and a reused id would put the body into somebody else's instance.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task DeletingAnInstance_KeepsTheBodiesInIt_ButClearsTheirInstance(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice, int bob) = await CreateAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            db.Set<CharacterCorpseRow>().Add(new CharacterCorpseRow { CharacterId = alice, MapId = 36, X = -16f, Y = -383f, Z = 61f, GhostTime = 5, Type = 1, InstanceId = 101 });
+            db.Set<CharacterCorpseRow>().Add(new CharacterCorpseRow { CharacterId = bob, MapId = 36, X = -16f, Y = -383f, Z = 61f, GhostTime = 5, Type = 1, InstanceId = 102 });
+            await db.SaveChangesAsync();
+        }
+
+        await WithStore(cs, async store =>
+        {
+            await store.SaveInstanceAsync(new InstanceRecord(101, 36, 1));
+            await store.SaveInstanceAsync(new InstanceRecord(102, 36, 1));
+            await store.DeleteInstanceAsync(101);
+        });
+
+        await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(cs);
+        CharacterCorpseRow aliceBody = await check.Set<CharacterCorpseRow>().AsNoTracking().SingleAsync(r => r.CharacterId == alice);
+        CharacterCorpseRow bobBody = await check.Set<CharacterCorpseRow>().AsNoTracking().SingleAsync(r => r.CharacterId == bob);
+        Assert.Equal((36u, -383f, 0u), (aliceBody.MapId, aliceBody.Y, aliceBody.InstanceId));
+        Assert.Equal(102u, bobBody.InstanceId);
+    }
 
     private async Task<(DatabaseConnectionOptions Cs, int Alice, int Bob)> CreateAsync(DatabaseProvider provider)
     {

@@ -151,6 +151,12 @@ orc bot walks up to a CALLS_GUARDS townsman, a human bot hears the shout and the
 swings (`SMSG_ATTACKERSTATEUPDATE`); the human waves (`ScenarioCreatureActions.TextEmoteAsync`, CMSG_TEXT_EMOTE) at a herald
 whose EventAI RECEIVE_EMOTE row greets it by name (`ScenarioCreatureDecoders.MonsterChat`).
 
+Teleport and death lane (wave 2): `pet-teleport` (`PetTeleportScenarioTests`: a hunter bot's pet comes back at its side after a far
+teleport to Kalimdor, the hunter gets its pet bar again and a watcher bot's client is sent the pet; the content creates warriors only,
+so the bot's class byte is set to hunter on the world thread) and `raid-lock` (`RaidLockScenarioTests`: two bots form a raid group with
+CMSG_GROUP_RAID_CONVERT, Molten Core is added to the map registry on the world thread, the leader is locked inside, the stored
+`group_instance` row is read back from SQLite, and the member who was outside enters the same instance and is locked too).
+
 ## MockClient playbot (external protocol client)
 
 `arcane-mock playbot` runs one external build-5875 client against an owned numeric

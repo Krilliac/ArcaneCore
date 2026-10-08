@@ -69,6 +69,19 @@ public sealed class TeleportService
     /// </summary>
     public event Action<Player>? TeleportCompleted;
 
+    /// <summary>
+    /// Raised on the world thread when a same-map teleport starts, before MSG_MOVE_TELEPORT_ACK goes out (vmangos Player::TeleportTo near
+    /// branch: a pet farther from the destination than the grid activation distance is unsummoned temporarily, Player.cpp:1911-1921).
+    /// </summary>
+    public event Action<Player, TeleportDestination>? NearTeleportStarting;
+
+    /// <summary>
+    /// Raised on the world thread when a far teleport is carried out, while the player is still in its old map (vmangos
+    /// Player::ExecuteTeleportFar: "remove pet on map change", UnsummonPetTemporaryIfAny, Player.cpp:2045-2048, before the old map's
+    /// Remove).
+    /// </summary>
+    public event Action<Player>? FarTeleportExecuting;
+
     /// <summary>Number of players with a teleport in progress.</summary>
     public int PendingCount => _pending.Count;
 
@@ -163,6 +176,7 @@ public sealed class TeleportService
         if (current.MapId == mapId)
         {
             _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default);
+            NearTeleportStarting?.Invoke(player, destination);
             MovementInfo moved = player.Movement;
             moved.X = x;
             moved.Y = y;
@@ -293,6 +307,7 @@ public sealed class TeleportService
         // pending extra attacks before the player leaves the source map. Failed/superseded
         // transfers return above and preserve the queue.
         player.Combat.ResetExtraAttacks();
+        FarTeleportExecuting?.Invoke(player);
         TeleportDestination dest = pending.Destination;
         player.Selection = ObjectGuid.Empty;
         player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(dest.MapId));
