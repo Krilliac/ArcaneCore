@@ -56,6 +56,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Hunter | [hunter](areas/hunter.md) |
 | Talents | [talents](areas/talents.md) |
 | Skills and professions | [skills](areas/skills.md) |
+| Crafting and profession specializations | [crafting](areas/crafting.md) |
 | Player stats and combat formulas | [stats](areas/stats.md) |
 | Rested experience | [rested-xp](areas/rested-xp.md) |
 | Character rename | [character-rename](areas/character-rename.md) |

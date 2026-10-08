@@ -117,15 +117,15 @@ copied). Each piece of code cites file:line.
 | `SkillLineAbility` width | 15 canonical, 14 tolerated | `DBCfmt.h:68` in both references |
 | `IsSpellFitByClassAndRace` masks | a `SkillRaceClassInfo` mask of 0 matches nobody in this function (but "any" in `GetSkillRaceClassInfo`) | `Player.cpp:19546` versus `DBCStores.cpp:589-602`; ported as written |
 
-## Limits (not delivered, stated so nothing reads as done)
+## Related coverage
 
-- **Crafting** (`CREATE_ITEM`, reagents, `UpdateCraft` callers, first aid and cooking acceptance paths) is not delivered:
-  `PlayerSkills.UpdateCraft` and its formulas exist and are tested, but nothing casts a recipe yet. `SpellInfo` still has no
-  reagent or equipped-item fields.
-- **Key items** (skeleton keys, lockboxes opened with a key) need the item-cast path (`CMSG_USE_ITEM` casting with a cast
-  item); locks that name a key never open. The item branch of OPEN_LOCK (a locked item as the target) works.
-- **Veins** with several uses: the object system despawns an emptied chest, so a node is mined once per respawn
-  (the `OnLootReleased` change belongs to the durable-loot lane). The fishing skill-up is called by the fishing catch (`FishingService`, see [fishing-special-loot](fishing-special-loot.md)).
+- [Crafting](crafting.md) includes recipe learning, reagents, tools, focus objects, random properties and craft skill-ups.
+- Item casts (`CMSG_USE_ITEM`) supply key items to the lock check, including skeleton keys. Mineral veins can reopen
+  after loot release up to their configured number of uses (`GameObjectMapSystem.Chests.cs`, vmangos
+  `WorldSession::DoLootRelease`). Their per-player skill-up set survives each reopen until the node respawns.
+- The fishing catch calls `PlayerSkills.UpdateFishing` ([fishing and special loot](fishing-special-loot.md)).
+
+## Limits (not delivered, stated so nothing reads as done)
 - Skill-ups from weapon-damage **spells** (`ProcSkillsAndReactives` with a `procSpell` requiring a weapon) need the
   spell item class, which `SpellInfo` does not carry.
 - **Shapeshift** forms: no weapon-skill override for a form without weapons (the form byte of `UNIT_FIELD_BYTES_1` is
