@@ -242,6 +242,19 @@ public sealed class RateKnobTests
         Assert.Equal(10.0f, new HonorService(new HonorOptions(), new FixedHonorClock(20_000), () => 19_997).Scaled(10.0f, HonorKind.Honorable));
     }
 
+    [Fact]
+    public void TheHonorRate_IsInTheRecordedContributionPoints()
+    {
+        var honor = new HonorService(new HonorOptions { Rate = 3.0f }, new FixedHonorClock(20_000), () => 19_997);
+        Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        honor.Track(player, honor.Create(player, CharacterHonorData.Empty));
+
+        Assert.True(honor.Add(player, 10.0f, HonorKind.Honorable, null));
+        Assert.True(honor.Add(player, 10.0f, HonorKind.Other, null));
+
+        Assert.Equal([30.0f, 10.0f], honor.For(player)!.Rows.Select(r => r.Cp));
+    }
+
     // ---- Existing knobs: Rate.Reputation.Gain, Rate.Talent, SkillGain.Gathering --------------------------------------------------------
 
     [Fact]
