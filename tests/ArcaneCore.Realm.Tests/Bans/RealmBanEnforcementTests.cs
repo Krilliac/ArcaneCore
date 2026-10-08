@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -214,6 +215,26 @@ public sealed class RealmBanEnforcementTests
         Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
         Assert.Equal((2, 3), (_bans.ListIpBansCalls, _bans.GetActiveIpBanCalls)); // the list again, no more row reads
         Assert.Equal(1, cache.Reloads);
+    }
+
+    [Fact]
+    public async Task WithTheListenersScopes_TheListIsLoadedThroughTheCachesOwnStore_AndTheRowReadThroughTheSessions()
+    {
+        // A list load that ran out of its query budget is abandoned while still running; it must not hold the session's
+        // store (one database context), which the fallback row read then uses (AuthDatabaseOutageTests over a locked file).
+        var listStore = new InMemoryBanStore(_clock);
+        listStore.AddIpRow("10.9.8.7", Now - 10, Now - 10);
+        await using ServiceProvider services = new ServiceCollection().AddScoped<IBanStore>(_ => listStore).BuildServiceProvider();
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock, services.GetRequiredService<IServiceScopeFactory>());
+
+        Assert.True(await cache.IsBannedAsync("10.9.8.7", _bans));
+        Assert.Equal((1, 0, 0), (listStore.ListIpBansCalls, _bans.ListIpBansCalls, _bans.GetActiveIpBanCalls));
+
+        listStore.ListFailWith = new TimeoutException("query budget exceeded");
+        _clock.Advance(60);
+        _bans.AddIpRow("10.1.1.1", Now, Now);
+        Assert.True(await cache.IsBannedAsync("10.1.1.1", _bans)); // answered by the session's own row read
+        Assert.Equal((2, 0, 1), (listStore.ListIpBansCalls, _bans.ListIpBansCalls, _bans.GetActiveIpBanCalls));
     }
 
     [Fact]

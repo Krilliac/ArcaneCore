@@ -43,7 +43,7 @@ public sealed class LogonServer(
         {
             var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger);
             Guard = guard;
-            IpBans = new RealmIpBanCache(TimeSpan.FromSeconds(Math.Max(0, config.IpBanCacheSeconds)));
+            IpBans = new RealmIpBanCache(TimeSpan.FromSeconds(Math.Max(0, config.IpBanCacheSeconds)), scopes: scopeFactory);
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),
                 client => Admit(client, guard, config, stoppingToken),

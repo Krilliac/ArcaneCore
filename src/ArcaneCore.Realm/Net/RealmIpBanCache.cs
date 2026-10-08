@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Realm.Net;
 
@@ -24,8 +25,17 @@ namespace ArcaneCore.Realm.Net;
 /// again. Fail closed only when that row read fails too (the error propagates and the connection is closed, as with
 /// the direct read). A cancelled caller is not a failed reload.
 /// </para>
+/// <para>
+/// With <paramref name="scopes"/> (the listener passes its own) the list is loaded through an <see cref="IBanStore"/> of a
+/// scope of the cache's own, never through the calling session's store: a load that ran out of the query budget is
+/// abandoned while still running, and the session's store (and its database context) must stay free for the row read.
+/// Without it the caller's store is used for both (tests over an in-memory store).
+/// </para>
 /// </summary>
-public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock = null)
+/// <param name="refreshEvery">How long a loaded list is used; zero or less turns the cache off.</param>
+/// <param name="clock">The application clock (ban dates, the period).</param>
+/// <param name="scopes">Where list loads resolve their own <see cref="IBanStore"/>; null uses the caller's store.</param>
+public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock = null, IServiceScopeFactory? scopes = null)
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly SemaphoreSlim _reload = new(1, 1);
@@ -109,7 +119,7 @@ public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock =
             IReadOnlyList<IpBanRecord> rows;
             try
             {
-                rows = await store.ListIpBansAsync(string.Empty, cancellationToken).ConfigureAwait(false);
+                rows = await LoadListAsync(store, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
@@ -141,6 +151,18 @@ public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock =
         {
             _reload.Release();
         }
+    }
+
+    private async Task<IReadOnlyList<IpBanRecord>> LoadListAsync(IBanStore callers, CancellationToken cancellationToken)
+    {
+        if (scopes is null)
+        {
+            return await callers.ListIpBansAsync(string.Empty, cancellationToken).ConfigureAwait(false);
+        }
+
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        IBanStore own = scope.ServiceProvider.GetService<IBanStore>() ?? callers;
+        return await own.ListIpBansAsync(string.Empty, cancellationToken).ConfigureAwait(false);
     }
 
     private bool IsStale(Snapshot snapshot) => _clock.GetUtcNow() - snapshot.LoadedAt >= RefreshEvery;
