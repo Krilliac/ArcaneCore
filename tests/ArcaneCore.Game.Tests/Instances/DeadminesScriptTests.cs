@@ -68,6 +68,36 @@ public sealed class DeadminesScriptTests
     }
 
     [Fact]
+    public void MrSmite_EvadeAfterTheAxePhase_ResetsToPhaseOneWithTheSword()
+    {
+        var spells = new RecordingCreatureSpells();
+        using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),
+            [646], [646], [(144111, GameObjectType.Generic)],
+            aiServices: new CreatureAiServices { Spells = spells });
+        Creature smite = run.Creature(646);
+        var ai = Assert.IsType<ArcaneCore.Game.Instances.Scripts.Deadmines.MrSmiteAi>(smite.AI);
+        Assert.True(run.Creatures.AttackStart(smite, run.Player));
+        smite.Health = smite.MaxHealth * 60 / 100;
+        run.Tick();
+        run.Tick(2_500);
+        for (int i = 0; i < 50 && ai.Phase != ArcaneCore.Game.Instances.Scripts.Deadmines.MrSmiteAi.SmitePhase.Kneeling; i++)
+        {
+            run.Tick(100);
+        }
+
+        run.Tick(3_000);
+        run.Tick(1_000);
+        Assert.Equal(ArcaneCore.Game.Instances.Scripts.Deadmines.MrSmiteAi.SmitePhase.Second, ai.Phase);
+        Assert.Equal(7427u, smite.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+
+        // boss_mr_smiteAI::Reset runs on every evade (CreatureAI::EnterEvadeMode).
+        ai.EnterEvadeMode();
+        Assert.Equal(ArcaneCore.Game.Instances.Scripts.Deadmines.MrSmiteAi.SmitePhase.First, ai.Phase);
+        Assert.Equal(7420u, smite.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+        Assert.Equal(0u, smite.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + 1));
+    }
+
+    [Fact]
     public void BossDeathsOpenFactoryDoors_AndCannonOpensIroncladDoorAfterDelay()
     {
         using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),

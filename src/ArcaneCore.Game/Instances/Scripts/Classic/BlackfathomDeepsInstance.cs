@@ -9,7 +9,8 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// TYPE_KELRIS (1) to DONE when Twilight Lord Kelris dies ("EventAI must set instance data (1,3) at his death").
 /// <para>
 /// Ported: the three states and their save string (Kelris only ever becomes DONE, once), the portal door when the shrine event is done and the
-/// portal door and shrines that are created open when it is. Not ported: the shrine event's waves.
+/// portal door and shrines that are created open when it is. The shrine event's waves and the Fathom Stone are in
+/// BlackfathomDeeps/BlackfathomDeepsInstance.Events.cs.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]

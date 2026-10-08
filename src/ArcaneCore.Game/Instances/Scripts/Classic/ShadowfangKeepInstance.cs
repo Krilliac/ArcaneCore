@@ -10,8 +10,8 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <para>
 /// Ported: the six encounter states and their save string, the courtyard door when the prisoners are freed (TYPE_FREE_NPC done), Arugal's door
 /// when Wolf Master Nandos is done, the sorcerer's door after the fourth voidwalker, and the doors that are created open when their encounter is
-/// done. Not ported (logged at debug level): Ada's and Ash's speech when Rethilgore dies, Archmage Arugal's Fenrus dialogue and summon, the
-/// Arugal intro dialogue and Vincent's death pose, the Nandos pack event.
+/// done. The event parts (Ada's and Ash's speech when Rethilgore dies, Archmage Arugal's Fenrus dialogue and summon, the Arugal intro dialogue
+/// and Vincent's death pose, the Nandos pack event) are in ShadowfangKeep/ShadowfangKeepInstance.Events.cs.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]

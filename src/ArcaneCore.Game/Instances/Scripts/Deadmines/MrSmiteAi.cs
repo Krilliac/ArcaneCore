@@ -18,8 +18,15 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
 
     public SmitePhase Phase => _phase;
 
-    public override void OnRespawn()
+    public override void OnRespawn() => Reset();
+
+    /// <summary>mangos-classic CreatureAI::EnterEvadeMode calls Reset (AI/BaseAI/CreatureAI.cpp:66-70): an evade mid-fight restores phase one and the sword.</summary>
+    public override void OnEvade() => Reset();
+
+    // boss_mr_smiteAI::Reset (boss_mr_smite.cpp:61-71).
+    private void Reset()
     {
+        _lastVictim = null;
         _phase = SmitePhase.First;
         _equipTimer = 0;
         _slamTimer = 9_000;

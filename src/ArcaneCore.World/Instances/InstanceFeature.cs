@@ -99,6 +99,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _writes.Start();
         _manager = new InstanceManager(world, Options, _writes, logger: loggers.CreateLogger<InstanceManager>());
         QuestNpcFeature? questFeature = services.GetService<QuestNpcFeature>();
+        // cmangos Player::IsCurrentQuest mode 2: QUEST_STATUS_COMPLETE and not rewarded (the SD2 Fortune Awaits chest check).
         _manager.QuestCompleteUnrewarded = (player, questId) => questFeature?.Services.IsCurrent(player, questId, 2) == true;
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
