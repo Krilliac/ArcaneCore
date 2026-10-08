@@ -259,6 +259,94 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>
+    /// vmangos PartyBotAI::OnPacketReceived: SMSG_LEARNED_SPELL marks the spell data stale, so a newly learned higher rank is used
+    /// from the next decision on and a newly learned talent spell changes the role (AutoAssignRole).
+    /// </summary>
+    [Fact]
+    public async Task SpellData_IsRebuiltFromTheBook_WhenTheServerAnnouncesALearnedSpell()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                SpellInfo rend1 = bolt with { Id = 8981, Name = "Rend", Rank = "Rank 1" };
+                SpellInfo rend2 = bolt with { Id = 8982, Name = "Rend", Rank = "Rank 2" };
+                SpellInfo shieldSlam = bolt with { Id = World.Playerbots.Combat.PlayerbotRoles.ShieldSlam, Name = "Shield Slam", Rank = "Rank 1" };
+                feature.System.Store = new SpellStore(feature.System.Store.All.Append(rend1).Append(rend2).Append(shieldSlam), [], []);
+                Assert.True(feature.System.LearnSpell(player, rend1.Id));
+
+                var helper = new PlayerbotCombatSpells(session);
+                Assert.Equal(rend1.Id, helper.Abilities(player)["Rend"]!.Id);
+                Assert.Equal(World.Playerbots.Combat.PlayerbotRole.MeleeDps, helper.RoleOf(player));
+
+                Assert.True(feature.System.LearnSpell(player, rend2.Id)); // SMSG_LEARNED_SPELL
+                Assert.Equal(rend2.Id, helper.Abilities(player)["Rend"]!.Id);
+                Assert.True(feature.System.LearnSpell(player, shieldSlam.Id));
+                Assert.Equal(World.Playerbots.Combat.PlayerbotRole.Tank, helper.RoleOf(player));
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    /// <summary>
+    /// The out-of-combat upkeep takes a warrior's stance through the ordinary CMSG_CAST_SPELL handler (the aura is on the player),
+    /// then has nothing left to do; a warrior fights in melee.
+    /// </summary>
+    [Fact]
+    public async Task OutOfCombatUpkeep_TakesTheStance_ThroughTheOrdinaryCastHandler()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            uint stance = await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                var battleStance = new SpellInfo
+                {
+                    Id = 8983, Name = "Battle Stance", RangeIndex = SpellConstants.RangeIndexSelfOnly, Duration = new SpellDuration(-1, 0, -1),
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModShapeshift, MiscValue = 17,
+                        TargetA = SpellImplicitTarget.UnitCaster }],
+                };
+                feature.System.Store = new SpellStore(feature.System.Store.All.Append(battleStance), [], []);
+                Assert.True(feature.Spellbook.LearnSpell(player, battleStance.Id));
+                return battleStance.Id;
+            });
+            var helper = new PlayerbotCombatSpells(session);
+            Assert.True(await host.World.InvokeAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(2);
+                return helper.UpdateOutOfCombat(session.Player!, 0);
+            }));
+            await host.WaitForWorldAsync(() => session.Services.GetRequiredService<SpellFeature>().System.HasAura(session.Player!, stance),
+                "Battle Stance aura");
+            Assert.Equal(ShapeshiftForm.BattleStance, await host.World.InvokeAsync(() => ShapeshiftService.GetForm(session.Player!)));
+            Assert.False(await host.World.InvokeAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(2);
+                return helper.UpdateOutOfCombat(session.Player!, 0); // nothing left to do
+            }));
+            Assert.Equal(World.Playerbots.Combat.PlayerbotClassRotation.MeleeRange, await host.World.InvokeAsync(() => helper.PreferredRange(session.Player!)));
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static async Task<Creature> AddTargetAsync(WorldTestHost host, WorldSession session, float xOffset, uint low)
     {
         Creature target = null!;
