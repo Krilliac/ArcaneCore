@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
@@ -275,7 +276,9 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
                 return;
             case PlayerbotGroupState.Leaving:
-                if (PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } exit)
+                // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
+                if (WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
+                    && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } exit)
                     WalkTo(player, new Vector3(exit.X, exit.Y, exit.Z), interval, toward: true);
                 else Hold(player);
                 return;
@@ -682,7 +685,8 @@ internal sealed class PlayerbotGroupAI
     // --- death ----------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Dead: wait (unreleased) for a living member's resurrection while one could give it and the group is not wiping, at most
+    /// Dead: wait (unreleased) for a living member's resurrection while one could give it (a survivor retreating from a wipe comes
+    /// back for it), at most
     /// <see cref="DeadWaitMs"/>; then release and run back (<see cref="PlayerbotRecovery"/>: to the body, or through the instance
     /// entrance when it died inside).
     /// </summary>
@@ -692,7 +696,7 @@ internal sealed class PlayerbotGroupAI
         long now = Now;
         if (_deadSinceMs < 0) _deadSinceMs = now;
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
-        if (!ghost && now - _deadSinceMs < DeadWaitMs && group.State != PlayerbotGroupState.Wiped && group.CanResurrect(_session.World, player))
+        if (!ghost && now - _deadSinceMs < DeadWaitMs && group.CanResurrect(_session.World, player))
         {
             PlayerbotMovementControl.Stop(_session, player);
             return;

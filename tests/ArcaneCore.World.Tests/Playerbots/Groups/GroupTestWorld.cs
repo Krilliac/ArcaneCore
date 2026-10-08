@@ -58,7 +58,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <summary>A dungeon quest (Type 81) for three whose objective spawns only inside The Deadmines.</summary>
     public const uint DungeonQuest = 990703;
 
-    /// <summary>An elite quest for six (a raid).</summary>
+    /// <summary>A raid quest (Type 62) for six.</summary>
     public const uint RaidQuest = 990704;
 
     /// <summary>An elite quest for two (wipe tests).</summary>
@@ -165,7 +165,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     {
         Player? player = Bots.FindSession(id)?.Player;
         return player is null ? "offline" : FormattableString.Invariant(
-            $"L{player.Level} {player.Health}/{player.MaxHealth} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) map {player.MapId} alive={player.IsAlive} combat={player.Combat.IsInCombat} victim={(player.Combat.Victim as Game.Creatures.Creature)?.Entry} attackers={string.Join(',', player.Combat.Attackers.OfType<Game.Creatures.Creature>().Select(c => $"{c.Entry}:{c.Health}/{c.MaxHealth}"))}");
+            $"L{player.Level} {player.Health}/{player.MaxHealth} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) map {player.MapId} alive={player.IsAlive} combat={player.Combat.IsInCombat} victim={(player.Combat.Victim as Game.Creatures.Creature)?.Entry} attackers={string.Join(',', player.Combat.Attackers.OfType<Game.Creatures.Creature>().Select(c => $"{c.Entry}:{c.Health}/{c.MaxHealth}"))} death={player.Combat.DeathState} ghost={(player.Flags & PlayerFlags.Ghost) != 0} resRequested={Game.Death.Resurrection.ResurrectionRequests.IsRequested(player)} rez={Coordinator.FindAI(id)?.LastResurrection} step={Coordinator.FindAI(id)?.Recovery.LastStep}");
     }
 
     public ValueTask DisposeAsync() => World.DisposeAsync();
@@ -225,8 +225,8 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 },
                 Hostile(OgreEntry, "Group Ogre", level: 10, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
                 Hostile(WarlordEntry, "Group Warlord", level: 10, health: 1500, minDamage: 6, maxDamage: 9, rank: 1),
-                Hostile(BruteEntry, "Group Brute", level: 10, health: 420, minDamage: 5, maxDamage: 7, rank: 0),
-                Hostile(BossEntry, "Deadmines Boss", level: 12, health: 600, minDamage: 6, maxDamage: 9, rank: 1),
+                Hostile(BruteEntry, "Group Brute", level: 1, health: 150, minDamage: 1, maxDamage: 1, rank: 0),
+                Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
             ],
             [
                 new CreatureSpawn { Guid = GiverSpawn, Entry = GiverEntry, MapId = 0, X = Home.X + 3f, Y = Home.Y, Z = Home.Z, Orientation = MathF.PI },
@@ -243,7 +243,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Quest(EliteQuest, "Group: the ogre", type: 1, suggested: 3, OgreEntry),
                 Quest(BruteQuest, "The brute", type: 0, suggested: 0, BruteEntry),
                 Quest(DungeonQuest, "Dungeon: the boss", type: 81, suggested: 3, BossEntry, minLevel: 10),
-                Quest(RaidQuest, "Raid: the warlord", type: 1, suggested: 6, WarlordEntry),
+                Quest(RaidQuest, "Raid: the warlord", type: 62, suggested: 6, WarlordEntry),
                 Quest(DuoQuest, "Group: the ogre for two", type: 1, suggested: 2, OgreEntry),
             ];
             QuestTemplate[] offered = [.. all.Where(q => quests.Contains(q.Entry))];

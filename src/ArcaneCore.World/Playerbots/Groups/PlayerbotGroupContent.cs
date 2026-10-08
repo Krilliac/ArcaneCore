@@ -85,8 +85,9 @@ internal sealed record PlayerbotGroupPlan(
 /// The pure rules of bot groups (apart from the world so they can be tested alone): which content needs a group and how big, who can
 /// fill which role, and who goes with whom.
 /// <para>
-/// The quest flags are vmangos <c>quest_template.Type</c> (QuestTypes, SharedDefines.h: QUEST_TYPE_ELITE 1 in 1.12 data is 41 in
-/// the QuestInfo.dbc ids the database carries: 41 Elite, 62 Raid, 81 Dungeon) and <c>SuggestedPlayers</c>. Neither vmangos nor
+/// The quest flags are vmangos <c>quest_template.Type</c>, QuestInfo.dbc ids (SharedDefines.h QuestTypes: 1 QUEST_TYPE_ELITE, the
+/// client's "Group"; 41 PvP; 62 Raid; 81 Dungeon), and <c>SuggestedPlayers</c>. Type 41 is PvP, not elite: in the live world
+/// database "Wanted: Hogger" (176) is Type 1 and the Alterac Valley quests are Type 41. Neither vmangos nor
 /// the mangoszero playerbot module groups bots by itself (vmangos PartyBot needs a player; the mangoszero module's "lfg" strategy
 /// joins the server's LFG queue); the matching here is ArcaneCore's own, after vanilla's unwritten norms: five for a dungeon, a
 /// tank and a healer when there are three or more, levels close together.
@@ -94,8 +95,8 @@ internal sealed record PlayerbotGroupPlan(
 /// </summary>
 internal static class PlayerbotGroupContent
 {
-    /// <summary>quest_template.Type: Elite (QuestInfo.dbc 41).</summary>
-    internal const uint QuestTypeElite = 41;
+    /// <summary>quest_template.Type: Elite, the client's "Group" (QuestInfo.dbc 1, vmangos QUEST_TYPE_ELITE).</summary>
+    internal const uint QuestTypeElite = 1;
 
     /// <summary>quest_template.Type: Raid (QuestInfo.dbc 62).</summary>
     internal const uint QuestTypeRaid = 62;
@@ -110,9 +111,10 @@ internal static class PlayerbotGroupContent
     internal const int MinRaidSize = 10;
 
     /// <summary>
-    /// The group a quest asks for (0: one player is enough). A raid quest a raid of its suggested size (at least
-    /// <see cref="MinRaidSize"/>), a dungeon quest five, an elite quest its suggested size or three, any other quest its suggested size
-    /// when that is more than one.
+    /// The group a quest asks for (0: one player is enough). A raid quest a raid of its suggested size (<see cref="MinRaidSize"/> when
+    /// it suggests a party or none), a dungeon quest five, an elite quest its suggested size or three, any other quest its suggested
+    /// size when that is more than one. Only a raid quest gets a raid: a raid group's kills credit raid quests alone (vmangos
+    /// Player::KilledMonster, the quest's raid check), so an elite quest suggesting more than five is done by a party of five.
     /// </summary>
     internal static int QuestGroupSize(QuestTemplate template)
     {
@@ -120,10 +122,10 @@ internal static class PlayerbotGroupContent
         int suggested = template.SuggestedPlayers;
         return template.Type switch
         {
-            QuestTypeRaid => Math.Clamp(Math.Max(suggested, MinRaidSize), MinRaidSize, 40),
+            QuestTypeRaid => suggested > PartySize ? Math.Min(suggested, 40) : MinRaidSize,
             QuestTypeDungeon => suggested > 1 ? Math.Min(suggested, PartySize) : PartySize,
-            QuestTypeElite => suggested > 1 ? Math.Min(suggested, 40) : 3,
-            _ => suggested > 1 ? Math.Min((int)suggested, 40) : 0,
+            QuestTypeElite => suggested > 1 ? Math.Min(suggested, PartySize) : 3,
+            _ => suggested > 1 ? Math.Min(suggested, PartySize) : 0,
         };
     }
 

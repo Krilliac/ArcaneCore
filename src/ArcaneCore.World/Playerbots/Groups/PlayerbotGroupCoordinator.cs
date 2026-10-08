@@ -406,7 +406,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             if (flagged < 2) return null;
             CreatureSpawn nearest = here.OrderBy(s => Vector2.DistanceSquared(new(s.X, s.Y), new(player.X, player.Y))).First();
             var at = new Vector3(nearest.X, nearest.Y, nearest.Z);
-            bool raid = quest.Template.Type == PlayerbotGroupContent.QuestTypeRaid || flagged > PlayerbotGroupContent.PartySize;
+            bool raid = quest.Template.Type == PlayerbotGroupContent.QuestTypeRaid;
             if (raid && !_options.Groups.RaidsEnabled) return null;
             return new PlayerbotGroupGoal(raid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Quest, quest.Id, entry,
                 player.MapId, player.MapId, at, 0, at, flagged, quest.MinLevel, "quest");
