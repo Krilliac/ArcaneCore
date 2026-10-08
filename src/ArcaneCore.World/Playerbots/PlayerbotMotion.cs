@@ -179,16 +179,16 @@ internal static class PlayerbotMotion
         {
             // One heartbeat at the current position with the new orientation replaces the old route's next packet.
             Vector3 position = Walk(state.Route!, state.Anchor, state.Route!.NextPoint,
-                state.Speed * Age(now, state.AnchorMs) / 1000f, state.Heading, out _, out _, out _, out _);
-            current = Validate(map, state.Route!, state.Anchor, position) ?? state.Anchor;
+                state.Speed * Age(now, state.AnchorMs) / 1000f, state.Heading, out int reached, out _, out _, out _);
+            current = Validate(map, state.Route!, state.Route!.NextPoint, reached, state.Anchor, position) ?? state.Anchor;
         }
 
         while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= 0.05f)
             route.NextPoint++;
         // The first stretch must be walkable before anything is announced.
         Vector3 probe = Walk(route, current, route.NextPoint, MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f)),
-            HeadingTo(current, route.Points[route.NextPoint]), out _, out _, out _, out _);
-        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, route, current, probe) is null)
+            HeadingTo(current, route.Points[route.NextPoint]), out int probed, out _, out _, out _);
+        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, route, route.NextPoint, probed, current, probe) is null)
         {
             Stop(session, player);
             return false;
@@ -265,7 +265,7 @@ internal static class PlayerbotMotion
         }
 
         if (!turned && !entering && age < HeartbeatIntervalMs) return;
-        if (Validate(map, route, state.Anchor, position) is not { } valid)
+        if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
             StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
@@ -328,7 +328,7 @@ internal static class PlayerbotMotion
         if (!state.Active || Age(now, state.AnchorMs) == 0) return;
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
-        if (Validate(map, route, state.Anchor, position) is not { } valid
+        if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid
             || !Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
         {
             state.Clear();
@@ -442,7 +442,7 @@ internal static class PlayerbotMotion
 
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
-        if (Validate(map, route, state.Anchor, position) is { } valid) StopAt(session, player, state, valid, heading, nextPoint, now);
+        if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is { } valid) StopAt(session, player, state, valid, heading, nextPoint, now);
         else StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
     }
 
@@ -518,10 +518,12 @@ internal static class PlayerbotMotion
     /// own height.</description></item>
     /// </list>
     /// </summary>
-    private static Vector3? Validate(Map map, PlayerbotRoute route, Vector3 from, Vector3 candidate)
+    /// <param name="fromPoint">The point the walk was heading for from <paramref name="from"/> (its leg ends there).</param>
+    /// <param name="toPoint">The point the walk heads for at <paramref name="candidate"/>: every leg in between is checked by its own proof.</param>
+    private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
     {
         if (!Finite(candidate)) return null;
-        if (route.Navigated)
+        if (route.LegsNavigated(fromPoint, toPoint))
         {
             float best = float.NaN;
             foreach (float raise in MeshFloorProbes)

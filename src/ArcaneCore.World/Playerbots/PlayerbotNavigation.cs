@@ -20,6 +20,22 @@ internal sealed class PlayerbotRoute
         Navigated = navigated;
     }
 
+    /// <summary>
+    /// A route joined from legs of different origins (a hazard detour: a mesh leg, then legs that may have been stepped over the
+    /// terrain): <paramref name="legNavigated"/>[i] says whether the leg from point i to point i + 1 came from the navigation mesh.
+    /// </summary>
+    internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, IReadOnlyList<bool> legNavigated)
+    {
+        if (legNavigated.Count != Math.Max(0, points.Count - 1))
+            throw new ArgumentException("one flag per leg", nameof(legNavigated));
+        Points = points;
+        Distance = distance;
+        _legs = legNavigated;
+        Navigated = legNavigated.Count > 0 && legNavigated.All(leg => leg);
+    }
+
+    private readonly IReadOnlyList<bool>? _legs;
+
     internal IReadOnlyList<Vector3> Points { get; }
     internal float Distance { get; }
 
@@ -31,6 +47,21 @@ internal sealed class PlayerbotRoute
     /// (<see cref="PlayerbotNavigation.TryTerrainRoute"/>) carry no such proof and keep the line-of-sight check.
     /// </summary>
     internal bool Navigated { get; }
+
+    /// <summary>
+    /// Whether every leg walked from the one ending at point <paramref name="fromPoint"/> through the one ending at point
+    /// <paramref name="toPoint"/> came from the navigation mesh (<see cref="Navigated"/> for a route of one origin). A position on a
+    /// stepped leg keeps the floor and line-of-sight checks even when an earlier leg of the same route was the mesh's.
+    /// </summary>
+    internal bool LegsNavigated(int fromPoint, int toPoint)
+    {
+        if (_legs is null) return Navigated;
+        int first = Math.Clamp(fromPoint, 1, Points.Count - 1), last = Math.Clamp(toPoint, 1, Points.Count - 1);
+        for (int point = first; point <= last; point++)
+            if (!_legs[point - 1]) return false;
+        return true;
+    }
+
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
 }
@@ -115,12 +146,17 @@ internal static class PlayerbotNavigation
                 Vector3 before = hazard.At - (along * off) + (side * sign * off);
                 Vector3 past = hazard.At + (along * off) + (side * sign * off);
                 if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first) || first is null) continue;
-                if (Leg(map, first.Points[^1], past, options) is not { } middle || Leg(map, middle[^1], end, options) is not { } last) continue;
-                List<Vector3> points = [.. first.Points, .. middle.Skip(1), .. last.Skip(1)];
+                if (Leg(map, first.Points[^1], past, options) is not { } middle
+                    || Leg(map, middle.Points[^1], end, options) is not { } last) continue;
+                List<Vector3> points = [.. first.Points, .. middle.Points.Skip(1), .. last.Points.Skip(1)];
                 float length = 0;
                 for (int i = 1; i < points.Count; i++) length += Vector3.Distance(points[i - 1], points[i]);
                 if (length > options.MaxRouteYards || points.Count > options.MaxPathPoints * 3) continue;
-                var detour = new PlayerbotRoute(points, length, first.Navigated);
+                // Each leg keeps its own proof: the first may be the mesh's while a later one was stepped over the terrain, and the
+                // motion must not skip the floor and line-of-sight checks on that one (PlayerbotMotion.Validate).
+                bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
+                    .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
+                var detour = new PlayerbotRoute(points, length, legs);
                 if (risk.Blocking(player, detour.Points) is not null) continue;
                 route = detour;
                 return true;
@@ -129,15 +165,16 @@ internal static class PlayerbotNavigation
         return false;
     }
 
-    /// <summary>A second leg from <paramref name="from"/> (the navigation mesh's, else a stepped terrain line), or null.</summary>
-    private static IReadOnlyList<Vector3>? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
+    /// <summary>A further leg from <paramref name="from"/> (the navigation mesh's, else a stepped terrain line), or null.</summary>
+    private static PlayerbotRoute? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
     {
         PathResult path = map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
         if ((path.Type & PathType.NotUsingPath) != 0)
             return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
-                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain!.Points : null;
-        return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0 ? path.Points : null;
+                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain : null;
+        return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0
+            ? new PlayerbotRoute(path.Points, path.Length, navigated: true) : null;
     }
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
