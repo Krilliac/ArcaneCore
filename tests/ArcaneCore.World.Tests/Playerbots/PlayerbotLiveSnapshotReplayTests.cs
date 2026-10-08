@@ -155,6 +155,8 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                     {
                         if (bots.FindSession(watch.BotId)?.Player is not { } player) continue;
                         watch.Observe(new Vector3(player.X, player.Y, player.Z), player.IsAlive, host.World.NowMs);
+                        if (!player.IsAlive && elapsed % 5_000 == 0 && bots.FindBrain(watch.BotId) is { } dead)
+                            output.WriteLine($"{elapsed / 1000,4}s {name} recovery: {dead.Recovery.LastStep}/{dead.Recovery.LastSpiritHealerStep} spot={dead.Recovery.ReviveSpot} ({player.X:F1}, {player.Y:F1}, {player.Z:F1})");
                         if (elapsed % 30_000 == 0)
                         {
                             PlayerbotBrain? brain = bots.FindBrain(watch.BotId);

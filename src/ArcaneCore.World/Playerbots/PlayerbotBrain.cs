@@ -42,6 +42,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
+
+    /// <summary>The ghost recovery (inspection and tests).</summary>
+    internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
     private readonly PlayerbotStallWatch _stall = new();
     private readonly PlayerbotSuspensions _suspensions = new();

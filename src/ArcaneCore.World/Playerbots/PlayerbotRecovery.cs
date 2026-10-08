@@ -3,6 +3,8 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData;
@@ -43,6 +45,12 @@ internal enum PlayerbotRecoveryStep
     /// <summary>Stand within reclaim range while a hostile creature is near the ghost (where the reclaim revives it).</summary>
     WaitForHostiles,
 
+    /// <summary>
+    /// Walk to a spot inside the reclaim radius of the body that no hostile creature camps and the navigation mesh reaches, and
+    /// reclaim there (<see cref="PlayerbotRecovery.FindReviveSpot"/>).
+    /// </summary>
+    WalkToReviveSpot,
+
     /// <summary>Reclaim the body (CMSG_RECLAIM_CORPSE).</summary>
     Reclaim,
 
@@ -71,9 +79,12 @@ internal enum PlayerbotSpiritHealerStep
 
 /// <summary>
 /// Ordinary ghost recovery for one managed player, like a client: release, walk back to the body, wait out the reclaim delay,
-/// wait for hostiles near the revive point to leave (mangoszero playerbot ReviveFromCorpseAction), reclaim. The revive point is
-/// where the ghost stands, not the body: CMSG_RECLAIM_CORPSE resurrects the player in place (vmangos MiscHandler.cpp:599,
-/// <c>ResurrectPlayer</c> without a relocation), and the walk stops as soon as the body is in reclaim range (about 39 yards).
+/// move off a camped revive point (mangoszero playerbot ReviveFromCorpseAction waits for hostiles to leave), reclaim. The revive
+/// point is where the ghost stands, not the body: CMSG_RECLAIM_CORPSE resurrects the player in place (vmangos MiscHandler.cpp:599,
+/// <c>ResurrectPlayer</c> without a relocation), and the walk stops as soon as the body is in reclaim range (about 39 yards). A
+/// body whose surroundings are camped is no reason to give it up: anywhere inside that radius will do, so the ghost looks for a
+/// spot there that is clear of hostiles and reachable (<see cref="PlayerbotRecovery.FindReviveSpot"/>), walks to it and reclaims;
+/// only when there is none does it wait for the camp to leave, and take the spirit healer after <see cref="NoProgressMs"/>.
 /// <list type="bullet">
 /// <item><description>A body on another map — the bot died in a dungeon and was released at a graveyard outside — is reached
 /// through the dungeon's entrance: the ghost walks into the area trigger whose <c>areatrigger_teleport</c> leads to the body's
@@ -86,8 +97,8 @@ internal enum PlayerbotSpiritHealerStep
 /// recovery fault (<see cref="SpiritHealerFailed"/>); a body that cannot even be released for <see cref="NoProgressMs"/> faults with
 /// <see cref="Stalled"/>. Before, a stall or a stuck walk threw at once, and the fault quarantined the bot.</description></item>
 /// <item><description>Waiting at the body while the reclaim delay runs (30, 60 or 120 s by recent deaths, vmangos
-/// GetCorpseReclaimDelay) is progress (live, 2026-10-07: the bots that faulted were only waiting); waiting for hostiles is not, so a
-/// body camped for a minute is given up for the healer.</description></item>
+/// GetCorpseReclaimDelay) is progress (live, 2026-10-07: the bots that faulted were only waiting); waiting for hostiles, or walking
+/// from one revive spot to the next, is not, so a body that stays camped for a minute is given up for the healer.</description></item>
 /// </list>
 /// </summary>
 internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions options)
@@ -100,6 +111,25 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// radius): the reclaim revives the bot where the ghost stands.
     /// </summary>
     internal const float HostileClearYards = 25f;
+
+    /// <summary>
+    /// A revive spot is at least this far from every hostile creature: <see cref="HostileClearYards"/> and a margin, so a bot
+    /// that stops a yard or two short of it still passes the camped-body rule.
+    /// </summary>
+    internal const float ReviveSpotClearYards = HostileClearYards + 2.5f;
+
+    /// <summary>A revive spot is at most this far (3D) from the body: the reclaim radius less a margin for the walk's last yards.</summary>
+    internal const float ReviveSpotMaxYards = CombatConstants.CorpseReclaimRadius - 3f;
+
+    /// <summary>A walk to a revive spot longer than this (route length) is not worth it: the camp may have moved by then.</summary>
+    internal const float ReviveSpotMaxWalkYards = 90f;
+
+    /// <summary>The spacing of the candidate rings round the body, and the number of candidates on each.</summary>
+    internal const float ReviveSpotRingYards = 3f;
+    internal const int ReviveSpotAngles = 24;
+
+    /// <summary>Revive spots whose route is asked of the navigation mesh in one search (nearest first).</summary>
+    internal const int ReviveSpotMaxQueries = 16;
 
     /// <summary>The ghost activates a healer from this close: inside the server's interaction range with a margin.</summary>
     internal const float SpiritHealerReachYards = 3f;
@@ -116,6 +146,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private long _closingMs = -1;
     private float _bestDistance = float.PositiveInfinity;
     private bool _spiritHealer;
+    private Vector3? _spot;
+    private object? _spotKey;
 
     /// <summary>The step of the last update (inspection and tests).</summary>
     internal PlayerbotRecoveryStep LastStep { get; private set; } = PlayerbotRecoveryStep.Release;
@@ -126,15 +158,19 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <summary>Whether the spirit-healer fallback was taken for this death.</summary>
     internal bool UsingSpiritHealer => _spiritHealer;
 
+    /// <summary>The revive spot the ghost walks to or last chose (inspection and tests).</summary>
+    internal Vector3? ReviveSpot => _spot;
+
     /// <summary>Where the current walk is going (tests): the last point of its route.</summary>
     internal Vector3? RouteEnd => _route is { Points.Count: > 0 } route ? route.Points[^1] : null;
 
     /// <summary>
     /// The decision, free of world state. <paramref name="stalled"/>: no progress for <see cref="NoProgressMs"/>, or a walk that
-    /// stopped closing for <see cref="StuckMs"/>; <paramref name="fallback"/>: the spirit healer was already chosen for this death.
+    /// stopped closing for <see cref="StuckMs"/>; <paramref name="fallback"/>: the spirit healer was already chosen for this death;
+    /// <paramref name="reviveSpotKnown"/>: a clear, reachable spot inside the reclaim radius exists while a hostile camps the ghost.
     /// </summary>
     internal static PlayerbotRecoveryStep Decide(bool ghost, PlayerbotCorpsePlace corpse, bool entranceKnown, bool atCorpse,
-        long reclaimWaitSeconds, bool hostileNearCorpse, bool stalled, bool fallback)
+        long reclaimWaitSeconds, bool hostileNearCorpse, bool stalled, bool fallback, bool reviveSpotKnown = false)
     {
         if (!ghost) return stalled ? PlayerbotRecoveryStep.Fault : PlayerbotRecoveryStep.Release;
         if (fallback || stalled) return PlayerbotRecoveryStep.SpiritHealer;
@@ -148,7 +184,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
         if (!atCorpse) return PlayerbotRecoveryStep.WalkToCorpse;
         if (reclaimWaitSeconds > 0) return PlayerbotRecoveryStep.WaitForReclaimDelay;
-        return hostileNearCorpse ? PlayerbotRecoveryStep.WaitForHostiles : PlayerbotRecoveryStep.Reclaim;
+        if (!hostileNearCorpse) return PlayerbotRecoveryStep.Reclaim;
+        return reviveSpotKnown ? PlayerbotRecoveryStep.WalkToReviveSpot : PlayerbotRecoveryStep.WaitForHostiles;
     }
 
     /// <summary>The spirit-healer fallback, free of world state.</summary>
@@ -190,7 +227,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
         bool hostile = atCorpse && wait <= 0 && HostileNear(player);
-        PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: false);
+        Vector3? spot = hostile && !stalled ? ChooseReviveSpot(player, corpse!) : null;
+        PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: false,
+            reviveSpotKnown: spot is not null);
         LastStep = step;
         switch (step)
         {
@@ -217,6 +256,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 StandStill(player);
                 return false;
 
+            case PlayerbotRecoveryStep.WalkToReviveSpot:
+                // Not progress for the no-progress bound: a camp that keeps moving must not keep the ghost walking for good.
+                return Walk(player, spot!.Value, _spotKey!, elapsedMs, now, countsAsProgress: false);
+
             case PlayerbotRecoveryStep.Reclaim:
                 if (!StandStill(player)) return false;
                 return session.TryManagedAction(WorldOpcode.CmsgReclaimCorpse, PlayerbotNavigation.GuidPayload(corpse!.Guid.Value));
@@ -239,6 +282,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal void Reset()
     {
         ClearWalk();
+        _spot = null;
+        _spotKey = null;
         _progressMs = -1;
         _spiritHealer = false;
         LastStep = PlayerbotRecoveryStep.Release;
@@ -271,7 +316,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>Walk towards <paramref name="goal"/> (identified by <paramref name="key"/>) in bounded chunks; closing on it is progress.</summary>
-    private bool Walk(Player player, Vector3 goal, object key, uint elapsedMs, long now)
+    private bool Walk(Player player, Vector3 goal, object key, uint elapsedMs, long now, bool countsAsProgress = true)
     {
         if (!Equals(_goal, key))
         {
@@ -296,7 +341,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         {
             _bestDistance = after;
             _closingMs = now;
-            _progressMs = now;
+            if (countsAsProgress) _progressMs = now;
         }
 
         return advanced;
@@ -347,18 +392,99 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal static bool HostileNear(Player player)
     {
-        if (player.Map is not { } map) return false;
+        var here = new Vector3(player.X, player.Y, player.Z);
+        foreach (Vector3 hostile in HostilePositions(player))
+            if (Vector3.Distance(hostile, here) <= HostileClearYards)
+                return true;
+        return false;
+    }
+
+    /// <summary>The living hostile creatures the ghost can see.</summary>
+    private static List<Vector3> HostilePositions(Player player)
+    {
+        var found = new List<Vector3>();
+        if (player.Map is not { } map) return found;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
                 || !ReferenceEquals(creature.Map, map))
                 continue;
-            if (Distance(player, creature.X, creature.Y, creature.Z) <= HostileClearYards
-                && map.Combat.Hooks.IsHostileTo(creature, player))
-                return true;
+            if (map.Combat.Hooks.IsHostileTo(creature, player))
+                found.Add(new Vector3(creature.X, creature.Y, creature.Z));
         }
 
-        return false;
+        return found;
+    }
+
+    /// <summary>
+    /// The revive spot to walk to while a hostile camps the ghost: the one chosen before while it is still clear and inside the
+    /// reclaim radius, else a new one (<see cref="FindReviveSpot"/>) found with the navigation mesh. Null when there is none.
+    /// </summary>
+    private Vector3? ChooseReviveSpot(Player player, Corpse corpse)
+    {
+        if (player.Map is null) return null;
+        var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+        List<Vector3> hostiles = HostilePositions(player);
+        if (_spot is { } kept && IsReviveSpot(kept, body, hostiles)) return kept;
+
+        Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
+        {
+            // The mesh finds the floor: a candidate is a place on the ring at the body's height, and the route ends on the
+            // nearest walkable point (a candidate off the mesh ends short of it, which IsReviveSpot then re-checks).
+            if (!PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) || route is null
+                || route.Distance > ReviveSpotMaxWalkYards)
+                return null;
+            return route.Points[^1];
+        });
+        if (found is null)
+        {
+            _spot = null;
+            return null;
+        }
+
+        _spot = found;
+        _spotKey = new object();
+        return found;
+    }
+
+    private static bool IsReviveSpot(Vector3 spot, Vector3 body, List<Vector3> hostiles)
+    {
+        if (Vector3.Distance(spot, body) > ReviveSpotMaxYards) return false;
+        foreach (Vector3 hostile in hostiles)
+            if (Vector3.Distance(hostile, spot) <= ReviveSpotClearYards) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// A place to reclaim a camped body from, free of world state: candidates on rings round the body, within
+    /// <see cref="ReviveSpotMaxYards"/> of it (the server revives within <see cref="CombatConstants.CorpseReclaimRadius"/>) and at
+    /// least <see cref="ReviveSpotClearYards"/> from every hostile, nearest to the ghost first. <paramref name="reach"/> maps a
+    /// candidate to the point the ghost can actually walk to (the navigation mesh's, null when it cannot); the first reachable
+    /// point that is still a revive spot is taken. At most <see cref="ReviveSpotMaxQueries"/> candidates are asked.
+    /// </summary>
+    internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<Vector3> hostiles, Func<Vector3, Vector3?> reach)
+    {
+        List<Vector3> hostileList = hostiles as List<Vector3> ?? [.. hostiles];
+        var candidates = new List<Vector3> { body };
+        // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear (the Frostmane camp
+        // round Mirthblade's body left a pocket on the far rim, 29 yards from the nearest troll).
+        for (float radius = ReviveSpotRingYards; radius <= ReviveSpotMaxYards - 1f; radius += ReviveSpotRingYards)
+            for (int step = 0; step < ReviveSpotAngles; step++)
+            {
+                float angle = step * 2f * MathF.PI / ReviveSpotAngles;
+                candidates.Add(new Vector3(body.X + (MathF.Cos(angle) * radius), body.Y + (MathF.Sin(angle) * radius), body.Z));
+            }
+
+        int queries = 0;
+        foreach (Vector3 candidate in candidates
+            .Where(c => IsReviveSpot(c, body, hostileList))
+            .OrderBy(c => Vector2.Distance(new Vector2(c.X, c.Y), new Vector2(ghost.X, ghost.Y))))
+        {
+            if (++queries > ReviveSpotMaxQueries) break;
+            if (reach(candidate) is { } point && IsReviveSpot(point, body, hostileList)) return point;
+        }
+
+        return null;
     }
 
     /// <summary>The nearest living spirit healer the ghost can see (ghosts see the spirit services across the map's view range).</summary>

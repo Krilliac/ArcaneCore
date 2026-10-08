@@ -1,11 +1,16 @@
 using System.Numerics;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.World.Features;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Tests.Playerbots.Dungeon;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
@@ -131,6 +136,69 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
         Assert.True(left < 39f, $"the body is still {left:F1} yards away (started {before:F1})");
     }
 
+    /// <summary>
+    /// A ghost at its body with two hostile creatures camping within 25 yards of it (the camped-body rule) does not wait for them
+    /// or take the spirit healer: the reclaim radius is 39 yards, so it walks to a spot inside it that is clear of both and that the
+    /// navigation mesh reaches, and revives there. Before, it stood at the body for a minute and took the spirit healer
+    /// (Mirthblade, two Frostmane Troll Whelps).
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task AGhostAtACampedBody_WalksToAClearSpotInsideTheReclaimRadius_AndRevivesThere()
+    {
+        var clock = new RevivalClock(1_000);
+        await using Terrain terrain = await Terrain.StartAsync(withFactions: true);
+        await terrain.Host.OnWorldAsync(() => DeathHooks.Register(terrain.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await terrain.PlaceAsync(ColdridgeAfterRevive);
+        Vector3 body = await terrain.KillAndReleaseAsync();
+        Vector3 ghost = new(body.X + 6f, body.Y, body.Z + 0.3f);
+        await terrain.PlaceAsync(ghost);
+
+        Vector3[] camp = [new(body.X + 14f, body.Y + 6f, body.Z), new(body.X + 9f, body.Y - 12f, body.Z)];
+        Creature[] hostiles = await terrain.Host.OnWorldAsync(() => camp.Select((at, index) =>
+            DungeonBotHost.AddCreature(terrain.Player.Map!, 994500u + (uint)index, at.X, at.Y, at.Z, 0, terrain.Host.World.NowMs, faction: 14)).ToArray());
+        await terrain.WaitAsync(() => hostiles.All(h => terrain.Player.VisibleObjects.Contains(h.Guid)), "the ghost sees the camp");
+        clock.Seconds += 31;
+
+        var recovery = new PlayerbotRecovery(terrain.Session, new PlayerbotOptions { Enabled = true });
+        bool walkedToSpot = false, usedHealer = false, alive = false;
+        for (int think = 0; think < 400 && !alive; think++)
+        {
+            alive = await terrain.Host.OnWorldAsync(() =>
+            {
+                PlayerbotMovementControl.Update(terrain.Session, terrain.Player);
+                if (terrain.Player.IsAlive) return true;
+                terrain.Session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(terrain.Player, 500);
+                walkedToSpot |= recovery.LastStep == PlayerbotRecoveryStep.WalkToReviveSpot;
+                usedHealer |= recovery.UsingSpiritHealer;
+                return terrain.Player.IsAlive;
+            });
+            for (int tick = 0; tick < 10 && !alive; tick++)
+            {
+                await terrain.Host.World.AdvanceClockAsync(50);
+                await terrain.Host.OnWorldAsync(() => PlayerbotMotion.Pump(terrain.Session, terrain.Player, terrain.Host.World.NowMs));
+            }
+        }
+
+        Assert.True(alive, $"still a ghost; last step {recovery.LastStep}, spot {recovery.ReviveSpot}");
+        Assert.True(walkedToSpot, "the ghost never walked to a revive spot");
+        Assert.False(usedHealer, "the ghost took the spirit healer");
+        await terrain.Host.OnWorldAsync(() =>
+        {
+            var at = new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
+            Assert.True(Vector3.Distance(at, body) < ArcaneCore.Game.Combat.CombatConstants.CorpseReclaimRadius, $"revived {Vector3.Distance(at, body):F1} yards from the body");
+            foreach (Creature hostile in hostiles)
+                Assert.True(Vector3.Distance(at, new Vector3(hostile.X, hostile.Y, hostile.Z)) > PlayerbotRecovery.HostileClearYards,
+                    $"revived {Vector3.Distance(at, new Vector3(hostile.X, hostile.Y, hostile.Z)):F1} yards from a hostile");
+        });
+    }
+
+    private sealed class RevivalClock(long seconds) : DeathClock
+    {
+        public long Seconds { get; set; } = seconds;
+        public override long UnixSeconds => Seconds;
+    }
+
     /// <summary>A world on the real terrain with one managed bot session on the manual clock.</summary>
     private sealed class Terrain : IAsyncDisposable
     {
@@ -148,11 +216,21 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
 
         private TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
 
-        public static async Task<Terrain> StartAsync()
+        public static async Task<Terrain> StartAsync(bool withFactions = false)
         {
             string root = Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable)!;
             WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = root,
-                configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+                configureServices: services =>
+                {
+                    services.AddSingleton<IWorldFeature, ManualClock>();
+                    if (!withFactions) return;
+                    // The scenario world's factions (DungeonBotHost): faction 14 monsters are hostile to the human bot.
+                    services.AddSingleton(new FactionTemplateCatalog(
+                    [
+                        new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
+                        new FactionTemplateRecord(14, 14, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 1),
+                    ]));
+                });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             return new Terrain(host, session);
         }
@@ -174,6 +252,36 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
             }
 
             throw new TimeoutException($"the bot did not arrive at {at}");
+        }
+
+        /// <summary>Kill the bot where it stands and release its spirit; the body's position.</summary>
+        public async Task<Vector3> KillAndReleaseAsync()
+        {
+            await Host.OnWorldAsync(() =>
+            {
+                Player.Health = 0;
+                Player.Map!.Combat.KillPlayer(Player);
+                if (!Player.Map!.Combat.RepopPlayer(Player)) throw new InvalidOperationException("release refused");
+            });
+            await WaitAsync(() => (Player.Flags & PlayerFlags.Ghost) != 0 && Teleports.StageOf(Player) is null, "the release");
+            return await Host.OnWorldAsync(() => new Vector3(Player.Combat.Corpse!.X, Player.Combat.Corpse.Y, Player.Combat.Corpse.Z));
+        }
+
+        /// <summary>Tick the world and acknowledge the server orders until <paramref name="done"/> holds (bounded by game time).</summary>
+        public async Task WaitAsync(Func<bool> done, string what)
+        {
+            for (int tick = 0; tick < 400; tick++)
+            {
+                bool reached = await Host.OnWorldAsync(() =>
+                {
+                    PlayerbotMovementControl.Update(Session, Player);
+                    return Player.IsInWorld && done();
+                });
+                if (reached) return;
+                await Host.World.AdvanceClockAsync(50);
+            }
+
+            throw new TimeoutException($"timed out waiting for: {what}");
         }
 
         /// <summary>Plan one route to <paramref name="goal"/> and follow it as the brain does; the distance left when it stops.</summary>
