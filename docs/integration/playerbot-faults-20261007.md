@@ -44,6 +44,9 @@ RED: `PlayerbotRecoveryTests.GhostAtCorpse_WaitsOutAScaledReclaimDelay_AtAShortT
    one state (here a timing cap), not a broken bot. Disabling on the first fault turned every transient bug into a permanent loss that
    needed an operator. Repeated faults still stop a bot that cannot run, so a crash loop cannot spin forever. Details:
    `docs/areas/playbots.md`, "Faults and quarantine".
+4. **Restore at startup**: a desired bot that cannot log in at startup (`login-refused`, for example saved on a map outside
+   `AllowedMaps`) is quarantined and retried the same way. Before, the failed restore also cleared `DesiredEnabled`
+   (`ManagedPlayerbotLifecycleTests.AFailedRestoreOnStartup_KeepsTheBotDesired`, RED: `D:/ArcaneCore-lanes/_logs/w3-bot-faults/red-restore.log`).
 
 Tests: `ManagedPlayerbotLifecycleTests.OneActionFault_LogsTheException_AndKeepsTheBotDesired` (RED before: the bot was stopped and not
 desired), `AQuarantinedBot_LogsInAgainAfterTheBackoff_Autonomous`, `TheLastAllowedFault_DisablesTheBot_AndItStaysOut`,

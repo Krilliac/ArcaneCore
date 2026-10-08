@@ -53,7 +53,9 @@ the `managed_playerbot` row turns `Faulted` with the fault as `ErrorCode`
 again, autonomous (a scenario controller that faulted is not reattached). The `MaxFaults`-th
 fault (3) within `FaultWindowSeconds` (3600 s of world time) disables it for good:
 `DesiredEnabled` off, `ErrorCode` `disabled after 3 faults: ...`, no retry. A failed retry
-login counts as a fault. `.playerbot start` or `.playerbot stop` clears the quarantine and the
+login counts as a fault, and so does a failed restore at startup (for example a bot saved on a
+map outside `AllowedMaps`): before, that cleared `DesiredEnabled` too. A failed operator
+`.playerbot start` is still reported and not retried. `.playerbot start` or `.playerbot stop` clears the quarantine and the
 fault history; a world restart restores every desired bot, quarantined ones included (the
 fault history is per process). Before 2026-10-07 one fault set `DesiredEnabled` off, so a
 single transient bug removed a bot until an operator noticed:

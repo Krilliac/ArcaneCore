@@ -260,6 +260,36 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
+    /// <summary>
+    /// A restore at startup that cannot log the bot in (here: it is saved on a map outside AllowedMaps, as a bot that logged out in a
+    /// dungeon would be) is a fault like any other: the bot
+    /// stays desired and is retried, instead of losing DesiredEnabled because of one failed login.
+    /// </summary>
+    [Fact]
+    public async Task AFailedRestoreOnStartup_KeepsTheBotDesired()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        Account owner = await accounts.CreateAsync(new Account { Username = "PBDUNGEON", Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
+        CharacterRecord character = await characters.CreateAsync(new CharacterRecord
+        {
+            AccountId = owner.Id, Name = "DungeonBot", Race = 1, Class = 1, Level = 10,
+        });
+        var bot = new ManagedPlayerbot(Guid.NewGuid(), owner.Id, character.Id, owner.Username, true,
+            ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, 1, 1);
+        await owners.CreateAsync(bot);
+
+        await using WorldTestHost host = Start(accounts, characters, owners, restoreOnStartup: true, configure: o => o.AllowedMaps = [1]);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+
+        ManagedPlayerbot record = (await owners.FindAsync(bot.BotId))!;
+        Assert.Equal(ManagedPlayerbotState.Faulted, record.State);
+        Assert.True(record.DesiredEnabled);
+        Assert.StartsWith("quarantined (fault 1/3): start-failed: login-refused", record.ErrorCode);
+    }
+
     private static async Task WaitAsync(Func<Task<bool>> condition, string what, int seconds)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);

@@ -78,9 +78,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode));
         }
         Volatile.Write(ref _snapshot, stopped.ToArray());
+        // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
             foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled).Take(_options.MaxBots))
-                await StartAsync(bot.BotId.ToString(), cancellationToken).ConfigureAwait(false);
+                await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, quarantineRetry: true).ConfigureAwait(false);
     }
 
     public IReadOnlyList<PlayerbotStatus> Snapshot() => Volatile.Read(ref _snapshot).ToArray();
