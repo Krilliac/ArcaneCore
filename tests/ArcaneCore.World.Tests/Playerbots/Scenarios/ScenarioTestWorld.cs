@@ -125,6 +125,38 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         return client;
     }
 
+    /// <summary>
+    /// Give every map a flat floor at the start height with a clear line of sight (WorldCollision), so autonomous bots can plan
+    /// routes (PlayerbotNavigation refuses a route over unknown terrain). The scenario world otherwise has no terrain.
+    /// </summary>
+    public Task UseFlatFloorAsync() => Host.OnWorldAsync(() =>
+    {
+        Game.Maps.Collision.WorldCollision.Of(Host.World).Install(lineOfSight: new FlatFloor(ScenarioTestContent.StartZ));
+        return true;
+    });
+
+    private sealed class FlatFloor(float height) : Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance,
+            out System.Numerics.Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => height;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out Game.Maps.Collision.ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+    }
+
     public async Task<T> WithScopeAsync<T>(Func<IServiceProvider, Task<T>> read)
     {
         await using AsyncServiceScope scope = Services.CreateAsyncScope();
@@ -220,8 +252,9 @@ internal static class ScenarioTestContent
             Entry = LinenCloth, Name = "Linen Cloth", Class = 7, SubClass = 0, Quality = 1, Stackable = 20, SellPrice = 13,
         });
         services.AddSingleton<IItemTemplateSource>(items);
+        ScenarioClassContent.Register(services, items);
         SpellContent duel = DuelWorldHost.Content();
-        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(ClassScriptScenarioContent.Extend(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells, .. UnitControlScenarioContent.Spells] })));
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(ScenarioClassContent.Extend(ClassScriptScenarioContent.Extend(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells, .. UnitControlScenarioContent.Spells] }))));
         var store = new ContentStore();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddSingleton<IQuestContentStore>(store);
@@ -232,6 +265,7 @@ internal static class ScenarioTestContent
             new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),   // human player
             new FactionTemplateRecord(14, 14, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 1),  // monster
             new FactionTemplateRecord(12, 72, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),  // Stormwind
+            new FactionTemplateRecord(2, 2, 0, OwnMask: 5, FriendlyMask: 4, HostileMask: 10),   // horde player (ScenarioClassContent)
         ]));
         // Faction 72 (Stormwind) is a reputation faction: the quest lookup reads the reaction through reputation.
         services.AddSingleton(new FactionCatalog([new FactionRecord(72, 0, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], name: "Stormwind")]));
@@ -243,6 +277,7 @@ internal static class ScenarioTestContent
             [
                 Hostile(WolfEntry, "Scenario Wolf"),
                 Hostile(KoboldEntry, "Scenario Kobold"),
+                ScenarioClassContent.Imp,
                 new CreatureTemplate
                 {
                     Entry = GiverEntry, Name = "Scenario Marshal", Faction = 12, NpcFlags = (uint)NpcFlags.QuestGiver, DisplayIds = [49],

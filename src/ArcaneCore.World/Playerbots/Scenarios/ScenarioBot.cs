@@ -51,8 +51,17 @@ public sealed class ScenarioBot : IPlayerbotController
     void IPlayerbotController.Detached(Guid botId)
     {
         _detached = true;
-        if (Session is { } session) session.ManagedPacketObserver = null;
+        // Handed to its own brain by the run (ScenarioContext.AutonomousAsync): the run still records what it receives.
+        if (!IsAutonomous && Session is { } session) session.ManagedPacketObserver = null;
     }
+
+    /// <summary>
+    /// The run handed this bot to its own <see cref="PlayerbotBrain"/> (<see cref="ScenarioContext.AutonomousAsync"/>): its
+    /// packets are still recorded, but the typed actions are refused until <see cref="ScenarioContext.ScriptAsync"/>.
+    /// </summary>
+    public bool IsAutonomous { get; internal set; }
+
+    internal void Reattach() => _detached = false;
 
     /// <summary>A mark for "packets from now on" (pass as <c>since</c>).</summary>
     public long Mark() => ScenarioPacketLog.NextSequence;
