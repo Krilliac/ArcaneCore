@@ -47,6 +47,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private int _cursor;
     private uint _checkpointMs;
     private Task _checkpoint = Task.CompletedTask;
+
+    /// <summary>
+    /// The last checkpoint started (world thread: read it there, after the tick that started it). Tests step the manual world clock
+    /// one tick at a time and let each checkpoint finish before game time moves on.
+    /// </summary>
+    internal Task LastCheckpoint => _checkpoint;
     private PlayerbotLocalPlanner? _planner;
     private readonly CancellationTokenSource _planningStop = new();
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
@@ -611,6 +617,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 quarantine.RetryAtMs = long.MaxValue; // one retry at a time; a failed start schedules the next
             }
 
+            // Scheduled: from here on an operator stop or start that takes the operation lock first decides (StartCoreAsync re-checks).
+            logger.LogInformation("Playerbot {BotId} quarantine retry starting", botId);
             PlayerbotOperationResult result;
             try { result = await StartCoreAsync(botId.ToString(), null, CancellationToken.None, StartKind.QuarantineRetry, quarantine).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
