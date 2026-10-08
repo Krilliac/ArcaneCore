@@ -16,32 +16,28 @@ public sealed class TickStatsTests
         {
             stats.Record(100, 10, 50_000);
         }
-        long firstBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        // A window can pick up a one-off runtime allocation charged to this thread (a full Game
+        // run under load once counted 6592 bytes in the first window while the other windows were
+        // 0). Record itself allocating would show in every window, so the claim is that some window
+        // of 10,000 calls allocates nothing - the same rule as the Realm watchdog's AllocatedBy.
+        var windows = new long[5];
+        for (int window = 0; window < windows.Length; window++)
         {
-            stats.Record(i, i, 50_000);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 10_000; i++)
+            {
+                stats.Record(i, i, 50_000);
+            }
+            windows[window] = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (windows[window] == 0)
+            {
+                break;
+            }
         }
-        long firstAllocated = GC.GetAllocatedBytesForCurrentThread() - firstBefore;
 
-        long secondBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
-        {
-            stats.Record(i, i, 50_000);
-        }
-        long secondAllocated = GC.GetAllocatedBytesForCurrentThread() - secondBefore;
-
-        long thirdBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
-        {
-            stats.Record(i, i, 50_000);
-        }
-        long thirdAllocated = GC.GetAllocatedBytesForCurrentThread() - thirdBefore;
-
-        // Keep all assertions outside the measured windows so assertion machinery
-        // cannot contaminate the next allocation sample.
-        Assert.Equal(0, firstAllocated);
-        Assert.Equal(0, secondAllocated);
-        Assert.Equal(0, thirdAllocated);
+        // Keep the assertion outside the measured windows so assertion machinery
+        // cannot contaminate an allocation sample.
+        Assert.True(windows.Contains(0), $"every window allocated: {string.Join(", ", windows)} bytes");
     }
 
     [Fact]
