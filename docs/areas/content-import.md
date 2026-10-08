@@ -183,24 +183,32 @@ feature reads:
   battleground tables, `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
   (`TransportDumpImporter`; a cmangos row has no build and gets 0), `spell_proc_event` (build 5875; `--cooldown-unit auto` reads the
   classic-db core revision from `db_version`: seconds before z2829, milliseconds from it, refused when the dump names none), the relay DB
-  scripts, and `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
-  holds 432 triggers, every `areatrigger_teleport` id of classic-db among them). A second run with the same inputs leaves the same rows. It
-  then checks what the world logs at start: teleports and taverns without a trigger, battleground start locations that are not safe
-  locations, transports without a type-15 object, portals to a map with no `map_template` row (vmangos "unknown target map") and
-  graveyard links to a zone with no `area_template` row (vmangos "not existing zone id"; checked only when the table has rows, as the
-  world does). With `Map.dbc` and `AreaTable.dbc` in `--dbc-dir` (both or neither: one alone is refused before the database is
-  opened) it also replaces `map_template` and `area_template` (`MapAreaDbcImporter`, below). It refuses a database file that does not exist, and a world whose schema is behind the
+  scripts, `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
+  holds 432 triggers, every `areatrigger_teleport` id of classic-db among them), and the flight masters' `taxi_nodes` and `taxi_path`
+  from `TaxiNodes.dbc` and `TaxiPath.dbc` (`NpcServiceDbcReaders`, vmangos `nifffssssssssxii` and `niii`). The ships' own
+  `gameobject_template` rows (type 15: data0 TaxiPath id, data1 speed, data2 acceleration) are written as the dump has them, mapped as
+  the full object import maps them (`GameObjectLootDumpImporter.MapTemplate`); every other object template is left alone. A missing DBC
+  leaves its table alone with a warning. With `Map.dbc` and `AreaTable.dbc` in `--dbc-dir` (both or neither: one alone is refused
+  before the database is opened) it also replaces `map_template` and `area_template` (`MapAreaDbcImporter`, below). A second run with
+  the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
+  battleground start locations that are not safe locations, transports without a type-15 object, portals to a map with no
+  `map_template` row (vmangos "unknown target map"), graveyard links to a zone with no `area_template` row (vmangos "not existing zone
+  id"; checked only when the table has rows, as the world does), and, with `TaxiPathNode.dbc` in `--dbc-dir`, every ship the world would
+  refuse (speed or acceleration 0, a path under three nodes, a map without a `map_template` row; [transports](transports.md)). It
+  refuses a database file that does not exist, and a world whose schema is behind the
   importer's unless `--migrate` is given (it never migrates on its own: an importer built with another lane's world step would otherwise
   upgrade the live world before the server that needs it is deployed). `tools/content/refresh-world-content.ps1` wraps it for an
   operator: it refuses a database another process holds open, writes a SHA-256-checked backup (the database and any leftover `-wal`),
-  checks the four DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`; all four are required) against a `SHA256SUMS` file in
-  `-DbcDirectory` when there is one or extracts them from the client's MPQs with
-  `mpqcli` (patch-2 over patch over dbc), and passes `-Migrate` on as `--migrate`. With `-AppSettings <appsettings.json>` (needs
-  `-DbcDirectory`) it then runs `tools/content/set-optional-data.ps1`, which points the world at its optional client data (item sets,
-  random suffixes, enchantments, pages, character appearance; docs/areas/items.md "Optional client data"). Run on a copy of the live world
-  (2026-10-07): 122 safe locations, 191 graveyard links, 3 battleground templates, 969 + 421 battleground spawn events, 24
-  battlemasters, 61 exploration levels, 33 weather zones, 42 taverns, 9 transports, 164 proc rows, 828 relay steps, 14 relay templates and
-  432 area triggers; every other table byte-identical afterwards (docs/integration/content-refresh-20261007.md).
+  checks the seven DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`, `TaxiNodes`, `TaxiPath`, `TaxiPathNode`; all are required)
+  against a `SHA256SUMS` file in `-DbcDirectory` when there is one or extracts them from the client's MPQs with `mpqcli` (patch-2 over
+  patch over dbc), and passes `-Migrate` on as `--migrate`. With `-AppSettings <appsettings.json>` (needs `-DbcDirectory`) it then runs
+  `tools/content/set-optional-data.ps1`, which points the world at its optional client data (item sets, random suffixes, enchantments,
+  pages, character appearance; docs/areas/items.md "Optional client data"). Run on a copy of the live world (2026-10-07): 122 safe
+  locations, 191 graveyard links, 3 battleground templates, 969 + 421 battleground spawn events, 24 battlemasters, 61 exploration levels,
+  33 weather zones, 42 taverns, 9 transports, 164 proc rows, 828 relay steps, 14 relay templates and 432 area triggers; every other table
+  byte-identical afterwards (docs/integration/content-refresh-20261007.md). Again on 2026-10-08 with the taxi DBCs: 9 ship templates,
+  85 taxi nodes, 287 taxi paths, "TaxiPathNode.dbc: 9582 row(s) on 288 path(s)" and every ship route resolving
+  (docs/integration/transports-content-20261008.md); and with the map DBCs: 44 maps and 1081 areas (docs/integration/instance-maps-20261008.md).
 - Verified on the z2815 dump: 40 start positions, 1,497 starting spells, 353 teleport targets and 2,400 level-stat rows (human
   warrior level 1: strength 23; the file is a sample of the retail table, not committed); the daemon logged "level stats for
   2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each

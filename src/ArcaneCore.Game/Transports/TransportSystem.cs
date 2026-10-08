@@ -306,6 +306,12 @@ public sealed class TransportSystem
 
         ship.Relocate(newMapId, x, y, z, o);
         AddToMap(ship, newMap);
+        if (oldMap?.MapId != newMapId)
+        {
+            // An operator's view of the ships sailing (World logging at Debug for ArcaneCore.World.Transports).
+            _logger.LogDebug("Transport {Entry} sailed from map {OldMap} to map {NewMap} with {Passengers} passenger(s)", ship.Entry,
+                oldMap?.MapId, newMapId, ship.Passengers.Count);
+        }
     }
 
     // vmangos: "Units teleport on transport not implemented": a creature stays on the old map; one whose owner is not

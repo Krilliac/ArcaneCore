@@ -141,7 +141,7 @@ first use): `smoke` (login, hear own /say), `group-chat` (invite, accept, both g
 the server roster, party chat, leave), `trade` (Linen Cloth 2589 for 75 copper through the
 trade window; both inventories and purses), `duel` (spell 7266, accept, countdown, melee to the
 1-health finish; SMSG_DUEL_WINNER checked against server state). After them come the other public
-scenarios this assembly ships (`PlayerbotScenarioCatalog.Shipped`, discovered: `dungeon`, `wsg`), then
+scenarios this assembly ships (`PlayerbotScenarioCatalog.Shipped`, discovered: `dungeon`, `ship`, `wsg`), then
 `IPlayerbotScenario` services registered in DI; a name belongs to its first entry. Shipped content
 scenarios need content a live world may not have and then fail at a named step. `ScenarioSteps` holds reusable blocks (form a group, open and
 accept a trade, leave earlier groups).
@@ -173,6 +173,17 @@ under their own bound even after the run's deadline): otherwise the shared bots 
 offline at that point (a failed relog inside, only tried when `AllowedMaps` lists 36) cannot be moved, and its login there is
 allowed. It leaves both scenario bots at level 10 or more. Tests: `DungeonScenarioTests` (including a dungeon that admits one
 player, so the member is refused inside the run).
+
+**Ships** (`ScenarioTransports`): `ShipAsync`, `BoardAsync` (a heartbeat carrying ONTRANSPORT, the ship and an offset),
+`LeaveShipAsync`, `TimeSkippedAsync`, and the SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD decoders. The scenario `ship`
+(`ShipCrossingScenario`) waits for the Ratchet - Booty Bay boat (`gameobject_template` 20808) at one of its ports, places
+`Scnalpha` on the dock, boards it at a fixed deck offset, waits for the map change (SMSG_TRANSFER_PENDING naming the ship and the
+old map, SMSG_NEW_WORLD carrying the offset, the bot aboard on the other continent), waits for the other port (told apart by its
+TaxiPathNode row), checks the bot is at its deck offset, and steps it off within 30 yards of the port. A cleanup step takes the
+bot off the ship and back to where it stood, also after a failure. It needs `World:Transports:Enabled` and the ship content
+([transports](transports.md)); on the real clock it takes up to one round trip (about six minutes), so
+`World:Playerbots:Scenarios:MaxDurationSeconds` must be 600 for `.playerbot scenario run ship`. Tests: `TransportScenarioTests`
+(synthetic boat), `RealTransportContentTests.ABot_RidesTheRealBootyBayBoat_...` (real content and terrain, env-gated).
 
 ### Running scenarios on a live server
 

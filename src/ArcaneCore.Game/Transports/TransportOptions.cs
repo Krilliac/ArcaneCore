@@ -9,10 +9,11 @@ public sealed class TransportOptions
     public const string SectionName = "World:Transports";
 
     /// <summary>
-    /// Master switch. Off (the default until the content is present: gameobject_template type 15 rows and a build-5875
-    /// TaxiPathNode.dbc through <c>NpcServices:TaxiPathNodeDbcPath</c>), no ship is built or spawned and a client that
-    /// claims to stand on a transport is treated as standing on nothing, exactly as before this feature existed. vmangos
-    /// always runs its ships (World.cpp:1451 LoadTransportTemplates).
+    /// Master switch. Set it to true once the content is present: the gameobject_template type 15 rows and the transports
+    /// periods (tools/content/refresh-world-content.ps1 writes both) and a build-5875 TaxiPathNode.dbc through
+    /// <c>NpcServices:TaxiPathNodeDbcPath</c>; the world then logs "Transports: 9 routes, 9 ships sailing". Off (the default),
+    /// no ship is built or spawned and a client that claims to stand on a transport is treated as standing on nothing.
+    /// vmangos always runs its ships (World.cpp:1451 LoadTransportTemplates).
     /// </summary>
     public bool Enabled { get; set; }
 

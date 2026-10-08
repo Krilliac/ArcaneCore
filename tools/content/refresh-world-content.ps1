@@ -12,12 +12,17 @@
     creature_battleground, gameobject_battleground  dump
     exploration_basexp, game_weather               dump
     areatrigger_tavern, transports                 dump
+    gameobject_template, type 15 rows only         dump (the ships and zeppelins; every other object is left alone)
     spell_proc_event                               dump (cooldown unit from the classic-db core revision)
     dbscripts_on_relay, dbscript_relay_template    dump
     areatrigger_template                           AreaTrigger.dbc
     map_template                                   Map.dbc (every map) + the dump's instance_template (player limit, reset
                                                    delay, ghost entrance, script of the dungeons and raids)
     area_template                                  AreaTable.dbc (every area, instance areas included)
+    taxi_nodes, taxi_path                          TaxiNodes.dbc, TaxiPath.dbc (the flight masters' nodes and routes)
+
+  TaxiPathNode.dbc is read to check every ship's route (data0 of its type 15 row): a route the world server would refuse at
+  start (fewer than three path nodes, a map without a map_template row, no speed) is reported as a "check:" line.
 
   Each of these tables is emptied and refilled inside one transaction, and only when the inputs carry it; any failure leaves the
   database as it was. Before writing, the script
@@ -25,9 +30,9 @@
     1. refuses a database another process holds open (stop the world server first),
     2. copies the database to -BackupDirectory and checks the copy's SHA-256, and the same for a leftover -wal file (committed
        pages not yet checkpointed, which the refresh's own connection would fold into the database),
-    3. takes AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc and AreaTable.dbc from -DbcDirectory (checked against its SHA256SUMS file
-       when it has one), or extracts them from the client's MPQs with -MpqTool (mpqcli; patch-2.MPQ over patch.MPQ over dbc.MPQ, the
-       client's own precedence). Nothing is downloaded.
+    3. takes AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, TaxiNodes.dbc, TaxiPath.dbc and TaxiPathNode.dbc from
+       -DbcDirectory (checked against its SHA256SUMS file when it has one), or extracts them from the client's MPQs with -MpqTool
+       (mpqcli; patch-2.MPQ over patch.MPQ over dbc.MPQ, the client's own precedence). Nothing is downloaded.
 
   -DryRun reads everything and writes nothing (no backup either).
 
@@ -47,11 +52,12 @@
   The classic-db or vmangos world dump (.sql or .sql.gz). Default: D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz.
 
 .PARAMETER DbcDirectory
-  A directory holding the build-5875 AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc and AreaTable.dbc (the effective copies, patch-2
-  first). A SHA256SUMS file there (sha256sum format) must list all four and is checked before anything is written.
+  A directory holding the build-5875 AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, TaxiNodes.dbc, TaxiPath.dbc and
+  TaxiPathNode.dbc (the effective copies, patch-2 first), for example D:\refs\client-dbc-5875-effective. A SHA256SUMS file there
+  (sha256sum format) must list all seven and is checked before anything is written.
 
 .PARAMETER MpqTool
-  mpqcli.exe, used to extract the four DBCs from -ClientData when -DbcDirectory is not given.
+  mpqcli.exe, used to extract the DBCs from -ClientData when -DbcDirectory is not given.
 
 .PARAMETER ClientData
   The 1.12.1 client's Data directory (read only). Default: D:\World of Warcraft Classic 1.12.1\Data.
@@ -99,6 +105,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# The client DBCs the refresh reads (all required: a missing one stops the script before anything is written).
+$dbcNames = @('AreaTrigger.dbc', 'WorldSafeLocs.dbc', 'Map.dbc', 'AreaTable.dbc', 'TaxiNodes.dbc', 'TaxiPath.dbc', 'TaxiPathNode.dbc')
+
 function Get-Sha256([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)
     try {
@@ -136,10 +145,9 @@ catch {
 }
 
 # 2. The DBCs: a given directory, or the client's MPQs through mpqcli (patch-2 over patch over dbc).
-$dbcNames = 'AreaTrigger.dbc', 'WorldSafeLocs.dbc', 'Map.dbc', 'AreaTable.dbc'
 $temporaryDbc = $null
 if (-not $DbcDirectory) {
-    if (-not $MpqTool) { throw 'give -DbcDirectory (AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc) or -MpqTool (mpqcli.exe) to extract them from -ClientData' }
+    if (-not $MpqTool) { throw "give -DbcDirectory ($($dbcNames -join ', ')) or -MpqTool (mpqcli.exe) to extract them from -ClientData" }
     if (-not (Test-Path -LiteralPath $MpqTool -PathType Leaf)) { throw "mpq tool not found: $MpqTool" }
     $temporaryDbc = Join-Path ([System.IO.Path]::GetTempPath()) ('arcanecore-dbc-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $temporaryDbc | Out-Null

@@ -32,7 +32,12 @@ node of the current leg and removes the taxi mount and movement flags.
 `NpcServices:TaxiNodesDbcPath`, `NpcServices:TaxiPathDbcPath`, and
 `NpcServices:TaxiPathNodeDbcPath` are optional paths to developer-supplied files.
 No client data is bundled. When the first two paths are absent, their imported
-world tables remain the source. A missing `TaxiPathNode.dbc` makes paid flights
+world tables remain the source: `taxi_nodes` and `taxi_path`, which the content
+refresh (`tools/content/refresh-world-content.ps1`, `arcane-content-importer
+refresh --dbc-dir`) fills from the client's `TaxiNodes.dbc` and `TaxiPath.dbc`
+(85 nodes and 287 paths in build 5875). A world built before that refresh has both
+tables empty and no flight master offers a flight
+(docs/integration/transports-content-20261008.md). A missing `TaxiPathNode.dbc` makes paid flights
 fail closed. The taxi mount uses `TaxiNodes.MountCreatureID[0]` for Horde and
 `[1]` for Alliance (`D:\refs\vmangos\src\game\ObjectMgr.cpp:7415-7445`).
 
