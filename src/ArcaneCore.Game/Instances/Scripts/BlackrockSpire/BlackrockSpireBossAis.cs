@@ -7,6 +7,7 @@ namespace ArcaneCore.Game.Instances.Scripts.BlackrockSpire;
 /// <summary>boss_gythAI (mangos-classic blackrock_spire/boss_gyth.cpp: Reset, UpdateAI).</summary>
 public sealed class GythAI(Creature creature) : ScriptDevBossAI(creature)
 {
+    public const uint SpellSummonRend = 16328;
     private uint _acid, _freeze, _breath, _knock;
     private bool _chromaticChaos, _summonedRend;
 
@@ -54,25 +55,23 @@ public sealed class GythAI(Creature creature) : ScriptDevBossAI(creature)
 
         if (!_summonedRend && (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * 11)
         {
-            CreatureCastResult cast = DoCast(Me, 16328);
-            // Spell 16328 is the retail summon. The fallback covers a missing spell or
-            // summon target while using the same NPC entry; an ordinary cast failure retries.
-            if (cast is CreatureCastResult.Ok or CreatureCastResult.UnknownSpell or CreatureCastResult.NoSpellSystem)
+            // boss_gyth: on CAST_OK of Summon Rend Blackhand (16328: SUMMON_WILD 10429, instant) Gyth stops preventing his death and drops
+            // the mount aura; Rend arrives through the spell (JustSummoned). Only when the spell cannot be cast at all here (no spell
+            // table row, no spell system) is Rend placed directly; any other failure retries on the next update.
+            CreatureCastResult cast = DoCast(Me, SpellSummonRend);
+            bool summoned = cast == CreatureCastResult.Ok;
+            if (cast is CreatureCastResult.UnknownSpell or CreatureCastResult.NoSpellSystem
+                && System?.SummonCorpseDespawn(Me, BlackrockSpireInstance.NpcRend, Me.X, Me.Y, Me.Z, Me.Orientation) is { } rend)
             {
-                CreatureMapSystem? creatures = Me.Map?.FindUpdater<CreatureMapSystem>();
-                bool rendPresent = creatures?.Creatures.Any(c => c.Template.Entry == BlackrockSpireInstance.NpcRend && c.Spawn is null && c.IsAlive) == true;
-                if (!rendPresent && creatures?.SummonCorpseDespawn(Me, BlackrockSpireInstance.NpcRend, Me.X, Me.Y, Me.Z, Me.Orientation) is { } rend)
-                {
-                    Me.Map?.FindUpdater<BlackrockSpireInstance>()?.TrackRend(rend);
-                    rendPresent = true;
-                }
+                Me.Map?.FindUpdater<BlackrockSpireInstance>()?.TrackRend(rend);
+                summoned = true;
+            }
 
-                if (rendPresent)
-                {
-                    _summonedRend = true;
-                    Me.InvincibilityHpThreshold = 0;
-                    System?.RemoveAuras(Me, 16167);
-                }
+            if (summoned)
+            {
+                _summonedRend = true;
+                Me.InvincibilityHpThreshold = 0;
+                System?.RemoveAuras(Me, 16167);
             }
         }
     }
@@ -95,9 +94,12 @@ public sealed class PyroguardEmberseerAI(Creature creature) : ScriptDevBossAI(cr
         DoCast(Me, 13377, triggered: true);
     }
 
+    /// <summary>cmangos AI_EVENT_CUSTOM_A (AIDefines.h), sent by Emberseer Growing 16049 (SpellEffects.cpp, DUMMY case 16049).</summary>
+    public const uint AiEventCustomA = 1000;
+
     public override void OnReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue)
     {
-        if (eventType != 5 || ++_growingStacks > 20)
+        if (eventType != AiEventCustomA || ++_growingStacks > 20)
         {
             return;
         }
@@ -113,7 +115,13 @@ public sealed class PyroguardEmberseerAI(Creature creature) : ScriptDevBossAI(cr
             DoCast(Me, 16047, triggered: true);
             DoCast(Me, 16534, triggered: true);
             DoCast(Me, 16052, triggered: true);
-            Me.Map?.FindUpdater<BlackrockSpireInstance>()?.UseEmberseerRunes(reset: false);
+            if (Me.Map?.FindUpdater<BlackrockSpireInstance>() is { } spire)
+            {
+                spire.UseEmberseerRunes(reset: false);
+                // Redundant in the reference too: the event is in progress before the boss is fully grown, so the altar cannot start it again.
+                spire.SetData(BlackrockSpireInstance.TypeEmberseer, EncounterState.InProgress);
+            }
+
             Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
         }
     }
@@ -130,7 +138,7 @@ public sealed class PyroguardEmberseerAI(Creature creature) : ScriptDevBossAI(cr
         {
             if (diffMs >= _encage)
             {
-                foreach (Creature incarcerator in System?.Creatures.Where(c => c.Template.Entry == 10316 && c.IsAlive) ?? [])
+                foreach (Creature incarcerator in System?.Creatures.Where(c => c.Template.Entry == BlackrockSpireInstance.NpcIncarcerator && c.IsAlive) ?? [])
                 {
                     incarcerator.System?.CastSpell(incarcerator, 15281, Me, triggered: false);
                 }

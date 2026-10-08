@@ -20,12 +20,16 @@ using static ArcaneCore.Game.Tests.CreatureTestSupport;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
-public sealed class ScriptDev2DungeonTests
+public sealed partial class ScriptDev2DungeonTests
 {
     private sealed class EventProbe(Map map) : InstanceData(map)
     {
         public uint EventId { get; private set; }
-        public override void OnSpellEvent(Unit caster, uint eventId) => EventId = eventId;
+        public override bool OnSpellEvent(Unit caster, uint eventId)
+        {
+            EventId = eventId;
+            return true;
+        }
     }
     private sealed record ScriptRun(InstanceFixture Fixture, Player Player) : IDisposable
     {

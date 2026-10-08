@@ -22,11 +22,12 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
     public const uint GoGythEntry = 164726, GoGythCombat = 175185, GoGythExit = 175186;
     public const uint GoDrakkisathDoor1 = 175946, GoDrakkisathDoor2 = 175947;
     public const uint GoFatherFlame = 175245, GoDragonspine = 164725;
-    public const uint NpcNefarius = 10162, NpcRend = 10429, NpcGyth = 10339, NpcBeast = 10430;
+    public const uint NpcNefarius = 10162, NpcRend = 10429, NpcGyth = 10339, NpcBeast = 10430, NpcEmberseer = 9816;
+    public const uint EventAltarEmberseer = 4884, SpellEmberseerGrowing = 16048;
     public const uint NpcDrakkisath = 10363, NpcSolakar = 10264, NpcWhelp = 10442,
         NpcDragon = 10447, NpcHandler = 10742, NpcBlackhandElite = 10317;
-    private const uint NpcRoomSummoner = 9818, NpcRoomVeteran = 9819, NpcIncarcerator = 10316,
-        NpcEmberseer = 9816, NpcRookeryGuardian = 10258, NpcRookeryHatcher = 10683;
+    public const uint NpcIncarcerator = 10316;
+    private const uint NpcRoomSummoner = 9818, NpcRoomVeteran = 9819, NpcRookeryGuardian = 10258, NpcRookeryHatcher = 10683;
     private static readonly uint[] RoomRunes = [175197, 175199, 175195, 175200, 175198, 175196, 175194];
     private static readonly uint[] EmberseerRunes = [175266, 175267, 175268, 175269, 175270, 175271, 175272];
     private static readonly uint[] Braziers = [175528, 175529, 175530, 175531, 175532, 175533];
@@ -148,15 +149,41 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         }
     }
 
-    public override void OnGameObjectUse(Player player, GameObject go)
+    /// <summary>
+    /// GOUse_go_father_flame: StartflamewreathEventIfCan, and the script takes the use (returns true). StartflamewreathEventIfCan only arms
+    /// the wave timer; it does not set TYPE_FLAMEWREATH.
+    /// </summary>
+    public override bool OnGameObjectUse(Player player, GameObject go)
     {
-        if (go.Entry == GoFatherFlame && Encounters[TypeFlamewreath] is not (EncounterState.Done or EncounterState.InProgress)
+        if (go.Entry != GoFatherFlame)
+        {
+            return false;
+        }
+
+        if (Encounters[TypeFlamewreath] is not (EncounterState.Done or EncounterState.InProgress)
             && Encounters[TypeDrakkisath] != EncounterState.Done && GetSingleCreatureFromStorage(NpcSolakar) is not { IsAlive: true })
         {
             _flamewreathTimer = 1;
             _flamewreathWave = 0;
-            SetData(TypeFlamewreath, EncounterState.InProgress);
         }
+
+        return true;
+    }
+
+    /// <summary>ProcessEventId_event_spell_altar_emberseer (scriptdev2.sql event 4884, sent by the Blackrock Altar's ritual spell 16533).</summary>
+    public override bool OnSpellEvent(Unit caster, uint eventId)
+    {
+        if (eventId != EventAltarEmberseer)
+        {
+            return false;
+        }
+
+        if (caster is Player)
+        {
+            StartEmberseerEvent();
+        }
+
+        return true;
     }
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
@@ -228,6 +255,17 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
             }
             else if (data == EncounterState.Fail)
             {
+                // SetData(TYPE_STADIUM, FAIL): Nefarius, Rend and Gyth go with the spectators (and the wave mobs, which the reference
+                // despawns one by one as they evade), so area trigger 2026 can start the event again without duplicates.
+                CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+                foreach (uint entry in new[] { NpcNefarius, NpcRend, NpcGyth })
+                {
+                    if (GetSingleCreatureFromStorage(entry) is { } eventNpc)
+                    {
+                        creatures?.ForcedDespawn(eventNpc, 0);
+                    }
+                }
+
                 DespawnEventCreatures();
                 _stadiumWave = 0;
                 _stadiumDialogueStep = 0;
@@ -433,13 +471,13 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
     {
         if (Encounters[TypeEmberseer] is EncounterState.Done or EncounterState.InProgress || _incarcerators.Count == 0
             || GetSingleCreatureFromStorage(NpcEmberseer) is not { } emberseer
-            || emberseer.System?.HasAura(emberseer, 16048) == true)
+            || emberseer.System?.HasAura(emberseer, SpellEmberseerGrowing) == true)
         {
             return;
         }
 
         emberseer.System?.SayText(emberseer, -1229000);
-        emberseer.System?.CastSpell(emberseer, 16048, emberseer, triggered: true);
+        emberseer.System?.CastSpell(emberseer, SpellEmberseerGrowing, emberseer, triggered: true);
         foreach (ObjectGuid guid in _incarcerators)
         {
             if (Instance.FindUpdater<CreatureMapSystem>()?.FindCreature(guid) is { IsAlive: true } incarcerator)
@@ -498,7 +536,8 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
             for (int i = 0; i < 2; i++)
             {
                 uint entry = _flamewreathWave == 0 || creatures?.RandomInt(0, 1) == 0 ? NpcRookeryHatcher : NpcRookeryGuardian;
-                if (creatures?.SummonInstanceCreature(entry, 51.11098f, -266.0549f, 92.87846f, 0f) is { } mob
+                // DoSendNextFlamewreathWave: TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN, 300000.
+                if (creatures?.SummonInstanceCreatureTimedOocOrDead(entry, 51.11098f, -266.0549f, 92.87846f, 0f, 300_000) is { } mob
                     && _flamewreathWave == 0 && i == 1)
                 {
                     mob.System?.SayText(mob, -1229020);
@@ -510,7 +549,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         }
         else
         {
-            creatures?.SummonInstanceCreature(NpcSolakar, 51.11098f, -266.0549f, 92.87846f, 0f);
+            creatures?.SummonInstanceCreatureTimedOocOrDead(NpcSolakar, 51.11098f, -266.0549f, 92.87846f, 0f, 3_600_000); // HOUR * IN_MILLISECONDS
             SetData(TypeFlamewreath, EncounterState.Special);
         }
     }

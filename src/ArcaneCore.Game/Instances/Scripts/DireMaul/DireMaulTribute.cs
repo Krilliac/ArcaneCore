@@ -18,6 +18,7 @@ public sealed partial class DireMaulInstance
     public const uint NpcKingGordok = 11501, NpcMoldar = 14326, NpcFengus = 14321,
         NpcSlipkik = 14323, NpcKromcrush = 14325, NpcChorush = 14324,
         NpcStomperKreeg = 14322, NpcMizzle = 14353;
+    private const uint FactionFriendly = 35;
     public const uint GoGordokTribute = 179564, GoNorthLibraryDoor = 179549;
 
     private static readonly uint[] TributeGuardTypes =
@@ -71,26 +72,33 @@ public sealed partial class DireMaulInstance
         Encounters[type] = data;
         if (type == TypeKingGordok && data == EncounterState.Done)
         {
-            // SetData(TYPE_KING_GORDOK): living Kromcrush and Cho'Rush become friendly,
-            // Cho'Rush announces the king's death and summons Mizzle for the DB path.
-            foreach (uint entry in new uint[] { NpcKromcrush, NpcChorush })
+            // SetData(TYPE_KING_GORDOK, DONE): a living Kromcrush turns friendly and evades only if he is fighting; a living Cho'Rush yells,
+            // turns friendly and always evades. Mizzle comes from the stored Cho'Rush whether he lives or not (a fallen Cho'Rush lowers the
+            // tribute tier, it does not cancel the tribute); his waypoints and gossip are database scripts.
+            if (GetSingleCreatureFromStorage(NpcKromcrush) is { IsAlive: true } kromcrush)
             {
-                if (GetSingleCreatureFromStorage(entry) is { IsAlive: true } ogre)
+                kromcrush.FactionTemplate = FactionFriendly;
+                if (kromcrush.Combat.Victim is not null)
                 {
-                    ogre.FactionTemplate = 35;
-                    if (ogre.Combat.Victim is not null)
-                    {
-                        ogre.AI?.EnterEvadeMode();
-                    }
+                    kromcrush.AI?.EnterEvadeMode();
+                }
+            }
 
-                    if (entry == NpcChorush)
-                    {
-                        ogre.System?.SayText(ogre, -1429003);
-                        if (ogre.System?.SummonCorpseDespawn(ogre, NpcMizzle, 683.296f, 484.384f, 29.544f, 0.0174f) is { } mizzle)
-                        {
-                            mizzle.System?.ChangeMovement(mizzle, 2, 0, 0);
-                        }
-                    }
+            if (GetSingleCreatureFromStorage(NpcChorush) is { } chorush)
+            {
+                if (chorush.IsAlive)
+                {
+                    chorush.System?.SayText(chorush, -1429003);
+                    chorush.FactionTemplate = FactionFriendly;
+                    chorush.AI?.EnterEvadeMode();
+                }
+
+                if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures
+                    && creatures.SummonCorpseDespawn(chorush, NpcMizzle, 683.296f, 484.384f, 29.544f, 0.0174f) is { } mizzle)
+                {
+                    mizzle.NpcFlags &= ~(uint)ArcaneCore.Game.Npc.NpcFlags.Gossip;
+                    creatures.SetScriptRun(mizzle, run: true);
+                    creatures.ChangeMovement(mizzle, 2, 0, 0); // MoveWaypoint
                 }
             }
         }

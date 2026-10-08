@@ -259,7 +259,6 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing
         // else happens: no use event either).
-        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnGameObjectUse(player, go!);
         if (AiOf(go!)?.OnUse(this, go!, player) == true)
         {
             return GameObjectUseResult.Ok;
@@ -277,12 +276,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             Dismount?.Invoke(player);
         }
 
+        // cmangos GameObject::Use runs the ScriptDev2 GOUse script after the mount check; a locked object reaches it only once its lock
+        // is open (the direct-use lock here, the open-lock spell in OpenLock).
+        bool scriptTookUse = CheckDirectLock(player, go!) == GameObjectUseResult.Ok && InstanceScriptTookUse(player, go!);
+
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
         result = _useHandlers.TryGetValue(go!.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
         {
             GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go),
             GameObjectType.Chest => UseChest(player, go),
-            GameObjectType.Goober => UseGoober(player, go),
+            GameObjectType.Goober => UseGoober(player, go, scriptTookUse: scriptTookUse),
             GameObjectType.Text => UseText(player, go),
             GameObjectType.Chair => UseChair(player, go),
             GameObjectType.Camera => UseCamera(player, go),
@@ -359,13 +362,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             TriggerLinkedTrap(go, player);
         }
 
+        // GameObject::Use, reached through Spell::SendLoot, runs the ScriptDev2 GOUse script of the opened object.
+        bool scriptTookUse = (go.Type is GameObjectType.Chest or GameObjectType.Door or GameObjectType.Button or GameObjectType.SpellFocus
+            or GameObjectType.Goober) && InstanceScriptTookUse(player, go);
+
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
             GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
-            GameObjectType.Goober => UseGoober(player, go, lockChecked: true),
+            GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
             _ => GameObjectUseResult.NotUsable,
         };
         if (result == GameObjectUseResult.Ok)
@@ -711,7 +718,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
     }
 
-    private GameObjectUseResult UseGoober(Player player, GameObject go, bool lockChecked = false)
+    /// <summary>
+    /// The map's instance script hears of the use (<see cref="Instances.Scripts.InstanceData.OnGameObjectUse"/>); true when it took the use
+    /// (cmangos <c>scriptReturnValue</c>).
+    /// </summary>
+    private bool InstanceScriptTookUse(Player player, GameObject go)
+        => Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnGameObjectUse(player, go) == true;
+
+    /// <param name="scriptTookUse">The ScriptDev2 GOUse script returned true: the goober still activates, but casts no spell (cmangos
+    /// GameObject::Use, GAMEOBJECT_TYPE_GOOBER: <c>if (!scriptReturnValue) ... else return;</c> before <c>spellId = goober.spellId</c>).</param>
+    private GameObjectUseResult UseGoober(Player player, GameObject go, bool lockChecked = false, bool scriptTookUse = false)
     {
         if (!lockChecked)
         {
@@ -767,7 +783,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
-        CastGooberSpell(player, go);
+        if (!scriptTookUse)
+        {
+            CastGooberSpell(player, go);
+        }
+
         return GameObjectUseResult.Ok;
     }
 

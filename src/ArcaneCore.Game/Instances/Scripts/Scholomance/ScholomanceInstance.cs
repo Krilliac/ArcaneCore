@@ -90,7 +90,7 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
     // instance_scholomance::OnPlayerEnter calls DoSpawnGandlingIfCan(true): a reload spawn is silent.
     public override void OnPlayerEnter(Player player) => SpawnGandlingIfReady(byPlayerEnter: true);
 
-    public override void OnGameObjectUse(Player player, GameObject go)
+    public override bool OnGameObjectUse(Player player, GameObject go)
     {
         // ClassicDB z2815 dbscripts_on_go_use id 2890009 (Brazier of the Herald):
         // close gate spawn 2890010, then summon Kirtonos five seconds later.
@@ -103,16 +103,26 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
 
             _kirtonosTimer = 5_000;
         }
+
+        return false; // a database script, not a ScriptDev2 GOUse: the use goes on
     }
 
-    public override void OnSpellEvent(Unit caster, uint eventId)
+    public override bool OnSpellEvent(Unit caster, uint eventId)
     {
-        // instance_scholomance::ProcessEventId_event_spell_gandling_shadow_portal.
-        if (caster is Creature && PortalGuardians.ContainsKey(eventId))
+        // instance_scholomance::ProcessEventId_event_spell_gandling_shadow_portal (Shadow Portal 17950 → ShadowPortalScript → the room
+        // portal's SEND_EVENT), then the dbscripts_on_event guardians this script stands in for.
+        if (!PortalGuardians.ContainsKey(eventId))
+        {
+            return false;
+        }
+
+        if (caster is Creature)
         {
             HandlePortalEvent(eventId, EncounterState.Special);
             _pendingGuardians.Add((eventId, 2_000));
         }
+
+        return true;
     }
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;

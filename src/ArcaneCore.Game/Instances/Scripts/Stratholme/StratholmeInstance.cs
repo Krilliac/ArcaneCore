@@ -42,6 +42,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     private uint _mindlessTimer;
     private uint _guardsTimer;
     private uint _slaughterDoorTimer;
+    private uint _slaughterSquareTimer;
     private uint _mindlessCount;
     private int _baronWarnings;
     private bool _slaughterDoorOpen;
@@ -66,7 +67,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         _abominations.Clear();
         _mindless.Clear();
         _guards.Clear();
-        _baronRunTimer = _mindlessTimer = _guardsTimer = _slaughterDoorTimer = _mindlessCount = 0;
+        _baronRunTimer = _mindlessTimer = _guardsTimer = _slaughterDoorTimer = _slaughterSquareTimer = _mindlessCount = 0;
         _baronWarnings = 0;
         _slaughterDoorOpen = _ramsteinSummoned = _announcerChosen = false;
         _acolyteAnnouncer = default;
@@ -95,7 +96,8 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         }
     }
 
-    public override void OnGameObjectUse(Player player, GameObject go)
+    /// <summary>GOUse_go_gauntlet_gate and GOUse_go_service_gate (stratholmeScripts.cpp): both return false, the gate opens as usual.</summary>
+    public override bool OnGameObjectUse(Player player, GameObject go)
     {
         if (go.Entry == GoGauntletGate1 && Encounters[TypeBaronRun] == EncounterState.NotStarted)
         {
@@ -110,6 +112,8 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         {
             SetData(TypeBarthilasRun, EncounterState.InProgress);
         }
+
+        return false;
     }
 
     public override void OnObjectCreate(GameObject go)
@@ -210,6 +214,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 {
                     if (Encounters[type] is not (EncounterState.Special or EncounterState.Done))
                     {
+                        _slaughterSquareTimer = 20_000; // m_slaughterSquareTimer: the reference's own guess
                         DoUseDoorOrButton(GoGauntletPort);
                     }
 
@@ -218,6 +223,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                         _ramsteinSummoned = true;
                         OpenSlaughterhouse(true);
                         _slaughterDoorTimer = 10_000;
+                        _slaughterSquareTimer = 0; // no more abominations to call
                         Announce(NpcBaron, -1329013);
                         if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcRamstein, 4032.643f, -3378.546f, 119.752f, 4.74f) is { } ramstein)
                         {
@@ -239,8 +245,23 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 }
                 else if (data == EncounterState.Fail && Encounters[type] != EncounterState.Fail)
                 {
+                    // Open the gauntlet port again and stop calling abominations; those already walking stop. Ramstein, if summoned,
+                    // stays (TEMPSPAWN_DEAD_DESPAWN) and goes home, so he is not summoned a second time.
                     DoUseDoorOrButton(GoGauntletPort);
-                    _ramsteinSummoned = false;
+                    _slaughterSquareTimer = 0;
+                    CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+                    foreach (ObjectGuid guid in _abominations)
+                    {
+                        if (creatures?.FindCreature(guid) is { } abomination && abomination.Motion.CurrentType == MovementGeneratorType.Point)
+                        {
+                            abomination.Motion.Remove(MovementGeneratorType.Point);
+                        }
+                    }
+                }
+                else if (data == EncounterState.InProgress && Encounters[type] == EncounterState.Fail)
+                {
+                    // After a fail, aggroing Ramstein means a new try at him: close the gauntlet port again.
+                    DoUseDoorOrButton(GoGauntletPort);
                 }
 
                 break;
@@ -332,8 +353,12 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
             case NpcBaroness: SetData(TypeBaroness, EncounterState.Fail); break;
             case NpcNerub: SetData(TypeNerub, EncounterState.Fail); break;
             case NpcPallid: SetData(TypePallid, EncounterState.Fail); break;
-            case NpcRamstein: SetData(TypeRamstein, EncounterState.Fail); break;
+            case NpcRamstein:
+                SetData(TypeRamstein, EncounterState.Fail);
+                OpenSlaughterhouse(true); // Ramstein walks back into the slaughterhouse
+                break;
             case NpcBaron: SetData(TypeBaron, EncounterState.Fail); break;
+            case NpcBileAbom or NpcVenomAbom: SetData(TypeRamstein, EncounterState.Fail); break; // a wipe before Ramstein
             case NpcMindless or NpcBlackGuard: SetData(TypeBlackGuards, EncounterState.Fail); break;
         }
     }
@@ -418,6 +443,19 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
             }
         }
 
+        if (_slaughterSquareTimer != 0)
+        {
+            if (diffMs >= _slaughterSquareTimer)
+            {
+                CallNextAbomination();
+                _slaughterSquareTimer = (uint)((Instance.FindUpdater<CreatureMapSystem>()?.RandomInt(30, 45) ?? 30) * 1000);
+            }
+            else
+            {
+                _slaughterSquareTimer -= diffMs;
+            }
+        }
+
         if (_slaughterDoorTimer != 0)
         {
             if (diffMs >= _slaughterDoorTimer)
@@ -460,6 +498,36 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
             {
                 _guardsTimer -= diffMs;
             }
+        }
+    }
+
+    /// <summary>
+    /// instance_stratholme::Update, m_slaughterSquareTimer: the first living abomination that is neither walking already nor fighting walks
+    /// to a point within 10 yards of the slaughter square port.
+    /// </summary>
+    private void CallNextAbomination()
+    {
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return;
+        }
+
+        foreach (ObjectGuid guid in _abominations)
+        {
+            if (creatures.FindCreature(guid) is not { IsAlive: true } abomination
+                || abomination.Motion.CurrentType == MovementGeneratorType.Point)
+            {
+                continue;
+            }
+
+            if (!abomination.Combat.IsInCombat && GetSingleGameObjectFromStorage(GoSlaughterPort) is { } port)
+            {
+                float angle = creatures.RandomInt(0, 359) * MathF.PI / 180f;
+                float distance = creatures.RandomInt(0, 10);
+                abomination.Motion.MovePoint(0, port.X + (distance * MathF.Cos(angle)), port.Y + (distance * MathF.Sin(angle)), port.Z, run: false);
+            }
+
+            break;
         }
     }
 

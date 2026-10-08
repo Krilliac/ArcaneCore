@@ -192,6 +192,22 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// Instance script summon without a creature summoner (a game object's SummonCreature) as cmangos TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN:
+    /// it goes after <paramref name="despawnMs"/> alive, out of combat and uncharmed, and a dead one with its corpse decay.
+    /// </summary>
+    public Creature? SummonInstanceCreatureTimedOocOrDead(uint entry, float x, float y, float z, float orientation, uint despawnMs)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        AddTimedSummon(creature, despawnMs, SummonTimer.OutOfCombatUncharmed);
+        return creature;
+    }
+
+    /// <summary>
     /// TEMPSUMMON_CORPSE_DESPAWN for a temporary creature a script put into the map itself (an object's summon): it goes with its corpse at
     /// once when it dies. A database spawn is left alone.
     /// </summary>

@@ -128,10 +128,12 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
-    /// <summary>cmangos ProcessEventId after SPELL_EFFECT_SEND_EVENT fires on this map.</summary>
-    public virtual void OnSpellEvent(Unit caster, uint eventId)
-    {
-    }
+    /// <summary>
+    /// cmangos ProcessEventId after SPELL_EFFECT_SEND_EVENT fires on this map (SpellEffects.cpp EffectSendEvent → StartEvents_Event).
+    /// True when this script handles <paramref name="eventId"/> (including any dbscripts_on_event content it stands in for); false
+    /// leaves the event unhandled, and the spell system reports it as not implemented.
+    /// </summary>
+    public virtual bool OnSpellEvent(Unit caster, uint eventId) => false;
 
     /// <summary>ScriptDev2 InstanceData player leave callback.</summary>
     public virtual void OnPlayerLeave(Player player)
@@ -143,10 +145,12 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
-    /// <summary>ScriptDev2 game-object use script before the object's normal use.</summary>
-    public virtual void OnGameObjectUse(Player player, GameObject go)
-    {
-    }
+    /// <summary>
+    /// ScriptDev2 GOUse script (cmangos GameObject::Use: <c>scriptReturnValue = sScriptDevAIMgr.OnGameObjectUse(player, go)</c>), called after
+    /// the mount check and, for a locked object, after its lock opened (Spell::SendLoot → GameObject::Use). True means the script took the
+    /// use: the object still activates, but a goober does not cast its spell (GameObject.cpp, GAMEOBJECT_TYPE_GOOBER: <c>else return;</c>).
+    /// </summary>
+    public virtual bool OnGameObjectUse(Player player, GameObject go) => false;
 
     /// <summary>cmangos CONDITION_INSTANCE_SCRIPT: the instance decides a loot or gossip condition.</summary>
     public virtual bool CheckConditionCriteriaMeet(Player player, uint conditionId) => false;

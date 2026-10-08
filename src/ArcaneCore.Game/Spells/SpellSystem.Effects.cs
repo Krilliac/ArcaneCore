@@ -84,14 +84,7 @@ public sealed partial class SpellSystem
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
         [SpellEffectName.Dummy] = static _ => { },
-        [SpellEffectName.SendEvent] = static context =>
-        {
-            if (context.Effect.MiscValue > 0)
-            {
-                context.Caster.Map?.FindUpdater<Instances.Scripts.InstanceData>()
-                    ?.OnSpellEvent(context.Caster, (uint)context.Effect.MiscValue);
-            }
-        },
+        [SpellEffectName.SendEvent] = EffectSendEvent,
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,
         [SpellEffectName.Heal] = EffectHeal,
@@ -286,6 +279,21 @@ public sealed partial class SpellSystem
         SetPower(context.Target, power, before + (uint)context.Value);
         SendToSet(context.Caster, WorldOpcode.SmsgSpellenergizelog, SpellPackets.BuildSpellEnergizeLog(
             context.Target.Guid, context.Caster.Guid, context.Spell.Id, (uint)powerType, (uint)context.Value), includeSelf: true);
+    }
+
+    /// <summary>
+    /// mangos-classic Spell::EffectSendEvent (SpellEffects.cpp:1794-1799): the event id (misc value) goes to the instance script of the
+    /// caster's map (ScriptDev2 ProcessEventId). An event no instance script handles stands for dbscripts_on_event content this server does
+    /// not run, so it is reported as not implemented, as it was before the instance scripts could take events.
+    /// </summary>
+    private void EffectSendEvent(SpellEffectContext context)
+    {
+        uint eventId = context.Effect.MiscValue > 0 ? (uint)context.Effect.MiscValue : 0;
+        if (eventId == 0
+            || context.Caster.Map?.FindUpdater<Instances.Scripts.InstanceData>()?.OnSpellEvent(context.Caster, eventId) != true)
+        {
+            ReportUnsupported("send event", eventId, context.Spell.Id);
+        }
     }
 
     /// <summary>
