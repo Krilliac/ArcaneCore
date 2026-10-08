@@ -272,9 +272,10 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   mount and possess triggers of the same pair.
 * **Spirit guide re-summon (wave 2).** `SummonService.AutoReSummonPet` (vmangos `Player::AutoReSummonPet`, Player.cpp:1580-1628) runs
   on `SpellSystem.PlayerSpiritHealed` (SPELL_EFFECT_SPIRIT_HEAL): the last demon or loaded permanent pet (`m_petEntry`, `m_petSpell`)
-  comes back alive at full health when the summoning spell's reagents are in the bags (they are taken). A hunter's abandon forgets
-  it. A warlock gets a fresh demon of that entry. A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard
-  does not apply to it.
+  comes back when the summoning spell's reagents are in the bags (they are taken); a pet saved dead is brought back to life at full
+  health, a living one keeps its saved health (Player.cpp:1619-1628). A hunter's abandon forgets it, and so does a logout
+  (`SummonService.ForgetOwner` on `WorldRuntime.PlayerLoggingOut`: vmangos keeps it on the Player object). A warlock gets a fresh demon
+  of that entry. A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard does not apply to it.
 * **Reagents back (wave 2).** A pet whose owner dies, that lost its owner, was left beyond the leash or whose owner has no pet any
   more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). Not done: the
   talent reset, taxi and far-control triggers of the same mode.

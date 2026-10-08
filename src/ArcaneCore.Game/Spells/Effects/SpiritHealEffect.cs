@@ -6,9 +6,10 @@ namespace ArcaneCore.Game.Spells;
 /// <summary>
 /// SPELL_EFFECT_SPIRIT_HEAL (117), vmangos Spell::EffectSpiritHeal (SpellEffects.cpp:5821-5846): the battleground spirit guide's
 /// resurrection wave (Spirit Heal, 22012, cast by the guide on the dead around it). Only a dead player in the world that carries
-/// Waiting to Resurrect (2584, the aura a battleground release casts) is taken: the aura goes, the player comes back at full health
-/// without its corpse (<see cref="MapCombat.ResurrectBySpiritGuide"/>, which also sends a player whose match is not in progress to its
-/// graveyard first), and its pet comes back (<see cref="SpellSystem.PlayerSpiritHealed"/>, Player::AutoReSummonPet).
+/// Waiting to Resurrect (2584, the aura a battleground release casts) is taken: a player whose match is not in progress is sent to its
+/// graveyard first, then the aura goes and the player comes back at full health without its corpse (<see cref="MapCombat.ResurrectBySpiritGuide"/>,
+/// which removes the aura only on the way to a resurrection that happens), and its pet comes back (<see cref="SpellSystem.PlayerSpiritHealed"/>,
+/// Player::AutoReSummonPet).
 /// </summary>
 public sealed class SpiritHealEffect : ISpellHandlerModule
 {
@@ -29,8 +30,8 @@ public sealed class SpiritHealEffect : ISpellHandlerModule
             return;
         }
 
-        context.System.RemoveAuras(player, WaitingToResurrect);
-        if (map.Combat.ResurrectBySpiritGuide(player))
+        SpellSystem system = context.System;
+        if (map.Combat.ResurrectBySpiritGuide(player, healed => system.RemoveAuras(healed, WaitingToResurrect)))
         {
             context.System.NotifySpiritHealed(player);
         }

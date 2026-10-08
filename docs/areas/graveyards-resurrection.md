@@ -132,9 +132,9 @@ own wording.
 - **Battlegrounds.** `IGraveyardOverride` is the seam; the "waiting to resurrect" cast at release, the area spirit healer queue and the
   100% reclaim belong to the battleground area. A spirit in a battleground map stays where it is without an override.
   SPELL_EFFECT_SPIRIT_HEAL (117) is here (wave 2, `SpiritHealEffect`, vmangos Spell::EffectSpiritHeal, SpellEffects.cpp:5821-5846): a
-  dead player with Waiting to Resurrect (2584) loses it, is sent to its graveyard first when its match is not in progress (not a game
-  master), comes back at full health without its corpse (`MapCombat.ResurrectBySpiritGuide`) and its pet comes back
-  (`SpellSystem.PlayerSpiritHealed`, docs/integration/pets.md).
+  dead player with Waiting to Resurrect (2584) is sent to its graveyard first when its match is not in progress (not a game
+  master), then loses the aura right before it comes back at full health without its corpse (`MapCombat.ResurrectBySpiritGuide`, so a
+  refused resurrection keeps the aura), and its pet comes back (`SpellSystem.PlayerSpiritHealed`, docs/integration/pets.md).
 - **Hot reload and GM link editing.** `WorldGraveyards.Build`/`Replace` swap the catalog atomically, but nothing registers a
   `.reload game_graveyard_zone` yet, and `.linkgrave` (which writes the database in vmangos) and the dead `.unstuck` branch are not provided.
 - **Offline `.revive`** answers "Player not found!" (vmangos converts the offline corpse); the pet branch of RESURRECT_NEW (a dead pet target)
