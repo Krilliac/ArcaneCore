@@ -60,6 +60,12 @@ public sealed partial class TalentService : IDisposable
     /// </summary>
     public event Action<Player>? TalentsReset;
 
+    /// <summary>
+    /// Raised at the start of every <see cref="ResetTalents"/> of a character no settlement holds, before anything is checked:
+    /// vmangos clears the reset-at-login character flag there (Player.cpp:4077-4078), paid or free, spent or not.
+    /// </summary>
+    public event Action<Player>? ResetAttempted;
+
     /// <summary>The talent state of a player (created empty on first use).</summary>
     public PlayerTalentState StateOf(Player player)
     {
@@ -72,6 +78,16 @@ public sealed partial class TalentService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(player);
         return player.GetUInt32(UpdateFields.PlayerCharacterPoints1);
+    }
+
+    /// <summary>
+    /// vmangos Player::SetFreeTalentPoints (<c>.modify tp</c>): set PLAYER_CHARACTER_POINTS1 directly. The next level change,
+    /// learn or login recomputes it from the level and the spent points.
+    /// </summary>
+    public void SetFreePoints(Player player, uint points)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        player.SetUInt32(UpdateFields.PlayerCharacterPoints1, points);
     }
 
     /// <summary>The points spent: the sum of rank costs over the known talent rank spells (vmangos m_usedTalentCount).</summary>

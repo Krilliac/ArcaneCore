@@ -33,7 +33,7 @@ namespace ArcaneCore.World.Talents;
 /// Features attach in full-name order, so the spell, NPC and progression features it hooks are already built.
 /// </para>
 /// </summary>
-public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
+public sealed partial class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     /// <summary>"Untalent Visual Effect": the trainer casts it on the player after a wipe (vmangos SkillHandler.cpp:57, mangos-classic :63).</summary>
     public const uint UntalentVisualSpell = 14867;
@@ -44,11 +44,13 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
     private SpellFeature? _spells;
     private QuestNpcFeature? _npcs;
     private PlayerProgression? _progression;
+    private readonly IServiceScopeFactory? _scopes;
 
     public TalentFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<TalentFeature> logger)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _scopes = scopes;
         Persistence = new TalentPersistence(scopes, logger);
     }
 
@@ -89,6 +91,8 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
             KnownSpells = player => _spells.Spellbook.GetSpells(player),
         };
         Persistence.Start();
+        Service.ResetAttempted += OnResetAttempted;
+        world.PlayerLoggedIn += OnPlayerLoggedIn;
 
         if (_services.GetService<ProgressionFeature>() is { } progression)
         {
@@ -116,7 +120,8 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
     /// Player::LoadFromDB for talents, on the session task before the player is visible: wait for earlier writes, restore the
     /// respec economy and the disabled set, drop disabled spells and superseded ranks from the book, and settle the free
     /// points (an overspend resets, like vmangos InitTalentForLevel after _LoadSpells, Player.cpp:14980). It runs after the
-    /// spell feature's hook (full-name order), so the book is loaded. A storage error fails the login.
+    /// spell feature's hook (full-name order), so the book is loaded. A pending reset-at-login request is read here and applied
+    /// once the player is in the world (<see cref="ReadLoginResetAsync"/>). A storage error fails the login.
     /// </summary>
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
@@ -131,11 +136,13 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
         service.RemoveDisabledFromBook(player);
         service.RemoveSupersededRanks(player);
         service.InitTalentForLevel(player);
+        await ReadLoginResetAsync(session, character, player).ConfigureAwait(false);
     }
 
     /// <summary>
     /// MSG_TALENT_WIPE_CONFIRM from the client (vmangos HandleTalentWipeConfirmOpcode, SkillHandler.cpp:39-58): the NPC must be
-    /// an interactable trainer (and, by default, a class trainer of the player's class); a refused reset sends the empty
+    /// an interactable trainer (and, by default, a class trainer of the player's class); a feigning player stops feigning
+    /// (vmangos removes the feign-death auras right after the trainer check, :46-48); a refused reset sends the empty
     /// confirmation, a successful one has the trainer cast the visual spell on the player. World thread.
     /// </summary>
     public void OnWipeConfirm(Player player, ObjectGuid trainer)
@@ -150,6 +157,12 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
         {
             _logger.LogDebug("{Player} confirmed a talent wipe at {Trainer}, which is not an interactable trainer", player.Name, trainer);
             return;
+        }
+
+        // vmangos: HasUnitState(UNIT_STATE_FEIGN_DEATH) -> RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH).
+        if (_spells!.System.IsFeigningDeath(player))
+        {
+            _spells.System.BreakFeignDeath(player);
         }
 
         if (Options.RequireClassTrainerForWipe && !TalentTrainerRules.CanTrainAndResetTalentsOf(player, npc))
@@ -174,6 +187,16 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
 
     public async ValueTask DisposeAsync()
     {
+        if (_world is not null)
+        {
+            _world.PlayerLoggedIn -= OnPlayerLoggedIn;
+        }
+
+        if (Service is not null)
+        {
+            Service.ResetAttempted -= OnResetAttempted;
+        }
+
         if (_progression is not null)
         {
             _progression.LevelChanged -= OnLevelChanged;
@@ -204,7 +227,17 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
             throw new InvalidOperationException($"{TalentOptions.Section}:TalentDbcPath and {TalentOptions.Section}:TalentTabDbcPath must be set together");
         }
 
-        return TalentDbcReaders.Load(Options.TalentDbcPath!, Options.TalentTabDbcPath!);
+        try
+        {
+            return TalentDbcReaders.Load(Options.TalentDbcPath!, Options.TalentTabDbcPath!);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or FormatException)
+        {
+            // Fail closed, but name the settings: the reader's own message only says which file it could not read.
+            throw new InvalidOperationException(
+                $"{TalentOptions.Section}:TalentDbcPath ('{Options.TalentDbcPath}') or {TalentOptions.Section}:TalentTabDbcPath " +
+                $"('{Options.TalentTabDbcPath}') could not be read: {ex.Message}. Fix the paths, or unset both to run without talents.", ex);
+        }
     }
 
     private IRankChain? BuildRankChain()

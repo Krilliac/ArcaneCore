@@ -7,6 +7,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Progression;
+using ArcaneCore.World.Talents;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Character;
@@ -14,10 +15,11 @@ namespace ArcaneCore.World.Gm.Character;
 /// <summary>
 /// <c>.modify hp</c>, <c>.modify mana</c>, <c>.modify energy</c> and <c>.modify rage</c>
 /// (vmangos UnitCommands.cpp:2283-2349, CharacterCommands.cpp:4733-4808, SEC_GAMEMASTER,
-/// Chat.cpp:582-583), added under the <c>.modify</c> root of the built-in commands, whose
+/// Chat.cpp:582-583) and <c>.modify tp</c> (HandleModifyTalentCommand, CharacterCommands.cpp:4524-4547,
+/// SEC_BASIC_ADMIN, Chat.cpp:594), added under the <c>.modify</c> root of the built-in commands, whose
 /// <c>.modify money</c> lives in <see cref="BuiltinCommands"/>. Player targets only: vmangos also
 /// accepts a selected creature for HP/mana. <c>.modify scale|faction|speed|aspeed|swim|bwalk|
-/// mount|morph|drunk|exhaustion|talentpoints</c> and the rest are not provided.
+/// mount|morph|drunk|exhaustion</c> and the rest are not provided.
 /// </summary>
 public sealed class ModifyExtension : ICommandExtension
 {
@@ -29,7 +31,44 @@ public sealed class ModifyExtension : ICommandExtension
         new ChatCommand("mana", AccountSecurity.GameMaster, "Syntax: .modify mana #newmana [#newmaxmana]\nChange the mana (and maximum mana) of the selected player, or yours.", (c, a) => Change(c, a, hp: false), RetailLevel: 3),
         new ChatCommand("energy", AccountSecurity.GameMaster, "Syntax: .modify energy #newenergy [#newmaxenergy]\nChange the energy (and maximum energy) of the selected player, or yours.", (c, a) => ChangePower(c, a, PowerType.Energy), RetailLevel: 3),
         new ChatCommand("rage", AccountSecurity.GameMaster, "Syntax: .modify rage #newrage [#newmaxrage]\nChange the rage (and maximum rage) of the selected player, or yours.", (c, a) => ChangePower(c, a, PowerType.Rage), RetailLevel: 3),
+        new ChatCommand("tp", AccountSecurity.Administrator, "Syntax: .modify tp #amount\nSet the free talent points of the selected player, or yours.", ModifyTalentPoints, RetailLevel: 4),
     ];
+
+    /// <summary>
+    /// vmangos HandleModifyTalentCommand: no argument or a negative amount is a syntax error; the selected player (or the invoker)
+    /// gets <c>SetFreeTalentPoints(amount)</c>, with no reply. Differences: an amount that is not a number is a syntax error (vmangos
+    /// atoi reads it as 0), and without the talent system the command says so and changes nothing. The points last until the next
+    /// level change, learn or login recomputes them, as in vmangos.
+    /// </summary>
+    private static bool ModifyTalentPoints(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractInt32(out int points) || points < 0)
+        {
+            return false;
+        }
+
+        if (context.Session.Services.GetService<TalentFeature>()?.Service is not { } talents)
+        {
+            context.Reply(ResetCommands.TalentsInert);
+            return true;
+        }
+
+        Player? target = context.SelectedPlayerOrSelf();
+        if (target is null)
+        {
+            context.Reply(GmStrings.NoCharSelected);
+            return true;
+        }
+
+        if (!context.CanActOn(target))
+        {
+            return true;
+        }
+
+        talents.SetFreePoints(target, (uint)points);
+        return true;
+    }
 
     private static bool Change(CommandContext context, string text, bool hp)
     {
@@ -176,8 +215,7 @@ public sealed class ModifyExtension : ICommandExtension
 /// Differences, documented in docs/integration/gm-commands.md: all three apply the target-rank check
 /// (<see cref="CommandContext.CanActOn"/>; vmangos has none on these commands); the level is capped at the
 /// progression maximum (<c>Progression:MaxPlayerLevel</c>, default 60) instead of vmangos' hard 255,
-/// because the level-stat table ends there; the talent recalculation (<c>InitTalentForLevel</c>)
-/// is not done (the talents area does not exist yet); a selected creature is not levelled and
+/// because the level-stat table ends there; a selected creature is not levelled and
 /// offline characters are not edited (vmangos updates the characters table); and a target is told
 /// about the change unless it is the invoker (vmangos also stays quiet for GMs that are invisible
 /// to it, which needs the GM-visibility state).
@@ -228,8 +266,12 @@ public sealed class LevelCommands : ICommandGroup
         PlayerProgression progression = context.Session.Services.GetRequiredService<ProgressionFeature>().Progression;
         int oldLevel = target.Level;
         int newLevel = Math.Clamp(oldLevel + addLevel, 1, progression.MaxPlayerLevel);
-        progression.GiveLevel(target, (byte)newLevel);
+
+        // vmangos GiveLevel, InitTalentForLevel, PLAYER_XP = 0 (HandleCharacterLevel, CharacterCommands.cpp:1853-1855). GiveLevel raises
+        // LevelChanged, whose subscribers recompute the talent points (a level-down resets an overspend) and save the
+        // character, so the experience is cleared first and the save sees it.
         target.SetUInt32(UpdateFields.PlayerXp, 0);
+        progression.GiveLevel(target, (byte)newLevel);
 
         if (!ReferenceEquals(target, context.Player))
         {

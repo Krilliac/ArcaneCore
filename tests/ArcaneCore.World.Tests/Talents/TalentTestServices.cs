@@ -3,7 +3,10 @@ using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Talents;
+using ArcaneCore.World.Talents;
 using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.Configuration;
@@ -34,6 +37,7 @@ internal sealed class TalentTestServices : IWorldTestServices
         services.AddSingleton<IConfiguration>(fixture.Configuration());
         services.AddSingleton<INpcContentStore>(fixture);
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(fixture.SpellContent()));
+        services.AddSingleton<ITalentResetFlagStore>(sp => fixture.ResetFlags.Attach(sp.GetRequiredService<ICharacterStore>()));
     }
 }
 
@@ -47,6 +51,12 @@ internal sealed class TalentWorldFixture : INpcContentStore
 
     /// <summary>"Untalent Visual Effect" (vmangos SkillHandler.cpp:57).</summary>
     public const uint UntalentVisual = 14867;
+
+    /// <summary>A self-cast permanent SPELL_AURA_FEIGN_DEATH (the wipe ends it, vmangos SkillHandler.cpp:46-48).</summary>
+    public const uint FeignDeath = 20990;
+
+    /// <summary>The reset-at-login requests of this host (<see cref="ITalentResetFlagStore"/>).</summary>
+    public MemoryTalentResetFlags ResetFlags { get; } = new();
 
     public Dictionary<string, string?> Settings { get; } = [];
 
@@ -96,7 +106,20 @@ internal sealed class TalentWorldFixture : INpcContentStore
             EffectDieSides1 = 1,
             EffectImplicitTargetA1 = 25,      // TARGET_UNIT
         };
-        return baseContent with { Spells = [.. baseContent.Spells, visual] };
+        var feign = new SpellTemplateRow
+        {
+            Id = FeignDeath,
+            SpellName = "Test Feign Death",
+            RangeIndex = 1,
+            Effect1 = 6,                      // SPELL_EFFECT_APPLY_AURA
+            EffectBaseDice1 = 1,
+            EffectDieSides1 = 1,
+            EffectImplicitTargetA1 = 1,       // TARGET_UNIT_CASTER
+            EffectApplyAuraName1 = (uint)AuraType.FeignDeath,
+            DurationIndex = 21,               // permanent
+            SpellVisual = 1,
+        };
+        return baseContent with { Spells = [.. baseContent.Spells, visual, feign] };
     }
 
     Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty with
@@ -191,5 +214,77 @@ internal sealed class MemoryTalentStore : ICharacterTalentStore
         }
 
         Interlocked.Increment(ref _writes);
+    }
+}
+
+/// <summary>
+/// In-memory <see cref="ITalentResetFlagStore"/> over the host's characters (the same rules as <see cref="EfTalentResetFlagStore"/>,
+/// which <c>TalentResetFlagStoreTests</c> runs on SQLite); <see cref="FailWrites"/> makes every write throw.
+/// </summary>
+internal sealed class MemoryTalentResetFlags : ITalentResetFlagStore
+{
+    private readonly ConcurrentDictionary<int, byte> _flagged = new();
+    private ICharacterStore? _characters;
+
+    public volatile bool FailWrites;
+
+    /// <summary>While set, reading a request throws (a database outage during a login).</summary>
+    public volatile bool FailReads;
+
+    public MemoryTalentResetFlags Attach(ICharacterStore characters)
+    {
+        _characters = characters;
+        return this;
+    }
+
+    public bool IsFlagged(int characterId) => _flagged.ContainsKey(characterId);
+
+    public void Flag(int characterId) => _flagged[characterId] = 0;
+
+    public async Task<bool> FlagAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        Write();
+        if (await Characters.GetByIdAsync(characterId, cancellationToken) is null)
+        {
+            return false;
+        }
+
+        _flagged[characterId] = 0;
+        return true;
+    }
+
+    public async Task<int> FlagAllAsync(CancellationToken cancellationToken = default)
+    {
+        Write();
+        int flagged = 0;
+        foreach (CharacterIdentity identity in await Characters.GetAllIdentitiesAsync(cancellationToken))
+        {
+            if (_flagged.TryAdd(identity.Id, 0))
+            {
+                flagged++;
+            }
+        }
+
+        return flagged;
+    }
+
+    public Task<bool> IsFlaggedAsync(int characterId, CancellationToken cancellationToken = default)
+        => FailReads ? Task.FromException<bool>(new IOException("character database unavailable")) : Task.FromResult(_flagged.ContainsKey(characterId));
+
+    public Task ClearAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        Write();
+        _flagged.TryRemove(characterId, out _);
+        return Task.CompletedTask;
+    }
+
+    private ICharacterStore Characters => _characters ?? throw new InvalidOperationException("not attached to a character store");
+
+    private void Write()
+    {
+        if (FailWrites)
+        {
+            throw new IOException("character database unavailable");
+        }
     }
 }
