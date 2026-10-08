@@ -10,7 +10,17 @@ public static class NamesDbcReader
     public const int MaxPatternLength = 4096;
     public const long MaxFileBytes = 16 * 1024 * 1024;
     public const int MaxRecords = 100_000;
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+    /// <summary>
+    /// The per-match ceiling. The patterns use the non-backtracking engine, whose match time is linear in the input (a name
+    /// of at most a few dozen characters), so the timeout is only a backstop. It must not be close to the cost of building
+    /// the engine's automaton on a pattern's first match (measured up to 17 ms unloaded, far more under memory pressure or a
+    /// GC pause): NameCatalog fails closed on a timeout, which would refuse a legal name. Patterns are also warmed at load.
+    /// </summary>
+    internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>A character-name-shaped input matched once per pattern at load, so the first player check pays no build cost.</summary>
+    private const string WarmUpInput = "Warmupname";
+    private const int WarmUpAttempts = 5;
 
     public static NameCatalogSource Read(string path, string kind, out IReadOnlyList<Regex> patterns)
     {
@@ -38,10 +48,11 @@ public static class NamesDbcReader
             if (pattern.Length > MaxPatternLength)
                 throw new InvalidDataException($"{kind} row {row} exceeds the pattern limit");
             pattern = pattern.Replace("\\^", "^").Replace("\\$", "$");
+            Regex compiled;
             try
             {
-                result.Add(new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
-                    RegexTimeout));
+                compiled = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+                    RegexTimeout);
             }
             catch (ArgumentException error)
             {
@@ -51,7 +62,29 @@ public static class NamesDbcReader
             {
                 throw new InvalidDataException($"unsupported {kind} regex at row {row}", error);
             }
+
+            WarmUp(compiled);
+            result.Add(compiled);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Builds the pattern's automaton now, at load, instead of on the first player-facing check. A timeout here only means the
+    /// machine was busy: the states built so far are kept, so the next attempt continues the work.
+    /// </summary>
+    private static void WarmUp(Regex pattern)
+    {
+        for (int attempt = 0; attempt < WarmUpAttempts; attempt++)
+        {
+            try
+            {
+                pattern.IsMatch(WarmUpInput);
+                return;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+            }
+        }
     }
 }
