@@ -235,19 +235,33 @@ internal sealed class ScenarioConnection(WorldClient client, int maximumObjects 
         byte[] time = await ExpectAsync(WorldOpcode.SmsgLoginSettimespeed, cancellationToken).ConfigureAwait(false);
         ScenarioWire.Require(time.Length == 8, "Login time-speed reply must contain eight bytes.");
 
-        WorldFrame update = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        byte[] body = update.Opcode switch
+        byte[] body = await ReadLoginUpdateAsync(cancellationToken).ConfigureAwait(false);
+        // vmangos Map::Add sends the map's ships (SendInitTransports, has-transport byte set) before the self create (SendInitSelf);
+        // ReadAsync has already recorded them as observed objects.
+        int shipPackets = 0;
+        while (ScenarioWire.IsMapTransportsPacket(body))
         {
-            (ushort)WorldOpcode.SmsgUpdateObject => update.Payload,
-            (ushort)WorldOpcode.SmsgCompressedUpdateObject => ScenarioWire.InflateUpdate(update.Payload),
-            _ => throw new MockProtocolException($"Login expected self create, received 0x{update.Opcode:X4}."),
-        };
+            ScenarioWire.Require(++shipPackets <= MaximumPacketsPerStage, "Login exceeded the ship packet limit.");
+            body = await ReadLoginUpdateAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         MockSelfCreate self = ScenarioWire.SelfCreate(body);
         ScenarioWire.Require(self.Guid == guid, "Login self create GUID differs from the requested character.");
         // Nearby object creates may arrive before world states or at the map's later flush.
         byte[] states = await ReadUntilAsync(WorldOpcode.SmsgInitWorldStates, cancellationToken).ConfigureAwait(false);
         ScenarioWire.Require(states.Length >= 10, "Login world-state reply is truncated.");
         return new MockLogin(location, self, motdLines);
+    }
+
+    private async Task<byte[]> ReadLoginUpdateAsync(CancellationToken cancellationToken)
+    {
+        WorldFrame update = await ReadAsync(cancellationToken).ConfigureAwait(false);
+        return update.Opcode switch
+        {
+            (ushort)WorldOpcode.SmsgUpdateObject => update.Payload,
+            (ushort)WorldOpcode.SmsgCompressedUpdateObject => ScenarioWire.InflateUpdate(update.Payload),
+            _ => throw new MockProtocolException($"Login expected self create, received 0x{update.Opcode:X4}."),
+        };
     }
 
     internal async Task LogoutAsync(CancellationToken cancellationToken)

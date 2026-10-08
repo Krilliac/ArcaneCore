@@ -216,6 +216,51 @@ public sealed class ProtocolTests
         Assert.False(incremental.ContainsKey(ArcaneCore.Game.UpdateFields.UnitFieldFlags));
     }
 
+    /// <summary>
+    /// The server sends its ships in packets of their own with the has-transport byte set (vmangos Map::SendInitTransports,
+    /// GenericTransport::SendCreateUpdateToMap / SendOutOfRangeUpdateToMap; ArcaneCore TransportPackets): u32 count, u8 1, then ordinary
+    /// blocks. With World:Transports:Enabled every player on a continent gets them at login, so a live session (the deploy's operator)
+    /// must decode them rather than end with "Synthetic update cannot contain a transport header".
+    /// </summary>
+    [Fact]
+    public void ShipPackets_WithTheHasTransportByte_DecodeAsOrdinaryUpdates()
+    {
+        byte[] create =
+        [
+            1, 0, 0, 0, 1, // one block, has transport
+            2, 0x01, 0x51, 5, // CREATE_OBJECT, packed GUID 0x51, game object
+            0x52, // HAS_POSITION | ALL | TRANSPORT
+            .. Convert.FromHexString("0000803F000000400000404000008040"), // x/y/z/orientation: 1/2/3/4
+            1, 0, 0, 0, // ALL
+            0x10, 0x27, 0, 0, // path progress
+            1, 1, 0, 0, 0, 0x51, 0, 0, 0, // one mask word, field 0 = 0x51
+        ];
+        MockFieldUpdate ship = Assert.Single(ScenarioWire.FieldUpdates(create));
+        Assert.Equal(0x51ul, ship.Guid);
+        Assert.Equal(0x51u, ship.Fields[0]);
+        Assert.Equal(new MockPosition(1f, 2f, 3f), ship.Position);
+        Assert.Empty(ScenarioWire.RemovedGuids(create));
+
+        byte[] outOfRange = [1, 0, 0, 0, 1, 4, 1, 0, 0, 0, 0x01, 0x51]; // the out-of-range list naming the ship
+        Assert.Equal([0x51ul], ScenarioWire.RemovedGuids(outOfRange));
+        Assert.Empty(ScenarioWire.FieldUpdates(outOfRange));
+
+        // At login the ships come first (vmangos Map::Add: SendInitTransports before SendInitSelf); the login skips that packet and
+        // only that packet: not a self create, not an ordinary update, not the out-of-range list.
+        Assert.True(ScenarioWire.IsMapTransportsPacket(create));
+        Assert.False(ScenarioWire.IsMapTransportsPacket([1, 0, 0, 0, 0, .. SelfCreateBlockVector()]));
+        Assert.False(ScenarioWire.IsMapTransportsPacket([1, 0, 0, 0, 1, .. SelfCreateBlockVector()]));
+        Assert.False(ScenarioWire.IsMapTransportsPacket([.. create[..4], 0, .. create[5..]]));
+        Assert.False(ScenarioWire.IsMapTransportsPacket(outOfRange));
+        Assert.False(ScenarioWire.IsMapTransportsPacket(create[..^1]));
+
+        // The byte is a flag: any other value is still refused.
+        create[4] = 2;
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.FieldUpdates(create));
+        outOfRange[4] = 2;
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.RemovedGuids(outOfRange));
+    }
+
     [Theory]
     [InlineData(0u)]
     [InlineData(129u)]

@@ -119,6 +119,48 @@ internal static partial class ScenarioWire
         return location;
     }
 
+    /// <summary>
+    /// The map's ships as a player entering the map gets them before its self create (vmangos Map::Add: SendInitTransports, then
+    /// SendInitSelf; ArcaneCore TransportSystem.OnPlayerAdding): the has-transport byte set and nothing but game object creates. A self
+    /// packet (it carries the player) or an ordinary update is not one.
+    /// </summary>
+    internal static bool IsMapTransportsPacket(byte[] body)
+    {
+        try
+        {
+            var cursor = new WireCursor(body);
+            uint count = cursor.UInt32();
+            if (count is 0 or > 128 || cursor.Byte() != 1)
+            {
+                return false;
+            }
+
+            for (uint index = 0; index < count; index++)
+            {
+                if (cursor.Byte() is not (2 or 3))
+                {
+                    return false;
+                }
+
+                _ = cursor.PackedGuid();
+                if (cursor.Byte() != TypeId.GameObject)
+                {
+                    return false;
+                }
+
+                _ = ReadMovement(cursor);
+                _ = ReadFields(cursor);
+            }
+
+            cursor.End();
+            return true;
+        }
+        catch (MockProtocolException)
+        {
+            return false;
+        }
+    }
+
     internal static MockSelfCreate SelfCreate(byte[] body)
     {
         var cursor = new WireCursor(body);
@@ -180,7 +222,7 @@ internal static partial class ScenarioWire
         var cursor = new WireCursor(body);
         uint count = cursor.UInt32();
         Require(count is > 0 and <= 128, "Object update exceeded the block limit.");
-        Require(cursor.Byte() == 0, "Synthetic update cannot contain a transport header.");
+        ReadHasTransport(cursor);
         var updates = new List<MockFieldUpdate>();
         for (uint index = 0; index < count; index++)
         {
@@ -404,7 +446,7 @@ internal static partial class ScenarioWire
         var cursor = new WireCursor(body);
         uint count = cursor.UInt32();
         Require(count is > 0 and <= 128, "Object update exceeded the block limit.");
-        Require(cursor.Byte() == 0, "Synthetic update cannot contain a transport header.");
+        ReadHasTransport(cursor);
         var removed = new List<ulong>();
         for (uint index = 0; index < count; index++)
         {
@@ -427,6 +469,14 @@ internal static partial class ScenarioWire
         cursor.End();
         return removed;
     }
+
+    /// <summary>
+    /// The u8 after the block count (vmangos UpdateData::BuildPacket, m_hasTransport): a flag, 1 on the server's ship packets
+    /// (Map::SendInitTransports, GenericTransport::SendCreateUpdateToMap / SendOutOfRangeUpdateToMap; ArcaneCore TransportPackets) and on
+    /// the self packet of a player aboard. Nothing else follows it, so the blocks decode the same either way; another value is refused.
+    /// </summary>
+    private static void ReadHasTransport(WireCursor cursor)
+        => Require(cursor.Byte() is 0 or 1, "Object update has-transport byte must be 0 or 1.");
 
     private static MockPosition? ReadMovement(WireCursor cursor)
     {
