@@ -76,7 +76,7 @@ public sealed record BuiltInChannel(uint Id, string Pattern, ChannelFlags Flags)
 /// <summary>
 /// The built-in channels: which channel names are constant channels, with which ids and flags (vmangos ChatChannels.dbc,
 /// GetChannelEntryFor and Channel::Channel). <see cref="FromDbc"/> builds it from the client's own ChatChannels.dbc
-/// (World:Social:ChatChannelsDbcPath), every locale's pattern included; without one the transcribed <see cref="Builtin"/>
+/// (World:Chat:ChatChannelsDbcPath), every locale's pattern included; without one the transcribed <see cref="Builtin"/>
 /// rows of the 1.12.1 client file are used, English patterns only.
 /// </summary>
 public sealed class ChatChannelCatalog
