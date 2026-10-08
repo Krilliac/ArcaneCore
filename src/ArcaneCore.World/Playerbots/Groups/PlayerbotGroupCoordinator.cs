@@ -344,6 +344,43 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         return state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete } && !GoalDone(player, goal);
     }
 
+    /// <summary>
+    /// Members share the goal's quests with each other, as players do once grouped: a bot member holding a sharable quest of the goal
+    /// (the goal's quest, or one asking for its creature or item) that another member lacks and could take sends CMSG_PUSHQUESTTOPARTY
+    /// (<see cref="PlayerbotGroupAI.PushQuest"/>) once every such member stands within the share distance (vmangos QUEST_SHARE_DISTANCE,
+    /// 14 yards); the receivers' party intake accepts (<c>PlayerbotPartyAI</c>). The server applies vmangos' rules (sharable flag, the
+    /// sharer on the quest, the receiver able to take it, the log not full, one offer at a time). Each quest is pushed once per group.
+    /// </summary>
+    private void ShareQuests(BotGroup group)
+    {
+        if (services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
+        var joined = new List<(Member Member, Player Player)>();
+        foreach (Member member in group.Members.Where(m => m.Joined))
+            if (_world!.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
+        foreach ((Member member, Player sharer) in joined)
+        {
+            if (member.Real || member.AI is not { } ai || quests.StateOf(sharer) is not { Loaded: true } state) continue;
+            foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
+            {
+                if (status.Rewarded || group.Shared.Contains(questId) || quests.Quests.Get(questId) is not { } quest
+                    || !ForGoal(quest, group.Goal) || !quests.CanShareQuest(sharer, questId)) continue;
+                var lacking = joined.Where(other => !ReferenceEquals(other.Player, sharer)
+                    && quests.StateOf(other.Player)?.Quests.GetStatus(questId) == QuestStatus.None && quests.CanTakeQuest(other.Player, questId) == true).ToArray();
+                if (lacking.Length == 0) continue;
+                if (lacking.Any(other => !ReferenceEquals(other.Player.Map, sharer.Map)
+                        || Distance(other.Player, sharer) >= QuestNpcServices.QuestShareDistance - 1f)) continue;
+                if (!ai.PushQuest(questId)) continue;
+                group.Shared.Add(questId);
+                Note($"{sharer.Name} shares quest {questId} with {string.Join(", ", lacking.Select(other => other.Player.Name))}");
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="quest"/> is part of <paramref name="goal"/>: the goal's quest, or one asking for its creature or item.</summary>
+    private static bool ForGoal(Quest quest, PlayerbotGroupGoal goal)
+        => quest.Id == goal.QuestId || (goal.ObjectiveEntry != 0 && quest.ReqCreatureOrGOId.Contains((int)goal.ObjectiveEntry))
+            || (goal.ObjectiveItem != 0 && quest.ReqItemId.Contains(goal.ObjectiveItem));
+
     /// <summary>The goal's objective is done for the bot: its quest item count (<see cref="PlayerbotGroupGoal.ObjectiveItem"/>), else its kills.</summary>
     internal bool GoalDone(Player player, PlayerbotGroupGoal goal)
         => goal.ObjectiveItem != 0 ? ItemObjectiveDone(player, goal.ObjectiveItem) : ObjectiveDone(player, goal.ObjectiveEntry);
@@ -665,6 +702,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         if (group.Members.Any(m => m.Joined && _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && p.Combat.IsInCombat))
             group.LastCombatMs = Math.Max(1u, now);
+
+        if (group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging && !group.InFight(now))
+            ShareQuests(group);
 
         switch (group.State)
         {
@@ -1091,6 +1131,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         public bool Raid { get; set; }
         public bool Solo { get; init; }
         public bool HadQuest { get; set; }
+
+        /// <summary>The quests a member already pushed to the group (<see cref="ShareQuests"/>).</summary>
+        public HashSet<uint> Shared { get; } = [];
 
         /// <summary>Where the group gathers before the content (<see cref="ApproachPoint"/>).</summary>
         public Vector3 Approach { get; set; }

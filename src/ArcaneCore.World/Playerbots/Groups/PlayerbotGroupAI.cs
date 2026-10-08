@@ -110,6 +110,12 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The bot's spells (its group role is set here).</summary>
     internal PlayerbotCombatSpells Spells => _spells;
 
+    /// <summary>
+    /// Share <paramref name="questId"/> with the group: CMSG_PUSHQUESTTOPARTY, the client's "Share Quest" (vmangos
+    /// <c>HandlePushQuestToParty</c>: every member within 14 yards who can take it is offered it). True when the server took it.
+    /// </summary>
+    internal bool PushQuest(uint questId) => Act(WorldOpcode.CmsgPushquesttoparty, BitConverter.GetBytes(questId), budgeted: false);
+
     /// <summary>The bot's corpse run (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
 

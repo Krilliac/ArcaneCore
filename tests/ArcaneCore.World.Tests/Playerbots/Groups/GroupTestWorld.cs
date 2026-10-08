@@ -278,6 +278,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
         {
             Entry = id, Method = 2, MinLevel = minLevel, QuestLevel = 10, RequiredRaces = 0xFF, Title = title, Type = type,
             SuggestedPlayers = suggested, ReqCreatureOrGOId1 = (int)objective, ReqCreatureOrGOCount1 = objective == 0 ? 0u : 1u, RewXP = 100,
+            QuestFlags = 8, // QUEST_FLAGS_SHARABLE, as most real group quests (e.g. classic-db 176 "Wanted: Hogger")
             ReqItemId1 = item, ReqItemCount1 = item == 0 ? 0u : 1u,
         };
 

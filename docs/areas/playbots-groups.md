@@ -121,6 +121,15 @@ quest drop to every member who needs it, whoever holds the corpse). A dead membe
 member could resurrect it, at most 60 seconds, then releases and runs back (`PlayerbotRecovery`; a ghost whose body lies inside walks
 into the entrance and is revived there). A leader that died is waited for where the group stands.
 
+**Sharing the goal's quests.** Once grouped (gathering, travelling or engaging, out of a fight) a bot member holding a sharable quest of
+the goal (the goal's quest, or one asking for its creature or item) that another member lacks and could take pushes it to the party
+(CMSG_PUSHQUESTTOPARTY, the client's "Share Quest") when every such member stands within the share distance (vmangos
+`QUEST_SHARE_DISTANCE`, 14 yards); each quest once per group, noted in the events (`Tank shares quest 990701 with Mage`). The server
+applies vmangos `HandlePushQuestToParty` (sharable flag, the sharer on the quest, the receiver able to take it, the log not full, one
+offer at a time). A bot's party intake (bot groups and a real player's party alike) answers the server's pending offer as a client's quest
+window does: accept (CMSG_QUESTGIVER_ACCEPT_QUEST with the sharer's guid) when the sharer is in its group and it can take a quest the
+server settles, else decline (MSG_QUEST_PUSH_RESULT).
+
 **Loot rolls** (items at or above the threshold): need when the item is an upgrade the bot can wear (`PlayerbotItemScore.UpgradeGain`
 with its build's weights), greed otherwise (`GroupLootVote`).
 
@@ -210,4 +219,4 @@ d3b26dcb):
 * Clearing is local: the leader pulls what stands within 20 yards of it on the way; there is no dungeon route or pull planning, no
   crowd control, no marking.
 * The coordinator's groups live in memory: after a restart the bots leave the restored server groups and match again.
-* Bots do not hand quests to each other (a bot without the quest is not matched for a quest goal).
+* A bot without a quest for the goal is not matched for it (sharing happens inside a group formed for the goal, below).
