@@ -7,12 +7,12 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// AI/ScriptDevAI/scripts/eastern_kingdoms/zulgurub/zulgurub.cpp, SetData's TYPE_OHGAN branch, GetData and Load; zulgurub.h:8-20). classic-db
 /// z2815 EventAI sets TYPE_OHGAN (5) to SPECIAL when a Vilebranch Speaker dies ("SPECIAL instance data is set via ACID").
 /// <para>
-/// Ported: the eight states and their save string; TYPE_OHGAN keeps its value. Not ported (logged at debug level): Bloodlord Mandokir running
-/// downstairs on SPECIAL, and every other type of the instance (the high priests, Lor'khan, Zath).
+/// Ported: the eight-slot save string, TYPE_OHGAN, and priest death/power bookkeeping for Hakkar (ZulGurubPriestState.cs).
+/// Not ported: Mandokir running downstairs on SPECIAL, priest encounter side effects, Lor'khan and Zath.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class ZulGurubInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class ZulGurubInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 309;
     public const int MaxEncounter = 8;
@@ -21,6 +21,11 @@ public sealed class ZulGurubInstance(Map instance) : ScriptedInstance(instance, 
 
     public override void SetData(uint type, uint data)
     {
+        if (SetPriestData(type, data))
+        {
+            return;
+        }
+
         if (type != TypeOhgan)
         {
             NotPorted(type, data, "(a Zul'Gurub event other than Ohgan's)");

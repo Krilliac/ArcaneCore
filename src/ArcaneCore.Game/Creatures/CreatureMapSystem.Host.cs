@@ -147,7 +147,7 @@ public sealed partial class CreatureMapSystem
 
     private void CreateAi(Creature creature)
     {
-        if (CreateEntryAi(creature) is { } scripted)
+        if ((CreateEntryAi(creature) ?? Instances.Scripts.Raids.RaidBossAI.Create(creature)) is { } scripted)
         {
             creature.AI = scripted; // a script AI of this map for the entry (CreatureMapSystem.ScriptedAi.cs)
             ResetGuardCall(creature);

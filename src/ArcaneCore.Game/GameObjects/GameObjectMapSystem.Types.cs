@@ -292,6 +292,21 @@ public sealed partial class GameObjectMapSystem
         }
     }
 
+    /// <summary>ScriptDev2 GameObject::Use(Unit*) for a scripted trap, e.g. Kurinnaxx's four-second timer.</summary>
+    public bool TriggerScriptedTrap(GameObject trap, Unit user)
+    {
+        ArgumentNullException.ThrowIfNull(trap);
+        ArgumentNullException.ThrowIfNull(user);
+        if (!Tracks(trap) || !trap.IsSpawned || trap.Type != GameObjectType.Trap || Spells is null
+            || trap.LootState != GameObjectLootState.Ready || !ReferenceEquals(user.Map, Map))
+        {
+            return false;
+        }
+
+        UseTrap(trap, user);
+        return true;
+    }
+
     private void PlayCustomAnim(GameObject go)
     {
         if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)))
