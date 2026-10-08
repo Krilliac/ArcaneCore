@@ -116,9 +116,21 @@ internal static class PlayerbotNavigation
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
         float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
-        Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
-        return Plan(player, destination, goal, options, partial: true, out route);
+        // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
+        // the mesh then answers a straight line (vmangos PathFinder's HaveTiles shortcut), which the terrain stepper refuses across
+        // any hill, and the bot stood at the tile's edge for good (Dawnrover on quest 35, 107 yards short of the Elwynn tile
+        // boundary south of Goldshire, the 126-yard point beyond it). A shorter step stays on the loaded mesh; walking it loads the
+        // next tile, and the next plan crosses.
+        for (; ; chunk /= 2)
+        {
+            Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
+            if (Plan(player, destination, goal, options, partial: true, out route)) return true;
+            if (distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
+        }
     }
+
+    /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
+    internal const float MinTowardChunkYards = 24f;
 
     /// <summary>
     /// One path query from where the bot is now to <paramref name="destination"/>; with <paramref name="partial"/> a route that

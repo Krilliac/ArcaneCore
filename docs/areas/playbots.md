@@ -42,6 +42,13 @@ whatever the think interval. Brain, goals and scripted controllers only choose r
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 
+A far goal (a quest giver or ender, a corpse) is approached a step at a time (`PlayerbotNavigation.TryPlanToward`): the point
+`MaxPathPoints - 2` yards along the straight line (at most 90% of `MaxRouteYards`), or the walkable point the mesh reaches nearest to it.
+Navigation-mesh tiles load with the map's grids round the players, so that point may lie on a tile not loaded yet, where the mesh
+answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the terrain stepper refuses over any hill; the step is then
+halved (down to 24 yards) until it stays on the loaded mesh, and walking it loads the next tile. Before, the bot stood at such a tile edge
+for good: the wave-8 rehearsal's quest-35 stall (Dawnrover 107 yards north of the Elwynn tile boundary, 610 yards from Guard Thomas).
+
 `World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
 those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
 through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the
