@@ -89,6 +89,70 @@ public sealed class DotRecastOracleTests(ITestOutputHelper output)
         Assert.True(Vector3.Distance(arcCorners[^1], V3(dotCorners[cornerCount - 1].pos)) < 0.01f);
     }
 
+    /// <summary>
+    /// Seeded random 6x6 cell mazes: from the same start and end polygons, NavMeshQuery must pick
+    /// DotRecast's corridor. Before NavMeshQuery kept Detour's node rules (per-side nodes, first-visit
+    /// positions, reopening closed nodes) 53 of the 472 connected mazes here chose a different corridor.
+    /// </summary>
+    [Fact]
+    public void SyntheticMazes_CorridorMatchesDetourNodeRules()
+    {
+        const int cells = 6;
+        const float size = 5;
+        var rng = new Random(1234);
+        var mismatches = new List<string>();
+        int compared = 0;
+        for (int trial = 0; trial < 600; trial++)
+        {
+            bool[,] walkable = new bool[cells, cells];
+            var open = new List<(int I, int J)>();
+            for (int i = 0; i < cells; i++)
+            for (int j = 0; j < cells; j++)
+            {
+                walkable[i, j] = rng.NextDouble() > 0.3;
+                if (walkable[i, j]) open.Add((i, j));
+            }
+
+            if (open.Count < 4) continue;
+            (int I, int J) a = open[rng.Next(open.Count)], b = open[rng.Next(open.Count)];
+            byte[] bytes = new CellTile(0, 0, 0, 0, cells, cells, Size: size) { Walkable = (i, j) => walkable[i, j] }.Build();
+            var arc = new NavMesh(0, new NavMeshParams(Vector3.Zero, 533.3333f, 533.3333f, 1, 0));
+            Assert.True(arc.AddTile(31, 31, NavMeshTile.Parse(bytes)));
+            var dot = new DtNavMesh();
+            Assert.True(dot.Init(new DtNavMeshParams
+            {
+                orig = RcVec3f.Zero, tileWidth = 533.3333f, tileHeight = 533.3333f, maxTiles = 1, maxPolys = 1 << 16,
+            }, NavMeshFormat.MaxVertsPerPoly).Succeeded());
+            Assert.True(dot.AddTile(new DtMeshDataReader().Read(new RcByteBuffer(bytes), 6, is32Bit: false), 0, 0, out _).Succeeded());
+            var query = new DtNavMeshQuery(dot);
+            var filter = new DtQueryDefaultFilter();
+            filter.SetIncludeFlags((int)PathOptions.Default.EffectiveIncludeFlags);
+            Vector3 start = NavMeshFormat.ToRecast(new Vector3((a.I * size) + 1.3f, (a.J * size) + 2.1f, 0));
+            Vector3 end = NavMeshFormat.ToRecast(new Vector3((b.I * size) + 3.7f, (b.J * size) + 1.4f, 0));
+            query.FindNearestPoly(Rc(start), new RcVec3f(1, 2, 1), filter, out long dotStart, out RcVec3f dotStartOn, out _);
+            query.FindNearestPoly(Rc(end), new RcVec3f(1, 2, 1), filter, out long dotEnd, out RcVec3f dotEndOn, out _);
+            Assert.NotEqual(0, dotStart);
+            Assert.NotEqual(0, dotEnd);
+            long[] path = new long[64];
+            Assert.True(query.FindPath(dotStart, dotEnd, dotStartOn, dotEndOn, filter, path, out int pathCount, path.Length).Succeeded());
+            if (path[pathCount - 1] != dotEnd) continue; // the two cells are not connected
+
+            compared++;
+            NavMeshTile tile = Assert.IsType<NavMeshTile>(arc.GetTile(0, 0));
+            (var corridor, bool complete) = NavMeshQuery.FindCorridor(arc,
+                new NavPolyRef(tile, PolyIndex(dot, dotStart)), V3(dotStartOn),
+                new NavPolyRef(tile, PolyIndex(dot, dotEnd)), V3(dotEndOn), PathOptions.Default);
+            int[] expected = [.. path.Take(pathCount).Select(r => PolyIndex(dot, r))];
+            int[] actual = [.. corridor.Select(p => p.Poly.Poly)];
+            if (!complete || !expected.SequenceEqual(actual))
+                mismatches.Add($"trial {trial}: DotRecast [{string.Join(",", expected)}], NavMeshQuery [{string.Join(",", actual)}]");
+        }
+
+        Assert.True(compared >= 400, $"only {compared} connected mazes");
+        Assert.True(mismatches.Count == 0,
+            $"{mismatches.Count} of {compared} corridors differ: {string.Join("; ", mismatches.Take(10))}");
+    }
+
     [RealTerrainFact]
     public void RealVmangosTiles_CompareCorridorsAndStraightPaths()
     {
@@ -127,6 +191,13 @@ public sealed class DotRecastOracleTests(ITestOutputHelper output)
 
         Assert.True(results.Count >= 300, $"Expected at least 300 comparable pairs, got {results.Count}");
         Assert.All(Regions, region => Assert.Contains(results, r => r.Region == region.Name));
+        // NavMeshQuery follows Detour's findPath node rules, so both engines should pick the same
+        // corridor almost always (254 of 256 complete pairs on 2026-10-08; 53 of 256 before the fix).
+        var complete = results.Where(r => r.ArcComplete && r.DotComplete).ToList();
+        int sameCorridor = complete.Count(r => !r.CorridorDiffers);
+        Assert.True(sameCorridor >= complete.Count * 0.95,
+            $"Only {sameCorridor} of {complete.Count} complete corridors match DotRecast");
+        Assert.DoesNotContain(results, r => r.Category is "OneSidePartial" or "OneSideNoPath");
     }
 
     private static void CompareRegion(string directory, string name, uint mapId, Vector3[] anchors, List<CaseResult> results)
