@@ -283,7 +283,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
     /// (unless <see cref="SpellRuleOptions.CreatureSpellCrit"/>); spells with no damage or heal effect or with
     /// CANT_CRIT never crit; potions and healthstones crit 10%; magic spells use the caster's school crit
     /// (<see cref="ISpellCritSource"/> base + MOD_SPELL_CRIT_CHANCE + the school's MOD_SPELL_CRIT_CHANCE_SCHOOL)
-    /// plus, for hostile spells, the victim's MOD_ATTACKER_SPELL_CRIT_CHANCE by school; melee and ranged
+    /// plus, for hostile spells, the victim's MOD_ATTACKER_SPELL_CRIT_CHANCE by school, plus Shatter against a frozen victim
+    /// (<see cref="SpellCritRules.ScriptedCritBonus"/>); melee and ranged
     /// class spells use the white crit chance plus the school aura (<see cref="UnitCritChance"/>: the player crit field or 5 plus MOD_CRIT_PERCENT for other units,
     /// the victim's attacker-crit auras and the weapon-skill difference), and always crit a player who is not
     /// standing; the talent crit-chance spell mod applies last and the result is never negative.
@@ -317,6 +318,12 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
                     if (target is not null && !spell.IsPositive)
                     {
                         chance += system.GetTotalAuraModifier(target, AuraType.ModAttackerSpellCritChance, a => ((uint)a.MiscValue & schoolMask) != 0);
+                    }
+
+                    // "scripted (increase crit chance ... against ... target by x%": Shatter (Unit.cpp:5259-5290).
+                    if (target is not null)
+                    {
+                        chance += SpellCritRules.ScriptedCritBonus(system, caster, target, spell);
                     }
 
                     break;
