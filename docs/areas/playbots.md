@@ -13,7 +13,8 @@ password-less Player accounts and logs them in through an ordinary socketless `W
 (`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
 Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `ThinkIntervalMs` 500,
-`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `AllowLocalLlm`, ...; off by default).
+`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
+`FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
 
 GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|list|inspect`
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
@@ -40,6 +41,24 @@ and the shared action budget does not apply; the controller's `Tick` runs on the
 every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerOrders`).
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
+
+### Faults and quarantine
+
+An exception out of a bot's update (brain, scripted controller or `PlayerbotMotion`) is an
+**action fault**. It is logged with the whole exception (type, message and stack), the bot's
+session closes and the next checkpoint (every 5 s) quarantines it: the character is saved and
+the `managed_playerbot` row turns `Faulted` with the fault as `ErrorCode`
+(`quarantined (fault 1/3): action: <message>`), but **keeps `DesiredEnabled`**. After
+`FaultBackoffSeconds` (30; doubled for every further fault, at most an hour) the bot logs in
+again, autonomous (a scenario controller that faulted is not reattached). The `MaxFaults`-th
+fault (3) within `FaultWindowSeconds` (3600 s of world time) disables it for good:
+`DesiredEnabled` off, `ErrorCode` `disabled after 3 faults: ...`, no retry. A failed retry
+login counts as a fault. `.playerbot start` or `.playerbot stop` clears the quarantine and the
+fault history; a world restart restores every desired bot, quarantined ones included (the
+fault history is per process). Before 2026-10-07 one fault set `DesiredEnabled` off, so a
+single transient bug removed a bot until an operator noticed:
+`docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
+(a GM kick) still stop the bot and clear `DesiredEnabled`, as before.
 
 ## Scenario harness
 

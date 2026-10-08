@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -173,21 +174,147 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.Equal(ManagedPlayerbotState.Running, (await owners.FindAsync(bot.BotId))!.State);
     }
 
+    /// <summary>
+    /// The live fault of 2026-10-07: one action fault logged only the exception type and left the bot with DesiredEnabled 0, so it never
+    /// came back. One fault now quarantines the bot: the whole exception is logged, the record keeps DesiredEnabled with a Faulted state
+    /// and the fault as its error code.
+    /// </summary>
+    [Fact]
+    public async Task OneActionFault_LogsTheException_AndKeepsTheBotDesired()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        var log = new CapturingLogger();
+        await using WorldTestHost host = Start(accounts, characters, owners, logger: log);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultonce", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
+
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault is recorded", 20);
+
+        ManagedPlayerbot record = (await owners.FindAsync(id))!;
+        Assert.True(record.DesiredEnabled);
+        Assert.Contains("fixture-action-fault", record.ErrorCode);
+        (Exception? error, string message) = Assert.Single(log.Entries, e => e.Message.Contains("action failed"));
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.Contains("fixture-action-fault", message);
+    }
+
+    [Fact]
+    public async Task AQuarantinedBot_LogsInAgainAfterTheBackoff_Autonomous()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultback", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the quarantine", 20);
+        Assert.StartsWith("quarantined (fault 1/3): action: fixture-action-fault", (await owners.FindAsync(id))!.ErrorCode);
+
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Running, "the retry", 30);
+
+        ManagedPlayerbot record = (await owners.FindAsync(id))!;
+        Assert.True(record.DesiredEnabled);
+        Assert.Null(record.ErrorCode);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Faultback") is not null, "the bot is back in the world");
+        Assert.False(feature.IsScripted(id)); // the scenario controller that faulted is gone; the brain runs it
+    }
+
+    [Fact]
+    public async Task TheLastAllowedFault_DisablesTheBot_AndItStaysOut()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 1; });
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultout", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
+
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault", 20);
+        ManagedPlayerbot record = (await owners.FindAsync(id))!;
+        Assert.False(record.DesiredEnabled);
+        Assert.StartsWith("disabled after 1 faults: action: fixture-action-fault", record.ErrorCode);
+
+        await Task.Delay(TimeSpan.FromSeconds(7)); // past the next checkpoint and the backoff
+        Assert.Equal(ManagedPlayerbotState.Faulted, (await owners.FindAsync(id))!.State);
+        Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultout")));
+    }
+
+    [Fact]
+    public void FaultOptions_AreBounded()
+    {
+        var options = new PlayerbotOptions();
+        Assert.Equal((30, 3, 3600), (options.FaultBackoffSeconds, options.MaxFaults, options.FaultWindowSeconds));
+        options.Validate();
+        options.MaxFaults = 0;
+        Assert.Throws<InvalidOperationException>(options.Validate);
+        options.MaxFaults = 3;
+        options.FaultBackoffSeconds = 0;
+        Assert.Throws<InvalidOperationException>(options.Validate);
+    }
+
+    private static async Task WaitAsync(Func<Task<bool>> condition, string what, int seconds)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
+        while (!await condition())
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"timed out waiting for: {what}");
+            await Task.Delay(20);
+        }
+    }
+
+    /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
+    private sealed class ThrowingController(int faults) : IPlayerbotController
+    {
+        private int _remaining = faults;
+
+        public void Tick(PlayerbotControllerContext context, uint elapsedMs)
+        {
+            if (Interlocked.Decrement(ref _remaining) >= 0) throw new InvalidOperationException("fixture-action-fault");
+        }
+
+        public void Detached(Guid botId) { }
+    }
+
+    private sealed class CapturingLogger : ILogger<ManagedPlayerbotFeature>
+    {
+        private readonly ConcurrentQueue<(Exception? Error, string Message)> _entries = new();
+
+        public IReadOnlyList<(Exception? Error, string Message)> Entries => [.. _entries];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => _entries.Enqueue((exception, formatter(state, exception)));
+    }
+
     private static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         MemoryManagedPlayerbotStore owners, MemoryProvisionStore? provisions = null,
-        bool enabled = true, bool restoreOnStartup = false)
+        bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null)
         => WorldTestHost.Start(configureServices: services =>
         {
+            if (logger is not null) services.AddSingleton<ILogger<ManagedPlayerbotFeature>>(logger);
+            var options = new PlayerbotOptions
+            {
+                Enabled = enabled, RestoreOnStartup = restoreOnStartup, MaxBots = 4, ThinkIntervalMs = 100,
+                MaxActionsPerTick = 2, MaxPathPoints = 32, MaxRouteYards = 100, AllowedMaps = [0, 1],
+            };
+            configure?.Invoke(options);
             services.AddSingleton<IAccountStore>(accounts);
             services.AddSingleton<IAccountAdmin>(accounts);
             services.AddSingleton<ICharacterStore>(characters);
             services.AddSingleton<ICharacterLifeStore>(characters);
             services.AddSingleton<IManagedPlayerbotStore>(owners);
-            services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(new PlayerbotOptions
-            {
-                Enabled = enabled, RestoreOnStartup = restoreOnStartup, MaxBots = 4, ThinkIntervalMs = 100,
-                MaxActionsPerTick = 2, MaxPathPoints = 32, MaxRouteYards = 100, AllowedMaps = [0, 1],
-            }));
+            services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
             services.AddSingleton<IManagedPlayerbotProvisionStore>(provisions ?? new MemoryProvisionStore(accounts));
         });
 

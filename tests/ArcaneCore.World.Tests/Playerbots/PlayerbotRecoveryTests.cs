@@ -64,12 +64,66 @@ public sealed class PlayerbotRecoveryTests
                 Assert.True(player.Map!.Combat.RepopPlayer(player));
                 session.ManagedBudget = new ManagedActionBudget(2);
                 var recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, AllowedMaps = [0, 1] });
-                Assert.True(recovery.Update(player, 1000)); // Dispatch is admitted; the ordinary delay still refuses resurrection.
+                // Within the delay the bot waits, as the client's Resurrect button does (SMSG_CORPSE_RECLAIM_DELAY): nothing is sent.
+                Assert.False(recovery.Update(player, 1000));
+                Assert.Equal(2, session.ManagedBudget!.Remaining);
                 Assert.True(player.Flags.HasFlag(PlayerFlags.Ghost));
                 clock.Seconds += 31;
                 Assert.True(recovery.Update(player, 1000));
                 Assert.True(player.IsAlive);
                 Assert.Null(player.Combat.Corpse);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// The live fault of Dawnrover and Ironwander (2026-10-07): a ghost standing at its body after a second death within five minutes
+    /// waits 60 s (vmangos GetCorpseReclaimDelay). At the live think interval of 100 ms the old per-think attempt cap (360) ran out after
+    /// 36 s and threw "playerbot-recovery-stalled", and the fault disabled the bot. Waiting out the delay is not a stall.
+    /// </summary>
+    [Fact]
+    public async Task GhostAtCorpse_WaitsOutAScaledReclaimDelay_AtAShortThinkInterval_ThenReclaims()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var clock = new TestDeathClock(1_000);
+            await host.OnWorldAsync(() =>
+            {
+                DeathHooks.Register(host.World, new DeathHooks(new DeathOptions(), clock));
+                Player player = session.Player!;
+                MapCombat combat = player.Map!.Combat;
+                player.Health = 0;
+                combat.KillPlayer(player);
+                Assert.True(combat.RepopPlayer(player));
+                clock.Seconds += 31;
+                Assert.True(combat.TryReclaimCorpse(player));
+                clock.Seconds += 5;
+                player.Health = 0;
+                combat.KillPlayer(player); // the second death in five minutes doubles the delay
+                Assert.True(combat.RepopPlayer(player));
+                uint delay = combat.GetCorpseReclaimDelay(player, pvp: false);
+                Assert.True(delay >= 60, $"delay {delay}");
+
+                var recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100, AllowedMaps = [0, 1] });
+                int thinks = 0;
+                int readyAt = -1;
+                while (!player.IsAlive && thinks < (int)(delay + 10) * 10)
+                {
+                    if (readyAt < 0 && combat.CorpseReclaimWaitSeconds(player) == 0) readyAt = thinks;
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    recovery.Update(player, 100);
+                    if (++thinks % 10 == 0) clock.Seconds++;
+                }
+
+                // vmangos recomputes the delay from the recent deaths left at each try, so the wait ends at 60 s here, well past the
+                // 36 s (360 thinks) where the old cap gave up; the bot reclaims on the first think the server allows it.
+                Assert.True(player.IsAlive, $"still a ghost after {thinks} thinks");
+                Assert.True(readyAt > 360, $"ready at think {readyAt}");
+                Assert.Equal(readyAt + 1, thinks);
                 return true;
             });
         }
