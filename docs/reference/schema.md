@@ -58,10 +58,10 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
 | 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
 | 34 | `Characters.Life.CharacterCorpseInstanceDataModule` | adds columns `character_corpse.InstanceId` | yes |
-| 35 | `Characters.Items.EconomyItemsLaneSchemaGap35` | no changes | no |
-| 36 | `Characters.Items.EconomyItemsLaneSchemaGap36` | no changes | no |
-| 37 | `Characters.Items.EconomyItemsLaneSchemaGap37` | no changes | no |
-| 38 | `Characters.Items.EconomyItemsLaneSchemaGap38` | no changes | no |
+| 35 | `Characters.Items.EconomyItemsLaneSchemaGap35` | no changes | yes |
+| 36 | `Characters.Items.EconomyItemsLaneSchemaGap36` | no changes | yes |
+| 37 | `Characters.Items.EconomyItemsLaneSchemaGap37` | no changes | yes |
+| 38 | `Characters.Items.EconomyItemsLaneSchemaGap38` | no changes | yes |
 | 39 | `Characters.Items.ItemGiftDataModule` | adds columns `item_instance.gift_entry`, `item_instance.gift_flags` | yes |
 
 ## `world`
