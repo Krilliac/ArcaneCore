@@ -116,6 +116,10 @@ public interface ICreatureSpellCaster
     /// <summary>Cast <paramref name="spellId"/> at <paramref name="target"/> (self when null).</summary>
     CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered);
 
+    /// <summary>Cast at a world position (ScriptDev2 SpellCastTargets DEST_LOCATION, for Zumrah's grave spell).</summary>
+    CreatureCastResult CastAtDestination(Creature caster, uint spellId, float x, float y, float z, bool triggered)
+        => CreatureCastResult.NoSpellSystem;
+
     bool IsCasting(Creature caster);
 
     bool HasAura(Unit unit, uint spellId);

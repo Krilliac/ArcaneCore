@@ -204,6 +204,11 @@ public sealed partial class QuestNpcServices
             spellCaster.CastOnSelf(player, sourceSpell.Template.SrcSpell);
         }
 
+        if (accepted)
+        {
+            QuestAccepted?.Invoke(player, guid, questId);
+        }
+
         return accepted;
     }
 

@@ -99,8 +99,33 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>ScriptDev2 instance encounter hook when a creature first enters combat.</summary>
+    public virtual void OnCreatureEnterCombat(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance encounter hook when a creature evades.</summary>
+    public virtual void OnCreatureEvade(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance encounter hook when a creature dies.</summary>
+    public virtual void OnCreatureDeath(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance hook after a creature respawns in the same map.</summary>
+    public virtual void OnCreatureRespawn(Creature creature)
+    {
+    }
+
     /// <summary>vmangos <c>OnObjectCreate</c>: a game object was added to the instance map (grid load, summon); it is not visible yet.</summary>
     public virtual void OnObjectCreate(GameObject go)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance hook when a tracked game object respawns.</summary>
+    public virtual void OnObjectSpawn(GameObject go)
     {
     }
 

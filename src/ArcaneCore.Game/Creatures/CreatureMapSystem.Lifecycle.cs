@@ -43,6 +43,7 @@ public sealed partial class CreatureMapSystem
         }
 
         OnAiDeath(creature, killer);
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDeath(creature);
         NotifySummonerOfDeath(creature);
         DespawnCorpseOfSummon(creature);
         StopMoving(creature);
@@ -430,6 +431,7 @@ public sealed partial class CreatureMapSystem
         creature.FollowMovementDisabled = false;
         creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureRespawn(creature);
     }
 
     private void ForgetObservers(Creature creature)

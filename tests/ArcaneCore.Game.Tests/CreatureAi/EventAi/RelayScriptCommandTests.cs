@@ -36,6 +36,27 @@ public sealed class RelayScriptCommandTests
     private const uint FlagAllEligible = 0x200;
     private const uint FlagBuddyByGo = 0x400;
 
+    [Fact]
+    public void ZulFarrakCageRelay_OpensTheSpawnGuidDoor()
+    {
+        using Town t = Start([Step(0, 11, dataLong: DoorGuid, dataLong2: 9_000_000)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10)]);
+        GameObject door = Assert.Single(t.Objects.GameObjects);
+        Assert.Equal(GameObjectState.Ready, door.State);
+        t.Wave();
+        Assert.Equal(GameObjectState.Active, door.State);
+    }
+
+    [Fact]
+    public void ZulFarrakPrisonerRelay_ChangesTheBuddyFaction()
+    {
+        using Town t = Start([Step(0, 22, dataLong: 495, buddy: BuddyEntry, radius: 50, flags: 4)],
+            more: [Spawn(17001, BuddyEntry, 2, 0)]);
+        Creature prisoner = Assert.Single(t.OfEntry(BuddyEntry));
+        t.Wave();
+        Assert.Equal(495u, prisoner.FactionTemplate);
+    }
+
     private static RelayScriptStep Step(uint delay, uint command, uint dataLong = 0, uint dataLong2 = 0, uint dataLong3 = 0, uint flags = 0,
         uint buddy = 0, uint radius = 0, int dataInt = 0, float x = 0, float y = 0, float z = 0, float o = 0, int dataInt2 = 0)
         => new(Relay, delay, 0, command, dataLong, dataLong2, dataLong3, buddy, radius, flags, dataInt, dataInt2, 0, 0, 0, x, y, z, o, 0, 0);

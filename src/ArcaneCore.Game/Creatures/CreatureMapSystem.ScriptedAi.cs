@@ -25,11 +25,11 @@ public sealed partial class CreatureMapSystem
     /// asks the script name first, AI/CreatureAISelector.cpp:37-50). Creatures already in the map take it at once; a later registration of the
     /// same entry replaces the earlier one.
     /// </summary>
-    public void RegisterEntryAi(uint entry, Func<Creature, CreatureAI> factory)
+    public void RegisterEntryAi(uint entry, Func<Creature, CreatureAI> factory, bool rebuildExisting = true)
     {
         ArgumentNullException.ThrowIfNull(factory);
         _entryAis[entry] = factory;
-        RebuildAi(entry);
+        if (rebuildExisting) RebuildAi(entry);
     }
 
     /// <summary>Stop giving creatures of <paramref name="entry"/> a script AI; those in the map go back to their template's AI.</summary>

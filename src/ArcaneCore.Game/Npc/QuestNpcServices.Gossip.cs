@@ -40,6 +40,9 @@ public sealed partial class QuestNpcServices
     /// <summary>A quest was rewarded by a quest giver (vmangos Player::RewardQuest: the battleground and the giver's OnQuestRewarded script).</summary>
     public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
 
+    /// <summary>A quest accepted from a creature (ScriptDev2 pQuestAcceptNPC is notified after the journal write).</summary>
+    public event Action<Player, ObjectGuid, uint>? QuestAccepted;
+
     /// <summary>
     /// CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368, no script hooks): a spirit guide first
     /// sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (:360-361), then the gossip menu goes out.

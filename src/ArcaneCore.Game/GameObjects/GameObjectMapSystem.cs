@@ -975,6 +975,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
         Map.AddObject(go);
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectSpawn(go);
         RespawnLinkedTrap(go); // GameObject::Update, GO_READY respawn (GameObject.cpp:427-437)
     }
 
