@@ -39,6 +39,7 @@ Every 2 seconds each free bot (autonomous, not in a real player's group, in no g
 | Type 62 (raid) | a raid of `SuggestedPlayers` when above 5, else 10 |
 | Any other quest with `SuggestedPlayers` above 1 | that many (at most 5) |
 | An objective that spawns only inside instances (`map_template` dungeon or raid) | that instance, reached through an entrance trigger on the bot's continent (`areatrigger_teleport` to it); the map's player limit (5 for a dungeon), or the quest's own size; the trigger's required level |
+| A quest item dropped only by creatures that spawn inside instances (`creature_loot_template` through `creature_loot_info`, and the `reference_loot_template` tables its negative `mincountOrRef` rows name, nested; `PlayerbotGroupContent.DropIndex`) | as the instance row above, at the creature that drops it; done when each member has the quest's count of the item |
 | A quest objective the risk estimate passed over alone (`PlayerbotRiskModel.NeededGroupSize`) | the smallest group (2 to 5) whose estimate would take it |
 
 Type 41 is PvP, not elite (QuestInfo.dbc; in the live world database "Wanted: Hogger", 176, is Type 1 and the Alterac Valley quests
@@ -115,7 +116,8 @@ corpse flag (`Targets` 0x8000) without `AllowDeadTarget`, so the healer casts li
 unreleased, at the corpse (CMSG_CAST_SPELL with TARGET_FLAG_CORPSE and the corpse guid) once it released, walking to the body either way.
 The server checks such a cast as vmangos does: a unit target is range and line-of-sight checked whatever the implicit target
 (`Spell::CheckRange`), a corpse must exist and be in sight (`Spell::CheckCast` :5780), and a client's cast of a corpse-flag spell without a
-unit or corpse is refused (`ValidateExplicitTargetMask`); a member loots the corpses whose round-robin turn is its own. A dead member waits (unreleased) while a living
+unit or corpse is refused (`ValidateExplicitTargetMask`); a member loots the corpses whose round-robin turn is its own, and any corpse holding a quest item it needs (vmangos shows a
+quest drop to every member who needs it, whoever holds the corpse). A dead member waits (unreleased) while a living
 member could resurrect it, at most 60 seconds, then releases and runs back (`PlayerbotRecovery`; a ghost whose body lies inside walks
 into the entrance and is revived there). A leader that died is waited for where the group stands.
 
@@ -202,8 +204,9 @@ d3b26dcb):
 
 ## Limits
 
-* Dungeon goals come from creature objectives; a dungeon quest that asks only for items is not recognised (its drop source would need
-  the loot tables).
+* An item objective is a goal only when every creature that drops it spawns inside instances; one dropped on the bot's own map stays the
+  brain's solo work (as before). The group kills the dropper once; a drop chance below 100% that does not drop for everyone fails the
+  goal after the usual two minutes without the objective in sight.
 * Clearing is local: the leader pulls what stands within 20 yards of it on the way; there is no dungeon route or pull planning, no
   crowd control, no marking.
 * The coordinator's groups live in memory: after a restart the bots leave the restored server groups and match again.
