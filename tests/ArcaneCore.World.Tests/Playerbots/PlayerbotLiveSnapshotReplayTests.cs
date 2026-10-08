@@ -170,7 +170,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             }
 
             foreach ((string name, Watch watch) in watches)
-                output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards");
+                output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards, deaths {watch.Deaths}");
             Assert.All(watches, pair => Assert.True(pair.Value.LongestStillMs < LongestStillMs,
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
@@ -189,10 +189,17 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
 
         public float Travelled { get; private set; }
 
+        /// <summary>Times the bot was seen dead after being seen alive (each death of the replay counts once).</summary>
+        public int Deaths { get; private set; }
+
+        private bool? _wasAlive; // unknown before the first look: a bot already dead at the start is not counted
+
         public void Observe(Vector3 position, bool alive, uint nowMs)
         {
             if (_last is { } last) Travelled += Vector3.Distance(last, position);
             _last = position;
+            if (_wasAlive == true && !alive) Deaths++;
+            _wasAlive = alive;
             if (!alive || _place is not { } place || Vector3.Distance(place, position) > SamePlaceYards)
             {
                 _place = alive ? position : null;
