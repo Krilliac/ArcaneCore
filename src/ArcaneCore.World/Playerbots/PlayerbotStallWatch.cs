@@ -16,6 +16,17 @@ namespace ArcaneCore.World.Playerbots;
 /// was doing (<see cref="PlayerbotBrain"/>): the goal's target is set aside for <see cref="PlayerbotSuspensions.SuspendMs"/>.
 /// The bot is not faulted: quarantine and a restart would put it back in the same place with the same choice.
 /// </para>
+/// <para>
+/// A bot that keeps dying in one place makes no progress either, though it moves and every recovery step on its own is
+/// progress (rehearsal 2026-10-08: Dawnrover reclaimed its body 36 yards below a Scourge invasion point, chose a Skeletal
+/// Soldier for its next fight and was killed by its Scourge Strike within seconds, over and over; between deaths it waited out
+/// reclaim delays of up to two minutes as a ghost, with <c>stall=none</c>). Deaths are watched too (<see cref="RecordDeath"/>):
+/// <see cref="DeathLoopDeaths"/> deaths within <see cref="DeathLoopYards"/> of each other on one map inside
+/// <see cref="DeathLoopWindowMs"/> are a death loop. It is reported like a stall, and stays reported while the bot is dead and
+/// until it has lived through a whole stall bound; the brain then takes the spirit healer for that death (the graveyard, away
+/// from the place) instead of reviving at the body again. A creature entry among the bot's attackers at
+/// <see cref="KillerDeaths"/> deaths inside the window is returned to be set aside, so the bot stops choosing it as a target.
+/// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
 internal sealed class PlayerbotStallWatch
@@ -23,14 +34,32 @@ internal sealed class PlayerbotStallWatch
     /// <summary>Moving this far from where the watch last saw progress is progress.</summary>
     internal const float ProgressYards = 10f;
 
+    /// <summary>Deaths that make a death loop (<see cref="RecordDeath"/>).</summary>
+    internal const int DeathLoopDeaths = 3;
+
+    /// <summary>A death loop's deaths all lie within this distance of the latest one (a reclaim radius and some way back).</summary>
+    internal const float DeathLoopYards = 60f;
+
+    /// <summary>The window deaths are counted in (the brain's suspensions last as long, <see cref="PlayerbotSuspensions.SuspendMs"/>).</summary>
+    internal const uint DeathLoopWindowMs = PlayerbotSuspensions.SuspendMs;
+
+    /// <summary>Deaths among whose attackers a creature entry was, inside the window, that set the entry aside.</summary>
+    internal const int KillerDeaths = 2;
+
+    private const int MaxDeaths = 16;
+    private readonly List<Death> _deaths = [];
+    private string? _stallReport;
+    private string? _deathLoopReport;
+    private uint _aliveSinceMs;
+
     private bool _started;
     private Vector3 _anchor;
     private uint _anchorMap;
     private Fingerprint _fingerprint;
     private uint _progressMs;
 
-    /// <summary>The current stall (null while the bot makes progress).</summary>
-    internal string? Report { get; private set; }
+    /// <summary>The current stall (null while the bot makes progress): a death loop first, else a living bot standing still.</summary>
+    internal string? Report => _deathLoopReport ?? _stallReport;
 
     /// <summary>The last stall reported, kept after progress resumed (inspection).</summary>
     internal string? LastReport { get; private set; }
@@ -38,11 +67,41 @@ internal sealed class PlayerbotStallWatch
     /// <summary>Stalls reported so far.</summary>
     internal int Count { get; private set; }
 
-    /// <summary>Forget everything (death, a new life: the recovery has its own bounds).</summary>
+    /// <summary>
+    /// Forget the living watch (death, a new life: the recovery has its own bounds). A death loop stays reported
+    /// (<see cref="RecordDeath"/>).
+    /// </summary>
     internal void Reset()
     {
         _started = false;
-        Report = null;
+        _stallReport = null;
+    }
+
+    /// <summary>
+    /// A death of the bot at <paramref name="position"/> on <paramref name="map"/>, with the creature entries that were attacking
+    /// it (<paramref name="attackers"/>). Returns whether the deaths now make a death loop, and the attacker entries to set aside
+    /// (present at <see cref="KillerDeaths"/> deaths inside the window).
+    /// </summary>
+    internal (bool Loop, IReadOnlyList<uint> SetAside) RecordDeath(uint nowMs, uint map, Vector3 position,
+        IReadOnlyCollection<uint> attackers)
+    {
+        _deaths.RemoveAll(death => unchecked(nowMs - death.AtMs) > DeathLoopWindowMs);
+        if (_deaths.Count >= MaxDeaths) _deaths.RemoveAt(0);
+        _deaths.Add(new Death(nowMs, map, position, [.. attackers.Distinct()]));
+
+        uint[] setAside = [.. attackers.Distinct().Where(entry => entry != 0
+            && _deaths.Count(death => death.Attackers.Contains(entry)) >= KillerDeaths)];
+        Death[] here = [.. _deaths.Where(death => death.Map == map && Vector3.Distance(death.Position, position) <= DeathLoopYards)];
+        if (here.Length < DeathLoopDeaths) return (false, setAside);
+
+        uint span = unchecked(nowMs - here[0].AtMs);
+        uint[] killers = [.. here.SelectMany(death => death.Attackers).Distinct().Order()];
+        bool fresh = _deathLoopReport is null;
+        _deathLoopReport = string.Create(CultureInfo.InvariantCulture,
+            $"death loop: died {here.Length} times in {span / 1000}s within {DeathLoopYards:F0} yd of {position.X:F1},{position.Y:F1},{position.Z:F1} map {map} attackers={(killers.Length == 0 ? "none" : string.Join('/', killers))}");
+        LastReport = _deathLoopReport;
+        if (fresh) Count++;
+        return (true, setAside);
     }
 
     /// <summary>
@@ -53,6 +112,9 @@ internal sealed class PlayerbotStallWatch
         Func<Player, Fingerprint> fingerprint)
     {
         Vector3 position = new(player.X, player.Y, player.Z);
+        if (!_started) _aliveSinceMs = nowMs;
+        // A death loop is over once the bot has lived through a whole stall bound.
+        if (_deathLoopReport is not null && unchecked(nowMs - _aliveSinceMs) >= stallMs) _deathLoopReport = null;
         Fingerprint current = fingerprint(player);
         if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
@@ -62,20 +124,22 @@ internal sealed class PlayerbotStallWatch
             _anchorMap = player.MapId;
             _fingerprint = current;
             _progressMs = nowMs;
-            Report = null;
+            _stallReport = null;
             return false;
         }
 
         uint idle = unchecked(nowMs - _progressMs);
         if (idle > int.MaxValue || idle < stallMs) return false;
-        bool fresh = Report is null;
-        Report = string.Create(CultureInfo.InvariantCulture,
+        bool fresh = _stallReport is null;
+        _stallReport = string.Create(CultureInfo.InvariantCulture,
             $"stalled {idle / 1000}s: goal={goal} target={target} quest={quest} at {position.X:F1},{position.Y:F1},{position.Z:F1} map {player.MapId}");
         if (!fresh) return false;
-        LastReport = Report;
+        LastReport = _stallReport;
         Count++;
         return true;
     }
+
+    private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers);
 
     /// <summary>What counts as progress besides moving.</summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
@@ -98,6 +162,23 @@ internal sealed class PlayerbotSuspensions
     internal bool IsEntrySuspended(uint entry, uint nowMs) => entry != 0 && Active(_entries, entry, nowMs);
 
     internal bool IsQuestSuspended(uint quest, uint nowMs) => quest != 0 && Active(_quests, quest, nowMs);
+
+    private uint _trainingUntilMs;
+    private bool _training;
+
+    /// <summary>Whether trainer visits are set aside (a death loop on the way to one, <see cref="SuspendTraining"/>).</summary>
+    internal bool IsTrainingSuspended(uint nowMs)
+    {
+        if (_training && unchecked((int)(_trainingUntilMs - nowMs)) <= 0) _training = false;
+        return _training;
+    }
+
+    /// <summary>Set every trainer visit aside for <see cref="SuspendMs"/>: the class trainers of a zone are usually in one town.</summary>
+    internal void SuspendTraining(uint nowMs)
+    {
+        _training = true;
+        _trainingUntilMs = unchecked(nowMs + SuspendMs);
+    }
 
     internal void SuspendEntry(uint entry, uint nowMs) => Add(_entries, entry, nowMs);
 
