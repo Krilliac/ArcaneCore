@@ -38,10 +38,9 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// vmangos CreatureAI::TriggerAlertDirect: tell everyone who sees the creature (SMSG_AI_REACTION, alert), stop it and turn it to
-    /// <paramref name="who"/>, and start the cooldown. Limits: vmangos then holds the creature still for 5 s (MoveDistract), which needs a
-    /// movement generator this server does not have, so the creature simply carries on with its movement; the turn is the orientation field
-    /// (no facing spline packet is sent, the client sees it with the next movement packet).
+    /// vmangos CreatureAI::TriggerAlertDirect (AI/CreatureAI.cpp:376-385): tell everyone who sees the creature (SMSG_AI_REACTION, alert),
+    /// stop it, turn it to <paramref name="who"/> (a facing spline) and hold it there for <see cref="StealthAlertDistractMs"/> (MoveDistract),
+    /// and start the cooldown.
     /// </summary>
     public void TriggerAlert(Creature creature, Unit who)
     {
@@ -49,7 +48,42 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(who);
         SendAiReaction(creature, AiReaction.Alert);
         StopMoving(creature);
-        creature.Orientation = MathF.Atan2(who.Y - creature.Y, who.X - creature.X);
+        SetFacingTo(creature, MathF.Atan2(who.Y - creature.Y, who.X - creature.X));
+        creature.Motion.MoveDistract(StealthAlertDistractMs);
         creature.LastAlertAtMs = _clockMs;
+    }
+
+    /// <summary>vmangos TriggerAlertDirect: <c>MoveDistract(5 * IN_MILLISECONDS)</c>.</summary>
+    public const uint StealthAlertDistractMs = 5000;
+
+    /// <summary>
+    /// vmangos Spell::EffectDistract (Spells/SpellEffects.cpp:2632-2649), the creature half: a creature in combat, or one that cannot react
+    /// (stunned, confused or fleeing; UNIT_STATE_CAN_NOT_REACT), is not distracted; otherwise it turns to <paramref name="angle"/> and stands
+    /// for <paramref name="durationMs"/> (MoveDistract), then turns back to its spawn facing. Returns whether it was distracted.
+    /// </summary>
+    public bool Distract(Creature creature, float angle, uint durationMs)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (!creature.IsAlive || !_creatures.ContainsKey(creature.Guid) || creature.Combat.IsInCombat || (creature.UnitFlags & LostControl) != 0)
+        {
+            return false;
+        }
+
+        SetFacingTo(creature, angle);
+        creature.Motion.MoveDistract(durationMs);
+        return true;
+    }
+
+    /// <summary>
+    /// vmangos Unit::SetFacingTo (Objects/Unit.cpp:2785-2794): the orientation, and a facing spline with no path (SMSG_MONSTER_MOVE, the
+    /// angle move type) so the observers see the turn. The spline keeps the creature's walk or run mode.
+    /// </summary>
+    public void SetFacingTo(Creature creature, float angle)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        angle = Creature.NormalizeOrientation(angle);
+        creature.Orientation = angle;
+        MovePath(creature, [new System.Numerics.Vector3(creature.X, creature.Y, creature.Z)], !creature.Movement.HasFlag(MovementFlags.WalkMode),
+            SplineFacing.ToAngle(angle));
     }
 }

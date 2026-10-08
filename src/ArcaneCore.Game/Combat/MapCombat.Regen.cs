@@ -174,7 +174,9 @@ public sealed partial class MapCombat
         }
 
         c.RegenTimer = CombatConstants.CreatureRegenIntervalMs; // vmangos sets, not adds
-        if (c.IsInCombat)
+        // vmangos RegenerateAll(diff, IsEvadeBecauseTargetNotReachable()) skips the in-combat check (Creature.cpp:1057, :1094): a creature
+        // that has not reached its victim for 3 s regenerates as if out of combat.
+        if (c.IsInCombat && unit is not ICombatCreature { IsInEvadeMode: true })
         {
             return;
         }

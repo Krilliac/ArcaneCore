@@ -80,8 +80,10 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
             return true;
         }
 
-        if (mover.IsCasting(creature))
+        if (mover.IsCasting(creature) || creature.WaypointsPaused)
         {
+            // A cast, or a relay script's PAUSE_WAYPOINTS (cmangos UNIT_STAT_WAYPOINT_PAUSED, MotionMaster::PauseWaypoints): stop and set off
+            // for the same node again afterwards.
             if (creature.IsMoving)
             {
                 mover.StopMoving(creature);

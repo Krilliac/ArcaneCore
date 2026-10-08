@@ -19,6 +19,7 @@ public enum EventAiEventType : byte
     SpellHit = 8,
     Spawned = 11,
     ReachedHome = 21,
+    ReceiveEmote = 22,
 }
 
 /// <summary>cmangos-classic EventAI action types that have a handler (<c>EventAI_ActionType</c>, CreatureEventAI.h:89-159).</summary>
@@ -38,6 +39,8 @@ public enum EventAiActionType : byte
     FleeForAssist = 25,
     Die = 37,
     CallForHelp = 39,
+    /// <summary>cmangos ACTION_T_START_RELAY_SCRIPT: relay id (negative: a relay template), target.</summary>
+    StartRelayScript = 53,
     TextNew = 54,
     /// <summary>cmangos ACTION_T_SET_RANGED_MODE: range mode type and chase distance.</summary>
     SetRangedMode = 57,
@@ -117,6 +120,9 @@ public enum EventAiTrigger
 
     /// <summary>A spell hit the creature (cmangos SpellHit).</summary>
     SpellHit,
+
+    /// <summary>A player aimed a text emote at the creature (cmangos ReceiveEmote).</summary>
+    ReceiveEmote,
 }
 
 /// <summary>Everything an action handler needs about the event that fired it.</summary>

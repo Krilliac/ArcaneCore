@@ -54,6 +54,31 @@ public sealed class CreatureEventAI : AggressorAI
 
     public EventAiEngine Engine => _engine;
 
+    /// <summary>
+    /// vmangos GuardEventAI (AI/GuardEventAI.cpp; selected for AIName 'GuardEventAI', or a GUARD-flagged template whose AIName is
+    /// 'EventAI', CreatureAISelector.cpp:66-69): the script runs as any EventAI script, but whom it attacks on sight is the guard rule
+    /// (<see cref="CreatureMapSystem.CanGuardAggroOnSight"/>).
+    /// </summary>
+    public bool UsesGuardSightRules { get; init; }
+
+    /// <summary>vmangos CreatureEventAI::MoveInLineOfSight has no guard call (only BasicAI does; combat entry still calls).</summary>
+    protected override bool CallsGuardsOnSight => false;
+
+    /// <summary>The guard rule for a GuardEventAI, else the aggressor rule (vmangos GuardEventAI::MoveInLineOfSight, GuardEventAI.cpp:50-77).</summary>
+    public override void MoveInLineOfSight(Unit who)
+    {
+        if (!UsesGuardSightRules)
+        {
+            base.MoveInLineOfSight(who);
+            return;
+        }
+
+        if (System is { } system && system.CanGuardAggroOnSight(Me, who))
+        {
+            AttackStart(who);
+        }
+    }
+
     /// <summary>The current phase (0..31).</summary>
     public int Phase => _engine.Context.Phase;
 
@@ -132,6 +157,9 @@ public sealed class CreatureEventAI : AggressorAI
     public override void OnDeath(Unit? killer) => _engine.Death(killer);
 
     public override void OnKilledUnit(Unit victim) => _engine.Kill(victim);
+
+    /// <summary>cmangos CreatureEventAI::ReceiveEmote: the EVENT_T_RECEIVE_EMOTE rows.</summary>
+    public override void OnReceiveEmote(Player player, uint textEmote) => _engine.ReceiveEmote(player, textEmote);
 
     public override void OnEvade() => _engine.Evade();
 

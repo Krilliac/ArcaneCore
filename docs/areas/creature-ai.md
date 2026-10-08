@@ -17,6 +17,9 @@ docs/integration/creature-ai.md.
   - `Point`: moves to one point, then fires movement-inform.
   - `Waypoint`: the `creature_movement` path, with a per-node `Run` flag and wait times. It resumes the current node after an interruption.
   - `Random`: unchanged from the creatures area.
+  - `Distract` (vmangos DistractMovementGenerator, IdleMovementGenerator.cpp:33-75): stands for a while (the 5 s after a stealth alert,
+    the effect value of SPELL_EFFECT_DISTRACT), then faces its spawn orientation again. Any newly pushed generator expires it
+    (MotionMaster::Mutate, MotionMaster.cpp:699-702). `CreatureMapSystem.SetFacingTo` sends the facing spline (Unit::SetFacingTo).
 - **Splines.** Multi-point linear splines use SMSG_MONSTER_MOVE: the point count, the
   destination, then N−1 packed offsets from the path midpoint (11/11/10 bits at quarter-yard
   resolution, from gtker wow_messages / vmangos `MoveSplineInitArgs` packing). Facing can be
@@ -33,23 +36,55 @@ docs/integration/creature-ai.md.
   - **Soft leash** (`Creature::IsOutOfThreatArea`, Objects/Creature.cpp:2796-2815): never with NO_LEASH_EVADE or in an instanceable map. The threat area is a sphere around where the fight began with radius `max(1.5 x aggro radius, ThreatRadius)` (`Creatures:ThreatRadius`, 50 here; the earlier 60 was wrong). The target is out only when neither the creature nor the target is inside it and the leash extension clock is more than `Creatures:LeashExtensionSeconds` (12) whole seconds old. The clock starts at the first check outside the area, is refreshed at the 3 s check while the creature is stunned, confused or fleeing, is shared with creatures that joined through its assistance call, and is cleared when combat stops.
   - **Hard leash** (`creature_template.Leash`, Creature::Update :976-993): every `Creatures:LeashCheckIntervalMs` (3000) of world time a creature in combat whose distance from where the fight began exceeds its template leash range evades instead of running its AI.
   - **Evade**: interrupts the cast, `CombatStop`, clears threat, restores full health and mana, calls `OnEvade`, then runs home. A waypoint mover goes back to its combat start point; anything else goes to its spawn point. The creature is immune to new attacks until it is home.
-  - **Unreachable target** (lane L3; `CreatureMapSystem.Combat.cs`, `Movement/CombatMovement.cs`): the chase generator asks the map system for the path and its verdict (`ICreaturePathQuery`: no path or an `Incomplete` path is unreachable; a straight line without navigation data is reachable), keeps vmangos' `m_bReachable` as `IsReachable`, re-paths every 100 ms while stuck without launching zero-length splines, and counts `UnreachableMs` (the count pauses while the creature cannot move and restarts with every new victim). `SelectHostileTarget` reads it after applying combat movement: once the count reaches `Creatures:UnreachableTargetEvadeMs` (5000; 0 disables) a creature alone on its threat list evades, one with more entries drops the victim from the list (-101 %), stops attacking and picks the next target on the following tick (mangos `Unit::SelectHostileTarget`, Object/UnitThreat.cpp:342-361, which evades at once and carries a TODO for the timer; vmangos times it in Creature.cpp:1017-1040). EventAI event 36 reads the same flag. Not delivered: the reference strips the creature's taunt auras when it gives an unreachable victim up (no creature aura-removal seam here); the vmangos timer value could not be re-read for this build (UNVERIFIED: 5000 is ArcaneCore's choice).
+  - **Unreachable target** (`CreatureMapSystem.Combat.cs`, `Movement/CombatMovement.cs`): the chase generator asks the map system for the path and its verdict (`ICreaturePathQuery`: no path or an `Incomplete` path is unreachable; a straight line without navigation data is reachable), keeps vmangos' `m_bReachable` as `IsReachable` and re-paths every 100 ms while stuck without launching zero-length splines. The host keeps vmangos' `m_targetNotReachableTimer` (`Creature.TargetNotReachableMs`, Objects/Creature.cpp:1013-1046) before the AI each update: it grows while the top generator is a melee chase with an unreachable victim, the creature has no NO_UNREACHABLE_EVADE flag, is not owned or charmed by a player, and is out of melee reach or out of sight of the victim; otherwise it is 0 (and combat stop clears it). Past `Creatures:UnreachableTargetSoftEvadeMs` (3000, `IsEvadeBecauseTargetNotReachable`, Creature.h:510) the creature is in evade mode where it stands (`IsInEvadeMode`: attacks and spells on it evade), its AI does not update and it regenerates as if out of combat, while it keeps its victim and its chase; past `Creatures:UnreachableTargetEvadeMs` (24000, :1039) it evades home. The victim stays on the threat list (only Alterac Valley, map 30, drops its threat after one second, :1026-1027); the earlier mangos rule that dropped the victim and switched targets after 5 s (Object/UnitThreat.cpp:342-361) is gone. EventAI event 36 reads the same flag. Not delivered: the knock-back exemption for a player victim (no knock-back state on the server).
   - **Assistance** (vmangos `CallAssistance`): once per fight, idle creatures of the same faction within 10 yd (`Creatures:AssistanceRadius`) that can see the caller join after 1.5 s. Helpers do not call more help. They attack the enemy stored with the call, even if the caller has switched victims during the delay (vmangos `AssistDelayEvent::Execute`). A charmed creature calls nobody. The template range depends on the row dialect: for vmangos rows, `call_for_help_range` 0 calls nobody and any other value searches the configured radius (Creature.cpp:2522-2526). For cmangos rows and rows with no recorded dialect, a positive `CallForHelp` replaces the radius, and NO_CALL_ASSIST (0x800) calls nobody (cmangos Creature.cpp:2168-2173).
+  - **NO_MELEE_FLEE panic** (`CreatureMapSystem.NoMeleeFlee.cs`): a creature with static flag 0x00100000 never swings (both
+    references) and, with `Creatures:NoMeleeFleeOnAggro` (default false, as vmangos), runs in panic for `Creatures:NoMeleeFleeMs` (30000) when a
+    player or a player's pet or charm engages it, then evades (cmangos Unit::SetInCombatWithVictim, Entities/Unit.cpp:7993-7998, and
+    CreatureAI::TimedFleeingEnded, AI/BaseAI/CreatureAI.cpp:254-258). Not for a summon, a rooted or sessile creature, one already
+    fleeing or casting, nor against a creature. The flight starts after the aggro hook, so a cast on aggro comes first. vmangos only
+    takes the melee away for the same bit (CREATURE_STATIC_FLAG_NO_MELEE, original comment "Flee"); the default `false` keeps that. Critters with
+    the flag (deer, sheep, cows) already run through CritterAI.
   - **Flee for assistance**: the creature runs to the nearest possible helper (within 30 yd) and calls for help when it arrives. If no helper is found, it flees for 7 s.
 - **AI selection** (`CreatureAiFactory`, from `creature_template.AIName`): `NullAI`, `ReactorAI`,
-  `PassiveAI` (= reactor), `AggressorAI`, `CritterAI`, `GuardAI` and `EventAI`, plus registered C# scripts. An empty
+  `PassiveAI` (= reactor), `AggressorAI`, `CritterAI`, `GuardAI`, `EventAI` and `GuardEventAI`, plus registered C# scripts. An empty
   name gives GuardAI for a template with the GUARD extra flag (0x400 in both dialects; mangos CreatureAISelector.cpp:85-88 puts
   the guard check after the script name and before the permit contest), Reactor for civilians and Aggressor otherwise. Unknown
   names are reported once and get the default.
-- **GuardAI** (`Creatures/AI/GuardAI.cs`, mangos Object/GuardAI.cpp re-implemented): only the on-sight rule differs from
-  AggressorAI (`CreatureMapSystem.CanGuardAggroOnSight`): a guard without a victim attacks a unit in its aggro radius that is
-  hostile to players as such (`ICreatureHostility.IsHostileToPlayers`: the faction template's hostile mask carries
-  FACTION_MASK_PLAYER, DBCEnums.h:71), that its own hostility calls an enemy (opposing faction, Hated reputation, a contested-PvP
-  player for a contested guard), or, with `Creatures:GuardsDefendFriendlies` (default true), that is fighting a creature the guard is
-  friendly to (`ICreatureHostility.IsFriendly`, the template reaction; both references keep this clause commented out, GuardAI.cpp:74,
-  so the retail behaviour is UNVERIFIED). The common gates apply (alive, in control, `CanInitiateAttack`, 3 yd vertical limit, the
-  combat hooks' attackability, line of sight); a guard with a victim ignores everyone else. Not delivered: SMSG_ZONE_UNDER_ATTACK on a
-  guard's death (needs a world-wide team broadcast and a verified message layout) and the reference's separate guard sight range.
+- **GuardAI** (`Creatures/AI/GuardAI.cs`, vmangos AI/GuardAI.cpp re-implemented): only the on-sight rule differs from
+  AggressorAI (`CreatureMapSystem.CanGuardAggroOnSight`, GuardAI::MoveInLineOfSight, GuardAI.cpp:50-77): a guard without a victim
+  attacks a unit in its aggro radius that is hostile to players as such (`ICreatureHostility.IsHostileToPlayers`: the faction
+  template's hostile mask carries FACTION_MASK_PLAYER, DBCEnums.h:71), that its own hostility calls an enemy (opposing faction,
+  Hated reputation, a contested-PvP player for a contested guard), or a player the guard is not friendly to who is contested-PvP,
+  attacking a unit the guard is friendly to, or attacking someone on a taxi (`IsAttackingPlayerOrFriendly`, GuardAI.cpp:35-48); for
+  that player the radius is at least 30 yd. With `Creatures:GuardsDefendFriendlies` (default true) a *creature* fighting a creature
+  the guard is friendly to is an enemy too (an ArcaneCore extension: mangos keeps the clause commented out, Object/GuardAI.cpp:74, so
+  that half is UNVERIFIED). The height limit applies to creature targets only (GuardAI.cpp:56-57); ONLY_ATTACK_PVP_ENABLING is not
+  applied (the guard does not go through BasicAI); the other gates are the common ones (alive, in control, `CanInitiateAttack`, the
+  combat hooks' attackability, stealth, line of sight). A guard with a victim ignores everyone else.
+- **GuardEventAI** (vmangos AI/GuardEventAI.cpp; CreatureAISelector.cpp:66-69): a GUARD-flagged template whose AIName is `EventAI`,
+  or any template named `GuardEventAI`, runs `CreatureEventAI` with `UsesGuardSightRules`: its script runs as usual and whom it attacks
+  on sight is the guard rule. Not delivered: SMSG_ZONE_UNDER_ATTACK on a guard's death (mangos GuardAI::JustDied; neither vmangos AI
+  sends it and the message layout is unverified) and the reference's `IsInAccessablePlaceFor` (water and air).
+- **Calling the guards** (static flag CALLS_GUARDS 0x08000000; `CreatureMapSystem.Guards.cs`, `Guards/GuardPostTable.cs`): vmangos
+  BasicAI::MoveInLineOfSight / SummonGuard (AI/BasicAI.cpp:49-105), Creature::OnEnterCombat (Creature.cpp:3689-3690), GuardMgr
+  (GuardMgr.cpp) and Creature::CallNearestGuard (Creature.cpp:3932-3949). A creature with the flag whose AI does not attack the unit
+  itself (a civilian, a defensive creature, or the unit is already its victim) calls the guards when a hostile player comes within its
+  detection range (3 yd of height, attackable, in sight), and any creature with the flag calls them when it enters combat. In an area
+  with a guard post (the 57 posts of vmangos GuardMgr at build 5875, keyed by area id, build 5875 elites for Sepulcher, Menethil and Hammerfall) the
+  post spends a charge (10 per post, one back per minute; 10 s cooldown after a use, shared by every map), the civilian says its call
+  (broadcast text by its model from CreatureDisplayInfo.dbc when the display metadata is installed, else by its faction template;
+  Razor Hill always says "Grunts! Attack!") and the post's guard for the team opposite the enemy's player appears 5 yd east of it
+  (beyond its bounding radius; at another angle round it when the civilian cannot see that point, as vmangos GetNearPoint does),
+  attacks the enemy and despawns after 2 minutes alive and out of combat (vmangos TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts
+  again while it fights, so a guard is never pulled out of a fight). A post that is cooling down or empty refuses and the civilian keeps trying on sight;
+  after a successful call it stops calling on sight until the guard it called is gone or it respawns. In an area without a post the
+  nearest idle friendly guard within 50 yd in sight attacks. Data: classic-db z2815 sets CALLS_GUARDS on no template (vmangos data
+  does), so nothing calls until such rows are imported. Against a creature that no player controls the post sends the guard of the
+  civilian's own team (vmangos GuardMgr::GetTeam and Unit::GetTeam: Faction.dbc's `team` field, 469 Alliance, 67 Horde), through
+  `CreatureAiServices.TeamOf`, which the world binds from FactionTemplate.dbc (`Creatures:FactionTemplateDbcPath`) and Faction.dbc
+  (`Reputation:FactionDbcPath`); without them the team is unknown and, as with vmangos TEAM_NONE, nobody comes. The area comes from the map
+  terrain (`CreatureAiServices.AreaOf` overrides it); without extracted maps the area is 0 and the nearest-guard fallback applies.
 - **Creature-versus-creature aggro** (`Creatures:CreatureAggroOnCreatures`, default true): `CanAggroOnSight` takes any living unit
   of the map (a GM player and an evading creature are excluded; the hostility seam decides: reputation for players, the faction
   templates between creatures, mangos AggressorAI::MoveInLineOfSight), and the relocation notify of a moving creature visits the
@@ -81,7 +116,11 @@ docs/integration/creature-ai.md.
     (parameters: repeat min, repeat max, player only; the old implementation read the wrong columns), 6
     death, 7 evade, 8 spell hit (spell id and school mask must both match), 9 range (the victim between the
     min and max yards, bounding radii added, Object.cpp:1401-1420), 11 spawned (always, or map id), 12 target
-    health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 23/24
+    health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 22 receive emote
+    (a player's CMSG_TEXT_EMOTE aimed at the creature readies the rows whose emote id matches, the player being the invoker;
+    a condition id is checked against the conditions table for that player, and never passes without one: cmangos
+    CreatureEventAI::ReceiveEmote :1829-1842 and CheckEvent :467-472; the world's text emote handler calls
+    `Creature.ReceiveEmote` like vmangos HandleTextEmoteOpcode, ChatHandler.cpp:751-752), 23/24
     aura and target aura (at least N stacks), 27/28 missing aura and target missing aura (fewer than N), 29
     generic timer (in and out of combat), 31 energy percent, 33 facing target (within 5 yd, victim's back or
     front half circle), 36 target not reachable. Aura stacks and the victim's casting state come from the
@@ -91,7 +130,8 @@ docs/integration/creature-ai.md.
     present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
     triggered or interrupts; success is the cast being accepted), 12 summon, 13 threat single (direct add or percent) and 14 threat all percent (docs/areas/threat.md), 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
-    flee for assistance, 37 die, 39 call for help, 54 target-aware text (direct id or random template).
+    flee for assistance, 37 die, 39 call for help, 53 start relay script (see "Relay scripts" below), 54 target-aware
+    text (direct id or random template).
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
     unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) needs
@@ -120,6 +160,42 @@ text choices separately from relay templates; import reports count only string c
 The primary contract is `ScriptMgr::GetRandomScriptTemplateId` and
 `LoadDbScriptRandomTemplates` in CMaNGOS classic revision `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f`.
 Legacy `MangosStringLocale` fallback and ranged action 57 remain pending.
+
+## Relay scripts (EventAI action 53)
+
+cmangos EventAI's ACTION_T_START_RELAY_SCRIPT (53: relay id, target; CreatureEventAI.cpp:1227-1247) starts a DB script of
+`dbscripts_on_relay` with the resolved target as the script's source and the creature as its target (a negative id is a relay
+template, `dbscript_random_templates` type 1). vmangos has no such action: its EventAI rows call generic scripts instead, so the
+semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 relay ids.
+
+- **Scheduling** (`Scripts/RelayScriptRunner.cs`, cmangos Map::ScriptsStart / ScriptsProcess, Maps/Map.cpp:2166-2272): per map; a
+  relay already scheduled for the same source and target is not started again; steps without delay run at once, the rest at
+  start + delay in delay, priority and dump order; a TERMINATE_SCRIPT that fires drops the rest of that run.
+- **Who acts** (`CreatureMapSystem.RelayScripts.cs`, ScriptAction::GetScriptProcessTargets, DBScripts/ScriptMgr.cpp:1360-1645): the
+  buddy by entry (nearest creature of `buddy_entry` within `search_radius` of the source, dead with BUDDY_IS_DESPAWNED) replaces the
+  source, or the target with BUDDY_AS_TARGET; then REVERSE_DIRECTION swaps and SOURCE_TARGETS_SELF copies. A step whose buddy is not
+  found is skipped (except TERMINATE_SCRIPT). A `condition_id` is evaluated for the player among source and target (the conditions
+  table, as for EVENT_T_RECEIVE_EMOTE); without a player or a conditions table the step is skipped.
+- **Commands carried out** (ScriptAction::ExecuteDbscriptCommand): 0 TALK (dataint, one of dataint..4, or string template datalong;
+  creature speakers), 1 EMOTE (datalong or one of dataint..4; an EMOTE_STATE_* id becomes UNIT_NPC_EMOTESTATE, 0 clears it, others play
+  once: vmangos Unit::HandleEmote with the SharedDefines.h state ids standing in for Emotes.dbc), 3 MOVE_TO (home with dataint 1/2,
+  turn to `o`, move by z, or walk to x/y/z after clearing the pushed movement; datalong is a relay started on arrival), 15 CAST_SPELL
+  (datalong or a dataint at random; datalong2 bit 0x01 triggered; COMMAND_ADDITIONAL casts without a target), 18 DESPAWN_SELF
+  (temporary creatures, after datalong ms), 21 SET_ACTIVEOBJECT (nothing to do here), 25 SET_RUN (script moves run, and the client is
+  told), 28 STAND_STATE, 29 MODIFY_NPC_FLAGS (datalong2 0 remove, 1 add, 2 toggle: the code, not the header comment), 31
+  TERMINATE_SCRIPT (npc entry datalong within datalong2 yd, else the step's buddy; COMMAND_ADDITIONAL inverts), 32 PAUSE_WAYPOINTS
+  (MotionMaster::PauseWaypoints(0)/UnpauseWaypoints: the waypoint generator stops and later sets off for the same node), 36 SET_FACING
+  (face the target, or the reset facing with datalong), 45 START_RELAY_SCRIPT.
+- **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_BY_GUID, BUDDY_IS_PET,
+  BUDDY_BY_POOL, BUDDY_BY_SPAWN_GROUP, ALL_ELIGIBLE_BUDDIES, BUDDY_BY_GO and BUDDY_BY_STRING_ID, game-object buddies, a player as the
+  speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced movement, DESPAWN_SELF of a database spawn (no forced
+  despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint pause adjustment. The commands the 109 relays reached
+  from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
+  ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.
+- **Data** (world step 40, `RelayScriptDataModule`): `dbscripts_on_relay` (every column but the comment, plus the dump order per id)
+  and `dbscript_relay_template`; `CreatureDumpImporter` reads `dbscripts_on_relay` and the type-1 rows of `dbscript_random_templates`
+  (a later dump file replaces every row of a relay id it carries), `EfCreatureDataStore` loads them into
+  `CreatureAiContent.RelayScripts`. A database imported before this step has no relay rows: re-import the dump.
 
 ## Code layout
 
@@ -167,8 +243,10 @@ only (new tables and columns), so a database at the previous version upgrades in
 - **Template behaviour**: `Detection`, `CallForHelp`, `Pursuit`, `Leash`, `Timeout`, `StaticFlags1/2`
   (cmangos names; vmangos `detection_range`, `call_for_help_range`, `leash_range`, `static_flags1/2`),
   and a dialect tag for `ExtraFlags`. A template without the detection column gets 18 yd
-  (`CreatureTemplate.DefaultDetectionRange`). The aggro radius reads `Detection`, the hard leash reads `Leash`, and the assistance call
-  reads `CallForHelp` (see **Assistance** above).
+  (`CreatureTemplate.DefaultDetectionRange`). A template without the call-for-help column takes its dialect's schema default:
+  5 for a vmangos row (`call_for_help_range DEFAULT '5'`, vmangos sql/old_migrations/20190123062532_world.sql:28) and 0 for a
+  cmangos row (`CallForHelp DEFAULT '0'`, mangos.sql:1258). The aggro radius reads `Detection`, the hard leash reads `Leash`, and
+  the assistance call reads `CallForHelp` (see **Assistance** above).
 - **ExtraFlags dialects.** The two references give the same bits different meanings (0x01 is
   INSTANCE_BIND in cmangos and NO_LEASH_EVADE in vmangos; 0x20 is RUN_DURING_WANDER versus
   NO_MOVEMENT_PAUSE; 0x40 is unused versus ALWAYS_RUN; 0x10000 is CIVILIAN versus NO_ASSIST).
@@ -205,7 +283,6 @@ code was copied.
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death.
-- An unreachable victim does not lose its taunt auras when it is given up (the reference strips SPELL_AURA_MOD_TAUNT).
+- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only).
   - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.

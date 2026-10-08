@@ -30,10 +30,9 @@ internal interface ICreaturePathQuery
 /// <para>
 /// Reachability (vmangos <c>m_bReachable</c>, TargetedMovementGenerator.h:53): the last path query's verdict from
 /// <see cref="ICreaturePathQuery"/>. While the target is unreachable and the creature stands at the end of its partial path it
-/// re-paths every <see cref="RecheckMs"/> (the re-path) and <see cref="UnreachableMs"/> counts the time; the host reads it for the
-/// unreachable-target evade (vmangos Creature::Update, Creature.cpp:1017-1040) and EventAI reads <see cref="IsReachable"/> for
-/// EVENT_T_TARGET_NOT_REACHABLE. Being in position is always reachable. Time the creature cannot move (stunned, casting) does
-/// not count. One generator per chase: a new target starts a new count.
+/// re-paths every <see cref="RecheckMs"/> (the re-path). The host's unreachable-target timer (vmangos m_targetNotReachableTimer,
+/// Creature.cpp:1013-1046, <c>CreatureMapSystem.UpdateUnreachableTarget</c>) and EventAI's EVENT_T_TARGET_NOT_REACHABLE read
+/// <see cref="IsReachable"/>. Being in position is always reachable; a creature that cannot move keeps the last verdict.
 /// </para>
 /// </summary>
 internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMovementGenerator
@@ -61,15 +60,11 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     /// <summary>False since the last path query found the target unreachable (vmangos TargetedMovementGenerator::IsReachable).</summary>
     public bool IsReachable => _reachable;
 
-    /// <summary>Milliseconds the target has been unreachable without a break (0 while reachable).</summary>
-    public uint UnreachableMs { get; private set; }
-
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _recheckMs = 0;
         _aimedAt = null;
         _reachable = true;
-        UnreachableMs = 0;
         if (!CannotMove(creature, mover))
         {
             Step(creature, mover);
@@ -102,11 +97,6 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 
             _aimedAt = null;
             return true;
-        }
-
-        if (!_reachable)
-        {
-            UnreachableMs += diffMs;
         }
 
         _recheckMs -= (int)Math.Min(diffMs, int.MaxValue);
@@ -197,14 +187,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         SetReachable(reachable);
     }
 
-    private void SetReachable(bool reachable)
-    {
-        _reachable = reachable;
-        if (reachable)
-        {
-            UnreachableMs = 0;
-        }
-    }
+    private void SetReachable(bool reachable) => _reachable = reachable;
 }
 
 /// <summary>

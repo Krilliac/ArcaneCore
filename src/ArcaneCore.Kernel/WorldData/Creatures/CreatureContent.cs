@@ -354,6 +354,39 @@ public sealed class CreatureContent
     }
 
     /// <summary>
+    /// Static spawns with waypoint movement (MovementType 2) that have no path to walk (see <see cref="ResolveWaypointPath"/>): no
+    /// <c>creature_movement</c> rows of their own and no default entry path for their entry or any entry the spawn can become. The
+    /// creature feature reports them once at load (vmangos reports each one when its generator loads, WaypointMovementGenerator.cpp:50).
+    /// </summary>
+    public IReadOnlyList<CreatureSpawn> FindWaypointSpawnsWithoutPath()
+    {
+        var missing = new List<CreatureSpawn>();
+        foreach (IReadOnlyList<CreatureSpawn> spawns in _spawnsByMap.Values)
+        {
+            foreach (CreatureSpawn spawn in spawns)
+            {
+                if (spawn.MovementType != 2 || ResolveWaypointPath(spawn.Guid, spawn.Entry).Points.Count > 0)
+                {
+                    continue;
+                }
+
+                bool anyEntryPath = false;
+                foreach (uint entry in GetSpawnEntries(spawn.Guid))
+                {
+                    anyEntryPath |= ResolveWaypointPath(0, entry).Points.Count > 0;
+                }
+
+                if (!anyEntryPath)
+                {
+                    missing.Add(spawn);
+                }
+            }
+        }
+
+        return missing;
+    }
+
+    /// <summary>
     /// The creature entries a spawn row can become (cmangos <c>creature_spawn_entry</c>; vmangos <c>id</c>, <c>id2</c> ... <c>id5</c>),
     /// ascending and distinct; empty for a spawn with one fixed entry. Part of the spawn data, so a definitions swap does not touch it.
     /// </summary>

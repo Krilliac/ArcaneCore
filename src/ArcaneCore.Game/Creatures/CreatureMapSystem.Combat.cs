@@ -56,6 +56,12 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 return true; // the aggro script killed or reset it
             }
 
+            TryStartNoMeleeFlee(creature, target); // after the aggro hook: a cast on aggro wins (cmangos Unit.cpp:7993)
+            if ((creature.Template.Behaviour & CreatureBehaviourFlags.CallsGuards) != 0)
+            {
+                SummonGuard(creature, target); // vmangos Creature::OnEnterCombat (Creature.cpp:3689-3690)
+            }
+
             CallAssistance(creature, target);
         }
 
@@ -157,11 +163,6 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 }
 
                 ApplyCombatMovement(creature);
-                if (IsTargetUnreachableForTooLong(creature))
-                {
-                    GiveUpUnreachableTarget(creature, target);
-                    return false;
-                }
             }
 
             return true;
@@ -293,37 +294,59 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         return corners;
     }
 
+    /// <summary>vmangos MAP_ALTERAC_VALLEY: the map whose unreachable victims lose their threat after one second (Creature.cpp:1026-1027).</summary>
+    private const uint AlteracValleyMapId = 30;
+
     /// <summary>
-    /// Whether the creature's chase has reported its victim unreachable for at least <see cref="CreatureOptions.UnreachableTargetEvadeMs"/>
-    /// (0 turns the rule off). Only a chase on top of the stack counts: a creature that does not move in combat has nothing to be
-    /// unreachable, as in vmangos (Creature.cpp:1017-1040 reads the current generator's IsReachable).
+    /// Whether the creature's victim counts as unreachable this update (vmangos Creature::Update, Objects/Creature.cpp:1013-1019): the
+    /// generator on top is a melee chase (a ranged chaser has distance-caster movement and never counts) whose last path query found the
+    /// victim unreachable, the creature has no NO_UNREACHABLE_EVADE flag, is not owned or charmed by a player, and cannot hit the
+    /// victim (out of melee reach or out of line of sight). The reference's knock-back exemption for a player victim is not modelled
+    /// (no knock-back state on the server).
     /// </summary>
-    public bool IsTargetUnreachableForTooLong(Creature creature)
+    public bool IsTargetUnreachable(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        return _options.UnreachableTargetEvadeMs > 0
-            && creature.Motion.Top is TargetedMovementGenerator { Type: MovementGeneratorType.Chase, IsReachable: false } chase
-            && chase.UnreachableMs >= _options.UnreachableTargetEvadeMs;
+        return creature.Combat.Victim is { } victim
+            && creature.Motion.Top is ChaseMovementGenerator { IsReachable: false }
+            && (creature.Template.Behaviour & CreatureBehaviourFlags.NoUnreachableEvade) == 0
+            && !creature.CharmerGuid.IsPlayer
+            && creature.Summon?.Owner.IsPlayer != true
+            && (!MapCombat.CanReachWithMeleeAutoAttack(creature, victim) || !InLineOfSight(creature, victim));
     }
 
     /// <summary>
-    /// mangos Unit::SelectHostileTarget on an unreachable victim (Object/UnitThreat.cpp:342-361): alone on the threat list the
-    /// creature evades; otherwise the victim is dropped from the list (threat -101 %) and the attack stops without leaving combat,
-    /// so the next selection picks another target. The reference also strips its taunt auras; this host has no aura removal seam
-    /// for creatures (docs/areas/creature-ai.md), so a taunter that is unreachable is dropped from the list only.
+    /// The unreachable-target timer (vmangos m_targetNotReachableTimer, Objects/Creature.cpp:1013-1046), run before the AI each update
+    /// of a living creature: while <see cref="IsTargetUnreachable"/> holds the count grows, otherwise it is 0. Past
+    /// <see cref="CreatureOptions.UnreachableTargetSoftEvadeMs"/> (3 s, IsEvadeBecauseTargetNotReachable, Creature.h:510) the creature is
+    /// in evade mode where it stands and its AI does not update; past <see cref="CreatureOptions.UnreachableTargetEvadeMs"/> (24 s,
+    /// :1039) it evades home. In Alterac Valley the victim also loses all its threat once the count passes one second (:1026-1027).
+    /// Returns whether the AI must skip this update.
     /// </summary>
-    private void GiveUpUnreachableTarget(Creature creature, Unit target)
+    private bool UpdateUnreachableTarget(Creature creature, uint diffMs)
     {
-        ThreatList threat = creature.Combat.Threat;
-        if (threat.Entries.Count < 2) // the reference counts the online list (getThreatList().size())
+        if (!creature.Combat.IsInCombat || !IsTargetUnreachable(creature))
         {
-            EnterEvadeMode(creature);
-            return;
+            creature.TargetNotReachableMs = 0;
+            creature.IsEvadingUnreachable = false;
+            return false;
         }
 
-        threat.ModifyThreatPercent(target, -101);
-        Map.Combat.AttackStop(creature, targetSwitch: true);
-        creature.Motion.Remove(MovementGeneratorType.Chase);
+        uint count = creature.TargetNotReachableMs = creature.TargetNotReachableMs + diffMs;
+        if (Map.MapId == AlteracValleyMapId && count > 1000 && creature.Combat.HasThreatList && creature.Combat.Victim is { } victim)
+        {
+            creature.Combat.Threat.ModifyThreatPercent(victim, -101);
+        }
+
+        if (_options.UnreachableTargetEvadeMs > 0 && count > _options.UnreachableTargetEvadeMs)
+        {
+            creature.IsEvadingUnreachable = false;
+            EnterEvadeMode(creature);
+            return true;
+        }
+
+        creature.IsEvadingUnreachable = _options.UnreachableTargetSoftEvadeMs > 0 && count > _options.UnreachableTargetSoftEvadeMs;
+        return creature.IsEvadingUnreachable;
     }
 
     /// <summary>

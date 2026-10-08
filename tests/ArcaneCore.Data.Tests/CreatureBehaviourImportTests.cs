@@ -280,6 +280,20 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
     }
 
     [Fact]
+    public void AVMangosTemplateWithoutTheCallForHelpColumn_GetsTheVmangosDefault5_AndACMangosOneKeeps0()
+    {
+        // vmangos sql/old_migrations/20190123062532_world.sql:28: call_for_help_range FLOAT NOT NULL DEFAULT '5' (Creature.cpp:261 also
+        // starts m_callForHelpDist at 5); cmangos mangos.sql:1258: CallForHelp DEFAULT '0'. An explicit 0 stays 0 in both dialects.
+        const string vmangosBare = "INSERT INTO `creature_template` (`entry`,`patch`,`name`,`level_min`,`level_max`) VALUES (920040,0,'Bare Vmangos',1,1);";
+        const string vmangosZero = "INSERT INTO `creature_template` (`entry`,`patch`,`name`,`level_min`,`level_max`,`call_for_help_range`) VALUES (920041,0,'Zero Vmangos',1,1,0);";
+        const string cmangosBare = "INSERT INTO `creature_template` (`Entry`,`Name`,`MinLevel`,`MaxLevel`) VALUES (920042,'Bare Cmangos',1,1);";
+
+        Assert.Equal(5f, Assert.Single(Import(vmangosBare).Snapshot().Templates).CallForHelp);
+        Assert.Equal(0f, Assert.Single(Import(vmangosZero).Snapshot().Templates).CallForHelp);
+        Assert.Equal(0f, Assert.Single(Import(cmangosBare).Snapshot().Templates).CallForHelp);
+    }
+
+    [Fact]
     public void ExtraFlagsDialect_CanBeForcedAtImportTime()
     {
         const string noFlagColumn = "INSERT INTO `creature_template` (`Entry`,`Name`,`MinLevel`,`MaxLevel`,`flags_extra`) VALUES (920030,'Forced',1,1,1);";

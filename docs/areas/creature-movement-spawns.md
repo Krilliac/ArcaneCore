@@ -146,6 +146,12 @@ Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMoveme
 * Legs go through the map's pathfinder (`:235 MOVE_PATHFINDING`; straight without navmeshes).
 * Gates (`:249-272`): a stunned/rooted/confused/fleeing creature starts no leg and its timers stand still; a casting creature stops and
   sets off for the same node again when the cast ends.
+* **No path at all** (neither the spawn's rows nor an entry path): both references leave the creature standing (vmangos
+  `WaypointMovementGenerator::LoadPath`, `:47-52`). `Creatures:Movement:MissingWaypointPathFallback` (default `Random`, a deliberate
+  deviation; `Idle` is retail) makes it wander within its spawn's wander distance (5 yd when the spawn has none) instead. The world
+  logs the affected spawns once at load (`CreatureContent.FindWaypointSpawnsWithoutPath`: the count, the fallback and the first 20
+  guids); the per-creature message is debug only. Against classic-db z2815, 7 of the 2,898 waypoint spawns have no path once
+  `creature_movement_template` is imported (a database without that table reports all 326 spawns that lack their own rows).
 
 Verification: `WaypointGeneratorTests` (map clock, explicit diffs, no wall time), `CreatureMovementTemplateTests` (importer, content,
 upgrade from the previous schema version on every provider the machine has; **only SQLite ran locally, MariaDB/PostgreSQL run on hosted

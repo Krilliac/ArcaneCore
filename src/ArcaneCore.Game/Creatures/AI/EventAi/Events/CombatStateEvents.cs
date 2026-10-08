@@ -168,8 +168,8 @@ public sealed class FacingTargetEvent : EventAiEventHandler
 /// EVENT_T_TARGET_NOT_REACHABLE (36): the creature has a victim, chases it, and the movement generator on top reports it
 /// unreachable (:544-547). Considered at every batch (UpdateEventTimers :1937). The chase generator reports a victim unreachable
 /// when the pathfinder found no path or only a partial one (<c>TargetedMovementGenerator.IsReachable</c>), so with navigation data
-/// installed the row fires from the first batch after the chase got stuck until the creature gives the victim up
-/// (<c>Creatures:UnreachableTargetEvadeMs</c>); without navigation data nothing is ever unreachable.
+/// installed the row fires from the first batch after the chase got stuck until the AI stops updating (the 3 s evade state,
+/// <c>Creatures:UnreachableTargetSoftEvadeMs</c>); without navigation data nothing is ever unreachable.
 /// </summary>
 public sealed class TargetNotReachableEvent : EventAiEventHandler
 {

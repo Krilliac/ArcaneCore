@@ -94,6 +94,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39.Version),
             (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40.Version),
             (typeof(ArcaneCore.Data.World.Procs.SpellProcEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Procs.SpellProcEventDataModule.Version),
+            // INTEGRATOR: 38 and 39 are this branch's empty placeholders for other lanes' reserved world steps (RelayScriptDataModule.cs).
+            (typeof(CreatureAiLaneSchemaGap38), DatabaseComponent.World, CreatureAiLaneSchemaGap38.Version),
+            (typeof(CreatureAiLaneSchemaGap39), DatabaseComponent.World, CreatureAiLaneSchemaGap39.Version),
+            (typeof(RelayScriptDataModule), DatabaseComponent.World, RelayScriptDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

@@ -10,13 +10,20 @@ namespace ArcaneCore.Game.Creatures;
 public sealed partial class Creature : Unit, ICombatCreature
 {
     /// <summary>
-    /// vmangos Creature::IsInEvadeMode: true from EnterEvadeMode until the creature is home.
+    /// vmangos Creature::IsInEvadeMode (Objects/Creature.cpp:3239-3245): true from EnterEvadeMode until the creature is home, and while it
+    /// has been unable to reach its victim for longer than <c>Creatures:UnreachableTargetSoftEvadeMs</c> (IsEvadeBecauseTargetNotReachable).
     /// Combat refuses new attacks on an evading creature (docs/integration/combat.md).
     /// </summary>
-    public bool IsInEvadeMode => IsEvading;
+    public bool IsInEvadeMode => IsEvading || IsEvadingUnreachable;
 
     /// <summary>Set by the map system while the creature runs home after leaving combat.</summary>
     internal bool IsEvading { get; set; }
+
+    /// <summary>vmangos Creature::IsEvadeBecauseTargetNotReachable (Creature.h:510): set by the map system from <see cref="TargetNotReachableMs"/>.</summary>
+    public bool IsEvadingUnreachable { get; internal set; }
+
+    /// <summary>vmangos <c>m_targetNotReachableTimer</c>: milliseconds the creature's chase has had an unreachable victim without a break.</summary>
+    public uint TargetNotReachableMs { get; internal set; }
 
     /// <summary>The script driving this creature (null outside a creature map system).</summary>
     public CreatureAI? AI { get; internal set; }
@@ -51,6 +58,24 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal LeashExtensionClock? LeashClock { get; set; }
 
+    /// <summary>
+    /// vmangos BasicAI::m_bCanSummonGuards (AI/BasicAI.cpp:22, 79-89, 104): a CALLS_GUARDS creature may call the guards on sight; a
+    /// successful call clears it until the called guard is gone or the creature respawns.
+    /// </summary>
+    internal bool CanCallGuardsOnSight { get; set; }
+
+    /// <summary>The guard this creature's last call summoned, while it is in the world.</summary>
+    internal ObjectGuid? CalledGuard { get; set; }
+
+    /// <summary>A relay script paused this creature's waypoint movement (cmangos UNIT_STAT_WAYPOINT_PAUSED).</summary>
+    internal bool WaypointsPaused { get; set; }
+
+    /// <summary>A relay script's SET_RUN: script moves of this creature run (cmangos SetWalk(false)).</summary>
+    internal bool ScriptRun { get; set; }
+
+    /// <summary>A NO_MELEE_FLEE panic flight is running (cmangos ORDER_CRITTER_FLEE): the creature evades when it ends.</summary>
+    internal bool InNoMeleePanic { get; set; }
+
     /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
     internal bool CalledAssistance { get; set; }
 
@@ -81,6 +106,19 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         System?.StopMoving(this);
         map.Combat.Attack(this, attacker, MeleeAllowedByTemplate);
+    }
+
+    /// <summary>
+    /// A player aimed a text emote at the creature (vmangos WorldSession::HandleTextEmoteOpcode -> CreatureAI::ReceiveEmote,
+    /// Handlers/ChatHandler.cpp:751-752). World thread.
+    /// </summary>
+    public void ReceiveEmote(Player player, uint textEmote)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (IsAlive && System is not null && AI is { } ai)
+        {
+            ai.OnReceiveEmote(player, textEmote);
+        }
     }
 
     /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>

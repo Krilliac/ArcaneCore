@@ -169,6 +169,12 @@ public sealed class MotionMaster
         Push(new HomeMovementGenerator(home));
     }
 
+    /// <summary>
+    /// vmangos MoveDistract (MotionMaster.cpp:678-683): stand where it is for <paramref name="durationMs"/>, then turn back to the spawn
+    /// facing (<see cref="DistractMovementGenerator"/>). A distraction already on top is replaced (Mutate expires it).
+    /// </summary>
+    public void MoveDistract(uint durationMs) => Push(new DistractMovementGenerator(durationMs));
+
     /// <summary>vmangos MovePoint: go to a point; the AI's movement-inform gets <paramref name="id"/>.</summary>
     public void MovePoint(uint id, float x, float y, float z, bool run)
         => Push(new PointMovementGenerator(id, new Vector3(x, y, z), run));
@@ -203,6 +209,16 @@ public sealed class MotionMaster
     private void Push(ICreatureMovementGenerator generator)
     {
         ICreatureMover mover = _mover ?? throw new InvalidOperationException($"{_owner.Guid} has no movement owner");
+
+        // vmangos MotionMaster::Mutate (MotionMaster.cpp:687-705): a distraction on top is expired by any new generator, without
+        // resuming the one beneath (MovementExpired(false)).
+        if (_stack.Count > 0 && _stack[^1].Type == MovementGeneratorType.Distract)
+        {
+            ICreatureMovementGenerator distract = _stack[^1];
+            _stack.RemoveAt(_stack.Count - 1);
+            distract.Finish(_owner, mover, completed: false);
+        }
+
         Top.Interrupt(_owner, mover);
         _stack.Add(generator);
         generator.Initialize(_owner, mover);

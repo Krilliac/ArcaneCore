@@ -122,6 +122,7 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.AI = ai;
+        ResetGuardCall(creature);
     }
 
     /// <summary>The AI half of a creature's tick: aggro scan over the map's players, then the script.</summary>
@@ -196,15 +197,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        if (_summons.Count > 0)
-        {
-            (Creature Creature, long DespawnAtMs)[] expired = [.. _summons.Where(s => s.DespawnAtMs <= _clockMs)];
-            _summons.RemoveAll(s => s.DespawnAtMs <= _clockMs);
-            foreach ((Creature summoned, _) in expired)
-            {
-                Despawn(summoned);
-            }
-        }
+        UpdateTimedSummons();
     }
 
     private void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
@@ -229,6 +222,10 @@ public sealed partial class CreatureMapSystem
                 if (pointId == FleeForAssistancePointId && creature.IsAlive)
                 {
                     CallForHelp(creature, _options.AssistanceRadius);
+                }
+                else if (pointId == RelayMovePointId)
+                {
+                    OnRelayMoveArrived(creature);
                 }
 
                 creature.AI?.OnMovementInform(type, pointId);

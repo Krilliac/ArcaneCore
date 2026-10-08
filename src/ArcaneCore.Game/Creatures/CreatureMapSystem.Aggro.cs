@@ -80,29 +80,74 @@ public sealed partial class CreatureMapSystem
             && CanSeeForAggro(creature, who);
     }
 
+    /// <summary>vmangos GuardAI::MoveInLineOfSight: the radius a guard watches a player who is attacking its friends (AI/GuardAI.cpp:66-67).</summary>
+    public const float GuardDefendRadius = 30.0f;
+
     /// <summary>
-    /// mangos GuardAI::MoveInLineOfSight (Object/GuardAI.cpp:65-85): a guard without a victim attacks a unit in its aggro radius that
-    /// is hostile to players as such (a mob in town), that its own hostility calls an enemy (an opposing-faction or Hated player, a
-    /// contested-PvP player for a contested guard), or, with <c>Creatures:GuardsDefendFriendlies</c>, that is fighting a creature the
-    /// guard is friendly to (the clause both references keep commented out). The common gates of <see cref="CanAggroOnSight"/> apply
-    /// (alive, in control, can initiate, 3 yd vertical limit, attackable, line of sight); the reference guard does not add threat to a
-    /// second target in dungeons, so a guard with a victim ignores everyone else.
+    /// vmangos GuardAI::MoveInLineOfSight (AI/GuardAI.cpp:50-77, shared by GuardEventAI): a guard without a victim attacks a unit that is
+    /// hostile to players as such (a mob in town), that its own hostility calls an enemy (an opposing-faction or Hated player, a
+    /// contested-PvP player for a contested guard), or a player it is not friendly to who is attacking a player or friend
+    /// (<see cref="IsAttackingPlayerOrFriendly"/>); for that player the radius is at least <see cref="GuardDefendRadius"/>. With
+    /// <c>Creatures:GuardsDefendFriendlies</c> a creature fighting a creature the guard is friendly to is an enemy too (an ArcaneCore
+    /// extension: mangos keeps that clause commented out, Object/GuardAI.cpp:74). The height limit applies to creature targets only
+    /// (GuardAI.cpp:56-57); the other gates are the common ones (alive, in control, can initiate, attackable, stealth and line of sight).
+    /// Unlike BasicAI the guard does not skip players without PvP for ONLY_ATTACK_PVP_ENABLING. Limit: the reference's
+    /// IsInAccessablePlaceFor (water and air) is not modelled.
     /// </summary>
     public bool CanGuardAggroOnSight(Creature guard, Unit who)
     {
         ArgumentNullException.ThrowIfNull(guard);
         ArgumentNullException.ThrowIfNull(who);
-        if (guard.Combat.Victim is not null || !IsAggroTarget(guard, who) || !IsProximityAggroAllowedFor(guard, who)
-            || !CanInitiateAttack(guard) || !IsInAggroReach(guard, who) || !Map.Combat.Hooks.CanAttack(guard, who))
+        if (guard.Combat.Victim is not null || !IsAggroTarget(guard, who) || !CanInitiateAttack(guard) || !Map.Combat.Hooks.CanAttack(guard, who))
         {
             return false;
         }
 
-        bool enemy = _ai.Hostility.IsHostileToPlayers(who)
+        float radii = guard.BoundingRadius + who.BoundingRadius;
+        bool canFly = (guard.Template.InhabitType & 0x04) != 0; // INHABIT_AIR
+        if (who is Creature && !canFly && MathF.Max(0f, MathF.Abs(guard.Z - who.Z) - radii) > CreatureAggro.MaxZDistance)
+        {
+            return false;
+        }
+
+        float radius = GetAttackDistance(guard, who);
+        bool attackingFriend = false;
+        if (who is Player player && !_ai.Hostility.IsFriendly(guard, player))
+        {
+            attackingFriend = IsAttackingPlayerOrFriendly(guard, player);
+            if (attackingFriend)
+            {
+                radius = MathF.Max(radius, GuardDefendRadius);
+            }
+        }
+
+        radius += _options.AggroUsesBoundingRadius ? radii : 0f;
+        if (DistanceSquared(guard, who) >= radius * radius)
+        {
+            return false;
+        }
+
+        bool enemy = attackingFriend
+            || _ai.Hostility.IsHostileToPlayers(who)
             || _ai.Hostility.IsHostile(guard, who)
-            || (_options.GuardsDefendFriendlies && who.Combat.Victim is Creature friend && !ReferenceEquals(friend, guard)
+            || (_options.GuardsDefendFriendlies && who is Creature && who.Combat.Victim is Creature friend && !ReferenceEquals(friend, guard)
                 && friend.IsAlive && ReferenceEquals(friend.Map, Map) && _ai.Hostility.IsFriendly(guard, friend));
         return enemy && CanSeeForAggro(guard, who);
+    }
+
+    /// <summary>
+    /// vmangos GuardAI::IsAttackingPlayerOrFriendly (AI/GuardAI.cpp:35-48): the player is flagged contested-PvP, or its victim is a unit
+    /// the guard is friendly to, or its victim is on a taxi.
+    /// </summary>
+    private bool IsAttackingPlayerOrFriendly(Creature guard, Player player)
+    {
+        if ((player.Flags & PlayerFlags.ContestedPvp) != 0)
+        {
+            return true;
+        }
+
+        return player.Combat.Victim is { } victim
+            && (_ai.Hostility.IsFriendly(guard, victim) || (victim.UnitFlags & UnitFlags.TaxiFlight) != 0);
     }
 
     /// <summary>

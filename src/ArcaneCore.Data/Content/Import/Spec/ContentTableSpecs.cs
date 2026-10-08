@@ -165,6 +165,14 @@ public static class ContentTableSpecs
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
         new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
+        // cmangos dbscripts_on_relay has no key; the scan key is wide enough that only true duplicates collide (CreatureDumpImporter.ReadRelayStep).
+        new("dbscripts_on_relay",
+            [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
+             new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
+            [
+                "datalong2", "datalong3", "search_radius", "data_flags", "dataint2", "dataint3", "dataint4", "datafloat",
+                "z", "o", "speed", "condition_id",
+            ], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
         new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
         new("spell_template", [new KeyColumn("Id")],

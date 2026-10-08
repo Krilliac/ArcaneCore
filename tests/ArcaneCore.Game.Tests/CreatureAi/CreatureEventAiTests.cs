@@ -335,7 +335,17 @@ public sealed class CreatureEventAiTests
         // The 300 ms in-combat timer fires at the first 600 ms batch (cmangos UpdateEventTimers).
         Run(world, 700);
         Assert.False(wolf.IsAlive);
-        Run(world, 400);
+
+        // cmangos ACTION_T_SPAWN with a duration is TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN (CreatureEventAI.cpp:819-820;
+        // TemporarySpawn.cpp:129-149): the 1000 ms run only while the add is alive and out of combat, so it stays while it fights.
+        Run(world, 1500);
+        Assert.Same(add, system.FindCreature(add.Guid));
+        Assert.Same(player, add.Combat.Victim);
+
+        world.RemovePlayer(player); // the fight ends
+        Run(world, 700);
+        Assert.Same(add, system.FindCreature(add.Guid));
+        Run(world, 500);
         Assert.Null(system.FindCreature(add.Guid));
     }
 

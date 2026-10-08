@@ -145,6 +145,11 @@ which later leaves) and `ritual-of-summoning` (a warlock's ritual, two helpers, 
 meeting stone actions and decoders are in `ScenarioMeetingStones` (`JoinMeetingStoneAsync`, `LeaveMeetingStoneAsync`,
 `MeetingStoneInfoAsync`, `SetQueue`, `MemberAdded`, `JoinFailed`). The scenario content only supports human warriors:
 creating a human priest (5) or warlock (9) bot there fails with `create-failed`.
+`ScenarioTestWorld.StartAsync(configure)` also lets a test register its own content and seams after
+`ScenarioTestContent` (a later registration wins). `CreatureAiScenarioTests` uses it for creature AI across sessions: an
+orc bot walks up to a CALLS_GUARDS townsman, a human bot hears the shout and the guard post's guard runs to the orc and
+swings (`SMSG_ATTACKERSTATEUPDATE`); the human waves (`ScenarioCreatureActions.TextEmoteAsync`, CMSG_TEXT_EMOTE) at a herald
+whose EventAI RECEIVE_EMOTE row greets it by name (`ScenarioCreatureDecoders.MonsterChat`).
 
 ## MockClient playbot (external protocol client)
 

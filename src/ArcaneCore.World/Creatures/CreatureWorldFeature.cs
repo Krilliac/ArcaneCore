@@ -76,9 +76,29 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
 
         logger.LogInformation("Loaded {Templates} creature templates and {Spawns} spawns", content.TemplateCount, content.SpawnCount);
+        ReportWaypointSpawnsWithoutPath(content);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         world.Post(() => Install(content));
+    }
+
+    /// <summary>
+    /// One warning for every waypoint spawn without a path (instead of one per creature and grid load): the count, the configured
+    /// fallback (<c>Creatures:Movement:MissingWaypointPathFallback</c>) and the first spawn guids.
+    /// </summary>
+    private void ReportWaypointSpawnsWithoutPath(CreatureContent content)
+    {
+        IReadOnlyList<CreatureSpawn> missing = content.FindWaypointSpawnsWithoutPath();
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        const int Sample = 20;
+        string guids = string.Join(", ", missing.Take(Sample).Select(s => $"{s.Guid} (entry {s.Entry})"));
+        logger.LogWarning(
+            "{Count} creature spawn(s) have waypoint movement but no creature_movement or creature_movement_template path; they fall back to {Fallback} movement (Creatures:Movement:MissingWaypointPathFallback). First {Shown}: {Guids}",
+            missing.Count, Options.Movement.MissingWaypointPathFallback, Math.Min(Sample, missing.Count), guids);
     }
 
     /// <summary>

@@ -129,6 +129,10 @@ public sealed class StealthAggroTests
         Assert.Equal([0u], rig.Reactions()); // the cooldown holds
 
         Run(rig.Arena.Kit.World, 9000);
+        // The 5 s distraction is over and the wolf faces its spawn orientation again (vmangos
+        // DistractMovementGenerator::Finalize), not the rogue; turn it back toward the rogue so the cooldown is what decides below.
+        Assert.Equal(rig.Wolf.Home.Orientation, rig.Wolf.Orientation, 0.01f);
+        rig.Wolf.Orientation = MathF.PI - 0.3f;
         rig.System.CallAiMoveInLineOfSight(rig.Wolf, rig.Rogue);
         Assert.Single(rig.Reactions());
 

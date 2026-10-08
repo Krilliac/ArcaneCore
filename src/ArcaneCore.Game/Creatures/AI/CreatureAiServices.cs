@@ -143,6 +143,9 @@ public sealed class CreatureAiFactory
 
     public const string GuardAIName = "GuardAI";
 
+    /// <summary>vmangos GuardEventAI: EventAI with the guard on-sight rules (AI/CreatureAIRegistry.cpp:50).</summary>
+    public const string GuardEventAIName = "GuardEventAI";
+
     /// <summary>CreatureType.dbc id of a critter (CREATURE_TYPE_CRITTER).</summary>
     public const uint CritterType = 8;
 
@@ -154,7 +157,11 @@ public sealed class CreatureAiFactory
         ["AggressorAI"] = static (c, _) => new AggressorAI(c),
         ["CritterAI"] = static (c, _) => new CritterAI(c),
         [GuardAIName] = static (c, _) => new GuardAI(c),
-        [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai),
+        [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai)
+        {
+            UsesGuardSightRules = (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0, // vmangos GuardEventAI::Permissible
+        },
+        [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
     };
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
@@ -235,4 +242,23 @@ public sealed class CreatureAiServices
 
     /// <summary>Aura stacks and casting state of any unit (EventAI aura and target-casting events); null: no auras, nobody casting.</summary>
     public IUnitSpellQueries? UnitSpells { get; init; }
+
+    /// <summary>The towns' guard posts (vmangos GuardMgr), shared by every map system built with these services.</summary>
+    public GuardPostTable GuardPosts { get; init; } = new();
+
+    /// <summary>
+    /// The conditions table (cmangos IsConditionSatisfied) for EventAI rows that carry a condition id (EVENT_T_RECEIVE_EMOTE); null: such
+    /// rows never fire and are reported. Bound from the world's condition feature.
+    /// </summary>
+    public Npc.IConditionEvaluator? Conditions { get; init; }
+
+    /// <summary>The area id a creature stands in (vmangos GetAreaId); null asks the map's terrain (<c>Map.GetZoneAndAreaId</c>).</summary>
+    public Func<Creature, uint>? AreaOf { get; init; }
+
+    /// <summary>
+    /// A creature's team (vmangos Unit::GetTeam, Unit.cpp:4960-4973: its faction's Faction.dbc team field, 469 Alliance or 67 Horde;
+    /// null for anything else). A guard post called against an enemy no player controls sends the guard of the civilian's own team
+    /// (GuardMgr::GetTeam); null here: nobody comes. Bound by the world from FactionTemplate.dbc and Faction.dbc.
+    /// </summary>
+    public Func<Creature, Team?>? TeamOf { get; init; }
 }

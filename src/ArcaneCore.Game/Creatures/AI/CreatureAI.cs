@@ -75,6 +75,11 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>A player aimed a text emote at the creature (vmangos CreatureAI::ReceiveEmote).</summary>
+    public virtual void OnReceiveEmote(Player player, uint textEmote)
+    {
+    }
+
     /// <summary>Spawned or respawned (vmangos JustRespawned / Reset).</summary>
     public virtual void OnRespawn()
     {
@@ -94,14 +99,30 @@ public abstract class CreatureAI
         }
     }
 
-    /// <summary>A unit is near (vmangos MoveInLineOfSight). Aggressive AIs attack valid hostile targets in aggro range.</summary>
+    /// <summary>
+    /// A unit is near (vmangos BasicAI::MoveInLineOfSight, AI/BasicAI.cpp:49-77). Aggressive AIs attack valid hostile targets in aggro
+    /// range; a CALLS_GUARDS creature that does not attack calls the guards on a hostile player within its detection range
+    /// (<see cref="CreatureMapSystem.CanCallGuardsOnSight"/>, <see cref="CreatureMapSystem.SummonGuard"/>).
+    /// </summary>
     public virtual void MoveInLineOfSight(Unit who)
     {
-        if (AggroesOnSight && System is { } system && system.CanAggroOnSight(Me, who))
+        if (System is not { } system)
+        {
+            return;
+        }
+
+        if (AggroesOnSight && system.CanAggroOnSight(Me, who))
         {
             system.EnterCombatWithTarget(Me, who);
         }
+        else if (CallsGuardsOnSight && system.CanCallGuardsOnSight(Me, who))
+        {
+            Me.CanCallGuardsOnSight = !system.SummonGuard(Me, who); // vmangos BasicAI::SummonGuard (BasicAI.cpp:102-105)
+        }
     }
+
+    /// <summary>Whether this AI calls the guards on sight (vmangos BasicAI does; NullCreatureAI, CritterAI and EventAI do not).</summary>
+    protected virtual bool CallsGuardsOnSight => true;
 
     /// <summary>
     /// A stealthed player the creature cannot see stands just outside its detection range (vmangos CreatureAI::OnMoveInStealth,
@@ -137,6 +158,8 @@ public abstract class CreatureAI
 /// <summary>vmangos NullCreatureAI: does nothing, not even fight back.</summary>
 public sealed class NullCreatureAI(Creature creature) : CreatureAI(creature)
 {
+    protected override bool CallsGuardsOnSight => false;
+
     public override void OnUpdate(uint diffMs)
     {
     }

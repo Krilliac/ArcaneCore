@@ -65,6 +65,9 @@ public abstract class EventAiEventHandler
     /// <summary>Whether a spell hit matches this row (only for <see cref="EventAiTrigger.SpellHit"/> handlers).</summary>
     public virtual bool MatchesSpell(CreatureAiEvent row, SpellInfo spell) => false;
 
+    /// <summary>Whether a text emote matches this row (only for <see cref="EventAiTrigger.ReceiveEmote"/> handlers).</summary>
+    public virtual bool MatchesEmote(CreatureAiEvent row, uint textEmote) => false;
+
     /// <summary>cmangos JustRespawned's per-type branch for a fresh holder (default: armed, timer 0).</summary>
     public virtual void OnRespawn(EventAiContext context, EventAiHolder holder)
     {

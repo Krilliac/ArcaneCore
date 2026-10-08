@@ -63,9 +63,11 @@ public sealed partial class CreatureOptions
     public bool CreatureAggroOnCreatures { get; set; } = true;
 
     /// <summary>
-    /// A guard also attacks a unit that is fighting a creature the guard is friendly to (<c>Creatures:GuardsDefendFriendlies</c>). Both
-    /// reference cores carry this clause commented out in GuardAI::MoveInLineOfSight (mangos Object/GuardAI.cpp:74), so the retail
-    /// behaviour is UNVERIFIED; on by default because a guard that watches a civilian being killed is the worse mistake.
+    /// A guard also attacks a <em>creature</em> that is fighting a creature the guard is friendly to (<c>Creatures:GuardsDefendFriendlies</c>).
+    /// A player who attacks a unit the guard is friendly to is always attacked, from up to 30 yd (vmangos GuardAI::IsAttackingPlayerOrFriendly
+    /// and MoveInLineOfSight, AI/GuardAI.cpp:35-77, which look at players only). mangos keeps the general clause commented out
+    /// (Object/GuardAI.cpp:74), so for creature attackers the retail behaviour is UNVERIFIED; on by default because a guard that watches a
+    /// civilian being killed is the worse mistake.
     /// </summary>
     public bool GuardsDefendFriendlies { get; set; } = true;
 }
