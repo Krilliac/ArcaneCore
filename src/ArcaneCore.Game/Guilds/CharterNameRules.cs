@@ -38,7 +38,7 @@ public static class CharterNameRules
             return false;
         }
 
-        if (!IsValidString(points, options.StrictCharterNames))
+        if (!IsValidString(points, options.StrictCharterNames, options.RealmZone))
         {
             return false;
         }
@@ -59,16 +59,47 @@ public static class CharterNameRules
         return count;
     }
 
-    private static bool IsValidString(List<int> points, int strictMask)
+    /// <summary>vmangos isValidString(wstr, strictMask, numericOrSpace: true, create: false) (ObjectMgr.cpp:9543-9578).</summary>
+    private static bool IsValidString(List<int> points, int strictMask, int realmZone)
     {
         if (strictMask == 0)
         {
             return All(points, IsExtendedLatin) || All(points, IsCyrillic) || All(points, IsEastAsian);
         }
 
-        // Bit 0x2 (realm-zone language) is not supported; see GuildOptions.StrictCharterNames.
+        if ((strictMask & 0x2) != 0)
+        {
+            int languages = RealmLanguageType(realmZone);
+            if (((languages & LanguageExtendedLatin) != 0 && All(points, IsExtendedLatin))
+                || ((languages & LanguageCyrillic) != 0 && All(points, IsCyrillic))
+                || ((languages & LanguageEastAsia) != 0 && All(points, IsEastAsian)))
+            {
+                return true;
+            }
+        }
+
         return (strictMask & 0x1) != 0 && All(points, IsBasicLatin);
     }
+
+    // vmangos LanguageType (ObjectMgr.cpp:9507-9513).
+    private const int LanguageExtendedLatin = 0x0001;
+    private const int LanguageCyrillic = 0x0002;
+    private const int LanguageEastAsia = 0x0004;
+    private const int LanguageAny = 0xFFFF;
+
+    /// <summary>
+    /// vmangos GetRealmLanguageType(create: false) (ObjectMgr.cpp:9515-9541): development, test and QA realms (and the unknown zone 0) take any
+    /// language; the United States, Oceanic, Latin America, English, German, French and Spanish zones extended Latin; Korea, Taiwan and China
+    /// East Asian; Russian Cyrillic; any other zone any language (basic Latin only at character creation, which a charter is not).
+    /// </summary>
+    private static int RealmLanguageType(int realmZone) => realmZone switch
+    {
+        0 or 1 or 26 or 28 => LanguageAny,
+        2 or 3 or 4 or 8 or 9 or 10 or 11 => LanguageExtendedLatin,
+        6 or 14 or 16 => LanguageEastAsia,
+        12 => LanguageCyrillic,
+        _ => LanguageAny,
+    };
 
     private static bool All(List<int> points, Func<int, bool> script)
     {

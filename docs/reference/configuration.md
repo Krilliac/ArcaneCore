@@ -801,7 +801,8 @@ How to read the tables:
 | `World:Guild:KickOnOversizedText` | `bool` | `true` | - | Disconnect a client that sends over-long guild text (name, MOTD, info, notes, rank names), as vmangos does through ProcessAnticheatAction (GuildHandler.cpp:58-62,470-474,518-522, 554-558,580-584,600-604). The retail client never sends such text. |
 | `World:Guild:MinCharterNameLength` | `int` | `2` | - | MinCharterName (mangosd.conf.dist.in:1299, default 2, World.cpp:625 clamps to 2..24). |
 | `World:Guild:MinPetitionSigns` | `int` | `9` | - | MinPetitionSigns (mangosd.conf.dist.in:1341, default 9, World.cpp:666 clamps to 0..9). |
-| `World:Guild:StrictCharterNames` | `int` | `0` | - | StrictCharterNames (mangosd.conf.dist.in:1296, default 0 = any single script). Bit 0x1 accepts basic Latin only. Bit 0x2 (realm-zone language) is not supported: this server has no realm zone, so only the 0x1 bit is evaluated when the mask is non-zero (documented limit). |
+| `World:Guild:RealmZone` | `int` | `1` | - | vmangos RealmZone (RealmZone.h:23-61, mangosd.conf RealmZone, default 1 = development: any language), the zone whose scripts StrictCharterNames bit 0x2 accepts. The character creation and pet name options carry their own copy of the setting. |
+| `World:Guild:StrictCharterNames` | `int` | `0` | - | StrictCharterNames (mangosd.conf.dist.in:1296, default 0 = any single script). Bit 0x1 accepts basic Latin; bit 0x2 accepts the scripts of the realm zone (`RealmZone`, vmangos GetRealmLanguageType with create false). |
 
 ## `World:Honor`
 

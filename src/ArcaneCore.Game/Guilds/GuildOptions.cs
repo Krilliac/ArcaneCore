@@ -31,10 +31,16 @@ public sealed class GuildOptions
 
     /// <summary>
     /// StrictCharterNames (mangosd.conf.dist.in:1296, default 0 = any single script). Bit 0x1 accepts
-    /// basic Latin only. Bit 0x2 (realm-zone language) is not supported: this server has no realm
-    /// zone, so only the 0x1 bit is evaluated when the mask is non-zero (documented limit).
+    /// basic Latin; bit 0x2 accepts the scripts of the realm zone (<see cref="RealmZone"/>, vmangos
+    /// GetRealmLanguageType with create false).
     /// </summary>
     public int StrictCharterNames { get; set; }
+
+    /// <summary>
+    /// vmangos RealmZone (RealmZone.h:23-61, mangosd.conf RealmZone, default 1 = development: any language), the zone whose scripts
+    /// StrictCharterNames bit 0x2 accepts. The character creation and pet name options carry their own copy of the setting.
+    /// </summary>
+    public int RealmZone { get; set; } = 1;
 
     /// <summary>
     /// Deleting a rank moves its members to the new lowest rank. Default false: vmangos
