@@ -93,8 +93,13 @@ public sealed partial class CreatureMapSystem
     public Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation)
         => SpawnTemporary(template, x, y, z, orientation, summoner: null);
 
-    /// <summary><see cref="SpawnTemporary(CreatureTemplate, float, float, float, float)"/> by a summoner, known to the summon from its start.</summary>
-    internal Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation, Creature? summoner)
+    /// <summary>
+    /// <see cref="SpawnTemporary(CreatureTemplate, float, float, float, float)"/> by a summoner, known to the summon from its start. The
+    /// summoner's AI hears of it at once unless <paramref name="notifySummoner"/> is false: a caller that still places or sets up the summon
+    /// then calls <see cref="NotifyJustSummoned"/> itself.
+    /// </summary>
+    internal Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation, Creature? summoner,
+        bool notifySummoner = true)
     {
         ArgumentNullException.ThrowIfNull(template);
         var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver);
@@ -115,7 +120,11 @@ public sealed partial class CreatureMapSystem
         }
 
         AddToWorld(creature, loaded);
-        NotifyJustSummoned(creature);
+        if (notifySummoner)
+        {
+            NotifyJustSummoned(creature);
+        }
+
         return creature;
     }
 

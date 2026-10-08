@@ -212,7 +212,9 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   TEMP_SPAWN_CREATURE (`CreatureMapSystem.RelayCommands.cs`: creature datalong at x/y/z/o, or without coordinates in front of the source
   at contact distance plus both bounding radii at twice the source's orientation, as cmangos' CreatureCreatePos and GetClosePoint add the
   orientation twice; dataint 1 runs; datalong2 ms alive out of combat and uncharmed despawns it, without it only its corpse going does;
-  datalong3 is the default path of a summon with waypoint movement), 13 ACTIVATE_OBJECT (the source unit uses the target object: doors and
+  datalong3 is the default path of a summon with waypoint movement; a creature source is the summon's spawner, TARGET_T_SPAWNER, and its
+  AI hears JustSummoned, EVENT_T_SUMMONED_UNIT, once the summon is placed, as WorldObject::SummonCreature, Object.cpp:2026-2166), 13
+  ACTIVATE_OBJECT (the source unit uses the target object: doors and
   buttons toggle, buttons and spell foci fire their linked trap, traps cast at the user, `GameObjectMapSystem.UseByUnit`; with
   COMMAND_ADDITIONAL the object plays custom animation datalong), 15 CAST_SPELL
   (datalong or a dataint at random; datalong2 bit 0x01 triggered; COMMAND_ADDITIONAL casts without a target), 18 DESPAWN_SELF

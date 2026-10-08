@@ -43,7 +43,11 @@ public sealed partial class CreatureMapSystem
         }
 
         bool atSource = step.X == 0f && step.Y == 0f && step.Z == 0f;
-        Creature summoned = SpawnTemporary(template, atSource ? source.X : step.X, atSource ? source.Y : step.Y, atSource ? source.Z : step.Z, step.Orientation);
+        // cmangos WorldObject::SummonCreature with the source as the spawner (Entities/Object.cpp:2026-2166): a creature source is the summon's
+        // spawner from its construction, and its AI hears JustSummoned once the summon is placed and summoned (:2155-2158).
+        Creature? spawner = source as Creature;
+        Creature summoned = SpawnTemporary(template, atSource ? source.X : step.X, atSource ? source.Y : step.Y, atSource ? source.Z : step.Z, step.Orientation,
+            spawner, notifySummoner: false);
         if (atSource)
         {
             float distance = ContactDistance + source.BoundingRadius + summoned.BoundingRadius;
@@ -69,6 +73,11 @@ public sealed partial class CreatureMapSystem
         if (step.DataLong2 > 0)
         {
             AddTimedSummon(summoned, step.DataLong2, SummonTimer.OutOfCombatUncharmed);
+        }
+
+        if (spawner is not null)
+        {
+            NotifyJustSummoned(summoned);
         }
     }
 

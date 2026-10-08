@@ -141,6 +141,36 @@ public sealed class RelayScriptCommandTests
         Assert.Single(t.OfEntry(BuddyEntry)); // TEMPSPAWN_DEAD_DESPAWN: only death removes it
     }
 
+    [Fact]
+    public void TempSpawn_ByACreatureSource_IsThatCreaturesSummon_ItsAiHearsOfIt_AfterThePlacement()
+    {
+        // cmangos WorldObject::SummonCreature (Entities/Object.cpp:2026-2166), which TEMP_SPAWN_CREATURE calls with the source as the spawner:
+        // the TemporarySpawn carries the spawner's guid from its construction (GetSpawner, EventAI TARGET_T_SPAWNER), and a creature
+        // spawner's AI gets JustSummoned once the summon is placed and summoned (EVENT_T_SUMMONED_UNIT, 17).
+        CreatureAiEvent summonedRow = new()
+        {
+            Id = 2,
+            CreatureId = WolfEntry,
+            EventType = 17,
+            Flags = 1,
+            Param1 = (int)BuddyEntry,
+            Action1 = new CreatureAiAction((byte)EventAiActionType.Cast, 7051, 0, 0),
+        };
+        using Town t = Start([Step(0, 10, dataLong: BuddyEntry, flags: FlagReverse)], rows: [summonedRow]);
+
+        t.Wave();
+
+        Creature summoned = Assert.Single(t.OfEntry(BuddyEntry));
+        Assert.Same(t.Elly, t.System.SummonerOf(summoned));
+        Assert.Equal([7051u], t.Spells.Casts.Select(c => c.Spell));
+
+        // The player as the source (no reverse): nobody's summon, and no creature AI hears of it.
+        using Town byPlayer = Start([Step(0, 10, dataLong: BuddyEntry, x: 6, y: 7, z: 83.5f)], rows: [summonedRow]);
+        byPlayer.Wave();
+        Assert.Null(byPlayer.System.SummonerOf(Assert.Single(byPlayer.OfEntry(BuddyEntry))));
+        Assert.Empty(byPlayer.Spells.Casts);
+    }
+
     // --- 13 ACTIVATE_OBJECT ----------------------------------------------------------------
 
     [Fact]
