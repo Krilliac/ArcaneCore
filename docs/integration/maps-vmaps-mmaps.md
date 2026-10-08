@@ -118,7 +118,9 @@ What it does, step by step (the same commands work by hand):
 
 1. **Copy the vmangos source** (without `.git`, `sql`, `bin`) to `<ToolsDir>/vmangos-src`. The
    vmangos build writes its executables into `<source>/bin`, so it must not run in the reference
-   checkout. The script also copies `tools/terrain/vmap-oracle` in as `contrib/vmap_probe`.
+   checkout. The script also copies `tools/terrain/vmap-oracle` in as `contrib/vmap_probe`. Keep
+   `-ToolsDir` and `-OutDir` outside the ArcaneCore checkout: `DocsLinkTests` walks every `.md` file
+   under it and fails on the vmangos copy's own READMEs.
 2. **Build the tools** with MSVC and Ninja inside `vcvars64.bat`, compilers pinned (`CC=cl`,
    `CXX=cl`; a shell exporting another `CC` makes CMake pick the wrong compiler):
    `cmake -S <src> -B <ToolsDir>/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_EXTRACTORS=ON

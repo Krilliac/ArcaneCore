@@ -9,4 +9,5 @@
   built by the script (copied into the vmangos source as `contrib/vmap_probe`); it is not part of
   the .NET solution.
 
-The extracted data is derived from Blizzard's assets. Keep it outside the repository.
+The extracted data is derived from Blizzard's assets. Keep it, and the tools directory, outside the
+repository (`DocsLinkTests` walks every `.md` file under the checkout, the vmangos copy included).
