@@ -887,8 +887,10 @@ public sealed class CreatureDumpImporter
         _aiTexts[text.Entry] = text;
     }
 
+    // The six dungeons' script_texts ranges, plus EMOTE_GENERIC_ENRAGED (-1000003) that boss_herod.cpp says at its frenzy.
     private static bool IsDungeonScriptText(int id)
-        => id is (>= -1047012 and <= -1047000)
+        => id is -1000003
+            or (>= -1047012 and <= -1047000)
             or (>= -1070005 and <= -1070001)
             or (>= -1090028 and <= -1090000)
             or (>= -1129012 and <= -1129005)

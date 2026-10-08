@@ -55,7 +55,7 @@ public sealed class UldamanInstance(Map map) : ScriptedInstance(map, 2)
                 if (!_archaedasRegistered && creature.System is { } system)
                 {
                     _archaedasRegistered = true;
-                    system.RegisterEntryAi(Archaedas, c => new ArchaedasAi(c, this), rebuildExisting: false);
+                    system.RegisterEntryAi(Archaedas, c => new ArchaedasAi(c, this), rebuildExisting: creature.AI is not null);
                 }
                 break;
         }

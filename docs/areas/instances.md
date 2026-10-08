@@ -1,6 +1,6 @@
 # Area: instances and bosses (wave 2, lane instances-bosses)
 
-The uncommitted ScriptDev2 port for Gnomeregan, Scarlet Monastery, Razorfen Downs, Razorfen Kraul, Uldaman and Zul'Farrak is recorded in [the 2026-10-08 lane note](../integration/sd2-mid-20261008.md). It adds instance states, boss and escort scripts, world event adapters and selected ClassicDB script content without a schema change; that note lists its verification boundary and remaining gaps.
+The ScriptDev2 port (branch `codex/w2-sd2-mid`) for Gnomeregan, Scarlet Monastery, Razorfen Downs, Razorfen Kraul, Uldaman and Zul'Farrak is recorded in [the 2026-10-08 lane note](../integration/sd2-mid-20261008.md). It adds instance states, boss and escort scripts, world event adapters and selected ClassicDB script content without a schema change; that note lists its verification boundary and remaining gaps.
 
 Status: first slices delivered on `claude/vw2-instances-bosses`. WoW 1.12.1 (5875). Base behaviour (saves, binds, raid resets, homebind timer, durable chests) is described in `docs/integration/instances.md`; this page records what this lane changed on top of it, what it left open, and the provenance of every rule.
 

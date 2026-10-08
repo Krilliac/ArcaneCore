@@ -41,6 +41,24 @@ public sealed class GnomereganScriptTests
     }
 
     [Fact]
+    public void Thermaplugg_ActiveBombFace_SummonsAWalkingBombThreeSecondsAfterItsActivation()
+    {
+        // instance_gnomeregan.cpp DoActivateBombFace sets m_uiBombTimer = 3000; boss_thermaplugg.cpp UpdateAI summons NPC_WALKING_BOMB
+        // when that timer runs out (`m_uiBombTimer < uiDiff`). The map ticks in 50 ms steps, a divisor of 3000.
+        using DungeonScriptHarness run = new(map => new GnomereganInstance(map),
+            [ThermapluggAi.Entry, ThermapluggAi.WalkingBomb], [ThermapluggAi.Entry],
+            (GnomereganInstance.FaceEntries[2], ArcaneCore.Game.GameObjects.GameObjectType.Door));
+        var data = Assert.IsType<GnomereganInstance>(run.Data);
+        Assert.True(run.Creatures.AttackStart(run.Creature(ThermapluggAi.Entry), run.Player));
+        Assert.True(data.FaceActive(2));
+
+        for (int i = 0; i < 58; i++) run.Tick(50); // 2.9 s
+        Assert.DoesNotContain(run.Creatures.Creatures, c => c.Template.Entry == ThermapluggAi.WalkingBomb);
+        for (int i = 0; i < 4; i++) run.Tick(50); // 3.1 s
+        Assert.Contains(run.Creatures.Creatures, c => c.Template.Entry == ThermapluggAi.WalkingBomb);
+    }
+
+    [Fact]
     public void Thermaplugg_AggroAndDeath_LockThenFinishTheEncounter()
     {
         using DungeonScriptHarness run = new(map => new GnomereganInstance(map), [7800], [7800]);

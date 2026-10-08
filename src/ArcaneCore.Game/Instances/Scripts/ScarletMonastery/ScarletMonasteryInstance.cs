@@ -34,10 +34,10 @@ public sealed class ScarletMonasteryInstance(Map map) : ScriptedInstance(map, 2)
         {
             switch (entry)
             {
-                case Mograine: system.RegisterEntryAi(entry, c => new MograineAi(c, this), rebuildExisting: false); break;
-                case Whitemane: system.RegisterEntryAi(entry, c => new WhitemaneAi(c, this), rebuildExisting: false); break;
-                case 3975: system.RegisterEntryAi(entry, c => new HerodAi(c), rebuildExisting: false); break;
-                case 6487: system.RegisterEntryAi(entry, c => new DoanAi(c), rebuildExisting: false); break;
+                case Mograine: system.RegisterEntryAi(entry, c => new MograineAi(c, this), rebuildExisting: creature.AI is not null); break;
+                case Whitemane: system.RegisterEntryAi(entry, c => new WhitemaneAi(c, this), rebuildExisting: creature.AI is not null); break;
+                case 3975: system.RegisterEntryAi(entry, c => new HerodAi(c), rebuildExisting: creature.AI is not null); break;
+                case 6487: system.RegisterEntryAi(entry, c => new DoanAi(c), rebuildExisting: creature.AI is not null); break;
             }
         }
         if (entry == Mograine && !_damageSubscribed)

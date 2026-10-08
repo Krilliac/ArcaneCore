@@ -41,7 +41,7 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
         if (entry == 7271 && !_zumrahRegistered && creature.System is { } system)
         {
             _zumrahRegistered = true;
-            system.RegisterEntryAi(7271, c => new ZumrahAi(c, this), rebuildExisting: false);
+            system.RegisterEntryAi(7271, c => new ZumrahAi(c, this), rebuildExisting: creature.AI is not null);
         }
     }
 
@@ -79,6 +79,9 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
             else if (data == EncounterState.Done)
             {
                 _pyramidTimer = 0;
+                // Deviation: instance_zulfarrak.cpp only opens GO_END_DOOR in OnObjectCreate once the pyramid is DONE; live, the door is
+                // blown by Weegli's DB script (vmangos instance_zulfarrak.cpp EVENT_END_DOOR), which this port does not include. Opening
+                // it here keeps Chief Ukorz Sandscalp reachable until that escort is ported.
                 if (GetSingleGameObjectFromStorage(EndDoor) is { } door) door.State = GameObjectState.Active;
             }
         }

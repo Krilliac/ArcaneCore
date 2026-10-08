@@ -27,7 +27,7 @@ public sealed class RazorfenDownsInstance(Map map) : ScriptedInstance(map, 1)
         if (creature.Template.Entry == BelnistraszAi.Entry && !_belnistraszRegistered && creature.System is { } system)
         {
             _belnistraszRegistered = true;
-            system.RegisterEntryAi(BelnistraszAi.Entry, c => new BelnistraszAi(c), rebuildExisting: false);
+            system.RegisterEntryAi(BelnistraszAi.Entry, c => new BelnistraszAi(c), rebuildExisting: creature.AI is not null);
         }
     }
 

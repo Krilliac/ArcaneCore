@@ -23,7 +23,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// Give every creature of <paramref name="entry"/> on this map the AI <paramref name="factory"/> builds (vmangos FactorySelector::selectAI
     /// asks the script name first, AI/CreatureAISelector.cpp:37-50). Creatures already in the map take it at once; a later registration of the
-    /// same entry replaces the earlier one.
+    /// same entry replaces the earlier one. An instance script registering from <c>OnCreatureCreate</c> passes
+    /// <paramref name="rebuildExisting"/> = <c>creature.AI is not null</c>: during a grid load the hook runs before the creature's AI is built (so
+    /// nothing needs rebuilding), while an instance data attached after a grid loaded early sees creatures whose AI already exists.
     /// </summary>
     public void RegisterEntryAi(uint entry, Func<Creature, CreatureAI> factory, bool rebuildExisting = true)
     {

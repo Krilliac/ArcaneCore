@@ -23,12 +23,22 @@ public sealed class GnomereganInstance(Map map) : ScriptedInstance(map, 2)
     private readonly ObjectGuid?[,] _sortedCharges = new ObjectGuid?[2, 2];
     private readonly ObjectGuid?[] _faces = new ObjectGuid?[6];
     private readonly bool[] _faceActive = new bool[6];
+    private readonly uint[] _faceBombTimers = new uint[6];
     private bool _emiRegistered;
     private bool _thermapluggRegistered;
     private bool _kernobeeRegistered;
     private readonly BombButtonAi _buttonAi = new();
 
     public bool FaceActive(int index) => index is >= 0 and < 6 && _faceActive[index];
+
+    /// <summary>sBombFace::m_uiBombTimer (gnomeregan.h): 3000 ms from DoActivateBombFace, 0 after DoDeactivateBombFace; Thermaplugg counts it down.</summary>
+    public uint FaceBombTimer(int index) => index is >= 0 and < 6 ? _faceBombTimers[index] : 0;
+
+    public void SetFaceBombTimer(int index, uint ms)
+    {
+        if (index is >= 0 and < 6) _faceBombTimers[index] = ms;
+    }
+
     public GameObject? FaceObject(int index) => index is >= 0 and < 6 && _faces[index] is { } guid
         ? Instance.FindUpdater<GameObjectMapSystem>()?.Find(guid) : null;
     public GameObject? CaveObject(uint entry) => entry is CaveNorth or CaveSouth ? GetSingleGameObjectFromStorage(entry) : null;
@@ -45,15 +55,15 @@ public sealed class GnomereganInstance(Map map) : ScriptedInstance(map, 2)
         {
             case Blastmaster when !_emiRegistered:
                 _emiRegistered = true;
-                system.RegisterEntryAi(Blastmaster, c => new EmiShortfuseAi(c, this), rebuildExisting: false);
+                system.RegisterEntryAi(Blastmaster, c => new EmiShortfuseAi(c, this), rebuildExisting: creature.AI is not null);
                 break;
             case 7800 when !_thermapluggRegistered:
                 _thermapluggRegistered = true;
-                system.RegisterEntryAi(7800, c => new ThermapluggAi(c, this), rebuildExisting: false);
+                system.RegisterEntryAi(7800, c => new ThermapluggAi(c, this), rebuildExisting: creature.AI is not null);
                 break;
             case 7850 when !_kernobeeRegistered:
                 _kernobeeRegistered = true;
-                system.RegisterEntryAi(7850, c => new KernobeeAi(c), rebuildExisting: false);
+                system.RegisterEntryAi(7850, c => new KernobeeAi(c), rebuildExisting: creature.AI is not null);
                 break;
         }
     }
@@ -149,6 +159,7 @@ public sealed class GnomereganInstance(Map map) : ScriptedInstance(map, 2)
         if (index is < 0 or >= 6 || _faceActive[index]) return;
         ToggleFace(index);
         _faceActive[index] = true;
+        _faceBombTimers[index] = 3000;
     }
 
     public void DeactivateBombFace(int index)
@@ -156,6 +167,7 @@ public sealed class GnomereganInstance(Map map) : ScriptedInstance(map, 2)
         if (index is < 0 or >= 6 || !_faceActive[index]) return;
         ToggleFace(index);
         _faceActive[index] = false;
+        _faceBombTimers[index] = 0;
     }
 
     private void ToggleFace(int index)

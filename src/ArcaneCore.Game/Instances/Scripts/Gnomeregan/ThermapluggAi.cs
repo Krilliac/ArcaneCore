@@ -11,7 +11,6 @@ public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance
     public const uint ActivateBombA = 11511, ActivateBombB = 11795;
     private readonly Dictionary<ObjectGuid, (float X, float Y, float Z)> _landingBombs = [];
     private readonly HashSet<ObjectGuid> _summonedBombs = [];
-    private readonly uint[] _faceTimers = new uint[6];
     private uint _knockMs, _activateMs;
     private bool _phaseTwo;
     private float _spawnX, _spawnY, _spawnZ;
@@ -25,7 +24,6 @@ public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance
         _phaseTwo = false;
         _landingBombs.Clear();
         _summonedBombs.Clear();
-        Array.Clear(_faceTimers);
     }
 
     public override void OnAggro(Unit target)
@@ -96,18 +94,20 @@ public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance
             if (Random.Shared.Next(6) == 0) System?.SayText(Me, -1090026);
         }
 
+        // The face timers live in the instance (sBombFace::m_uiBombTimer, set to 3000 by DoActivateBombFace), so a timer that reaches
+        // exactly 0 still fires on the next update (`m_uiBombTimer < uiDiff`).
         for (int i = 0; i < 6; i++)
         {
-            if (!instance.FaceActive(i)) { _faceTimers[i] = 0; continue; }
-            if (_faceTimers[i] == 0) _faceTimers[i] = 3000;
-            if (_faceTimers[i] >= diffMs) { _faceTimers[i] -= diffMs; continue; }
+            if (!instance.FaceActive(i)) continue;
+            uint timer = instance.FaceBombTimer(i);
+            if (timer >= diffMs) { instance.SetFaceBombTimer(i, timer - diffMs); continue; }
             if (instance.FaceObject(i) is { } face && System is { } system)
             {
                 float x = 0.35f * _spawnX + 0.65f * face.X;
                 float y = 0.35f * _spawnY + 0.65f * face.Y;
                 system.SummonCorpseDespawn(Me, WalkingBomb, x, y, -316.2625f, 0);
             }
-            _faceTimers[i] = (uint)Random.Shared.Next(10000, 25001);
+            instance.SetFaceBombTimer(i, (uint)Random.Shared.Next(10000, 25001));
         }
     }
 

@@ -44,7 +44,7 @@ public sealed class ScriptDev2DungeonContentTests
 
         Assert.Equal([19, 25, 47, 12], new[] { 7998u, 8516u, 4508u, 6575u }
             .Select(entry => importer.PathSnapshot().Count(row => row.Entry == entry)));
-        int[] requiredTextIds = [-1090000, -1189005, -1129005, -1047000, -1070001, -1209000];
+        int[] requiredTextIds = [-1000003, -1090000, -1189005, -1129005, -1047000, -1070001, -1209000];
         foreach (int id in requiredTextIds)
             Assert.Contains(importer.AiSnapshot().Texts, row => row.Entry == id);
         Assert.Equal(2, importer.RelaySnapshot().Steps.Count(row => row.Id == 1_002_488));

@@ -50,12 +50,12 @@ public sealed class RazorfenKraulInstance(Map instance) : ScriptedInstance(insta
             if (creature.Template.Entry == 4508 && !_willixRegistered)
             {
                 _willixRegistered = true;
-                system.RegisterEntryAi(4508, c => new RazorfenKraul.WillixAi(c), rebuildExisting: false);
+                system.RegisterEntryAi(4508, c => new RazorfenKraul.WillixAi(c), rebuildExisting: creature.AI is not null);
             }
             else if (creature.Template.Entry == 4781 && !_gopherRegistered)
             {
                 _gopherRegistered = true;
-                system.RegisterEntryAi(4781, c => new RazorfenKraul.SnufflenoseGopherAi(c), rebuildExisting: false);
+                system.RegisterEntryAi(4781, c => new RazorfenKraul.SnufflenoseGopherAi(c), rebuildExisting: creature.AI is not null);
             }
         }
     }
