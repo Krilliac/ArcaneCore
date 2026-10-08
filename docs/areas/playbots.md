@@ -20,6 +20,10 @@ GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
 behaviour is described in `docs/integration/playerbot-*.md`.
 
+Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
+it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
+line and has its own `BOTINSPECT` line.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
