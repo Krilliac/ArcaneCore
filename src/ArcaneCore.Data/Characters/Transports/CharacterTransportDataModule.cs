@@ -62,7 +62,7 @@ public sealed class CharacterTransportDataModule : IDataModule, ICharacterDataCl
 /// change nothing. INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until
 /// you do); keep the ones nobody claimed. Never ship a build with these placeholders to a live realm (see TransportLaneWorldGapStep).
 /// </summary>
-public abstract class TransportLaneCharactersGapStep(int version) : IDataModule
+public abstract class TransportLaneCharactersGapStep(int version) : IDataModule, ICharacterDataCleanup
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -77,6 +77,9 @@ public abstract class TransportLaneCharactersGapStep(int version) : IDataModule
     public void AddServices(IServiceCollection services)
     {
     }
+
+    // An empty step owns no rows.
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>Characters step 35 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
