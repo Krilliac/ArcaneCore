@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
@@ -97,6 +98,36 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    public async Task StrictReconnectIntegrity_UsesR1AndZeroHash(bool correct, bool configured)
+    {
+        // vmangos VerifyVersion(isReconnect=true) skips the build-hash lookup entirely, so a reconnect is
+        // judged against 20 zero bytes whether or not the client's tuple has a configured hash.
+        byte[] key = Enumerable.Range(1, 40).Select(i => (byte)i).ToArray();
+        var accounts = new InMemoryAccountStore();
+        await accounts.CreateAsync(new Account { Username = "RECONNECT", Salt = [1], Verifier = [2], SessionKey = key });
+        var options = new AuthOptions { StrictVersionCheck = true,
+            IntegrityHashes = configured
+                ? [new ClientIntegrityHashOptions { Build = 5875, Os = "Win", Platform = "x86",
+                    Hash = Convert.ToHexString(Enumerable.Repeat((byte)9, 20).ToArray()) }]
+                : [] };
+        await using NetworkStream client = await StartAsync(accounts, new InMemoryRealmStore([]), options: options);
+        await client.WriteAsync(BuildChallenge("RECONNECT"));
+        byte[] challenge = await ReadExactAsync(client, 34);
+        byte[] r1 = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+        byte[] proofInput = Encoding.ASCII.GetBytes("RECONNECT")
+            .Concat(r1).Concat(challenge[2..18]).Concat(key).ToArray();
+        byte[] r3 = correct ? ClientIntegrity.VersionProof(r1, new byte[20]) : new byte[20];
+        byte[] packet = [(byte)AuthCommand.ReconnectProof, .. r1, .. SHA1.HashData(proofInput), .. r3, 0];
+        await client.WriteAsync(packet);
+        Assert.Equal(correct ? (byte)AuthResult.Success : (byte)AuthResult.VersionInvalid,
+            (await ReadExactAsync(client, 2))[1]);
+    }
+
+    [Theory]
     [InlineData(AccountStatus.Suspended, 0, AuthResult.Suspended)]
     [InlineData(AccountStatus.Banned, 40, AuthResult.Banned)]
     [InlineData(AccountStatus.Active, 0, AuthResult.UnknownAccount)]
@@ -133,7 +164,8 @@ public sealed class LogonReconnectTests : IAsyncLifetime
         Assert.Equal((byte)AuthResult.FailNoAccess, (await ReadExactAsync(ipClient, 2))[1]);
     }
 
-    private async Task<NetworkStream> StartAsync(IAccountStore accounts, IRealmStore realms, IBanStore? bans = null)
+    private async Task<NetworkStream> StartAsync(IAccountStore accounts, IRealmStore realms, IBanStore? bans = null,
+        AuthOptions? options = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -144,7 +176,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
             {
                 using TcpClient server = await listener.AcceptTcpClientAsync(_lifetime.Token);
                 await using NetworkStream stream = server.GetStream();
-                await new LogonSession(stream, accounts, realms, new AuthOptions(), NullLogger.Instance, "127.0.0.1:1", bans).RunAsync(_lifetime.Token);
+                await new LogonSession(stream, accounts, realms, options ?? new AuthOptions(), NullLogger.Instance, "127.0.0.1:1", bans).RunAsync(_lifetime.Token);
             }
             finally
             {

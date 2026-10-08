@@ -337,8 +337,8 @@ public sealed class RealmBanEnforcementTests
             byte[] proof = new byte[1 + LogonProofRequest.BodyLength];
             proof[0] = (byte)AuthCommand.LogonProof;
             await net.WriteAsync(proof);
-            byte[] proofReply = new byte[4];
-            int got = await net.ReadAtLeastAsync(proofReply, 4, throwOnEndOfStream: false, cts.Token);
+            byte[] proofReply = new byte[2];
+            int got = await net.ReadAtLeastAsync(proofReply, 2, throwOnEndOfStream: false, cts.Token);
             reply[3] = got >= 2 ? proofReply[1] : (byte)0xFF;
         }
 

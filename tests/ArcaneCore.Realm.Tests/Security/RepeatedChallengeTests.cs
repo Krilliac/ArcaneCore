@@ -155,7 +155,7 @@ public sealed class RepeatedChallengeTests
         await c.WriteAsync(CodexNetAuthRealmTests.Challenge(User));
         (_, byte[] b, byte[] salt) = await CodexNetAuthRealmTests.ReadChallenge(c);
         await c.WriteAsync(CodexNetAuthRealmTests.ProofFor(User, User, "WRONG", salt, b));
-        byte[] failed = await CodexNetAuthRealmTests.ReadN(c, 4);
+        byte[] failed = await CodexNetAuthRealmTests.ReadN(c, 2); // build 5875 failure has no later-build padding
         Assert.NotEqual((byte)AuthResult.Success, failed[1]);
         Assert.Equal(1.0, guard.Table.TokensOf(key, RateBucket.AuthFailures));
 

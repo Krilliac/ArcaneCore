@@ -54,4 +54,19 @@ public sealed class AuthOptions
     /// the single-row read for one period instead (closed only if that read fails too).
     /// </summary>
     public int IpBanCacheSeconds { get; set; } = 60;
+
+    /// <summary>vmangos StrictVersionCheck, default false. Enabled checks crc_hash against
+    /// a configured 20-byte hash for the client build/OS/platform.</summary>
+    public bool StrictVersionCheck { get; set; }
+
+    /// <summary>Known client integrity hashes. A zero hash skips the check for its exact client tuple.</summary>
+    public List<ClientIntegrityHashOptions> IntegrityHashes { get; set; } = [];
+}
+
+public sealed class ClientIntegrityHashOptions
+{
+    public ushort Build { get; set; }
+    public string Os { get; set; } = string.Empty;
+    public string Platform { get; set; } = string.Empty;
+    public string Hash { get; set; } = string.Empty;
 }

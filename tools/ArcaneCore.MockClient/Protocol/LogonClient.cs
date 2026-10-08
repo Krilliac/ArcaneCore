@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using ArcaneCore.Cryptography;
 
 namespace ArcaneCore.MockClient.Protocol;
 
@@ -10,14 +11,16 @@ public static class LogonClient
     private const int MaximumRealmListSize = 16 * 1024;
 
     public static async Task<LogonResult> AuthenticateAsync(
-        IPEndPoint endpoint, string account, string password, CancellationToken ct = default, ushort build = 5875)
+        IPEndPoint endpoint, string account, string password, CancellationToken ct = default, ushort build = 5875,
+        string? pin = null, byte[]? integrityHash = null)
     {
         string username = ProtocolPackets.NormalizeAccount(account);
         string normalizedPassword = ProtocolPackets.NormalizePassword(password);
         using TcpClient client = await ProtocolIO.ConnectAsync(endpoint, ct).ConfigureAwait(false);
         await using NetworkStream stream = client.GetStream();
 
-        (byte[] serverKey, byte[] salt) = await ProtocolIO.BoundedAsync("Logon challenge", ct, async token =>
+        (byte[] serverKey, byte[] salt, uint gridSeed, byte[] pinSalt) =
+            await ProtocolIO.BoundedAsync("Logon challenge", ct, async token =>
         {
             await stream.WriteAsync(ProtocolPackets.LogonChallenge(username, build), token).ConfigureAwait(false);
             byte[] header = await ProtocolIO.ReadExactAsync(stream, 3, "logon challenge header", token).ConfigureAwait(false);
@@ -49,20 +52,37 @@ public static class LogonClient
 
             byte[] receivedSalt = await ProtocolIO.ReadExactAsync(stream, 32, "SRP6 salt", token).ConfigureAwait(false);
             byte[] challengeTail = await ProtocolIO.ReadExactAsync(stream, 17, "version challenge and security flag", token).ConfigureAwait(false);
-            if (challengeTail[16] != 0)
+            if (challengeTail[16] is not (0 or 1))
             {
                 throw new MockProtocolException($"Unsupported logon security flags 0x{challengeTail[16]:X2}.");
             }
 
-            return (publicKey, receivedSalt);
+            byte[] extra = challengeTail[16] == 1
+                ? await ProtocolIO.ReadExactAsync(stream, 20, "PIN grid seed and salt", token).ConfigureAwait(false)
+                : [];
+
+            return (publicKey, receivedSalt,
+                extra.Length == 20 ? BinaryPrimitives.ReadUInt32LittleEndian(extra) : 0,
+                extra.Length == 20 ? extra[4..] : []);
         }).ConfigureAwait(false);
 
         ClientSrp6.Session session = ClientSrp6.Create(username, normalizedPassword, salt, serverKey);
         try
         {
+            byte[]? pinData = null;
+            if (pinSalt.Length > 0 && pin is not null)
+            {
+                if (pin.Length is < 4 or > 10 || pin.Any(c => c is < '0' or > '9'))
+                    throw new ArgumentException("PIN must be 4-10 decimal digits", nameof(pin));
+                byte[] clientSalt = RandomNumberGenerator.GetBytes(PinHash.SaltLength);
+                byte[] digest = PinHash.Calculate(pin.Select(c => (byte)(c - '0')).ToArray(),
+                    gridSeed, pinSalt, clientSalt);
+                pinData = [.. clientSalt, .. digest];
+            }
+            byte[]? crc = integrityHash is null ? null : ClientIntegrity.VersionProof(session.PublicKey, integrityHash);
             await ProtocolIO.BoundedAsync("Logon proof", ct, async token =>
             {
-                await stream.WriteAsync(ProtocolPackets.LogonProof(session), token).ConfigureAwait(false);
+                await stream.WriteAsync(ProtocolPackets.LogonProof(session, crc, pinData), token).ConfigureAwait(false);
                 byte[] header = await ProtocolIO.ReadExactAsync(stream, 2, "logon proof header", token).ConfigureAwait(false);
                 ExpectCommand(header[0], 0x01, "proof");
                 if (header[1] != 0)
