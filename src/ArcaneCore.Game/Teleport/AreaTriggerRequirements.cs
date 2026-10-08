@@ -31,9 +31,10 @@ public interface IAreaTriggerGate
 
 /// <summary>
 /// Entry requirements of an <c>areatrigger_teleport</c> row, evaluated when a player steps on the trigger (the lock-status part of
-/// the reference cores' <c>HandleAreaTriggerOpcode</c>: mangos-zero <c>Player::GetAreaTriggerLockStatus</c> and
-/// <c>SendTransferAbortedByLockStatus</c>, PlayerAreaTrigger.cpp:94-262). Order: a game master always passes, then the required level,
-/// the required items, the quest and further vetoes of the <see cref="IAreaTriggerGate"/>s, then the conditions-table reference.
+/// the reference cores' <c>HandleAreaTriggerOpcode</c>: mangos-classic
+/// <c>Player::GetAreaTriggerLockStatus</c>, Entities/Player.cpp:19985-20057). Order: a game master always passes, then the required level,
+/// the required item (either one when both columns are set), the quest and further vetoes of the
+/// <see cref="IAreaTriggerGate"/>s, then the conditions-table reference.
 /// <para>
 /// A row whose <see cref="AreaTriggerTeleport.Message"/> is not empty shows that text for every refusal (the cores' failed-text
 /// column replaces the generated message). Otherwise the level and item refusals use the stock texts (mangos_string 49 and 50) and a
@@ -75,13 +76,16 @@ public static class AreaTriggerRequirements
             return Refuse(teleport, string.Format(CultureInfo.InvariantCulture, LevelRequiredText, teleport.RequiredLevel));
         }
 
-        // The keyring and the bags count, the bank does not (Player::HasItemCount with its default inBankAlso = false).
-        if (MissingItem(player, teleport.RequiredItem) is { } first)
+        // mangos-classic Player::GetAreaTriggerLockStatus (Entities/Player.cpp:20010-20027):
+        // when both columns name keys, either one suffices; a refusal names the first.
+        // HasItemCount's default includes bags/keyring, not the bank.
+        if (MissingItem(player, teleport.RequiredItem) is { } first
+            && (teleport.RequiredItem2 == 0 || MissingItem(player, teleport.RequiredItem2) is not null))
         {
             return Refuse(teleport, ItemText(player, first));
         }
 
-        if (MissingItem(player, teleport.RequiredItem2) is { } second)
+        if (teleport.RequiredItem == 0 && MissingItem(player, teleport.RequiredItem2) is { } second)
         {
             return Refuse(teleport, ItemText(player, second));
         }

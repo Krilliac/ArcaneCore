@@ -19,8 +19,10 @@ destination row, evaluated by `Game/Teleport/AreaTriggerRequirements.Evaluate` o
 1. A game master (`.gm on`) passes everything (mangos-zero `GetAreaTriggerLockStatus`: "Gamemaster can always enter"). A GM account
    that has not switched GM mode on is checked like anybody else.
 2. Level: `required_level`. Refusal text `You must be at least level N to enter.` (mangos_string 49).
-3. Items: `required_item`, then `required_item2`; each must be carried (bags, backpack, keyring; the bank does not count, as
-   `Player::HasItemCount` with its default). Refusal text `You must have item <name> to enter.` (mangos_string 50, `LANG_REQUIRED_ITEM`).
+3. Items: `required_item` or `required_item2` when both are set; either carried key passes. With only one set, that key is required.
+   Bags, backpack and keyring count; the bank does not (`Player::HasItemCount` with its default). If neither alternative is held,
+   the first is named in the refusal text `You must have item <name> to enter.` (mangos-classic
+   `Entities/Player.cpp`, `Player::GetAreaTriggerLockStatus`; mangos_string 50, `LANG_REQUIRED_ITEM`).
    An item without a loaded template is named by its entry number instead of crashing (the reference dereferences the template).
 4. Every `IAreaTriggerGate` the world features register. `QuestNpcFeature` is one: `required_quest_done` must be a quest the
    player has turned in (`QuestNpcServices.IsRewarded`: a repeatable quest never counts, a player whose journal is not loaded is
@@ -77,7 +79,7 @@ the table; a quest named by both is credited once. There is no new option.
 
 ## Tests (no game client)
 
-* `Game.Tests/Teleport/TeleportRequirementsTests`: level, items (bag, both items, unknown template), message override, GM bypass, gates
+* `Game.Tests/Teleport/TeleportRequirementsTests`: level, items (bag, either alternative item, unknown template), message override, GM bypass, gates
   (silent, text, order, first refusal), condition (no evaluator, false, true, id 0), check order.
 * `Game.Tests/Npc/QuestExplorationTests`: store indexes, credit from the table without configuration, withheld without a relation,
   table plus configuration credits once, several quests per trigger, dead player and trigger 0, store swap by a reload.
