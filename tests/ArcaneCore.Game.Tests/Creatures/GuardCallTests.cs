@@ -57,7 +57,7 @@ public sealed class GuardCallTests
     }
 
     private static Town Start(uint areaId = Goldshire, CreatureTemplate? civilian = null, GuardPostTable? posts = null, IEnumerable<CreatureSpawn>? more = null,
-        IEnumerable<CreatureTemplate>? moreTemplates = null)
+        IEnumerable<CreatureTemplate>? moreTemplates = null, Func<Creature, Team?>? teamOf = null)
     {
         posts ??= new GuardPostTable();
         CreatureContent content = new([civilian ?? Civilian(), GuardTemplate(), .. moreTemplates ?? []], [Spawn(1, CivilianEntry, 0, 0), .. more ?? []],
@@ -67,6 +67,7 @@ public sealed class GuardCallTests
             Hostility = new TownHostility(),
             GuardPosts = posts,
             AreaOf = _ => areaId,
+            TeamOf = teamOf,
         }, new CreatureOptions { AiRelocationNotifyDelayMs = 3_600_000, RespawnPacifyMs = 0 });
         AddPlayer(world, 99, 0, -80); // loads the town's grids; far outside every range
         Creature spawned = system.Creatures.Single(c => c.Template.Entry == CivilianEntry);
@@ -224,6 +225,30 @@ public sealed class GuardCallTests
 
         Creature guard = Assert.Single(t.Guards);
         Assert.Same(orc, guard.Combat.Victim);
+    }
+
+    /// <summary>
+    /// vmangos GuardMgr::GetTeam (GuardMgr.cpp:403-418): against an enemy no player controls, the post sends the guard of the civilian's own
+    /// team (Unit::GetTeam: Faction.dbc's team field, Unit.cpp:4960-4973). Without that seam the team is unknown: the charge is spent and
+    /// nobody comes, as with vmangos TEAM_NONE.
+    /// </summary>
+    [Fact]
+    public void AnEnemyNoPlayerControls_BringsTheGuardOfTheCiviliansOwnTeam()
+    {
+        const uint MobEntry = 7102;
+        CreatureTemplate mob = Template(MobEntry) with { Faction = 14 };
+
+        using Town unknown = Start(more: [Spawn(2, MobEntry, 30, 0)], moreTemplates: [mob]);
+        Creature raider = unknown.System.Creatures.Single(c => c.Template.Entry == MobEntry);
+        unknown.Map.Combat.DealDamage(raider, unknown.Civilian, 1, direct: false);
+        Assert.Empty(unknown.Guards);
+        Assert.Equal(GuardPostTable.MaxCharges - 1, unknown.Posts.ChargesOf(Goldshire));
+
+        using Town known = Start(more: [Spawn(2, MobEntry, 30, 0)], moreTemplates: [mob], teamOf: c => c.Template.Entry == CivilianEntry ? Team.Alliance : null);
+        Creature attacker = known.System.Creatures.Single(c => c.Template.Entry == MobEntry);
+        known.Map.Combat.DealDamage(attacker, known.Civilian, 1, direct: false);
+        Creature guard = Assert.Single(known.Guards);
+        Assert.Same(attacker, guard.Combat.Victim);
     }
 
     [Fact]

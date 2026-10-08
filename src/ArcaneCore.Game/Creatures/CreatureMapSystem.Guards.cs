@@ -53,9 +53,10 @@ public sealed partial class CreatureMapSystem
     /// vmangos GuardMgr::SummonGuard (GuardMgr.cpp:421-457). In an area without a guard post the nearest idle friendly guard attacks
     /// <paramref name="enemy"/> (<see cref="CallNearestGuard"/>) and the call counts as made. A post that is cooling down or out of charges
     /// refuses (false: the caller may try again). Otherwise the civilian speaks its call (<see cref="GuardPostTable.GetTextId"/>, as a say)
-    /// and the post's guard for the team opposite the enemy's player (else the civilian's own team, which needs Faction.dbc and is not
-    /// modelled) appears 5 yd east of it (<see cref="GuardSummonPoint"/>), attacks the enemy and despawns after 2 minutes alive and out of combat
-    /// (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts again while it fights). Returns whether the call was made.
+    /// and the post's guard for the team opposite the enemy's player (else the civilian's own team, from Faction.dbc through
+    /// <see cref="CreatureAiServices.TeamOf"/>) appears 5 yd east of it (<see cref="GuardSummonPoint"/>), attacks the enemy and despawns
+    /// after 2 minutes alive and out of combat (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts again while it fights). Returns whether
+    /// the call was made.
     /// </summary>
     public bool SummonGuard(Creature civilian, Unit enemy)
     {
@@ -67,7 +68,7 @@ public sealed partial class CreatureMapSystem
         }
 
         uint areaId = AreaOf(civilian);
-        GuardPostCall call = _ai.GuardPosts.TryUse(areaId, GuardTeamAgainst(enemy), _serverTime());
+        GuardPostCall call = _ai.GuardPosts.TryUse(areaId, GuardTeamAgainst(civilian, enemy), _serverTime());
         switch (call.Use)
         {
             case GuardPostUse.NoPost:
@@ -199,14 +200,17 @@ public sealed partial class CreatureMapSystem
         creature.CalledGuard = null;
     }
 
-    /// <summary>vmangos GuardMgr::GetTeam (GuardMgr.cpp:406-419): the team opposite the enemy's player; null when no player controls it.</summary>
-    private Team? GuardTeamAgainst(Unit enemy)
+    /// <summary>
+    /// vmangos GuardMgr::GetTeam (GuardMgr.cpp:403-418): the team opposite the enemy's player; when no player controls the enemy, the
+    /// civilian's own team (<see cref="CreatureAiServices.TeamOf"/>, Unit::GetTeam); null when that is unknown.
+    /// </summary>
+    private Team? GuardTeamAgainst(Creature civilian, Unit enemy)
     {
         return enemy.GetCharmerOrOwnerPlayerOrSelf()?.Team switch
         {
             Team.Horde => Team.Alliance,
             Team.Alliance => Team.Horde,
-            _ => null,
+            _ => _ai.TeamOf?.Invoke(civilian),
         };
     }
 

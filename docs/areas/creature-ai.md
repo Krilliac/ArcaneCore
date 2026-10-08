@@ -80,8 +80,10 @@ docs/integration/creature-ai.md.
   again while it fights, so a guard is never pulled out of a fight). A post that is cooling down or empty refuses and the civilian keeps trying on sight;
   after a successful call it stops calling on sight until the guard it called is gone or it respawns. In an area without a post the
   nearest idle friendly guard within 50 yd in sight attacks. Data: classic-db z2815 sets CALLS_GUARDS on no template (vmangos data
-  does), so nothing calls until such rows are imported; a call against a creature that no player controls summons nobody (vmangos
-  takes the civilian's own team from Faction.dbc `team`, which the faction catalog does not carry). The area comes from the map
+  does), so nothing calls until such rows are imported. Against a creature that no player controls the post sends the guard of the
+  civilian's own team (vmangos GuardMgr::GetTeam and Unit::GetTeam: Faction.dbc's `team` field, 469 Alliance, 67 Horde), through
+  `CreatureAiServices.TeamOf`, which the world binds from FactionTemplate.dbc (`Creatures:FactionTemplateDbcPath`) and Faction.dbc
+  (`Reputation:FactionDbcPath`); without them the team is unknown and, as with vmangos TEAM_NONE, nobody comes. The area comes from the map
   terrain (`CreatureAiServices.AreaOf` overrides it); without extracted maps the area is 0 and the nearest-guard fallback applies.
 - **Creature-versus-creature aggro** (`Creatures:CreatureAggroOnCreatures`, default true): `CanAggroOnSight` takes any living unit
   of the map (a GM player and an evading creature are excluded; the hostility seam decides: reputation for players, the faction

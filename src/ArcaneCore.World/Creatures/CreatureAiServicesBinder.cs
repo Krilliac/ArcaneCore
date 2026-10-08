@@ -3,7 +3,9 @@ using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -32,11 +34,32 @@ public static class CreatureAiServicesBinder
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(options);
-        ICreatureHostility hostility = services.GetService<ICreatureHostility>()
-            ?? new FactionCreatureHostility(services.GetService<FactionTemplateCatalog>()
-                ?? (string.IsNullOrWhiteSpace(options.FactionTemplateDbcPath)
-                    ? FactionTemplateCatalog.Empty
-                    : FactionTemplateDbcReader.Load(options.FactionTemplateDbcPath)));
+        var templates = new Lazy<FactionTemplateCatalog>(() => services.GetService<FactionTemplateCatalog>()
+            ?? (string.IsNullOrWhiteSpace(options.FactionTemplateDbcPath)
+                ? FactionTemplateCatalog.Empty
+                : FactionTemplateDbcReader.Load(options.FactionTemplateDbcPath)));
+        ICreatureHostility hostility = services.GetService<ICreatureHostility>() ?? new FactionCreatureHostility(templates.Value);
+
+        // Faction.dbc comes from the reputation feature (Reputation:FactionDbcPath) unless a catalog is registered; read on the first
+        // guard call against an enemy no player controls, the only user, on a map thread. A reputation load failure is reported by the
+        // reputation feature itself; here it only means no team.
+        var factions = new Lazy<FactionCatalog>(() =>
+        {
+            if (services.GetService<FactionCatalog>() is { } registered)
+            {
+                return registered;
+            }
+
+            try
+            {
+                return services.GetService<ReputationFeature>()?.Service.Factions ?? FactionCatalog.Empty;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException or ArgumentException
+                or System.Data.Common.DbException)
+            {
+                return FactionCatalog.Empty;
+            }
+        });
         SpellFeature? spells = services.GetService<SpellFeature>();
         var result = new CreatureAiServices
         {
@@ -46,6 +69,7 @@ public static class CreatureAiServicesBinder
             Factory = services.GetService<CreatureAiFactory>() ?? new CreatureAiFactory(),
             // The conditions table is a world feature (ConditionFeature), not a registered IConditionEvaluator service.
             Conditions = services.GetService<IConditionEvaluator>() ?? services.GetServices<IWorldFeature>().OfType<IConditionEvaluator>().FirstOrDefault(),
+            TeamOf = creature => FactionTeams.Of(creature.FactionTemplate, templates.Value, factions.Value),
         };
 
         foreach (PropertyInfo property in Bindable)

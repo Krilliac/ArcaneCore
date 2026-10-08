@@ -254,4 +254,11 @@ public sealed class CreatureAiServices
 
     /// <summary>The area id a creature stands in (vmangos GetAreaId); null asks the map's terrain (<c>Map.GetZoneAndAreaId</c>).</summary>
     public Func<Creature, uint>? AreaOf { get; init; }
+
+    /// <summary>
+    /// A creature's team (vmangos Unit::GetTeam, Unit.cpp:4960-4973: its faction's Faction.dbc team field, 469 Alliance or 67 Horde;
+    /// null for anything else). A guard post called against an enemy no player controls sends the guard of the civilian's own team
+    /// (GuardMgr::GetTeam); null here: nobody comes. Bound by the world from FactionTemplate.dbc and Faction.dbc.
+    /// </summary>
+    public Func<Creature, Team?>? TeamOf { get; init; }
 }

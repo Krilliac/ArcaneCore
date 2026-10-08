@@ -2,6 +2,9 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Reputation;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -59,6 +62,38 @@ public sealed class CreatureAiServicesBindingTests
         Assert.IsType<FactionCreatureHostility>(services.Hostility);
         Assert.Null(services.Spells);
         Assert.NotNull(services.Factory);
+    }
+
+    /// <summary>
+    /// vmangos Unit::GetTeam (Unit.cpp:4960-4973), used by GuardMgr::GetTeam: the faction template's Faction.dbc row and its team
+    /// (m_parentFactionID) field, 469 Alliance or 67 Horde; anything else, or a missing row, is no team.
+    /// </summary>
+    [Fact]
+    public void TheCreatureTeam_ComesFromFactionDbcsTeamField()
+    {
+        static FactionRecord Faction(uint id, uint parent) => new(id, -1, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], parent);
+        var templates = new FactionTemplateCatalog([
+            new FactionTemplateRecord(12, 72, 0, 2, 2, 12),   // Stormwind
+            new FactionTemplateRecord(29, 76, 0, 4, 4, 10),   // Orgrimmar
+            new FactionTemplateRecord(14, 16, 0, 8, 0, 1),    // Monster
+            new FactionTemplateRecord(35, 999, 0, 0, 0, 0),   // a faction Faction.dbc lacks
+        ]);
+        var factions = new FactionCatalog([Faction(72, 469), Faction(76, 67), Faction(16, 0)]);
+        CreatureAiServices services = CreatureAiServicesBinder.Build(
+            Container(c => c.AddSingleton(templates).AddSingleton(factions)), new CreatureOptions());
+
+        Func<Creature, Team?> teamOf = Assert.IsType<Func<Creature, Team?>>(services.TeamOf);
+        Assert.Equal(Team.Alliance, teamOf(Creature(12)));
+        Assert.Equal(Team.Horde, teamOf(Creature(29)));
+        Assert.Null(teamOf(Creature(14)));
+        Assert.Null(teamOf(Creature(35)));
+        Assert.Null(teamOf(Creature(9999)));
+    }
+
+    private static Creature Creature(uint factionTemplate)
+    {
+        var template = new CreatureTemplate { Entry = 1, Name = "townsman", Faction = factionTemplate, MinLevelHealth = 20, MaxLevelHealth = 20 };
+        return new Creature(1, template, spawn: null, new CreatureContent([template], [], [], [], []), new Random(1));
     }
 
     [Fact]
