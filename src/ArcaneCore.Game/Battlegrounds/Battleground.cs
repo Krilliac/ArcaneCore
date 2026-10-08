@@ -17,6 +17,10 @@ public abstract class Battleground
     }
 
     private readonly Dictionary<ObjectGuid, Participant> _players = [];
+
+    // Each team's participants in join order: the battleground raid group of vmangos (AddOrSetPlayerToCorrectBgGroup), whose
+    // first member leads and whose next member leads when the leader leaves (Group::RemoveMember → _chooseLeader).
+    private readonly List<ObjectGuid>[] _joinOrder = [[], []];
     private readonly Dictionary<byte, byte> _activeEvents = [];
     private readonly uint[] _invited = new uint[2];
     private readonly uint[] _playersCount = new uint[2];
@@ -121,6 +125,9 @@ public abstract class Battleground
 
     /// <summary>The team a participant fights for, or null when the guid is not in the match.</summary>
     public Team? PlayerTeam(ObjectGuid guid) => _players.TryGetValue(guid, out Participant? p) ? p.Team : null;
+
+    /// <summary>A team's participants in join order: the members of its battleground raid group (vmangos); the first one leads.</summary>
+    public IReadOnlyList<ObjectGuid> TeamMembers(Team team) => _joinOrder[BattlegroundConstants.TeamIndex(team)];
 
     public BattlegroundScore? ScoreOf(ObjectGuid guid) => _players.TryGetValue(guid, out Participant? p) ? p.Score : null;
 
@@ -400,6 +407,7 @@ public abstract class Battleground
 
         _players[guid] = new Participant(team, CreateScore());
         _playersCount[BattlegroundConstants.TeamIndex(team)]++;
+        _joinOrder[BattlegroundConstants.TeamIndex(team)].Add(guid);
         Host.PlayerJoinedTeam(team, guid);
 
         // PlayerAddedToBGCheckIfBGIsRunning (BattleGround.cpp:1808-1822): a late joiner into an ended match is frozen and shown the result.
@@ -428,6 +436,7 @@ public abstract class Battleground
             participant = true;
             team = entry.Team;
             _playersCount[BattlegroundConstants.TeamIndex(team)]--;
+            _joinOrder[BattlegroundConstants.TeamIndex(team)].Remove(guid);
         }
 
         if (online)

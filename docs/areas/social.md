@@ -111,6 +111,13 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   the Undercity guild master has no gossip option rows in classic-db, no `GE_TABARDCHANGE`, no emblem range
   validation, no mute aura (vmangos casts the visual spell 1852 on a muted player), commands are not counted by the flood
   gate. (`.mute` itself is persistent since the GM audit lane: `account_mute`.)
+- **Battleground chat** (wave 2, `World/Social/BattlegroundChatFeature.cs`): `CHAT_MSG_BATTLEGROUND` reaches the speaker's
+  battleground group, the speaker included, and `CHAT_MSG_BATTLEGROUND_LEADER` too but only from its leader; outside a
+  battleground both are dropped (vmangos `ChatHandler.cpp:579-615`). vmangos keeps a raid group per battleground team
+  (`AddOrSetPlayerToCorrectBgGroup`); here the team's participants in join order stand for it (`Battleground.TeamMembers`,
+  `BattlegroundManagerChatRoster`), the first joiner leading and the next one when the leader leaves. The roster is taken
+  from a registered `IBattlegroundChatRoster` or `BattlegroundManager`; the battleground daemon is not wired into the world
+  yet (battleground lane), so until then nobody is in a battleground and the messages are dropped, as before.
 - **GM cross-faction group invites** need GM mode (`.gm on`), matching vmangos
   `IsGameMaster()`; the account level alone is not enough.
 
