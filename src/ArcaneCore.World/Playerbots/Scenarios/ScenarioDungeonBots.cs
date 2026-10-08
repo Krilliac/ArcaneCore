@@ -431,16 +431,15 @@ public sealed class DungeonBotSpiritHealerScenario : IPlayerbotScenario
             await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} releases", () => bot.Session!.Player is { IsInWorld: true } player
                 && (player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is not null && teleports.StageOf(player) is null,
                 TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-            // The ghost sees the spirit healers (the living do not): note where the one it will use stands.
-            Vector3 healer = await context.StepAsync("a spirit healer is in sight", () => context.ReadAsync(() =>
+            // The ghost sees the spirit healers (the living do not) once its view is updated after the release: note where the one
+            // it will use stands.
+            await ScenarioDungeonBots.WaitStepAsync(context, "a spirit healer is in sight",
+                () => bot.Session!.Player is { IsInWorld: true } player && NearestHealer(player) is not null, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            Vector3 healer = await context.ReadAsync(() =>
             {
-                Player player = bot.RequirePlayer();
-                Creature spirit = player.VisibleObjects.Select(g => player.Map!.FindObject(g)).OfType<Creature>()
-                    .Where(c => c.IsAlive && (c.NpcFlags & (uint)NpcFlags.SpiritHealer) != 0)
-                    .OrderBy(c => Vector3.Distance(new(c.X, c.Y, c.Z), new(player.X, player.Y, player.Z)))
-                    .FirstOrDefault() ?? throw new ScenarioAssertionException("no spirit healer in sight");
+                Creature spirit = NearestHealer(bot.RequirePlayer()) ?? throw new ScenarioAssertionException("no spirit healer in sight");
                 return new Vector3(spirit.X, spirit.Y, spirit.Z);
-            })).ConfigureAwait(false);
+            }).ConfigureAwait(false);
             Vector3 body = await context.StepAsync($"its body sinks {CorpseDepth} yards below the ground", () => context.ReadAsync(() =>
             {
                 Player player = bot.RequirePlayer();
@@ -470,4 +469,12 @@ public sealed class DungeonBotSpiritHealerScenario : IPlayerbotScenario
             await ScenarioDungeonBots.BringBackAsync(context, origin).ConfigureAwait(false);
         }
     }
+
+    /// <summary>The nearest living spirit healer <paramref name="player"/> sees (a ghost sees them; the living do not).</summary>
+    private static Creature? NearestHealer(Player player)
+        => player.Map is not { } map ? null
+            : player.VisibleObjects.Select(map.FindObject).OfType<Creature>()
+                .Where(c => c.IsAlive && (c.NpcFlags & (uint)NpcFlags.SpiritHealer) != 0)
+                .OrderBy(c => Vector3.Distance(new(c.X, c.Y, c.Z), new(player.X, player.Y, player.Z)))
+                .FirstOrDefault();
 }
