@@ -1,4 +1,6 @@
 using ArcaneCore.Game;
+using ArcaneCore.Data.Social;
+using ArcaneCore.Game.Channels;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
@@ -125,6 +127,14 @@ public sealed class SocialFeature(
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
+        // The client's ChatChannels.dbc, when the operator points at one (World:Chat:ChatChannelsDbcPath); fail closed.
+        string channelsDbc = configuration?.GetSection(Chat.ChatOptions.SectionName).GetValue<string>(nameof(Chat.ChatOptions.ChatChannelsDbcPath)) ?? string.Empty;
+        if (channelsDbc.Length > 0)
+        {
+            _context.ChannelCatalog = ChatChannelCatalog.FromDbc(ChatChannelsDbcReader.Load(channelsDbc));
+            _logger.LogInformation("Built-in chat channels from {Path}: {Count} rows", channelsDbc, _context.ChannelCatalog.Channels.Count);
+        }
+
         _spellFeature = services?.GetService<SpellFeature>();
         if (_spellFeature is { } spellFeature)
             spellFeature.System.VisibleAuraSlotChanged += OnVisibleAuraSlotChanged;

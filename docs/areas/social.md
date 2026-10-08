@@ -58,9 +58,8 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 
 ## Limitations and deviations
 
-- **ChatChannels.dbc rows are not verified.** The built-in channel ids, flags and name patterns
-  in `ChannelTypes.cs` are transcribed from the vmangos ChatChannelsEntry handling; no DBC file
-  was read.
+- **ChatChannels.dbc** is read from the developer's own client file when `World:Chat:ChatChannelsDbcPath` is set (every
+  locale's pattern); otherwise the transcribed 1.12.1 rows are used (English only). See [chat.md](chat.md).
 - **Groups survive a restart** (wave 2). `SocialGroupPersistenceFeature` restores the stored groups into the
   `GroupManager` at start (vmangos `ObjectMgr::LoadGroups`, `ObjectMgr.cpp:5360-5460`: a member whose character is gone is
   skipped, a group whose leader is gone or with fewer than two members left is dropped and its rows deleted) and, once per

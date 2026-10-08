@@ -82,10 +82,14 @@ no packet layout or byte-limit policy changed.
 
 ## Limits and open reference questions
 
-* **ChatChannels.dbc.** No DBC exists under the references and there is no DBC reader. The six built-in
-  rows match the vmangos `Channel.h` comment table for the English name patterns only; vmangos matches
-  all locale patterns (`DBCStores.cpp:530-552`), so a non-English client's General/Trade channel
-  would be created as a custom channel. Needs the client MPQ data.
+* **ChatChannels.dbc** (wave 2). `World:Chat:ChatChannelsDbcPath` points at the developer's own 1.12.1 file
+  (`Data/Social/ChatChannelsDbcReader.cs`, 21 fields, build 5875; another layout stops the start): the built-in channels
+  then come from it with every locale's name pattern, as vmangos matches them (`DBCStores.cpp:530-552`), so a German
+  client's "Allgemein - ..." is the General channel. Without a file the six transcribed rows of the 1.12.1 client file are
+  used, English patterns only (`Game/Channels/ChannelTypes.cs` `ChatChannelCatalog.Builtin`). Those rows were checked
+  against a 1.12.1 client file: ids 1, 2, 22, 23, **24**, 25 with DBC flags 0x3, 0x3B, 0x10003, 0x10004, **0x0**,
+  0x20032. LookingForGroup is id 24 with no flags there, so its channel flags are GENERAL | NOT_LFG (0x18); vmangos'
+  `Channel.h` (id 26, "0x50") describes the 2.x file, whose row carries the LFG flag. The earlier table used 26 and 0x50.
 * **Persisted mute and `GM.WhisperingTo = 2`.** The flood mute and the whisper-acceptance state are in
   memory. The flood mute is the session's (keyed by account id, vmangos `WorldSession::m_muteTime`), so it
   survives a logout and relog but ends with the server process; the whisper state is the player's and

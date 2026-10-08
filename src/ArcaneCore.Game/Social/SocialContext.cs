@@ -141,6 +141,12 @@ public sealed class SocialContext
     public Channels.ChannelManager Channels { get; }
 
     /// <summary>
+    /// Which channel names are built-in channels (ChatChannels.dbc). The transcribed 1.12.1 rows unless the world feature
+    /// replaced it with the client's own file at startup (World:Social:ChatChannelsDbcPath). Read when a channel is created.
+    /// </summary>
+    public ArcaneCore.Game.Channels.ChatChannelCatalog ChannelCatalog { get; set; } = ArcaneCore.Game.Channels.ChatChannelCatalog.Builtin;
+
+    /// <summary>
     /// Whether <paramref name="viewer"/> may see <paramref name="other"/> as online in social
     /// lists (vmangos SocialMgr::GetFriendInfo / BroadcastToFriendListers): staff see everyone;
     /// players see their own faction (or both with AllowTwoSide.WhoList) and no staff above

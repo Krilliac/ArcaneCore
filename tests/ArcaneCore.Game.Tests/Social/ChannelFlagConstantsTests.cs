@@ -39,8 +39,9 @@ public sealed class ChannelFlagConstantsTests
     [Fact]
     public void BuiltInChannels_CarryTheDocumentedFlagsAndIds()
     {
-        // vmangos Channel.h:74-81 ids and the flag table in the comment at :105-110.
-        (uint Id, byte Flags)[] expected = [(1, 0x18), (2, 0x3C), (22, 0x18), (23, 0x18), (25, 0x38), (26, 0x50)];
+        // The 1.12.1 client's ChatChannels.dbc (ids 1, 2, 22, 23, 24, 25 in file order) through vmangos Channel::Channel.
+        // vmangos Channel.h's id 26 and "0x50" for LookingForGroup describe the 2.x file, where that row has the LFG flag.
+        (uint Id, byte Flags)[] expected = [(1, 0x18), (2, 0x3C), (22, 0x18), (23, 0x18), (24, 0x18), (25, 0x38)];
         Assert.Equal(expected, BuiltInChannels.All.Select(c => (c.Id, (byte)c.Flags)));
     }
 

@@ -19,7 +19,7 @@ public sealed class Channel
     internal Channel(SocialContext context, string name)
     {
         _context = context;
-        BuiltInChannel? builtIn = BuiltInChannels.Find(name);
+        BuiltInChannel? builtIn = context.ChannelCatalog.Find(name);
         if (builtIn is not null)
         {
             ChannelId = builtIn.Id;
