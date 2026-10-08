@@ -8,6 +8,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.WorldState.Events;
@@ -362,7 +363,16 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
         }
     }
 
-    // ---- kills (vmangos Player::KilledPlayerCredit → BattleGround::HandleKillPlayer, Creature death → HandleKillUnit) ----
+    // ---- kills (vmangos Unit::Kill → BattleGround::HandleKillPlayer / HandleKillUnit, Unit.cpp:1272-1283) ----
+
+    /// <summary>
+    /// The player a kill is credited to (vmangos <c>pPlayerTap = GetCharmerOrOwnerPlayerOrPlayerItself()</c>, Unit.cpp:981): the killer itself
+    /// when it is a player, else the player that charms or owns it (a pet, guardian, totem or charmed creature), else the player a stand-in
+    /// unit reports through <see cref="IPlayerControlledUnit"/>. For a creature victim vmangos then prefers the creature's original loot
+    /// recipient when player damage dominated (Unit.cpp:987-1001); creatures keep no such recipient here, so the controlling player stands.
+    /// </summary>
+    private static Player? CreditedPlayer(Unit? killer)
+        => killer is null ? null : killer.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(killer);
 
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
@@ -371,7 +381,7 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
             return;
         }
 
-        Player? killerPlayer = killer as Player;
+        Player? killerPlayer = CreditedPlayer(killer);
         if (victim is Player dead)
         {
             if (Battleground.PlayerTeam(dead.Guid) is not null)
