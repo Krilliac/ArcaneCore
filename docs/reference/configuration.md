@@ -73,6 +73,7 @@ How to read the tables:
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
 - [`World:Stealth`](#worldstealth)
 - [`World:Time`](#worldtime)
+- [`World:Transports`](#worldtransports)
 - [`World:Weather`](#worldweather)
 - [`World:WorldStates`](#worldworldstates)
 - [`World:Zones`](#worldzones)
@@ -868,6 +869,13 @@ How to read the tables:
 |---|---|---|---|---|
 | `World:Time:TimeZoneId` | `string` | `""` | - | An explicit zone id (IANA or Windows) to treat as "server local time"; empty = the machine's zone. Only read while `UseServerLocalTime` is true. |
 | `World:Time:UseServerLocalTime` | `bool` | `true` | - | Pack the SERVER's local time into SMSG_LOGIN_SETTIMESPEED and compute weather seasons and event dates in it, as vmangos does with `localtime` (Server/Packets/Misc.cpp:924-933, Weather.cpp:100-103). Default true (retail); false uses UTC. |
+
+## `World:Transports`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Transports:Enabled` | `bool` | `false` | - | Master switch. Off (the default until the content is present: gameobject_template type 15 rows and a build-5875 TaxiPathNode.dbc through `NpcServices:TaxiPathNodeDbcPath`), no ship is built or spawned and a client that claims to stand on a transport is treated as standing on nothing, exactly as before this feature existed. vmangos always runs its ships (World.cpp:1451 LoadTransportTemplates). |
+| `World:Transports:Entries` | `List<uint>` | `[]` | - | Only these `gameobject_template` entries become ships; empty (the default) means every type 15 row with a usable path. A switch for bringing routes up one at a time. |
 
 ## `World:Weather`
 
