@@ -11,7 +11,20 @@ public sealed partial class CreatureMapSystem
     private readonly ICreatureRespawnPersistence? _persistence;
     private readonly IRespawnClock _respawnClock;
 
-    private bool Persists => _persistence is not null && _options.Respawn.Persist;
+    /// <summary>
+    /// Respawn times go to the database except on a battleground map: vmangos MapPersistentState::SaveCreatureRespawnTime returns before the
+    /// database for one ("BGs/Arenas always reset at server restart/unload, so no reason store in DB", Maps/MapPersistentStateMgr.cpp:84-86).
+    /// Battleground instance ids are reused after a restart, so a stored time would carry into a later match.
+    /// </summary>
+    private bool Persists => _persistence is not null && _options.Respawn.Persist && !IsBattlegroundMap;
+
+    private bool IsBattlegroundMap => Map.Template is { IsBattleground: true };
+
+    /// <summary>
+    /// A creature that will not come back (<see cref="Creature.RespawnNeverSeconds"/>, a battleground's RESPAWN_STOP) has no respawn time to
+    /// store: saving "now + never" would leave a row whose time never passes, so the load would never delete it.
+    /// </summary>
+    private static bool NeverRespawns(Creature creature) => creature.RespawnAtMs == long.MaxValue;
 
     /// <summary>
     /// Read the stored times of this map instance into the dormant-respawn table, so the creatures load dead for what is left of them
@@ -20,6 +33,18 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void LoadPersistedRespawns()
     {
+        if (_persistence is not null && _options.Respawn.Persist && IsBattlegroundMap)
+        {
+            // Rows an older build left for this (reused) battleground instance id: a new match starts with every creature alive, as in vmangos,
+            // whose startup cleanup deletes the respawn rows of instances that are not saved dungeon instances.
+            foreach (uint guid in _persistence.GetPending(Map.MapId, Map.InstanceId).Keys)
+            {
+                _persistence.Delete(Map.MapId, Map.InstanceId, guid);
+            }
+
+            return;
+        }
+
         if (!Persists)
         {
             return;
@@ -42,7 +67,7 @@ public sealed partial class CreatureMapSystem
     /// <summary>A database spawn died: save its respawn time when the options (or its rank) ask for it at death.</summary>
     private void SaveRespawnOnDeath(Creature creature)
     {
-        if (!Persists || creature.Spawn is null || creature.Summon is not null)
+        if (!Persists || creature.Spawn is null || creature.Summon is not null || NeverRespawns(creature))
         {
             return;
         }
@@ -77,7 +102,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void SaveRespawnTime(Creature creature)
     {
-        if (creature.Spawn is null || creature.Summon is not null || creature.DeathState == CreatureDeathState.Alive)
+        if (creature.Spawn is null || creature.Summon is not null || creature.DeathState == CreatureDeathState.Alive || NeverRespawns(creature))
         {
             return;
         }

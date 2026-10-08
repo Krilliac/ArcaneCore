@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
@@ -275,6 +277,88 @@ public sealed class RespawnPersistenceTests
             long saved = long.Parse(call[(call.LastIndexOf(':') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
             Assert.InRange(saved, StartUnix + 500, StartUnix + 560); // 600 s minus the ~66 s of map time that passed (m_respawnTime, no corpse any more)
         }
+    }
+
+    private const uint AlteracValley = 30;
+    private const uint BattlegroundInstance = 5;
+
+    /// <summary>A creature system on an Alterac Valley instance map (a battleground map in the registry), with a player in it so the grid loads.</summary>
+    private static (WorldRuntime World, CreatureMapSystem System) StartBattleground(
+        FakePersistence persistence, FakeClock clock, uint respawnSeconds = 600, CreatureOptions? options = null)
+    {
+        WorldRuntime world = TestWorld.CreateRuntime();
+        WorldMaps.Of(world).Load(new MapContent(
+            [new MapTemplate(AlteracValley, 0, MapType.Battleground, 0, 40, 0, -1, 0, 0, "Alterac Valley", "")], [], [], [], []));
+        Map map = world.GetMap(AlteracValley, BattlegroundInstance);
+        CreatureContent content = Content([Template()], [Spawn(7, WolfEntry, 10, 0, mapId: AlteracValley, respawnSeconds: respawnSeconds)]);
+        var system = new CreatureMapSystem(map, content, options, random: new Random(1), respawnPersistence: persistence, respawnClock: clock);
+        map.AddUpdater(system);
+        map.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1), AlteracValley));
+        world.RunTick(50);
+        return (world, system);
+    }
+
+    [Fact]
+    public void OnABattlegroundMap_ADeathSavesNothing_AndAStoredTimeIsDropped_LikeVmangos()
+    {
+        // vmangos MapPersistentState::SaveCreatureRespawnTime (Maps/MapPersistentStateMgr.cpp:84-86): "BGs/Arenas always reset at server
+        // restart/unload, so no reason store in DB". A row left by an older build for a reused instance id must not load the creature dead.
+        foreach (bool saveImmediately in new[] { true, false })
+        {
+            var options = new CreatureOptions();
+            options.Respawn.SaveImmediately = saveImmediately;
+            var persistence = new FakePersistence();
+            persistence.Stored[(AlteracValley, BattlegroundInstance, 7)] = StartUnix + 300;
+            (WorldRuntime w, CreatureMapSystem system) = StartBattleground(persistence, new FakeClock(), options: options);
+            using WorldRuntime world = w;
+
+            Creature wolf = Assert.Single(system.Creatures);
+            Assert.Equal(CreatureDeathState.Alive, wolf.DeathState);
+            Assert.Empty(persistence.Stored);
+
+            system.KillCreature(wolf);
+            system.SaveRespawnTimes(); // shutdown / instance unload, which saves with SaveImmediately off
+
+            Assert.DoesNotContain(persistence.Calls, c => c.StartsWith("save:", StringComparison.Ordinal));
+            Assert.Empty(persistence.Stored);
+        }
+    }
+
+    [Fact]
+    public void ARespawnStopCreaturesDeath_LeavesNoLastingRow_OnABattlegroundMap()
+    {
+        // RESPAWN_STOP (SpawnBGCreature) on a defender, then the defender dies: in memory it stays dead for the match; in the database nothing
+        // is written, so a later match reusing the instance id after a restart does not load it dead with an endless timer.
+        var persistence = new FakePersistence();
+        var clock = new FakeClock();
+        (WorldRuntime w, CreatureMapSystem system) = StartBattleground(
+            persistence, clock, respawnSeconds: 5, new CreatureOptions { CorpseDecayNormalSeconds = 1 });
+        using WorldRuntime world = w;
+        Creature wolf = Assert.Single(system.Creatures);
+
+        Assert.True(system.SetEventRespawnMode(7, forced: false));
+        system.KillCreature(wolf);
+        Run(world, 30_000, 1000);
+        clock.UnixSeconds += 30;
+        system.SaveRespawnTimes();
+
+        Assert.Equal(CreatureDeathState.Dead, wolf.DeathState);
+        Assert.Empty(persistence.Stored);
+    }
+
+    [Fact]
+    public void ANeverRespawnTime_IsNotWrittenAsARowThatNeverExpires_OnAnyMap()
+    {
+        // RespawnNeverSeconds means "no respawn time", not a date: saving now + 2^63 ms would leave a row the load never deletes.
+        var persistence = new FakePersistence();
+        (WorldRuntime w, CreatureMapSystem system) = Start(One(5), persistence, new FakeClock());
+        using WorldRuntime world = w;
+        Creature wolf = Assert.Single(system.Creatures);
+
+        Assert.True(system.SetEventRespawnMode(7, forced: false));
+        system.KillCreature(wolf);
+
+        Assert.Empty(persistence.Stored);
     }
 
     [Fact]
