@@ -175,6 +175,24 @@ different subgroups; the formation timeout setting the goal aside; a real player
 nearby player who declines; the GM commands; a server group of bots nobody leads left; a bot stranded in an instance, stopped and
 logged in again there (the login gate), walking out (`PlayerbotGroupWorldTests`, `PlayerbotGroupPlayerTests`). `ConfigReloadTests` checks every key is live and range-checked.
 
+## Live replay (2026-10-08)
+
+`PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`D:/ArcaneCore-lanes/_logs/w6-integrate/rehearsal/orig-characters.db`
+and `orig-world.db`, the live settings without their `Database`, `Auth` and `Realms` sections, terrain `D:/ArcaneCore-data/terrain-5875`;
+the five desired bots: Dawnrover, paladin 6, Elwynn; Ironwander, warrior 5, and Mirthblade, rogue 8, Dun Morogh; Duststalker, hunter 8,
+Durotar; Graveweaver, warlock 1, Tirisfal), six runs of 10 game minutes each with this branch and six with its base (`claude/bot-risk`
+d3b26dcb):
+
+* No group goal arose and no group formed (`formed 0`, nobody waiting): none of the five has an elite, dungeon or raid quest, and no
+  quest objective was passed over as too strong alone for a small group. Ironwander and Mirthblade are the only two that could match
+  (same team and zone, levels 5 and 8), and they never wanted the same thing.
+* Deaths: 0 in all six runs (base: 0 in five runs, 4 in one). Every run passed (nobody still for 180 s while alive).
+* Stalls reported by the stall watch: 2 in one run (Dawnrover at a quest giver, Ironwander at a grind target), 0 in the others (base: 0).
+* Distance travelled, all five together: 10332 to 12558 yards (mean 11496); base 11577 to 13751 (mean 12673). The replay is not
+  deterministic (positions differ between runs within the first 30 seconds); per bot the two sets overlap (Mirthblade 2914 to 4403 against
+  3351 to 4709). The only brain-visible change for bots without group goals is that a quest or creature entry set aside is no longer
+  chosen as the creature to hunt; no suspension showed in these runs, so the difference is not attributed to it.
+
 ## Limits
 
 * Dungeon goals come from creature objectives; a dungeon quest that asks only for items is not recognised (its drop source would need
