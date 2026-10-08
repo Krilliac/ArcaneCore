@@ -149,6 +149,31 @@ public sealed class UnitControlTests
     }
 
     [Fact]
+    public void ThePossessor_MayCancelItsOwnChanneledPossession_ThoughTheSpellIsNegative()
+    {
+        SpellInfo mindControl = Spell(920_101, Effect(SpellEffectName.ApplyAura, 60, SpellImplicitTarget.UnitEnemy, aura: AuraType.ModPossess)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            Duration = new SpellDuration(60_000, 0, 60_000),
+            AttributesEx = SpellAttributesEx.IsChanneled,
+        };
+        using var kit = new PetTestKit([.. ControlSpells(), mindControl]);
+        (Player priest, _) = kit.AddPlayer(1, 5, 5);
+        Creature mob = Mob(kit);
+        kit.Spells.Spellbook.Teach(priest, 920_101);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(priest, 920_101, SpellCastTargets.ForUnit(mob.Guid), triggered: false));
+        Assert.Equal(priest.Guid, mob.CharmerGuid);
+
+        kit.Spells.System.CancelAura(priest, 920_101); // vmangos HandleCancelAuraOpcode: "except own aura spells" while remote controlling
+
+        Assert.True(mob.CharmerGuid.IsEmpty);
+        Assert.True(priest.CharmGuid.IsEmpty);
+        Assert.Same(priest, priest.GetMover());
+    }
+
+    [Fact]
     public void AFearedPossessedCreature_IsNoLongerMovedByItsPossessor()
     {
         SpellInfo fear = Spell(920_100, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, aura: AuraType.ModFear)) with

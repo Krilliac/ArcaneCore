@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
@@ -35,9 +36,18 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_CANCEL_CAST: u32 spell (vmangos HandleCancelCastOpcode).</summary>
     private static void HandleCancelCast(WorldSession session, Player player, byte[] payload)
     {
+        // ignore for remote control state (for player case) (vmangos HandleCancelCastOpcode, SpellHandler.cpp:320-324)
+        if (RemoteControlsAPlayer(player))
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         Spells(session).CancelCast(player, reader.ReadUInt32());
     }
+
+    /// <summary>The player moves another player (a Mind Control): vmangos ignores its cancel-cast and cancel-channel requests.</summary>
+    private static bool RemoteControlsAPlayer(Player player) => player.GetMover() is Player mover && !ReferenceEquals(mover, player);
 
     /// <summary>CMSG_CANCEL_AURA: u32 spell (vmangos HandleCancelAuraOpcode).</summary>
     private static void HandleCancelAura(WorldSession session, Player player, byte[] payload)
@@ -51,5 +61,11 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
     /// interrupts the current channeled spell).
     /// </summary>
     private static void HandleCancelChannelling(WorldSession session, Player player, byte[] payload)
-        => Spells(session).CancelChannel(player);
+    {
+        // ignore for remote control state (for player case) (vmangos HandleCancelChanneling, SpellHandler.cpp:446-451)
+        if (!RemoteControlsAPlayer(player))
+        {
+            Spells(session).CancelChannel(player);
+        }
+    }
 }

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -6,8 +7,8 @@ public sealed partial class SpellSystem
 {
     /// <summary>
     /// CMSG_CANCEL_AURA (vmangos WorldSession::HandleCancelAuraOpcode, SpellHandler.cpp:333-405): ignored for NO_AURA_CANCEL,
-    /// DO_NOT_DISPLAY, NO_AURA_ICON without an active icon, passive and negative spells (a player is always its own
-    /// mover here, so the possess exception of the negative branch never applies) and while possessed; a channelled spell
+    /// DO_NOT_DISPLAY, NO_AURA_ICON without an active icon, passive and negative spells (except, while the player moves another unit, a
+    /// MOD_POSSESS or MOD_POSSESS_PET spell: the possessor ends its own Mind Control or Eyes of the Beast) and while possessed; a channelled spell
     /// stops its channel; a foreign area aura cannot be cancelled; otherwise every holder of the spell is removed.
     /// Polarity is the spell's (vmangos IsPositiveSpell by id, with no caster or victim).
     /// </summary>
@@ -17,7 +18,14 @@ public sealed partial class SpellSystem
         SpellInfo? spell = Store.Get(spellId);
         if (spell is null || spell.HasAttribute(SpellAttributes.NoAuraCancel) || spell.HasAttribute(SpellAttributes.DoNotDisplay)
             || (spell.HasAttribute(SpellAttributesEx.NoAuraIcon) && spell.ActiveIconId == 0)
-            || spell.IsPassive || !spell.IsPositiveSpell(Store.Get))
+            || spell.IsPassive)
+        {
+            return;
+        }
+
+        // "ignore for remote control state ... except own aura spells" (SpellHandler.cpp:353-373)
+        if (!spell.IsPositiveSpell(Store.Get)
+            && (player.IsSelfMover || !(spell.HasAura(AuraType.ModPossess) || spell.HasAura(AuraType.ModPossessPet))))
         {
             return;
         }
