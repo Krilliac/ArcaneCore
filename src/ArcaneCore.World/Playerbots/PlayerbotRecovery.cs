@@ -427,7 +427,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             var at = new Vector3(creature.X, creature.Y, creature.Z);
             if (system is null)
             {
-                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0));
+                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0, creature));
                 continue;
             }
 
@@ -436,7 +436,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
             if (radius <= 0) continue;
             bool flyer = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR: no height limit
-            found.Add(new PlayerbotThreat(at, radius, flyer, radii));
+            found.Add(new PlayerbotThreat(at, radius, flyer, radii, creature));
         }
 
         return found;
@@ -561,7 +561,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 /// A creature that would attack a revived bot (<see cref="PlayerbotRecovery.Threats"/>): where it stands, its aggro radius against
 /// the bot, whether it is free of the 3-yard height limit (a flyer), and the bounding radii the height limit takes off.
 /// </summary>
-internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, bool IgnoresHeight, float Radii)
+internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, bool IgnoresHeight, float Radii, Creature? Source = null)
 {
     /// <summary>
     /// Whether a bot standing at <paramref name="spot"/> is inside this creature's aggro reach plus <paramref name="margin"/>

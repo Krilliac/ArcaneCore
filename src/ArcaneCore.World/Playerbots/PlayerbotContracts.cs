@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Playerbots;
 
 public sealed record PlayerbotOperationResult(bool Success, string Code, Guid? BotId = null, string? Name = null);
 public sealed record PlayerbotStatus(Guid BotId, string Name, ManagedPlayerbotState State, bool DesiredEnabled,
-    PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId, uint MapId, uint Health, string? ErrorCode);
+    PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId, uint MapId, uint Health, string? ErrorCode, string? Risk = null);
 
 public interface IPlayerbotService
 {

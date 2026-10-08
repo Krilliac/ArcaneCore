@@ -60,7 +60,7 @@ public sealed partial class CreatureMapSystem
     /// (Entities/Creature.cpp:2171-2173), and rows from before the dialect was recorded: a positive <c>CallForHelp</c> replaces
     /// <see cref="CreatureOptions.AssistanceRadius"/>, 0 keeps it.
     /// </summary>
-    private float AssistanceRadiusOf(CreatureTemplate template) => template.ExtraFlagsDialect == CreatureExtraFlagsDialect.VMangos
+    public float AssistanceRadiusOf(CreatureTemplate template) => template.ExtraFlagsDialect == CreatureExtraFlagsDialect.VMangos
         ? (template.CallForHelp > 0 ? _options.AssistanceRadius : 0f)
         : (template.CallForHelp > 0 ? template.CallForHelp : _options.AssistanceRadius);
 

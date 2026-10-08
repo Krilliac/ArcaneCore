@@ -496,7 +496,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId)).Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => new PlayerbotStatus(
                 b.Record.BotId, b.Name, b.Session.State == SessionState.Closed ? ManagedPlayerbotState.Faulted : b.Record.State,
                 b.Record.DesiredEnabled, GoalOf(b).Goal, GoalOf(b).TargetEntry, GoalOf(b).QuestId, b.MapId, b.Session.Player?.Health ?? 0,
-                b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b)))).ToArray());
+                b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b), RiskOf(b)))).ToArray());
         }
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
@@ -530,6 +530,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
     }
+
+    /// <summary>The risk line of a running bot (its party AI's while that drives it); none for a scripted bot.</summary>
+    private static string? RiskOf(ActiveBot active) => active.Controller is not null ? null
+        : active.PartyDriven ? active.Party.RiskReport : active.Brain.RiskReport;
 
     /// <summary>A running bot's current stall (<see cref="PlayerbotStallWatch"/>), shown where a fault would be.</summary>
     private static string? StallOf(ActiveBot active) => active.PartyDriven || active.Controller is not null ? null

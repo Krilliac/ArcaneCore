@@ -79,6 +79,9 @@ public sealed class PlayerbotOptions
     /// <summary>How a bot behaves in a real player's group (<c>World:Playerbots:Party</c>; <see cref="Party.PlayerbotPartyAI"/>).</summary>
     public PlayerbotPartyOptions Party { get; set; } = new();
 
+    /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
+    public PlayerbotRiskOptions Risk { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -120,6 +123,8 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}:Scenarios: MaxDurationSeconds must be 5..600 and StepTimeoutSeconds 1..300.");
         if (Party is null) throw new InvalidOperationException($"{SectionName}:Party is missing.");
         Party.Validate();
+        if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
+        Risk.Validate();
     }
 }
 

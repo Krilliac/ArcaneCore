@@ -21,13 +21,18 @@ internal static class PlayerbotConsumables
     private const int MaxItemsScanned = 128;
 
     internal static bool TryFindRecovery(Player player, SpellSystem spells, out PlayerbotConsumable consumable)
+        => TryFindRecovery(player, spells, 45, 35, out consumable);
+
+    /// <param name="healthBelowPct">Eat below this health percentage (45 between ordinary fights; the risk's recovery asks for more).</param>
+    /// <param name="manaBelowPct">Drink below this mana percentage (35 between ordinary fights).</param>
+    internal static bool TryFindRecovery(Player player, SpellSystem spells, uint healthBelowPct, uint manaBelowPct, out PlayerbotConsumable consumable)
     {
         consumable = default;
-        bool healthLow = player.Health * 100UL < player.MaxHealth * 45UL;
+        bool healthLow = player.Health * 100UL < player.MaxHealth * (ulong)healthBelowPct;
         bool manaLow = player.PowerType == PowerType.Mana
             && player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) > 0
             && SpellSystem.GetPower(player, PowerType.Mana) * 100UL
-                < player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) * 35UL;
+                < player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) * (ulong)manaBelowPct;
 
         if (!healthLow && !manaLow)
             return false;
