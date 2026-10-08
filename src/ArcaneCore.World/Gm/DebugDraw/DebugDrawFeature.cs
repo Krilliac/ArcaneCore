@@ -9,6 +9,8 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.Gm.DebugDraw;
 
@@ -34,6 +36,14 @@ public sealed class DebugDrawFeature(IServiceProvider services) : IWorldFeature
 
     public DebugDrawOptions Options { get; private set; } = new();
 
+    private DebugMarkerStyle[] _styles = [.. DebugMarkerStyles.All];
+
+    /// <summary>The marker look of every kind this server draws with (built-in models plus validated overrides, <see cref="DebugMarkerModels"/>).</summary>
+    public IReadOnlyList<DebugMarkerStyle> Styles => _styles;
+
+    /// <summary>The look of <paramref name="kind"/> (<see cref="Styles"/>).</summary>
+    public DebugMarkerStyle StyleOf(DebugMarkerKind kind) => (int)kind < _styles.Length ? _styles[(int)kind] : _styles[0];
+
     /// <summary>GMs that currently have markers.</summary>
     public int ActiveGmCount => _sets.Count;
 
@@ -42,6 +52,7 @@ public sealed class DebugDrawFeature(IServiceProvider services) : IWorldFeature
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         Options = DebugDrawOptions.Bind(services.GetService<IConfiguration>());
+        _styles = DebugMarkerModels.Resolve(Options, services.GetService<ILogger<DebugDrawFeature>>() ?? (ILogger)NullLogger.Instance);
         world.WorldTick += OnTick;
         world.PlayerLoggingOut += OnLoggingOut;
     }
@@ -84,7 +95,7 @@ public sealed class DebugDrawFeature(IServiceProvider services) : IWorldFeature
         int accepted = 0;
         foreach (DebugMarkerRequest request in requests)
         {
-            DebugMarkerStyle style = DebugMarkerStyles.Of(request.Kind);
+            DebugMarkerStyle style = StyleOf(request.Kind);
             bool glow = request.Emphasis && Options.Glow && style.GlowDisplayId != 0;
             int cost = glow ? 2 : 1;
             if (batch.Markers.Count + cost > max)

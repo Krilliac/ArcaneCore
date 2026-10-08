@@ -788,9 +788,12 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath` | `string` | `""` | - | The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is shipped). When set, every marker model (built-in and overridden) is checked against it at startup: an override the client does not have falls back to the built-in model with a warning. An unreadable or malformed file stops the daemon, as every configured DBC does. Empty: no check. |
 | `World:GmCommands:DebugDraw:Glow` | `bool` | `true` | - | Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns). |
+| `World:GmCommands:DebugDraw:GlowModels` | `Dictionary<string, uint>` | `{}` | - | Per marker kind, the glow companion's GameObjectDisplayInfo id (0 = no glow), checked like `Models`. |
 | `World:GmCommands:DebugDraw:LifetimeSeconds` | `int` | `120` | - | Seconds a drawing stays before it is removed on its own (it also goes with .debug vis clear, a logout or a map change). 5..3600. |
 | `World:GmCommands:DebugDraw:MaxMarkersPerGm` | `int` | `300` | - | Most markers one GM's client holds at once (glow companions count); a new drawing removes the oldest ones to fit. 1..2000. |
+| `World:GmCommands:DebugDraw:Models` | `Dictionary<string, uint>` | `{}` | - | Per marker kind (the `DebugMarkerKind` name, e.g. `Cell`, `LosClear`, `Waypoint`), a GameObjectDisplayInfo id to draw instead of the built-in model. 0 or an id missing from `GameObjectDisplayInfoDbcPath` keeps the built-in model. |
 | `World:GmCommands:DebugDraw:Spacing` | `float` | `2` | - | Yards between the dots of a line or path (at least 0.5; a long line spreads its dots further to stay within its share of markers). |
 
 ## `World:GmCommands:FirstLoginTools`

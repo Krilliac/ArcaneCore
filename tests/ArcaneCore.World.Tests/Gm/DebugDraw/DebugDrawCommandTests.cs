@@ -21,7 +21,7 @@ namespace ArcaneCore.World.Tests.Gm.DebugDraw;
 /// data the command computed (line of sight, path, waypoints), and they are removed by <c>.debug vis clear</c>, the cap, their lifetime
 /// and logout, with a destroy for every create.
 /// </summary>
-public sealed class DebugDrawCommandTests
+public sealed partial class DebugDrawCommandTests
 {
     private const uint WolfEntry = 20102;
     private const uint WolfSpawn = 88201;

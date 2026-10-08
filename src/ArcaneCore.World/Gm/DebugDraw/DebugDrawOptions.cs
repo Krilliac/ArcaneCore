@@ -22,6 +22,22 @@ public sealed class DebugDrawOptions
     /// <summary>Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns).</summary>
     public bool Glow { get; set; } = true;
 
+    /// <summary>
+    /// The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is shipped). When set, every marker model (built-in
+    /// and overridden) is checked against it at startup: an override the client does not have falls back to the built-in model with a
+    /// warning. An unreadable or malformed file stops the daemon, as every configured DBC does. Empty: no check.
+    /// </summary>
+    public string GameObjectDisplayInfoDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Per marker kind (the <c>DebugMarkerKind</c> name, e.g. <c>Cell</c>, <c>LosClear</c>, <c>Waypoint</c>), a GameObjectDisplayInfo id
+    /// to draw instead of the built-in model. 0 or an id missing from <see cref="GameObjectDisplayInfoDbcPath"/> keeps the built-in model.
+    /// </summary>
+    public Dictionary<string, uint> Models { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Per marker kind, the glow companion's GameObjectDisplayInfo id (0 = no glow), checked like <see cref="Models"/>.</summary>
+    public Dictionary<string, uint> GlowModels { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Bind <c>World:GmCommands:DebugDraw</c> and clamp every value into its range.</summary>
     public static DebugDrawOptions Bind(IConfiguration? configuration)
     {

@@ -79,6 +79,20 @@ are blue (the fork used green, the same as a clear LoS) and the new kinds use th
 `World:GmCommands:DebugDraw` ([configuration reference](../reference/configuration.md)): `MaxMarkersPerGm` (300, 1..2000),
 `LifetimeSeconds` (120, 5..3600), `Spacing` (2 yards between dots, 0.5..50; a long line spreads its dots), `Glow` (true).
 
+Marker models (`DebugMarkerModels`, resolved once at startup):
+
+- `Models:<Kind>` and `GlowModels:<Kind>` (the `DebugMarkerKind` name, e.g. `Models:Cell = 5811`, `GlowModels:LosClear = 0`)
+  replace a kind's model or glow (glow 0 = none). An unknown kind name is a warning and is ignored.
+- `GameObjectDisplayInfoDbcPath` (optional, the developer's own build-5875 GameObjectDisplayInfo.dbc, read by
+  `GameObjectDisplayInfoDbcReader`): every built-in and overridden display id is checked against it. An override the file lacks is a
+  warning and the kind keeps its built-in model; a built-in id the file lacks is a warning (there is nothing to fall back to). One
+  info line reports the check. An unreadable or malformed file stops the daemon. Without the path the overrides are used unchecked.
+- The model a marker shows is its object's display id field (the glow companions share their kind's entry and template already), so
+  an override does not change the synthetic template.
+
+Checked against the client-effective file (patch.MPQ copy, 1638 rows, identical to `D:\server-Zero\run\dbc`): all 19 distinct
+built-in ids exist with the model paths in the table above, and each model's `.m2` is present in the client's MPQs.
+
 ## Tests
 
 - `tests/ArcaneCore.Game.Tests/DebugDraw/`: segment and polyline sampling (spacing, caps, the skipped start, closed loops), the cell
@@ -88,6 +102,8 @@ are blue (the fork used green, the same as a clear LoS) and the new kinds use th
   `.debug vis clear` destroys each one; a fake wall gives a hit point 0.5 yards in front of it; a fake pathfinder's corners are
   drawn; the no-navmesh path is marked bad; waypoints from `creature_movement` with the closing loop; right-click label and query
   answer; the cap evicts the oldest drawing; the lifetime expiry; logout destroys and forgets; the kit goes to the GM only.
+  `DebugMarkerModelTests.cs`: the GameObjectDisplayInfo reader, model overrides applied or refused against a synthetic file (and drawn
+  by `.debug vis los`), and, gated on `ARCANECORE_TEST_DBC_DIR`, every built-in id with its model path in the real client file.
 
 ## Limits
 
