@@ -149,6 +149,29 @@ public sealed class PlayerbotHazardTests
         });
     }
 
+    /// <summary>
+    /// A route planned before the soldier was known is given up at the next step once it is: the bot does not walk on into it.
+    /// </summary>
+    [Fact]
+    public async Task ARouteIntoAHazardThatAppearedLater_IsGivenUp()
+    {
+        (RiskTestWorld world, CreatureTemplate soldierTemplate) = await StartAsync();
+        await using RiskTestWorld owned = world;
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            PlayerbotNavigation.Guard(player, world.Brain.Risk);
+            Assert.True(PlayerbotNavigation.TryPlan(player, new Vector3(player.X, player.Y + 60, player.Z), world.Options, out PlayerbotRoute? route));
+            world.Session.ManagedBudget = new ArcaneCore.World.Net.ManagedActionBudget(4);
+            Assert.True(PlayerbotNavigation.TryAdvance(world.Session, route!, world.Options, 100, world.Host.World.NowMs));
+            Creature soldier = world.Spawn(soldierTemplate, 0, 30);
+            world.Brain.Risk.Hazards.Add(player.MapId, new Vector3(soldier.X, soldier.Y, soldier.Z), 26f, world.Host.World.NowMs, 300, "lethal", soldier.Guid);
+            Assert.False(PlayerbotNavigation.TryAdvance(world.Session, route!, world.Options, 100, world.Host.World.NowMs));
+            PlayerbotNavigation.Guard(player, null);
+            return true;
+        });
+    }
+
     private static IEnumerable<Vector3> Sample(IReadOnlyList<Vector3> points)
     {
         for (int i = 1; i < points.Count; i++)

@@ -225,6 +225,18 @@ internal static class PlayerbotNavigation
         if (player.StandState != StandState.Stand)
             return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
         if (!PlayerbotMapPolicy.MayMoveOn(player, options)) return false;
+        // A hazard that turned up since the route was planned (a creature that kills outright came into sight): give the route up
+        // here, before walking into it; the goal plans again, round it or elsewhere.
+        if (Guards.TryGetValue(player, out PlayerbotRisk? risk))
+        {
+            List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
+            if (risk.Blocking(player, rest) is not null)
+            {
+                PlayerbotMovementControl.Stop(session, player);
+                return false;
+            }
+        }
+
         return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs);
     }
 
