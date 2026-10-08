@@ -49,6 +49,7 @@ combat. `ReputationFeature` and `ReputationCombatFeature` now each log one line 
 | `SMSG_SET_FORCED_REACTIONS` is built but not sent | vmangos writes (u32 faction, u32 rank); wow_messages types the faction as a u16 | `SendForcedReactions` |
 | the reputation templates reload as one pair: either `.reload` name refreshes both tables | one immutable `ReputationContent` swapped whole | none |
 | the kill-credit exclusion of "units a player controls" covers pets, totems and `IPlayerControlledUnit` | the base has no charm primitive | none |
+| a player-tapped creature killed by an NPC (a guard, an escort) still credits the tapper and the group of the tap, whatever share of the damage players did | vmangos credits the tap only when `Creature::IsLootAllowedDueToDamageOrigin` holds (`Unit.cpp:988`, `Creature.h:548-554`: players dealt more than 35% of the damage, or the creature has `CORPSE_RAID`), otherwise the killer; the damage-origin counters are not kept here (review finding 114, `ReputationKillCredit`) | none |
 
 ## Limits (not delivered, recorded)
 

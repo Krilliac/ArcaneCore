@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -117,12 +118,154 @@ public sealed class RealmBanEnforcementTests
         Assert.Equal(0, first);
     }
 
+    // --- the logon daemon's IP-ban list (RealmIpBanCache) ----------------------------
+
+    [Fact]
+    public void TheDefaultPeriod_IsMangosdsBanListReloadTimer() => Assert.Equal(60, new AuthOptions().IpBanCacheSeconds);
+
+    [Fact]
+    public async Task ManyChallenges_ThroughOneListenersCache_ReadTheIpBanTableOnce()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        _bans.AddIpRow("10.9.8.7", Now - 10, Now - 10);
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        }
+
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "10.9.8.7:5555", cache: cache));
+        Assert.Equal(1, _bans.ListIpBansCalls);
+        Assert.Equal(0, _bans.GetActiveIpBanCalls);
+    }
+
+    [Fact]
+    public async Task ABanWrittenAfterTheLoad_ReachesTheLogonScreenOnceThePeriodHasPassed()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+
+        _bans.AddIpRow("127.0.0.1", Now, Now); // another process bans the address
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+
+        _clock.Advance(60);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        Assert.Equal(2, _bans.ListIpBansCalls);
+    }
+
+    [Fact]
+    public async Task ATemporaryBanInTheList_EndsOnTime_WithoutAReload()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(600), _clock);
+        _bans.AddIpRow("127.0.0.1", Now - 10, Now + 30);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+
+        _clock.Advance(31);
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        Assert.Equal(1, _bans.ListIpBansCalls);
+    }
+
+    [Fact]
+    public async Task APeriodOfZero_ReadsTheRowOnEveryChallenge_AsVmangosRealmdDoes()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.Zero, _clock);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        }
+
+        Assert.Equal(3, _bans.GetActiveIpBanCalls);
+        Assert.Equal(0, _bans.ListIpBansCalls);
+    }
+
+    [Fact]
+    public async Task AFailedReload_WithTheRowReadFailingToo_ClosesTheConnection_AndALaterChallengeStillChecks()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        _bans.FailWith = new InvalidOperationException("database down");
+        (int read, _) = await ExchangeAsync(true, "127.0.0.1:5555", true, AccountStatus.Active, sendProof: false, cache);
+        Assert.Equal(0, read); // fail closed, as the direct read
+        Assert.Equal((1, 1), (cache.FailedReloads, cache.RowReadFallbacks));
+
+        _bans.FailWith = null;
+        _bans.AddIpRow("127.0.0.1", Now - 10, Now - 10);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+    }
+
+    [Fact]
+    public async Task AFailedReload_FallsBackToTheRowRead_ForOnePeriod_ThenTheListIsLoadedAgain()
+    {
+        // A list load that keeps failing (a large ip_banned past the query budget) must not lock everyone out:
+        // challenges are answered by vmangos realmd's single-row read, and the whole list is not retried per challenge.
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        _bans.AddIpRow("10.9.8.7", Now - 10, Now - 10);
+        _bans.ListFailWith = new TimeoutException("query budget exceeded");
+
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "10.9.8.7:5555", cache: cache));
+        Assert.Equal((1, 2), (_bans.ListIpBansCalls, _bans.GetActiveIpBanCalls));
+        Assert.Equal((0, 1, 2), (cache.Reloads, cache.FailedReloads, cache.RowReadFallbacks));
+
+        _bans.ListFailWith = null;
+        _clock.Advance(59);
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        Assert.Equal((1, 3), (_bans.ListIpBansCalls, _bans.GetActiveIpBanCalls)); // still inside the period after the failure
+
+        _clock.Advance(1);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "10.9.8.7:5555", cache: cache));
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+        Assert.Equal((2, 3), (_bans.ListIpBansCalls, _bans.GetActiveIpBanCalls)); // the list again, no more row reads
+        Assert.Equal(1, cache.Reloads);
+    }
+
+    [Fact]
+    public async Task WithTheListenersScopes_TheListIsLoadedThroughTheCachesOwnStore_AndTheRowReadThroughTheSessions()
+    {
+        // A list load that ran out of its query budget is abandoned while still running; it must not hold the session's
+        // store (one database context), which the fallback row read then uses (AuthDatabaseOutageTests over a locked file).
+        var listStore = new InMemoryBanStore(_clock);
+        listStore.AddIpRow("10.9.8.7", Now - 10, Now - 10);
+        await using ServiceProvider services = new ServiceCollection().AddScoped<IBanStore>(_ => listStore).BuildServiceProvider();
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock, services.GetRequiredService<IServiceScopeFactory>());
+
+        Assert.True(await cache.IsBannedAsync("10.9.8.7", _bans));
+        Assert.Equal((1, 0, 0), (listStore.ListIpBansCalls, _bans.ListIpBansCalls, _bans.GetActiveIpBanCalls));
+
+        listStore.ListFailWith = new TimeoutException("query budget exceeded");
+        _clock.Advance(60);
+        _bans.AddIpRow("10.1.1.1", Now, Now);
+        Assert.True(await cache.IsBannedAsync("10.1.1.1", _bans)); // answered by the session's own row read
+        Assert.Equal((2, 0, 1), (listStore.ListIpBansCalls, _bans.ListIpBansCalls, _bans.GetActiveIpBanCalls));
+    }
+
+    [Fact]
+    public async Task AnUnbanWrittenElsewhere_LetsTheAddressBackInOnceThePeriodHasPassed()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        _bans.AddIpRow("127.0.0.1", Now - 10, Now - 10);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+
+        Assert.True(await _bans.UnbanIpAsync("127.0.0.1")); // another process lifts the ban
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+
+        _clock.Advance(60);
+        Assert.Equal((byte)AuthResult.Success, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+    }
+
+    [Fact]
+    public async Task ANonCanonicalStoredSpelling_StillMatchesTheSessionAddress()
+    {
+        var cache = new RealmIpBanCache(TimeSpan.FromSeconds(60), _clock);
+        _bans.AddIpRow(" ::ffff:127.0.0.1 ", Now - 10, Now - 10);
+        Assert.Equal((byte)AuthResult.FailNoAccess, await ChallengeResultAsync(endpoint: "127.0.0.1:5555", cache: cache));
+    }
+
     // --- harness -------------------------------------------------------------------
 
     private async Task<byte> ChallengeResultAsync(
-        bool createAccount = true, string endpoint = "test", bool useBans = true, AccountStatus status = AccountStatus.Active)
+        bool createAccount = true, string endpoint = "test", bool useBans = true, AccountStatus status = AccountStatus.Active,
+        RealmIpBanCache? cache = null)
     {
-        (int read, byte[] reply) = await ExchangeAsync(createAccount, endpoint, useBans, status, sendProof: false);
+        (int read, byte[] reply) = await ExchangeAsync(createAccount, endpoint, useBans, status, sendProof: false, cache);
         Assert.True(read >= 3);
         return reply[2];
     }
@@ -140,7 +283,7 @@ public sealed class RealmBanEnforcementTests
     }
 
     private async Task<(int Read, byte[] Reply)> ExchangeAsync(
-        bool createAccount, string endpoint, bool useBans, AccountStatus status, bool sendProof)
+        bool createAccount, string endpoint, bool useBans, AccountStatus status, bool sendProof, RealmIpBanCache? cache = null)
     {
         var accounts = new InMemoryAccountStore();
         if (createAccount)
@@ -167,7 +310,7 @@ public sealed class RealmBanEnforcementTests
             await using NetworkStream stream = accepted.GetStream();
             var session = new LogonSession(
                 stream, accounts, new InMemoryRealmStore([]), new AuthOptions { AutocreateAccounts = false },
-                NullLogger.Instance, endpoint, useBans ? _bans : null);
+                NullLogger.Instance, endpoint, useBans ? _bans : null, ipBanCache: cache);
             try
             {
                 await session.RunAsync(CancellationToken.None);
@@ -227,5 +370,7 @@ public sealed class RealmBanEnforcementTests
     private sealed class ManualClock(long unixSeconds) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+
+        public void Advance(long seconds) => unixSeconds += seconds;
     }
 }

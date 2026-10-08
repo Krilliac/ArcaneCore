@@ -178,7 +178,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_SpentExpendableCharges_ScaleThePrice()
     {
-        // vmangos HandleSellItemOpcode (ItemHandler.cpp:84-96): negative template charges make the price relative to
+        // vmangos HandleSellItemOpcode (ItemHandler.cpp:523-537): negative template charges make the price relative to
         // the charges left; the buyback slot keeps the scaled price.
         using var kit = new NpcServiceKit(NpcFlags.Vendor);
         Item wand = kit.Give(Wand);
@@ -191,7 +191,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_LostDurability_SubtractsTheUndiscountedRepairCost()
     {
-        // ItemHandler.cpp:98-138: uint32(lost × DurabilityCosts multiplier × DurabilityQuality factor) comes off the price.
+        // ItemHandler.cpp:539-575: uint32(lost × DurabilityCosts multiplier × DurabilityQuality factor) comes off the price.
         using var kit = new NpcServiceKit(NpcFlags.Vendor, repair: Repair());
         Item sword = kit.Give(Sword);
         sword.Durability = 40; // 10 lost × 3 × 1.0 = 30
@@ -215,7 +215,7 @@ public sealed class NpcVendorServiceTests
     [Fact]
     public void SellItem_DamagedItemWithoutARepairCostRow_IsRefused()
     {
-        // ItemHandler.cpp:106-121: no DurabilityCosts/DurabilityQuality row for a damaged item answers SELL_ERR_CANT_SELL_ITEM.
+        // ItemHandler.cpp:547-562: no DurabilityCosts/DurabilityQuality row for a damaged item answers SELL_ERR_CANT_SELL_ITEM.
         using var kit = new NpcServiceKit(NpcFlags.Vendor);
         Item sword = kit.Give(Sword);
         sword.Durability = 49;

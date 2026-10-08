@@ -14,6 +14,12 @@ public sealed class SessionRegistry
 
     public int Count => _byAccount.Count;
 
+    /// <summary>
+    /// A session was registered (authenticated). Raised on the registering thread after the registry holds it; a faulting
+    /// subscriber is the subscriber's problem (the account address recorder queues and returns).
+    /// </summary>
+    public event Action<WorldSession>? Registered;
+
     public void Register(WorldSession session)
     {
         // Keyed by account: the session must have taken its account id from the authenticated row first,
@@ -33,6 +39,8 @@ public sealed class SessionRegistry
         {
             previous.Kick();
         }
+
+        Registered?.Invoke(session);
     }
 
     public void Unregister(WorldSession session)

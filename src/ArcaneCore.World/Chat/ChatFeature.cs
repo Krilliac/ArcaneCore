@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Data.Social;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Chat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
@@ -36,12 +38,25 @@ public sealed class ChatFeature : IWorldFeature
     /// <summary>The chat rules.</summary>
     public ChatOptions Options { get; } = new();
 
+    /// <summary>The client's text emotes and emotes (<see cref="ChatOptions.EmotesTextDbcPath"/>); null without the files.</summary>
+    public EmoteCatalog? Emotes { get; set; }
+
     /// <summary>Whole seconds since the Unix epoch (vmangos time(nullptr)).</summary>
     public long NowUnixSeconds => _clock.GetUtcNow().ToUnixTimeSeconds();
 
     public void Attach(WorldRuntime world)
     {
         _configuration?.GetSection(ChatOptions.SectionName).Bind(Options);
+        if (Options.EmotesTextDbcPath.Length > 0 || Options.EmotesDbcPath.Length > 0)
+        {
+            if (Options.EmotesTextDbcPath.Length == 0 || Options.EmotesDbcPath.Length == 0)
+            {
+                throw new InvalidOperationException("World:Chat:EmotesTextDbcPath and World:Chat:EmotesDbcPath are set together or not at all");
+            }
+
+            Emotes = new EmoteCatalog(EmoteDbcReaders.LoadText(Options.EmotesTextDbcPath), EmoteDbcReaders.LoadEmotes(Options.EmotesDbcPath));
+        }
+
         world.Updated += ExpireSessionMutes;
     }
 

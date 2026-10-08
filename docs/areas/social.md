@@ -40,7 +40,7 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 | Charter names | `Game/Guilds/CharterNameRules.cs` | `ObjectMgr.cpp:9496-9616` (IsReservedName, isValidString, IsValidCharterName), `shared/Util.h:115-231` | — | — |
 | Tabard designer and guild emblem | `Game/Guilds/GuildManager.Emblem.cs`, `GuildEmblemPackets.cs`, `World/Social/TabardHandlers.cs` | `Handlers/GuildHandler.cpp:684-735`, `Handlers/NPCHandler.cpp:49-69`, `Objects/Player.cpp:12268-12271`, `Guild/Guild.cpp:883-892` | `Guilds/GuildHandler.cpp:716-767` (same 10 gold and results) | `guild/msg_save_guild_emblem_client/server`, `msg_tabardvendor_activate` |
 | Chat mute and anti-flood | `Game/Social/ChatRestrictionService.cs`, `World/Social/ChatRestrictionFeature.cs` | `Handlers/ChatHandler.cpp:221-247,417-430`, `Chat/MasterPlayerChat.cpp:10-37`, `shared/Util.cpp:197-250`, `mangosd.conf.dist.in:1666-1668`, classic-db `mangos_string` 705 | — | — |
-| /who guild name and guild filter | `World/Handlers/ChatHandlers.cs` (HandleWho) | `Handlers/MiscHandler.cpp:147-158,180-196,201-203` | — | `cmsg_who`, `smsg_who` |
+| /who guild name and guild filter, area-name search strings, battleground instance filter | `World/Handlers/ChatHandlers.cs` (HandleWho), `Game/Social/WhoRules.cs` | `Handlers/MiscHandler.cpp:147-158,158-196,201-203` | — | `cmsg_who`, `smsg_who` |
 | Channel join / leave, password, built-ins (General, Trade, LocalDefense, WorldDefense, LookingForGroup, GuildRecruitment) | `Game/Channels/ChannelManager.cs`, `Channel.cs`, `ChannelTypes.cs` | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp/.h`, `Handlers/ChannelHandler.cpp`, `DBCStores.cpp`/`DBCStructure.h` (ChatChannelsEntry) | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp`, `Chat/ChannelHandler.cpp` | `chat/cmsg_join_channel.wowm` |
 | SMSG_CHANNEL_NOTIFY and the moderation commands (owner, moderator, mute, kick, ban, announce, moderate, invite) | `Channel.cs`, `ChannelPackets.cs` | `Channel.cpp` Make* | `Channel.cpp` | `chat/smsg_channel_notify.wowm` |
 | SMSG_CHANNEL_LIST | `ChannelPackets.BuildList` | `Channel.cpp` List, `Server/Packets/Channel.cpp` | `Channel.cpp` List | `chat/smsg_channel_list.wowm` |
@@ -58,11 +58,19 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 
 ## Limitations and deviations
 
-- **ChatChannels.dbc rows are not verified.** The built-in channel ids, flags and name patterns
-  in `ChannelTypes.cs` are transcribed from the vmangos ChatChannelsEntry handling; no DBC file
-  was read.
-- **Groups are in memory only.** They are not persisted and do not survive a restart
-  (vmangos stores groups in `groups`/`group_member`).
+- **ChatChannels.dbc** is read from the developer's own client file when `World:Chat:ChatChannelsDbcPath` is set (every
+  locale's pattern); otherwise the transcribed 1.12.1 rows are used (English only). See [chat.md](chat.md).
+- **Groups survive a restart** (wave 2). `SocialGroupPersistenceFeature` restores the stored groups into the
+  `GroupManager` at start (vmangos `ObjectMgr::LoadGroups`, `ObjectMgr.cpp:5360-5460`: a member whose character is gone is
+  skipped, a group whose leader is gone or with fewer than two members left is dropped and its rows deleted) and, once per
+  clock second, writes every group that changed as one whole-group snapshot (characters schema 37, `character_group` and
+  `character_group_member`; `groups` is a reserved word in MySQL 8). vmangos writes at each mutation; here a change reaches
+  storage within a second, and the stop writes the final state. The member order is stored too (`Slot`, it decides the next
+  leader); vmangos' main tank / main assistant columns have no counterpart. Two guards where vmangos trusts its rows: a stored
+  leader or master looter who is not a member falls back to the first member, and an out-of-range loot method or threshold
+  takes the default. Group instance binds are not stored yet (review finding 89, the instances lane). Tests: Data
+  `GroupStoreTests`, Game `GroupRestoreTests`, World `GroupPersistenceWorldTests` (two hosts in turn) and the playerbot
+  scenario `GroupPersistenceScenarioTests` (bots form the group, a second world over the same SQLite database restores it).
 - **Lists after login.** `LoginSequence` (seam) sends empty friend/ignore lists; the stored
   lists are resent after `PlayerLoggedIn`, and only when non-empty.
 - **Guild MOTD order.** The MOTD and SIGNED_ON events go out after the player is added to the
@@ -92,12 +100,24 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   the 1.12 client drops them and sends `CMSG_CHAT_IGNORED`, and the whisperer then gets
   CHAT_MSG_IGNORED (vmangos HandleChatIgnoredOpcode).
 - **/who** shows the member's guild and matches the guild filter and the search strings against it
-  (`MiscHandler.cpp:147-158,180-196`). The search strings still do not match area names (needs
-  AreaTable.dbc, `MiscHandler.cpp:115-130`).
+  (`MiscHandler.cpp:147-158,180-196`). Since wave 2 the search strings also match the name of the member's zone from the
+  area table (`area_template`, vmangos `AreaEntry::GetById(zone)->Name` and `Utf8FitTo`, `MiscHandler.cpp:178-196`), and a
+  zone filter on one's own battleground zone (2597, 3277, 3358) lists only one's own instance (`MiscHandler.cpp:158-176`,
+  client patch 1.7.0); `Game/Social/WhoRules.cs`. Area names are the English `area_template` names (no locale table);
+  a zone the area table does not know matches no search string.
 - **Charters, tabard, mute and flood: see the limits list in
-  [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no antispam name filter,
+  [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no built-in antispam word list
+  (the antispam filter is the operator's `World:Guild:CharterSpamPatterns` since wave 2),
   the Undercity guild master has no gossip option rows in classic-db, no `GE_TABARDCHANGE`, no emblem range
-  validation, no mute aura and no persistent `.mute`, commands are not counted by the flood gate.
+  validation, no mute aura (vmangos casts the visual spell 1852 on a muted player), commands are not counted by the flood
+  gate. (`.mute` itself is persistent since the GM audit lane: `account_mute`.)
+- **Battleground chat** (wave 2, `World/Social/BattlegroundChatFeature.cs`): `CHAT_MSG_BATTLEGROUND` reaches the speaker's
+  battleground group, the speaker included, and `CHAT_MSG_BATTLEGROUND_LEADER` too but only from its leader; outside a
+  battleground both are dropped (vmangos `ChatHandler.cpp:579-615`). vmangos keeps a raid group per battleground team
+  (`AddOrSetPlayerToCorrectBgGroup`); here the team's participants in join order stand for it (`Battleground.TeamMembers`,
+  `BattlegroundManagerChatRoster`), the first joiner leading and the next one when the leader leaves. The roster is taken
+  from a registered `IBattlegroundChatRoster` or `BattlegroundManager`; the battleground daemon is not wired into the world
+  yet (battleground lane), so until then nobody is in a battleground and the messages are dropped, as before.
 - **GM cross-faction group invites** need GM mode (`.gm on`), matching vmangos
   `IsGameMaster()`; the account level alone is not enough.
 

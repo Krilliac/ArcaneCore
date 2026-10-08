@@ -77,7 +77,7 @@ public sealed class ChannelManagerTests
     [Theory]
     [InlineData("Trade - City", 0x3C)]
     [InlineData("LocalDefense - Elwynn Forest", 0x18)]
-    [InlineData("LookingForGroup", 0x50)]
+    [InlineData("LookingForGroup", 0x18)] // the 1.12.1 row has no DBC flags (the 2.x row's LFG flag made it 0x50)
     public void BuiltInChannelFlags(string name, int flags)
     {
         using var f = new SocialFixture();

@@ -35,7 +35,7 @@ are opt-in at vmangos' values), and every option names the reference value it fo
 | Mute notice "You must wait 10 Seconds. before speaking again." (the reference time formatter keeps the trailing spaces, the capital plural and the full stop; 0 and 1 are "Second.") | `World/Chat/ChatText.SecsToTimeString`, `ChatFeature.MuteNotice` | `shared/Util.cpp:197-248`, classic-db `mangos_string` 705 |
 | A muted player cannot emote or text-emote; can only whisper staff | `ChatHandlers.RejectMuted`, `Whisper` | `ChatHandler.cpp:417-428`, `:660-668`, `:713-721` |
 | AFK/DND and, by default, addon messages are neither counted nor blocked | `HandleMessageChat` | `ChatHandler.cpp:158-236` |
-| Expired in-memory flood mutes are swept once per clock second on the world thread, including disconnected accounts and worlds with no maps; active mutes survive logout/relog | `ChatFeature`, `WorldRuntime.Updated` | ArcaneCore storage maintenance; preserves `m_muteTime <= now` expiry semantics |
+| Expired in-memory flood mutes are swept once per clock second on the world thread, including disconnected accounts and worlds with no maps; active mutes survive logout/relog. The GM account mutes (`.mute`, `GmAuditFeature`, with their `account_mute` rows) and `ChatRestrictionService`'s table are swept the same way | `ChatFeature`, `GmAuditFeature.ExpireMutes`, `ChatRestrictionFeature`, `WorldRuntime.Updated` | ArcaneCore storage maintenance; preserves `m_muteTime <= now` expiry semantics |
 | `ChatFakeMessagePreventing`: runs of space/tab/bell/newline become one space | `World/Chat/ChatSanitizer.StripInvisibleChars` | `shared/Util.cpp:134-163`, `ChatHandler.cpp:44-53` |
 | `ChatStrictLinkChecking.Severity` 1 and 2 (pipe commands `c H h r |`, order `c H h h r`, 255 bytes), `.Kick` | `ChatSanitizer.IsValidChatMessage` | `Chat/Chat.cpp:2165-2208`, `ChatHandler.cpp:55-61` |
 | Staff hidden from plain players unless accepting whispers or having whispered them first; `.whispers [ON/OFF]`; the allowed list is cleared by `.whispers OFF` | `World/Chat/ChatFeature`, `WhisperCommands.cs`, `ChatHandlers.Whisper` | `ChatHandler.cpp:405-415`, `Chat/MasterPlayer.h:98-102`, `MasterPlayerChat.cpp:55-72`, `Commands/CharacterCommands.cpp:1283-1313`, `Chat/Chat.cpp:1285`, `Player.cpp:133-135`; strings 259/284-286 |
@@ -82,10 +82,14 @@ no packet layout or byte-limit policy changed.
 
 ## Limits and open reference questions
 
-* **ChatChannels.dbc.** No DBC exists under the references and there is no DBC reader. The six built-in
-  rows match the vmangos `Channel.h` comment table for the English name patterns only; vmangos matches
-  all locale patterns (`DBCStores.cpp:530-552`), so a non-English client's General/Trade channel
-  would be created as a custom channel. Needs the client MPQ data.
+* **ChatChannels.dbc** (wave 2). `World:Chat:ChatChannelsDbcPath` points at the developer's own 1.12.1 file
+  (`Data/Social/ChatChannelsDbcReader.cs`, 21 fields, build 5875; another layout stops the start): the built-in channels
+  then come from it with every locale's name pattern, as vmangos matches them (`DBCStores.cpp:530-552`), so a German
+  client's "Allgemein - ..." is the General channel. Without a file the six transcribed rows of the 1.12.1 client file are
+  used, English patterns only (`Game/Channels/ChannelTypes.cs` `ChatChannelCatalog.Builtin`). Those rows were checked
+  against a 1.12.1 client file: ids 1, 2, 22, 23, **24**, 25 with DBC flags 0x3, 0x3B, 0x10003, 0x10004, **0x0**,
+  0x20032. LookingForGroup is id 24 with no flags there, so its channel flags are GENERAL | NOT_LFG (0x18); vmangos'
+  `Channel.h` (id 26, "0x50") describes the 2.x file, whose row carries the LFG flag. The earlier table used 26 and 0x50.
 * **Persisted mute and `GM.WhisperingTo = 2`.** The flood mute and the whisper-acceptance state are in
   memory. The flood mute is the session's (keyed by account id, vmangos `WorldSession::m_muteTime`), so it
   survives a logout and relog but ends with the server process; the whisper state is the player's and
@@ -100,7 +104,16 @@ no packet layout or byte-limit policy changed.
 * **Group/guild Universal conversion order.** vmangos converts party/raid/guild chat to Universal
   before the `MOD_LANGUAGE` override; here `SocialFeature.TryHandle` converts afterwards, so with
   `AllowTwoSideGroup` and a language aura the group message is Universal. Non-default realm setting only.
-* **Emote interrupts.** vmangos' emote opcodes also remove `ANIM_CANCELS` auras; not done.
+* **Text emotes** (wave 2) follow vmangos `HandleTextEmoteOpcode` (`ChatHandler.cpp:711-753`) when the developer's own
+  `EmotesText.dbc` and `Emotes.dbc` are configured (`World:Chat:EmotesTextDbcPath`, `World:Chat:EmotesDbcPath`; both or
+  neither, 19 and 7 fields of build 5875, `Data/Social/EmoteDbcReaders.cs`): an unknown text emote is dropped; a known one
+  plays its emote unless it is sleep, sit, kneel or none, after cancelling `AURA_INTERRUPT_ANIM_CANCELS` channels and auras
+  (0x20, Feign Death); the emote is a state (`UNIT_NPC_EMOTESTATE`) when its Emotes.dbc type is not 0, otherwise a one-shot
+  `SMSG_EMOTE` to the player and its observers (vmangos `Unit::HandleEmote`, `Unit.cpp:1861-1872`). The announcement names a
+  creature target too (`EmoteChatBuilder`), and a creature target is passed to every `ITextEmoteReceiver` feature
+  (`CreatureAI::ReceiveEmote`; EventAI's receive-emote event can hang off it, not implemented here). Without the files a
+  text emote is only announced, as before. The plain `CMSG_EMOTE` path (wave and none) cancels the same
+  `ANIM_CANCELS` channels and auras first (`ChatHandler.cpp:674-675`).
 * **vmangos channel restrictions not reproduced** (all non-retail): level-restricted channels, GM
   public-channel ban, strict-Latin, world-channel cooldown, GM-only channels (Warden etc.),
   `GM.JoinOppositeFactionChannels`, `Channel.SilentlyGMJoin`.

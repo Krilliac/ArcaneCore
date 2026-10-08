@@ -159,6 +159,9 @@ public enum SpellAuraInterruptFlags : uint
     Moving = 0x00000008,
     Turning = 0x00000010,
 
+    /// <summary>AURA_INTERRUPT_ANIM_CANCELS (vmangos SpellDefines.h:582, "used by Feign Death"): removed when the unit plays an emote.</summary>
+    AnimCancels = 0x00000020,
+
     /// <summary>AURA_INTERRUPT_DISMOUNT_CANCELS (vmangos SpellDefines.h:583): removed when the unit dismounts.</summary>
     DismountCancels = 0x00000040,
 

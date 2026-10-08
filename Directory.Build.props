@@ -16,4 +16,10 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <!-- Test processes only: let a database be created through a reserved schema placeholder (src/ArcaneCore.Data/Schema/ReservedSchemaGaps.cs).
+       Servers and tools never get this switch, so a build that still holds a placeholder refuses to create or upgrade a real database. -->
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <RuntimeHostConfigurationOption Include="ArcaneCore.Data.AllowReservedSchemaGaps" Value="true" />
+  </ItemGroup>
+
 </Project>

@@ -25,7 +25,7 @@ enforcement.
 | Realm: IP ban -> `FAIL_NOACCESS 0x0D` before any SRP state; permanent -> `0x03`; temporary -> `0x0C` | `src/ArcaneCore.Realm/Net/LogonSession.cs` (optional trailing `IBanStore`) | `AuthSocket.cpp:338-352, 464-476` |
 | World authentication: `AUTH_BANNED 0x1C` for an account ban row or an IP ban, fail closed on a store error, post-`Register` re-check that closes the status-read/Register race | `src/ArcaneCore.World/Net/WorldSession.cs` | `WorldSocket.cpp:333-345` |
 | Live kick: a ban or status change disconnects the session (or every session from a banned address) through the normal close path, which saves the character; the banning author is skipped | `src/ArcaneCore.World/Bans/BanEnforcementFeature.cs` | `World.cpp:2469-2486, 2520-2570` (`LogoutPlayer(true)` + `KickPlayer`, author excluded at `:2552`) |
-| Optional periodic re-check for bans written by other processes | `src/ArcaneCore.World/Bans/BanRecheckFeature.cs` | none (see deviations) |
+| Periodic re-check for bans written by other processes (on by default, every 60 s) | `src/ArcaneCore.World/Bans/BanRecheckFeature.cs` | none (see deviations) |
 | `.ban`, `.unban`, `.baninfo`, `.banlist` x `account`/`character`/`ip` | `src/ArcaneCore.World/Bans/BanCommands.cs`, `BanCommandText.cs`, `Kernel/Accounts/BanTime.cs` | `AccountCommands.cpp:516-1010`, `World.cpp:2500-2665`, `Util.cpp:197-275`, `Chat.cpp:2818-2945` |
 | `arcane-account ban / unban / baninfo / banlist` | `tools/ArcaneCore.AccountTool/Program.cs` | n/a |
 
@@ -39,11 +39,13 @@ Administrator for `ban ip` and every `unban`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `Bans:RecheckIntervalSeconds` | `0` (off, retail) | Re-check connected sessions against ban rows, IP bans and the status column every N seconds (fractions allowed) |
+| `Bans:RecheckIntervalSeconds` | `60` (stricter than retail) | Re-check connected sessions against ban rows, IP bans and the status column every N seconds (fractions allowed); `0` turns it off (retail). 60 is mangosd's `BanListReloadTimer` (`World.cpp:697`) |
 | `Bans:RevokeSessionKeyOnBan` | `false` (retail keeps the key) | Null the stored session key after a live ban; the next world reconnect then answers `UnknownAccount` instead of `AUTH_BANNED` |
 | `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban. A duration that overflows 32 bits of seconds (about 136 years) is always refused, by `.ban` and `arcane-account ban`, whatever this is set to: it never wraps into a short or permanent ban |
 | `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
+| `Auth:IpBanCacheSeconds` (realm daemon) | `60` (not retail) | How long the logon daemon uses its in-memory copy of `ip_banned` before reloading it; `0` reads the row on every challenge, as vmangos realmd |
 | `Bans:RealmId` | `1` | Written to `account_banned.realm` (vmangos `realmID`); never filtered on, as retail |
+| `Bans:BanListCharacterIncludesHistory` | `false` (narrower than retail) | `.banlist character` lists only accounts with a ban in force; `true` lists every account with any ban row, as vmangos |
 | `Bans:MaxListedEntries` | `200` (stricter than retail) | The most entries one `.baninfo` history or `.banlist` reply prints before a "more entries exist" line; `.banlist character` also stops its per-account history queries there. Retail prints everything; `0` restores that |
 
 Behaviour retail mandates (kick on `.ban`, refusal at logon and world auth, IP-ban refusal, the
@@ -54,15 +56,27 @@ author is not kicked by their own ban) has no switch.
 * **The ban rows are the authority, the `Status` column stays an operator override** that is always honoured
   (existing tests and the Codex finding-4 tests are unchanged). Effective status: non-Active column wins, else a
   permanent row means Banned and a temporary one Suspended.
-* **Live re-check** (`Bans:RecheckIntervalSeconds`) is an ArcaneCore extension. Retail never kicks for an
-  externally written row: mangosd only reloads the IP cache every `BanListReloadTimer` and the account reload is
-  commented out (`AccountMgr.cpp:317-327`, `World.cpp:697` default 60, `mangosd.conf.dist.in:232-234,418` say 120).
+* **Live re-check** (`Bans:RecheckIntervalSeconds`) is an ArcaneCore extension, on by default since wave 2 (every
+  60 s, the period of mangosd's `BanListReloadTimer`). Retail never kicks for an externally written row: mangosd only
+  reloads the IP cache every `BanListReloadTimer` and the account reload is commented out (`AccountMgr.cpp:317-327`,
+  `World.cpp:697` default 60, `mangosd.conf.dist.in:232-234,418` say 120). Set `0` for exact retail.
 * **Events are in-process.** Only a ban written by this world process (`.ban`, the stores) kicks instantly. The
   realm daemon, `arcane-account` and raw SQL are separate processes; their bans apply at the next login or, with the
-  re-check on, within one interval. `arcane-account ban` says so when it runs.
+  re-check on (the default), within one interval. `arcane-account ban` says so when it runs.
 * **Fail open for live sessions, fail closed at authentication.** A store error during a re-check pass is logged,
   kicks nobody and the timer keeps running; a store error at logon or world auth closes the connection.
 * World IP check reads the rows at authentication; retail checks a cached list refreshed on a timer (stricter, not looser).
+* **Realm IP check reads a cached list** (`Auth:IpBanCacheSeconds`, default 60): the logon daemon loads every active
+  `ip_banned` row once per period and checks each challenge in memory (`src/ArcaneCore.Realm/Net/RealmIpBanCache.cs`),
+  as mangosd keeps its IP list (`AccountMgr.cpp:340-367, 412-417`, reloaded every `BanListReloadTimer`, `World.cpp:697`).
+  vmangos realmd instead queries the table on every challenge (`AuthSocket.cpp:338-352`), so a reconnect flood costs one
+  query per connection; `0` restores that. Each entry keeps its unban date, so a temporary ban ends on time between
+  reloads; a ban written after the last reload reaches the logon screen within one period, and world authentication
+  (which reads the rows directly) refuses the address at once. An unban (or a shortened ban) written by the world,
+  `arcane-account` or SQL likewise takes up to one period to let the address back in at the logon screen. A failed
+  reload (an outage, or a large table that runs past the store's query budget) does not lock everyone out: that
+  challenge and every challenge for one period after it use vmangos realmd's single-row read, then the list is tried
+  again; the connection is closed (fail closed) only when the row read fails too.
 * Realm check order: ArcaneCore validates the build and the username before the IP check, so an IP-banned client
   with a wrong build sees `VersionInvalid` (retail order for that pair was not verified).
 * Ban times come from the application clock (`TimeProvider`), not the database's `UNIX_TIMESTAMP()`; hosts with
@@ -74,16 +88,29 @@ author is not kicked by their own ban) has no switch.
   primary key while its cache is updated). A repeat ban of an account adds a row, as retail.
 * `.banlist account` lists accounts with a ban **in force**; retail lists every account with `active = 1`, including
   temporary bans that expired but were not yet cleaned (cleanup runs at startup, at `.banlist ip`, and here on every `.banlist`).
-* `.ban ip`: ArcaneCore keeps no `last_ip`, so it kicks live sessions by their connection address and always reports
-  success; retail kicks accounts whose `last_ip` matches and prints `ip X not found` when none do (vmangos
-  `World.cpp:2576-2579`). `.ban allip` is not implemented (needs `last_ip` and character level access).
+* `.ban ip` kicks live sessions by their connection address and always reports success; retail kicks accounts whose
+  `last_ip` matches and prints `ip X not found` when none do (vmangos `World.cpp:2576-2579`).
+* **`.ban allip $IpPrefix [$reason]`** (wave 2, Administrator, vmangos `HandleBanAllIPCommand`,
+  `AccountCommands.cpp:531-585`): every account last seen on an address starting with the prefix and with no character
+  above level 10 is banned permanently, unless already banned; one `Account 'X' permanently banned. Reason: R` line per
+  account and `N accounts banned for R (M on this IP)`; `No account found on IP 'P'` when nobody was seen there; the
+  reason defaults to `<no reason given>`. The last address is recorded by the world daemon when a session authenticates
+  (`AccountAddressFeature`, characters table `account_last_ip`, schema 38: the auth schema belongs to the realm daemon, so
+  this is the world's own record, written at world login rather than at the realm logon as vmangos `account.last_ip`). The
+  level is the higher of the stored and, for a character online, the live one. Deviations: the invoker's own account is
+  never banned, and `Bans:ProtectHigherSecurity` (default) spares accounts of equal or higher security (vmangos only hides
+  ids below 100 from a non-administrator); the prefix is a literal (digits, hex letters, `.` and `:`), not a LIKE pattern.
+  The per-account lines stop at `Bans:MaxListedEntries` (every account is still banned).
 * Ban/unban store faults answer "The ban database is unavailable; see the server log." (retail has no such text; its
   async holder fails silently).
 * `.baninfo account`/`character` and `.banlist` of characters read the account name through `IAccountAdmin`; the
   `<hidden>` reason branch of vmangos is not implemented (it reads a `gmlevel` column no vmangos INSERT ever writes).
-* `.banlist character` matches the name prefix in the world's character directory (`CharacterDirectory`) and checks the
-  owner accounts for **any** history (expired, inactive and unban audit rows included) in batches of 200, one query per
-  batch, stopping once one more than `Bans:MaxListedEntries` accounts with history were found. `Bans:MaxListedEntries`
+* `.banlist character` matches the name prefix in the world's character directory (`CharacterDirectory`) and lists the
+  owner accounts that have a ban **in force**, the same rule as `.banlist account` (since wave 2). vmangos lists every
+  owner account with **any** `account_banned` row, expired, lifted and unban audit rows included
+  (`AccountCommands.cpp:835-853, 886-905`), while its `.banlist account` requires `active = 1` (`:855-884`);
+  `Bans:BanListCharacterIncludesHistory = true` restores that broad listing. Owners are checked in batches of 200, one
+  query per batch, stopping once one more than `Bans:MaxListedEntries` matching accounts were found. `Bans:MaxListedEntries`
   (default 200, a deliberate deviation only above that many entries; `0` restores retail's unbounded output) caps every
   `.banlist` reply and therefore also the work of the character listing. (The Codex line's separate
   `CharacterListMaxResults` cap and store-side prefix query were superseded by this at the 2026-10-07 integration.)
@@ -94,7 +121,7 @@ author is not kicked by their own ban) has no switch.
 
 ## Operator guidance
 
-* To enforce bans written by `arcane-account` or SQL on a running realm, set `Bans:RecheckIntervalSeconds` (tens of
+* Bans written by `arcane-account` or SQL reach a running realm within `Bans:RecheckIntervalSeconds` (60 s by default; tens of
   seconds on a large realm: each pass is a few indexed queries over the connected account ids).
 * To make a ban survive a world reconnect with a stale key, set `Bans:RevokeSessionKeyOnBan`.
 * Expired rows are purged at startup (`AuthDbInitializer`), at most hourly by the re-check, and by `.banlist`.
@@ -119,4 +146,4 @@ author is not kicked by their own ban) has no switch.
 * `arcane-account` has no test project; its logic is covered through `IBanStore` and one scripted SQLite run (create,
   ban, baninfo, banlist, unban, permanent ban); the CLI shell itself is not unit tested.
 * Not delivered: `.reload account_banned/ip_banned` (the hot-reload coordinator is not on this base), per-realm
-  filtering of `account_banned.realm`, `last_ip` and `.ban allip`.
+  filtering of `account_banned.realm`. (`.ban allip` and the world's last-address record arrived in wave 2.)

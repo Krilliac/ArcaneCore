@@ -240,6 +240,30 @@ public sealed class NpcBankSpiritServiceTests
         Assert.False(kit.Player.IsAlive);
     }
 
+    [Fact] // review finding 108: vmangos HandleGossipHelloOpcode (NPCHandler.cpp:360-361) opens a spirit guide's resurrection timer first
+    public void GossipHello_ToASpiritGuide_SendsTheAreaSpiritHealerTime_BeforeTheMenu()
+    {
+        using var rig = new SpiritRig();
+        NpcServiceKit kit = rig.Kit;
+        rig.KillAndRelease();
+        kit.Npc = kit.Npc with { NpcFlags = NpcFlags.SpiritGuide | NpcFlags.Gossip };
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+
+        List<(WorldOpcode Opcode, byte[] Payload)> sent = kit.Drain();
+        Assert.Equal(WorldOpcode.SmsgAreaSpiritHealerTime, sent[0].Opcode);
+        // Creature::SendAreaSpiritHealerQueryOpcode: the guide's guid and the time to its next resurrection wave (0: no
+        // resurrection channel runs, the battleground spirit-healer channel is not implemented).
+        Assert.Equal((kit.Npc.Guid.Value, 0u), (BitConverter.ToUInt64(sent[0].Payload, 0), BitConverter.ToUInt32(sent[0].Payload, 8)));
+        Assert.Equal(12, sent[0].Payload.Length);
+        Assert.Contains(sent, p => p.Opcode == WorldOpcode.SmsgGossipMessage);
+
+        // A creature without the flag sends no timer.
+        kit.Npc = kit.Npc with { NpcFlags = NpcFlags.SpiritHealer | NpcFlags.Gossip };
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        Assert.DoesNotContain(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgAreaSpiritHealerTime);
+    }
+
     [Fact]
     public void Ghosts_CanOnlyUseSpiritServices()
     {

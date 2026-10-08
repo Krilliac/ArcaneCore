@@ -72,6 +72,21 @@ public sealed class GmAuditStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task DeleteExpiredMutes_RemovesOnlyRowsThatEndedByThen(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, _) = await CreateAsync(provider);
+        await WriteAsync(connection, s => s.SaveMuteAsync(Mute(1, 900)));
+        await WriteAsync(connection, s => s.SaveMuteAsync(Mute(2, 1000)));   // ends exactly now: over (CanSpeak is mutetime <= now)
+        await WriteAsync(connection, s => s.SaveMuteAsync(Mute(3, 1001)));
+
+        Assert.Equal(2, await ReadAsync(connection, s => s.DeleteExpiredMutesAsync(1000)));
+        Assert.Equal(0, await ReadAsync(connection, s => s.DeleteExpiredMutesAsync(1000)));
+        await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(connection);
+        Assert.Equal([3], await verify.Set<AccountMuteRow>().Select(r => r.AccountId).ToListAsync());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task Tickets_RoundTrip_UpdateInPlace_AndOnlyOpenOnesLoad(DatabaseProvider provider)
     {
         (DatabaseConnectionOptions connection, int[] ids) = await CreateAsync(provider, "Alpha", "Bravo", "Charlie");

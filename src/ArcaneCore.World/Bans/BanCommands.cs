@@ -21,9 +21,9 @@ namespace ArcaneCore.World.Bans;
 /// Security follows vmangos Chat.cpp:170-191, 1022-1024, 1263-1266 (SEC_TICKETMASTER 2, SEC_GAMEMASTER 3,
 /// SEC_ADMINISTRATOR 6) mapped onto ArcaneCore's four levels: Moderator for the ban/baninfo/banlist parents and
 /// baninfo/banlist account/character, GameMaster for ban account/character and baninfo/banlist ip, Administrator for
-/// ban ip and every unban. Without a last_ip column
-/// <c>.ban ip</c> kicks the live sessions from that address and always reports success (retail kicks accounts whose
-/// last_ip matches and prints "ip X not found" when none do).
+/// ban ip, ban allip and every unban. <c>.ban ip</c> kicks the live sessions from that address and always reports success
+/// (retail kicks accounts whose last_ip matches and prints "ip X not found" when none do); <c>.ban allip</c> reads the
+/// world's own last-address record (<see cref="IAccountAddressStore"/>).
 /// </para>
 /// </summary>
 public sealed class BanCommands : ICommandGroup
@@ -39,6 +39,7 @@ public sealed class BanCommands : ICommandGroup
             new ChatCommand("account", AccountSecurity.GameMaster, "Syntax: .ban account $Name $bantime $reason — $bantime is like 1d2h3m4s, 0 or an unknown format is permanent; the reason is one word or quoted.", BanAccount),
             new ChatCommand("character", AccountSecurity.GameMaster, "Syntax: .ban character $Name $bantime $reason — bans the character's account.", BanCharacter),
             new ChatCommand("ip", AccountSecurity.Administrator, "Syntax: .ban ip $Ip $bantime $reason", BanIp),
+            new ChatCommand("allip", AccountSecurity.Administrator, "Syntax: .ban allip $IpPrefix [$reason] — permanently bans every account last seen on an address starting with $IpPrefix that has no character above level 10.", BanAllIp),
         ]),
         new ChatCommand("unban", AccountSecurity.Administrator, "Lift a ban.", Children:
         [
@@ -55,7 +56,7 @@ public sealed class BanCommands : ICommandGroup
         new ChatCommand("banlist", AccountSecurity.Moderator, "List bans.", Children:
         [
             new ChatCommand("account", AccountSecurity.Moderator, "Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name.", BanListAccount),
-            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name.", BanListCharacter),
+            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .banlist character $Name — accounts with a ban in force owning a character whose name starts with $Name.", BanListCharacter),
             new ChatCommand("ip", AccountSecurity.GameMaster, "Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip.", BanListIp),
         ]),
     ];
@@ -154,6 +155,111 @@ public sealed class BanCommands : ICommandGroup
         });
         return true;
     }
+
+    // --- .ban allip -------------------------------------------------------------------
+
+    /// <summary>vmangos HandleBanAllIPCommand's level limit: an account with a character above it is spared.</summary>
+    public const int AllIpMaxLevel = 10;
+
+    /// <summary>vmangos HandleBanAllIPCommand's reason when none is given.</summary>
+    public const string AllIpNoReason = "<no reason given>";
+
+    /// <summary>
+    /// <c>.ban allip $IpPrefix [$reason]</c> (vmangos HandleBanAllIPCommand, AccountCommands.cpp:531-585): every account
+    /// whose last address starts with the prefix (<see cref="IAccountAddressStore"/>, vmangos <c>last_ip LIKE 'prefix%'</c>)
+    /// and that has no character above level <see cref="AllIpMaxLevel"/> is banned permanently with the reason, unless it is
+    /// already banned; one line per banned account, then the total. The level is the higher of the stored one and, for a
+    /// character online now, the live one. Deviations: the invoker's own account is never included (vmangos would ban it
+    /// when its characters are low level), and with <c>Bans:ProtectHigherSecurity</c> (default) accounts of equal or higher
+    /// security are spared, where vmangos only hides ids below 100 from a non-administrator. The prefix must look like the
+    /// start of an address (digits, hex letters, '.' and ':').
+    /// </summary>
+    private static bool BanAllIp(CommandContext context, string args)
+    {
+        string rest = args;
+        if (BanCommandText.ExtractArg(ref rest) is not { Length: > 0 } prefix || !IsAddressPrefix(prefix))
+        {
+            return false;
+        }
+
+        string reason = BanCommandText.ExtractArg(ref rest) is { Length: > 0 } given ? given : AllIpNoReason;
+        BanOptions options = OptionsOf(context);
+        AccountSecurity invokerSecurity = context.Security;
+        int invokerAccount = context.Session.AccountId;
+        string author = context.Player.Name;
+
+        // Live levels are read here, on the world thread; the store work runs off it.
+        var onlineLevels = new Dictionary<int, int>();
+        foreach (Game.Entities.Player online in context.World.OnlinePlayers)
+        {
+            onlineLevels[online.AccountId] = Math.Max(onlineLevels.GetValueOrDefault(online.AccountId), online.Level);
+        }
+
+        Run(context, async services =>
+        {
+            IReadOnlyList<AccountAddressRecord> found = services.GetService<IAccountAddressStore>() is { } addresses
+                ? await addresses.FindByPrefixAsync(prefix).ConfigureAwait(false)
+                : [];
+            int[] onIp = [.. found.Select(f => f.AccountId).Distinct()];
+            if (onIp.Length == 0)
+            {
+                context.Reply(string.Format(BanCommandText.AllIpNotFound, prefix));
+                return;
+            }
+
+            IBanStore bans = services.GetRequiredService<IBanStore>();
+            IAccountStore accounts = services.GetRequiredService<IAccountStore>();
+            ICharacterStore characters = services.GetRequiredService<ICharacterStore>();
+            IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>().GetUsernamesAsync(onIp).ConfigureAwait(false);
+            IReadOnlySet<int> alreadyBanned = await bans.FindBannedAccountsAsync(onIp).ConfigureAwait(false);
+            int max = options.MaxListedEntries;
+            var lines = new List<string>();
+            int banned = 0;
+            foreach (int id in onIp)
+            {
+                if (id == invokerAccount || !names.TryGetValue(id, out string? name) || alreadyBanned.Contains(id))
+                {
+                    continue;
+                }
+
+                int level = onlineLevels.GetValueOrDefault(id);
+                foreach (CharacterRecord character in await characters.GetByAccountAsync(id).ConfigureAwait(false))
+                {
+                    level = Math.Max(level, character.Level);
+                }
+
+                if (level > AllIpMaxLevel)
+                {
+                    continue;
+                }
+
+                if (options.ProtectHigherSecurity
+                    && await accounts.FindByUsernameAsync(name).ConfigureAwait(false) is { } account && account.Security >= invokerSecurity)
+                {
+                    continue;
+                }
+
+                await bans.BanAccountAsync(new BanRequest(id, 0, reason, author, invokerAccount, options.RealmId)).ConfigureAwait(false);
+                banned++;
+                if (max <= 0 || lines.Count < max)
+                {
+                    lines.Add(string.Format(BanCommandText.AllIpBanned, name, reason));
+                }
+            }
+
+            if (max > 0 && banned > max)
+            {
+                lines.Add(string.Format(BanCommandText.ListTruncated, max));
+            }
+
+            lines.Add(string.Format(BanCommandText.AllIpSummary, banned, reason, onIp.Length));
+            context.Reply(string.Join('\n', lines));
+        });
+        return true;
+    }
+
+    private static bool IsAddressPrefix(string text)
+        => text.Length <= 45 && text.All(c => char.IsAsciiHexDigit(c) || c is '.' or ':');
 
     private static void ReplyBanned(CommandContext context, string display, uint seconds, string reason)
         => context.Reply(seconds > 0
@@ -417,17 +523,21 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
-            // HandleBanListHelper: the header, then the name of every such account that has any ban row. Accounts are
-            // checked HistoryBatch at a time (one query per batch) and the walk ends as soon as one more than
+            // HandleBanListHelper: the header, then the name of every such account that has a ban in force (by default,
+            // as .banlist account) or, with Bans:BanListCharacterIncludesHistory, any ban row at all (vmangos). Accounts
+            // are checked HistoryBatch at a time (one query per batch) and the walk ends as soon as one more than
             // Bans:MaxListedEntries names are known, so the work is bounded, not just the printed lines.
             context.Reply(BanCommandText.BanListMatchingAccount);
             IAccountAdmin admin = services.GetRequiredService<IAccountAdmin>();
-            int max = OptionsOf(context).MaxListedEntries;
+            BanOptions options = OptionsOf(context);
+            int max = options.MaxListedEntries;
             var lines = new List<string>();
             bool truncated = false;
             foreach (int[] batch in accountIds.Chunk(HistoryBatch))
             {
-                IReadOnlySet<int> withHistory = await bans.FindAccountsWithHistoryAsync(batch).ConfigureAwait(false);
+                IReadOnlySet<int> withHistory = options.BanListCharacterIncludesHistory
+                    ? await bans.FindAccountsWithHistoryAsync(batch).ConfigureAwait(false)
+                    : await bans.FindBannedAccountsAsync(batch).ConfigureAwait(false);
                 int[] hits = [.. batch.Where(withHistory.Contains)];
                 if (hits.Length == 0)
                 {

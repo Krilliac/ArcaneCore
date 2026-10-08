@@ -69,4 +69,23 @@ public sealed class ChatOptions
     /// lane has made, so 2 is not offered and the retail first-login state (0) is the default.
     /// </summary>
     public int GmWhisperingTo { get; set; }
+
+    /// <summary>
+    /// Path of the developer's own 1.12.1 ChatChannels.dbc (no client data ships with the server). When set, the built-in
+    /// channels (ids, flags and every locale's name pattern) come from it, as vmangos loads them (DBCStores.cpp
+    /// sChatChannelsStore, GetChannelEntryFor); a file that cannot be read or is not the build 5875 layout stops the start.
+    /// Empty (the default): the six transcribed 1.12.1 rows, English names only, so a non-English client's General or
+    /// Trade channel is created as a custom channel. Read at start.
+    /// </summary>
+    public string ChatChannelsDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Path of the developer's own 1.12.1 EmotesText.dbc. With it (and <see cref="EmotesDbcPath"/>), a text emote plays its
+    /// animation and an unknown one is dropped, as vmangos HandleTextEmoteOpcode does with sEmotesTextStore; without it a
+    /// text emote is only announced. Both paths or neither; a file that cannot be read stops the start. Read at start.
+    /// </summary>
+    public string EmotesTextDbcPath { get; set; } = string.Empty;
+
+    /// <summary>Path of the developer's own 1.12.1 Emotes.dbc (whether an emote is a one-shot animation or a state, vmangos Unit::HandleEmote). See <see cref="EmotesTextDbcPath"/>.</summary>
+    public string EmotesDbcPath { get; set; } = string.Empty;
 }

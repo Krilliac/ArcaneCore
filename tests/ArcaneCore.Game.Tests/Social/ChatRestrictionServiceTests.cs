@@ -34,6 +34,20 @@ public sealed class ChatRestrictionServiceTests
         Assert.Equal(10, twelfth.MuteRemainingSeconds); // ChatFlood.MuteTime
     }
 
+    [Fact] // active expiry: an ended mute is dropped by the periodic sweep, not only when the account speaks again
+    public void PruneExpired_DropsEndedMutes_AndKeepsRunningOnes()
+    {
+        ChatRestrictionService s = Service();
+        s.Mute(1, _now + 5);
+        s.Mute(2, _now + 60);
+        Assert.Equal(2, s.MuteCount);
+
+        _now += 5; // account 1's mute ends exactly now (CanSpeak is mutetime <= now)
+        Assert.Equal(1, s.PruneExpired());
+        Assert.Equal(1, s.MuteCount);
+        Assert.Equal(55, s.MuteRemaining(2));
+    }
+
     [Fact] // a message after the delay resets the counter
     public void ASlowSpeaker_IsNeverMuted()
     {

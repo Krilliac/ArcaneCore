@@ -221,8 +221,18 @@ public sealed class TeleportService
         UpdateZone(map, player);
 
         // vmangos TeleportPositionRelocation runs the zone (or area) update at once; the 1 s zone timer would leave the world states
-        // and the zone listeners a second behind.
-        map.FindUpdater<ZoneAreaUpdater>()?.OnRelocated(player);
+        // and the zone listeners a second behind. ZoneAreaUpdater runs every listener and then rethrows the first failure (inside
+        // Map.Update a throwing updater is logged); here that failure is logged the same way and the arrival still completes, so
+        // one failing listener cannot leave the player without its visibility pass and the completion event.
+        try
+        {
+            map.FindUpdater<ZoneAreaUpdater>()?.OnRelocated(player);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "map {MapId} zone update of {Player} after a near teleport failed", map.MapId, player.Name);
+        }
+
         player.NeedsVisibilityUpdate = true;
         TeleportCompleted?.Invoke(player);
         return true;

@@ -37,6 +37,9 @@ public sealed class PetitionManager
     /// <summary>Reserved charter names (vmangos IsReservedName); none by default.</summary>
     public ICharterNameBlacklist? Blacklist { get; set; }
 
+    /// <summary>A charter purchase was refused as spam (vmangos LogChat "Attempt to create guild petition with spam name").</summary>
+    public event Action<Player, string>? SpamRefused;
+
     /// <summary>Whether <see cref="Load"/> has run.</summary>
     public bool IsLoaded { get; private set; }
 
@@ -152,6 +155,14 @@ public sealed class PetitionManager
 
         if (!CharterNameRules.IsValid(name, Options, Blacklist))
         {
+            SendResult(player, GuildCommand.Create, name, GuildCommandError.NameInvalid);
+            return;
+        }
+
+        // vmangos HandlePetitionBuyOpcode (PetitionsHandler.cpp:87-95): the antispam check, after the name rules.
+        if (_context.Guilds.Antispam?.IsSpam(name) == true)
+        {
+            SpamRefused?.Invoke(player, name);
             SendResult(player, GuildCommand.Create, name, GuildCommandError.NameInvalid);
             return;
         }

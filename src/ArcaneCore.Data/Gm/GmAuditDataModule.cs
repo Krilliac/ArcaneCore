@@ -146,6 +146,9 @@ public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
         => await db.Set<AccountMuteRow>().Where(r => r.AccountId == accountId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
+    public Task<int> DeleteExpiredMutesAsync(long nowUnix, CancellationToken cancellationToken = default)
+        => db.Set<AccountMuteRow>().Where(r => r.MutedUntil <= nowUnix).ExecuteDeleteAsync(cancellationToken);
+
     public async Task<IReadOnlyList<GmTicketRecord>> LoadOpenTicketsAsync(CancellationToken cancellationToken = default)
         => [.. (await db.Set<GmTicketRow>().AsNoTracking().Where(r => r.Status == (byte)GmTicketStatus.Open)
             .OrderBy(r => r.Id).ToListAsync(cancellationToken).ConfigureAwait(false)).Select(r => r.ToRecord())];

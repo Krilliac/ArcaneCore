@@ -12,6 +12,40 @@ public sealed partial class GmAuditFeature
     private readonly Dictionary<int, GmTicketRecord> _tickets = [];
     private readonly Dictionary<int, (long WindowStart, int Count)> _ticketPacketWindows = [];
     private int _lastTicketId;
+    private long _lastTicketChange;
+
+    /// <summary>
+    /// When the ticket queue last changed (a ticket filed, updated, answered, closed or removed; vmangos
+    /// TicketMgr::UpdateLastChange), unix seconds; the start time until the first change. The 1.12 ticket status carries the
+    /// days since then as its "estimated wait" (vmangos GmTicket::FillPacket).
+    /// </summary>
+    public long LastTicketChange
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastTicketChange;
+            }
+        }
+    }
+
+    /// <summary>The last-change time of the oldest open ticket (vmangos TicketMgr::GetOldestOpenTicket), or null when none is open.</summary>
+    public long? OldestOpenTicketUpdatedAt()
+    {
+        lock (_gate)
+        {
+            return _tickets.Count == 0 ? null : _tickets.Values.Min(t => t.UpdatedAt);
+        }
+    }
+
+    private void TouchQueue()
+    {
+        lock (_gate)
+        {
+            _lastTicketChange = NowUnixSeconds;
+        }
+    }
 
     /// <summary>The per-account limit in force (<see cref="GmOptions.TicketMutationsPerMinute"/> after the fail-closed bind).</summary>
     public int TicketMutationsPerMinute { get; private set; } = new GmOptions().TicketMutationsPerMinute;
@@ -96,16 +130,20 @@ public sealed partial class GmAuditFeature
             _tickets[ticket.Id] = ticket;
         }
 
+        TouchQueue();
         PersistTicket(ticket);
         return ticket;
     }
 
     /// <summary>
-    /// Replace the text of the character's open ticket (vmangos HandleGMTicketUpdateTextOpcode). Null when it has none.
-    /// <paramref name="changed"/> is false when the text was already that: nothing is then written or stamped, and the
-    /// caller does not tell staff.
+    /// Replace the text (and, when given, the type) of the character's open ticket (vmangos HandleGMTicketUpdateTextOpcode:
+    /// SetMessage and SetTicketType). Null when it has none. <paramref name="changed"/> is false when nothing differs:
+    /// nothing is then written or stamped, and the caller does not tell staff.
     /// </summary>
-    public GmTicketRecord? UpdateTicketText(int characterId, string text, out bool changed)
+    public GmTicketRecord? UpdateTicketText(int characterId, string text, out bool changed) => UpdateTicketText(characterId, text, null, out changed);
+
+    /// <inheritdoc cref="UpdateTicketText(int, string, out bool)"/>
+    public GmTicketRecord? UpdateTicketText(int characterId, string text, byte? category, out bool changed)
     {
         GmTicketRecord updated;
         lock (_gate)
@@ -117,16 +155,18 @@ public sealed partial class GmAuditFeature
                 return null;
             }
 
-            if (string.Equals(ticket.Text, text, StringComparison.Ordinal))
+            byte newCategory = category ?? ticket.Category;
+            if (string.Equals(ticket.Text, text, StringComparison.Ordinal) && ticket.Category == newCategory)
             {
                 changed = false;
                 return ticket;
             }
 
-            updated = ticket with { Text = text, UpdatedAt = NowUnixSeconds };
+            updated = ticket with { Text = text, Category = newCategory, UpdatedAt = NowUnixSeconds };
             _tickets[updated.Id] = updated;
         }
 
+        TouchQueue();
         PersistTicket(updated);
         changed = true;
         return updated;
@@ -147,6 +187,7 @@ public sealed partial class GmAuditFeature
             _tickets[ticketId] = updated;
         }
 
+        TouchQueue();
         PersistTicket(updated);
         return updated;
     }
@@ -176,6 +217,7 @@ public sealed partial class GmAuditFeature
             };
         }
 
+        TouchQueue();
         PersistTicket(closed);
         return closed;
     }
@@ -200,6 +242,7 @@ public sealed partial class GmAuditFeature
 
         if (removed is not null)
         {
+            TouchQueue();
             Writes.Save(TicketKey(ticketId), store => store.DeleteTicketAsync(ticketId));
         }
 

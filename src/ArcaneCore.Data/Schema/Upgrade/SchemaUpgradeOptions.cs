@@ -46,6 +46,12 @@ public sealed class SchemaUpgradeOptions
     /// </summary>
     public Func<DbContext, CancellationToken, Task<int?>>? SessionProbe { get; init; }
 
+    /// <summary>
+    /// Whether a create or upgrade may record a reserved placeholder version as applied (<see cref="ReservedSchemaGaps"/>).
+    /// Defaults to <see cref="ReservedSchemaGaps.AllowedInThisProcess"/>, which only the test projects turn on.
+    /// </summary>
+    public bool AllowReservedSchemaGaps { get; init; } = ReservedSchemaGaps.AllowedInThisProcess;
+
     /// <summary>Called once per version row written, in order.</summary>
     public IProgress<SchemaStepProgress>? Progress { get; init; }
 

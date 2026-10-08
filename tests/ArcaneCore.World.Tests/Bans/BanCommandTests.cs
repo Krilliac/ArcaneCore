@@ -233,7 +233,7 @@ public sealed class BanCommandTests
     [Fact] // the cap bounds the history work of .banlist character, not only the printed lines
     public async Task BanListCharacter_StopsQueryingOnceTheCapIsExceeded()
     {
-        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2, BanListCharacterIncludesHistory = true });
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         const int accounts = 450; // three batches of 200 when walked to the end
         for (int i = 0; i < accounts; i++)
@@ -255,10 +255,50 @@ public sealed class BanCommandTests
         Assert.Equal(1, host.Bans.FindHistoryCalls); // not 3 batches, and never one query per account
     }
 
-    [Fact] // a small listing is identical to before: every account with history, in id order
-    public async Task BanListCharacter_UnderTheCap_ListsEveryAccountWithHistoryAcrossBatches()
+    [Fact] // the narrow default: only accounts with a ban in force, as .banlist account (vmangos active = 1 and not expired)
+    public async Task BanListCharacter_ListsOnlyAccountsWithABanInForce_ByDefault()
     {
         await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        (string Account, long Ban, long Unban, bool Active)[] rows =
+        [
+            ("PERMA", 100, 100, true),               // permanent, in force
+            ("TEMPO", now - 60, now + 3600, true),   // temporary, in force
+            ("EXPIRED", now - 7200, now - 3600, true), // temporary, over
+            ("LIFTED", 100, 100, false),             // unbanned (inactive), plus its audit row below
+            ("CLEAN", 0, 0, false),                  // never banned
+        ];
+        int n = 0;
+        foreach ((string account, long ban, long unban, bool active) in rows)
+        {
+            await host.AddAccountAsync(account);
+            int id = (await host.Accounts.FindByUsernameAsync(account))!.Id;
+            host.Directory.Add(new CharacterIdentity(2000 + n, id, $"Narrow{n}", 1, 0, 1));
+            n++;
+            if (account != "CLEAN")
+            {
+                host.Bans.AddAccountRow(id, ban, unban, active);
+            }
+
+            if (account == "LIFTED")
+            {
+                host.Bans.AddAccountRow(id, now - 5, now - 5, active: false); // the UNBAN audit row
+            }
+        }
+
+        await Drain(admin);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist character narrow");
+        Assert.Equal(["The following accounts match your query:", "PERMA", "TEMPO"], await ReadLinesAsync(admin, 3));
+        // Nothing else was listed: the next chat line is the answer to the next command.
+        Assert.Equal("There is no matching IPban.", await CommandAsync(admin, ".banlist ip 9.9.9."));
+        Assert.Equal(0, host.Bans.FindHistoryCalls);
+    }
+
+    [Fact] // Bans:BanListCharacterIncludesHistory restores vmangos: every account with any row, in id order
+    public async Task BanListCharacter_UnderTheCap_ListsEveryAccountWithHistoryAcrossBatches()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { BanListCharacterIncludesHistory = true });
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         for (int i = 0; i < 250; i++)
         {

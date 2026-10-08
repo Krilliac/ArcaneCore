@@ -43,4 +43,15 @@ public sealed class AuthOptions
 
     /// <summary>Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection.</summary>
     public int MaxConnectionsPerIp { get; set; }
+
+    /// <summary>
+    /// How long the logon daemon keeps its in-memory copy of <c>ip_banned</c> before the next logon challenge reloads it,
+    /// in seconds (realm <c>RealmIpBanCache</c>). Default 60, mangosd's BanListReloadTimer (World.cpp:697), whose
+    /// in-memory IP list this mirrors (AccountMgr.cpp:340-367, 412-417). vmangos realmd reads the table on every
+    /// challenge (AuthSocket.cpp:338-352); 0 restores that. An IP ban written elsewhere reaches the logon screen within
+    /// this period; world authentication reads the rows directly and refuses the address at once. An unban written
+    /// elsewhere also takes up to this period to let the address back in. When the list cannot be loaded, challenges use
+    /// the single-row read for one period instead (closed only if that read fails too).
+    /// </summary>
+    public int IpBanCacheSeconds { get; set; } = 60;
 }

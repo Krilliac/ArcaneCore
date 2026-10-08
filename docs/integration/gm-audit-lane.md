@@ -31,7 +31,7 @@ The three mutations are rate limited per account, ArcaneCore's own (no reference
 (default 10) is the most create, update-text and delete packets one account may send in a fixed minute from its first; the rest are refused
 before the payload is read and the player gets a system line. A refused create or update answers with its error code (3 / 5); a refused
 delete answers with the ticket's real state (the status answer that normally follows a delete) and never the "deleted" code, since nothing
-was deleted (UNVERIFIED on a retail client, as the layouts below). Fail-closed: 0 refuses every ticket mutation, a negative value falls
+was deleted. Fail-closed: 0 refuses every ticket mutation, a negative value falls
 back to the default, and the limit holds the staff notices to the same bound.
 
 ### Why these names and levels
@@ -53,6 +53,12 @@ back to the default, and the limit holds the staff notices to the same bound.
 * **Duration** is minutes when a bare number (mangos-zero, vmangos), else `1d2h30m` groups as `.ban`. Unlike vmangos' 32-bit
   `TimeStringToSecs` the arithmetic is checked, so `4294967297s` is refused instead of wrapping into one second; zero is refused and
   there is no permanent mute (use a ban); maximum 365 days. A word with a digit is a duration, otherwise a name, so `.mute 30m` mutes the selection.
+* **Expiry is active** (wave 2). A mute that runs out is dropped from memory and its `account_mute` row deleted by the world tick
+  (once per clock second, `GmAuditFeature.ExpireMutes`), whether or not anyone speaks, runs `.pinfo` or `.arcane mutes`; rows that
+  ran out while the world was down are deleted at start (`IGmAuditStore.DeleteExpiredMutesAsync`, conditional on the end time, so a
+  mute set again meanwhile is never touched). vmangos keeps `account.mutetime` and only compares it when the player speaks
+  (`WorldSession::m_muteTime`, `ChatHandler.cpp:221-247`); the player sees the same thing (nothing is said when a mute ends on its own),
+  the server just stops keeping ended mutes. The social lane's `ChatRestrictionService` table is pruned the same way.
 * **`.arcane` is a non-retail root.** No reference core has it, `RetailCommandOrder` does not list it, so a future retail table can never
   collide with it. Everything under it only reads.
 * **Tickets are per character, one open at a time** (vmangos `character_ticket`). `respond` answers and leaves the ticket open; `close`
@@ -101,13 +107,20 @@ and say so.
 
 ## Unverified and deferred (nothing below is guessed into code)
 
-* **UNVERIFIED on a retail 1.12.1 client:** the layouts of `CMSG_GMTICKET_CREATE` (`u8 category, u32 map, 3 x f32, cstring text, cstring
-  reserved`), the status-6 `SMSG_GMTICKET_GETTICKET` tail, and the response codes (1 exists, 2 created, 3 error, 4 updated, 5 update error,
-  9 deleted) are mangos-zero's (`GMTicketHandler.cpp`, `GMTicketMgr.h:39-46`); no 1.12.1 capture or client disassembly was available. The
-  category byte in create is the most doubtful (acore's 3.3.5 layout has it too). Mitigations: a create shorter than the fixed part is
-  answered with the create-error code and stores nothing; the position fields are skipped and the server's own position stored. Verify
-  with a client capture before relying on tickets. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328) is a later-client opcode and is not sent; closing or
-  deleting a ticket clears the owner's window with the status-0x0A answer the existing code already sent.
+* **Ticket packets: verified against vmangos and wow_messages (wave 2), not against a client capture.** The 1.12 layouts of vmangos
+  `Server/Packets/GmTicket.cpp` and wow_messages `gamemaster/*.wowm` (paste_versions 1.12) agree and are followed:
+  `CMSG_GMTICKET_CREATE` is `u8 type, u32 map, 3 x f32, cstring text, cstring reserved` (a harassment report may append chat data,
+  not read); `CMSG_GMTICKET_UPDATETEXT` is `u8 type, cstring text` (wow_messages: "cmangos does not have this field, vmangos does"; the
+  byte the old code took for a BEL at the start of the text was this type, which is now stored as vmangos SetTicketType does); the
+  status-6 `SMSG_GMTICKET_GETTICKET` is `cstring text, u8 type, f32 days since the ticket last changed, f32 days since the oldest open
+  ticket last changed, f32 days since the queue last changed, u8 escalation, u8 read by a GM` (vmangos `GmTicket::FillPacket`; the
+  type was always 7 before, the ages always 0). Rules taken from vmangos `GMTicketHandler.cpp`: a type of 11 or more makes create silent;
+  a second ticket answers CREATE_ERROR (3), not ALREADY_EXIST (1, which vmangos' 1.12 handler never sends); a create sends no time
+  response (only get-ticket does); withdrawing without a ticket answers nothing. Escalation and "read by a GM" are always 0 (no
+  escalation queue, viewing is not tracked). A create shorter than the fixed part is still answered with the create-error code; the
+  position fields are skipped and the server's own position stored. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328) is a later-client opcode and
+  is not sent. vmangos' "completed ticket" (the GM answer appended to the status text) has no counterpart: a response here leaves the
+  ticket open.
 * **Deferred:** `.gm visible` (needs a GM-invisibility concept in the visibility code); the cores' full-account `.gm list` (needs an
   account-listing method on `IAccountAdmin`, whose lane is also editing the ban seam); `mute` of an offline character (needs the account
   security without loading the account); mailing a ticket answer to an offline owner; `ticket assign/comment/escalate/togglesystem`,

@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
 | `GameMaster` | 3 | 121 |
-| `Administrator` | 6 | 176 |
+| `Administrator` | 6 | 177 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -150,6 +150,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.ban account` | 3 | GameMaster | stored level through the map | Syntax: .ban account $Name $bantime $reason — $bantime is like 1d2h3m4s, 0 or an unknown format is permanent; the reason is one word or quoted. |
 | `.ban character` | 3 | GameMaster | stored level through the map | Syntax: .ban character $Name $bantime $reason — bans the character's account. |
 | `.ban ip` | 6 | Administrator | stored level through the map | Syntax: .ban ip $Ip $bantime $reason |
+| `.ban allip` | 6 | Administrator | stored level through the map | Syntax: .ban allip $IpPrefix [$reason] — permanently bans every account last seen on an address starting with $IpPrefix that has no character above level 10. |
 | `.unban` ... | 6 | Administrator | stored level through the map | Lift a ban. |
 | `.unban account` | 6 | Administrator | stored level through the map | Syntax: .unban account $Name $message |
 | `.unban character` | 6 | Administrator | stored level through the map | Syntax: .unban character $Name $message |
@@ -160,7 +161,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.baninfo ip` | 3 | GameMaster | stored level through the map | Syntax: .baninfo ip $Ip |
 | `.banlist` ... | 1 | Moderator | stored level through the map | List bans. |
 | `.banlist account` | 1 | Moderator | stored level through the map | Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name. |
-| `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name. |
+| `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — accounts with a ban in force owning a character whose name starts with $Name. |
 | `.banlist ip` | 3 | GameMaster | stored level through the map | Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip. |
 | `.neargrave` | 3 | GameMaster | stored level through the map | Syntax: .neargrave [alliance\|horde] Find the graveyard nearest to you that serves your zone (for the given team, or any). |
 | `.explorecheat` | 1 | Moderator | stored level through the map | Syntax: .explorecheat #flag - 1 reveals every zone, 0 hides them (vmangos: the effect lands on you). |

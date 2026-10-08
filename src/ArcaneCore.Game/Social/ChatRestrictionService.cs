@@ -41,6 +41,26 @@ public sealed class ChatRestrictionService(ChatRestrictionOptions options, Func<
     /// <summary>End the account's mute.</summary>
     public void Unmute(int accountId) => _muteUntil.Remove(accountId);
 
+    /// <summary>How many accounts have a mute entry, ended ones not yet pruned included.</summary>
+    public int MuteCount => _muteUntil.Count;
+
+    /// <summary>
+    /// Drop every mute that has ended (until &lt;= now, vmangos CanSpeak is <c>m_muteTime &lt;= time(nullptr)</c>), so an
+    /// account that never speaks again does not keep its entry; returns how many went. The owning feature calls it on
+    /// the world tick.
+    /// </summary>
+    public int PruneExpired()
+    {
+        long now = unixNow();
+        int[] ended = [.. _muteUntil.Where(pair => pair.Value <= now).Select(pair => pair.Key)];
+        foreach (int accountId in ended)
+        {
+            _muteUntil.Remove(accountId);
+        }
+
+        return ended.Length;
+    }
+
     /// <summary>The session ended: its mute and the character's flood counter are gone (vmangos keeps both in memory).</summary>
     public void Forget(int accountId, uint characterId)
     {

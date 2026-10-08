@@ -77,7 +77,13 @@ public static class DataModules
         IReadOnlyList<ForeignLine>? foreignLines = null)
     {
         var steps = new List<SchemaStep>(inlineSteps);
-        foreach (IDataModule module in modules ?? For(component))
+        var gaps = new List<int>();
+        IDataModule[] candidates = [.. modules ?? For(component)];
+
+        // A reserved-gap placeholder yields to a real module or inline step that claims its version (IReservedSchemaGap).
+        var claimed = new HashSet<int>(inlineSteps.Select(s => s.Version)
+            .Concat(candidates.Where(m => m is not IReservedSchemaGap).Select(m => m.SchemaVersion)));
+        foreach (IDataModule module in candidates.Where(m => m is not IReservedSchemaGap || !claimed.Contains(m.SchemaVersion)))
         {
             if (module.Component != component)
             {
@@ -95,6 +101,10 @@ public static class DataModules
             }
 
             steps.Add(new SchemaStep(module.SchemaVersion, module.SchemaChanges));
+            if (module is IReservedSchemaGap)
+            {
+                gaps.Add(module.SchemaVersion);
+            }
         }
 
         steps.Sort((a, b) => a.Version.CompareTo(b.Version));
@@ -118,6 +128,7 @@ public static class DataModules
             Version1Tables = version1Tables,
             Steps = steps,
             ForeignLines = foreignLines ?? [],
+            ReservedGapVersions = [.. gaps.Order()],
         };
     }
 

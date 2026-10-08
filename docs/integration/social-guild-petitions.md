@@ -97,8 +97,14 @@ attach/are offered messages in the right order (features sort by full type name)
 
 ## Limits
 
-- No antispam name filter (`AntispamInterface::filterMessage`) and no reserved names: classic-db `reserved_name`
-  has 0 rows; `ICharterNameBlacklist` is empty by default.
+- **Antispam** (wave 2): `World:Guild:CharterSpamPatterns` (a list, empty by default) makes `PatternCharterAntispamFilter`
+  the `AntispamInterface::filterMessage` of the reference: a guild or charter name that contains a pattern, compared without
+  case and spaces, is refused as an invalid name at the charter purchase (`PetitionsHandler.cpp:87-95`, logged like
+  vmangos' "Attempt to create guild petition with spam name") and at every guild creation (`.guild create`,
+  `CMSG_GUILD_CREATE` and the charter turn-in, `Guild.cpp:130-137`). vmangos ships the interface without an
+  implementation, so the empty default filters nothing, as there. A rename is not checked (vmangos checks only the
+  reserved names and the name rules there). Reserved names: classic-db `reserved_name` has 0 rows;
+  `ICharterNameBlacklist` is empty by default.
 - Undercity guild master (creature 4613) has gossip menu text but no `gossip_menu_option` rows in classic-db, so
   charters cannot be offered through gossip there. Data gap, not invented; the direct `CMSG_PETITION_SHOWLIST`
   still works. `option_id 10` also appears once for an arena team (menu 8494, TBC content): not wired.

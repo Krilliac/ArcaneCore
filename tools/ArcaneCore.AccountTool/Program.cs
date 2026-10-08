@@ -43,8 +43,8 @@ AuthDbContext db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
 
 const string ConsoleAuthor = "CONSOLE";
 const string RecheckWarning =
-    "note: a running world daemon disconnects the account only if it enforces bans written by other processes " +
-    "(Bans:RecheckIntervalSeconds > 0); otherwise the ban applies at the account's next login.";
+    "note: a running world daemon disconnects the account at its next ban re-check (Bans:RecheckIntervalSeconds, " +
+    "60 seconds by default); with the re-check off (0) the ban applies at the account's next login.";
 
 string command = args[0].ToLowerInvariant();
 switch (command)

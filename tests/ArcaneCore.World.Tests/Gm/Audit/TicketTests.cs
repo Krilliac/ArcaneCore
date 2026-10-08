@@ -14,7 +14,8 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Gm.Audit;
 
 /// <summary>
-/// GM tickets end to end: the player packets (CMSG_GMTICKET_*, layouts of mangos-zero, UNVERIFIED on a retail client) and the
+/// GM tickets end to end: the player packets (CMSG_GMTICKET_*, the 1.12 layouts of vmangos Server/Packets/GmTicket.cpp and
+/// wow_messages gamemaster/*.wowm, which agree) and the
 /// staff <c>.ticket</c> commands, with the store, the retained-write path and the character-deletion hook.
 /// </summary>
 public sealed class TicketTests
@@ -54,9 +55,11 @@ public sealed class TicketTests
         return writer.ToArray();
     }
 
-    internal static byte[] TextPayload(string text)
+    /// <summary>CMSG_GMTICKET_UPDATETEXT for 1.12: u8 ticket type, then the text (vmangos GmTicketUpdateText, wow_messages "versions = 1").</summary>
+    internal static byte[] TextPayload(string text, byte type = 1)
     {
         var writer = new PacketWriter(32);
+        writer.WriteByte(type);
         writer.WriteCString(text);
         return writer.ToArray();
     }
@@ -119,7 +122,7 @@ public sealed class TicketTests
         await player.CollectAsync();
 
         Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(player, "first"));
-        Assert.Equal(GmTicketHandlers.ResponseAlreadyExists, await CreateAsync(player, "second"));
+        Assert.Equal(GmTicketHandlers.ResponseCreateError, await CreateAsync(player, "second"));   // vmangos: the response stays CREATE_ERROR
 
         Assert.Equal("first", Assert.Single(AuditOf(host).OpenTickets()).Text);
     }
@@ -175,11 +178,21 @@ public sealed class TicketTests
         await player.SendAsync(WorldOpcode.CmsgGmticketGetticket, []);
         Assert.Equal(0x0Au, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket)));
 
-        await CreateAsync(player, "need a GM");
+        await player.SendAsync(WorldOpcode.CmsgGmticketCreate, CreatePayload("need a GM", category: 4));
+        await player.ReadUntilAsync(WorldOpcode.SmsgGmticketCreate);
         await player.SendAsync(WorldOpcode.CmsgGmticketGetticket, []);
+        await player.ReadUntilAsync(WorldOpcode.SmsgQueryTimeResponse);   // vmangos HandleGMTicketGetTicketOpcode answers the time first
         var reader = new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket));
+        // vmangos GmTicketGetTicket::AppendBodyTo / wow_messages smsg_gmticket_getticket (1.12): status, text, the ticket's own
+        // type, three ages in days (since its last change, of the oldest open ticket, since the queue last changed),
+        // escalation status, read by a GM.
         Assert.Equal((GmTicketHandlers.StatusHasTicket, "need a GM"), (reader.ReadUInt32(), reader.ReadCString()));
-        Assert.Equal(1 + 12 + 2, reader.Remaining);   // category, three floats, two bytes: the mangos-zero tail
+        Assert.Equal(4, reader.ReadByte());
+        Assert.InRange(reader.ReadSingle(), 0f, 0.01f);
+        Assert.InRange(reader.ReadSingle(), 0f, 0.01f);
+        Assert.InRange(reader.ReadSingle(), 0f, 0.01f);
+        Assert.Equal((0, 0), (reader.ReadByte(), reader.ReadByte()));
+        Assert.Equal(0, reader.Remaining);
     }
 
     [Fact]
@@ -196,11 +209,11 @@ public sealed class TicketTests
 
         await CreateAsync(player, "old text");
         await gm.CollectAsync();
-        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("\u0007new text"));   // the client puts a BEL in front of an update
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("new text", type: 7));   // the leading byte is the type (7 = quest NPC)
 
         Assert.Equal(GmTicketHandlers.ResponseUpdated, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
         Assert.Equal($"Player {Link("Plain")} has updated his ticket (ID 1).", (await gm.ReadChatAsync()).Text);
-        Assert.Equal("new text", AuditOf(host).OpenTickets()[0].Text);
+        Assert.Equal(("new text", (byte)7), (AuditOf(host).OpenTickets()[0].Text, AuditOf(host).OpenTickets()[0].Category));   // vmangos SetTicketType
         await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1)?.Text == "new text", "the update to reach storage");
 
         await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("\u0007"));           // nothing left after cleaning
@@ -224,8 +237,28 @@ public sealed class TicketTests
         Assert.Empty(AuditOf(host).OpenTickets());
         await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1) is null, "the row to go");
 
-        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);   // again, with no ticket: still answered
-        Assert.Equal(GmTicketHandlers.ResponseDeleted, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketDeleteticket)));
+        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);   // again, with no ticket: vmangos answers nothing
+        Assert.DoesNotContain(await player.CollectAsync(), p => p.Opcode is WorldOpcode.SmsgGmticketDeleteticket or WorldOpcode.SmsgGmticketGetticket);
+    }
+
+    [Fact]
+    public async Task Create_AnUnknownTicketType_IsIgnored_AndASuccessSendsOnlyTheCreateAnswer()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        // vmangos HandleGMTicketCreateOpcode: "if (packet.ticketType >= GMTICKET_MAX) return;" (GMTICKET_MAX = 11).
+        await player.SendAsync(WorldOpcode.CmsgGmticketCreate, CreatePayload("odd type", category: 11));
+        Assert.DoesNotContain(await player.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgGmticketCreate);
+        Assert.Empty(AuditOf(host).OpenTickets());
+
+        // A good one is answered with SMSG_GMTICKET_CREATE alone (no time response, unlike the get-ticket request).
+        await player.SendAsync(WorldOpcode.CmsgGmticketCreate, CreatePayload("I fell through the world", category: 10));
+        List<(WorldOpcode Opcode, byte[] Payload)> answer = await player.CollectAsync();
+        Assert.Equal(GmTicketHandlers.ResponseCreated, U32(Assert.Single(answer, p => p.Opcode == WorldOpcode.SmsgGmticketCreate).Payload));
+        Assert.DoesNotContain(answer, p => p.Opcode == WorldOpcode.SmsgQueryTimeResponse);
+        Assert.Equal(10, AuditOf(host).OpenTickets()[0].Category);
     }
 
     [Fact]

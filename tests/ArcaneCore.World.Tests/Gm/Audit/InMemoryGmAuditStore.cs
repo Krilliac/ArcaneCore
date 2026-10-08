@@ -100,6 +100,21 @@ internal sealed class InMemoryGmAuditStore : IGmAuditStore
         return Task.CompletedTask;
     }
 
+    public Task<int> DeleteExpiredMutesAsync(long nowUnix, CancellationToken cancellationToken = default)
+    {
+        Gate();
+        lock (_lock)
+        {
+            int[] expired = [.. _mutes.Values.Where(m => m.MutedUntil <= nowUnix).Select(m => m.AccountId)];
+            foreach (int accountId in expired)
+            {
+                _mutes.Remove(accountId);
+            }
+
+            return Task.FromResult(expired.Length);
+        }
+    }
+
     public Task<IReadOnlyList<GmTicketRecord>> LoadOpenTicketsAsync(CancellationToken cancellationToken = default)
     {
         lock (_lock)

@@ -37,7 +37,8 @@ The schema versions are listed in the [schema reference](../reference/schema.md)
 Ban from in-game with `.ban account`, `.ban character` and `.ban ip`, and lift with `.unban`; `.baninfo` and `.banlist` read the history. Without a client use
 `arcane-account ban <username> <duration|0> <reason>`, `unban`, `baninfo` and `banlist`. A duration is `1d2h3m4s`; `0`, and (unless
 `Bans:RejectUnparseableDuration` is on) any string that does not parse, is a permanent ban, exactly as in retail. A ban made by the account tool is a database
-row: a connected player is disconnected only when `Bans:RecheckIntervalSeconds` is above 0; otherwise it applies at that account's next login. The ban tables,
+row: a connected player is disconnected by the periodic re-check (`Bans:RecheckIntervalSeconds`, 60 seconds by default); with it set to 0 the ban applies at
+that account's next login. The ban tables,
 IP bans and the live enforcement options are described in [live bans](../security/live-bans.md).
 
 ## Monitoring
@@ -74,7 +75,8 @@ not, the "what to do" column says how to get retail. The defaults in this table 
 | `World:MaxQueuedWorldPackets` | `8192` | **not retail** | vmangos queues without a bound (WorldSession.cpp:307). | On by default as hardening; 0 restores the retail unbounded queue. |
 | `World:MaxQueuedWorldBytes` | `8388608` | **not retail** | vmangos queues without a bound. | On by default as hardening (8 MiB); 0 restores the retail unbounded queue. |
 | `World:Social:MaxJoinedChannels` | `0` | retail | vmangos has no channel cap. | A positive value caps channels per player. |
-| `Bans:RecheckIntervalSeconds` | `0` | retail | Retail: a ban row written by another process does not kick a connected account. | Set a positive interval if you ban with `arcane-account` while players are online. |
+| `Auth:IpBanCacheSeconds` | `60` | **not retail** | vmangos realmd reads `ip_banned` on every logon challenge (AuthSocket.cpp:338-352); mangosd keeps the same list in memory, reloaded every 60 s. | On by default so a reconnect flood does not cost one query per connection; a ban written elsewhere reaches the logon screen within the period (world login refuses it at once), and an unban written elsewhere also takes up to one period to let the address back in. If the list cannot be loaded, challenges fall back to the per-challenge row read for one period. Set 0 for the per-challenge read. |
+| `Bans:RecheckIntervalSeconds` | `60` | **not retail** | Retail: a ban row written by another process does not kick a connected account (mangosd only reloads its IP-ban cache every BanListReloadTimer = 60 s). | On by default so `arcane-account` and SQL bans reach connected players within a minute; set 0 for exact retail. |
 | `Bans:RevokeSessionKeyOnBan` | `false` | retail | Retail keeps the session key and relies on the ban check at world login. | True also revokes the key, so a banned client's reconnect is refused earlier. |
 | `Bans:RejectUnparseableDuration` | `false` | retail | Retail turns a malformed duration into a PERMANENT ban. | True refuses a malformed duration instead; set it unless you want exact retail behaviour. |
 | `Bans:ProtectHigherSecurity` | `true` | **not retail** | Retail has no hierarchy guard on `.ban account` / `.ban character`. | On by default; set false for exact retail. |

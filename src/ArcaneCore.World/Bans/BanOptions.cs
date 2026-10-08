@@ -18,12 +18,17 @@ public sealed class BanOptions
 
     /// <summary>
     /// How often connected sessions are re-checked against the ban rows, IP bans and the status column, so a ban
-    /// written by another process is enforced. 0 (the default) is retail: vmangos never kicks for an externally
-    /// written row; mangosd only reloads its IP cache (AccountMgr.cpp:317-327, World.cpp:697 BanListReloadTimer 60,
-    /// mangosd.conf.dist.in:232-234 says 120). A very large realm should keep this at tens of seconds: each pass
-    /// is a few indexed queries over the connected account ids. Bound from Bans:RecheckIntervalSeconds.
+    /// written by another process (<c>arcane-account</c>, SQL, the realm daemon) is enforced. Default 60 seconds, the
+    /// period of mangosd's own ban-list reload (World.cpp:697 BanListReloadTimer 60; mangosd.conf.dist.in:232-234 ships
+    /// 120). vmangos only reloads its IP cache on that timer and never kicks for an externally written account row
+    /// (AccountMgr.cpp:317-327), so kicking on the re-check is an ArcaneCore deviation in the safe direction; 0 turns the
+    /// re-check off for exact retail behaviour. Each pass is a few indexed queries over the connected account ids.
+    /// Bound from Bans:RecheckIntervalSeconds.
     /// </summary>
-    public double RecheckIntervalSeconds { get; set; }
+    public double RecheckIntervalSeconds { get; set; } = DefaultRecheckIntervalSeconds;
+
+    /// <summary>The default of <see cref="RecheckIntervalSeconds"/>: mangosd BanListReloadTimer (World.cpp:697).</summary>
+    public const double DefaultRecheckIntervalSeconds = 60;
 
     /// <summary>
     /// Refuse a <c>.ban</c> whose duration is not a clean <c>1d2h3m4s</c> string. Retail does not: any other
@@ -56,4 +61,13 @@ public sealed class BanOptions
     /// unbounded output. Bound from Bans:MaxListedEntries; default 200 (a deliberate deviation, only above that many entries).
     /// </summary>
     public int MaxListedEntries { get; set; } = 200;
+
+    /// <summary>
+    /// <c>.banlist character</c> also lists accounts whose only rows are expired, lifted (inactive) or unban audit rows. vmangos
+    /// does (HandleBanListCharacterCommand → HandleBanListHelper, AccountCommands.cpp:835-853, 886-905: any
+    /// <c>account_banned</c> row of the account), while its <c>.banlist account</c> lists only rows with <c>active = 1</c>
+    /// (:855-884). The default (false) narrows the character listing to accounts with a ban in force, the same rule as
+    /// <c>.banlist account</c> here; true restores vmangos' broad listing. Bound from Bans:BanListCharacterIncludesHistory.
+    /// </summary>
+    public bool BanListCharacterIncludesHistory { get; set; }
 }

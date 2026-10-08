@@ -13,7 +13,8 @@ public sealed partial class GuildManager
     /// </summary>
     public Guild? CreateFromPetition(uint leaderId, string name, IEnumerable<uint> signerIds, int petitionId)
     {
-        if (!IsLoaded || GetByName(name) is not null || context.Characters.Find(leaderId) is null || GetGuildOf(leaderId) is not null)
+        // Guild::Create(petition, leader) goes through Guild::Create(leader, name), antispam check included.
+        if (!IsLoaded || GetByName(name) is not null || Antispam?.IsSpam(name) == true || context.Characters.Find(leaderId) is null || GetGuildOf(leaderId) is not null)
         {
             return null;
         }

@@ -128,6 +128,20 @@ public sealed class Group
         return true;
     }
 
+    /// <summary>vmangos Group::LoadMemberFromDB: a stored slot with its own subgroup and assistant flag; a duplicate or a full subgroup is refused.</summary>
+    internal bool RestoreMemberSlot(ObjectGuid guid, string name, byte subGroup, bool assistant)
+    {
+        if (Find(guid) is not null || subGroup >= MaxRaidSubGroups || (!IsRaid && subGroup != 0) || _subGroupCounts[subGroup] >= MaxGroupSize
+            || _members.Count >= (IsRaid ? MaxRaidSize : MaxGroupSize))
+        {
+            return false;
+        }
+
+        _members.Add(new GroupMemberSlot(guid, name, subGroup) { Assistant = assistant && IsRaid });
+        _subGroupCounts[subGroup]++;
+        return true;
+    }
+
     internal void RemoveMemberSlot(GroupMemberSlot slot)
     {
         _members.Remove(slot);

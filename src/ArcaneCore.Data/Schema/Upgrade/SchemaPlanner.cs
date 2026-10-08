@@ -26,8 +26,17 @@ public static class SchemaPlanner
     /// <param name="definition">The schema the code needs.</param>
     /// <param name="includeScript">Also render the DDL of every <see cref="ChangeDecision.Create"/> and the version-row statements.</param>
     /// <param name="cancellationToken">Cancels the reads.</param>
-    public static async Task<SchemaPlan> PlanAsync(
+    public static Task<SchemaPlan> PlanAsync(
         DbContext db, SchemaDefinition definition, bool includeScript = false, CancellationToken cancellationToken = default)
+        => PlanAsync(db, definition, includeScript, ReservedSchemaGaps.AllowedInThisProcess, cancellationToken);
+
+    /// <summary>
+    /// <see cref="PlanAsync(DbContext, SchemaDefinition, bool, CancellationToken)"/> with an explicit answer to whether a
+    /// create or upgrade may pass through a reserved placeholder version (<see cref="ReservedSchemaGaps"/>); when it may not,
+    /// such a plan is refused like the apply.
+    /// </summary>
+    public static async Task<SchemaPlan> PlanAsync(
+        DbContext db, SchemaDefinition definition, bool includeScript, bool allowReservedGaps, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(definition);
@@ -35,14 +44,14 @@ public static class SchemaPlanner
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (!await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
-            var offline = new Session(db, definition, includeScript, offline: true);
+            var offline = new Session(db, definition, includeScript, offline: true, allowReservedGaps);
             return await offline.PlanCreateAsync(SchemaState.Missing, null, cancellationToken).ConfigureAwait(false);
         }
 
         await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await new Session(db, definition, includeScript, offline: false).PlanAsync(cancellationToken).ConfigureAwait(false);
+            return await new Session(db, definition, includeScript, offline: false, allowReservedGaps).PlanAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -56,17 +65,19 @@ public static class SchemaPlanner
         private readonly SchemaDefinition _definition;
         private readonly bool _script;
         private readonly bool _offline;
+        private readonly bool _allowReservedGaps;
         private readonly SchemaChangeDecider.ModelOperations _ops;
         private readonly HashSet<string> _virtualTables = new(StringComparer.Ordinal);
         private readonly Dictionary<string, HashSet<string>> _virtualColumns = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<CatalogIndex>> _indexes = new(StringComparer.Ordinal);
 
-        public Session(DbContext db, SchemaDefinition definition, bool script, bool offline)
+        public Session(DbContext db, SchemaDefinition definition, bool script, bool offline, bool allowReservedGaps)
         {
             _db = db;
             _definition = definition;
             _script = script;
             _offline = offline;
+            _allowReservedGaps = allowReservedGaps;
             _ops = SchemaChangeDecider.ReadModel(db);
         }
 
@@ -156,6 +167,11 @@ public static class SchemaPlanner
         /// <summary>Fresh create (or resume): the version table, then every model table, then the current version.</summary>
         public async Task<SchemaPlan> PlanCreateAsync(SchemaState state, int? version, CancellationToken ct)
         {
+            if (RefuseReservedGaps(state, version, version) is { } refused)
+            {
+                return refused;
+            }
+
             var noLater = new HashSet<(string, string)>();
             var actions = new List<PlannedAction>();
             await CreateTableAsync(_definition.VersionTable, noLater, actions, ct).ConfigureAwait(false);
@@ -205,6 +221,11 @@ public static class SchemaPlanner
 
         private async Task<SchemaPlan> PlanStepsAsync(SchemaState state, int from, List<PlannedStep> prefix, CancellationToken ct)
         {
+            if (RefuseReservedGaps(state, state == SchemaState.AdoptV1 ? null : from, from) is { } refused)
+            {
+                return refused;
+            }
+
             var steps = new List<PlannedStep>(prefix);
             int version = from;
             foreach (SchemaStep step in _definition.Steps.Where(s => s.Version > from).OrderBy(s => s.Version))
@@ -386,6 +407,15 @@ public static class SchemaPlanner
             }
 
             return present;
+        }
+
+        /// <summary>The apply's refusal to record a reserved placeholder version as applied (<see cref="ReservedSchemaGaps"/>), or null.</summary>
+        private SchemaPlan? RefuseReservedGaps(SchemaState state, int? version, int? from)
+        {
+            IReadOnlyList<int> pending = ReservedSchemaGaps.Pending(_definition, from);
+            return pending.Count == 0 || _allowReservedGaps
+                ? null
+                : Refused(state, version, ReservedSchemaGaps.RefusalMessage(_definition, from, pending));
         }
 
         private SchemaPlan Refused(SchemaState state, int? version, string message)

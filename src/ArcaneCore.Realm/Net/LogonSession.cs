@@ -37,11 +37,13 @@ public sealed class LogonSession(
     ILogger logger,
     string remoteEndpoint,
     IBanStore? banStore = null,
-    NetGuard? guard = null)
+    NetGuard? guard = null,
+    RealmIpBanCache? ipBanCache = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
 
     private readonly IBanStore? _banStore = banStore; // optional: null keeps every pre-ban call site unchanged
+    private readonly RealmIpBanCache? _ipBanCache = ipBanCache; // optional: null reads the row on every challenge (vmangos realmd)
     private readonly NetProtectionOptions _protection = guard?.Options ?? DefaultProtection;
     private readonly IpKey? _address = IpKey.TryParse(remoteEndpoint, out IpKey parsedAddress) ? parsedAddress : null;
     private string _username = string.Empty;
@@ -284,8 +286,7 @@ public sealed class LogonSession(
         // (vmangos AuthSocket.cpp:338-352). A store error propagates and closes the connection (fail closed).
         // ArcaneCore validates the build and name above first, so a wrong-build client sees VersionInvalid.
         string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
-        if (_banStore is not null && address is not null
-            && await _banStore.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null)
+        if (_banStore is not null && address is not null && await IsIpBannedAsync(address, cancellationToken).ConfigureAwait(false))
         {
             logger.LogInformation("[{Endpoint}] banned address tried to log in as '{Account}'",
                 remoteEndpoint, LogSafe.Escape(username));
@@ -487,8 +488,7 @@ public sealed class LogonSession(
         }
 
         string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
-        if (_banStore is not null && address is not null
-            && await _banStore.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null)
+        if (_banStore is not null && address is not null && await IsIpBannedAsync(address, cancellationToken).ConfigureAwait(false))
         {
             RecordFailure();
             await SendReconnectFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
@@ -593,6 +593,15 @@ public sealed class LogonSession(
 
         return new string(chars);
     }
+
+    /// <summary>
+    /// The IP-ban check of a challenge or a reconnect challenge: through the listener's <see cref="RealmIpBanCache"/>
+    /// when there is one, otherwise one row read per call (vmangos AuthSocket.cpp:338-352). A store error propagates.
+    /// </summary>
+    private async ValueTask<bool> IsIpBannedAsync(string address, CancellationToken cancellationToken)
+        => _ipBanCache is not null
+            ? await _ipBanCache.IsBannedAsync(address, _banStore!, cancellationToken).ConfigureAwait(false)
+            : await _banStore!.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null;
 
     private static bool IsPrintableAscii(string value)
     {
