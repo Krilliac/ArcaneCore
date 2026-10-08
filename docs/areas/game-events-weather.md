@@ -263,6 +263,38 @@ Limit: a manual `.event start` / `.event stop` schedule override does not surviv
   `CreatureMapSystem.Lifecycle.cs` (one `ApplyEventData(creature)` line in `LoadSpawns`); new partials `Creature.EventData.cs`,
   `CreatureMapSystem.EventData.cs`.
 
+### Live client effects: `.fx` (non-retail GM tooling)
+
+Source: `src/ArcaneCore.World/Gm/Events/` (`LiveFxCommands`, `FxScope`, `LiveFxPackets`); plan: Krilliac server-Zero branch
+`claude/live-override-commands-plan`, trimmed to build 5875. The commands push effects the stock 1.12.1 client already renders, with
+existing server opcodes; nothing is stored, and a relog (or the next zone change, for world states and weather) restores the normal
+state. Retail has no such root: vmangos only has debug play music, sound and cinematic and debug worldstate, each to the invoker
+(Chat.cpp:288-323). The root exists while `World:GmCommands:LiveFx` is on (default on, listed in the operations guide's deviation
+register); every use is written to the GM audit log like any command above level 0.
+
+Every command takes a scope (`self`, the default; `target`, the selected player, subject to the usual security rule; `zone`, the
+players of the invoker's zone on its map instance; `map`; `server`). `map` and `server` need an Administrator account so a GameMaster
+cannot spam the realm. The reply says how many players were reached.
+
+| Command | Packet (opcode) | Payload (wow_messages; vmangos) |
+|---|---|---|
+| `.fx music` #soundid | SMSG_PLAY_MUSIC (631) | u32 sound id (smsg_play_music.wowm; Misc.cpp:579-582, `PlayDirectMusic` Object.cpp:2909) |
+| `.fx sound` #soundid | SMSG_PLAY_SOUND (722) | u32 sound id (smsg_play_sound.wowm; Misc.cpp:589-592) |
+| `.fx visual` #kitid | SMSG_PLAY_SPELL_VISUAL (499) | u64 guid, u32 SpellVisualKit (smsg_play_spell_visual.wowm; Spell.cpp:73-77). Played on each scoped character and sent to it and everyone who sees it, as `Unit::SendPlaySpellVisualKit` (Unit.cpp:10739-10745). |
+| `.fx cinematic` #id | SMSG_TRIGGER_CINEMATIC (250) | u32 CinematicSequences id (smsg_trigger_cinematic.wowm; Misc.cpp:794-797). Only the packet: no server-side camera state. |
+| `.fx zoneattack` [#areaid] | SMSG_ZONE_UNDER_ATTACK (596) | u32 area (smsg_zone_under_attack.wowm; Misc.cpp:632-635). Default the invoker's zone; an id not in AreaTable is refused. |
+| `.fx worldstate` #field #value | SMSG_UPDATE_WORLD_STATE (707) | u32 field, u32 value (smsg_update_world_state.wowm; Misc.cpp:1018-1026). |
+| `.fx timespeed` #speed or reset | SMSG_LOGIN_SETTIMESPEED (66) | packed local game time, f32 game minutes per second (smsg_login_settimespeed.wowm; Misc.cpp:941-945). 0 freezes the client sky clock, `reset` is the retail 1/60, the cap is 60. |
+| `.fx message` [scope] text | SMSG_AREA_TRIGGER_MESSAGE (696) | u32 length with terminator, text (smsg_area_trigger_message.wowm; WorldSession.cpp:882-897). The scope is the first word here; at most 1023 bytes. |
+| `.fx weather` #type #status [zone, map, server] | SMSG_WEATHER | Administrator. The `.wchange` arguments (shared parser `WeatherCommands.TryParse`) applied to the invoker's zone, every occupied zone of its map, or of every map, through `MapWeather.SetWeather`: it is real zone weather, regenerated on the normal schedule. |
+| `.fx event` [preset] | the above | Named compositions: `faire` (music 8440, `go_scripts.cpp:275`, plus a welcome), `celebrate` (cheer 8574, `fireworks_show.cpp:51`), `invasion` (horn 3439, `BattleGroundDefines.h:45`, a zone-under-attack alert for each player's own zone, a warning). With no preset it lists them. |
+
+Dropped from the plan: SMSG_OVERRIDE_LIGHT (0x411 is not a 5875 opcode; ArcaneCore's table ends at 827) and the movie command (no
+vanilla packet). The plan's `.event` meta-command is `.fx event`, because `.event` is the retail game-event command. Sound, music,
+cinematic and visual ids are not checked against the client DBCs (no SoundEntries, CinematicSequences or SpellVisualKit store is
+loaded); the client ignores an unknown id. Tests: `tests/ArcaneCore.World.Tests/Gm/Events/LiveFxCommandTests.cs` assert the exact
+bytes per session for every scope.
+
 ## Not delivered (limits)
 
 - **Event mails** (`game_event_mail`, vmangos `SendEventMails`, GameEventMgr.cpp:1038-1063; classic-db has one row, on the script-started

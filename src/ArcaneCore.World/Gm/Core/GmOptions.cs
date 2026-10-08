@@ -79,6 +79,15 @@ public sealed class GmOptions
     /// </summary>
     public int TicketMutationsPerMinute { get; set; } = 10;
 
+    /// <summary>
+    /// ArcaneCore only, NOT the retail default: registers the <c>.fx</c> GM tooling (music, sounds, spell visuals,
+    /// cinematics, zone-under-attack, world states, client clock speed, screen messages, multi-zone weather and the
+    /// <c>.fx event</c> presets), which pushes client-visible effects to the invoker, the selection, the zone, the map or
+    /// the server. vmangos has no such root: only <c>.debug play music|sound|cinematic</c> and <c>.debug worldstate</c>,
+    /// each to the invoker (Chat.cpp:288-323). False removes the root (restart to change).
+    /// </summary>
+    public bool LiveFx { get; set; } = true;
+
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
 
