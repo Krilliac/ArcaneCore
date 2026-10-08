@@ -205,8 +205,8 @@ internal sealed class SwiftmendScenario : IPlayerbotScenario
         bool critical = reader.ReadByte() != 0;
         return spell == spellId ? (amount, critical) : (0, false);
     }
-
 }
+
 /// <summary>
 /// The stock vanilla combat rules with the spell crit roll pinned (vmangos Unit::IsSpellCrit): a scenario that asserts an exact direct damage
 /// amount cannot leave it to the 5% base roll.
