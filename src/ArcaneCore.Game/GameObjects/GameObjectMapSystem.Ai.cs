@@ -4,8 +4,9 @@ namespace ArcaneCore.Game.GameObjects;
 
 /// <summary>
 /// A script of the objects of one entry (vmangos GameObjectAI, Objects/GameObjectAI.h): <see cref="OnTrapTarget"/> is asked when an
-/// environmental trap found a target, and <see cref="Update"/> runs every update of the object, spawned or not (GameObject::Update calls
-/// UpdateAI before its state switch, GameObject.cpp:338-340). World thread.
+/// environmental trap found a target, <see cref="OnUse"/> when a player uses the object, and <see cref="Update"/> runs every update of the
+/// object, spawned or not (GameObject::Update calls UpdateAI before its state switch, GameObject.cpp:338-340). One instance serves every
+/// object of its entry, so a script keeps per-object state by the object. World thread.
 /// </summary>
 public interface IGameObjectAi
 {
@@ -14,6 +15,12 @@ public interface IGameObjectAi
 
     /// <summary>vmangos GameObjectAI::UpdateAI.</summary>
     void Update(GameObjectMapSystem objects, GameObject go, uint diffMs);
+
+    /// <summary>
+    /// vmangos GameObjectAI::OnUse at the start of GameObject::Use (GameObject.cpp:1405-1407): true when the script handled the use and the
+    /// object does nothing more. Not asked for a trap's target (that is <see cref="OnTrapTarget"/>).
+    /// </summary>
+    bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user) => false;
 }
 
 /// <summary>The object scripts by entry and the little a script may do to its object.</summary>

@@ -207,12 +207,21 @@ public abstract class EscortAI : CreatureAI
     /// <summary>The script's own update, after the waypoint logic (vmangos UpdateEscortAI). By default it keeps the victim from the threat list.</summary>
     protected virtual void UpdateEscortAI(uint diffMs) => UpdateVictim();
 
-    /// <summary>The first call is the spawn (Reset only), every later one a respawn (<see cref="JustRespawned"/>).</summary>
+    /// <summary>
+    /// The creature entered the world alive for the first time with this AI (the work a ScriptDev script does in its constructor, which here
+    /// runs when the map has placed the creature), before the first <see cref="Reset"/>.
+    /// </summary>
+    protected virtual void JustSpawned()
+    {
+    }
+
+    /// <summary>The first call is the spawn (<see cref="JustSpawned"/>, then Reset), every later one a respawn (<see cref="JustRespawned"/>).</summary>
     public sealed override void OnRespawn()
     {
         if (!_respawnedOnce)
         {
             _respawnedOnce = true;
+            JustSpawned();
             Reset();
             return;
         }

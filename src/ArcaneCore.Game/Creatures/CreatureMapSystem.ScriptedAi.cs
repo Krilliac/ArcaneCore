@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -100,6 +101,16 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// vmangos SetDefaultMovementType(RANDOM_MOTION_TYPE) + SetWanderDistance taking effect (MotionMaster::Initialize): the creature's default
+    /// movement becomes a wander of <paramref name="wanderDistance"/> yards around its home, started now.
+    /// </summary>
+    public void SetDefaultRandomMovement(Creature creature, float wanderDistance)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        creature.Motion.Initialize(new RandomMovementGenerator(wanderDistance, creature.Home, run: null), this, start: creature.IsAlive);
+    }
+
+    /// <summary>
     /// ScriptDev DoScriptText(textId, source, target) with a broadcast text or creature_ai_texts id: the line is spoken the way its chat type
     /// says. A missing text is logged once and nothing is said.
     /// </summary>
@@ -152,6 +163,19 @@ public sealed partial class CreatureMapSystem
         return summoned;
     }
 
+    /// <summary>
+    /// TEMPSUMMON_CORPSE_DESPAWN for a temporary creature a script put into the map itself (an object's summon): it goes with its corpse at
+    /// once when it dies. A database spawn is left alone.
+    /// </summary>
+    public void MarkCorpseDespawn(Creature summoned)
+    {
+        ArgumentNullException.ThrowIfNull(summoned);
+        if (summoned.Spawn is null && _creatures.ContainsKey(summoned.Guid))
+        {
+            _corpseDespawns.Add(summoned);
+        }
+    }
+
     /// <summary>A creature summoned with <see cref="SummonCorpseDespawn"/> died: its corpse goes on the next update (TemporarySummon CORPSE_DESPAWN).</summary>
     private void DespawnCorpseOfSummon(Creature creature)
     {
@@ -159,6 +183,28 @@ public sealed partial class CreatureMapSystem
         {
             ForcedDespawn(creature, 1);
         }
+    }
+
+    /// <summary>
+    /// vmangos Creature::SelectNearestTarget(range) for a script: the nearest unit within <paramref name="range"/> yards the creature may attack
+    /// on sight but for the aggro radius (a living player who is not a game master, or another creature with <c>CreatureAggroOnCreatures</c>;
+    /// hostile, attackable and in line of sight). Null when there is none.
+    /// </summary>
+    public Unit? SelectNearestTarget(Creature creature, float range)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        float rangeSq = range * range;
+        IEnumerable<Unit> candidates = Map.Players;
+        if (_options.CreatureAggroOnCreatures)
+        {
+            candidates = candidates.Concat(_creatures.Values);
+        }
+
+        return candidates
+            .Where(u => IsAggroTarget(creature, u) && DistanceSquared3D(creature, u) <= rangeSq
+                && Map.Combat.Hooks.CanAttack(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
+            .OrderBy(u => DistanceSquared3D(creature, u))
+            .FirstOrDefault();
     }
 
     /// <summary>An escort was started on an entry without escort points (vmangos "EscortAI Start with 0 waypoints", once per entry).</summary>

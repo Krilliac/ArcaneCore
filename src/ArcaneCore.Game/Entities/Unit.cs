@@ -173,10 +173,13 @@ public abstract partial class Unit : WorldObject
     /// </summary>
     private const MovementFlags ServerOwnedFlags = MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.WalkMode;
 
+    /// <summary>The movement flags a relocation keeps (<see cref="ServerOwnedFlags"/>; a creature adds the flight a script gave it).</summary>
+    private protected virtual MovementFlags RelocationKeptFlags => ServerOwnedFlags;
+
     /// <summary>Place the unit (teleport, spawn, login) with a fresh, stationary movement state.</summary>
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
     {
-        MovementFlags kept = _movement.Flags & ServerOwnedFlags;
+        MovementFlags kept = _movement.Flags & RelocationKeptFlags;
 
         // A teleport, spell relocation, taxi stop or login ends any fall in progress (vmangos SetFallInformation(0),
         // Player.cpp:1932,2082,15051).

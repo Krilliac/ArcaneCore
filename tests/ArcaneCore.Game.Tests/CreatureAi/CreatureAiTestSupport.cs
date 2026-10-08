@@ -257,7 +257,21 @@ internal sealed class FakeCaster : ICreatureSpellCaster
 
     public bool HasAura(Unit unit, uint spellId) => Auras.Contains((unit, spellId));
 
-    public void Interrupt(Creature caster) => Interrupts++;
+    public List<(Unit Unit, uint Spell)> RemovedAuras { get; } = [];
+
+    public void RemoveAuras(Unit unit, uint spellId)
+    {
+        RemovedAuras.Add((unit, spellId));
+        Auras.Remove((unit, spellId));
+    }
+
+    public List<Creature> Interrupted { get; } = [];
+
+    public void Interrupt(Creature caster)
+    {
+        Interrupts++;
+        Interrupted.Add(caster);
+    }
 
     public void OnCreatureRemoved(Creature creature) => Removed.Add(creature);
 

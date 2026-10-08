@@ -42,6 +42,12 @@ public abstract class CreatureAI
     /// <summary>Whether the creature runs after its victim (cmangos EventAI combat movement).</summary>
     public bool CombatMovement { get; set; } = true;
 
+    /// <summary>
+    /// The distance a scripted caster keeps from its victim while it chases it (vmangos Creature::SetCasterChaseDistance); 0 chases into melee
+    /// reach as any creature.
+    /// </summary>
+    public float CasterChaseDistance { get; protected set; }
+
     /// <summary>Whether the creature swings at its victim (cmangos EventAI auto attack); false keeps it at range.</summary>
     public bool MeleeEnabled { get; protected set; } = true;
 

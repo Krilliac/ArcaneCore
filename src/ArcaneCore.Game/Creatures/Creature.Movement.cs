@@ -26,6 +26,13 @@ public sealed partial class Creature : Unit, ICombatCreature
 
     internal void SetHome(CreatureHome home) => Home = home;
 
+    /// <summary>
+    /// A creature's flight is server state (vmangos Unit::SetFly sets MOVEFLAG_FLYING on m_movementInfo, Unit.cpp:7304-7310): its moves and
+    /// relocations keep it, as they keep the walk mode.
+    /// </summary>
+    private protected override MovementFlags RelocationKeptFlags
+        => MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.WalkMode | MovementFlags.Flying;
+
     // --- movement --------------------------------------------------------------------------
 
     /// <summary>Start a straight move to (x, y, z); returns the spline (world thread).</summary>
