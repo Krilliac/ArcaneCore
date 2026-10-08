@@ -296,6 +296,27 @@ public sealed class RaidBossScriptTests
     }
 
     [Fact]
+    public void ZulGurub_APriestsDeathCompletesHisSlot_AndPowersHakkarDownOnce()
+    {
+        // mangos-classic zulgurub.cpp SetData(TYPE_JEKLIK, DONE) -> RemoveHakkarPowerStack: Hakkar casts 24693 on himself.
+        using var raid = new Raid(309, 14834);
+        raid.Caster.Casts.Clear();
+        Creature jeklik = raid.Creatures.SpawnTemporary(Template(14517), 5, 0, 50, 0);
+        raid.Map.Combat.Kill(raid.Tank, jeklik);
+        Assert.Equal(EncounterState.Done, raid.Data.GetData(0));
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(1));
+        Assert.Single(raid.Caster.Casts, c => c.Spell == 24693);
+
+        Creature again = raid.Creatures.SpawnTemporary(Template(14517), 5, 0, 50, 0);
+        raid.Map.Combat.Kill(raid.Tank, again);
+        Assert.Single(raid.Caster.Casts, c => c.Spell == 24693); // a repeated DONE must not strip a second stack
+
+        Creature other = raid.Creatures.SpawnTemporary(Template(11830), 5, 0, 50, 0); // any entry that is not a high priest
+        raid.Map.Combat.Kill(raid.Tank, other);
+        Assert.Equal("3 0 0 0 0 0 0 0", raid.Data.GetSaveData());
+    }
+
+    [Fact]
     public void Hakkar_InsanityRestoresCapturedThreatAfterTheAuraEnds()
     {
         using var raid = new Raid(309, 14834);

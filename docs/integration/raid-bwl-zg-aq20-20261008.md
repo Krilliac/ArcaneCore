@@ -63,7 +63,7 @@ Final verification (local evidence retained in ignored `artifacts/raid-bwl-zg-aq
 | `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build` | 2,522 passed, 0 failed, 6 skipped; 2,528 total | `raid-tests-world-full.log` |
 | `git diff --check` | Passed for tracked changes | Final working-tree check |
 
-`RaidBossScriptTests` adds 19 cases covering AI selection and kill-state transitions, timer boundaries, threat reduction, enrage/reset,
+`RaidBossScriptTests` adds 20 cases (19 from the Codex lane, 1 from intake) covering AI selection and kill-state transitions, priest-death bookkeeping, timer boundaries, threat reduction, enrage/reset,
 platform leash, door persistence/idempotence, trap creation/activation/charge removal/missing content, actual trap-centered damage,
 Shadow Flame cloak protection, Hakkar priest aspects/power stack removal, Insanity threat restoration and both siphon spell choices.
 
@@ -73,6 +73,18 @@ no production code or test assertion was changed for that rerun. The final full 
 
 Tests advance world/AI/object clocks directly; no wall-clock waits or quiet-window assertions. They use synthetic spell effects and world
 objects, with content IDs/layouts checked against references. No multiplayer playerbot scenario or real-client raid clear was run.
+
+## Intake review (Claude, 2026-10-08)
+
+- `RaidBossAI` initial delays given as a range (SD2 `AddCombatAction(action, min, max)`) are now rolled again on every
+  evade/respawn reset instead of once at AI construction; Kurinnaxx's four opening timers use this.
+- New test `ZulGurub_APriestsDeathCompletesHisSlot_AndPowersHakkarDownOnce` covers the map-kill path into the priest slots
+  and the idempotent single 24693 cast; the lane had no test for that subscription.
+- `RemoveScriptAuraStack` lives in its own `SpellSystem.ScriptAuraStacks.cs` rather than the class-scripts lane's file.
+- Red proofs re-run natively (one build with six deliberate breaks): priest idempotence, one-stack removal, object
+  destination, Knock Away threat, Shadow Flame cloak check and Kurinnaxx enrage reset each failed their test (6 failed / 35 passed).
+- Native results after intake: build 0 warnings / 0 errors; focused 41 passed; Game 7,098 passed, 11 skipped (7,109);
+  World 2,522 passed, 6 skipped (2,528).
 
 ## Content and limits
 

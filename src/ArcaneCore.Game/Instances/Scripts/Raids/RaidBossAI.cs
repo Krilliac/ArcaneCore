@@ -15,10 +15,10 @@ namespace ArcaneCore.Game.Instances.Scripts.Raids;
 /// </summary>
 public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorAI(creature)
 {
-    private sealed class ActionTimer(uint initial, Func<bool> execute, Func<uint> repeat)
+    private sealed class ActionTimer(Func<uint> initial, Func<bool> execute, Func<uint> repeat)
     {
-        public uint Remaining = initial;
-        public uint Initial { get; } = initial;
+        public uint Remaining = initial();
+        public Func<uint> Initial { get; } = initial;
         public Func<bool> Execute { get; } = execute;
         public Func<uint> Repeat { get; } = repeat;
     }
@@ -48,7 +48,11 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
     protected uint RandomDelay(int min, int max) => (uint)(System?.RandomInt(min, max) ?? min);
 
     protected void AddAction(uint initial, Func<bool> execute, Func<uint> repeat)
-        => _actions.Add(new ActionTimer(initial, execute, repeat));
+        => _actions.Add(new ActionTimer(() => initial, execute, repeat));
+
+    /// <summary>SD2 CombatAI AddCombatAction(action, min, max): the first delay is rolled again on every reset.</summary>
+    protected void AddAction(int initialMin, int initialMax, Func<bool> execute, Func<uint> repeat)
+        => _actions.Add(new ActionTimer(() => RandomDelay(initialMin, initialMax), execute, repeat));
 
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
@@ -67,7 +71,7 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
     {
         foreach (ActionTimer action in _actions)
         {
-            action.Remaining = action.Initial;
+            action.Remaining = action.Initial();
         }
     }
 

@@ -16,10 +16,10 @@ public sealed class KurinnaxxAI : RaidBossAI
 
     public KurinnaxxAI(Creature creature) : base(creature, 0)
     {
-        AddAction(RandomDelay(8000, 10000), () => Cast(25646, Victim), () => RandomDelay(8000, 10000));
-        AddAction(RandomDelay(5000, 10000), () => Cast(26524, Me, triggered: true), () => RandomDelay(10000, 15000));
-        AddAction(RandomDelay(1000, 5000), () => Cast(3391), () => RandomDelay(12000, 17000));
-        AddAction(RandomDelay(10000, 15000), () => Cast(25814, Victim), () => RandomDelay(12000, 15000));
+        AddAction(8000, 10000, () => Cast(25646, Victim), () => RandomDelay(8000, 10000));
+        AddAction(5000, 10000, () => Cast(26524, Me, triggered: true), () => RandomDelay(10000, 15000));
+        AddAction(1000, 5000, () => Cast(3391), () => RandomDelay(12000, 17000));
+        AddAction(10000, 15000, () => Cast(25814, Victim), () => RandomDelay(12000, 15000));
     }
 
     public override void OnAggro(Unit target)
