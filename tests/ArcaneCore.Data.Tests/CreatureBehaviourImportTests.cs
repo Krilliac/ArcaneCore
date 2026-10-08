@@ -462,6 +462,14 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.True(scripts.Count(s => s.EventFlags32 is 1024 or 1025) > 6000);
         Assert.Equal(39, scripts.Count(s => s.CreatureGuid != 0));
         Assert.Equal(0, scripts.Count(s => s.CreatureId == 0 && s.CreatureGuid == 0));
+
+        // mangos-classic CreatureEventAI.h declares these IDs, but z2815 never uses them.
+        Assert.DoesNotContain(scripts, s => s.EventType == 35);
+        byte[] missingActions = [16, 26, 27, 44, 46, 52, 60, 62, 63];
+        foreach (byte type in missingActions)
+        {
+            Assert.DoesNotContain(scripts, s => s.Action1Type == type || s.Action2Type == type || s.Action3Type == type);
+        }
     }
 
     private sealed class ClassicDbDumpFactAttribute : FactAttribute

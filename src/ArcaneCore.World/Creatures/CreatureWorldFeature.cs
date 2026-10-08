@@ -81,6 +81,18 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
 
         logger.LogInformation("Loaded {Templates} creature templates and {Spawns} spawns", content.TemplateCount, content.SpawnCount);
+        EventAiCoverageReport aiCoverage = EventAiCoverage.Analyze(content.Ai.AllEvents);
+        logger.LogInformation("EventAI type coverage: {Rows} rows, {Complete}/{Creatures} creature script keys complete; {Parameters} rows have unsupported parameters",
+            aiCoverage.Rows, aiCoverage.CreaturesFullySupported, aiCoverage.CreaturesWithScripts, aiCoverage.RowsWithUnsupportedParameters);
+        if (aiCoverage.UsedUnsupportedEventIds.Count != 0 || aiCoverage.UsedUnsupportedActionIds.Count != 0)
+        {
+            logger.LogWarning("EventAI used but unsupported IDs: events {Events}; actions {Actions}",
+                string.Join(", ", aiCoverage.UsedUnsupportedEventIds.Select(pair => $"{pair.Key} ({pair.Value})")),
+                string.Join(", ", aiCoverage.UsedUnsupportedActionIds.Select(pair => $"{pair.Key} ({pair.Value})")));
+        }
+
+        logger.LogInformation("EventAI unsupported reference IDs unused by loaded scripts: events {Events}; actions {Actions}",
+            string.Join(", ", aiCoverage.UnusedUnsupportedEventIds), string.Join(", ", aiCoverage.UnusedUnsupportedActionIds));
         ReportWaypointSpawnsWithoutPath(content);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
