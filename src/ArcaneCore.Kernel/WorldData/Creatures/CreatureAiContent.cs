@@ -144,6 +144,9 @@ public sealed class CreatureAiContent
     /// <summary>The relay DB scripts EventAI's START_RELAY_SCRIPT action (53) runs (cmangos <c>dbscripts_on_relay</c>).</summary>
     public RelayScriptCatalog RelayScripts { get; init; } = RelayScriptCatalog.Empty;
 
+    /// <summary>Quest start/end, gossip and event DB scripts (cmangos ScriptMgr::LoadScripts).</summary>
+    public DbScriptCatalog DbScripts { get; init; } = DbScriptCatalog.Empty;
+
     /// <summary>The EventAI rows of a creature entry, in id order.</summary>
     public IReadOnlyList<CreatureAiEvent> GetEvents(uint entry) => _events.GetValueOrDefault(entry) ?? [];
 
