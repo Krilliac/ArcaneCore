@@ -41,7 +41,8 @@ internal static class PlayerbotNavigation
             || !Finite(new Vector3(player.X, player.Y, player.Z)))
             return false;
 
-        if (options.AllowedMaps is { Length: > 0 } maps && !maps.Contains(map.MapId))
+        // AllowedMaps limits open-world travel; the dungeon or raid instance the bot is in is always walkable (PlayerbotMapPolicy).
+        if (!PlayerbotMapPolicy.MayMoveOn(player, options))
             return false;
 
         // A destination given up after a loop is refused for a while, so the goal picks another one.
@@ -107,7 +108,7 @@ internal static class PlayerbotNavigation
         }
         if (player.StandState != StandState.Stand)
             return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
-        if (options.AllowedMaps is { Length: > 0 } maps && !maps.Contains(map.MapId)) return false;
+        if (!PlayerbotMapPolicy.MayMoveOn(player, options)) return false;
         return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs);
     }
 

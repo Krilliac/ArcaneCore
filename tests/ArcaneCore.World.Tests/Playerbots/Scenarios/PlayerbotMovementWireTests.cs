@@ -25,6 +25,7 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
     private const float RunSpeed = 7f; // Unit.BaseRunSpeed; PlayerbotOptions.MoveSpeed default
     private const float Tolerance = 0.75f; // yards between where a packet lands and where the previous one predicted
     private const uint MaxPacketGapMs = 600; // a real client heartbeats about every 500 ms
+    private const float WireOffsetY = 20f; // where the walks run, south of the start (clear of the test map's triggers)
 
     [Fact]
     public async Task StraightRoute_EveryPacketLandsWhereThePreviousOnePredicted()
@@ -212,8 +213,11 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
                 WorldCollision.Of(context.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
                 return true;
             });
-            await context.PlaceAsync(observer, 0, StartX, StartY + 6f, StartZ);
-            await context.PlaceAsync(mover, 0, StartX, StartY, StartZ);
+            // 20 yards south of the human start: the host's map content has a teleport trigger 10 yards east of the start
+            // (MapTestData "Test shortcut", a 3-yard sphere), and a bot walking into it reports it like a client
+            // (PlayerbotAreaTriggers) and is teleported away mid-route.
+            await context.PlaceAsync(observer, 0, StartX, StartY - WireOffsetY + 6f, StartZ);
+            await context.PlaceAsync(mover, 0, StartX, StartY - WireOffsetY, StartZ);
             await context.WaitUntilAsync("observer sees mover", () => observer.RequirePlayerForTests().VisibleObjects.Contains(mover.Guid));
 
             var walker = new Walker(thinkMs, think);

@@ -41,7 +41,7 @@ private worlds on 127.0.0.1:18185-18187.
   `delay_remaining_s` counted down from 119, then reclaimed; Ironwander went on to fight and train. Dawnrover was killed again
   right after reclaiming (its third death, so another 120 s wait) and was again waiting without a fault when the run ended.
   Reclaiming beside whatever killed it is a gameplay gap, not a fault (follow-up: wait for nearby hostiles to leave, or use the
-  spirit healer).
+  spirit healer). **Closed** by lane `claude/tb-b4-dungeon-movement-recovery` (see "Follow-up closed" below).
 
 ## Fixes
 
@@ -90,3 +90,36 @@ silently within the delay.
 The two rows still have `DesiredEnabled = 0` from the incident. Once this build runs, an Administrator brings them back with
 `.playerbot start Dawnrover` and `.playerbot start Ironwander`. That is an ordinary start: it sets `DesiredEnabled` again, and the
 ghosts reclaim their bodies after the delay. No schema change is involved.
+
+## Follow-up closed: hostiles at the body, the spirit healer, deaths in dungeons (2026-10-08)
+
+Lane `claude/tb-b4-dungeon-movement-recovery` (wave b, dungeon movement and recovery). Details: `docs/areas/playbots-dungeons.md`.
+
+7. **Hostiles near the revive point.** After the reclaim delay a ghost in reclaim range of its body does not reclaim while a living
+   hostile creature it can see stands within 25 yards of the ghost (`PlayerbotRecovery.HostileClearYards`; mangoszero playerbot
+   `ReviveFromCorpseAction`). The check is made around the ghost, not the body: CMSG_RECLAIM_CORPSE revives the player where the ghost
+   stands (vmangos MiscHandler.cpp:599), up to about 39 yards from the body. Waiting for hostiles is not progress, so a body camped for
+   a minute is given up (next item). Tests: `PlayerbotRecoveryDecisionTests.AHostileNearTheBody_MeansWaiting_ThenTheGhostReclaimsWhenItLeaves`,
+   `TheHostileCheck_IsMadeAroundTheGhost_WhereTheReclaimRevivesIt`.
+8. **No more `playerbot-recovery-stalled` / `playerbot-recovery-stuck` throws for a ghost.** A ghost whose recovery made no progress
+   for 60 s, whose walk stopped closing on its goal (or could not be planned) for 10 s, that has no body, or whose body is on another
+   map with no entrance trigger here, takes the spirit healer: the nearest one it can see, else it walks to the graveyard of its
+   position, and sends CMSG_SPIRIT_HEALER_ACTIVATE (vmangos NPCHandler.cpp:416) through the ordinary handler. Only when that
+   fallback stalls the same way (or there is no healer and no graveyard) does the recovery fault, with
+   `playerbot-recovery-spirit-healer-failed`. A body that cannot even be released for 60 s still faults with
+   `playerbot-recovery-stalled` (a spirit healer cannot help an unreleased body; the `Fault` step throws it explicitly,
+   `AStalledBodyThatIsNoGhost_FaultsStalled_AndNeverTakesTheSpiritHealer`). Tests:
+   `PlayerbotRecoveryDecisionTests.AStalledCorpseRun_TakesTheSpiritHealer_AndNothingThrows` (RED before: threw
+   `playerbot-recovery-stuck`), `WithoutAnySpiritHealer_TheRecoveryFaultsOnlyWhenTheFallbackFails` (RED before: the stuck code),
+   scenario `dungeon-bot-spirit-healer` (`DungeonBotScenarioTests.ABotWhoseCorpseRunStalls_UsesTheSpiritHealer_AndIsNotQuarantined`).
+9. **A death inside a dungeon.** The ghost is released at the graveyard outside; the recovery walks it into the entrance trigger whose
+   `areatrigger_teleport` leads to the body's map and the server revives it at the entrance (vmangos Player.cpp:1953-1966). Before,
+   `corpse.Map != player.Map` made the recovery wait doing nothing until it threw `playerbot-recovery-stalled`. Scenario
+   `dungeon-bot-ghost-entrance`.
+10. **No teleport off AllowedMaps for a living bot.** Since bots report area triggers like a client (`PlayerbotAreaTriggers`), a living
+    bot only takes a teleport trigger whose target map is in AllowedMaps (the maps the login gate admits), unless its controller opted
+    in (`PlayerbotAreaTriggers.AllowTeleports`) or it is a ghost whose body lies behind the trigger. Otherwise an autonomous bot
+    crossing the Deeprun Tram entrances (map 369, neither listed nor a dungeon: frozen there) or a dungeon entrance (no way back out)
+    was refused at its next login (`login-refused`), quarantined, and disabled after three faults. Tests:
+    `PlayerbotAreaTriggerTests.ARouteAcrossATeleportOffAllowedMaps_WithoutConsent_WalksStraightThrough` (entrance and tram),
+    `Update_ReportsTriggersWithoutATeleport_AndOnlyTheTeleportsTheBotMayTake`, scenario `dungeon-bot-walk-past-entrance`.
