@@ -86,6 +86,32 @@ public sealed class GraveyardDumpImporter
         }
     }
 
+    /// <summary>
+    /// Add the safe locations of a <c>WorldSafeLocs.dbc</c> that the dumps read so far do not carry, and return how many were added. A
+    /// dump row wins because it carries the facing (cmangos <c>o</c>) the DBC lacks; the DBC only fills ids a cmangos dump never had.
+    /// </summary>
+    public int AddMissingSafeLocs(IEnumerable<WorldSafeLoc> locs)
+    {
+        ArgumentNullException.ThrowIfNull(locs);
+        int added = 0;
+        foreach (WorldSafeLoc loc in locs)
+        {
+            if (!_locs.ContainsKey(loc.Id))
+            {
+                _locs[loc.Id] = new WorldSafeLocRow
+                {
+                    Id = loc.Id, MapId = loc.MapId, X = loc.X, Y = loc.Y, Z = loc.Z, Orientation = loc.Orientation, Name = FitName(loc.Id, loc.Name),
+                };
+                added++;
+            }
+        }
+
+        return added;
+    }
+
+    /// <summary>Whether anything was read (an empty importer must not empty the tables on a replace).</summary>
+    public bool HasRows => _locs.Count > 0 || _links.Count > 0;
+
     /// <summary>The rows that would be written (for inspection and tests): the facing table applied.</summary>
     public (IReadOnlyCollection<WorldSafeLocRow> SafeLocs, IReadOnlyCollection<GraveyardZoneRow> Links) Snapshot()
     {

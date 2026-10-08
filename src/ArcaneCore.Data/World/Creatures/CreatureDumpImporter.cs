@@ -339,6 +339,26 @@ public sealed class CreatureDumpImporter
         => ([.. _relaySteps.Values.SelectMany(rows => rows)], [.. _relayTemplates.Values]);
 
     /// <summary>
+    /// Replace only <c>dbscripts_on_relay</c> and <c>dbscript_relay_template</c> with the rows read (the content-importer's <c>refresh</c>:
+    /// EventAI's START_RELAY_SCRIPT needs them, and the other creature tables stay as they are). Runs inside the caller's
+    /// <see cref="Content.Import.ImportTransaction"/>. Nothing read: nothing is emptied. Returns the step and template counts written.
+    /// </summary>
+    public async Task<(int Steps, int Templates)> ReplaceRelayScriptsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        if (_relaySteps.Count == 0 && _relayTemplates.Count == 0)
+        {
+            return (0, 0);
+        }
+
+        await db.Set<RelayScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _relayTemplates.Values, cancellationToken).ConfigureAwait(false);
+        return (_relaySteps.Values.Sum(rows => rows.Count), _relayTemplates.Count);
+    }
+
+    /// <summary>
     /// One <c>dbscripts_on_relay</c> row (cmangos mangos.sql column names). The table has no key: the rows of one id are kept in dump
     /// order (<see cref="RelayScriptRow.Ordinal"/>), and a later dump file that carries an id replaces every row of that id.
     /// </summary>

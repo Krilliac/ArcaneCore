@@ -36,7 +36,7 @@ internal sealed class CliException(int exitCode, string message, Exception? inne
 /// project is a one-line host. Commands: <c>plan</c> (read-only report), <c>import</c>,
 /// <c>import-dbc</c> and <c>verify</c>. See <see cref="ExitCodes"/> for the exit codes.
 /// </summary>
-public static class ContentImporterCli
+public static partial class ContentImporterCli
 {
     /// <summary>Environment variable read when no connection string is given (keeps the password off the command line).</summary>
     public const string ConnectionVariable = "ARCANECORE_CONTENT_CONNECTION";
@@ -65,6 +65,14 @@ public static class ContentImporterCli
                                 family masks) with the dump's rows for build 5875; vmangos rows outside
                                 the build range are dropped (--cooldown-unit ms|seconds: classic-db dumps
                                 before z2829 store seconds; --dry-run writes nothing)
+          refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
+                                lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
+                                exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
+                                dbscripts_on_relay and dbscript_relay_template, and (with --dbc-dir holding AreaTrigger.dbc)
+                                areatrigger_template; WorldSafeLocs.dbc in --dbc-dir adds the safe locations the dump lacks.
+                                A table the inputs do not carry is left as it is, so running it again changes nothing.
+                                (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
+                                --dry-run writes nothing; --report <file>)
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.
@@ -122,6 +130,7 @@ public static class ContentImporterCli
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }

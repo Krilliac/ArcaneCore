@@ -24,6 +24,7 @@ internal sealed class CliArguments
         ["verify"] = ["--database", "--provider", "--connection-string"],
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
         ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run"],
+        ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
