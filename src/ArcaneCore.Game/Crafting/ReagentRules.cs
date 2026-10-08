@@ -10,7 +10,8 @@ namespace ArcaneCore.Game.Crafting;
 /// <para>
 /// The reagents themselves are checked and taken by the cast (<c>SpellSystem.CheckReagents</c> / <c>StageCastReagents</c>: every cast of a
 /// player, with vmangos' triggered-cast rule on the triggering spell's first reagent, Spell.cpp:7069-7083). What this adds is the tool check
-/// (Totem[2]) and the count that skips items offered in an open trade; a triggered cast skips both here.
+/// (Totem[2]) and the count that skips items offered in an open trade. A triggered child checks both when its parent
+/// has no first reagent or the child targets a trade item.
 /// </para>
 /// </summary>
 public static class ReagentRules
@@ -42,9 +43,6 @@ public static class ReagentRules
         ArgumentNullException.ThrowIfNull(system);
         return system.CastChecks.OfType<ReagentCastCheck>().Any();
     }
-
-    /// <summary>vmangos <c>IgnoreItemRequirements</c>: only a player pays reagents, and a triggered cast never does (see the class remarks).</summary>
-    public static bool IgnoresItemRequirements(Unit caster, bool triggered) => caster is not Player || triggered;
 
     /// <summary>The predicate that hides a player's traded items from the count and the destruction (null: nothing is hidden).</summary>
     internal static Func<Item, bool>? TradeFilter(Player player, Func<Player, Item, bool>? isInTrade)
@@ -93,7 +91,9 @@ public sealed class ReagentCastCheck(Func<Player, Item, bool>? isInTrade = null)
     public SpellCastResult Check(in SpellCastCheckContext context)
     {
         SpellInfo spell = context.Spell;
-        if (ReagentRules.IgnoresItemRequirements(context.Caster, context.Triggered) || context.Caster is not Player player)
+        // Use the same predicate as reagent staging; object-originated casts also skip inventory costs.
+        if (context.System.IgnoresReagents(context.Caster, context.Targets, context.Triggered, context.TriggeringSpell)
+            || context.Caster is not Player player)
         {
             return SpellCastResult.CastOk;
         }

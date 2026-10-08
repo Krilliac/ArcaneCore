@@ -294,6 +294,11 @@ public sealed partial class QuestNpcServices
                     SendListInventory(s, npc.Guid);
                 }
 
+                if (reply.Trainer)
+                {
+                    SendTrainerList(s, npc.Guid);
+                }
+
                 if (reply.NpcTextId != 0)
                 {
                     SendGossipMenu(s, npc.Guid, reply.NpcTextId);

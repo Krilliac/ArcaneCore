@@ -27,7 +27,9 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 - `ReagentCostTaker` destroys the reagents right after the power is spent and before the ammunition and the effects (`Spell.cpp:3716-3718`: "remove reagents
   before HandleEffects to allow place crafted item in same slot"); the bank is not touched; when the cast item is the reagent it is cleared from the cast so it is not
   used up twice.
-- Triggered casts neither check nor take reagents (`IgnoreItemRequirements`, `:7069-7083`, simplified: see Limits).
+- Standalone triggered casts ignore item requirements. A child whose parent's first reagent slot is empty checks
+  its own reagent and tool; a child of a parent with that slot filled reuses the paid items
+  (`Spell::IgnoreItemRequirements`, Spell.cpp:7069-7083).
 
 **Spell cast seams** (`Spells/SpellCostSeams.cs`, `SpellSystem.ItemCast.cs`, edits in `SpellSystem.cs`)
 - `ISpellCostTaker` + `SpellSystem.RegisterCostTaker`: every registered taker runs once per completed cast after `TakePower`. Other lanes that take a cost
@@ -46,6 +48,9 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   `created` set), then `Skills.UpdateCraft(spell)` only when at least one item was stored. `DoCreateItem(..., grantSkillUp: false)` is the battleground-mark path for
   that lane.
 - Fail closed: `CreateItemSpells.Install` throws unless the reagent pair is installed (no craft is ever free) or when another CREATE_ITEM handler exists.
+- When optional ItemRandomProperties.dbc and `item_enchantment_template` content is configured, the craft's
+  `StoreNewItem` rolls and applies a property's three enchantments (vmangos `Spell::DoCreateItem`,
+  SpellEffects.cpp:1950; `Item::GenerateItemRandomPropertyId`, Item.cpp:792-834). Without the content, the output has no random property.
 
 **Use item** (`Game/Items/ItemUse/*`, `World/Items/UseItemFeature.cs`)
 - `CMSG_USE_ITEM` (u8 bag, u8 slot, u8 spell index, SpellCastTargets; gtker `cmsg_use_item.wowm` 1.12) after `HandleUseItemOpcode`
@@ -62,6 +67,16 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 **Recipes** (no code; `RecipeLearningTests`)
 - A recipe item (class 9) is `CMSG_USE_ITEM` + `SPELL_EFFECT_LEARN_SPELL`; `RequiredSkill`/`RequiredSkillRank`/`RequiredSpell` (95 specialisation recipes) gate it
   through `PlayerInventory.CanUseItem`. A known recipe is used up and nothing changes, as in vmangos (`EffectLearnSpell`, `SpellEffects.cpp:2435-2454`).
+
+**Specialization teaching** (`Game/Crafting/ProfessionSpecializationGossip.cs`, `World/Crafting/CraftingFeature.cs`)
+- The ClassicDB NPCs assigned `npc_prof_blacksmith` and `npc_prof_leather` offer the ScriptDev2 learn paths for Armorsmith,
+  Weaponsmith, Hammersmith, Axesmith, Swordsmith, Dragonscale, Elemental and Tribal leatherworking. The server checks the
+  reference's skill, level, faction rank, rewarded quest and mutually exclusive spell conditions again when a gossip line is
+  selected (mangos-classic `npc_professions.cpp`: `GossipHello_npc_prof_blacksmith`, `SendActionMenu_npc_prof_blacksmith`,
+  `IsEligibleSpecializeLW`, `GossipHello_npc_prof_leather`, `SendActionMenu_npc_prof_leather`). Learning casts the content's
+  teaching spell. An unavailable teaching spell cannot be manufactured by the gossip handler.
+- Profession gossip is attached after the quest service is built; its vendor and trainer choices use the normal NPC services.
+  The existing item `RequiredSpell` rule checks specialization plans and equipment (vmangos `Player::CanUseItem`).
 
 **First aid** (`Game/Crafting/FirstAid.cs`)
 - The 19 bandage spells are data. `FirstAidObserver` is vmangos' `FirstAidScript::OnAfterHit` (`spell_item.cpp:577-594`): after a bandage hits its unit target the
@@ -111,22 +126,27 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 
 ## Limits (documented, not delivered)
 
+- **Specialization unlearning and engineering switching**: the mangos-classic ScriptDev2 file displays blacksmith unlearn
+  confirmations but does not implement their action cases, and its leatherworking unlearn spells (36328, 36433, 36434)
+  are absent from the 1.12.1 z2815 `spell_template`. Its own header says engineering unlearn/relearn is unsupported.
+  ArcaneCore does not offer these actions. The blacksmith weapon-subdiscipline learn confirmation is a direct choice in
+  ArcaneCore; the reference adds an extra confirmation menu with no cost.
 - **Combat-spell enchants** (crusader, fiery weapon, lifestealing, poisons' weapon procs, shaman imbues: 62 referenced) need a melee/ranged outcome event the combat
   system does not publish; `Player::CastItemCombatSpell` (`Player.cpp:7310-7355`) is not delivered. The enchantment is stored, shown and timed; it never procs.
 - **Rogue poisons**: the poison item spells (for example 2823) have enchant id 0 in both classic-db and the 1.12 `Spell.dbc`, so vmangos resolves them in spell scripts, which
   this lane does not have; poisons are not applied.
 - **`spell_enchant_charges`** (vmangos `SpellMgr.cpp:1889-1923`) is not in classic-db: temporary enchantments get 0 charges (duration only).
-- **Item random properties** are not rolled for crafted items (9 of 1,146 outputs have one; needs `ItemRandomProperties.dbc` and `item_enchantment_template`, the items lane).
-  Property enchantment slots 3-6 exist but nothing fills them.
 - **Skill discovery and extra-item procs are not built because they are TBC features** (vmangos dropped both tables as empty, `sql/old_migrations/20181108192531_world.sql:12-14`; every classic-db
   `skill_discovery_template` row names a spell above 25000 that 1.12 lacks, and every `skill_extra_item_template` row needs an absent TBC specialisation spell). Retail behaviour is
   "no discovery".
-- **Triggered casts always ignore reagents**: vmangos still requires them when the item target is not the caster's own or when the triggering spell has no first reagent
-  (`IgnoreItemRequirements`, `Spell.cpp:7069-7083`); `SpellCast` has no triggering-spell reference.
+- **Foreign trade item targets** still need a live trade acceptance run for the triggered reagent rule
+  (`Spell::IgnoreItemRequirements`, Spell.cpp:7069-7083).
 - **`item_required_target`** (`Item::IsTargetValidForItemUse`) is not imported: `IItemRequiredTargets` is the seam, the default accepts every target.
 - **Trial accounts** (`Player.cpp:5227-5236`) do not exist here.
 - **Known recipe refusal**: vmangos neither refuses nor checks; whether retail answers "already known" could not be verified. No refusal switch was built.
-- **Engineering devices, mining nodes, campfires and the profession spell scripts** are not in this lane; they need the aura lane and use-item.
+- **Engineering devices** and the specialisation book interaction are still outside this area. Mining node opening and
+  campfire spell-focus checks are implemented in the gathering and focus features. See
+  [the profession audit](../integration/professions-audit-20261008.md).
 - **Wire layouts** (`CMSG_USE_ITEM`, `SMSG_ENCHANTMENTLOG`, `SMSG_ITEM_ENCHANT_TIME_UPDATE`) come from the references only and were not seen against a real client (`needs_real_client`).
   `SMSG_ENCHANTMENTLOG` has a recorded source disagreement: gtker and cmangos-classic write the owner first, vmangos `EnchantmentLog::AppendBodyTo` writes the caster first; the owner
   first order is implemented.

@@ -65,6 +65,18 @@ public sealed class RecipeLearningTests
                     Entry = SpecPlans, Class = 9, SubClass = 4, Name = "Plans: Specialist Sword", DisplayId = 8, Quality = 1, RequiredSkill = 164, RequiredSkillRank = 125,
                     RequiredSpell = SpecSpell, Spells = [new ItemSpell(LearnSpell, ItemSpellTriggers.OnUse, -1, 0, -1, 0, -1)],
                 }.Normalized(),
+                // z2815 item_template.RequiredSpell fixtures: one recipe of each vanilla specialization.
+                .. new (uint Item, uint Skill, uint Spell)[]
+                {
+                    (11612, 164, 9788), (11610, 164, 9787),
+                    (18654, 202, 20219), (18653, 202, 20222),
+                    (15726, 165, 10656), (15732, 165, 10658), (15729, 165, 10660),
+                }.Select(row => new ItemTemplate
+                {
+                    Entry = row.Item, Class = 9, SubClass = 4, Name = $"Specialization recipe {row.Item}", DisplayId = 8, Quality = 1,
+                    RequiredSkill = row.Skill, RequiredSkillRank = 125, RequiredSpell = row.Spell,
+                    Spells = [new ItemSpell(LearnSpell, ItemSpellTriggers.OnUse, -1, 0, -1, 0, -1)],
+                }.Normalized()),
             ];
             Kit = new CraftingTestKit(spells, items);
             Kit.Player.Inventory.Requirements = Skills;
@@ -136,6 +148,30 @@ public sealed class RecipeLearningTests
         Item accepted = rig.Use(SpecPlans);
         Assert.True(rig.Kit.Kit.Spellbook.HasSpell(rig.Kit.Player, CraftSpell));
         Assert.Null(rig.Kit.Inventory.GetItemByGuid(accepted.Guid));
+    }
+
+    [Theory]
+    [InlineData(11612u, 9788u)]  // Armorsmith
+    [InlineData(11610u, 9787u)]  // Weaponsmith
+    [InlineData(18654u, 20219u)] // Gnomish Engineer
+    [InlineData(18653u, 20222u)] // Goblin Engineer
+    [InlineData(15726u, 10656u)] // Dragonscale
+    [InlineData(15732u, 10658u)] // Elemental
+    [InlineData(15729u, 10660u)] // Tribal
+    public void ClassicDbSpecializationRecipe_RequiresItsOwnSpecializationSpell(uint itemEntry, uint specialization)
+    {
+        using var rig = new Rig();
+        rig.Skills.BlacksmithingSkill = 300;
+
+        Item refused = rig.Use(itemEntry);
+        Assert.Equal(InventoryResult.NoRequiredProficiency, rig.EquipError());
+        Assert.NotNull(rig.Kit.Inventory.GetItemByGuid(refused.Guid));
+        Assert.False(rig.Kit.Kit.Spellbook.HasSpell(rig.Kit.Player, CraftSpell));
+
+        rig.Skills.Spells.Add(specialization);
+        Item accepted = rig.Use(itemEntry);
+        Assert.Null(rig.Kit.Inventory.GetItemByGuid(accepted.Guid));
+        Assert.True(rig.Kit.Kit.Spellbook.HasSpell(rig.Kit.Player, CraftSpell));
     }
 
     [Fact]

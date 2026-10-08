@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Crafting;
+using ArcaneCore.Game.Crafting.Enchanting;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Skills;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -52,6 +54,35 @@ public sealed class CreateItemEffectTests
         byte[] push = Assert.Single(SpellTestKit.Packets(rig.Session, WorldOpcode.SmsgItemPushResult));
         Assert.Equal(1, push[8]);    // received
         Assert.Equal(1, push[12]);   // created (DoCreateItem: SendNewItem(item, count, true, bgType == 0))
+    }
+
+    [Fact]
+    public void CraftedItem_RollsItsConfiguredRandomPropertyAndPropertyEnchantments()
+    {
+        // vmangos Spell::DoCreateItem calls StoreNewItem with GenerateItemRandomPropertyId
+        // (SpellEffects.cpp:1950). This pins the full craft -> inventory -> property seam.
+        const uint output = 94011;
+        SpellInfo spell = CraftingTestKit.Craft(Craft,
+            SpellTestKit.Effect(SpellEffectName.CreateItem, 1) with { ItemType = output });
+        var template = new ItemTemplate
+        {
+            Entry = output, Class = 2, SubClass = 7, Name = "Crafted Sword", DisplayId = 7,
+            InventoryType = 13, Stackable = 1, Quality = 2, RandomProperty = 5,
+        };
+        using var rig = new CraftingTestKit([spell], [template]);
+        var catalog = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0])],
+            [new ItemEnchantmentChance(5, 1001, 100f)]);
+        rig.Inventory.RandomProperties = new ItemRandomProperties(catalog, () => 40f);
+        ReagentRules.Install(rig.System);
+        CreateItemSpells.Install(rig.System);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+
+        Item crafted = Assert.Single(rig.Inventory.AllItems, item => item.Entry == output);
+        Assert.Equal(1001, crafted.RandomPropertyId);
+        Assert.Equal(74u, ItemEnchantments.Id(crafted, EnchantSlots.Property0));
+        Assert.Equal(75u, ItemEnchantments.Id(crafted, EnchantSlots.Property0 + 1));
     }
 
     [Theory]

@@ -58,6 +58,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Talents | [talents](areas/talents.md) |
 | Skills and professions | [skills](areas/skills.md) |
 | Client data (DBC directory, validation) | [client-data](areas/client-data.md) |
+| Crafting and profession specializations | [crafting](areas/crafting.md) |
 | Player stats and combat formulas | [stats](areas/stats.md) |
 | Rested experience | [rested-xp](areas/rested-xp.md) |
 | Rates (every Rate.* knob, speed rates) | [rates](areas/rates.md) |
