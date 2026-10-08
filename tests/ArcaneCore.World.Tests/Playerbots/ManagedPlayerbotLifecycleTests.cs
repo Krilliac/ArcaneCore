@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -249,9 +251,14 @@ public sealed class ManagedPlayerbotLifecycleTests
 
     /// <summary>
     /// An operator '.playerbot stop' that takes the operation lock between the quarantine retry's snapshot and its start wins: the retry
-    /// must not log the bot back in nor turn DesiredEnabled on again. The window is forced: a second, running bot's checkpoint update is
-    /// held (the checkpoint holds the operation lock), the operator stop queues on the lock, then the checkpoint is let go; the lock is
-    /// FIFO, so the stop runs before the retry that the same checkpoint starts.
+    /// must not log the bot back in nor turn DesiredEnabled on again. The window is forced, step by step, on the manual world clock:
+    /// the checkpoint that has the retry due is held inside the operation lock (a second, running bot's update), the operator stop
+    /// queues on the lock and is held inside it (its bot lookup) once the checkpoint lets go, the checkpoint then schedules the retry
+    /// (its "retry starting" line), and only then does the stop go on and remove the quarantine.
+    /// <para>
+    /// Before (2026-10-08, once under a loaded full run): the stop was released together with the checkpoint, and when it removed
+    /// the quarantine before the checkpoint thread took its snapshot, no retry ever started and the wait for its refusal timed out.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task AnOperatorStop_BetweenTheRetrySnapshotAndItsStart_StaysStopped()
@@ -260,31 +267,45 @@ public sealed class ManagedPlayerbotLifecycleTests
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
         var log = new CapturingLogger();
-        await using WorldTestHost host = Start(accounts, characters, owners, logger: log, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
+        await using WorldTestHost host = Start(accounts, characters, owners, logger: log, manualClock: true,
+            configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid holder = Assert.IsType<Guid>((await feature.CreateAsync("Holdlock", 1, 1)).BotId);
         Assert.True((await feature.StartAsync(holder.ToString())).Success);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Stoprace", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the quarantine", 20);
-        await Task.Delay(1500); // past the backoff and the checkpoint that quarantined it; the next one (5 s) retries
 
+        // The bot faults on its first tick; the next checkpoint quarantines it with its retry due 1 s of game time later. Game time
+        // stands still while a checkpoint runs, so that checkpoint never finds the retry due.
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Faulted, null, "the quarantine");
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains($"{id} quarantine retry starting"));
+
+        // The next checkpoint (5 s of game time on, the retry due): hold it inside the operation lock at the running bot's update.
         TaskCompletionSource held = owners.HoldUpdatesOf(holder);
-        await held.Task.WaitAsync(TimeSpan.FromSeconds(15)); // the checkpoint is inside the lock
+        await StepUntilAsync(host, feature, () => held.Task.IsCompleted, held.Task, "the checkpoint with the retry due");
+
+        // The operator stop queues on the lock (the checkpoint holds it), and will wait inside it at its bot lookup.
+        TaskCompletionSource looking = owners.HoldNextLoadAll();
         Task<PlayerbotOperationResult> stop = feature.StopAsync("Stoprace");
-        await Task.Delay(200);
         Assert.False(stop.IsCompleted);
         owners.ReleaseHeldUpdates();
-        Assert.True((await stop.WaitAsync(TimeSpan.FromSeconds(15))).Success);
+        await looking.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the stop has the lock, the quarantine is still there
 
-        // The retry queued right behind the stop and ran into the window (proof the race was exercised, not missed).
-        await WaitAsync(() => Task.FromResult(log.Entries.Any(e => e.Message.Contains("quarantine retry ended (quarantine-cleared)"))),
-            "the retry refused under the lock", 15);
+        // The checkpoint, out of the lock, schedules the retry; only then does the stop go on.
+        await WaitAsync(() => Task.FromResult(log.Entries.Any(e => e.Message.Contains($"{id} quarantine retry starting"))),
+            "the retry scheduled", 30);
+        owners.ReleaseHeldLoadAll();
+        Assert.True((await stop.WaitAsync(TimeSpan.FromSeconds(30))).Success);
+
+        // The retry ran into the window and was refused under the lock (proof the race was exercised, not missed).
+        await WaitAsync(() => Task.FromResult(log.Entries.Any(e => e.Message.Contains($"{id} quarantine retry ended (quarantine-cleared)"))),
+            "the retry refused under the lock", 30);
         ManagedPlayerbot record = (await owners.FindAsync(id))!;
         Assert.False(record.DesiredEnabled, $"state {record.State}, error {record.ErrorCode}");
         Assert.NotEqual(ManagedPlayerbotState.Running, record.State);
         Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Stoprace")));
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains($"{id} left quarantine"));
     }
 
     /// <summary>
@@ -453,6 +474,24 @@ public sealed class ManagedPlayerbotLifecycleTests
         await host.WaitForWorldAsync(() => !feature.IsPartyDriven(id), "the brain drives the bot again");
     }
 
+    /// <summary>
+    /// Advance the manual world clock one tick at a time until <paramref name="done"/> holds, letting each checkpoint the tick started
+    /// finish before game time moves on (or until <paramref name="stopOn"/> completes while one runs).
+    /// </summary>
+    private static async Task StepUntilAsync(WorldTestHost host, ManagedPlayerbotFeature feature, Func<bool> done, Task? stopOn, string what)
+    {
+        for (int tick = 0; tick < 2_000; tick++)
+        {
+            if (done()) return;
+            await host.World.AdvanceClockAsync(50);
+            Task checkpoint = await host.World.InvokeAsync(() => feature.LastCheckpoint);
+            Task finished = stopOn is null ? checkpoint : await Task.WhenAny(checkpoint, stopOn);
+            await finished.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
+        if (!done()) throw new TimeoutException($"timed out waiting for: {what} (100 s of game time)");
+    }
+
     private static async Task WaitAsync(Func<Task<bool>> condition, string what, int seconds)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
@@ -492,9 +531,11 @@ public sealed class ManagedPlayerbotLifecycleTests
 
     private static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         MemoryManagedPlayerbotStore owners, MemoryProvisionStore? provisions = null,
-        bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null)
+        bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null,
+        bool manualClock = false)
         => WorldTestHost.Start(configureServices: services =>
         {
+            if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
             if (logger is not null) services.AddSingleton<ILogger<ManagedPlayerbotFeature>>(logger);
             var options = new PlayerbotOptions
             {
@@ -510,6 +551,11 @@ public sealed class ManagedPlayerbotLifecycleTests
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
             services.AddSingleton<IManagedPlayerbotProvisionStore>(provisions ?? new MemoryProvisionStore(accounts));
         });
+
+    private sealed class ManualClock : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
 
     private sealed class MemoryProvisionStore(InMemoryAccountStore accounts) : IManagedPlayerbotProvisionStore
     {
@@ -543,8 +589,31 @@ public sealed class ManagedPlayerbotLifecycleTests
         public bool FailNextCreate { get; set; }
         public bool FailNextUpdate { get; set; }
 
-        public Task<IReadOnlyList<ManagedPlayerbot>> LoadAllAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<ManagedPlayerbot>>(_items.Values.OrderBy(item => item.BotId).ToArray());
+        private TaskCompletionSource? _loadHeld;
+        private TaskCompletionSource _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The next <see cref="LoadAllAsync"/> waits until <see cref="ReleaseHeldLoadAll"/>; the returned task completes when it is waiting.</summary>
+        public TaskCompletionSource HoldNextLoadAll()
+        {
+            _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _loadHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public void ReleaseHeldLoadAll() => _loadRelease.TrySetResult();
+
+        public async Task<IReadOnlyList<ManagedPlayerbot>> LoadAllAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _loadHeld, null) is { } held)
+            {
+                held.TrySetResult();
+                await _loadRelease.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
+            }
+
+            return _items.Values.OrderBy(item => item.BotId).ToArray();
+        }
+
+        /// <summary>The stored record, read without any hold (any thread).</summary>
+        public ManagedPlayerbot? Peek(Guid botId) => _items.GetValueOrDefault(botId);
 
         public Task<ManagedPlayerbot?> FindAsync(Guid botId, CancellationToken cancellationToken = default)
             => Task.FromResult(_items.GetValueOrDefault(botId));
