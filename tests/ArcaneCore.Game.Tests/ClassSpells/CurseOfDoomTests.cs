@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
@@ -88,6 +89,47 @@ public sealed class CurseOfDoomTests
         Assert.Equal((7f, 8f), (doomguard.X, doomguard.Y));      // TARGET_LOCATION_CASTER_DEST: at the warlock
         Assert.Equal(14u, doomguard.FactionTemplate);            // its own (hostile) faction
         Assert.InRange(doomguard.Summon.RemainingMs, 13_000, 15_000);
+    }
+
+    [Fact]
+    public void TheDoomguard_OutOfCombatWhenItsTimeRunsOut_Despawns_InsteadOfDying()
+    {
+        // vmangos Spell::EffectSummonDemon summons TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN (SpellEffects.cpp:5808): at the end of its time a
+        // Doomguard that is not in combat is unsummoned (TemporarySummon.cpp:171-196), it does not die and leave a corpse.
+        (PetTestKit kit, Player warlock, _) = Kit(roll: 0, victimHealth: 500);
+        using PetTestKit owned = kit;
+        kit.Spells.Advance(60_000, step: 1000);
+        Creature doomguard = Assert.Single(kit.Creatures.Creatures, c => c.Entry == Doomguard);
+        // Nobody to fight: the warlock leaves (the Doomguard has no owner and stays) and the Doomguard's combat ends.
+        kit.Map.RemovePlayer(warlock);
+        kit.Map.Combat.CombatStop(doomguard);
+        Assert.False(doomguard.Combat.IsInCombat);
+
+        for (int i = 0; i < 16; i++)
+        {
+            kit.Spells.World.RunTick(1000);   // the map's pet system counts the summon's time down
+        }
+
+        Assert.DoesNotContain(kit.Creatures.Creatures, c => c.Entry == Doomguard);
+        Assert.True(doomguard.IsAlive);
+    }
+
+    [Fact]
+    public void TheDoomguard_StaysWhenTheWarlockLeavesTheMap()
+    {
+        // vmangos: an unowned temporary summon (WorldObject::SummonCreature, no owner fields), so nothing takes it away with its summoner.
+        (PetTestKit kit, Player warlock, _) = Kit(roll: 0, victimHealth: 500);
+        using PetTestKit owned = kit;
+        kit.Spells.Advance(60_000, step: 1000);
+        Creature doomguard = Assert.Single(kit.Creatures.Creatures, c => c.Entry == Doomguard);
+        Assert.True(doomguard.OwnerGuid.IsEmpty);
+
+        kit.Map.RemovePlayer(warlock);
+        kit.Spells.World.RunTick(500);
+        kit.Spells.World.RunTick(500);
+
+        Assert.Contains(doomguard, kit.Creatures.Creatures);
+        Assert.True(doomguard.IsAlive);
     }
 
     [Theory]

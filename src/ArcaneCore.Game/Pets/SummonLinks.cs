@@ -38,6 +38,12 @@ public sealed class SummonLinks
     /// <summary>The summon was created with a positive duration (a wild summon without one only ends with its death).</summary>
     public bool HasTimer { get; }
 
+    /// <summary>
+    /// A wild summon whose time running out unsummons it instead of killing it (vmangos TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN,
+    /// TemporarySummon.cpp:171-196: it waits while in combat, then despawns); false is TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (killed).
+    /// </summary>
+    public bool DespawnsWhenTimeRunsOut { get; internal init; }
+
     /// <summary>The pet's command/react state and action bar (vmangos: "pets always have a charminfo"); null for totems and wild summons.</summary>
     public CharmInfo? Charm { get; internal set; }
 
