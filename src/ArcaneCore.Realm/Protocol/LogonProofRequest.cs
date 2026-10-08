@@ -18,6 +18,8 @@ public sealed class LogonProofRequest
 
     public required byte[] ClientProof { get; init; }
 
+    public required byte[] CrcHash { get; init; }
+
     public required byte SecurityFlags { get; init; }
 
     public static bool TryParse(ReadOnlySpan<byte> body, out LogonProofRequest? request)
@@ -30,12 +32,14 @@ public sealed class LogonProofRequest
 
         byte[] publicKey = body.Slice(0, PublicKeyLength).ToArray();
         byte[] proof = body.Slice(PublicKeyLength, ProofLength).ToArray();
+        byte[] crc = body.Slice(PublicKeyLength + ProofLength, CrcLength).ToArray();
         byte securityFlags = body[PublicKeyLength + ProofLength + CrcLength + 1];
 
         request = new LogonProofRequest
         {
             ClientPublicKey = publicKey,
             ClientProof = proof,
+            CrcHash = crc,
             SecurityFlags = securityFlags,
         };
         return true;

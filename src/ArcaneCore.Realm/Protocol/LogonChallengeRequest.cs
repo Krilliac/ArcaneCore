@@ -14,6 +14,9 @@ public sealed class LogonChallengeRequest
 
     public required ushort Build { get; init; }
 
+    public required string Platform { get; init; }
+    public required string Os { get; init; }
+
     /// <summary>Account name as sent by the client (already uppercased by the client).</summary>
     public required string Username { get; init; }
 
@@ -35,7 +38,18 @@ public sealed class LogonChallengeRequest
 
         string username = Encoding.ASCII.GetString(body.Slice(FixedPrefixLength, usernameLength));
 
-        request = new LogonChallengeRequest { Build = build, Username = username };
+        // AuthPackets.h sends these four-character tags byte reversed ("68x" -> "x86").
+        static string Tag(ReadOnlySpan<byte> bytes)
+        {
+            string raw = Encoding.ASCII.GetString(bytes).TrimEnd('\0');
+            return new string(raw.Reverse().ToArray());
+        }
+
+        request = new LogonChallengeRequest
+        {
+            Build = build, Username = username,
+            Platform = Tag(body.Slice(9, 4)), Os = Tag(body.Slice(13, 4)),
+        };
         return true;
     }
 }

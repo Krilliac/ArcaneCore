@@ -44,13 +44,22 @@ internal static class ProtocolPackets
         return packet;
     }
 
-    internal static byte[] LogonProof(ClientSrp6.Session session)
+    internal static byte[] LogonProof(ClientSrp6.Session session, byte[]? crcHash = null, byte[]? pinData = null)
     {
-        byte[] packet = new byte[75];
+        if (crcHash is not null && crcHash.Length != 20)
+            throw new ArgumentException("crc_hash must be 20 bytes", nameof(crcHash));
+        byte[] packet = new byte[75 + (pinData?.Length ?? 0)];
         packet[0] = 0x01;
         session.PublicKey.CopyTo(packet, 1);
         session.ClientProof.CopyTo(packet, 33);
-        // crc_hash[20], telemetry count and protocol 3 security flags remain zero.
+        // crc_hash[20], telemetry count, securityFlags, optional PINData (16 salt + 20 hash).
+        crcHash?.CopyTo(packet, 53);
+        if (pinData is not null)
+        {
+            if (pinData.Length != 36) throw new ArgumentException("PINData must be 36 bytes", nameof(pinData));
+            packet[74] = 1;
+            pinData.CopyTo(packet, 75);
+        }
         return packet;
     }
 

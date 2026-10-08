@@ -75,6 +75,15 @@ internal sealed class InMemoryAccountStore : IAccountStore, IAccountAdmin
         return Task.CompletedTask;
     }
 
+    public Task UpdateLoginAsync(
+        string username, byte[] sessionKey, string? address, CancellationToken cancellationToken = default)
+    {
+        Account account = _accounts[username.ToUpperInvariant()];
+        account.SessionKey = sessionKey;
+        if (address is not null) account.LastIp = address;
+        return Task.CompletedTask;
+    }
+
     public Task<bool> UpdateSecurityAsync(
         string username, AccountSecurity security, CancellationToken cancellationToken = default)
     {

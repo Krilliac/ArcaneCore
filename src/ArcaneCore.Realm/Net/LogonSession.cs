@@ -38,7 +38,8 @@ public sealed class LogonSession(
     string remoteEndpoint,
     IBanStore? banStore = null,
     NetGuard? guard = null,
-    RealmIpBanCache? ipBanCache = null)
+    RealmIpBanCache? ipBanCache = null,
+    TimeProvider? timeProvider = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
 
@@ -48,6 +49,13 @@ public sealed class LogonSession(
     private readonly IpKey? _address = IpKey.TryParse(remoteEndpoint, out IpKey parsedAddress) ? parsedAddress : null;
     private string _username = string.Empty;
     private Srp6Server? _srp;
+    private Account? _pendingAccount;
+    private bool _promptPin;
+    private uint _gridSeed;
+    private byte[]? _pinSalt;
+    private string _clientOs = string.Empty;
+    private string _clientPlatform = string.Empty;
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private bool _isAutocreate;
     private byte[]? _autocreateVerifier;
     private bool _authenticated;
@@ -371,11 +379,34 @@ public sealed class LogonSession(
                 return;
             }
 
+            // vmangos AuthSocket.cpp:393-414,497-517: IP_LOCK from a different address
+            // requires a configured factor, while ALWAYS_ENFORCE prompts even at the usual IP.
+            bool moved = account.LockFlags.HasFlag(AccountLockFlags.IpLock)
+                && !string.Equals(account.LastIp, address, StringComparison.OrdinalIgnoreCase);
+            bool hasFactor = (account.LockFlags & (AccountLockFlags.FixedPin | AccountLockFlags.Totp)) != 0;
+            if (moved && !hasFactor)
+            {
+                RecordFailure();
+                await SendChallengeFailureAsync(AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            _promptPin = moved || account.LockFlags.HasFlag(AccountLockFlags.AlwaysEnforce);
+            _pendingAccount = account;
+
             _isAutocreate = false;
         }
 
         // Only now, after every early-out, does the connection commit to this account.
         _username = username;
+        _clientOs = request.Os;
+        _clientPlatform = request.Platform;
+        if (_promptPin)
+        {
+            Span<byte> seedBytes = stackalloc byte[4];
+            RandomNumberGenerator.Fill(seedBytes);
+            _gridSeed = BinaryPrimitives.ReadUInt32LittleEndian(seedBytes);
+            _pinSalt = RandomNumberGenerator.GetBytes(PinHash.SaltLength);
+        }
 
         await SendChallengeSuccessAsync(_srp, cancellationToken).ConfigureAwait(false);
     }
@@ -384,6 +415,15 @@ public sealed class LogonSession(
     {
         byte[] body = new byte[LogonProofRequest.BodyLength];
         await ReadPacketPartAsync(body, cancellationToken).ConfigureAwait(false);
+        // AuthSocket.cpp:578-587: the 36-byte PINData immediately follows the fixed proof
+        // whenever the client sets securityFlags bit 0 (SECURITY_FLAG_PIN), whatever other bits are set,
+        // so the stream stays framed even when the flags are then refused below.
+        byte[]? pinData = null;
+        if ((body[^1] & 1) != 0)
+        {
+            pinData = new byte[PinHash.SaltLength + PinHash.HashLength];
+            await ReadPacketPartAsync(pinData, cancellationToken).ConfigureAwait(false);
+        }
 
         // One proof per challenge (vmangos STATUS_INVALID on entry, AuthSocket.cpp:555): the SRP
         // state is consumed whether the proof succeeds or fails, so it cannot be retried or replayed.
@@ -391,6 +431,12 @@ public sealed class LogonSession(
         string username = _username;
         bool isAutocreate = _isAutocreate;
         byte[]? autocreateVerifier = _autocreateVerifier;
+        Account? account = _pendingAccount;
+        bool promptPin = _promptPin;
+        uint gridSeed = _gridSeed;
+        byte[]? pinSalt = _pinSalt;
+        string clientOs = _clientOs;
+        string clientPlatform = _clientPlatform;
         ResetChallengeState();
 
         // The state machine: a proof consumes the challenge, so from here the session holds no SRP state
@@ -407,11 +453,11 @@ public sealed class LogonSession(
             return;
         }
 
-        // PIN / authenticator security flags are not supported in M1.
-        if (request.SecurityFlags != 0)
+        if (request.SecurityFlags is not (0 or 1) || (promptPin && (request.SecurityFlags != 1 || pinData is null)))
         {
             logger.LogInformation("[{Endpoint}] unsupported security flags 0x{Flags:X2}",
                 remoteEndpoint, request.SecurityFlags);
+            RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -422,6 +468,21 @@ public sealed class LogonSession(
             logger.LogInformation("[{Endpoint}] invalid proof for '{Account}'", remoteEndpoint, LogSafe.Escape(username));
             RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (promptPin && (account is null || pinSalt is null
+            || !VerifyPin(account, gridSeed, pinSalt, pinData!)))
+        {
+            RecordFailure();
+            await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!VerifyVersion(request.ClientPublicKey, request.CrcHash, clientOs, clientPlatform))
+        {
+            RecordFailure();
+            await SendProofFailureAsync(AuthResult.VersionInvalid, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -452,7 +513,8 @@ public sealed class LogonSession(
         }
         else
         {
-            await accountStore.UpdateSessionKeyAsync(username, srp.SessionKey, cancellationToken)
+            await accountStore.UpdateLoginAsync(username, srp.SessionKey,
+                    AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint), cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -574,6 +636,20 @@ public sealed class LogonSession(
             return;
         }
 
+        // vmangos AuthSocket.cpp:944 and VerifyVersion: reconnects use SHA1(R1 || 20 zero
+        // bytes), regardless of the configured client-file hash and of the client's OS/platform.
+        if (!VerifyVersion(body.AsSpan(0, 16), body.AsSpan(36, 20), os: string.Empty, platform: string.Empty,
+                isReconnect: true))
+        {
+            RecordFailure();
+            var failure = new PacketWriter(2);
+            failure.WriteByte((byte)AuthCommand.ReconnectProof);
+            failure.WriteByte((byte)AuthResult.VersionInvalid);
+            await stream.WriteAsync(failure.AsMemory(), cancellationToken).ConfigureAwait(false);
+            _closeRequested = true;
+            return;
+        }
+
         _authenticated = true;
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectProof);
@@ -583,6 +659,63 @@ public sealed class LogonSession(
 
     /// <summary>Charge one failed attempt to this connection's address (Net:Protection:AuthFailureBurstPerIp).</summary>
     private void RecordFailure() => guard?.RecordAuthFailure(_address);
+
+    private bool VerifyPin(Account account, uint gridSeed, ReadOnlySpan<byte> serverSalt, ReadOnlySpan<byte> pinData)
+    {
+        if (pinData.Length != PinHash.SaltLength + PinHash.HashLength) return false;
+        ReadOnlySpan<byte> clientSalt = pinData[..PinHash.SaltLength];
+        ReadOnlySpan<byte> clientHash = pinData[PinHash.SaltLength..];
+        // AuthSocket.cpp:695-731 tests FIXED_PIN first, then TOTP. Preserve that
+        // priority even for a legacy row with both bits set.
+        if (account.LockFlags.HasFlag(AccountLockFlags.FixedPin))
+        {
+            string text = account.SecurityInfo;
+            if (text.Length is < 4 or > 10 || text.Any(c => c is < '0' or > '9')) return false;
+            byte[] digits = text.Select(c => (byte)(c - '0')).ToArray();
+            return PinHash.Verify(digits, gridSeed, serverSalt, clientSalt, clientHash);
+        }
+
+        if (account.LockFlags.HasFlag(AccountLockFlags.Totp)
+            && Totp.TryDecodeSecret(account.SecurityInfo, out byte[] key))
+        {
+            // vmangos AuthSocket.cpp:719-729: four windows, [-2, -1, 0, +1].
+            long now = _time.GetUtcNow().ToUnixTimeSeconds();
+            for (int offset = -2; offset <= 1; offset++)
+            {
+                if (now / 30 + offset < 0) continue;
+                byte[] digits = Totp.Generate(key, now, offset).ToString("D6", System.Globalization.CultureInfo.InvariantCulture)
+                    .Select(c => (byte)(c - '0')).ToArray();
+                if (PinHash.Verify(digits, gridSeed, serverSalt, clientSalt, clientHash)) return true;
+            }
+        }
+        return false;
+    }
+
+    private bool VerifyVersion(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> proof, string os, string platform,
+        bool isReconnect = false)
+    {
+        if (!options.StrictVersionCheck) return true;
+
+        // vmangos VerifyVersion: a reconnect always proves against 20 zero bytes, with no build
+        // lookup, so it needs no configured entry for the client tuple.
+        if (isReconnect)
+            return CryptographicOperations.FixedTimeEquals(ClientIntegrity.VersionProof(publicKey, new byte[20]), proof);
+
+        foreach (ClientIntegrityHashOptions entry in options.IntegrityHashes)
+        {
+            if (entry.Build != ClientBuild.Vanilla1121
+                || !string.Equals(entry.Os, os, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(entry.Platform, platform, StringComparison.OrdinalIgnoreCase)) continue;
+            if (entry.Hash.Length != 40) continue;
+            byte[] hash;
+            try { hash = Convert.FromHexString(entry.Hash); }
+            catch (FormatException) { continue; }
+            if (hash.AsSpan().IndexOfAnyExcept((byte)0) < 0) return true; // zero = not filled server side
+            if (CryptographicOperations.FixedTimeEquals(ClientIntegrity.VersionProof(publicKey, hash), proof))
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Meter a logon or reconnect challenge before it costs anything (security finding S1). Every challenge does an
@@ -675,6 +808,12 @@ public sealed class LogonSession(
     private void ResetChallengeState()
     {
         _srp = null;
+        _pendingAccount = null;
+        _promptPin = false;
+        _gridSeed = 0;
+        _pinSalt = null;
+        _clientOs = string.Empty;
+        _clientPlatform = string.Empty;
         _isAutocreate = false;
         _autocreateVerifier = null;
         _username = string.Empty;
@@ -720,7 +859,12 @@ public sealed class LogonSession(
         writer.WriteBytes(WowSrp6.NLittleEndian);        // N (32, LE)
         writer.WriteBytes(srp.Salt);                     // s (32)
         writer.WriteBytes(AuthConstants.VersionChallenge); // crc_salt (16)
-        writer.WriteByte(0x00);                          // security flag (none)
+        writer.WriteByte(_promptPin ? (byte)1 : (byte)0);
+        if (_promptPin)
+        {
+            writer.WriteUInt32(_gridSeed);
+            writer.WriteBytes(_pinSalt!);
+        }
         await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
@@ -746,11 +890,11 @@ public sealed class LogonSession(
 
     private async Task SendProofFailureAsync(AuthResult result, CancellationToken cancellationToken)
     {
-        // vmangos failure path: cmd, error, uint16(0).
-        var writer = new PacketWriter(4);
+        // Build 5875: vmangos AuthSocket.cpp:745-756, 854-864 sends only cmd and
+        // error. Its two padding bytes apply to builds newer than 6005.
+        var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.LogonProof);
         writer.WriteByte((byte)result);
-        writer.WriteUInt16(0);
         await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 

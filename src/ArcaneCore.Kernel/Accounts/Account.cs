@@ -21,6 +21,17 @@ public enum AccountStatus
     Suspended = 2,
 }
 
+/// <summary>vmangos realmd AuthSocket.h LockFlag values used by classic PIN authentication.</summary>
+[Flags]
+public enum AccountLockFlags : byte
+{
+    None = 0,
+    IpLock = 0x01,
+    FixedPin = 0x02,
+    Totp = 0x04,
+    AlwaysEnforce = 0x08,
+}
+
 /// <summary>
 /// A logon account. Credentials are stored as the SRP6 salt + verifier only — never
 /// a recoverable password (Charter §3; mirrors the vmangos `account` table semantics).
@@ -48,4 +59,13 @@ public sealed class Account
 
     /// <summary>GM level (auth schema v2).</summary>
     public AccountSecurity Security { get; set; } = AccountSecurity.Player;
+
+    /// <summary>PIN/TOTP and IP-lock policy (auth schema v5).</summary>
+    public AccountLockFlags LockFlags { get; set; }
+
+    /// <summary>Fixed PIN digits or Base32 TOTP key; never include in logs.</summary>
+    public string SecurityInfo { get; set; } = string.Empty;
+
+    /// <summary>Last successful realm logon address, for vmangos IP_LOCK semantics.</summary>
+    public string LastIp { get; set; } = string.Empty;
 }

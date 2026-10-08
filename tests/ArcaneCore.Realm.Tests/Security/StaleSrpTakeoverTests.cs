@@ -97,7 +97,7 @@ public sealed class StaleSrpTakeoverTests
         (_, byte[] b, _) = await ReadChallenge(c);
 
         await c.WriteAsync(ProofFor("ALICE", "ALICE", "WRONGPW", saltA, b));
-        byte[] first = await ReadN(c, 4);
+        byte[] first = await ReadN(c, 2); // build 5875 failure: command + result, no later-build padding
         Assert.Equal((byte)AuthCommand.LogonProof, first[0]);
         Assert.NotEqual((byte)AuthResult.Success, first[1]);
 

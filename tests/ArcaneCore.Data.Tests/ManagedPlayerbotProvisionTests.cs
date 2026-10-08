@@ -11,7 +11,7 @@ namespace ArcaneCore.Data.Tests;
 public sealed class ManagedPlayerbotProvisionTests
 {
     [Fact]
-    public async Task Sqlite_Auth3To4Upgrade_CreatesProvisionJournal()
+    public async Task Sqlite_Auth3ToCurrentUpgrade_CreatesProvisionJournal()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");
         await connection.OpenAsync();
@@ -23,7 +23,7 @@ public sealed class ManagedPlayerbotProvisionTests
 
         await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema);
 
-        Assert.Equal(ManagedPlayerbotProvisionDataModule.Version,
+        Assert.Equal(AuthDbContext.Schema.CurrentVersion,
             (await db.Set<SchemaVersionRow>().AsNoTracking().SingleAsync()).Version);
         Assert.Equal(1, await db.Database.SqlQueryRaw<int>(
             "SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'table' AND name = 'managed_playerbot_provision'").SingleAsync());

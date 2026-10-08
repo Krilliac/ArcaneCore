@@ -102,10 +102,190 @@ public sealed class LogonHandshakeTests
         Assert.Equal((byte)AuthResult.UnknownAccount, challenge.Result);
     }
 
+    [Theory]
+    [InlineData("123456", true)]
+    [InlineData("654321", false)]
+    [InlineData(null, false)]
+    public async Task FixedPin_GridChallengeAndProof_AdmitOnlyCorrectPin(string? submitted, bool succeeds)
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+            LockFlags = AccountLockFlags.FixedPin | AccountLockFlags.AlwaysEnforce,
+            SecurityInfo = "123456",
+        });
+        await using NetworkStream client = await StartSessionAsync(accounts, new InMemoryRealmStore([]), autocreate: false);
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        Assert.Equal((byte)1, challenge.SecurityFlag);
+        Assert.Equal(16, challenge.PinSalt.Length);
+        ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+        byte[]? pin = submitted is null ? null : BuildPinData(submitted, challenge);
+        await SendAsync(client, BuildProof(session, pinData: pin));
+        ProofReply proof = await ReadProofReplyAsync(client);
+        Assert.Equal(succeeds ? (byte)AuthResult.Success : (byte)AuthResult.UnknownAccount, proof.Result);
+        Assert.Equal(succeeds, (await accounts.FindByUsernameAsync(Username))!.SessionKey is not null);
+    }
+
+    [Fact]
+    public async Task IpLock_MatchingAddressSkipsPin_ChangedAddressRequiresIt()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+            LockFlags = AccountLockFlags.IpLock | AccountLockFlags.FixedPin,
+            SecurityInfo = "123456", LastIp = "127.0.0.1",
+        });
+        await using NetworkStream same = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            endpoint: "127.0.0.1:50000");
+        await SendAsync(same, BuildChallenge(Username, Password));
+        Assert.Equal((byte)0, (await ReadChallengeReplyAsync(same)).SecurityFlag);
+        await using NetworkStream moved = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            endpoint: "127.0.0.2:50000");
+        await SendAsync(moved, BuildChallenge(Username, Password));
+        Assert.Equal((byte)1, (await ReadChallengeReplyAsync(moved)).SecurityFlag);
+    }
+
+    [Fact]
+    public async Task IpLock_PinLoginRecordsAddress_ThenThatAddressSkipsThePin()
+    {
+        // vmangos stores last_ip on every successful proof (AuthSocket.cpp UPDATE account SET ... last_ip)
+        // and IP_LOCK compares against it at the next challenge. A leading-zero PIN keeps its digits.
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+            LockFlags = AccountLockFlags.IpLock | AccountLockFlags.FixedPin, SecurityInfo = "0042",
+        });
+        await using (NetworkStream first = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            endpoint: "127.0.0.9:50000"))
+        {
+            await SendAsync(first, BuildChallenge(Username, Password));
+            ChallengeReply challenge = await ReadChallengeReplyAsync(first);
+            Assert.Equal((byte)1, challenge.SecurityFlag); // no trusted address yet
+            ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+            await SendAsync(first, BuildProof(session, pinData: BuildPinData("0042", challenge)));
+            Assert.Equal((byte)AuthResult.Success, (await ReadProofReplyAsync(first)).Result);
+        }
+
+        Assert.Equal("127.0.0.9", (await accounts.FindByUsernameAsync(Username))!.LastIp);
+        await using NetworkStream again = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            endpoint: "127.0.0.9:50001");
+        await SendAsync(again, BuildChallenge(Username, Password));
+        Assert.Equal((byte)0, (await ReadChallengeReplyAsync(again)).SecurityFlag);
+    }
+
+    [Fact]
+    public async Task IpLock_WithoutFactor_RefusesAMovedAddressAtChallenge()
+    {
+        // vmangos AuthSocket.cpp:416-424: IP-locked, address differs, no TOTP/FIXED_PIN -> WOW_FAIL_SUSPENDED.
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+            LockFlags = AccountLockFlags.IpLock, LastIp = "127.0.0.1",
+        });
+        await using NetworkStream moved = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            endpoint: "127.0.0.2:50000");
+        await SendAsync(moved, BuildChallenge(Username, Password));
+        Assert.Equal((byte)AuthResult.Suspended, (await ReadChallengeReplyAsync(moved)).Result);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task ClientIntegrity_DefaultOffOrCorrectHashSucceeds_WrongHashFails(bool strict, bool correct)
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+        });
+        byte[] versionHash = Enumerable.Range(1, 20).Select(i => (byte)i).ToArray();
+        var options = new AuthOptions
+        {
+            StrictVersionCheck = strict,
+            IntegrityHashes = [new ClientIntegrityHashOptions
+            {
+                Build = ClientBuild.Vanilla1121, Os = "Win", Platform = "x86", Hash = Convert.ToHexString(versionHash),
+            }],
+        };
+        await using NetworkStream client = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false, options);
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+        byte[] crc = correct ? ClientIntegrity.VersionProof(session.PublicKey, versionHash) : new byte[20];
+        await SendAsync(client, BuildProof(session, crc: crc));
+        Assert.Equal(!strict || correct ? (byte)AuthResult.Success : (byte)AuthResult.VersionInvalid,
+            (await ReadProofReplyAsync(client)).Result);
+    }
+
+    [Fact]
+    public async Task StrictIntegrity_ZeroHashDisablesComparison()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+        });
+        var options = new AuthOptions { StrictVersionCheck = true,
+            IntegrityHashes = [new ClientIntegrityHashOptions { Build = ClientBuild.Vanilla1121,
+                Os = "Win", Platform = "x86", Hash = new string('0', 40) }] };
+        await using NetworkStream client = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false, options);
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+        await SendAsync(client, BuildProof(session));
+        Assert.Equal((byte)AuthResult.Success, (await ReadProofReplyAsync(client)).Result);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(2, false)]
+    public async Task Totp_PinGridUsesManualClockAndVmangosWindow(int offset, bool succeeds)
+    {
+        const string secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        Assert.True(Totp.TryDecodeSecret(secret, out byte[] key));
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+            LockFlags = AccountLockFlags.Totp | AccountLockFlags.AlwaysEnforce, SecurityInfo = secret,
+        });
+        await using NetworkStream client = await StartSessionAsync(accounts, new InMemoryRealmStore([]), false,
+            clock: new FrozenClock(59));
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+        string code = Totp.Generate(key, 59, offset).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+        await SendAsync(client, BuildProof(session, pinData: BuildPinData(code, challenge)));
+        Assert.Equal(succeeds ? (byte)AuthResult.Success : (byte)AuthResult.UnknownAccount,
+            (await ReadProofReplyAsync(client)).Result);
+    }
+
     // --- session host ------------------------------------------------------------
 
     private static async Task<NetworkStream> StartSessionAsync(
-        IAccountStore accounts, IRealmStore realms, bool autocreate)
+        IAccountStore accounts, IRealmStore realms, bool autocreate, AuthOptions? options = null,
+        string endpoint = "test", TimeProvider? clock = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -118,8 +298,8 @@ public sealed class LogonHandshakeTests
             await using NetworkStream stream = server.GetStream();
             var session = new LogonSession(
                 stream, accounts, realms,
-                new AuthOptions { AutocreateAccounts = autocreate },
-                NullLogger.Instance, "test");
+                options ?? new AuthOptions { AutocreateAccounts = autocreate },
+                NullLogger.Instance, endpoint, timeProvider: clock);
             await session.RunAsync(CancellationToken.None);
         });
 
@@ -151,15 +331,24 @@ public sealed class LogonHandshakeTests
         return [.. packet];
     }
 
-    private static byte[] BuildProof(ClientSession session)
+    private static byte[] BuildProof(ClientSession session, byte[]? crc = null, byte[]? pinData = null)
     {
         var packet = new List<byte> { (byte)AuthCommand.LogonProof };
         packet.AddRange(session.PublicKey);  // A[32]
         packet.AddRange(session.Proof);      // M1[20]
-        packet.AddRange(new byte[20]);       // crc_hash[20]
+        packet.AddRange(crc ?? new byte[20]); // crc_hash[20]
         packet.Add(0);                       // number_of_keys
-        packet.Add(0);                       // security flags
+        packet.Add(pinData is null ? (byte)0 : (byte)1);
+        if (pinData is not null) packet.AddRange(pinData);
         return [.. packet];
+    }
+
+    private static byte[] BuildPinData(string pin, ChallengeReply challenge)
+    {
+        byte[] salt = RandomNumberGenerator.GetBytes(16);
+        byte[] hash = PinHash.Calculate(pin.Select(c => (byte)(c - '0')).ToArray(),
+            challenge.GridSeed, challenge.PinSalt, salt);
+        return [.. salt, .. hash];
     }
 
     private static byte[] BuildRealmListRequest()
@@ -183,7 +372,11 @@ public sealed class LogonHandshakeTests
         byte[] rest = await ReadExactAsync(stream, 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
         byte[] b = rest[..32];
         byte[] salt = rest.AsSpan(32 + 1 + 1 + 1 + 32, 32).ToArray();
-        return new ChallengeReply { Result = head[2], B = b, Salt = salt };
+        byte flag = rest[^1];
+        byte[] pin = flag == 1 ? await ReadExactAsync(stream, 20) : [];
+        return new ChallengeReply { Result = head[2], B = b, Salt = salt,
+            SecurityFlag = flag, GridSeed = pin.Length == 20 ? BinaryPrimitives.ReadUInt32LittleEndian(pin) : 0,
+            PinSalt = pin.Length == 20 ? pin[4..] : [] };
     }
 
     private static async Task<ProofReply> ReadProofReplyAsync(NetworkStream stream)
@@ -191,7 +384,6 @@ public sealed class LogonHandshakeTests
         byte[] head = await ReadExactAsync(stream, 2); // cmd, result
         if (head[1] != (byte)AuthResult.Success)
         {
-            await ReadExactAsync(stream, 2); // failure padding uint16
             return new ProofReply { Result = head[1], M2 = [] };
         }
 
@@ -233,6 +425,9 @@ public sealed class LogonHandshakeTests
         public required byte Result { get; init; }
         public required byte[] B { get; init; }
         public required byte[] Salt { get; init; }
+        public byte SecurityFlag { get; init; }
+        public uint GridSeed { get; init; }
+        public byte[] PinSalt { get; init; } = [];
     }
 
     private sealed class ProofReply
@@ -280,5 +475,10 @@ public sealed class LogonHandshakeTests
         }
 
         public byte[] ExpectedServerProof() => Srp6Math.ServerProof(A, Proof, SessionKey);
+    }
+
+    private sealed class FrozenClock(long unixSeconds) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
     }
 }

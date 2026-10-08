@@ -55,6 +55,15 @@ switch (command)
         return await SetPasswordAsync();
     case "set-gmlevel":
         return await SetGmLevelAsync();
+    case "set-pin":
+        return await SetFactorAsync(AccountLockFlags.FixedPin);
+    case "set-totp":
+        return await SetFactorAsync(AccountLockFlags.Totp);
+    case "clear-pin":
+    case "clear-totp":
+        return await ClearFactorAsync(command == "clear-pin" ? AccountLockFlags.FixedPin : AccountLockFlags.Totp);
+    case "set-ip-lock":
+        return await SetIpLockAsync();
     case "list":
         return await ListAsync();
     case "ban":
@@ -133,6 +142,105 @@ async Task<int> SetGmLevelAsync()
 
     Console.WriteLine($"'{username}' is now {security} ({(byte)security}); it applies from the account's next world login");
     return 0;
+}
+
+async Task<int> SetFactorAsync(AccountLockFlags method)
+{
+    if (args.Length is < 2 or > 3 || args.Length == 3 && args[2] != "--secret-stdin")
+    {
+        Console.Error.WriteLine("usage: arcane-account set-pin|set-totp <username> [--secret-stdin]");
+        return 1;
+    }
+    string? secret = ReadSecret(args.Length == 3 || Console.IsInputRedirected);
+    if (secret is null || !AccountLoginSecurityPolicy.IsValid(method | AccountLockFlags.AlwaysEnforce, secret)
+        || method == AccountLockFlags.Totp && !Totp.TryDecodeSecret(secret, out _))
+    {
+        Console.Error.WriteLine("invalid secret (PIN: 4-10 decimal digits; TOTP: Base32 without padding, 16-103 characters)");
+        return 1;
+    }
+    IAccountLoginSecurityStore store = scope.ServiceProvider.GetRequiredService<IAccountLoginSecurityStore>();
+    Account? account = await accounts.FindByUsernameAsync(args[1]).ConfigureAwait(false);
+    if (account is null || !await store.SetAsync(args[1],
+            (account.LockFlags & AccountLockFlags.IpLock) | method | AccountLockFlags.AlwaysEnforce,
+            secret.ToUpperInvariant()).ConfigureAwait(false))
+    {
+        Console.Error.WriteLine("account does not exist");
+        return 1;
+    }
+    Console.WriteLine($"{method} enabled for '{account.Username}'; prior session key revoked");
+    return 0;
+}
+
+async Task<int> ClearFactorAsync(AccountLockFlags method)
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("usage: arcane-account clear-pin|clear-totp <username>");
+        return 1;
+    }
+    Account? account = await accounts.FindByUsernameAsync(args[1]).ConfigureAwait(false);
+    if (account is null)
+    {
+        Console.Error.WriteLine("account does not exist");
+        return 1;
+    }
+    if (!account.LockFlags.HasFlag(method))
+    {
+        Console.Error.WriteLine("that factor is not enabled");
+        return 1;
+    }
+    // Remove IP_LOCK too: keeping it without a factor can lock out a moved account.
+    await scope.ServiceProvider.GetRequiredService<IAccountLoginSecurityStore>()
+        .SetAsync(args[1], AccountLockFlags.None, string.Empty).ConfigureAwait(false);
+    Console.WriteLine($"login factor cleared for '{account.Username}'; prior session key revoked");
+    return 0;
+}
+
+async Task<int> SetIpLockAsync()
+{
+    if (args.Length != 3 || args[2] is not ("on" or "off"))
+    {
+        Console.Error.WriteLine("usage: arcane-account set-ip-lock <username> on|off");
+        return 1;
+    }
+    Account? account = await accounts.FindByUsernameAsync(args[1]).ConfigureAwait(false);
+    if (account is null)
+    {
+        Console.Error.WriteLine("account does not exist");
+        return 1;
+    }
+    if (args[2] == "on" && account.LastIp.Length == 0
+        && (account.LockFlags & (AccountLockFlags.FixedPin | AccountLockFlags.Totp)) == 0)
+    {
+        Console.Error.WriteLine("the account must first log in from its trusted address or have a PIN/TOTP factor");
+        return 1;
+    }
+    AccountLockFlags flags = args[2] == "on"
+        ? account.LockFlags | AccountLockFlags.IpLock
+        : account.LockFlags & ~AccountLockFlags.IpLock;
+    await scope.ServiceProvider.GetRequiredService<IAccountLoginSecurityStore>()
+        .SetAsync(args[1], flags, account.SecurityInfo).ConfigureAwait(false);
+    Console.WriteLine($"IP lock {args[2]} for '{account.Username}'");
+    return 0;
+}
+
+static string? ReadSecret(bool fromStdin)
+{
+    if (fromStdin) return Console.ReadLine();
+    Console.Error.Write("Secret: ");
+    var value = new System.Text.StringBuilder();
+    while (true)
+    {
+        ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+        if (key.Key == ConsoleKey.Enter) break;
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (value.Length > 0) value.Length--;
+        }
+        else if (!char.IsControl(key.KeyChar) && value.Length < 103) value.Append(key.KeyChar);
+    }
+    Console.Error.WriteLine();
+    return value.ToString();
 }
 
 async Task<int> ListAsync()
@@ -326,6 +434,9 @@ static void PrintUsage()
     Console.Error.WriteLine("    or from the ARCANE_ACCOUNT_PASSWORD environment variable; '<username> <password>' still");
     Console.Error.WriteLine("    works but exposes the password in process listings and shell history (warned on stderr)");
     Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
+    Console.Error.WriteLine("  arcane-account set-pin|set-totp <username> [--secret-stdin]   (no-echo prompt or stdin)");
+    Console.Error.WriteLine("  arcane-account clear-pin|clear-totp <username>");
+    Console.Error.WriteLine("  arcane-account set-ip-lock <username> on|off");
     Console.Error.WriteLine("  arcane-account list");
     Console.Error.WriteLine("  arcane-account ban <username> <duration|0> <reason>");
     Console.Error.WriteLine("  arcane-account unban <username> <message>");
