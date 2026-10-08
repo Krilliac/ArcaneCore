@@ -155,6 +155,15 @@ world it needs the Warsong Gulch content (map 489, its triggers, safe locations,
 template of one player per team (the retail minimum is five, so two bots never start a match otherwise) and
 `World:Playerbots:Scenarios:MaxDurationSeconds` of about 600 (two 2-minute waits plus the captures).
 
+**Dungeons** (`ScenarioDungeons`): `RaiseLevelAsync` (ordinary level-up to an entrance's level) and `TakeAreaTriggerAsync` (stand
+in a trigger, send CMSG_AREATRIGGER, wait for the far teleport). The scenario `dungeon` (`DungeonEntryScenario`) groups `Scnalpha`
+and `Scnbeta`, raises them to level 10, sends the leader through The Deadmines entrance (trigger 78, map 36) into a new instance
+that the group is bound to (non-permanent), sends the member through the same trigger into the same instance, checks party chat
+inside, and, when `AllowedMaps` lists map 36, logs the member out inside and back in into the same instance (a managed bot may
+only log in on an allowed map). Both leave through the exit trigger 119 and the group is disbanded. It needs map 36 and triggers
+78 and 119 with their teleports (`map_template`, `areatrigger_template`, `areatrigger_teleport`) and fails at its first step
+naming what is missing. It leaves both scenario bots at level 10 or more. Tests: `DungeonScenarioTests`.
+
 ### Running scenarios on a live server
 
 `.playerbot scenario list` and `.playerbot scenario run <name>` (Administrator) run a registered
