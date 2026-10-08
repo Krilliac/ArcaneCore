@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -38,11 +39,18 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
     /// <summary>Whether the bot is following a route (PlayerbotMotion), and how many loops it gave up so far.</summary>
     public bool Following { get; init; }
     public int LoopsGivenUp { get; init; }
+
+    /// <summary>The master's name while the bot's party AI drives it (it is in a real player's group), otherwise null.</summary>
+    public string? Master { get; init; }
+
+    /// <summary>The party mode while the party AI drives the bot (follow, stay or passive), otherwise null.</summary>
+    public PlayerbotPartyMode? PartyMode { get; init; }
 }
 
 internal static class PlayerbotInspector
 {
-    internal static PlayerbotInspection? Capture(WorldSession session, PlayerbotBrain brain)
+    /// <param name="party">The bot's party AI when it drives the bot (then its goal, target, master and mode are reported).</param>
+    internal static PlayerbotInspection? Capture(WorldSession session, PlayerbotBrain brain, PlayerbotPartyAI? party = null)
     {
         if (!session.World.IsWorldThread) throw new InvalidOperationException("playerbot-inspection-thread");
         if (session.Player is not { } player) return null;
@@ -76,10 +84,12 @@ internal static class PlayerbotInspector
             ? new(body.Guid.Value, body.MapId, body.X, body.Y, body.Z,
                 CorpseDistance(player, body), CorpseDelayRemaining(session, player, body))
             : null;
-        return new(player.Name, brain.Goal, brain.TargetEntry, brain.QuestId, player.MapId, player.Level,
+        bool partyDriven = party is { IsEngaged: true };
+        return new(player.Name, partyDriven ? party!.Goal : brain.Goal, partyDriven ? party!.TargetEntry : brain.TargetEntry,
+            brain.QuestId, player.MapId, player.Level,
             player.Health, player.MaxHealth, player.Money, player.Combat.IsInCombat,
             (player.Flags & PlayerFlags.Ghost) != 0, player.X, player.Y, player.Z, player.Combat.DeathState, corpse,
-            Unit(brain.InspectionTarget), Unit(player.Combat.Victim),
+            Unit(partyDriven ? party!.InspectionTarget : brain.InspectionTarget), Unit(player.Combat.Victim),
             state?.CurrentCast?.Spell.Id ?? 0, state?.MeleeCast?.Spell.Id ?? 0,
             spells?.Spellbook.GetSpells(player).Take(128).ToArray() ?? [], nearby,
             attackers, sameMapAttackers.Length, equipment)
@@ -89,6 +99,8 @@ internal static class PlayerbotInspector
             MovementTimeMs = player.Movement.Time,
             Following = PlayerbotMotion.IsActive(player),
             LoopsGivenUp = PlayerbotMotion.LoopCount(player),
+            Master = partyDriven ? party!.MasterName : null,
+            PartyMode = partyDriven ? party!.Mode : null,
         };
     }
 

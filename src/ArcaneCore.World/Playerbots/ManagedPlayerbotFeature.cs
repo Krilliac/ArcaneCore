@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Diagnostics;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -11,6 +12,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -96,7 +98,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             ActiveBot? bot = id is { } key ? _active.GetValueOrDefault(key)
                 : _active.Values.FirstOrDefault(value => value.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
-            return bot is null ? null : PlayerbotInspector.Capture(bot.Session, bot.Brain);
+            return bot is null ? null : PlayerbotInspector.Capture(bot.Session, bot.Brain, bot.PartyDriven ? bot.Party : null);
         }).WaitAsync(cancellationToken);
     }
 
@@ -202,6 +204,45 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// <summary>Whether a running bot is driven by a controller instead of the brain.</summary>
     public bool IsScripted(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.Controller is not null;
 
+    /// <summary>Whether a running autonomous bot is driven by its party AI (it is in a real player's group) instead of the brain.</summary>
+    public bool IsPartyDriven(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.PartyDriven;
+
+    /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
+    internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
+
+    /// <summary>The party AI of a running bot while it drives the bot (inspection and the scenario harness), otherwise null.</summary>
+    internal PlayerbotPartyAI? FindParty(Guid botId)
+        => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused && active.PartyDriven ? active.Party : null;
+
+    /// <summary>
+    /// <c>.playerbot invite</c> (the vmangos <c>.partybot add</c> analogue; world thread): <paramref name="inviter"/> invites the
+    /// running autonomous bot <paramref name="idOrName"/> through the ordinary group invite, and the bot accepts at once whatever its
+    /// <see cref="PlayerbotPartyOptions.InvitePolicy"/> says. The invite keeps every ordinary rule (faction, full group, leader or
+    /// assistant only); a refused one is answered to the inviter by the group system and reported as "invite-refused".
+    /// </summary>
+    internal PlayerbotOperationResult InviteToGroup(Player inviter, string idOrName)
+    {
+        ArgumentNullException.ThrowIfNull(inviter);
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-invite-thread");
+        Guid? id = Guid.TryParse(idOrName, out Guid parsed) ? parsed : null;
+        ActiveBot? bot = id is { } key ? _active.GetValueOrDefault(key)
+            : _active.Values.FirstOrDefault(value => value.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
+        if (bot is null || bot.Paused || bot.Session.State != SessionState.InWorld || bot.Session.Player is not { } player)
+            return new(false, "bot-not-running");
+        if (bot.Controller is not null) return new(false, "bot-scripted", bot.Record.BotId, player.Name);
+        if (ReferenceEquals(player, inviter)) return new(false, "invite-refused", bot.Record.BotId, player.Name);
+        if (services.GetService<Social.SocialFeature>()?.Context.Groups is not { } groups) return new(false, "groups-unavailable");
+        if (groups.AreInSameGroup(inviter.Guid, player.Guid)) return new(true, "already-in-your-group", bot.Record.BotId, player.Name);
+        if (groups.GetGroup(player.Guid) is not null) return new(false, "bot-already-grouped", bot.Record.BotId, player.Name);
+        groups.Invite(inviter, player.Name);
+        if (groups.GetInvite(player.Guid) is null) return new(false, "invite-refused", bot.Record.BotId, player.Name);
+        bot.Session.ManagedBudget = null;
+        bot.Session.TryManagedAction(WorldOpcode.CmsgGroupAccept, []);
+        return groups.AreInSameGroup(inviter.Guid, player.Guid)
+            ? new(true, "invited", bot.Record.BotId, player.Name)
+            : new(false, "accept-refused", bot.Record.BotId, player.Name);
+    }
+
     /// <summary>The ordinary session of a running bot (scenario harness; null when not running).</summary>
     internal WorldSession? FindSession(Guid botId)
         => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;
@@ -248,7 +289,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
-            var active = new ActiveBot(bot, scope, session, new PlayerbotBrain(session, _options, _planner, _planningStop.Token))
+            var active = new ActiveBot(bot, scope, session, NewBrain(session), new PlayerbotPartyAI(session, _options))
             { Controller = controller };
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
             retained = true;
@@ -321,6 +362,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
+    private PlayerbotBrain NewBrain(WorldSession session) => new(session, _options, _planner, _planningStop.Token);
+
+    /// <summary>The goal the bot reports and persists: its party AI's while that drives it, otherwise the brain's.</summary>
+    private static (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId) GoalOf(ActiveBot active)
+        => active.PartyDriven ? (active.Party.Goal, active.Party.TargetEntry, active.Brain.QuestId)
+            : (active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
+
     private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
         => WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, _world!, registry, sessionOptions.Value, logger, cancellationToken);
 
@@ -343,7 +391,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     DesiredEnabled = preserveDesired && active.Record.DesiredEnabled,
                     State = faultCode is null ? ManagedPlayerbotState.Stopped : ManagedPlayerbotState.Faulted,
                     ErrorCode = faultCode ?? active.Record.ErrorCode,
-                    Goal = active.Brain.Goal, TargetEntry = active.Brain.TargetEntry, QuestId = active.Brain.QuestId,
+                    Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId,
                 }, cancellationToken).ConfigureAwait(false);
                 active.Record = bot;
                 _active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active));
@@ -384,7 +432,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover) continue;
             try { PlayerbotMotion.Pump(active.Session, mover, _world!.NowMs); }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
+            // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
+            // chat, loot rolls and resurrection offers are answered as they come, not when the bot's turn in the budget comes.
+            if (active.Controller is not null || active.Session.State != SessionState.InWorld) continue;
+            try { active.Party.Intake(mover); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "party", ex); }
         }
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         long started = Stopwatch.GetTimestamp();
@@ -404,10 +457,16 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         active.Session.ManagedBudget = null;
                         controller.Tick(active.ControllerContext, sinceLast);
                     }
-                    else
+                    else if (active.Session.Player is { } driven)
                     {
                         active.Session.ManagedBudget = budget;
-                        active.Brain.Update(sinceLast);
+                        // A bot in a real player's group follows its party AI; out of it (or after its master's timeout) the
+                        // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
+                        bool party = active.Party.Drives(driven);
+                        if (active.PartyDriven && !party) ReplaceBrain(active);
+                        active.PartyDriven = party;
+                        if (party) active.Party.Update(driven, sinceLast);
+                        else active.Brain.Update(sinceLast);
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
@@ -420,7 +479,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
             Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId)).Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => new PlayerbotStatus(
                 b.Record.BotId, b.Name, b.Session.State == SessionState.Closed ? ManagedPlayerbotState.Faulted : b.Record.State,
-                b.Record.DesiredEnabled, b.Brain.Goal, b.Brain.TargetEntry, b.Brain.QuestId, b.MapId, b.Session.Player?.Health ?? 0,
+                b.Record.DesiredEnabled, GoalOf(b).Goal, GoalOf(b).TargetEntry, GoalOf(b).QuestId, b.MapId, b.Session.Player?.Health ?? 0,
                 b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode))).ToArray());
         }
         _checkpointMs += elapsedMs;
@@ -447,13 +506,19 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     continue;
                 }
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
-                { Goal = active.Brain.Goal, TargetEntry = active.Brain.TargetEntry, QuestId = active.Brain.QuestId }, CancellationToken.None).ConfigureAwait(false);
+                { Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId }, CancellationToken.None).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         { logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name); }
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
+    }
+
+    private void ReplaceBrain(ActiveBot active)
+    {
+        active.Brain.Stop();
+        active.Brain = NewBrain(active.Session);
     }
 
     /// <summary>
@@ -621,12 +686,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
     }
 
-    private sealed class ActiveBot(ManagedPlayerbot record, AsyncServiceScope scope, WorldSession session, PlayerbotBrain brain)
+    private sealed class ActiveBot(ManagedPlayerbot record, AsyncServiceScope scope, WorldSession session, PlayerbotBrain brain,
+        PlayerbotPartyAI party)
     {
         public ManagedPlayerbot Record = record;
         public AsyncServiceScope Scope { get; } = scope;
         public WorldSession Session { get; } = session;
-        public PlayerbotBrain Brain { get; } = brain;
+        public PlayerbotBrain Brain = brain;
+        public PlayerbotPartyAI Party { get; } = party;
+        public bool PartyDriven;
         public string Name = session.Player!.Name;
         public uint MapId = session.Player!.Map!.MapId;
         public uint LastUpdateMs = session.World.NowMs;

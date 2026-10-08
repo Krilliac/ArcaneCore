@@ -12,7 +12,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|scenario>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|scenario>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -27,6 +27,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot list\nList managed bots.", List),
                 new ChatCommand("inspect", AccountSecurity.GameMaster,
                     "Syntax: .playerbot inspect $id|$name\nRead actual target, victim, cast and nearby trainer facts.", Inspect),
+                new ChatCommand("invite", AccountSecurity.GameMaster,
+                    "Syntax: .playerbot invite $id|$name\nPut a running bot into your group; it follows you and takes your commands.", Invite),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
@@ -94,6 +96,20 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>
+    /// <c>.playerbot invite</c> (vmangos <c>.partybot add</c>): the invoker invites the bot through the ordinary group invite and the
+    /// bot accepts at once, whatever its invite policy. Runs on the world thread, where commands run.
+    /// </summary>
+    private static bool Invite(CommandContext context, string text)
+    {
+        if (!TryRequiredId(text, out string id)) return false;
+        ManagedPlayerbotFeature? service = context.Session.Services.GetService<ManagedPlayerbotFeature>();
+        if (service is null) { context.Reply("Playerbot service is unavailable."); return true; }
+        PlayerbotOperationResult result = service.InviteToGroup(context.Player, id);
+        context.Reply($"Playerbot {(result.Success ? "ok" : "failed")}: {result.Code} ({result.Name ?? id}).");
+        return true;
+    }
+
     private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id)
     {
         try { await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false); }
@@ -108,6 +124,8 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply(FormattableString.Invariant($"BOTINSPECT {value.Name} goal={value.Goal} report={value.ReportedTarget} quest={value.QuestId} map={value.MapId} level={value.Level} hp={value.Health}/{value.MaxHealth} money={value.Money} combat={value.InCombat} ghost={value.Ghost}"));
         context.Reply(FormattableString.Invariant($"BOTINSPECT death={value.DeathState} pos={value.PlayerX:F2},{value.PlayerY:F2},{value.PlayerZ:F2}"));
         context.Reply(FormattableString.Invariant($"BOTINSPECT movement=flags:{(uint)value.MovementFlags:X8} stand:{value.StandState} time:{value.MovementTimeMs} following:{value.Following} loops:{value.LoopsGivenUp}"));
+        context.Reply(value.Master is null ? "BOTINSPECT party=none"
+            : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
         {
             string distance = corpse.Distance?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";
