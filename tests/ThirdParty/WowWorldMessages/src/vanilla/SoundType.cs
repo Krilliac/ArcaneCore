@@ -1,0 +1,31 @@
+namespace WowWorldMessages.Vanilla;
+
+public enum SoundType : byte {
+    Unused = 0,
+    Spells = 1,
+    Ui = 2,
+    Footsteps = 3,
+    WeaponImpact = 4,
+    WeaponMiss = 6,
+    PickUpPutDown = 9,
+    NpcCombat = 10,
+    Errors = 12,
+    Objects = 14,
+    Death = 16,
+    NpcGreetings = 17,
+    Test = 18,
+    ArmourFoley = 19,
+    Footsteps2 = 20,
+    WaterCharacter = 21,
+    WaterLiquid = 22,
+    Tradeskills = 23,
+    Doodads = 25,
+    SpellFizzle = 26,
+    NpcLoops = 27,
+    ZoneMusic = 28,
+    Emotes = 29,
+    NarrationMusic = 30,
+    Narration = 31,
+    ZoneAmbience = 50,
+}
+
