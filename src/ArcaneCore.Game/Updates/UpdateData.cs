@@ -145,7 +145,8 @@ public sealed class UpdateData
         _openBlockStart = -1;
     }
 
-    private static void Send(PacketWriter body, Action<WorldOpcode, byte[]> send, int compressionThreshold)
+    /// <summary>Send one finished update body, compressed above <paramref name="compressionThreshold"/> (also used for the ship packets).</summary>
+    internal static void Send(PacketWriter body, Action<WorldOpcode, byte[]> send, int compressionThreshold)
     {
         if (compressionThreshold <= 0 || body.Length <= compressionThreshold)
         {

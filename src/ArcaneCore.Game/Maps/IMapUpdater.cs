@@ -19,4 +19,13 @@ public interface IMapUpdater
     /// cleared, so drop any per-player tracking (world thread).
     /// </summary>
     void OnPlayerRemoved(Map map, Player player);
+
+    /// <summary>
+    /// <paramref name="player"/> is entering the map: it is registered, but its own create block has not been queued yet, so
+    /// a packet sent here reaches the client before it (vmangos <c>Map::Add</c> runs <c>SendInitTransports</c> before
+    /// <c>SendInitSelf</c>). World thread; nothing by default.
+    /// </summary>
+    void OnPlayerAdding(Map map, Player player)
+    {
+    }
 }

@@ -39,7 +39,7 @@ public sealed partial class DuelService
     /// <summary>
     /// The cast-time rules of a duel challenge (vmangos Spell::CheckCast SPELL_EFFECT_DUEL, Spell.cpp:6187-6203): the caster and the target
     /// must be players (BAD_TARGETS; a self challenge is refused too, hardening the references leave open) and the target must not hold a duel
-    /// (TARGET_DUELING). The transport comparison (NOT_ON_TRANSPORT) has nothing to compare on this base.
+    /// (TARGET_DUELING). Both must stand on the same ship, or both on land (NOT_ON_TRANSPORT, Spell.cpp:6195-6196).
     /// </summary>
     internal SpellCastResult CheckChallenge(Unit caster, Unit? target)
     {
@@ -51,6 +51,11 @@ public sealed partial class DuelService
         if (caster is not Player || target is not Player other || ReferenceEquals(caster, target))
         {
             return SpellCastResult.BadTargets;
+        }
+
+        if (!ReferenceEquals(other.Transport, caster.Transport))
+        {
+            return SpellCastResult.NotOnTransport;
         }
 
         return other.Duel is not null ? SpellCastResult.TargetDueling : SpellCastResult.CastOk;
@@ -147,6 +152,13 @@ public sealed partial class DuelService
 
         challenger.Duel = new DuelInfo(challenger, target);
         target.Duel = new DuelInfo(challenger, challenger);
+        if (challenger.Transport is { } ship)
+        {
+            // vmangos SpellEffects.cpp:4750-4755: a duel requested aboard is bound to the ship.
+            challenger.Duel.TransportGuid = ship.Guid.Low;
+            target.Duel.TransportGuid = ship.Guid.Low;
+        }
+
         challenger.DuelArbiter = flag.Guid.Value;
         target.DuelArbiter = flag.Guid.Value;
     }

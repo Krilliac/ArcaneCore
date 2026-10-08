@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Entities;
 /// A living object (creature or player): unit update fields plus a movement state and the
 /// six movement speeds sent in its create block.
 /// </summary>
-public abstract class Unit : WorldObject
+public abstract partial class Unit : WorldObject
 {
     /// <summary>Vanilla base speeds, yards/second (vmangos Unit.cpp baseMoveSpeed).</summary>
     public const float BaseWalkSpeed = 2.5f;

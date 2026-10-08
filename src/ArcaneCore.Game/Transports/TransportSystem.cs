@@ -1,0 +1,527 @@
+using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ArcaneCore.Game.Transports;
+
+/// <summary>
+/// The world's ships and zeppelins (vmangos <c>TransportMgr</c> plus the transport parts of <c>Map</c>; re-implemented).
+/// <list type="bullet">
+/// <item>Spawning: a continent route gets one ship, created with the first map of the route it touches (vmangos
+/// <c>SpawnTransportsOnMap</c>, Map.cpp:176); <see cref="Install"/> creates those maps, as vmangos has its continents loaded
+/// from the start. A route inside one instanceable map gets a ship in every instance of it.</item>
+/// <item>Sending: a ship is not in the grids. Every player of its map has it (vmangos <c>Map::SendInitTransports</c> at map
+/// entry, <c>SendCreateUpdateToMap</c> when the ship arrives, <c>SendOutOfRangeUpdateToMap</c> when it leaves); its own
+/// passengers are not told when it changes maps.</item>
+/// <item>Map change at a dock (vmangos <c>ShipTransport::TeleportTransport</c>): creatures are left behind, players are
+/// revived, freed of fear and confusion, taken out of combat and carried along: a far teleport to the new map that keeps
+/// them on the ship (<see cref="TeleportPassenger"/>), or a relocation when the map stays the same.</item>
+/// </list>
+/// World thread only.
+/// </summary>
+public sealed class TransportSystem
+{
+    private static readonly ConditionalWeakTable<WorldRuntime, TransportSystem> s_registered = new();
+
+    private readonly WorldRuntime _world;
+    private readonly ILogger _logger;
+    private readonly TransportTemplate[] _templates;
+    private readonly List<ShipTransport> _ships = [];
+    private readonly Dictionary<Map, List<ShipTransport>> _byMap = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ObjectGuid> _justBoarded = [];
+    private bool _installed;
+
+    public TransportSystem(WorldRuntime world, IEnumerable<TransportTemplate> templates, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(templates);
+        _world = world;
+        _templates = [.. templates.OrderBy(t => t.Entry)];
+        _logger = logger ?? NullLogger.Instance;
+    }
+
+    /// <summary>The routes, by entry.</summary>
+    public IReadOnlyList<TransportTemplate> Templates => _templates;
+
+    /// <summary>Every ship that exists, in creation order.</summary>
+    public IReadOnlyList<ShipTransport> Ships => _ships;
+
+    /// <summary>
+    /// A far teleport that keeps the player aboard (vmangos <c>TeleportTo(.., TELE_TO_NOT_LEAVE_TRANSPORT)</c>): the player,
+    /// the new map and the position. The world feature wires it to the teleport service. Without it, or when it refuses,
+    /// a player whose ship changes maps is put off the ship where it stands.
+    /// </summary>
+    public Func<Player, uint, float, float, float, float, bool>? TeleportPassenger { get; set; }
+
+    /// <summary>
+    /// Run on a player before its ship changes maps, after a dead passenger was revived (vmangos TeleportTransport:
+    /// <c>RemoveSpellsCausingAura(SPELL_AURA_MOD_CONFUSE / MOD_FEAR)</c> and <c>CombatStopWithPets(true)</c>). The world
+    /// feature wires it to the spell system; without it only the combat stop runs.
+    /// </summary>
+    public Action<Player>? PreparePassengerForMapChange { get; set; }
+
+    /// <summary>Raised when a unit boards a ship.</summary>
+    public event Action<ShipTransport, Unit>? PassengerBoarded;
+
+    /// <summary>Raised when a unit leaves a ship.</summary>
+    public event Action<ShipTransport, Unit>? PassengerLeft;
+
+    /// <summary>Make <paramref name="system"/> the transport system of <paramref name="world"/> (<see cref="Of"/>).</summary>
+    public static void Register(WorldRuntime world, TransportSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(system);
+        s_registered.AddOrUpdate(world, system);
+    }
+
+    /// <summary>The registered system of <paramref name="world"/>, or null when transports are off.</summary>
+    public static TransportSystem? Of(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return s_registered.TryGetValue(world, out TransportSystem? system) ? system : null;
+    }
+
+    /// <summary>
+    /// Attach to every map, now and when created, and create the continent routes' ships (world thread, once).
+    /// </summary>
+    public void Install()
+    {
+        if (!_world.IsWorldThread)
+        {
+            throw new InvalidOperationException("transports are installed on the world thread");
+        }
+
+        if (_installed)
+        {
+            return;
+        }
+
+        _installed = true;
+        _world.MapCreated += OnMapCreated;
+        _world.MapUnloading += OnMapUnloading;
+        _world.PlayerLoggingOut += OnPlayerLoggingOut;
+        foreach (Map map in _world.Maps.ToArray())
+        {
+            OnMapCreated(map);
+        }
+
+        // vmangos loads the continents at startup and their ships with them; this base creates maps on first use.
+        foreach (TransportTemplate template in _templates)
+        {
+            if (!template.InInstance && !template.Spawned && template.KeyFrames.Count > 0)
+            {
+                _world.GetMap(template.KeyFrames[0].Node.MapId);
+            }
+        }
+
+        _logger.LogInformation("Transports: {Routes} routes, {Ships} ships sailing", _templates.Length, _ships.Count);
+    }
+
+    /// <summary>The ships on <paramref name="map"/> now.</summary>
+    public IReadOnlyList<ShipTransport> ShipsOn(Map map)
+        => _byMap.TryGetValue(map, out List<ShipTransport>? ships) ? ships : [];
+
+    /// <summary>vmangos <c>Map::GetTransport</c>: the ship with this GUID on <paramref name="map"/>, or null.</summary>
+    public ShipTransport? Find(Map map, ObjectGuid guid)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        if (guid.IsEmpty || !_byMap.TryGetValue(map, out List<ShipTransport>? ships))
+        {
+            return null;
+        }
+
+        foreach (ShipTransport ship in ships)
+        {
+            if (ship.Guid == guid)
+            {
+                return ship;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The ship of a continent route, by template entry (its GUID counter), or null.</summary>
+    public ShipTransport? FindByEntry(uint entry) => _ships.FirstOrDefault(s => s.Entry == entry);
+
+    /// <summary>
+    /// The 1.12 client loses a ship it just boarded until it is sent again; vmangos re-sends it at the next
+    /// CMSG_MOVE_TIME_SKIPPED (MovementHandler.cpp:1001-1010). True once after a player boarded (and clears the mark).
+    /// </summary>
+    public bool TakeJustBoarded(Player player) => _justBoarded.Remove(player.Guid);
+
+    /// <summary>Send <paramref name="ship"/> to <paramref name="player"/> again: out of range, then create (vmangos SendOutOfRange/CreateUpdateToPlayer).</summary>
+    public void ResendTo(ShipTransport ship, Player player)
+    {
+        ArgumentNullException.ThrowIfNull(ship);
+        ArgumentNullException.ThrowIfNull(player);
+        TransportPackets.Send(player, TransportPackets.BuildOutOfRange([ship]), CompressionThreshold);
+        TransportPackets.Send(player, TransportPackets.BuildCreate([ship], player, _world.NowMs), CompressionThreshold);
+    }
+
+    // --- per map ------------------------------------------------------------------------------------------------------
+
+    internal void UpdateMap(Map map)
+    {
+        if (!_byMap.TryGetValue(map, out List<ShipTransport>? ships) || ships.Count == 0)
+        {
+            return;
+        }
+
+        uint now = _world.NowMs;
+        foreach (ShipTransport ship in ships.ToArray())
+        {
+            if (ReferenceEquals(ship.CurrentMap, map))
+            {
+                ship.Update(now);
+            }
+        }
+    }
+
+    /// <summary>vmangos <c>Map::SendInitTransports</c>: every ship of the map, the player's own among them, before its own create block.</summary>
+    internal void OnPlayerAdding(Map map, Player player)
+    {
+        if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+        {
+            TransportPackets.Send(player, TransportPackets.BuildCreate(ships, player, _world.NowMs), CompressionThreshold);
+        }
+    }
+
+    /// <summary>vmangos <c>Map::SendRemoveTransports</c>: every ship of the map but the player's own.</summary>
+    internal void OnPlayerRemoved(Map map, Player player)
+    {
+        if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+        {
+            TransportPackets.Send(player, TransportPackets.BuildOutOfRange(ships.Where(s => !ReferenceEquals(s, player.Transport))), CompressionThreshold);
+        }
+    }
+
+    internal void OnBoarded(ShipTransport ship, Unit passenger)
+    {
+        Raise(PassengerBoarded, ship, passenger);
+    }
+
+    internal void OnLeft(ShipTransport ship, Unit passenger)
+    {
+        if (passenger is Player player)
+        {
+            _justBoarded.Remove(player.Guid);
+        }
+
+        Raise(PassengerLeft, ship, passenger);
+    }
+
+    /// <summary>A player's client says it stands on <paramref name="ship"/>: board it and remember to re-send the ship.</summary>
+    internal void BoardFromClient(ShipTransport ship, Player player)
+    {
+        if (ship.AddPassenger(player))
+        {
+            _justBoarded.Add(player.Guid);
+        }
+    }
+
+    /// <summary>vmangos frame Update flag: destroy and create the ship again for every player of its map who is not aboard.</summary>
+    internal void Refresh(ShipTransport ship)
+    {
+        SendOutOfRangeToMap(ship);
+        SendCreateToMap(ship);
+    }
+
+    // --- map change (ShipTransport::TeleportTransport, Transport.cpp:120-200) ---------------------------------------
+
+    internal void TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
+    {
+        Map? oldMap = ship.CurrentMap;
+        Map newMap = oldMap is not null && oldMap.MapId == newMapId ? oldMap : _world.GetMap(newMapId);
+        RemoveFromMap(ship);
+        ship.CurrentMap = newMap;
+
+        foreach (Unit passenger in ship.Passengers.ToArray())
+        {
+            float destX = passenger.Movement.TransportX;
+            float destY = passenger.Movement.TransportY;
+            float destZ = passenger.Movement.TransportZ;
+            float destO = passenger.Movement.TransportOrientation;
+            ShipTransport.CalculatePassengerPosition(ref destX, ref destY, ref destZ, ref destO, x, y, z, o);
+            switch (passenger)
+            {
+                case Creature creature:
+                    LeaveCreatureBehind(ship, creature);
+                    break;
+                case Player player:
+                    CarryPlayer(ship, player, newMapId, destX, destY, destZ, destO);
+                    break;
+                default:
+                    ship.RemovePassenger(passenger);
+                    break;
+            }
+        }
+
+        ship.Relocate(newMapId, x, y, z, o);
+        AddToMap(ship, newMap);
+    }
+
+    // vmangos: "Units teleport on transport not implemented": a creature stays on the old map; one whose owner is not
+    // riding along leaves combat (evades) or is put back at its owner or its spawn point.
+    private void LeaveCreatureBehind(ShipTransport ship, Creature creature)
+    {
+        ship.RemovePassenger(creature);
+        creature.RemoveMovementFlags(MovementFlags.OnTransport); // vmangos leaves the flag; a server-moved unit must not keep it
+        Player? owner = creature.GetOwner() as Player;
+        if (owner is not null && ReferenceEquals(owner.Transport, ship))
+        {
+            return; // the pet follows its owner through the far teleport (the pet system's job)
+        }
+
+        Map? map = creature.Map;
+        if (creature.Combat.IsInCombat)
+        {
+            map?.FindUpdater<CreatureMapSystem>()?.EnterEvadeMode(creature);
+            return;
+        }
+
+        if (owner is not null)
+        {
+            creature.Relocate(owner.X, owner.Y, owner.Z, 0f, _world.NowMs);
+        }
+        else
+        {
+            CreatureHome home = creature.Home;
+            creature.Relocate(home.X, home.Y, home.Z, home.Orientation, _world.NowMs);
+        }
+    }
+
+    private void CarryPlayer(ShipTransport ship, Player player, uint newMapId, float x, float y, float z, float o)
+    {
+        if (player.Map is not { } map)
+        {
+            ship.RemovePassenger(player); // not in the world (in transit, logging in)
+            return;
+        }
+
+        if (!player.IsAlive)
+        {
+            map.Combat.ResurrectPlayer(player, 1.0f, applySickness: false);
+        }
+
+        if (PreparePassengerForMapChange is { } prepare)
+        {
+            prepare(player);
+        }
+        else
+        {
+            map.Combat.CombatStop(player);
+        }
+
+        if (newMapId == player.MapId)
+        {
+            // No teleport packet without a map change (vmangos: SetAsServerSide + TeleportPositionRelocation).
+            player.RelocateOnTransport(x, y, z, o);
+            return;
+        }
+
+        if (TeleportPassenger is not { } teleport || !teleport(player, newMapId, x, y, z, o))
+        {
+            _logger.LogWarning("{Player} could not travel with transport {Entry} to map {MapId}; left at the dock", player.Name, ship.Entry, newMapId);
+            ship.RemovePassenger(player);
+            player.RemoveMovementFlags(MovementFlags.OnTransport);
+        }
+    }
+
+    // --- spawning (TransportMgr::SpawnTransportsOnMap / CreateTransport, TransportMgr.cpp:374-427) ----------------------
+
+    private void OnMapCreated(Map map)
+    {
+        if (_byMap.ContainsKey(map))
+        {
+            return;
+        }
+
+        _byMap[map] = [];
+        map.AddUpdater(new TransportMapUpdater(this));
+        foreach (TransportTemplate template in _templates)
+        {
+            // Continent ships exist once.
+            if (template.Spawned && !template.InInstance)
+            {
+                continue;
+            }
+
+            if (template.MapsUsed.Contains(map.MapId) && CreateTransport(template, map) is not null)
+            {
+                template.Spawned = true;
+            }
+        }
+    }
+
+    private ShipTransport? CreateTransport(TransportTemplate template, Map map)
+    {
+        int frame = -1;
+        for (int i = 0; i < template.KeyFrames.Count; i++)
+        {
+            if (template.KeyFrames[i].Node.MapId == map.MapId)
+            {
+                frame = i;
+                break;
+            }
+        }
+
+        if (frame < 0)
+        {
+            return null;
+        }
+
+        // A continent ship sails the shared copy only (vmangos GetContinentInstanceId; this base has one continent instance).
+        bool instanceable = map.Template?.Instanceable ?? false;
+        if (!instanceable && map.InstanceId != 0)
+        {
+            return null;
+        }
+
+        if (instanceable != template.InInstance)
+        {
+            _logger.LogError("Transport {Entry} attempted creation in map {MapId} but its route is {Kind}", template.Entry, map.MapId,
+                template.InInstance ? "instanced" : "a continent route");
+            return null;
+        }
+
+        var ship = new ShipTransport(this, template, frame, _world.NowMs);
+        _ships.Add(ship);
+        AddToMap(ship, map);
+        _logger.LogDebug("Created transport {Entry} on map {MapId}", template.Entry, map.MapId);
+        return ship;
+    }
+
+    private void OnMapUnloading(Map map)
+    {
+        if (!_byMap.Remove(map, out List<ShipTransport>? ships))
+        {
+            return;
+        }
+
+        foreach (ShipTransport ship in ships)
+        {
+            foreach (Unit passenger in ship.Passengers.ToArray())
+            {
+                ship.RemovePassenger(passenger);
+            }
+
+            ship.CurrentMap = null;
+            _ships.Remove(ship);
+        }
+    }
+
+    // vmangos Unit::CleanupsBeforeDelete / Player::RemoveFromWorld: a player leaving the world leaves its ship.
+    private void OnPlayerLoggingOut(Player player)
+    {
+        player.Transport?.RemovePassenger(player);
+        _justBoarded.Remove(player.Guid);
+    }
+
+    private void AddToMap(ShipTransport ship, Map map)
+    {
+        ship.CurrentMap = map;
+        ship.MapId = map.MapId;
+        if (!_byMap.TryGetValue(map, out List<ShipTransport>? ships))
+        {
+            ships = [];
+            _byMap[map] = ships;
+        }
+
+        if (!ships.Contains(ship))
+        {
+            ships.Add(ship);
+        }
+
+        SendCreateToMap(ship);
+    }
+
+    private void RemoveFromMap(ShipTransport ship)
+    {
+        if (ship.CurrentMap is not { } map)
+        {
+            return;
+        }
+
+        SendOutOfRangeToMap(ship);
+        if (_byMap.TryGetValue(map, out List<ShipTransport>? ships))
+        {
+            ships.Remove(ship);
+        }
+
+        ship.CurrentMap = null;
+    }
+
+    private void SendCreateToMap(ShipTransport ship)
+    {
+        if (ship.CurrentMap is not { } map)
+        {
+            return;
+        }
+
+        foreach (Player player in map.Players.ToArray())
+        {
+            if (!ReferenceEquals(player.Transport, ship))
+            {
+                TransportPackets.Send(player, TransportPackets.BuildCreate([ship], player, _world.NowMs), CompressionThreshold);
+            }
+        }
+    }
+
+    private void SendOutOfRangeToMap(ShipTransport ship)
+    {
+        if (ship.CurrentMap is not { } map)
+        {
+            return;
+        }
+
+        PacketWriter? packet = null;
+        foreach (Player player in map.Players.ToArray())
+        {
+            if (!ReferenceEquals(player.Transport, ship))
+            {
+                packet ??= TransportPackets.BuildOutOfRange([ship]);
+                TransportPackets.Send(player, packet, CompressionThreshold);
+            }
+        }
+    }
+
+    private int CompressionThreshold => _world.Options.UpdateCompressionThreshold;
+
+    private void Raise(Action<ShipTransport, Unit>? handlers, ShipTransport ship, Unit passenger)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<ShipTransport, Unit> handler in handlers.GetInvocationList().Cast<Action<ShipTransport, Unit>>())
+        {
+            try
+            {
+                handler(ship, passenger);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "transport passenger handler failed");
+            }
+        }
+    }
+
+    /// <summary>The per-map hook: the ships of the map move with its update, and its players get them at entry and lose them at exit.</summary>
+    private sealed class TransportMapUpdater(TransportSystem system) : IMapUpdater
+    {
+        public void Update(Map map, uint diffMs) => system.UpdateMap(map);
+
+        public void OnPlayerRemoved(Map map, Player player) => system.OnPlayerRemoved(map, player);
+
+        public void OnPlayerAdding(Map map, Player player) => system.OnPlayerAdding(map, player);
+    }
+}

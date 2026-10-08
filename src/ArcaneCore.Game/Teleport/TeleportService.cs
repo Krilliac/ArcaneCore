@@ -147,6 +147,15 @@ public sealed class TeleportService
     /// ArcaneCore has not got yet), a player in no map, or a far teleport already under way.
     /// </summary>
     public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
+        => TeleportTo(player, mapId, x, y, z, orientation, TeleportOptions.None);
+
+    /// <summary>
+    /// <see cref="TeleportTo(Player, uint, float, float, float, float)"/> with vmangos <c>TeleportToOptions</c>. With
+    /// <see cref="TeleportOptions.NotLeaveTransport"/> a passenger stays on its ship: the teleport is always a far one
+    /// (vmangos only teleports near without a transport, Player.cpp:1896), SMSG_TRANSFER_PENDING names the ship and the
+    /// old map, and SMSG_NEW_WORLD carries the offset on the ship instead of the world position (Player.cpp:2068-2072, 2113-2118).
+    /// </summary>
+    public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation, TeleportOptions options)
     {
         if (!Check(player, mapId, x, y, z, orientation, log: true) || player.Map is not { } current)
         {
@@ -156,11 +165,18 @@ public sealed class TeleportService
         // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
         current.Combat.ReviveForDungeonEntry(player, mapId);
 
+        // vmangos TeleportTo (Player.cpp:1868-1872): leave the ship unless told to stay on it.
+        bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
+        if (!staysAboard)
+        {
+            player.Transport?.RemovePassenger(player);
+        }
+
         // vmangos TeleportTo: reset the client time stamp and stop movement, leave any transport.
-        ResetMovementForTeleport(player);
+        ResetMovementForTeleport(player, staysAboard);
 
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
-        if (current.MapId == mapId)
+        if (current.MapId == mapId && !staysAboard)
         {
             _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default);
             MovementInfo moved = player.Movement;
@@ -285,15 +301,29 @@ public sealed class TeleportService
         player.Combat.ResetExtraAttacks();
         TeleportDestination dest = pending.Destination;
         player.Selection = ObjectGuid.Empty;
-        player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(dest.MapId));
+        Transports.ShipTransport? ship = player.Transport;
+        player.Session.Send(WorldOpcode.SmsgTransferPending, ship is null
+            ? TeleportPackets.BuildTransferPending(dest.MapId)
+            : TeleportPackets.BuildTransferPending(dest.MapId, ship.Entry, source.MapId));
         source.RemovePlayer(player);
         source.BeginTransit(player);
 
         // The player is in no map now; a save while in transit stores the destination, as
         // vmangos SaveToDB does with m_teleportDest during a far teleport.
+        MovementInfo aboard = player.Movement;
         player.MapId = dest.MapId;
         player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
         pending.Stage = TeleportStage.Far;
+        if (ship is not null)
+        {
+            // Still aboard: the movement block keeps the ship and the offset, and the client loads the new map at its place on
+            // the ship (vmangos SendNewWorld: m_movementInfo.GetTransportPos() with the destination map).
+            player.SetTransportData(ship.Guid, aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation);
+            player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(
+                dest.MapId, aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation));
+            return;
+        }
+
         player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(dest.MapId, dest.X, dest.Y, dest.Z, dest.Orientation));
     }
 
@@ -350,7 +380,30 @@ public sealed class TeleportService
         }
 
         player.MapId = dest.MapId;
-        player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
+        if (player.Transport is { } ship)
+        {
+            MovementInfo aboard = player.Movement;
+            if (ReferenceEquals(ship.CurrentMap, map))
+            {
+                // vmangos HandleMoveWorldportAckOpcode: "Transport position may have changed while loading" - the player
+                // enters at its offset from where the ship is now.
+                (float x, float y, float z, float o) = (aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation);
+                ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
+                player.Relocate(x, y, z, o, _world.NowMs);
+                player.SetTransportData(ship.Guid, aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation);
+            }
+            else
+            {
+                // The ship is not where the player arrives (a failed entry sent it back): it is left behind.
+                ship.RemovePassenger(player);
+                player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
+            }
+        }
+        else
+        {
+            player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
+        }
+
         UpdateZone(map, player);
         _beforeAddToMap(player);
         map.AddPlayer(player);
@@ -386,15 +439,22 @@ public sealed class TeleportService
         }
     }
 
-    private void ResetMovementForTeleport(Player player)
+    // vmangos TeleportTo (Player.cpp:1884-1889): the moving and turning flags go; ONTRANSPORT and the ship data go too unless the
+    // player stays aboard.
+    private void ResetMovementForTeleport(Player player, bool staysAboard)
     {
         MovementInfo movement = player.Movement;
-        movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.TurnLeft | MovementFlags.TurnRight | MovementFlags.OnTransport);
-        movement.TransportGuid = 0;
-        movement.TransportX = 0;
-        movement.TransportY = 0;
-        movement.TransportZ = 0;
-        movement.TransportOrientation = 0;
+        movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.TurnLeft | MovementFlags.TurnRight);
+        if (!staysAboard)
+        {
+            movement.Flags &= ~MovementFlags.OnTransport;
+            movement.TransportGuid = 0;
+            movement.TransportX = 0;
+            movement.TransportY = 0;
+            movement.TransportZ = 0;
+            movement.TransportOrientation = 0;
+        }
+
         player.ApplyMovement(movement, _world.NowMs);
     }
 

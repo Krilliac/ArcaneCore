@@ -161,9 +161,21 @@ public static class UpdateBlockWriter
         }
         else if ((flags & ObjectUpdateFlags.HasPosition) != 0)
         {
-            writer.WriteSingle(obj.X);
-            writer.WriteSingle(obj.Y);
-            writer.WriteSingle(obj.Z);
+            if (obj is Transports.ShipTransport)
+            {
+                // vmangos GameObject::GetStationaryX/Y/Z/O (GameObject.h:234-237): an MO transport sends 0, 0, 0 and its
+                // facing; the client places it from the path progress below.
+                writer.WriteSingle(0f);
+                writer.WriteSingle(0f);
+                writer.WriteSingle(0f);
+            }
+            else
+            {
+                writer.WriteSingle(obj.X);
+                writer.WriteSingle(obj.Y);
+                writer.WriteSingle(obj.Z);
+            }
+
             writer.WriteSingle(obj.Orientation);
         }
 
@@ -184,7 +196,8 @@ public static class UpdateBlockWriter
 
         if ((flags & ObjectUpdateFlags.Transport) != 0)
         {
-            writer.WriteUInt32(serverTimeMs);
+            // vmangos Object::BuildMovementUpdate (Object.cpp:590-598): a transport's path progress, else the server time.
+            writer.WriteUInt32(obj is Transports.ShipTransport ship ? ship.PathProgress : serverTimeMs);
         }
     }
 }

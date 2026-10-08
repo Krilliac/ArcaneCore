@@ -277,6 +277,12 @@ public sealed class Map
         player.ClearChangedFields();
         player.IsQueuedForUpdate = false;
 
+        // vmangos Map::Add: SendInitTransports goes out before SendInitSelf (IMapUpdater.OnPlayerAdding).
+        foreach (IMapUpdater updater in _updaters)
+        {
+            updater.OnPlayerAdding(this, player);
+        }
+
         // vmangos Player::BuildCreateUpdateBlockForPlayer: the player's own items precede it.
         player.Inventory.WriteCreateBlocks(player.PendingUpdates, _world.NowMs);
 

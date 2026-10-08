@@ -44,8 +44,11 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
             return false;
         }
 
-        if (!player.IsAlive && (player.Movement.Flags & MovementFlags.OnTransport) != 0)
+        // vmangos Player.cpp:5010-5016 tests GetTransport(); the movement flag is kept as well, which is how this base
+        // recognised a spirit on a transport before ships existed.
+        if (!player.IsAlive && (player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0))
         {
+            player.Transport?.RemovePassenger(player);
             map.Combat.ResurrectFromTransport(player);
         }
 

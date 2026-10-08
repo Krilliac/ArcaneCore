@@ -21,8 +21,7 @@ public enum DuelCompleteType : byte
 /// <summary>
 /// One player's half of a duel (vmangos Player.h:235-244 <c>DuelInfo</c>). vmangos creates two instances per
 /// challenge (SpellEffects.cpp:4739-4757): the challenger's has <c>opponent = target</c>, the target's has
-/// <c>opponent = challenger</c>; both name the challenger as <see cref="Initiator"/>. The transport guid vmangos
-/// keeps is not modelled (no transport system on this base; see docs/areas/duels.md). All times are whole Unix
+/// <c>opponent = challenger</c>; both name the challenger as <see cref="Initiator"/>. All times are whole Unix
 /// seconds (vmangos <c>time_t</c>); 0 means "unset". World thread only.
 /// </summary>
 public sealed class DuelInfo(Player initiator, Player opponent)
@@ -30,6 +29,13 @@ public sealed class DuelInfo(Player initiator, Player opponent)
     public Player Initiator { get; } = initiator ?? throw new ArgumentNullException(nameof(initiator));
 
     public Player Opponent { get; } = opponent ?? throw new ArgumentNullException(nameof(opponent));
+
+    /// <summary>
+    /// vmangos <c>DuelInfo::transportGuid</c> (SpellEffects.cpp:4750-4755): the low GUID of the ship the challenger stood on
+    /// when the duel was requested, 0 on land. A ship duel's area is the ship: leaving it is leaving the area
+    /// (Player::CheckDuelDistance, Player.cpp:6685-6689).
+    /// </summary>
+    public uint TransportGuid { get; internal set; }
 
     /// <summary>vmangos <c>startTimer</c>: when the opponent accepted; 0 until then and again once the duel started.</summary>
     public long StartTimerSeconds { get; internal set; }

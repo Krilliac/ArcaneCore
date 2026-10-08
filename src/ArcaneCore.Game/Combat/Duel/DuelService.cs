@@ -282,8 +282,8 @@ public sealed partial class DuelService
     /// fled (an unaccepted request too, unless <see cref="DuelOptions.ExpiredRequestIsSilent"/>). Distance is the 3D distance with both bounding
     /// radii (WorldObject::IsWithinDist, Object.cpp:1738-1752) against <see cref="DuelOptions.OutOfBoundsYards"/>, or the smaller
     /// <see cref="DuelOptions.ReturnInBoundsYards"/> once out. First leaving sends SMSG_DUEL_OUTOFBOUNDS, coming back SMSG_DUEL_INBOUNDS, and
-    /// <see cref="DuelOptions.OutOfBoundsGraceSeconds"/> out ends it as fled. Limit: vmangos also ends a transport duel when the player leaves the
-    /// transport (DuelInfo.transportGuid); there are no transports on this base.
+    /// <see cref="DuelOptions.OutOfBoundsGraceSeconds"/> out ends it as fled. A duel requested aboard a ship (<see cref="DuelInfo.TransportGuid"/>)
+    /// has no distance: the player is inside while it rides that ship and outside as soon as it is off it (Player.cpp:6685-6689).
     /// </summary>
     internal void CheckDistance(Player player, long now)
     {
@@ -300,12 +300,21 @@ public sealed partial class DuelService
             return;
         }
 
-        float limit = duel.OutOfBoundSeconds != 0 ? Options.ReturnInBoundsYards : Options.OutOfBoundsYards;
-        float dx = player.X - flag.X;
-        float dy = player.Y - flag.Y;
-        float dz = player.Z - flag.Z;
-        float max = limit + player.BoundingRadius + flag.BoundingRadius;
-        bool inRange = (dx * dx) + (dy * dy) + (dz * dz) < max * max;
+        bool inRange;
+        if (duel.TransportGuid != 0)
+        {
+            inRange = player.Transport is { } ship && ship.Guid.Low == duel.TransportGuid;
+        }
+        else
+        {
+            float limit = duel.OutOfBoundSeconds != 0 ? Options.ReturnInBoundsYards : Options.OutOfBoundsYards;
+            float dx = player.X - flag.X;
+            float dy = player.Y - flag.Y;
+            float dz = player.Z - flag.Z;
+            float max = limit + player.BoundingRadius + flag.BoundingRadius;
+            inRange = (dx * dx) + (dy * dy) + (dz * dz) < max * max;
+        }
+
         if (duel.OutOfBoundSeconds == 0)
         {
             if (!inRange)
