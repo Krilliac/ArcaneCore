@@ -151,6 +151,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private long _progressMs = -1;
     private long _closingMs = -1;
     private float _bestDistance = float.PositiveInfinity;
+    private float _bestRouteLeft = float.PositiveInfinity;
     private bool _spiritHealer;
     private Vector3? _spot;
     private object? _spotKey;
@@ -321,7 +322,15 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
     }
 
-    /// <summary>Walk towards <paramref name="goal"/> (identified by <paramref name="key"/>) in bounded chunks; closing on it is progress.</summary>
+    /// <summary>
+    /// Walk towards <paramref name="goal"/> (identified by <paramref name="key"/>) in bounded chunks. Two things count as closing for
+    /// the stuck bound (<see cref="StuckMs"/>): a straight-line distance to the goal shorter than any before, and, on the route being
+    /// followed, less way left along it (its remaining legs, then straight on to the goal). A route down a switchback leads away from
+    /// the goal for a while: on the ridge above Kharanos the first leg from the graveyard runs north-east for 16 yards of distance
+    /// and more than 10 seconds before it turns west to Ironwander's body, and the straight-line measure alone judged every such
+    /// corpse run stuck and took the spirit healer. Only the straight-line measure is progress for <see cref="NoProgressMs"/>, so
+    /// routes that keep leading nowhere still end in the spirit healer.
+    /// </summary>
     private bool Walk(Player player, Vector3 goal, object key, uint elapsedMs, long now, bool countsAsProgress = true)
     {
         if (!Equals(_goal, key))
@@ -338,9 +347,20 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 _route = null;
                 return false;
             }
+
+            // A fresh route sets its own yardstick; only walking it down counts, so replanning on the spot is not closing.
+            _bestRouteLeft = float.PositiveInfinity;
         }
 
-        bool advanced = PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
+        PlayerbotRoute route = _route!;
+        bool advanced = PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, session.World.NowMs);
+        float left = RouteLeft(player, route, goal);
+        if (float.IsFinite(left))
+        {
+            if (float.IsFinite(_bestRouteLeft) && left < _bestRouteLeft - RouteClosingYards) _closingMs = now;
+            if (left < _bestRouteLeft - RouteClosingYards || !float.IsFinite(_bestRouteLeft)) _bestRouteLeft = left;
+        }
+
         if (!advanced) _route = null;
         float after = Distance(player, goal.X, goal.Y, goal.Z);
         if (float.IsFinite(after) && after < _bestDistance - 0.01f)
@@ -366,6 +386,31 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _goal = null;
         _closingMs = -1;
         _bestDistance = float.PositiveInfinity;
+        _bestRouteLeft = float.PositiveInfinity;
+    }
+
+    /// <summary>Way left along a route that counts as closing: more than a heartbeat's jitter.</summary>
+    internal const float RouteClosingYards = 0.5f;
+
+    /// <summary>
+    /// The way left along <paramref name="route"/> from where the bot is now (its motion's current position): to the next corner,
+    /// along the remaining legs, then straight on to <paramref name="goal"/> (a partial route ends short of it).
+    /// </summary>
+    internal static float RouteLeft(Player player, PlayerbotRoute route, Vector3 goal)
+        => RouteLeft(PlayerbotMotion.CurrentPosition(player), route, goal);
+
+    /// <summary>The way left along <paramref name="route"/> from <paramref name="from"/>, free of world state.</summary>
+    internal static float RouteLeft(Vector3 from, PlayerbotRoute route, Vector3 goal)
+    {
+        float left = 0;
+        Vector3 at = from;
+        for (int index = Math.Max(1, route.NextPoint); index < route.Points.Count; index++)
+        {
+            left += Vector3.Distance(at, route.Points[index]);
+            at = route.Points[index];
+        }
+
+        return left + Vector3.Distance(at, goal);
     }
 
     /// <summary>

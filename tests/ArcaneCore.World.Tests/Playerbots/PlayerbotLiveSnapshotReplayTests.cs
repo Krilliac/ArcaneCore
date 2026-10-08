@@ -136,6 +136,11 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             }
         }
 
+        // Death rules (the reclaim delay, a ghost's time) read the death clock, which is the wall clock: the replay runs game time
+        // about 30 times faster, so a ghost waited out a 30-second reclaim delay for 15 minutes of game time. Tie it to game time.
+        await host.OnWorldAsync(() => ArcaneCore.Game.Death.DeathHooks.Register(host.World,
+            new ArcaneCore.Game.Death.DeathHooks(ArcaneCore.Game.Death.DeathHooks.For(host.World).Options, new GameTimeDeathClock(host.World))));
+
         ManagedPlayerbotFeature bots = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await bots.StartupAsync(default);
         try
@@ -191,6 +196,14 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
         finally { await bots.ShutdownBeforeWorldStopAsync(); }
+    }
+
+    /// <summary>Unix seconds that advance with the world's game time from the moment the replay starts.</summary>
+    private sealed class GameTimeDeathClock(ArcaneCore.Game.Maps.WorldRuntime world) : ArcaneCore.Game.Death.DeathClock
+    {
+        private readonly long _startSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)world.Uptime.TotalSeconds;
+
+        public override long UnixSeconds => _startSeconds + (long)world.Uptime.TotalSeconds;
     }
 
     private sealed class Watch(Guid botId)
