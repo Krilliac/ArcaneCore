@@ -53,11 +53,10 @@ Shared files edited (small, each a seam):
 - `Data/Content/Import/Cli/ContentImporterCli.cs`: reads, writes and counts the four battleground tables.
 - `tests/.../ScenarioTestWorld.cs`: the `StartAsync(Action<IServiceCollection>? configure)` hook, byte-identical to the gameobjects lane's.
 
-Schema: world 44 (`BattlegroundWorldDataModule`). World 38-43 are held open by `BattlegroundLaneSchemaGap38`-`43` (empty steps) because
-`Compose` needs contiguous versions. INTEGRATOR: delete each placeholder another lane really claims (Compose reports "claimed twice" until you do);
-the `IntegratedSchemaTests` entries are marked. Characters 40 (`CharacterBattlegroundDataModule`, `character_battleground_data`); characters
-35-39 are held open the same way (`BattlegroundLaneCharactersGap35`-`39`, which own no rows).
-`SchemaStartupResilienceTests` accepts empty steps with the same lines the other lanes use.
+Schema (as integrated, docs/integration/wave2-20261007.md "Schema map"): world 40 (`BattlegroundWorldDataModule`) and characters 39
+(`CharacterBattlegroundDataModule`, `character_battleground_data`). The lane branch carried the plan's numbers, world 44 and characters 40, with
+empty placeholder steps (`BattlegroundLaneSchemaGap38`-`43`, `BattlegroundLaneCharactersGap35`-`39`) holding the gaps open; the 2026-10-07
+integration deleted every placeholder and renumbered the real modules down, so no database ever held the plan numbers.
 
 Overlaps to resolve at integration:
 

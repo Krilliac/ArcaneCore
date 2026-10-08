@@ -7,6 +7,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
@@ -544,21 +545,28 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     /// <summary>
     /// vmangos Aura::HandleAuraModEffectImmunity (SpellAuras.cpp:4066-4083): removing an aura that carries
-    /// <see cref="InvulnerabilityBuffCancels"/> from a player who is not possessed drops what the player carries in its battleground.
+    /// <see cref="InvulnerabilityBuffCancels"/> from a player who is not possessed (<c>!target-&gt;HasAuraType(SPELL_AURA_MOD_POSSESS)</c>, :4069)
+    /// drops what the player carries in its battleground.
     /// </summary>
     private void OnAuraHolderRemoved(SpellAuraHolder holder)
     {
         if (holder.Target is Player player && ((uint)holder.Spell.AuraInterruptFlags & InvulnerabilityBuffCancels) != 0
-            && BattlegroundOf(player.Guid) is { } bg)
+            && BattlegroundOf(player.Guid) is { } bg && !IsPossessed(player))
         {
             bg.EventPlayerDroppedFlag(player.Guid);
         }
     }
 
+    /// <summary>vmangos <c>HasAuraType(SPELL_AURA_MOD_POSSESS)</c> on the player: a live possess aura holds it.</summary>
+    private bool IsPossessed(Player player)
+        => services.GetService<SpellFeature>()?.System is { } spells
+            && spells.GetAuras(player).Any(h => !h.IsRemoved && h.HasAura(AuraType.ModPossess));
+
     /// <summary>
     /// vmangos Aura::HandleAuraModSchoolImmunity (SpellAuras.cpp:4112-4121) and HandleModUnattackable (SpellAuras.cpp:5689-5695): a positive
-    /// school immunity (client patch 1.7.0: offensive immunities no longer drop the flag) or an unattackable aura on a player who is not charmed
-    /// removes the auras that carry <see cref="InvulnerabilityBuffCancels"/> — the flag, which then drops.
+    /// school immunity (client patch 1.7.0: offensive immunities no longer drop the flag) on a player who is not charmed
+    /// (<c>!target-&gt;IsCharmed()</c>), or an unattackable aura on any player, removes the auras that carry
+    /// <see cref="InvulnerabilityBuffCancels"/> — the flag, which then drops.
     /// </summary>
     private void OnAuraHolderAdded(SpellAuraHolder holder)
     {
@@ -567,7 +575,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return;
         }
 
-        bool schoolImmunity = holder.Spell.HasAura(AuraType.SchoolImmunity) && holder.Spell.IsPositive;
+        bool schoolImmunity = holder.Spell.HasAura(AuraType.SchoolImmunity) && holder.Spell.IsPositive && !player.IsCharmed;
         if (!schoolImmunity && !holder.Spell.HasAura(AuraType.ModUnattackable))
         {
             return;
