@@ -25,7 +25,7 @@ public sealed class ScriptedAiSupportTests
     {
         var ai = new CreatureAiContent(
             [],
-            [new CreatureAiText(-47101, "Charge!", 0, 0, 0)],
+            [new CreatureAiText(-47101, "Charge!", 0, 0, 0) { Sound = 5804 }],
             broadcastTexts: new BroadcastTextCatalog([new BroadcastText(8906, "For the Stormpike!", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0])]));
         CreatureContent content = new(
             [Template(SummonerEntry, b => b.Name = "Summoner"), Template(SummonEntry, b => b.Name = "Trooper")],
@@ -126,6 +126,20 @@ public sealed class ScriptedAiSupportTests
             MonsterChat chat = ParseMonsterChat(Assert.Single(Packets(session, WorldOpcode.SmsgMessagechat)));
             Assert.Equal(ChatType.MonsterYell, chat.Type);
             Assert.Equal("For the Stormpike!", chat.Message);
+        }
+    }
+
+    [Fact]
+    public void SayText_PlaysTheScriptDevLineSound()
+    {
+        (WorldRuntime world, _, CreatureMapSystem system, Creature summoner, FakeSession session) = Setup();
+        using (world)
+        {
+            Run(world, 100);
+            session.Clear();
+            system.SayText(summoner, -47101);
+            byte[] sound = Assert.Single(Packets(session, WorldOpcode.SmsgPlaySound));
+            Assert.Equal(5804u, BitConverter.ToUInt32(sound, 0));
         }
     }
 }

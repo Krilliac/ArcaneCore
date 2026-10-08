@@ -454,6 +454,8 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal((1u, 79u), (naralex[0].Point, naralex[^1].Point));
         Assert.Equal((13_000u, 1_000u, 1_000u, 1_000u), (naralex[0].WaitTimeMs, naralex[11].WaitTimeMs, naralex[29].WaitTimeMs, naralex[69].WaitTimeMs));
         Assert.Equal((12u, 30u, 70u), (naralex[11].Point, naralex[29].Point, naralex[69].Point));
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1109006); // Avatar brazier (sd2-high)
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1230048); // bar patrol (sd2-high)
 
         // Almost every row carries 1024/1025 and 39 rows are keyed by spawn guid.
         IReadOnlyCollection<CreatureAiScriptRow> scripts = importer.AiSnapshot().Scripts;

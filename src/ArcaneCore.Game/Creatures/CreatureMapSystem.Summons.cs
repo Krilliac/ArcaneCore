@@ -18,6 +18,8 @@ public sealed partial class CreatureMapSystem
     /// <summary>When a timed temporary creature goes away.</summary>
     private enum SummonTimer
     {
+        /// <summary>ScriptDev2 TEMPSPAWN_TIMED_DESPAWN: lifetime runs even in combat.</summary>
+        Absolute,
         /// <summary>
         /// vmangos TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (Objects/TemporarySummon.cpp:127-148): the lifetime counts down only while the creature
         /// is alive and out of combat, and starts again from the whole lifetime while it fights (or lies dead: its corpse then goes with
@@ -154,5 +156,41 @@ public sealed partial class CreatureMapSystem
         }
 
         return summoned;
+    }
+
+    /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer.</summary>
+    public Creature? SummonFromGameObject(uint entry, float x, float y, float z, float orientation, uint lifetimeMs)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            if (_reportedAi.Add($"summon:{entry}"))
+            {
+                _logger.LogWarning("instance game object summons missing creature_template {Entry}; skipped", entry);
+            }
+
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        AddTimedSummon(creature, lifetimeMs, SummonTimer.Absolute);
+        return creature;
+    }
+
+    /// <summary>ScriptDev2 instance summon with TEMPSPAWN_DEAD_DESPAWN; the temporary creature goes with its corpse.</summary>
+    public Creature? SummonForInstance(uint entry, float x, float y, float z, float orientation)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            if (_reportedAi.Add($"summon:{entry}"))
+            {
+                _logger.LogWarning("instance script summons missing creature_template {Entry}; skipped", entry);
+            }
+
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        MarkCorpseDespawn(creature);
+        return creature;
     }
 }

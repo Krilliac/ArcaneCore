@@ -51,7 +51,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             creature.PacifiedMs = 0; // vmangos Creature::SetInCombatWith... enter combat clears the temporary pacify (Creature.cpp:3665)
             creature.CombatStart = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
             Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEnterCombat(creature);
-            creature.AI?.OnAggro(target);
+            creature.AI?.OnAggro(target); // the instance heard OnCreatureEnterCombat first (cmangos Unit::SetInCombatState; one call, sd2-mid and sd2-high both added it)
             if (!creature.IsAlive || creature.IsEvading)
             {
                 return true; // the aggro script killed or reset it

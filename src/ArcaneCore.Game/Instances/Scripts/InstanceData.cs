@@ -117,6 +117,11 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>A creature finished its evade and is back home (cmangos CreatureAI::JustReachedHome; TEMPFACTION_RESTORE_REACH_HOME).</summary>
+    public virtual void OnCreatureReachedHome(Creature creature)
+    {
+    }
+
     /// <summary>ScriptDev2 InstanceData::OnPlayerEnter, after the player joins this map.</summary>
     public virtual void OnPlayerEnter(Player player)
     {
@@ -134,6 +139,11 @@ public abstract class InstanceData : IMapUpdater
 
     /// <summary>ScriptDev2 instance hook when a tracked game object respawns.</summary>
     public virtual void OnObjectSpawn(GameObject go)
+    {
+    }
+
+    /// <summary>ScriptDev2 game object and event-id scripts after a successful player use.</summary>
+    public virtual void OnObjectUsed(Player player, GameObject go)
     {
     }
 

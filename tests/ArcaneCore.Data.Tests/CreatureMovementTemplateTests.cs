@@ -110,6 +110,9 @@ public sealed class CreatureMovementTemplateTests : IAsyncLifetime
         Assert.Equal(544, rows.Select(r => (r.Entry, r.PathId)).Distinct().Count());
         Assert.Equal(479, rows.Select(r => r.Entry).Distinct().Count());
         Assert.Equal(51, rows.Where(r => r.PathId > 0).Select(r => r.Entry).Distinct().Count());
+        // sd2-high's escorts read their ScriptDev2 path (the script_waypoint namespace, CreatureContent.GetScriptWaypoints).
+        Assert.Equal(6, importer.PathSnapshot().Count(r => r.Entry == 10096 && r.PathId == CreatureContent.ScriptWaypointPathBit)); // Ring of Law Grimstone
+        Assert.Equal(2, importer.PathSnapshot().Count(r => r.Entry == 9502 && r.PathId == CreatureContent.ScriptWaypointPathBit)); // Grim Guzzler Phalanx
         Assert.Contains(report.Warnings, w => w.Contains("ScriptId", StringComparison.Ordinal));
 
         // 319 of the 2,898 waypoint spawns have no creature_movement rows but do have an entry path.

@@ -301,6 +301,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         if (result == GameObjectUseResult.Ok)
         {
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectUsed(player, go);
             Used?.Invoke(player, go);
         }
 
@@ -351,6 +352,27 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return result;
         }
 
+        // mangos-classic Spell::SendLoot (SpellEffects.cpp:2147-2158): a trap opened by an "Attacking" lock (the Maraudon larva spewer, lock
+        // 99) is only activated - no GameObject::Use, no use event. Its activation is what the object's script watches. A disarm or a
+        // lockless trap stays refused here as before.
+        if (go.Type == GameObjectType.Trap)
+        {
+            if (lockType != LockType.OpenAttacking)
+            {
+                return GameObjectUseResult.NotUsable;
+            }
+
+            go.LootState = GameObjectLootState.Activated;
+            return GameObjectUseResult.Ok;
+        }
+
+        // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
+        // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
+        if (AiOf(go)?.OnUse(this, go, player) == true)
+        {
+            return GameObjectUseResult.Ok;
+        }
+
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
         // chest branches spring the linked trap (GameObject.cpp:1441-1455, 1472-1479) - before the chest loot, whatever the quest gate says.
         if (go.Type is GameObjectType.Chest or GameObjectType.Button)
@@ -369,6 +391,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         };
         if (result == GameObjectUseResult.Ok)
         {
+            // The instance's object scripts (ScriptDev2 GOUse_* and goober event ids) hear a lock opened by a spell as they hear a use.
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectUsed(player, go);
             Used?.Invoke(player, go);
         }
 
