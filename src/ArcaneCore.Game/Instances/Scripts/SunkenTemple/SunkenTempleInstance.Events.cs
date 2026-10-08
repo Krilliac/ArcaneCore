@@ -257,6 +257,17 @@ public sealed partial class SunkenTempleInstance
             creatures?.UpdateEntry(shade, NpcAvatarOfHakkar); // sunken_templeScripts.cpp SummonHakkar::OnEffectExecute
             creatures?.SayText(shade, -1109010);
             _avatarWaveMs = _suppressorMs = 0;
+            // HakkarSummoned (spell 12948, sunken_templeScripts.cpp:251-268): the evil circles (148998) go when the Avatar arrives.
+            if (Instance.FindUpdater<GameObjectMapSystem>() is { } objects)
+            {
+                foreach (ObjectGuid guid in _evilCircles)
+                {
+                    if (objects.Find(guid) is { } circle)
+                    {
+                        objects.DespawnForRespawn(circle);
+                    }
+                }
+            }
         }
         else if (_flamesDoused < 4) _suppressorMs = (uint)(creatures?.RandomInt(15_000, 45_000) ?? 15_000);
     }
@@ -301,7 +312,7 @@ public sealed partial class SunkenTempleInstance
                 {
                     foreach (ObjectGuid guid in _evilCircles)
                         if (Instance.FindUpdater<GameObjectMapSystem>()?.Find(guid) is { } circle)
-                            creatures?.SummonCorpseDespawn(shade, NpcHakkariMinion, circle.X, circle.Y, circle.Z, 0);
+                            creatures?.SummonDeadDespawn(shade, NpcHakkariMinion, circle.X, circle.Y, circle.Z, 0);
                     SummonAtRandomCircle(shade, NpcBloodkeeper);
                     _canSummonBloodkeeper = _firstWave = false;
                     _avatarWaveMs = 50_000;
@@ -329,7 +340,7 @@ public sealed partial class SunkenTempleInstance
                 if (shade is null) return;
                 int door = creatures?.RandomInt(0, 1) ?? 0;
                 var at = SuppressorDoors[door];
-                if (creatures?.SummonCorpseDespawn(shade, NpcSuppressor, at.X, at.Y, at.Z, 0) is { } suppressor)
+                if (creatures?.SummonDeadDespawn(shade, NpcSuppressor, at.X, at.Y, at.Z, 0) is { } suppressor)
                 {
                     creatures.ChangeMovement(suppressor, 2, (uint)door, 0);
                     creatures.SayText(suppressor, -1109011 - creatures.RandomInt(0, 3));
@@ -345,7 +356,7 @@ public sealed partial class SunkenTempleInstance
         CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
         int index = creatures?.RandomInt(0, _evilCircles.Count - 1) ?? 0;
         if (Instance.FindUpdater<GameObjectMapSystem>()?.Find(_evilCircles[index]) is { } circle)
-            creatures?.SummonCorpseDespawn(shade, entry, circle.X, circle.Y, circle.Z, 0);
+            creatures?.SummonDeadDespawn(shade, entry, circle.X, circle.Y, circle.Z, 0);
     }
 
     private sealed class EternalFlameAI(SunkenTempleInstance instance) : IGameObjectAi

@@ -24,6 +24,7 @@ public sealed class WillixAi(Creature creature) : EscortAI(creature)
     public bool AcceptQuest(Player player)
     {
         if (!Start()) return false;
+        Me.FactionTemplate = 113; // SetFactionTemporary(FACTION_ESCORT_N_NEUTRAL_PASSIVE, RESTORE_RESPAWN), razorfen_kraul.cpp:148
         _escortPlayer = player;
         System?.SayText(Me, -1047000, player);
         return true;

@@ -179,6 +179,23 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     public Creature? SummonCorpseDespawn(Creature summoner, uint entry, float x, float y, float z, float orientation)
     {
+        Creature? summoned = SummonDeadDespawn(summoner, entry, x, y, z, orientation);
+        if (summoned is not null)
+        {
+            _corpseDespawns.Add(summoned);
+        }
+
+        return summoned;
+    }
+
+    /// <summary>
+    /// ScriptDev SummonCreature(entry, x, y, z, o, TEMPSPAWN_DEAD_DESPAWN, 0) (cmangos Entities/Object.h: "despawns when the creature
+    /// disappears"), the type nearly every ScriptDev2 instance summon uses: a temporary creature at the place, summoned by
+    /// <paramref name="summoner"/> (its AI hears of it), that stays until it dies and then lies as an ordinary corpse - lootable - until the
+    /// corpse decays, when it is gone for good (a temporary creature never respawns). Null for a missing template (reported once).
+    /// </summary>
+    public Creature? SummonDeadDespawn(Creature summoner, uint entry, float x, float y, float z, float orientation)
+    {
         ArgumentNullException.ThrowIfNull(summoner);
         if (_content.FindTemplate(entry) is not { } template)
         {
@@ -190,9 +207,7 @@ public sealed partial class CreatureMapSystem
             return null;
         }
 
-        Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner);
-        _corpseDespawns.Add(summoned);
-        return summoned;
+        return SpawnTemporary(template, x, y, z, orientation, summoner);
     }
 
     /// <summary>Instance script summon when the event has no creature summoner (SD2 player or game-object summon).</summary>

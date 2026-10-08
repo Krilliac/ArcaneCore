@@ -61,7 +61,7 @@ public sealed class GythAI(Creature creature) : ScriptDevBossAI(creature)
             CreatureCastResult cast = DoCast(Me, SpellSummonRend);
             bool summoned = cast == CreatureCastResult.Ok;
             if (cast is CreatureCastResult.UnknownSpell or CreatureCastResult.NoSpellSystem
-                && System?.SummonCorpseDespawn(Me, BlackrockSpireInstance.NpcRend, Me.X, Me.Y, Me.Z, Me.Orientation) is { } rend)
+                && System?.SummonDeadDespawn(Me, BlackrockSpireInstance.NpcRend, Me.X, Me.Y, Me.Z, Me.Orientation) is { } rend)
             {
                 Me.Map?.FindUpdater<BlackrockSpireInstance>()?.TrackRend(rend);
                 summoned = true;
@@ -180,7 +180,8 @@ public sealed class OverlordWyrmthalakAI(Creature creature) : ScriptDevBossAI(cr
 
     public override void OnJustSummoned(Creature summoned)
     {
-        if (Victim is { } target)
+        // JustSummoned: SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0), else the victim (boss_overlord_wyrmthalak.cpp:69-79).
+        if ((RandomThreatTarget() ?? Victim) is { } target)
         {
             summoned.AI?.AttackStart(target);
         }
@@ -205,8 +206,9 @@ public sealed class OverlordWyrmthalakAI(Creature creature) : ScriptDevBossAI(cr
             {
                 uint entry = Adds[System?.RandomInt(0, 2) ?? 0];
                 float x = i == 0 ? -51.6805f : -54.4554f;
-                if (System?.SummonCorpseDespawn(Me, entry, x, -439.8f, 78.288f, 4.657f) is { } add)
+                if (System?.SummonDeadDespawn(Me, entry, x, -439.8f, 78.288f, 4.657f) is { } add)
                 {
+                    System.MarkTimedDespawn(add, 300_000); // boss_overlord_wyrmthalak.cpp:126-127, TEMPSPAWN_TIMED_DESPAWN 300000
                     add.Motion.MovePoint(0, i == 0 ? -39.355381f : -49.875881f,
                         i == 0 ? -513.456482f : -511.896942f, i == 0 ? 88.472046f : 88.195160f, run: true);
                 }

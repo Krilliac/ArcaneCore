@@ -11,7 +11,7 @@ namespace ArcaneCore.Game.Instances.Scripts.ScarletMonastery;
 /// SpellHit, HandleLayOnHandsTimer, HandleRevivedTimer, ExecuteAction).</summary>
 public sealed class MograineAi(Creature creature, ScarletMonasteryInstance instance) : ScriptedAI(creature)
 {
-    private uint _strikeMs = 8400, _hammerMs = 9600, _reviveMs, _resumeMs;
+    private uint _strikeMs = 8400, _hammerMs = 9600, _shieldMs = 40_000, _reviveMs, _resumeMs;
     private bool _fakeDeath, _healed, _shielded;
 
     public bool IsFeigningDeath => _fakeDeath;
@@ -25,6 +25,7 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
         _fakeDeath = _healed = _shielded = false;
         _strikeMs = 8400;
         _hammerMs = 9600;
+        _shieldMs = 40_000; // AddCombatAction(MOGRAINE_ACTION_DIVINE_SHIELD, 40000u)
         _reviveMs = _resumeMs = 0;
         Me.UnitFlags &= ~(UnitFlags.ImmuneToNpc | UnitFlags.NotSelectable);
         Me.StandState = StandState.Stand;
@@ -125,6 +126,11 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
                     _resumeMs = 0;
                     _fakeDeath = false;
                     Me.UnitFlags &= ~(UnitFlags.ImmuneToNpc | UnitFlags.NotSelectable);
+                    // HandleRevivedTimer: Divine Shield is ready again, Crusader Strike and Hammer restart with their subsequent timers.
+                    _shielded = false;
+                    _shieldMs = 0;
+                    _strikeMs = (uint)Random.Shared.Next(6000, 15001);
+                    _hammerMs = (uint)Random.Shared.Next(7000, 18501);
                     DoCast(Me, 8990);
                     if (System?.SelectNearestTarget(Me, 80) is { } enemy) AttackStart(enemy);
                 }
@@ -133,7 +139,8 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
         }
 
         if (!UpdateVictim()) return;
-        if (!_shielded && Me.MaxHealth > 0 && Me.Health * 2 <= Me.MaxHealth && DoCast(Me, 642) == CreatureCastResult.Ok)
+        if (_shieldMs >= diffMs) _shieldMs -= diffMs;
+        else if (!_shielded && Me.MaxHealth > 0 && Me.Health * 2 <= Me.MaxHealth && DoCast(Me, 642) == CreatureCastResult.Ok)
             _shielded = true;
         if (_strikeMs >= diffMs) _strikeMs -= diffMs;
         else if (DoCast(Victim, 14518) == CreatureCastResult.Ok) _strikeMs = (uint)Random.Shared.Next(6000, 15001);
@@ -148,7 +155,7 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
 public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance instance) : ScriptedAI(creature)
 {
     private uint _healMs, _shieldMs, _smiteMs, _mindMs, _resurrectMs, _resumeMs;
-    private bool _deepSleep, _intro;
+    private bool _deepSleep, _intro, _mindArmed;
 
     public bool DeepSleepTriggered => _deepSleep;
     public bool IsInIntro => _intro;
@@ -160,7 +167,8 @@ public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance inst
         _healMs = 10_000;
         _shieldMs = 15_000;
         _smiteMs = 100;
-        _mindMs = 5000;
+        _mindMs = 0;
+        _mindArmed = false; // AddCombatAction(WHITEMANE_ACTION_DOMINATE_MIND, true): disabled until HandleResurrectionCombat
         _resurrectMs = _resumeMs = 0;
         Me.InvincibilityHpThreshold = 1;
         MeleeEnabled = false;
@@ -224,6 +232,12 @@ public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance inst
             else
             {
                 _resumeMs = 0;
+                // HandleResurrectionCombat: every combat action restarts with its subsequent timer, and Dominate Mind is armed only now.
+                _healMs = 13_000;
+                _shieldMs = (uint)Random.Shared.Next(22000, 45001);
+                _smiteMs = (uint)Random.Shared.Next(2000, 3001);
+                _mindMs = (uint)(System?.RandomInt(5000, 10000) ?? 5000);
+                _mindArmed = true;
                 CombatMovement = true;
                 MeleeEnabled = true;
                 Me.InvincibilityHpThreshold = 0;
@@ -250,16 +264,23 @@ public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance inst
         if (_healMs >= diffMs) _healMs -= diffMs;
         else
         {
-            Creature? friend = instance.FindMograine();
-            if (friend is { IsAlive: true } && friend.Health < friend.MaxHealth && DoCast(friend, 12039) == CreatureCastResult.Ok)
+            // DoSelectLowestHpFriendly(50.0f): any friendly in combat within 50 yd (herself and the Scarlet adds too) missing the most health.
+            if (SelectLowestHpFriendly(50f) is { } friend && DoCast(friend, 12039) == CreatureCastResult.Ok)
                 _healMs = 13_000;
         }
         if (_shieldMs >= diffMs) _shieldMs -= diffMs;
         else if (DoCast(Me, 22187) == CreatureCastResult.Ok) _shieldMs = (uint)Random.Shared.Next(22000, 45001);
         if (_smiteMs >= diffMs) _smiteMs -= diffMs;
         else if (DoCast(Victim, 9481) == CreatureCastResult.Ok) _smiteMs = (uint)Random.Shared.Next(2000, 3001);
+        if (!_mindArmed) return;
         if (_mindMs >= diffMs) _mindMs -= diffMs;
-        else if (Random.Shared.Next(51) == 0 && DoCast(Victim, 14515) == CreatureCastResult.Ok)
+        else if ((System?.RandomInt(0, 50) ?? 1) == 0
+            && SelectRandomAttackingTarget(0, playerOnly: true) is { } dominated && DoCast(dominated, 14515) == CreatureCastResult.Ok)
+        {
+            // SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0, SPELL_DOMINATEMIND, SELECT_FLAG_PLAYER): a random player of the threat list.
+            // The source tests DoCastSpellIfCan's result as a bool (CAST_OK is 0), so it re-arms on a failed cast; the intent, re-arming
+            // 20-30 s after a cast that went off, is kept here.
             _mindMs = (uint)Random.Shared.Next(20000, 30001);
+        }
     }
 }

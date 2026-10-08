@@ -123,7 +123,7 @@ public sealed partial class BlackfathomDeepsInstance
             {
                 float adjustedY = count > 1 ? y - GameObjectMapSystem.InteractionDistance / 2
                     + k * GameObjectMapSystem.InteractionDistance / count : y;
-                Creature? summon = creatures.SummonCorpseDespawn(kelris, entry, x, adjustedY, z, o);
+                Creature? summon = creatures.SummonDeadDespawn(kelris, entry, x, adjustedY, z, o);
                 if (summon is not null)
                 {
                     _waveMobs.Add(summon.Guid);
@@ -146,8 +146,8 @@ public sealed partial class BlackfathomDeepsInstance
                     && objects.Map.FindUpdater<CreatureMapSystem>() is { } creatures
                     && creatures.Content.FindTemplate(NpcBaronAquanis) is { } template)
                 {
-                    Creature baron = creatures.SpawnTemporary(template, -782.21f, -63.26f, -42.43f, 2.36f);
-                    creatures.MarkCorpseDespawn(baron);
+                    // TEMPSPAWN_DEAD_DESPAWN (instance_blackfathom_deeps.cpp:283): Aquanis' corpse stays to be looted.
+                    creatures.SpawnTemporary(template, -782.21f, -63.26f, -42.43f, 2.36f);
                 }
 
                 if (instance.GetData(TypeAquanis) == EncounterState.NotStarted)

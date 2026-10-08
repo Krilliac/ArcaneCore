@@ -73,7 +73,9 @@ internal sealed class DungeonScriptHarness : IDisposable
     public Player AddPlayer(uint guid)
     {
         Player player = _fixture.AddPlayer(guid);
+        _fixture.Party(Player, player); // ungrouped, it would get an instance of its own
         Assert.True(_fixture.EnterDungeon(player));
+        Assert.Same(Map, player.Map);
         _fixture.Tick();
         return player;
     }

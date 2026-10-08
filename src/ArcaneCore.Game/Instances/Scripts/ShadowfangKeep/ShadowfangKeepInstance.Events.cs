@@ -230,7 +230,7 @@ public sealed partial class ShadowfangKeepInstance
         ];
         foreach ((float x, float y, float z, float o) in points)
         {
-            Creature? walker = creatures.SummonCorpseDespawn(_eventArugal, 4627, x, y, z, o);
+            Creature? walker = creatures.SummonDeadDespawn(_eventArugal, 4627, x, y, z, o);
             if (walker is not null)
             {
                 creatures.SetHomePosition(walker, -146.06f, 2172.84f, 127.953f, o);

@@ -77,15 +77,16 @@ public sealed class ZumrahAi(Creature creature, ZulFarrakInstance instance) : Sc
         }
 
         if (_boltMs >= diffMs) _boltMs -= diffMs;
-        else if (DoCast(Victim, 12739) == CreatureCastResult.Ok) _boltMs = (uint)Random.Shared.Next(3500, 5001);
+        // SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0) (boss_zumrah.cpp:165): any attacker, not only the tank.
+        else if (SelectRandomAttackingTarget(0) is { } boltTarget && DoCast(boltTarget, 12739) == CreatureCastResult.Ok)
+            _boltMs = (uint)Random.Shared.Next(3500, 5001);
         if (_volleyMs >= diffMs) _volleyMs -= diffMs;
         else if (DoCast(Me, 15245) == CreatureCastResult.Ok) _volleyMs = (uint)Random.Shared.Next(10000, 18001);
         if (_wardMs >= diffMs) _wardMs -= diffMs;
         else if (DoCast(Me, 11086) == CreatureCastResult.Ok) _wardMs = (uint)Random.Shared.Next(15000, 32001);
         if (_healMs >= diffMs) _healMs -= diffMs;
-        else if (System?.Creatures.Where(c => c.IsAlive && c.FactionTemplate == Me.FactionTemplate && DistanceSq(c, Me) <= 40 * 40
-                     && c.Health < c.MaxHealth).OrderBy(c => (double)c.Health / Math.Max(c.MaxHealth, 1u)).FirstOrDefault() is { } friend
-                 && DoCast(friend, 12491) == CreatureCastResult.Ok)
+        // DoSelectLowestHpFriendly(40.0f) (boss_zumrah.cpp:192): the assistable creature in combat missing the most health.
+        else if (SelectLowestHpFriendly(40f) is { } friend && DoCast(friend, 12491) == CreatureCastResult.Ok)
             _healMs = (uint)Random.Shared.Next(15000, 23001);
     }
 

@@ -209,8 +209,13 @@ public sealed partial class DungeonScriptExpansionTests
             CreatureMapSystem creatures = map.FindUpdater<CreatureMapSystem>()!;
             Assert.Contains(creatures.Creatures, c => c.Template.Entry == SunkenTempleInstance.NpcHakkariMinion);
             Assert.Contains(creatures.Creatures, c => c.Template.Entry == SunkenTempleInstance.NpcBloodkeeper);
+            GameObject circle = map.FindUpdater<GameObjectMapSystem>()!.GameObjects.Single(g => g.Entry == SunkenTempleInstance.GoEvilCircle);
+            Assert.True(circle.IsSpawned);
             for (int i = 0; i < 4; i++) script.SetData(SunkenTempleInstance.TypeAvatar, EncounterState.Special);
             Assert.Equal(4, script.FlamesDoused);
+            // HakkarSummoned (spell 12948, sunken_templeScripts.cpp:251-268): the evil circles go when the Avatar arrives.
+            fixture.Tick();
+            Assert.False(circle.IsSpawned);
             Creature avatar = Assert.Single(creatures.Creatures, c => c.Template.Entry == SunkenTempleInstance.NpcAvatarOfHakkar);
             map.Combat.Kill(player, avatar);
             Assert.Equal(EncounterState.Done, script.GetData(SunkenTempleInstance.TypeAvatar));

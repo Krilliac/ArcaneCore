@@ -15,8 +15,8 @@ public sealed class ArugalAi(Creature creature) : AggressorAI(creature)
     {
         _bolt = 1_000;
         _shock = 1_000;
-        _curse = 20_000;
-        _teleport = 22_000;
+        _curse = (uint)(System?.RandomInt(20_000, 30_000) ?? 20_000);
+        _teleport = (uint)(System?.RandomInt(22_000, 26_000) ?? 22_000);
         _position = 0;
         CasterChaseDistance = 50f;
         MeleeEnabled = false;
@@ -77,7 +77,14 @@ public sealed class ArugalAi(Creature creature) : AggressorAI(creature)
             else
             {
                 uint spell = next switch { 0 => 7586u, 1 => 7587u, _ => 7136u };
-                if (DoCast(Me, spell) == CreatureCastResult.Ok)
+                System?.InterruptCast(Me);
+                CreatureCastResult result = DoCast(Me, spell);
+                if (result != CreatureCastResult.Ok && _position == 1)
+                {
+                    result = DoCast(Me, spell, triggered: true); // out of mana on the upper ledge: forced, or the encounter is stuck
+                }
+
+                if (result == CreatureCastResult.Ok)
                 {
                     _position = next;
                     MeleeEnabled = next != 1;

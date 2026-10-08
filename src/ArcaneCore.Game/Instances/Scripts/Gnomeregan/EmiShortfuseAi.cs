@@ -101,7 +101,7 @@ public sealed class EmiShortfuseAi(Creature creature, GnomereganInstance instanc
     public override void OnJustSummoned(Creature summoned)
     {
         _summoned.Add(summoned.Guid);
-        if (summoned.Template.Entry == Grubbis) Say(-1090023, summoned);
+        if (summoned.Template.Entry == Grubbis) System?.SayText(summoned, -1090023); // DoScriptText(SAY_GRUBBIS_SPAWN, pSummoned): Grubbis speaks
         else if (summoned.Template.Entry is Burrower or Ambusher)
         {
             uint cave = _phase > 20 ? GnomereganInstance.CaveNorth : GnomereganInstance.CaveSouth;
@@ -159,7 +159,14 @@ public sealed class EmiShortfuseAi(Creature creature, GnomereganInstance instanc
         _phaseTimer = 0;
         switch (_phase++)
         {
-            case 1: Say(-1090000); Me.NpcFlags = 0; _phaseTimer = 5000; break;
+            case 1:
+                Say(-1090000);
+                // gnomeregan.cpp:354-356: FACTION_ESCORT_N_NEUTRAL_PASSIVE (113) until respawn, no npc flags, no dynamic flags.
+                Me.FactionTemplate = 113;
+                Me.NpcFlags = 0;
+                Me.SetUInt32(UpdateFields.UnitDynamicFlags, 0);
+                _phaseTimer = 5000;
+                break;
             case 2: Say(-1090001); _phaseTimer = 3500; break;
             case 3: Start(); break;
             case 4: Say(-1090002); break;
@@ -224,6 +231,6 @@ public sealed class EmiShortfuseAi(Creature creature, GnomereganInstance instanc
     {
         if (System is not { } system) return;
         foreach (var row in Summons)
-            if (row.Pack == pack) system.SummonCorpseDespawn(Me, row.Entry, row.X, row.Y, row.Z, row.O);
+            if (row.Pack == pack) system.SummonDeadDespawn(Me, row.Entry, row.X, row.Y, row.Z, row.O);
     }
 }

@@ -195,6 +195,70 @@ public abstract class CreatureAI
 
     /// <summary>Make nearby same-faction creatures join the fight at once (EventAI CALL_FOR_HELP).</summary>
     protected int DoCallForHelp(float radius) => System?.CallForHelp(Me, radius) ?? 0;
+
+    /// <summary>
+    /// cmangos <c>Unit::SelectAttackingTarget(ATTACKING_TARGET_RANDOM, position[, spell, SELECT_FLAG_PLAYER])</c> (Entities/Unit.cpp): a random
+    /// living unit of the threat list (highest threat first) from index <paramref name="position"/> on; position 1 skips the top-threat unit.
+    /// <paramref name="playerOnly"/> is SELECT_FLAG_PLAYER. Null when the list has no more than <paramref name="position"/> entries or none fits.
+    /// </summary>
+    protected Unit? SelectRandomAttackingTarget(int position = 0, bool playerOnly = false)
+    {
+        if (!Me.Combat.HasThreatList)
+        {
+            return null;
+        }
+
+        IReadOnlyList<Combat.ThreatEntry> threat = Me.Combat.Threat.Entries;
+        if (position >= threat.Count)
+        {
+            return null;
+        }
+
+        Unit[] candidates = [.. threat.Skip(position).Select(e => e.Target).Where(u => u.IsAlive && (!playerOnly || u is Player))];
+        return candidates.Length == 0 ? null : candidates[System?.RandomInt(0, candidates.Length - 1) ?? 0];
+    }
+
+    /// <summary>
+    /// cmangos <c>UnitAI::DoSelectLowestHpFriendly(range, minMissing, percent = false, targetSelf)</c> (AI/BaseAI/UnitAI.cpp:667-687) with
+    /// MostHPMissingInRangeCheck (Grids/GridNotifiers.h:825-854): of the living, in-combat creatures within <paramref name="range"/> yards
+    /// this creature can assist (itself included when <paramref name="targetSelf"/>), the one missing the most health, more than
+    /// <paramref name="minMissing"/> points. Null when none does.
+    /// </summary>
+    protected Creature? SelectLowestHpFriendly(float range, uint minMissing = 1, bool targetSelf = true)
+    {
+        if (System is not { } system)
+        {
+            return null;
+        }
+
+        ICreatureHostility hostility = system.AiServices.Hostility;
+        float rangeSquared = range * range;
+        Creature? best = null;
+        uint bestMissing = minMissing;
+        foreach (Creature other in system.Creatures)
+        {
+            if (!other.IsAlive || !other.Combat.IsInCombat || (!targetSelf && ReferenceEquals(other, Me)))
+            {
+                continue;
+            }
+
+            float dx = other.X - Me.X, dy = other.Y - Me.Y, dz = other.Z - Me.Z;
+            if (dx * dx + dy * dy + dz * dz > rangeSquared
+                || (!ReferenceEquals(other, Me) && !hostility.CanAssist(other, Me) && !hostility.IsFriendly(Me, other)))
+            {
+                continue;
+            }
+
+            uint missing = other.MaxHealth - Math.Min(other.Health, other.MaxHealth);
+            if (missing > bestMissing)
+            {
+                best = other;
+                bestMissing = missing;
+            }
+        }
+
+        return best;
+    }
 }
 
 /// <summary>vmangos NullCreatureAI: does nothing, not even fight back.</summary>

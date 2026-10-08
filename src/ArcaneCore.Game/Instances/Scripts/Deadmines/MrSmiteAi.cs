@@ -14,7 +14,6 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
     private SmitePhase _phase;
     private uint _equipTimer;
     private uint _slamTimer;
-    private Unit? _lastVictim;
 
     public SmitePhase Phase => _phase;
 
@@ -26,7 +25,6 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
     // boss_mr_smiteAI::Reset (boss_mr_smite.cpp:61-71).
     private void Reset()
     {
-        _lastVictim = null;
         _phase = SmitePhase.First;
         _equipTimer = 0;
         _slamTimer = 9_000;
@@ -76,7 +74,6 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
             if (DoCast(Me, 6432) == CreatureCastResult.Ok) // Smite Stomp
             {
                 System?.SayText(Me, healthPercent < 33f ? -1036003 : -1036002);
-                _lastVictim = victim;
                 System?.Map.Combat.AttackStop(Me, targetSwitch: true);
                 System?.RemoveAuras(Me, _phase == SmitePhase.First ? 6433u : 12787u);
                 _phase = SmitePhase.Equipping;
@@ -149,7 +146,8 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
                     DoCast(Me, 12787, triggered: true); // Thrash
                 }
 
-                if (_lastVictim is { IsAlive: true } target)
+                // PhaseEquipEnd: SelectAttackingTarget(ATTACKING_TARGET_TOPAGGRO, 0); he evades only when nobody is left on his threat list.
+                if (Me.Combat.Threat.Entries.FirstOrDefault(e => e.Target.IsAlive)?.Target is { } target)
                 {
                     AttackStart(target);
                 }

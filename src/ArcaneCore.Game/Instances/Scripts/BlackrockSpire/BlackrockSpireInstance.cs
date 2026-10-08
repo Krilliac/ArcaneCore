@@ -324,7 +324,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
                 float[] z = [109.86f, 109.24f, 110.18f];
                 for (uint i = 0; i < 3; i++)
                 {
-                    if (beast.System?.SummonCorpseDespawn(beast, NpcBlackhandElite, x[i], y[i], z[i], 2.4f) is { } elite)
+                    if (beast.System?.SummonDeadDespawn(beast, NpcBlackhandElite, x[i], y[i], z[i], 2.4f) is { } elite)
                     {
                         elite.System?.ChangeMovement(elite, 2, i, 0);
                     }
@@ -579,7 +579,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         {
             foreach (uint entry in StadiumWaves[_stadiumWave])
             {
-                if (nefarius.System?.SummonCorpseDespawn(nefarius, entry, 210f, -420.3f, 110.94f, 3.14f) is { } mob)
+                if (nefarius.System?.SummonDeadDespawn(nefarius, entry, 210f, -420.3f, 110.94f, 3.14f) is { } mob)
                 {
                     _waveMobs.Add(mob.Guid);
                     mob.Motion.MovePoint(0, 163.62f, -420.33f, 110.47f, run: true);
@@ -623,7 +623,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         }
         else if (_stadiumWave == StadiumWaves.Length + 3)
         {
-            if (nefarius.System?.SummonCorpseDespawn(nefarius, NpcGyth, 210.14f, -397.54f, 111.1f, 0f) is { } gyth)
+            if (nefarius.System?.SummonDeadDespawn(nefarius, NpcGyth, 210.14f, -397.54f, 111.1f, 0f) is { } gyth)
             {
                 _waveMobs.Add(gyth.Guid);
                 gyth.Motion.MovePoint(0, 163.62f, -420.33f, 110.47f, run: true);
@@ -638,7 +638,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
     {
         foreach ((uint entry, float x, float y, float z, float orientation, float tx, float ty, float tz) in Spectators)
         {
-            if (nefarius.System?.SummonCorpseDespawn(nefarius, entry, x, y, z, orientation) is { } spectator)
+            if (nefarius.System?.SummonDeadDespawn(nefarius, entry, x, y, z, orientation) is { } spectator)
             {
                 spectator.ReactState = CreatureReactState.Defensive;
                 spectator.Motion.MovePoint(0, tx, ty, tz, run: true);
