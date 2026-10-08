@@ -96,19 +96,21 @@ public sealed class AuctionRecoveryTests
             return true;
         });
         Assert.Equal(EconomyOutcome.After, await after.Task.WaitAsync(Fixture.Budget));
-        var conflict = NewCompletion<EconomyOutcome>();
+        var conflict = NewCompletion<(EconomyOutcome Outcome, bool Reserved)>();
         await fixture.OnWorld(() =>
         {
             Assert.False(fixture.Feature.IsAuctionQuarantined(1));
+            // Observe the reservation in the completion callback (world thread): the recovery read starts at once and its
+            // world-thread completion can release the ID before a separate OnWorld probe from the test thread gets to run.
             fixture.Feature.RunAuctionOperation([], [new UpdateAuction(fixture.Primary, committed)], 1,
-                outcome => conflict.TrySetResult(outcome));
+                outcome => conflict.TrySetResult((outcome, fixture.Feature.IsAuctionQuarantined(1))));
             return true;
         });
-        Assert.Equal(EconomyOutcome.Before, await conflict.Task.WaitAsync(Fixture.Budget));
+        (EconomyOutcome conflictOutcome, bool reserved) = await conflict.Task.WaitAsync(Fixture.Budget);
+        Assert.Equal(EconomyOutcome.Before, conflictOutcome);
         // A refused same-ID update means the cache no longer matches the row: the ID stays
         // reserved until a fresh authoritative read repairs it, then it is released.
-        Assert.True(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(1)),
-            "a conflicting update must reserve the auction until it is resynced");
+        Assert.True(reserved, "a conflicting update must reserve the auction until it is resynced");
         Assert.True(await fixture.TryWaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1)),
             "the reserved auction was never resynced and released");
         var next = NewCompletion<EconomyOutcome>();
@@ -681,8 +683,12 @@ public sealed class AuctionRecoveryTests
             bool primary = request.Changes.Any(c => c is InsertAuction { Auction.Id: 1 } or UpdateAuction { Expected.Id: 1 });
             if (request.Changes.Any(c => c is UpdateAuction { Expected.Id: 2 }))
             {
+                // The held commit ignores the settlement budget (5 s of wall time): the test holds it across the whole
+                // recovery of auction 1, which under load took longer, so the budget cancelled the hold and the
+                // operation reconciled to Before. The hold stands for "still in flight", not for a slow store.
                 control.OtherEntered.TrySetResult();
-                await control.OtherRelease.Task.WaitAsync(cancellationToken);
+                await control.OtherRelease.Task.ConfigureAwait(false);
+                cancellationToken = CancellationToken.None;
             }
             int attempt = primary ? Interlocked.Increment(ref control.PrimaryCommitAttempts) : 0;
             EconomyCommitResult result = await inner.CommitAsync(request, cancellationToken);
@@ -735,8 +741,9 @@ public sealed class AuctionRecoveryTests
             AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
             if (control.HoldRecoverySnapshot && Interlocked.CompareExchange(ref control.SnapshotClaimed, 1, 0) == 0)
             {
+                // Like the held commit, the held read ignores the 5 s wall-time read budget; the snapshot is already taken.
                 control.SnapshotCaptured.TrySetResult();
-                await control.SnapshotRelease.Task.WaitAsync(cancellationToken);
+                await control.SnapshotRelease.Task.ConfigureAwait(false);
             }
 
             return snapshot;
