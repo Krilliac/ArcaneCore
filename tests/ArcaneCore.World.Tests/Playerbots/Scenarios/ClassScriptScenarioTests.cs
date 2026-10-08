@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.PersistentAreaAuras;
 using ArcaneCore.Protocol;
@@ -14,7 +15,9 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// The class scripts across two sessions (docs/areas/class-scripts.md): two scripted bots duel. A puts on Seal of Righteousness and its white
 /// swings make B take the seal's Holy damage; Judgement then turns the seal into Judgement of Righteousness on B and the seal is gone
 /// (vmangos UnitAuraProcHandler.cpp:979-1053, SpellEffects.cpp:4502-4529). A's Consecration puts a ground object down that B's client is told
-/// about, and B, standing in it, takes its ticks (vmangos Spell::EffectPersistentAA, DynamicObjectUpdater, Aura::PeriodicTick).
+/// about, and B, standing in it, takes its ticks (vmangos Spell::EffectPersistentAA, DynamicObjectUpdater, Aura::PeriodicTick). A's Swiftmend
+/// is refused at B without a heal over time, then consumes the Rejuvenation A put on B and heals B for four of its ticks, which B's client is told
+/// (vmangos scripts/spells/spell_druid.cpp:101-160).
 /// </summary>
 public sealed class ClassScriptScenarioTests
 {
@@ -31,6 +34,13 @@ public sealed class ClassScriptScenarioTests
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
         await world.RunPassingAsync(new ConsecrationDuelScenario());
     }
+
+    [Fact]
+    public async Task Swiftmend_ConsumesTheRejuvenationOnTheOtherBot_AndItsClientSeesTheHeal()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        await world.RunPassingAsync(new SwiftmendScenario());
+    }
 }
 
 /// <summary>The build 5875 rows the class-script scenarios cast (ids, families, flags and effects as in spell_template; amounts kept small).</summary>
@@ -43,7 +53,11 @@ internal static class ClassScriptScenarioContent
     public const uint Consecration = 26573;
     public const int ConsecrationTick = 8;
 
+    public const uint Rejuvenation = 774;
+    public const int RejuvenationTick = 8;
+
     private const uint SealDurationIndex = 9;
+    private const uint RejuvenationDurationIndex = 29;
     private const uint ConsecrationDurationIndex = 31;
     private const uint ConsecrationRadiusIndex = 14;
 
@@ -52,7 +66,8 @@ internal static class ClassScriptScenarioContent
         Spells = [.. content.Spells, .. Spells],
         Durations = [.. content.Durations,
             new SpellDurationRow { Id = SealDurationIndex, Duration = 30_000, MaxDuration = 30_000 },
-            new SpellDurationRow { Id = ConsecrationDurationIndex, Duration = 8_000, MaxDuration = 8_000 }],
+            new SpellDurationRow { Id = ConsecrationDurationIndex, Duration = 8_000, MaxDuration = 8_000 },
+            new SpellDurationRow { Id = RejuvenationDurationIndex, Duration = 12_000, MaxDuration = 12_000 }],
         Radii = [.. content.Radii, new SpellRadiusRow { Id = ConsecrationRadiusIndex, Radius = 8, RadiusMax = 8 }],
     };
 
@@ -96,7 +111,90 @@ internal static class ClassScriptScenarioContent
             Effect1 = 27, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = ConsecrationTick - 1, EffectImplicitTargetA1 = 18,
             EffectImplicitTargetB1 = 16, EffectRadiusIndex1 = ConsecrationRadiusIndex, EffectApplyAuraName1 = 3, EffectAmplitude1 = 1000,
         },
+        // Rejuvenation rank 1: PERIODIC_HEAL 8 every 3 s for 12 s at a friend, druid family flag 0x10 (no mana cost, no global cooldown here).
+        new SpellTemplateRow
+        {
+            Id = Rejuvenation, SpellName = "Rejuvenation", School = 3, RangeIndex = 4, DurationIndex = RejuvenationDurationIndex, SpellVisual = 1,
+            SpellFamilyName = SwiftmendScript.DruidFamily, SpellFamilyFlags = SwiftmendScript.RejuvenationFlag, DmgClass = 1,
+            Effect1 = 6, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = RejuvenationTick - 1, EffectImplicitTargetA1 = 21,
+            EffectApplyAuraName1 = 8, EffectAmplitude1 = 3000,
+        },
+        // Swiftmend: HEAL 1 at a friend, druid family.
+        new SpellTemplateRow
+        {
+            Id = SwiftmendScript.Swiftmend, SpellName = "Swiftmend", School = 3, RangeIndex = 4, SpellVisual = 1,
+            SpellFamilyName = SwiftmendScript.DruidFamily, SpellFamilyFlags = 0x200000000, DmgClass = 1,
+            Effect1 = 10, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = 0, EffectImplicitTargetA1 = 21,
+        },
     ];
+}
+
+/// <summary>
+/// A's Swiftmend at B: refused while B has no heal over time (A's client gets TARGET_AURASTATE), then, after A's Rejuvenation on B, it consumes the
+/// Rejuvenation and heals B for 1 plus four ticks of 8, which B's client sees in SMSG_SPELLHEALLOG.
+/// </summary>
+internal sealed class SwiftmendScenario : IPlayerbotScenario
+{
+    public string Name => "class-swiftmend";
+
+    public string Description => "Swiftmend is refused without a heal over time, then consumes Rejuvenation and heals the other bot";
+
+    public async Task RunAsync(ScenarioContext context)
+    {
+        (ScenarioBot a, ScenarioBot b) = await PlayerbotScenarioCatalog.PairAsync(context);
+        await context.StepAsync("A knows Rejuvenation and Swiftmend", async () =>
+        {
+            await context.LearnSpellAsync(a, ClassScriptScenarioContent.Rejuvenation);
+            await context.LearnSpellAsync(a, SwiftmendScript.Swiftmend);
+        });
+        SpellSystem spells = context.Services.GetRequiredService<SpellFeature>().System;
+
+        await context.StepAsync("A's Swiftmend at B without a heal over time is refused", async () =>
+        {
+            long mark = a.Mark();
+            ScenarioContext.Expect(await a.CastAsync(SwiftmendScript.Swiftmend, b.Guid), "Swiftmend not sent");
+            byte reason = await a.WaitForPacketAsync(WorldOpcode.SmsgCastResult, CastFailure, r => r != 0, mark);
+            ScenarioContext.ExpectEqual((byte)SpellCastResult.TargetAurastate, reason, "cast failure reason");
+        });
+
+        await context.StepAsync("A puts Rejuvenation on B", async () =>
+        {
+            await context.SetHealthAsync(b, 1);
+            ScenarioContext.Expect(await a.CastAsync(ClassScriptScenarioContent.Rejuvenation, b.Guid), "Rejuvenation not sent");
+            await context.WaitUntilAsync("B holds Rejuvenation", () => spells.HasAura(b.RequirePlayer(), ClassScriptScenarioContent.Rejuvenation));
+        });
+
+        (uint Amount, bool Critical) heal = await context.StepAsync("A's Swiftmend at B heals it", async () =>
+        {
+            long mark = b.Mark();
+            ScenarioContext.Expect(await a.CastAsync(SwiftmendScript.Swiftmend, b.Guid), "Swiftmend not sent");
+            return await b.WaitForPacketAsync(WorldOpcode.SmsgSpellheallog, payload => HealOf(payload, SwiftmendScript.Swiftmend), h => h.Amount != 0, mark);
+        });
+        await context.StepAsync("the heal is four Rejuvenation ticks and the Rejuvenation is gone", async () =>
+        {
+            uint expected = 1 + (4 * ClassScriptScenarioContent.RejuvenationTick);
+            ScenarioContext.ExpectEqual(heal.Critical ? expected + (expected / 2) : expected, heal.Amount, "Swiftmend heal");
+            // Read once, not waited for: the Rejuvenation has most of its 12 seconds left, so only the consumption can have removed it.
+            bool holds = await context.ReadAsync(() => spells.HasAura(b.RequirePlayer(), ClassScriptScenarioContent.Rejuvenation));
+            ScenarioContext.Expect(!holds, "B still holds Rejuvenation after Swiftmend");
+        });
+    }
+
+    /// <summary>SMSG_CAST_RESULT: u32 spell, u8 status (2 = failure), u8 reason; 0 for another spell or a success.</summary>
+    private static byte CastFailure(byte[] payload)
+        => payload.Length >= 6 && BitConverter.ToUInt32(payload, 0) == SwiftmendScript.Swiftmend && payload[4] == 2 ? payload[5] : (byte)0;
+
+    /// <summary>SMSG_SPELLHEALLOG: packed target, packed caster, u32 spell, u32 amount, u8 critical; (0, false) for another spell.</summary>
+    private static (uint Amount, bool Critical) HealOf(byte[] payload, uint spellId)
+    {
+        var reader = new PacketReader(payload);
+        _ = reader.ReadPackedGuid();
+        _ = reader.ReadPackedGuid();
+        uint spell = reader.ReadUInt32();
+        uint amount = reader.ReadUInt32();
+        bool critical = reader.ReadByte() != 0;
+        return spell == spellId ? (amount, critical) : (0, false);
+    }
 }
 
 /// <summary>A seals, strikes B in a duel until the seal procs, then judges B.</summary>
