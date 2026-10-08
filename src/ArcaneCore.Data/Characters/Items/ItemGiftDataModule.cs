@@ -54,7 +54,7 @@ public sealed class ItemGiftDataModule : IDataModule, ICharacterDataCleanup
 /// INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until you do); keep the
 /// ones nobody claimed. An empty step only advances the version table; never ship a build with these placeholders to a live realm.
 /// </summary>
-public abstract class EconomyItemsLaneSchemaGap(int version) : IDataModule
+public abstract class EconomyItemsLaneSchemaGap(int version) : IDataModule, ICharacterDataCleanup
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -69,6 +69,9 @@ public abstract class EconomyItemsLaneSchemaGap(int version) : IDataModule
     public void AddServices(IServiceCollection services)
     {
     }
+
+    /// <summary>An empty step owns no rows.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>Characters step 35 held open for the lane that owns it (see <see cref="EconomyItemsLaneSchemaGap"/>).</summary>
