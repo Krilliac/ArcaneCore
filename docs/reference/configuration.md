@@ -867,6 +867,13 @@ How to read the tables:
 | `World:Playerbots:MaxPathPoints` | `int` | `128` | - | The most points of one bot route (1..4096). |
 | `World:Playerbots:MaxRouteYards` | `float` | `2000` | - | The longest bot route in yards (above 0, at most 100000). |
 | `World:Playerbots:MoveSpeed` | `float` | `7` | - | The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100). |
+| `World:Playerbots:MovementPackets` | `bool` | `true` | live | How a bot's movement reaches the world (on by default). On: the bot reports its motion with the MSG_MOVE_* packets a 1.12 client sends, dispatched through the ordinary movement handlers like any client's. Off: the server relocates the bot itself (the same locomotion observers) and sends its observers the same MSG_MOVE_* relay, skipping the opcode dispatch, the packet encode/decode and the handler, which is cheaper with many bots. Live: `.reload config` applies a change at once. |
+| `World:Playerbots:Party:Allowlist` | `string[]` | `[]` | - | Character names whose invitations a bot always accepts, whatever `InvitePolicy` says (case-insensitive). |
+| `World:Playerbots:Party:AutoRevive` | `bool` | `true` | - | Revive a dead bot in place when vmangos `PartyBotAI::ShouldAutoRevive` says so (on by default); otherwise it runs back. |
+| `World:Playerbots:Party:InvitePolicy` | `PlayerbotInvitePolicy` | `GuildOrFriends` | - | Who may invite a bot (`PlayerbotInvitePolicy.GuildOrFriends` by default). Values: `None`, `GuildOrFriends`, `Anyone`. |
+| `World:Playerbots:Party:LootRoll` | `PlayerbotLootRoll` | `Pass` | - | The vote on every group loot roll (`PlayerbotLootRoll.Pass` by default: the items go to the players). Values: `Pass`, `Greed`. |
+| `World:Playerbots:Party:MasterTimeoutSeconds` | `int` | `60` | - | Seconds a bot waits for an offline or departed master before it leaves the group and goes back to its own goals (1..3600). |
+| `World:Playerbots:Party:TeleportToLeader` | `bool` | `true` | - | Teleport to the master when it is more than 100 yards away or on another map (vmangos PartyBotAI .goname; on by default). |
 | `World:Playerbots:RestoreOnStartup` | `bool` | `false` | - | Log the saved managed bots back in when the world starts. |
 | `World:Playerbots:Scenarios:Enabled` | `bool` | `false` | - | Let an Administrator run registered bot scenarios against the live world (off by default). |
 | `World:Playerbots:Scenarios:MaxDurationSeconds` | `int` | `120` | - | Wall-clock bound of one scenario run in seconds (5..600). |
