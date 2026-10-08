@@ -22,6 +22,8 @@ public sealed class RazorfenKraulInstance(Map instance) : ScriptedInstance(insta
     public const uint NpcWardKeeper = 4625;
 
     private uint _wardKeepersRemaining;
+    private bool _willixRegistered;
+    private bool _gopherRegistered;
 
     /// <summary>The ward keepers counted and not yet reported dead (<c>m_uiWardKeepersRemaining</c>).</summary>
     public uint WardKeepersRemaining => _wardKeepersRemaining;
@@ -40,6 +42,21 @@ public sealed class RazorfenKraulInstance(Map instance) : ScriptedInstance(insta
         if (creature.Template.Entry == NpcWardKeeper)
         {
             _wardKeepersRemaining++;
+        }
+
+        // ScriptDev2 razorfen_kraul.cpp: the escort and Blueleaf gopher are entry scripts, not instance states.
+        if (creature.System is { } system)
+        {
+            if (creature.Template.Entry == 4508 && !_willixRegistered)
+            {
+                _willixRegistered = true;
+                system.RegisterEntryAi(4508, c => new RazorfenKraul.WillixAi(c), rebuildExisting: false);
+            }
+            else if (creature.Template.Entry == 4781 && !_gopherRegistered)
+            {
+                _gopherRegistered = true;
+                system.RegisterEntryAi(4781, c => new RazorfenKraul.SnufflenoseGopherAi(c), rebuildExisting: false);
+            }
         }
     }
 
