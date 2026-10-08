@@ -11,6 +11,48 @@ namespace ArcaneCore.Data.Tests.ClientData;
 /// </summary>
 public sealed class DbcCrossReferenceTests
 {
+    [Fact]
+    public void DbdForeignKeys_CountDanglingIdsAndRepeatedRows()
+    {
+        using var temp = new TempDirectory();
+        DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
+        int continent = area.Columns.Single(c => c.Name == "ContinentID").Offset / 4;
+        uint[] first = new uint[area.Fields];
+        uint[] second = new uint[area.Fields];
+        uint[] third = new uint[area.Fields];
+        uint[] unset = new uint[area.Fields];
+        first[0] = 1; first[continent] = 1;
+        second[0] = 2; second[continent] = 99;
+        third[0] = 3; third[continent] = 99;
+        unset[0] = 4; unset[continent] = uint.MaxValue;
+        File.WriteAllBytes(Path.Combine(temp.Path, "AreaTable.dbc"), SyntheticDbc.Image(area.Fields, area.RecordSize, first, second, third, unset));
+        SyntheticDbc.Write(temp.Path, "Map.dbc", rows: 1);
+
+        DbcReferenceResult result = DbcCrossReferences.RunDbc(temp.Path).Single(r => r.Reference.Name == "AreaTable.dbc.ContinentID");
+        Assert.Equal(DbcReferenceStatus.Dangling, result.Status);
+        Assert.Equal((2, 1, 2L), (result.ReferencedIds, result.DanglingIds, result.DanglingRows));
+        Assert.Equal([99L], result.Samples);
+    }
+
+    [Fact]
+    public void DbdArrayForeignKey_CountsRowsRatherThanRepeatedArrayElements()
+    {
+        using var temp = new TempDirectory();
+        DbdLayout spell = ClientDbcDbdLayouts.All["Spell.dbc"];
+        DbdField visual = spell.Columns.Single(c => c.Name == "SpellVisualID");
+        Assert.Equal(2, visual.ArrayLength);
+        uint[] row = new uint[spell.Fields];
+        row[0] = 1;
+        row[visual.Offset / 4] = 77;
+        row[visual.Offset / 4 + 1] = 77;
+        File.WriteAllBytes(Path.Combine(temp.Path, "Spell.dbc"), SyntheticDbc.Image(spell.Fields, spell.RecordSize, row));
+        SyntheticDbc.Write(temp.Path, "SpellVisual.dbc", rows: 1);
+
+        DbcReferenceResult result = DbcCrossReferences.RunDbc(temp.Path).Single(r => r.Reference.Name == "Spell.dbc.SpellVisualID");
+        Assert.Equal((1, 1, 1L), (result.ReferencedIds, result.DanglingIds, result.DanglingRows));
+        Assert.Equal([77L], result.Samples);
+    }
+
     private static string NewWorld(string directory, params string[] statements)
     {
         string path = Path.Combine(directory, "world.db");
@@ -84,6 +126,12 @@ public sealed class DbcCrossReferenceTests
             SyntheticDbc.Write(temp.Path, reference.Dbc, rows: 3);
         }
 
+        DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
+        uint[] areaRow = new uint[area.Fields];
+        areaRow[0] = 1;
+        areaRow[area.Columns.Single(c => c.Name == "ContinentID").Offset / 4] = 77;
+        File.WriteAllBytes(Path.Combine(temp.Path, "AreaTable.dbc"), SyntheticDbc.Image(area.Fields, area.RecordSize, areaRow));
+
         string world = NewWorld(temp.Path, World);
         var database = new DatabaseOptions { World = new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = $"Data Source={world}" } };
         using var output = new StringWriter();
@@ -96,6 +144,8 @@ public sealed class DbcCrossReferenceTests
         Assert.Contains("  Spell.dbc: loaded 3 records (173 fields, ArcaneCore SpellDbcImporter)", text, StringComparison.Ordinal);
         Assert.Contains("npc_trainer.spell -> Spell.dbc: 1 of 3 ids dangling in 2 rows (e.g. 99)", text, StringComparison.Ordinal);
         Assert.Contains("creature_spawn.MapId -> Map.dbc: ok (2 ids)", text, StringComparison.Ordinal);
+        Assert.Contains(DbcCrossReferences.ClientInternalTitle + ": ", text, StringComparison.Ordinal);
+        Assert.Contains("AreaTable.dbc.ContinentID -> Map.dbc: 1 of 1 ids dangling in 1 rows (e.g. 77)", text, StringComparison.Ordinal);
 
         using var json = new StringWriter();
         Assert.Equal(DbUpgradeExitCodes.Drift, await DbUpgradeCli.RunAsync(["dbc", "--dbc-dir", temp.Path, "--json"], database, json, error, null, CancellationToken.None));
@@ -103,6 +153,35 @@ public sealed class DbcCrossReferenceTests
         System.Text.Json.JsonElement spell = document.RootElement.GetProperty("references").EnumerateArray()
             .Single(r => r.GetProperty("table").GetString() == "npc_trainer" && r.GetProperty("column").GetString() == "spell");
         Assert.Equal(1, spell.GetProperty("danglingIds").GetInt32());
+        Assert.DoesNotContain(document.RootElement.GetProperty("references").EnumerateArray(), r => r.GetProperty("table").GetString() == "AreaTable.dbc");
+        System.Text.Json.JsonElement areaReference = document.RootElement.GetProperty("clientReferences").EnumerateArray()
+            .Single(r => r.GetProperty("table").GetString() == "AreaTable.dbc" && r.GetProperty("column").GetString() == "ContinentID");
+        Assert.Equal(1, areaReference.GetProperty("danglingIds").GetInt32());
+    }
+
+    [Fact]
+    public async Task ArcaneDbDbc_ClientInternalDanglingIds_AreReportedButAreNotDrift()
+    {
+        using var temp = new TempDirectory();
+        foreach (DbcReference reference in DbcCrossReferences.All.DistinctBy(r => r.Dbc))
+        {
+            SyntheticDbc.Write(temp.Path, reference.Dbc, rows: 3);
+        }
+
+        DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
+        uint[] areaRow = new uint[area.Fields];
+        areaRow[0] = 1;
+        areaRow[area.Columns.Single(c => c.Name == "ContinentID").Offset / 4] = 77;
+        File.WriteAllBytes(Path.Combine(temp.Path, "AreaTable.dbc"), SyntheticDbc.Image(area.Fields, area.RecordSize, areaRow));
+        string world = NewWorld(temp.Path, "CREATE TABLE creature_spawn (Guid INTEGER, MapId INTEGER)", "INSERT INTO creature_spawn VALUES (1, 1), (2, 3)");
+        var database = new DatabaseOptions { World = new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = $"Data Source={world}" } };
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        Assert.Equal(DbUpgradeExitCodes.Ok, await DbUpgradeCli.RunAsync(["dbc", "--dbc-dir", temp.Path], database, output, error, null, CancellationToken.None));
+        string text = output.ToString();
+        Assert.Contains("creature_spawn.MapId -> Map.dbc: ok (2 ids)", text, StringComparison.Ordinal);
+        Assert.Contains("AreaTable.dbc.ContinentID -> Map.dbc: 1 of 1 ids dangling in 1 rows (e.g. 77)", text, StringComparison.Ordinal);
     }
 
     [Fact]

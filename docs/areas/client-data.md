@@ -1,23 +1,30 @@
 # Client data: the DBC directory and its validation
 
-Status: lane `claude/client-data` (2026-10-08). WoW 1.12.1 (5875). Reference: vmangos `src/game/Database/DBCfmt.h` (the format
+Status: lane `claude/client-data` (2026-10-08), extended by `codex/w3-client-data-dbd`. WoW 1.12.1 (5875). Reference: vmangos `src/game/Database/DBCfmt.h` (the format
 strings) and `DBCStores.cpp` (`LoadDBCStores`, `LoadDBC`: a file whose field count differs from its format string is reported as
 "exist, but have N fields instead M ... Wrong client version DBC file?"). Re-implemented; no code was copied. No client data ships
 with the server: the developer extracts the DBFilesClient set from their own client (the full 154-file set the 1.12.1 client
 resolves, patch-2.MPQ over patch.MPQ over dbc.MPQ, is described in the `README.txt` beside the extraction).
+
+`tools/codegen/gen_dbc_layouts.py` selects build 1.12.1.5875 blocks from the local WoWDBDefs checkout at commit `e3df370`
+(`definitions/*.dbd`, CC BY-SA 4.0) and generates `ClientDbcLayouts.Dbd.g.cs`. The original vmangos `DBCfmt.h`
+strings stay authoritative for their files: generation fails if field counts or record sizes disagree. The generated table
+adds field names, types, lengths, offsets and COLUMNS foreign keys for all 154 extracted client files. No `.dbd` files ship
+in this repository; see `THIRD_PARTY_NOTICES.md`.
 
 ## Delivered
 
 | Behaviour | ArcaneCore owner | Reference |
 | --- | --- | --- |
 | One key, `ClientData:DbcDirectory`: every DBC consumer key that is unset or empty reads `<DbcDirectory>/<File>.dbc`; a key that is set anywhere (appsettings, environment, command line) still wins | `ClientDataStartup.Apply` (adds the filled keys as the last configuration source, before anything binds), `ClientDataReport` | vmangos reads every DBC from one `DataDir`/dbc directory |
-| Start-up check of every DBC the daemon reads: the WDBC header (magic, length = 20 + records x record size + string block) and the field count and record size against the vmangos format string, or the ArcaneCore reader's layout for the four files vmangos takes from its database (Faction, FactionTemplate, CharStartOutfit with its packed 152-byte records, Spell) | `ClientDbcInspector`, `ClientDbcLayouts` | `DBCFileLoader::Load`, `LoadDBC` (DBCStores.cpp:150-187) |
+| Start-up check of all 154 build-5875 DBCs: WDBC header, file length, field count and record size. vmangos formats and four ArcaneCore reader layouts take precedence; WoWDBDefs covers the other 95. A file nothing reads that is malformed or of another layout is a problem; one that is missing is counted (and warned about) in the directory summary, but is not a problem, so `ClientData:Strict` does not refuse a partial extraction for it. | `ClientDbcInspector`, `ClientDbcLayouts`, `ClientDbcDbdLayouts` | vmangos `DBCFileLoader::Load`, `DBCStores.cpp::LoadDBC` (150-187); WoWDBDefs `definitions/*.dbd` BUILD 1.12.1.5875 |
 | One log line per DBC file (category `ArcaneCore.ClientData`): `loaded N records (F fields, source)`, `missing`, `malformed` or `format mismatch: ...`, the path, where it came from (explicit key or DbcDirectory) and the keys it feeds; then a summary of the rest of the directory | `ClientDataReport.Lines`, `ClientDataStartup.Log` | |
 | A missing or mismatched file under the directory is not handed to its consumer, which keeps its built-in table or stays off, with a warning; keys a feature needs together (talents, names, emotes, appearance, creature display, repair, skills) are filled all or none | `ClientDataReport.Build` | vmangos refuses to start on a bad DBC (`ASSERT` on `bad_dbc_files`); ArcaneCore warns unless `ClientData:Strict` |
 | `ClientData:Strict`: every client data problem (a bad or missing file under the directory, a missing directory, an explicit key whose file is missing or another build's) is a configuration error: `check-config` and the start fail with exit code 78 | `ClientDataConfigChecks` (in `OpsCli.Validate`) | |
 | Built-in tables are fallbacks only: with the directory set, the client file wins. Tests compare each built-in table with the client file when `ARCANECORE_TEST_DBC_DIR` is set: the 32 SpellShapeshiftForm rows (`ShapeshiftFormCatalog.Retail`), the six ChatChannels rows (`ChatChannelCatalog.Builtin`), the auction houses (`EconomyOptions.AuctionHouses`) and the team factions (`FactionTeams`, the neutral auctioneer factions) | `ClientDataWorldTests`, `AuctionHouseDbcAgreementTests` | |
 | Cross-reference of the world database against the DBCs: spell ids (trainers, item spells, starting spells and action bars, totems, quest spells, `spell_template` rows that are not server-side, proc events, target positions), map ids, area ids, faction template and faction ids, creature, game object and item display ids, area triggers, graveyards, taxi nodes and paths, locks, item sets, skill lines and broadcast emotes; per column the distinct ids, the dangling ids, the rows holding them and up to five examples | `DbcCrossReferences` | |
-| `arcane-db dbc [--dbc-dir <dir>] [--json]`: the whole directory against the layouts, then the cross-reference; read-only; exit 5 when a file is bad or an id dangles (docs/ops/database-upgrade.md) | `DbUpgradeCli.Run.DbcAsync` | |
+| Cross-reference of DBC integer foreign keys to extracted DBC `ID` columns (for example AreaTable.ContinentID to Map, Spell.SpellVisualID to SpellVisual), ignoring zero and all-ones unset markers; both validation commands print it after the world cross-reference under its own heading (`clientReferences` in `arcane-db dbc --json`). It is a diagnostic of the client's own data and never makes `arcane-db dbc` exit 5 | `DbcCrossReferences.RunDbc` | WoWDBDefs `definitions/*.dbd` COLUMNS declarations |
+| `arcane-db dbc [--dbc-dir <dir>] [--json]`: the whole directory against the layouts, then the cross-references; read-only; exit 5 when a file is malformed or of another layout or a world id dangles (docs/ops/database-upgrade.md) | `DbUpgradeCli.Run.DbcAsync` | |
 | `.arcane dbc` (GameMaster): the start-up report in chat. `.arcane dbc validate` (Administrator): the cross-reference, run off the world thread; the summary and at most 40 lines in chat, everything in the server log | `ClientDataCommands` | |
 
 ## The consumers
@@ -57,8 +64,15 @@ daemon then reads those tables, not the files.
 
 ## Against the real client set (2026-10-08)
 
-`D:\ArcaneCore-data\client-dbc-5875` (154 files): all 59 files with a reference layout match it (every vmangos format string
-of build 5875, ItemDisplayInfo's commented-out one, and the four ArcaneCore layouts); the other 95 have a well-formed header.
+`D:\ArcaneCore-data\client-dbc-5875` (154 files): all 154 have reference layouts and match their field count and record size.
+The 59 primary layouts still match (every vmangos format string of build 5875, ItemDisplayInfo's commented-out one, and four ArcaneCore layouts).
+The DBC-to-DBC scan of this extraction checks 175 columns: 150 clean, 25 with 177 distinct dangling ids in 507 rows, none skipped.
+Examples include AreaTable.ContinentID -> Map (17, 150), AreaTrigger.ContinentID -> Map (24, 28), and
+Spell.SpellVisualID -> SpellVisual (clean). These counts are diagnostic: a WoWDBDefs foreign-key annotation can describe
+a bitmask or optional link, and some client tables contain ids for content absent from this particular extraction. Two are
+annotations that do not hold for this build: FactionTemplate.FactionGroup is a mask (5 and 8; vmangos `FactionTemplateEntry`
+names the masks `ourMask`, `friendlyMask`, `hostileMask`), and Map.ParentMapID (field 19) holds AreaTable ids (all 23 values,
+717 The Stockade, 718, 719, 721, 1337 ..., are AreaTable rows and none is a Map row).
 With only `ClientData:DbcDirectory` set, all 32 per-file keys and the one directory key are filled and nothing is reported. The cross-reference of the live
 world (snapshot `live-w5-r1/after-stop-world.db`, `arcane-db dbc`, exit 5) checked 84 columns: 76 clean, 8 with 15 dangling ids in 67
 rows. Three columns are the client's own data: `area_template.MapId` 17 and 150 and `areatrigger_template.MapId` 24 and 28 (imported from the
@@ -69,8 +83,8 @@ client's AreaTable and AreaTrigger, which name maps its Map.dbc does not have) a
 
 ## Limits
 
-- Only the header is validated: a file of the right layout whose rows are wrong (a duplicate id, an unknown map type) still stops
-  its feature when it reads it, as before.
+- The layout check validates headers and size; the DBC foreign-key check validates declared integer references to extracted
+  DBC `ID` columns. Duplicate ids and other semantic row errors are not checked.
 - vmangos loads locale overrides of the string columns from `dbc/<locale>/`; ArcaneCore reads only the one directory.
 - `item_template.random_property` is not checked: it names an `item_enchantment_template` group (the dump table the random property
   feature reads), not an ItemRandomProperties.dbc row.

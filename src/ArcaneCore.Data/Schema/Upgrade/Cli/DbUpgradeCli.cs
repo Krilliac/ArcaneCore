@@ -479,8 +479,11 @@ public static class DbUpgradeCli
         public string? DbcDirectory { get; init; }
 
         /// <summary>
-        /// <c>dbc</c>: every file of the DBC directory against its vmangos layout, then the world database's references into the DBCs
-        /// (<see cref="DbcCrossReferences"/>). Read-only. Drift (5) when a referenced DBC is bad or an id dangles.
+        /// <c>dbc</c>: every file of the DBC directory against its vmangos/ArcaneCore/WoWDBDefs layout, then the world database's
+        /// references into the DBCs (<see cref="DbcCrossReferences"/>), then the client DBCs' references into each other
+        /// (<see cref="DbcCrossReferences.RunDbc"/>). Read-only. Drift (5) when a client file is bad or missing or a world id
+        /// dangles; the client-internal references are a diagnostic (the client's own data, and some WoWDBDefs annotations do not
+        /// hold for build 5875) and never change the exit code.
         /// </summary>
         public async Task<int> DbcAsync(DbUpgradeArguments a, CancellationToken ct)
         {
@@ -506,6 +509,7 @@ public static class DbUpgradeCli
             var target = new Target(s_specs.Single(s => s.Name == "world"), prepared, Describe(prepared));
             IReadOnlyList<DbcReferenceResult> references = await GuardAsync(target, ct,
                 db => DbcCrossReferences.RunAsync(db.Database.GetDbConnection(), directory, cancellationToken: ct)).ConfigureAwait(false);
+            IReadOnlyList<DbcReferenceResult> clientReferences = DbcCrossReferences.RunDbc(directory, ct);
 
             bool badFile = files.Any(f => f.Status is ClientDbcStatus.Malformed or ClientDbcStatus.FormatMismatch);
             bool dangling = references.Any(r => r.Status == DbcReferenceStatus.Dangling);
@@ -515,11 +519,8 @@ public static class DbUpgradeCli
                 {
                     directory,
                     files = files.Select(f => new { file = f.File, status = f.Status.ToString(), records = f.Records, fields = f.Fields, recordSize = f.RecordSize, layout = f.Layout?.Source, detail = f.Detail }),
-                    references = references.Select(r => new
-                    {
-                        dbc = r.Reference.Dbc, table = r.Reference.Table, column = r.Reference.Column, status = r.Status.ToString(),
-                        referencedIds = r.ReferencedIds, danglingIds = r.DanglingIds, danglingRows = r.DanglingRows, samples = r.Samples, reason = r.Reason,
-                    }),
+                    references = references.Select(Json),
+                    clientReferences = clientReferences.Select(Json),
                 })).ConfigureAwait(false);
             }
             else
@@ -530,15 +531,24 @@ public static class DbUpgradeCli
                     await _out.WriteLineAsync($"  {file.File}: {file.Describe()}").ConfigureAwait(false);
                 }
 
-                int headerOnly = files.Count(f => f.Layout is null && f.IsUsable);
-                await _out.WriteLineAsync($"  ({headerOnly} more files without a reference layout have a well-formed WDBC header)").ConfigureAwait(false);
                 foreach (string line in DbcCrossReferences.Lines(references, all: true))
+                {
+                    await _out.WriteLineAsync(line).ConfigureAwait(false);
+                }
+
+                foreach (string line in DbcCrossReferences.Lines(clientReferences, title: DbcCrossReferences.ClientInternalTitle))
                 {
                     await _out.WriteLineAsync(line).ConfigureAwait(false);
                 }
             }
 
             return badFile || dangling ? DbUpgradeExitCodes.Drift : DbUpgradeExitCodes.Ok;
+
+            static object Json(DbcReferenceResult r) => new
+            {
+                dbc = r.Reference.Dbc, table = r.Reference.Table, column = r.Reference.Column, status = r.Status.ToString(),
+                referencedIds = r.ReferencedIds, danglingIds = r.DanglingIds, danglingRows = r.DanglingRows, samples = r.Samples, reason = r.Reason,
+            };
         }
 
         public int BackupInfo(DbUpgradeArguments a)

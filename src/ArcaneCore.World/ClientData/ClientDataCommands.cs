@@ -12,7 +12,8 @@ namespace ArcaneCore.World.ClientData;
 /// <summary>
 /// <c>.arcane dbc</c> (GameMaster): the client data start-up report, one line per DBC the daemon reads (loaded N records, missing or
 /// format mismatch, and where the path came from). <c>.arcane dbc validate</c> (Administrator, it scans the world database): the
-/// world database's references into the client DBCs and how many ids dangle (<see cref="DbcCrossReferences"/>); the same report as
+/// world database's references into the client DBCs and how many ids dangle (<see cref="DbcCrossReferences"/>), then the client DBCs'
+/// references into each other as a diagnostic (<see cref="DbcCrossReferences.RunDbc"/>); the same report as
 /// <c>arcane-db dbc</c>. No reference core has either, so they live under ArcaneCore's own <c>.arcane</c> root. Read-only.
 /// </summary>
 public sealed class ClientDataCommands : ICommandExtension
@@ -83,23 +84,27 @@ public sealed class ClientDataCommands : ICommandExtension
             {
                 await using WorldDbContext db = await factory.CreateDbContextAsync().ConfigureAwait(false);
                 IReadOnlyList<DbcReferenceResult> results = await DbcCrossReferences.RunAsync(db.Database.GetDbConnection(), directory).ConfigureAwait(false);
-                IReadOnlyList<string> lines = DbcCrossReferences.Lines(results);
-                foreach (string line in lines)
+                IReadOnlyList<string> world = DbcCrossReferences.Lines(results);
+                IReadOnlyList<string> client = DbcCrossReferences.Lines(DbcCrossReferences.RunDbc(directory), title: DbcCrossReferences.ClientInternalTitle);
+                foreach (string line in world.Concat(client))
                 {
                     logger.LogInformation("{DbcValidate}", line);
                 }
 
+                // Both summaries first, then the world database's dangling references, then the client's own (a diagnostic).
+                string[] details = [.. world.Skip(1), .. client.Skip(1)];
                 context.World.Post(() =>
                 {
-                    context.Reply(lines[0]);
-                    foreach (string line in lines.Skip(1).Take(MaxValidateLines))
+                    context.Reply(world[0]);
+                    context.Reply(client[0]);
+                    foreach (string line in details.Take(MaxValidateLines))
                     {
                         context.Reply(line);
                     }
 
-                    if (lines.Count - 1 > MaxValidateLines)
+                    if (details.Length > MaxValidateLines)
                     {
-                        context.Reply($"... {lines.Count - 1 - MaxValidateLines} more lines in the server log.");
+                        context.Reply($"... {details.Length - MaxValidateLines} more lines in the server log.");
                     }
                 });
             }

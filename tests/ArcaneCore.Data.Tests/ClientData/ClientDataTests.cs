@@ -16,6 +16,7 @@ using ArcaneCore.Data.Talents;
 using ArcaneCore.Data.Tests.Skills;
 using Microsoft.Extensions.Configuration;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Data.Tests.ClientData;
 
@@ -82,12 +83,16 @@ internal sealed class TempDirectory : IDisposable
 /// <summary>The client DBC layouts, the header check and the resolution of <c>ClientData:DbcDirectory</c> (docs/areas/client-data.md).</summary>
 public sealed class ClientDataTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public ClientDataTests(ITestOutputHelper output) => _output = output;
+
     private static IConfiguration Config(params (string Key, string? Value)[] values)
         => new ConfigurationBuilder().AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value))).Build();
 
     private static string WriteAllConsumerFiles(string directory)
     {
-        foreach (string file in ClientDbcConsumers.Files)
+        foreach (string file in ClientDbcLayouts.All.Keys)
         {
             SyntheticDbc.Write(directory, file);
         }
@@ -110,6 +115,29 @@ public sealed class ClientDataTests
         foreach (string file in ClientDbcConsumers.Files)
         {
             Assert.NotNull(ClientDbcLayouts.Find(file));
+        }
+    }
+
+    [Fact]
+    public void TheGeneratedWoWDBDefsLayouts_AgreeWithEveryPrimaryLayout_AndCoverTheFullClientSet()
+    {
+        // tools/codegen/gen_dbc_layouts.py refuses to generate on a disagreement; this catches an edit to either side made
+        // without regenerating.
+        Assert.Equal(154, ClientDbcDbdLayouts.All.Count);
+        Assert.Equal(154, ClientDbcLayouts.All.Count);
+        foreach (ClientDbcLayout primary in ClientDbcLayouts.PrimaryLayouts)
+        {
+            Assert.True(ClientDbcDbdLayouts.All.TryGetValue(primary.File, out DbdLayout? generated), $"{primary.File} has no WoWDBDefs layout");
+            Assert.Equal((primary.File, primary.Fields, primary.RecordSize), (primary.File, generated!.Fields, generated.RecordSize));
+            Assert.Same(primary, ClientDbcLayouts.Find(primary.File));
+        }
+
+        foreach (DbdLayout layout in ClientDbcDbdLayouts.All.Values)
+        {
+            int fields = layout.Columns.Sum(c => c.ArrayLength * (c.Type == "locstring" ? 9 : 1));
+            DbdField last = layout.Columns[^1];
+            int lastBytes = last.ArrayLength * (last.Type == "locstring" ? 9 : 1) * (last.Type is "locstring" or "string" ? 4 : last.WidthBits / 8);
+            Assert.Equal((layout.File, layout.Fields, layout.RecordSize), (layout.File, fields, last.Offset + lastBytes));
         }
     }
 
@@ -263,5 +291,44 @@ public sealed class ClientDataTests
         Assert.Empty(report.Problems);
         Assert.Equal(ClientDataReport.KeyCount, report.Overlay.Count);
         Assert.All(report.DirectoryFiles.Where(f => f.Layout is not null), f => Assert.Equal(ClientDbcStatus.Loaded, f.Status));
+    }
+
+    [Fact]
+    public void AFileNoConsumerReads_IsCheckedAgainstItsWoWDBDefsLayout_AndOnlyListedWhenMissing()
+    {
+        using var temp = new TempDirectory();
+        WriteAllConsumerFiles(temp.Path);
+        File.Delete(Path.Combine(temp.Path, "Map.dbc"));
+        SyntheticDbc.Write(temp.Path, "WowError_Strings.dbc", fields: 10); // WoWDBDefs: ID, Name, Description_lang (9) = 11
+
+        ClientDataReport report = ClientDataReport.Build(Config(("ClientData:DbcDirectory", temp.Path)));
+        Assert.Equal(154, report.DirectoryFiles.Count);
+        Assert.Equal(ClientDbcStatus.FormatMismatch, report.DirectoryFiles.Single(f => f.File == "WowError_Strings.dbc").Status);
+        Assert.Contains(report.Problems, p => p.Key == "ClientData:DbcDirectory" && p.Problem.StartsWith("WowError_Strings.dbc", StringComparison.Ordinal));
+
+        // Nothing reads it, so a missing file is counted in the summary but is not a problem (nor fatal under ClientData:Strict).
+        Assert.Equal(ClientDbcStatus.Missing, report.DirectoryFiles.Single(f => f.File == "Map.dbc").Status);
+        Assert.DoesNotContain(report.Problems, p => p.Problem.StartsWith("Map.dbc", StringComparison.Ordinal));
+        Assert.Contains(report.Lines(), l => l.Text.Contains("1 reference files are missing", StringComparison.Ordinal));
+    }
+
+    [RealDbcFact]
+    public void TheRealClientDirectory_MatchesAll154WoWDBDefsLayouts()
+    {
+        string directory = Environment.GetEnvironmentVariable(RealDbcFactAttribute.Variable)!;
+        Assert.Equal(154, ClientDbcDbdLayouts.All.Count);
+        IReadOnlyList<ClientDbcFileCheck> checks = ClientDbcInspector.CheckDirectory(directory);
+        Assert.Equal(154, checks.Count);
+        Assert.All(checks, check => Assert.True(check.Status == ClientDbcStatus.Loaded && check.Layout is not null, $"{check.File}: {check.Describe()}"));
+        IReadOnlyList<DbcReferenceResult> references = DbcCrossReferences.RunDbc(directory);
+        Assert.Contains(references, r => r.Reference.Name == "AreaTable.dbc.ContinentID");
+        Assert.Contains(references, r => r.Reference.Name == "Spell.dbc.SpellVisualID");
+        Assert.True(references.Count > 0);
+        Assert.DoesNotContain(references, r => r.Status == DbcReferenceStatus.Skipped);
+        // The client's own cross-table inconsistencies are reported, not treated as a malformed file.
+        foreach (string line in DbcCrossReferences.Lines(references))
+        {
+            _output.WriteLine(line);
+        }
     }
 }
