@@ -90,6 +90,34 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>A creature this one summoned entered the world (cmangos JustSummoned: EventAI summons and spell summons).</summary>
+    public virtual void OnJustSummoned(Creature summoned)
+    {
+    }
+
+    /// <summary>A creature this one summoned died (cmangos SummonedCreatureJustDied).</summary>
+    public virtual void OnSummonedCreatureJustDied(Creature summoned)
+    {
+    }
+
+    /// <summary>A creature this one summoned left the world (cmangos SummonedCreatureDespawn).</summary>
+    public virtual void OnSummonedCreatureDespawn(Creature summoned)
+    {
+    }
+
+    /// <summary>
+    /// An AI event reached the creature (cmangos UnitAI::ReceiveAIEvent): <paramref name="eventType"/> is a cmangos <c>AIEventType</c>,
+    /// <paramref name="sender"/> the creature that threw it and <paramref name="invoker"/> the unit it is about.
+    /// </summary>
+    public virtual void OnReceiveAiEvent(uint eventType, Creature sender, Unit? invoker, uint miscValue)
+    {
+    }
+
+    /// <summary>A spell this creature cast landed on <paramref name="target"/> (cmangos SpellHitTarget).</summary>
+    public virtual void OnSpellHitTarget(Unit target, SpellInfo spell)
+    {
+    }
+
     /// <summary>Attacked (vmangos AttackedBy): an idle creature fights back.</summary>
     public virtual void OnAttackedBy(Unit attacker)
     {

@@ -27,6 +27,11 @@ public sealed partial class CreatureMapSystem
         var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, highGuid, guidEntry);
         creature.MapId = Map.MapId;
         CreatureHome home = prepare(creature);
+        if (creature.Summon is { } links && FindCreature(links.Owner) is { } summoner)
+        {
+            RecordSummoner(summoner, creature); // a spell summon of a creature caster (cmangos Spell::EffectSummon*: JustSummoned)
+        }
+
         creature.SetHome(home);
         creature.ResetToHome(_serverTime());
         creature.IsNewObject = true;
@@ -38,6 +43,7 @@ public sealed partial class CreatureMapSystem
         }
 
         AddToWorld(creature, loaded);
+        NotifyJustSummoned(creature);
         return creature;
     }
 

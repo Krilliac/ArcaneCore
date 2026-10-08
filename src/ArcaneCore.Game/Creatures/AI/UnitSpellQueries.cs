@@ -15,6 +15,12 @@ public interface IUnitSpellQueries
 
     /// <summary>Whether <paramref name="unit"/> has a non-melee spell or channel in progress (cmangos IsNonMeleeSpellCasted).</summary>
     bool IsCasting(Unit unit);
+
+    /// <summary>Whether a live root aura holds <paramref name="unit"/> (an AI root lifted then keeps the aura's root).</summary>
+    bool IsRooted(Unit unit) => false;
+
+    /// <summary>cmangos Unit::RemoveAurasDueToSpell (EventAI REMOVEAURASFROMSPELL); false when nothing could be removed.</summary>
+    bool RemoveAuras(Unit unit, uint spellId) => false;
 }
 
 /// <summary><see cref="IUnitSpellQueries"/> over the world <see cref="SpellSystem"/>.</summary>
@@ -31,6 +37,25 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
         ArgumentNullException.ThrowIfNull(unit);
         SpellAuraHolder? holder = spells().GetAuras(unit).FirstOrDefault(h => h.Spell.Id == spellId);
         return holder?.StackAmount ?? 0;
+    }
+
+    public bool IsRooted(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return spells().IsRooted(unit);
+    }
+
+    public bool RemoveAuras(Unit unit, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        SpellSystem system = spells();
+        if (!system.GetAuras(unit).Any(h => h.Spell.Id == spellId))
+        {
+            return false;
+        }
+
+        system.RemoveAuras(unit, spellId);
+        return true;
     }
 
     public bool IsCasting(Unit unit)

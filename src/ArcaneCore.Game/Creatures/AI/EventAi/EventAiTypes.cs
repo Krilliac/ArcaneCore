@@ -123,6 +123,24 @@ public enum EventAiTrigger
 
     /// <summary>A player aimed a text emote at the creature (cmangos ReceiveEmote).</summary>
     ReceiveEmote,
+
+    /// <summary>A unit moved in sight of the creature while it has no victim (cmangos MoveInLineOfSight, EVENT_T_OOC_LOS).</summary>
+    OutOfCombatLineOfSight,
+
+    /// <summary>The creature summoned a creature (cmangos JustSummoned).</summary>
+    Summoned,
+
+    /// <summary>A creature it summoned died (cmangos SummonedCreatureJustDied).</summary>
+    SummonedDied,
+
+    /// <summary>A creature it summoned left the world (cmangos SummonedCreatureDespawn).</summary>
+    SummonedDespawned,
+
+    /// <summary>An AI event reached the creature (cmangos ReceiveAIEvent).</summary>
+    AiEvent,
+
+    /// <summary>A spell the creature cast landed on a unit (cmangos SpellHitTarget).</summary>
+    SpellHitTarget,
 }
 
 /// <summary>Everything an action handler needs about the event that fired it.</summary>

@@ -101,6 +101,16 @@ public sealed partial class CreatureMapSystem
     public Creature? Summon(Creature summoner, uint entry, Unit? target, uint despawnMs)
     {
         ArgumentNullException.ThrowIfNull(summoner);
+        return SummonAt(summoner, entry, summoner.X, summoner.Y, summoner.Z, summoner.Orientation, target, despawnMs);
+    }
+
+    /// <summary>
+    /// <see cref="Summon"/> at a given position (cmangos EventAI SUMMON_ID: the creature_ai_summons row's position and lifetime,
+    /// CreatureEventAI.cpp:1003-1029).
+    /// </summary>
+    public Creature? SummonAt(Creature summoner, uint entry, float x, float y, float z, float orientation, Unit? target, uint despawnMs)
+    {
+        ArgumentNullException.ThrowIfNull(summoner);
         if (_content.FindTemplate(entry) is not { } template)
         {
             if (_reportedAi.Add($"summon:{entry}"))
@@ -111,7 +121,7 @@ public sealed partial class CreatureMapSystem
             return null;
         }
 
-        Creature summoned = SpawnTemporary(template, summoner.X, summoner.Y, summoner.Z, summoner.Orientation);
+        Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner); // cmangos SummonCreature → JustSummoned
         if (despawnMs > 0)
         {
             AddTimedSummon(summoned, despawnMs, SummonTimer.OutOfCombatUncharmed);

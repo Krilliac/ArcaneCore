@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -42,6 +43,7 @@ public sealed partial class CreatureMapSystem
         }
 
         OnAiDeath(creature, killer);
+        NotifySummonerOfDeath(creature);
         StopMoving(creature);
         creature.Health = 0;
         creature.NpcFlags = 0;
@@ -88,9 +90,18 @@ public sealed partial class CreatureMapSystem
     /// does not respawn after death; it disappears when its grid unloads.
     /// </summary>
     public Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation)
+        => SpawnTemporary(template, x, y, z, orientation, summoner: null);
+
+    /// <summary><see cref="SpawnTemporary(CreatureTemplate, float, float, float, float)"/> by a summoner, known to the summon from its start.</summary>
+    internal Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation, Creature? summoner)
     {
         ArgumentNullException.ThrowIfNull(template);
         var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver);
+        if (summoner is not null)
+        {
+            RecordSummoner(summoner, creature);
+        }
+
         creature.MapId = Map.MapId;
         creature.SetHome(new CreatureHome(x, y, z, orientation));
         creature.ResetToHome(_serverTime());
@@ -103,6 +114,7 @@ public sealed partial class CreatureMapSystem
         }
 
         AddToWorld(creature, loaded);
+        NotifyJustSummoned(creature);
         return creature;
     }
 
@@ -271,6 +283,8 @@ public sealed partial class CreatureMapSystem
     private void RemoveFromWorld(Creature creature)
     {
         _creatures.Remove(creature.Guid);
+        _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
+        NotifySummonerOfRemoval(creature);
         ForgetAi(creature);
         creature.Motion.Reset();
         Map.Combat.Untrack(creature);
@@ -351,6 +365,13 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        // An EventAI UPDATE_TEMPLATE lasts until the respawn (cmangos Creature::ResetEntry(respawn), Creature.cpp:636-655).
+        if (creature.ScriptOriginalTemplate is { } original)
+        {
+            creature.ChangeTemplate(original);
+            creature.ScriptOriginalTemplate = null;
+        }
+
         // A spawn with several entries picks again at every respawn (vmangos Creature.cpp:830-841); the GUID stays, the AI follows the template.
         bool entryChanged = false;
         if (creature.Spawn is { } spawn && _options.Respawn.AlternateEntries && _content.GetSpawnEntries(spawn.Guid) is { Count: > 0 } alternatives
@@ -390,6 +411,9 @@ public sealed partial class CreatureMapSystem
         ResetGuardCall(creature); // vmangos BasicAI::JustRespawned
         creature.WaypointsPaused = false; // a respawn starts with fresh unit state (relay scripts' pause and run mode)
         creature.ScriptRun = false;
+        SetAiImmobilized(creature, false, combatOnly: false);
+        creature.FollowMovementDisabled = false;
+        creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
     }
 

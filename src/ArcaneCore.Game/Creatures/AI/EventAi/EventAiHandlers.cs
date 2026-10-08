@@ -65,6 +65,9 @@ public abstract class EventAiEventHandler
     /// <summary>Whether a spell hit matches this row (only for <see cref="EventAiTrigger.SpellHit"/> handlers).</summary>
     public virtual bool MatchesSpell(CreatureAiEvent row, SpellInfo spell) => false;
 
+    /// <summary>Whether a unit that moved in sight matches this row (only for <see cref="EventAiTrigger.OutOfCombatLineOfSight"/> handlers).</summary>
+    public virtual bool MatchesUnit(EventAiContext context, EventAiHolder holder, Unit who) => false;
+
     /// <summary>Whether a text emote matches this row (only for <see cref="EventAiTrigger.ReceiveEmote"/> handlers).</summary>
     public virtual bool MatchesEmote(CreatureAiEvent row, uint textEmote) => false;
 

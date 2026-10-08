@@ -265,6 +265,8 @@ public sealed partial class CreatureMapSystem
         {
             creature.AI?.OnSpellHit(caster, spell);
         }
+
+        NotifySpellHitTarget(caster, target, spell);
     }
 
     /// <summary>vmangos IsWithinLOSInMap through the map's <see cref="ILineOfSight"/> (<c>map.Collision</c>, eye height; open without vmaps).</summary>

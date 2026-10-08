@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -107,6 +108,9 @@ public sealed class EventAiContext
                 break;
             case 10: // TARGET_T_EVENT_SENDER
                 result = invocation.Sender;
+                break;
+            case 11: // TARGET_T_SPAWNER: the creature or unit that summoned this one (cmangos GetSpawner)
+                result = System?.SummonerOf(Me) ?? (Me.OwnerGuid.IsEmpty ? null : Me.Map?.FindObject(Me.OwnerGuid) as Unit);
                 break;
             case 12: // TARGET_T_EVENT_SPECIFIC
                 result = invocation.EventTarget;
