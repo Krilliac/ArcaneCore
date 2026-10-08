@@ -25,6 +25,8 @@ internal sealed record PlaybotRunReport(string Outcome, string? Failure, bool En
 {
     public bool ModelRequested { get; init; }
     public bool ModelWarm { get; init; }
+    /// <summary>SMSG_LOGOUT_RESPONSE refusal reasons received before the final logout reply.</summary>
+    public IReadOnlyList<uint> LogoutRefusals { get; init; } = [];
 }
 
 /// <summary>A single normal protocol player, with one reader and finite gameplay/traffic budgets.</summary>
@@ -50,6 +52,8 @@ internal static class AutonomousPlaybot
         WorldClient? client = null;
         ScenarioConnection? connection = null;
         bool entered = false, loggedOut = false;
+        ulong self = 0, attackTarget = 0;
+        List<uint> logoutRefusals = [];
         string? failure = null;
         string outcome = "budget-complete";
         using var run = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -74,11 +78,11 @@ internal static class AutonomousPlaybot
                 throw new MockProtocolException("Initial playbot repertoire requires a Human Warrior.");
             MockLogin login = await connection.LoginAsync(chosen.Guid, ct).ConfigureAwait(false);
             entered = true;
+            self = chosen.Guid;
             var origin = new MockPosition(login.Location.X, login.Location.Y, login.Location.Z);
             var position = origin;
             var queried = new HashSet<ulong>();
             var looted = new HashSet<ulong>();
-            ulong attackTarget = 0;
             bool released = false, heroicQueued = false;
             int moves = 0;
             int combatDiagnostics = 0;
@@ -274,11 +278,27 @@ internal static class AutonomousPlaybot
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 try
                 {
-                    await connection.SendAsync(WorldOpcode.CmsgAttackstop, [], cleanup.Token).ConfigureAwait(false);
-                    await connection.SendAsync(WorldOpcode.CmsgLogoutRequest, [], cleanup.Token).ConfigureAwait(false);
-                    byte[] reply = await LiveSession.ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutResponse, cleanup.Token).ConfigureAwait(false);
-                    if (LiveSession.IsSuccessfulLogoutResponse(reply))
-                        loggedOut = (await LiveSession.ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutComplete, cleanup.Token).ConfigureAwait(false)).Length == 0;
+                    // A live target keeps fighting (and threatening) us whether or not we swing back, so
+                    // stopping the swing could only make the combat that blocks logout last forever.
+                    if (attackTarget == 0 || connection.FieldsOf(attackTarget).GetValueOrDefault(UpdateFields.UnitFieldHealth) == 0)
+                        await connection.SendAsync(WorldOpcode.CmsgAttackstop, [], cleanup.Token).ConfigureAwait(false);
+                    // The server refuses logout while in combat (vmangos HandleLogoutRequestOpcode reason 1),
+                    // and a player stays in combat until the next 1.2 s combat check after its last
+                    // threatening creature dies (vmangos Unit::Update). Wait for that observable exit and ask again.
+                    while (true)
+                    {
+                        await connection.SendAsync(WorldOpcode.CmsgLogoutRequest, [], cleanup.Token).ConfigureAwait(false);
+                        byte[] reply = await LiveSession.ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutResponse, cleanup.Token).ConfigureAwait(false);
+                        if (LiveSession.IsSuccessfulLogoutResponse(reply))
+                        {
+                            loggedOut = (await LiveSession.ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutComplete, cleanup.Token).ConfigureAwait(false)).Length == 0;
+                            break;
+                        }
+                        uint reason = reply.Length == 5 ? BinaryPrimitives.ReadUInt32LittleEndian(reply) : uint.MaxValue;
+                        logoutRefusals.Add(reason);
+                        if (reason != (uint)LogoutResult.InCombat || logoutRefusals.Count >= MaximumLogoutRequests) break;
+                        await WaitForCombatExitAsync(connection, self, cleanup.Token).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception error) when (error is IOException or OperationCanceledException or TimeoutException or ObjectDisposedException) { }
                 if (!loggedOut) { outcome = "failed"; failure ??= "logout-incomplete"; }
@@ -286,7 +306,26 @@ internal static class AutonomousPlaybot
             if (client is not null) await client.DisposeAsync().ConfigureAwait(false);
         }
         return new(outcome, failure, entered, loggedOut, connection?.FramesReceived ?? 0,
-            connection?.BytesReceived ?? 0, replies, steps);
+            connection?.BytesReceived ?? 0, replies, steps) { LogoutRefusals = logoutRefusals };
+    }
+
+    private const int MaximumLogoutRequests = 8;
+
+    /// <summary>
+    /// Reads (and so applies) server traffic until our own observed UNIT_FIELD_FLAGS lose
+    /// UNIT_FLAG_IN_COMBAT. Bounded by the caller's token and the same one-megabyte budget as logout.
+    /// </summary>
+    private static async Task WaitForCombatExitAsync(ScenarioConnection connection, ulong self, CancellationToken cancellationToken)
+    {
+        int receivedBytes = 0;
+        while ((connection.FieldsOf(self).GetValueOrDefault(UpdateFields.UnitFieldFlags) & (uint)UnitFlags.InCombat) != 0)
+        {
+            await connection.WaitForTrafficAsync(cancellationToken).ConfigureAwait(false);
+            WorldFrame frame = await connection.ReadAsync(cancellationToken).ConfigureAwait(false);
+            receivedBytes += frame.Payload.Length + 4;
+            if (receivedBytes > 1024 * 1024)
+                throw new MockProtocolException("combat exit before logout exceeded its one-megabyte traffic budget");
+        }
     }
 
     private static uint? Read(IReadOnlyDictionary<int, uint> fields, int index)

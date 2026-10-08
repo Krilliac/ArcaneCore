@@ -7,6 +7,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Playbots;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -87,6 +88,9 @@ public sealed class PlaybotRuntimeSurvivalTests(ITestOutputHelper output)
             "Botdefender", Seconds: 25, Steps: 10, AttackEntry: SyntheticArcaneServer.TargetEntry, Movement: false), selector, bound.Token);
         Assert.True(report.Outcome == "budget-complete", System.Text.Json.JsonSerializer.Serialize(report));
         Assert.True(report.LogoutComplete);
+        // The budget can end mid-fight; the only acceptable refusal is the server's in-combat one,
+        // which the playbot waits out (observed combat exit) before asking again.
+        Assert.All(report.LogoutRefusals, reason => Assert.Equal((uint)LogoutResult.InCombat, reason));
         output.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
         Assert.Contains(report.Steps, step => step.Action == "Attack" && step.Target == SyntheticArcaneServer.FirstTargetGuid
             && step.DecisionId.Contains(":defend-", StringComparison.Ordinal));
