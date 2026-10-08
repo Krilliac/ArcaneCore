@@ -89,6 +89,38 @@ public sealed class PlayerbotGroupPlayerTests
     }
 
     [Fact]
+    public async Task ABotInABotLedGroup_StillAnswersAPlayersWhisper_AndTheGroupFormedThroughItsIntakeStays()
+    {
+        // Bot chat (on by default) and the coordinator share the party intake: the members' acceptances of the leader's invitations
+        // must not be swallowed by the chat, and a grouped bot must still answer a real player (wave 8 merge of bot-chat and bot-groups).
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => options.Chat.PerPlayerCooldownSeconds = 0);
+        var tank = await world.AddBotAsync("Chattank", Human, Warrior, 10, [Taunt]);
+        var healer = await world.AddBotAsync("Chatprie", Human, Priest, 10, [LesserHeal, Smite]);
+        var mage = await world.AddBotAsync("Chatmage", Human, Mage, 10, [Fireball]);
+        Assert.True(world.Options.Chat.Enabled);
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.Equal(3, await world.OnWorldAsync(() => world.GroupManager.GetGroup(world.Player(tank.Id).Guid)?.MemberCount ?? 0));
+
+        await using WorldTestClient player = await world.World.EnterWorldAsync("CHATGROUPP", "Chatgroupp", AccountSecurity.Player);
+        await player.CollectAsync();
+        ulong bot = await world.OnWorldAsync(() => world.Player(healer.Id).Guid.Value);
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.Drives(healer.Id)));
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "what level are you?", healer.Name);
+
+        ArcaneCore.World.Playerbots.Chat.PlayerbotChat chat = world.Bots.Chat!;
+        Assert.True(await world.RunUntilAsync(10_000, () => chat.Status().Answered >= 1), world.Trace());
+        await world.RunAsync(500); // the reply is said on the world thread at the next tick
+        ChatMessage reply;
+        do reply = await player.ReadChatAsync(); while (reply.Type != ChatType.Whisper || reply.Sender != bot);
+        Assert.Matches(@"\b10\b", reply.Text);
+        Assert.NotEqual(ArcaneCore.World.Playerbots.Party.PlayerbotChatCommands.PoliteReply, reply.Text);
+
+        // The bot is still in its group and still driven by the coordinator; the mage was never turned away either.
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.Drives(healer.Id) && world.Coordinator.Drives(mage.Id)));
+        Assert.True(await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(world.Player(tank.Id).Guid, world.Player(healer.Id).Guid)));
+    }
+
+    [Fact]
     public async Task AServerGroupOfBotsNobodyLeads_IsLeft()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([]);
