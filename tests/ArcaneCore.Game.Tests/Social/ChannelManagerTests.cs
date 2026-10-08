@@ -174,9 +174,10 @@ public sealed class ChannelManagerTests
     }
 
     [Fact]
-    public void WorldDefense_IsMuted_WithoutHonorRank()
+    public void WorldDefense_IsMuted_ForAnUnrankedPlayer_WhileHonorIsEnabled()
     {
         using var f = new SocialFixture();
+        ArcaneCore.Game.Honor.HonorHooks.Register(f.World, new ArcaneCore.Game.Honor.HonorHooks(new ArcaneCore.Game.Honor.HonorOptions(), ArcaneCore.Game.Honor.HonorClock.System) { InternalRank = _ => 0 });
         Player a = f.AddPlayer(1);
         f.Context.Channels.Join(a, "WorldDefense", string.Empty);
         f.ClearAll();

@@ -61,6 +61,9 @@ public sealed partial class MapCombat
             KillPlayer(player); // released before its update ran (HandleRepopRequestOpcode)
         }
 
+        // BuildPlayerRepop (Player.cpp:4586-4589): Waiting to Resurrect for a player in a battleground, before the ghost form.
+        Death.DeathSeams.Find(_world)?.Battlegrounds?.OnSpiritReleased(player);
+
         // The ghost aura (when there is one) sets the ghost flag itself, so the order to walk on water is not gated on the flag
         // being clear afterwards (RepopPlayer refused a player that already was a ghost above).
         Hooks.ApplyGhostForm(player);

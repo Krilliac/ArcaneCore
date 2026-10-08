@@ -57,11 +57,17 @@ public interface IBattlegroundManagerHost
 /// <summary>Creates the match object of a type; null when the type is not supported (vmangos <c>CreateNewBattleGround</c> returns null for a type it cannot build).</summary>
 public delegate Battleground? BattlegroundFactory(BattlegroundTemplate template, int bracket, uint instanceId, uint clientInstanceId, BattlegroundOptions options, BattlegroundPorts ports);
 
-/// <summary>The match types this build can run: Warsong Gulch.</summary>
+/// <summary>The match types this build can run: Alterac Valley, Warsong Gulch and Arathi Basin (vmangos <c>CreateNewBattleGround</c>, BattleGroundMgr.cpp:1250-1262).</summary>
 public static class BattlegroundFactories
 {
     public static Battleground? Default(BattlegroundTemplate template, int bracket, uint instanceId, uint clientInstanceId, BattlegroundOptions options, BattlegroundPorts ports)
-        => template.Type == BattlegroundType.WarsongGulch ? new WarsongGulch(template, bracket, instanceId, clientInstanceId, options, ports) : null;
+        => template.Type switch
+        {
+            BattlegroundType.AlteracValley => new AlteracValley(template, bracket, instanceId, clientInstanceId, options, ports),
+            BattlegroundType.WarsongGulch => new WarsongGulch(template, bracket, instanceId, clientInstanceId, options, ports),
+            BattlegroundType.ArathiBasin => new ArathiBasin(template, bracket, instanceId, clientInstanceId, options, ports),
+            _ => null,
+        };
 }
 
 /// <summary>A player's queue slots and the match it is bound to (vmangos <c>m_bgBattleGroundQueueID[3]</c> and <c>m_bgData</c>).</summary>
@@ -213,7 +219,7 @@ public sealed record BattlegroundStatusReport(uint QueueSlot, BattlegroundStatus
 /// the free-slot lists, the client-visible instance ids, the scheduled queue updates and the invitation timers. Time moves only through
 /// <see cref="Update"/>. World thread.
 /// <para>
-/// Not delivered: Alterac Valley and Arathi Basin matches (the factory builds Warsong Gulch only), the premade-queue announcer, randomized
+/// Not delivered: the premade-queue announcer, randomized
 /// queue order and the debug "testing" mode of vmangos (docs/areas/battlegrounds.md).
 /// </para>
 /// </summary>
@@ -351,6 +357,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             Ranks = _basePorts.Ranks,
             Reputation = _basePorts.Reputation,
             Calendar = _basePorts.Calendar,
+            Random = _basePorts.Random,
             Lifecycle = this,
         };
 

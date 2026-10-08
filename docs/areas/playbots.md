@@ -115,6 +115,15 @@ trade window; both inventories and purses), `duel` (spell 7266, accept, countdow
 registered in DI are listed too. `ScenarioSteps` holds reusable blocks (form a group, open and
 accept a trade, leave earlier groups).
 
+**Battlegrounds** (`ScenarioBattlegrounds`, kept out of the shared harness files): bot actions `BattlemasterHelloAsync`,
+`JoinBattlegroundAsync` (CMSG_BATTLEMASTER_JOIN), `PortBattlegroundAsync`, `LeaveBattlefieldAsync`, `BattlefieldStatusAsync`, `PvpLogDataAsync`,
+`PlayerPositionsAsync`, `CancelAuraAsync`; decoders for SMSG_BATTLEFIELD_STATUS, MSG_PVP_LOG_DATA, SMSG_UPDATE_WORLD_STATE and
+MSG_BATTLEGROUND_PLAYER_POSITIONS; lookups of a battlemaster spawn of a type (`battlemaster_entry`), a game object spawn and an area trigger. The
+scenario `wsg` (`WarsongGulchScenario`, registered by tests; a realm would register it as an `IPlayerbotScenario` service) logs in a human and an
+orc warrior, queues each at a battlemaster of its continent, ports both into one match, waits out the two-minute start, captures the Horde flag,
+drops the Alliance flag by cancelling the flag aura, returns it, captures twice more (SMSG_BATTLEFIELD_WIN / _LOSE, the final scoreboard) and
+waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening.
+
 ### Running scenarios on a live server
 
 `.playerbot scenario list` and `.playerbot scenario run <name>` (Administrator) run a registered
@@ -156,6 +165,8 @@ teleport to Kalimdor, the hunter gets its pet bar again and a watcher bot's clie
 so the bot's class byte is set to hunter on the world thread) and `raid-lock` (`RaidLockScenarioTests`: two bots form a raid group with
 CMSG_GROUP_RAID_CONVERT, Molten Core is added to the map registry on the world thread, the leader is locked inside, the stored
 `group_instance` row is read back from SQLite, and the member who was outside enters the same instance and is locked too).
+`BattlegroundScenarioTests` and `BattlegroundWorldScenarioTests` start the scenario world with `WarsongGulchTestContent` (map 489, its safe
+locations, flag stands with their event rows, flag room triggers, flag auras, a battlemaster per side) through the `StartAsync(configure)` hook.
 
 ## MockClient playbot (external protocol client)
 

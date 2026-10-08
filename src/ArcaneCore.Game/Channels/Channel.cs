@@ -399,11 +399,17 @@ public sealed class Channel
     /// vmangos Channel::Say: member; not muted (WorldDefense needs internal honor rank 15, see
     /// <see cref="ArcaneCore.Game.Honor.HonorHooks.InternalRank"/>); moderated channels need a moderator or GM; universal language with
     /// two-side channels; members ignoring a non-moderator speaker do not receive it.
+    /// <para>
+    /// With honor disabled (<c>World:Honor:Enabled</c> false: no rank source is registered) nobody can ever hold a rank, so the WorldDefense
+    /// rank gate does not apply and the channel is open like LocalDefense; the message carries rank 0. vmangos has no switch to turn honor
+    /// off, so this case does not arise there (deliberate deviation, docs/areas/battlegrounds.md).
+    /// </para>
     /// </summary>
     internal void Say(Player player, string text, Language language)
     {
-        // GetHonorMgr().GetRank().rank (Channel.cpp:636-648, 670); 0 until the honor feature supplies the ranks.
-        byte honorRank = ArcaneCore.Game.Honor.HonorHooks.For(_context.World).InternalRank?.Invoke(player) ?? 0;
+        // GetHonorMgr().GetRank().rank (Channel.cpp:636-648, 670); null while honor is disabled.
+        byte? rankSource = ArcaneCore.Game.Honor.HonorHooks.For(_context.World).InternalRank?.Invoke(player);
+        byte honorRank = rankSource ?? 0;
         if (!IsOn(player.Guid))
         {
             SendToOne(player, ChannelPackets.BuildNotify(ChatNotify.NotMember, Name));
@@ -411,7 +417,7 @@ public sealed class Channel
         }
 
         ChannelMemberFlags flags = FlagsOf(player.Guid);
-        if ((flags & ChannelMemberFlags.Muted) != 0 || (ChannelId == BuiltInChannels.WorldDefenseId && honorRank < BuiltInChannels.WorldDefenseSpeakRank))
+        if ((flags & ChannelMemberFlags.Muted) != 0 || (ChannelId == BuiltInChannels.WorldDefenseId && rankSource is { } rank && rank < BuiltInChannels.WorldDefenseSpeakRank))
         {
             SendToOne(player, ChannelPackets.BuildNotify(ChatNotify.Muted, Name));
             return;

@@ -33,6 +33,9 @@ public enum GameObjectType : uint
     MeetingStone = 23,
     FlagStand = 24,
     FishingHole = 25,
+
+    /// <summary>GAMEOBJECT_TYPE_FLAGDROP (vmangos GameObjectDefines.h, client 1.8+): a dropped battleground flag.</summary>
+    FlagDrop = 26,
 }
 
 /// <summary>GOState: GAMEOBJECT_STATE values.</summary>

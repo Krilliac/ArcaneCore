@@ -81,6 +81,34 @@ public sealed partial class InstanceManager : IMapResolver
     public InstanceOptions Options => _options;
 
     /// <summary>
+    /// The resolver of battleground maps (the battleground feature installs it). A battleground map is not a dungeon, so without it a player
+    /// would enter the shared copy (instance 0); with it every resolver call for a battleground map is delegated, and the instance rules of
+    /// this manager never see one (vmangos <c>MapManager::CreateBgMap</c> keeps battleground maps apart from the dungeon instances).
+    /// </summary>
+    public IMapResolver? BattlegroundMaps { get; set; }
+
+    /// <summary>
+    /// A fresh instance id from the counter the dungeon saves use, for a map that is not a dungeon save (a battleground match; vmangos
+    /// <c>MapManager::GenerateInstanceId</c> serves both). World thread.
+    /// </summary>
+    public uint AllocateInstanceId()
+    {
+        uint id = _nextInstanceId++;
+        while (_saves.ContainsKey(id))
+        {
+            id = _nextInstanceId++;
+        }
+
+        return id;
+    }
+
+    private bool IsBattlegroundMap(uint mapId, out IMapResolver resolver)
+    {
+        resolver = BattlegroundMaps!;
+        return BattlegroundMaps is not null && Registry.Find(mapId) is { IsBattleground: true };
+    }
+
+    /// <summary>
     /// Raised on the world thread when a logical save is deleted for good (a real reset, a
     /// delete after nobody is bound, or the startup drop of an unbound or expired save), after
     /// its storage delete was queued. The state kept per save (chest loot) follows it.
@@ -246,6 +274,11 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map ResolveLoginMap(Player player)
     {
+        if (IsBattlegroundMap(player.MapId, out IMapResolver battlegrounds))
+        {
+            return battlegrounds.ResolveLoginMap(player);
+        }
+
         MapTemplate? template = Registry.Find(player.MapId);
         if (template is null || !template.IsDungeon)
         {
@@ -272,6 +305,11 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public bool CanEnter(Player player, uint mapId)
     {
+        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        {
+            return battlegrounds.CanEnter(player, mapId);
+        }
+
         MapTemplate? template = Registry.Find(mapId);
         if (template is null || !template.IsDungeon)
         {
@@ -285,6 +323,11 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map? ResolveEntry(Player player, uint mapId)
     {
+        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        {
+            return battlegrounds.ResolveEntry(player, mapId);
+        }
+
         MapTemplate? template = Registry.Find(mapId);
         if (template is null || !template.IsDungeon)
         {
@@ -307,6 +350,8 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public void OnEntered(Player player, Map map)
     {
+        // The battleground resolver hears about every arrival (a far teleport out of a match leaves it, Player.cpp:2036-2043).
+        BattlegroundMaps?.OnEntered(player, map);
         PlayerState state = StateFor(player);
         SendSavedInstances(player); // every far teleport, instance or not (vmangos SendNewWorld)
         if (!_mapStates.TryGetValue(map, out InstanceMapState? mapState))
@@ -345,6 +390,11 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map? ResolveCorpseMap(uint mapId, uint instanceId)
     {
+        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        {
+            return battlegrounds.ResolveCorpseMap(mapId, instanceId);
+        }
+
         if (_world.FindMap(mapId, instanceId) is { } loaded)
         {
             return loaded;

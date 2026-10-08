@@ -1,4 +1,4 @@
-# Area: Battlegrounds (framework and Warsong Gulch)
+# Area: Battlegrounds (framework, Warsong Gulch, Arathi Basin, Alterac Valley, the world lifecycle)
 
 Branch `claude/vw5-battlegrounds` (wave 4, lane `battlegrounds`, based on `claude/vw4-integration` 7313b9e). Merge notes are in
 [docs/integration/battlegrounds.md](../integration/battlegrounds.md). Directive: everything as close to retail 1.12.1 as possible,
@@ -22,6 +22,27 @@ The options (`BattlegroundOptions`, section `Battleground`) default to retail an
 finish 300000 ms (0 = off), `InvitationType` 1, premade wait 0, premade minimum group 6, `QueuesCount` 0 meaning 3 (client patch 1.9+),
 `TagInBattlegrounds` on, `GroupQueueLimit` 40. The server binding of the section and the `CastDeserter` use belong to the lifecycle slice
 (not delivered, below).
+
+## Wave 2 (lane `battlegrounds`, branch `claude/w2-battlegrounds`)
+
+The battlegrounds are live in the world daemon: queue at a battlemaster, port into a per-match map instance, play, leave.
+
+| Slice | What it does | Reference |
+|---|---|---|
+| Arathi Basin (`ArathiBasin`) | Five nodes clicked through their banner (`EventPlayerClickedOnFlag`, event1 = node): a neutral node is claimed, an enemy node assaulted, an own node the enemy contests defended; a contested node is occupied after 60 s; occupied nodes tick 10/10/10/10/30 resources every 12/9/6/3/1 s (the tick fires once the accumulated time is strictly above the interval); 2000 wins; the near-victory text once above 1800; honor per 330 resources (200 on a weekend) and 10 reputation per 200 (150) with 509/510; the four/five-base quest spells 24061/24064; the banner events `(node, status)` with the 1 s / 5 s banner delay; node credits 15001-15005; node graveyards by squared 2D distance (entrance 890/889 before the start, start graveyards 898/899 without a node); the initial world states (icons, node states with the `{0,2,3,0,1}` offsets, occupied bases, resources, the unknown `0x745 = 2`); the 15 buff objects of the match, re-rolled to a random type when one is taken (180 s); exits 3948/3949. | `BattleGroundAB.cpp`, `BattleGroundAB.h` |
+| Alterac Valley (`AlteracValley`) | Seven graveyards and eight towers/bunkers with Alliance, Horde or neutral (Snowfall) owners; assault and defend through the banner's `(node, owner * 2 + state)` event; a node assaulted for 5 minutes is taken (graveyard) or destroyed (tower: -75 reinforcements to its old owner, reputation and bonus honor to the destroyer); 600 reinforcements, -1 per death (not in Spirit of Redemption), -100 for a captain (once), +1 per 45 s per owned mine, a mine reclaimed by the neutral team after 20 minutes; the captains' buffs (22751/23693) every 2-6 minutes; the general's death ends the match (vmangos removed the reinforcement-zero win, BattleGroundAV.cpp:782-787); the end bonuses for surviving towers, owned graveyards (the vmangos loop also counts the towers), owned mines and a living captain, the weekend 1584/396; the cave or the nearest controlled graveyard; the world states (nodes, mines, scores, the score display only while running); exits 2608/2606; no premature finish. | `BattleGroundAV.cpp`, `BattleGroundAV.h` |
+| Base objectives | `FlagCarrierShownTo` (the MSG_BATTLEGROUND_PLAYER_POSITIONS carrier: the viewer's own team's carrier, vmangos sends an Alliance viewer `GetHordeFlagPickerGuid`), `EventPlayerDroppedFlag` and `EventPlayerClickedOnFlag` as the single entries every trigger reaches, `HandleKillUnit`, `HandleTriggerBuff` and `BuffChange`, the position-aware `ClosestGraveyard`, `BonusHonorFromKill` (`GetHonorGain(max, max, rank 1)`), `HonorModifier` (`60^(hours-1)` under an hour), `CastSpellOnTeam`. The factory builds all three types. | `BattleGround.cpp:546-564, 771-783, 1713-1757`; `BattleGroundHandler.cpp:266-326` |
+| World tables (world schema 44) | `battleground_template`, `creature_battleground`, `gameobject_battleground` and `battlemaster_entry` (classic-db layout; vmangos patch rows and mark spells are read too) through `IBattlegroundContentStore`, imported by the content CLI. With an empty template table the classic-db rows are built in; the marks default to the 1.12 marks of honor (`BattleGroundMarks`). | `BattleGroundMgr.cpp:1332-1399, 1631-1729` |
+| Lifecycle (`ArcaneCore.World/Battlegrounds`) | `BattlegroundFeature` runs the manager on the world tick, registers the templates (start locations from WorldSafeLocs), creates one map instance per match (ids from the dungeon counter, `InstanceManager.AllocateInstanceId`), resolves battleground maps (`InstanceManager.BattlegroundMaps`), lets only a match's players onto its map (`TeleportService.BattlegroundEntryAllowed`), adds an arriving player to its match and sends the initial world states, makes a far teleport out of a match leave it, removes a participant who logs out and moves a login on a battleground map to the entry point (or the bind point). `MatchRuntime` is a match's `IBattlegroundHost`: battleground system messages (broadcast texts; `mangos_string` English rows), sounds, world states, statuses, the end packets, resurrections, client control, the 100 yd return, doors (event 254: opened, then removed), the event spawn gate (an `IWrappingSpawnGate` in front of the game-event gate, with the 1 s / 5 s banner delays), the flag stands and dropped flags, the AB/AV banners (opening a button with `noDamageImmune`), the dropped flag summon, the match objects, the buff traps, the kills, the herald yells and the quest credits. `BattlegroundHandlers`: battlemaster hello and join (a battlemaster in reach, or the portal within 50 yd of the entry point), battlefield list and port, leave (not in combat in a running match), the scoreboard and the map positions; CMSG_BATTLEFIELD_STATUS answers through the feature. | `BattleGroundHandler.cpp`; `BattleGroundMgr.cpp:1432-1473`; `Player.cpp:1861-1864, 2036-2043, 14775-14788, 18675-18702` |
+| Flag drops on every trigger | The flag aura's removal (any cause: a right click, a positive school immunity or unattackable aura on a player, which strips the auras carrying `AURA_INTERRUPT_INVULNERABILITY_BUFF_CANCELS`, mounting through the aura's own mount flag), death, leaving and a far teleport all reach `EventPlayerDroppedFlag`. An accepted summon would too, but this server has no summon acceptance. | `SpellAuras.cpp:4066-4083, 4112-4121, 5689-5695`; `Player.cpp:19665-19669` |
+| Buff traps | A spawned trap whose radius (data2) is 0 and cooldown (data5) 3 is a battleground buff: a living player within 3 yd gets its spell (data3), the trap cools down 3 s, then `HandleTriggerBuff`: a database buff (Warsong Gulch) is despawned and respawns on its spawn timer, an Arathi Basin buff re-rolls. | `GameObject.cpp:476-551` |
+| Spell 2584 | Releasing the spirit as a participant casts Waiting to Resurrect before the ghost form (`IBattlegroundPresence.OnSpiritReleased`); leaving a battleground removes it. | `Player.cpp:4586-4589, 18681` |
+| WorldDefense with honor disabled | The rank-15 speak gate applies only while an honor rank source is registered; with `World:Honor:Enabled` false the channel is open and carries rank 0. | `Channel.cpp:636-648` |
+| Bot scenario | `WarsongGulchScenario` (`wsg`) and the harness extensions in `ScenarioBattlegrounds` (docs/areas/playbots.md). | |
+
+Data a live realm needs: the world import of the four tables above (classic-db z2815 has 3 templates, 24 battlemasters and the event rows),
+`WorldSafeLocs.dbc` (the start locations and graveyards), `AreaTrigger.dbc` rows 3646/3647 and the exits, the map rows 30/489/529 and the
+battleground game objects and creatures. Without the event rows nothing is gated: flags and banners stand from the start and doors stay shut.
 
 ## Deviations from vmangos (each is deliberate and small)
 
@@ -48,53 +69,57 @@ finish 300000 ms (0 = off), `InvitationType` 1, premade wait 0, premade minimum 
 - **The shipped config default is used for `InvitationType`.** `World.cpp:787` reads 0 when the key is missing, `mangosd.conf.dist.in:2932`
   ships 1 (the balanced, retail behaviour). Default here: 1.
 - `Battleground.UpdatePlayerScore` and the reward ports are keyed by guid; vmangos scans `sObjectMgr.GetPlayer` per call.
+- **The buff a trap gives is cast by the player on itself.** vmangos casts it from the game object; the spell system cannot cast from an object,
+  and for a self-only aura the result differs only in the aura's caster guid.
+- **Opening an Arathi Basin or Alterac Valley banner also runs the button's own activation** (its state flips) before the battleground hears of
+  it; vmangos returns from the open-lock effect first. CMSG_GAMEOBJ_USE on a locked banner is refused by the lock as before; the click reaches the
+  battleground through the opening spell. There is no cast-time check of `CanUseBattleGroundObject` in the spell's cast checks.
+- **A participant who logs out is removed at once** (offline: nothing of it is touched); vmangos keeps it for `MAX_OFFLINE_TIME` and lets it
+  rejoin. Its next login is at the entry point (the memory, else the `character_battleground_data` row), as vmangos does once the match is gone.
+- **WorldDefense is open while honor is disabled** (above): vmangos cannot turn honor off.
+- **The `mangos_string` texts are the English rows** of cmangos-classic `mangos.sql`; a broadcast text missing from `broadcast_text` falls back
+  to a recorded English line.
+- **The dropped flag is placed by the match**, not by the spell (23334/23336): the spell system has no SUMMON_OBJECT_WILD effect.
 
 ## Limits (documented, not hidden)
 
 Not delivered, and what each needs. Nothing below is stubbed inside the delivered scope; the code that depends on it is behind a port with an
 inert default.
 
-- **Slice S3 (content tables).** `battleground_template` (vmangos columns: id, patch, min/max players per team, min/max level, the four mark
-  spells, the two start locations, player loot id), `battlemaster_entry`, `battleground_events`, `gameobject_battleground`,
-  `creature_battleground`, `areatrigger_bg_entrance` and the importer are a World schema change (hosted-CI provider theories required:
-  MariaDB DDL is not transactional, PostgreSQL DDL is, quoting and case folding differ). Also needed: areatrigger rows 3646, 3647, 3669,
-  3671 (AreaTrigger.dbc-derived, not in classic-db) and WorldSafeLocs 769-772 (DBC). `BattlegroundTemplate` is the record the loader will
-  fill; `BattlegroundManager.RegisterTemplate` validates the map. classic-db's WSG row `(2, 5, 10, 10, 60, 769, 770, 75, 0)` is the cross-check
-  (it has no mark-spell columns; the vmangos column set is the schema to import).
-- **Slice S5 (instances, entry points, persistence).** `WorldRuntime.MapResolver` is one slot held by `InstanceManager`, which returns the
-  shared map for every non-dungeon template, so a battleground map needs a composite resolver and an instance id allocator shared with
-  `InstanceManager` (`IBattlegroundManagerHost.AllocateInstanceId` is that seam). `TeleportService.Check` (line 118) and
-  `TeleportCommands.cs:130` refuse every battleground map and must become a per-player assignment check (Player.cpp:1863), with the far-teleport
-  `LeaveBattleground` rule (Player.cpp:2036-2043) and the entry-point return (Player.cpp:2144-2150, 18624-18672). `character_battleground_data`
-  (guid, instance, team, x, y, z, o, map; Player.cpp:20950-20982) and the login recovery to the entry point (Player.cpp:14775-14788) are a
-  Characters schema change (hosted-CI rule). Shared files, so it serialises against other lanes.
-- **Slice S6 (the daemon lifecycle).** The `IWorldFeature` that owns one `BattlegroundManager`, the handlers (BATTLEMASTER_HELLO/JOIN, BATTLEFIELD_LIST/JOIN/PORT/STATUS,
-  LEAVE_BATTLEFIELD, PVP_LOG_DATA, PLAYER_POSITIONS, area spirit healer 738-740), the `IBattlegroundManagerHost`/`IBattlegroundHost`
-  implementations, flag stand/drop game-object handlers (type 24 and 26 through `RegisterUseHandler`; the dropped flag's pickup spell effects
-  23383/23384), the `IWorldStateProvider` for the initial states, the battlemaster gossip option 12, the 50 yd portal rule and
-  `Player::LeaveBattleground` (Deserter 26013 gated on `CastDeserter`). `CmsgBattlefieldStatus` stays with
-  `World/Handlers/InactiveQueueHandlers.cs` until then; that file and its two test files must be retargeted by this slice, not before, because
-  both handler groups would otherwise register one opcode.
+- **Slice S3 (content tables)**, delivered in wave 2 (world schema 44). Not imported: `battleground_events` (descriptions only) and
+  `areatrigger_bg_entrance` (the portal join, which vmangos refuses anyway). The flag room and exit triggers are `AreaTrigger.dbc` rows.
+- **Slice S5 (instances, entry points, persistence)**, delivered in wave 2: `character_battleground_data` (characters schema 40; guid,
+  instance, team, join position and map, Player.cpp:20950-20982) is written when a participant enters its match and removed when it leaves
+  online or logs in again; a login on a battleground map reads it after the memory (Player.cpp:14775-14788).
+  `TeleportCommands.cs:130` still refuses battleground maps to GMs (vmangos does too, Player.cpp:1863).
+- **Slice S6 (the daemon lifecycle)**, delivered in wave 2. Not delivered: the battlemaster gossip option 12 (the hello opcode is answered),
+  the area spirit healer opcodes 738-740 and the dropped flag's pickup spell effects 23383/23384 (the flag drop object's use is handled directly).
 - **Slice S7 (BG raid groups).** `Group.MinMemberCount` is a static 2, `GroupType` has no battleground raid; the per-team raid group, the
   original-group restore and the "do not send teammates when the player's group is the BG raid" rule of MSG_BATTLEGROUND_PLAYER_POSITIONS are
   not modelled (the builder always takes the teammate list the host passes).
-- **Spawn gating and doors.** `IBattlegroundHost.EventStateChanged/OpenDoors/DespawnDoors` are called with the right events at the right time; the
-  creature and game-object spawn system must consult the active events when it loads BG spawns (BattleGround.cpp:1337-1400). That is the
-  `creature-movement-spawns` lane's loader.
+- **Spawn gating and doors**, delivered in wave 2: a battleground map's creature and game object systems ask the match whether every event of a
+  spawn is active (`MatchRuntime` as the spawn gate). A creature of an event that turns off is removed at once; vmangos stops only its respawn
+  (`RESPAWN_STOP`) when the despawn is not forced.
 - **Auras and spells.** The flag auras 23333/23335 and the dropped flag 23334/23336 are cast through `IBattlegroundSpellPort`; the carrier drops the
   flag on aura removal only when the aura engine reports it (the `aura-engine-completeness` lane). The mark spells and the deserter debuff go
   through the same port. Honor (`IBattlegroundHonorSink`, `IHonorRankSource`), reputation (`IBattlegroundReputationSink`) and the weekend
   (`IBattlegroundCalendar`) map to the honor, reputation and game-events lanes; until they merge the scoreboard honor stays 0 and the rank
   shows 4.
-- **Other battlegrounds.** Alterac Valley, Arathi Basin and arenas are out of scope; `BattlegroundFactories.Default` builds Warsong Gulch only, an AV
-  group join is rejected as vmangos does, and the AV/AB branches of vmangos (AV queue minimum, AV initial maximum, AV randomization) are not ported.
+- **Alterac Valley, not ported** (each needs content or systems this server does not have): the armor-scrap upgrades of the defenders and their
+  quests, the air, cavalry, ground and world-boss challenge invocations, the shredders, the landmine layers and experts, the commanders' respawn
+  stop, Snivvle, and the start-time supply and tamed events (unreachable in vmangos itself). The defender events are spawned at upgrade level 0.
+  The AV queue minimum, initial maximum and randomization of vmangos are not ported; an AV group join is rejected as vmangos does.
 - **Not ported from vmangos.** The queue announcer (`Battleground.QueueAnnouncer.*`), `BattleGround.RandomizeQueues`, the debug "testing"
   mode, the accurate-PvP reputation values of patches before 1.10, `BattleGround::HandleCommand`, the item reward by mail for a full bag
   (marks are cast spells here, as in vmangos for 1.12).
 - **Resurrection.** The 30 s spirit-guide wave is not battleground code (vmangos `RESURRECTION_INTERVAL` is unused): it is the spirit-healer channel
-  spell 22011 and the "Waiting to Resurrect" aura 2584. The wave's effect, SPELL_EFFECT_SPIRIT_HEAL (`SpiritHealEffect`, with the pet
-  re-summon), is in the death area; the 2584 cast at release and the guide's channel are not modelled yet; `BuildAreaSpiritHealerTime`
-  is only the packet. The released body of a player in a battleground carries CORPSE_FLAG_LOOTABLE (insignia).
+  spell 22011, whose Spirit Heal effect (spell 22012, SPELL_EFFECT_SPIRIT_HEAL) resurrects the ghosts that wear Waiting to Resurrect (2584, now
+  cast on release). The effect itself (`SpiritHealEffect`, with the pet re-summon) is in the death area; the guide's script that channels 22011
+  and the area spirit healer opcodes (738-740) are not modelled (`BuildAreaSpiritHealerTime` is only the packet): a ghost in a battleground runs
+  back to its body (a corpse reclaim restores it fully) or waits for the match end. The released body of a player in a battleground carries
+  CORPSE_FLAG_LOOTABLE (insignia).
+- **Not delivered in wave 2.** The battleground raid group (slice S7), the BG chat channel (lane ops-social), the vmangos debug "testing"
+  mode, the queue announcer, and the honor weekend calendar (the `IBattlegroundCalendar` port stays inert).
 
 ## Open questions
 
@@ -105,5 +130,12 @@ inert default.
 
 `tests/ArcaneCore.Game.Tests/Battlegrounds`: `WarsongGulchTests` (flag rules, timers, honor, reputation, world states, exits), `WarsongGulchPropertyTests`
 (60 seeded random games: captures never exceed 3, one winner who owns the third capture, a flag is carried exactly while it has a carrier),
-`BattlegroundCoreTests`, `BattlegroundPacketTests` (hand-written wire bytes) and `BattlegroundManagerTests` (queue, invitations in time, port, login).
-No store or schema changed in this lane, so there is nothing that only ran on SQLite.
+`BattlegroundCoreTests`, `BattlegroundPacketTests` (hand-written wire bytes), `BattlegroundManagerTests` (queue, invitations in time, port, login),
+`ArathiBasinTests`, `AlteracValleyTests` and `WarsongGulchCarrierTests` (wave 2). `tests/ArcaneCore.Game.Tests/Death/BattlegroundReleaseTests`
+(the release hook runs before the ghost form), `Honor/WorldDefenseRankTests` and `Social/ChannelManagerTests` (the gate with and without honor).
+`tests/ArcaneCore.Data.Tests/Battlegrounds/BattlegroundDataTests` (both schema steps, both dump dialects, both stores on every available provider).
+`tests/ArcaneCore.World.Tests/Playerbots/Scenarios/BattlegroundScenarioTests` (the `wsg` bot scenario) and `BattlegroundWorldScenarioTests` (buff
+trap, Divine Shield drop, own-team return, death drop and kill credit, Waiting to Resurrect and the battleground graveyard, the initial world
+states, leaving with Deserter, a far teleport out, a logout and login inside a match, the same after a restart from the stored row) run two managed bots against the real handlers on the
+manual clock with the synthetic content of `WarsongGulchTestContent`. Not covered by a world test: Arathi Basin and Alterac Valley in the world
+(their rules are covered in the game tests; their banners need the open-lock spell path and content).

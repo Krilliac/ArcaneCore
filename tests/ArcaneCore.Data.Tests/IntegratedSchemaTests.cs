@@ -98,6 +98,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CreatureAiLaneSchemaGap38), DatabaseComponent.World, CreatureAiLaneSchemaGap38.Version),
             (typeof(CreatureAiLaneSchemaGap39), DatabaseComponent.World, CreatureAiLaneSchemaGap39.Version),
             (typeof(RelayScriptDataModule), DatabaseComponent.World, RelayScriptDataModule.Version),
+            // INTEGRATOR: 38 to 43 are this branch's empty placeholders for other lanes' reserved world steps (BattlegroundWorldDataModule.cs).
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap38), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap38.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap39), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap39.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap40), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap40.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap41), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap41.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43.Version),
+            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -140,6 +148,13 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(EconomyItemsLaneSchemaGap38), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap38.Version),
             (typeof(ItemGiftDataModule), DatabaseComponent.Characters, ItemGiftDataModule.Version),
             (typeof(GroupInstanceBindDataModule), DatabaseComponent.Characters, GroupInstanceBindDataModule.Version),
+            // INTEGRATOR: 35 to 39 are this branch's empty placeholders for other lanes' reserved characters steps (CharacterBattlegroundDataModule.cs).
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

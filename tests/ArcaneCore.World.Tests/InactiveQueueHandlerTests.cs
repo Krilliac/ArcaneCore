@@ -27,16 +27,18 @@ public sealed class InactiveQueueHandlerTests
             Assert.False(handler.AllowsState(SessionState.LoggingIn));
         }
 
-        // The meeting stone queue (GameObjects.MeetingStoneHandlers) takes join and leave as world handlers too; battleground queueing is not here.
+        // The meeting stone queue (GameObjects.MeetingStoneHandlers) takes join and leave as world handlers too.
         foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgMeetingstoneJoin, WorldOpcode.CmsgMeetingstoneLeave })
         {
             Assert.True(table.TryGet(opcode, out OpcodeHandler handler), $"missing {opcode} handler");
             Assert.NotNull(handler.World);
         }
 
+        // The battleground queue actions belong to the battleground handlers (docs/areas/battlegrounds.md).
         foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgBattlemasterJoin, WorldOpcode.CmsgBattlefieldPort })
         {
-            Assert.False(table.TryGet(opcode, out _));
+            Assert.True(table.TryGet(opcode, out OpcodeHandler handler), $"missing {opcode} handler");
+            Assert.NotNull(handler.World);
         }
     }
 

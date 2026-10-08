@@ -137,7 +137,9 @@ public sealed class TeleportService
             return false;
         }
 
-        if (target.IsBattleground)
+        // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
+        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
+        if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
         {
             return false;
         }
@@ -154,10 +156,16 @@ public sealed class TeleportService
     }
 
     /// <summary>
+    /// Whether a player may be teleported onto a battleground map: the battleground feature answers true for the map of the match the player
+    /// is bound to (vmangos <c>InBattleGround()</c>). Null (no battleground system) refuses every battleground map. World thread.
+    /// </summary>
+    public Func<Player, uint, bool>? BattlegroundEntryAllowed { get; set; }
+
+    /// <summary>
     /// Start a teleport (vmangos <c>Player::TeleportTo</c>). Fails — returns false and changes
     /// nothing — for invalid coordinates (<c>MapManager::IsValidMapCoord</c>), a map that is not
-    /// in the registry, a battleground map (entered only through the battleground system, which
-    /// ArcaneCore has not got yet), a player in no map, or a far teleport already under way.
+    /// in the registry, a battleground map the player is not bound to (<see cref="BattlegroundEntryAllowed"/>),
+    /// a player in no map, or a far teleport already under way.
     /// </summary>
     public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
     {
