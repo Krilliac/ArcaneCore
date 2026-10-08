@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
@@ -53,7 +54,7 @@ public sealed partial class CreatureMapSystem
     /// <paramref name="enemy"/> (<see cref="CallNearestGuard"/>) and the call counts as made. A post that is cooling down or out of charges
     /// refuses (false: the caller may try again). Otherwise the civilian speaks its call (<see cref="GuardPostTable.GetTextId"/>, as a say)
     /// and the post's guard for the team opposite the enemy's player (else the civilian's own team, which needs Faction.dbc and is not
-    /// modelled) appears 5 yd east of it, attacks the enemy and despawns after 2 minutes alive and out of combat
+    /// modelled) appears 5 yd east of it (<see cref="GuardSummonPoint"/>), attacks the enemy and despawns after 2 minutes alive and out of combat
     /// (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts again while it fights). Returns whether the call was made.
     /// </summary>
     public bool SummonGuard(Creature civilian, Unit enemy)
@@ -85,10 +86,7 @@ public sealed partial class CreatureMapSystem
 
         if (call.GuardEntry != 0 && _content.FindTemplate(call.GuardEntry) is { } template)
         {
-            // GetNearPoint(civilian, x, y, z, 0, 5, 0): 5 yd at the absolute angle 0.
-            float x = civilian.X + GuardPostTable.SummonDistance;
-            float y = civilian.Y;
-            float z = _height.GetHeight(Map.MapId, x, y, civilian.Z) ?? civilian.Z;
+            (float x, float y, float z) = GuardSummonPoint(civilian);
             Creature guard = SpawnTemporary(template, x, y, z, 0);
             AddTimedSummon(guard, GuardPostTable.GuardDespawnMs, SummonTimer.OutOfCombat); // TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 2 minutes
             civilian.CalledGuard = guard.Guid;
@@ -103,6 +101,37 @@ public sealed partial class CreatureMapSystem
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// vmangos <c>GetNearPoint(civilian, x, y, z, 0, 5, 0)</c> (GuardMgr.cpp:450) with DetectPosCollision on, its default (World.cpp:751;
+    /// Objects/Object.cpp:2726-2825): the civilian's bounding radius + 5 yd at the absolute angle 0, on the ground under it. When the
+    /// civilian cannot see that point, the first point at the same distance it can see, going round both sides of the angle in 45 degree
+    /// steps; when it sees none, the first point. The ObjectPosSelector's avoidance of spots other objects already take is not ported.
+    /// </summary>
+    private (float X, float Y, float Z) GuardSummonPoint(Creature civilian)
+    {
+        float range = civilian.BoundingRadius + GuardPostTable.SummonDistance;
+        (float X, float Y, float Z) first = default;
+        for (int step = 0; step < 8; step++)
+        {
+            int quarter = (step + 1) / 2; // 0, +45, -45, +90, -90, +135, -135, 180 degrees
+            float angle = (step % 2 == 1 ? 1 : -1) * quarter * MathF.PI / 4f;
+            float x = civilian.X + (range * MathF.Cos(angle));
+            float y = civilian.Y + (range * MathF.Sin(angle));
+            float z = _height.GetHeight(Map.MapId, x, y, civilian.Z) ?? civilian.Z;
+            if (step == 0)
+            {
+                first = (x, y, z);
+            }
+
+            if (Map.Collision.IsWithinLineOfSight(civilian, x, y, z))
+            {
+                return (x, y, z);
+            }
+        }
+
+        return first;
     }
 
     /// <summary>

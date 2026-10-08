@@ -2,6 +2,8 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -90,7 +92,9 @@ public sealed class GuardCallTests
         t.Civilian.AI!.MoveInLineOfSight(orc);
 
         Creature guard = Assert.Single(t.Guards);
-        Assert.Equal(t.Civilian.X + GuardPostTable.SummonDistance, guard.X, 2);
+        // GetNearPoint(civilian, x, y, z, 0, 5, 0): the civilian's bounding radius + 5 yd at the absolute angle 0 (Object.cpp:2726-2729).
+        Assert.Equal(t.Civilian.X + t.Civilian.BoundingRadius + GuardPostTable.SummonDistance, guard.X, 2);
+        Assert.Equal(t.Civilian.Y, guard.Y, 2);
         Assert.Same(orc, guard.Combat.Victim);
         Assert.Null(t.Civilian.Combat.Victim); // a civilian does not attack
         MonsterChat said = ParseMonsterChat(Assert.Single(Packets(session, WorldOpcode.SmsgMessagechat)));
@@ -158,6 +162,25 @@ public sealed class GuardCallTests
         Run(t.World, 10_100);
         t.Civilian.AI!.MoveInLineOfSight(orc);
         Assert.Single(t.Guards);
+    }
+
+    /// <summary>
+    /// vmangos GetNearPoint with DetectPosCollision (default on, World.cpp:751; Object.cpp:2776-2825): a first point the civilian cannot
+    /// see is given up for another angle around it at the same distance that it can see.
+    /// </summary>
+    [Fact]
+    public void AWallEastOfTheCivilian_PutsTheGuardWhereTheCivilianCanSeeIt()
+    {
+        using Town t = Start();
+        WorldCollision.Of(t.World).Install(new CollisionSeamTests.WallAtX(3f));
+        (Player orc, _) = Horde(t.World, 1, -10, 0);
+
+        t.Civilian.AI!.MoveInLineOfSight(orc);
+
+        Creature guard = Assert.Single(t.Guards);
+        Assert.True(guard.X < 3f, $"the guard appeared behind the wall at x = {guard.X}");
+        Assert.True(t.Map.Collision.IsWithinLineOfSight(t.Civilian, guard));
+        Assert.Equal(t.Civilian.BoundingRadius + GuardPostTable.SummonDistance, Distance2D(guard, t.Civilian), 2);
     }
 
     [Fact]
