@@ -21,7 +21,7 @@ public sealed class AccountAddressRow
 /// when a session authenticates and read by <c>.ban allip</c>. Account-scoped like <c>account_mute</c>, so a character
 /// deletion leaves it alone. Additive and re-runnable.
 /// </summary>
-public sealed class AccountAddressDataModule : IDataModule
+public sealed class AccountAddressDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>The characters schema version of this module (wave-2 lane ops-social reservation 38).</summary>
     public const int Version = 38;
@@ -45,6 +45,9 @@ public sealed class AccountAddressDataModule : IDataModule
         });
 
     public void AddServices(IServiceCollection services) => services.AddScoped<IAccountAddressStore, EfAccountAddressStore>();
+
+    /// <summary>The last address belongs to the account, not to a character: nothing to delete (as <c>account_mute</c>).</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>EF Core implementation of <see cref="IAccountAddressStore"/>.</summary>

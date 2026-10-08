@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -33,16 +34,22 @@ public abstract class ReservedSchemaGap : IReservedSchemaGap
 }
 
 /// <summary>Characters schema 35, reserved for another wave-2 lane (ops-social owns 37 and 38).</summary>
-public sealed class ReservedCharactersSchema35 : ReservedSchemaGap
+public sealed class ReservedCharactersSchema35 : ReservedSchemaGap, ICharacterDataCleanup
 {
+    /// <summary>A placeholder has no tables: nothing to delete.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public override DatabaseComponent Component => DatabaseComponent.Characters;
 
     public override int SchemaVersion => 35;
 }
 
 /// <summary>Characters schema 36, reserved for another wave-2 lane (ops-social owns 37 and 38).</summary>
-public sealed class ReservedCharactersSchema36 : ReservedSchemaGap
+public sealed class ReservedCharactersSchema36 : ReservedSchemaGap, ICharacterDataCleanup
 {
+    /// <summary>A placeholder has no tables: nothing to delete.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public override DatabaseComponent Component => DatabaseComponent.Characters;
 
     public override int SchemaVersion => 36;

@@ -37,9 +37,14 @@ public sealed class BattlegroundChatFeature(IServiceProvider services) : IWorldF
             return false;
         }
 
-        // Consumed either way: outside a battleground (or from a non-leader on the leader channel) vmangos just returns.
-        if (_roster?.TeamOf(player.Guid) is not { } team
-            || (message.Type == ChatType.BattlegroundLeader && team.Leader != player.Guid))
+        // Outside a battleground the message is not this feature's: no other feature serving it, the chat handler drops it,
+        // as vmangos returns. Inside one, a non-leader's leader message is consumed and dropped.
+        if (_roster?.TeamOf(player.Guid) is not { } team)
+        {
+            return false;
+        }
+
+        if (message.Type == ChatType.BattlegroundLeader && team.Leader != player.Guid)
         {
             return true;
         }
