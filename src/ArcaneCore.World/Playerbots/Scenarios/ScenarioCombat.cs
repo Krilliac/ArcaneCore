@@ -11,8 +11,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
 /// <summary>One of the bot's own completed casts (SMSG_SPELL_GO) with what the world looked like at that tick.</summary>
-public sealed record CombatCast(uint SpellId, string Name, float Distance, float HealthPercent, IReadOnlyList<ulong> Targets, bool HadPet,
-    uint WorldMs);
+/// <param name="Distance">The bot's distance to the victim.</param>
+/// <param name="SpotDistance">The bot's distance to where the victim stood when the trace started.</param>
+public sealed record CombatCast(uint SpellId, string Name, float Distance, float SpotDistance, float HealthPercent, IReadOnlyList<ulong> Targets,
+    bool HadPet, uint WorldMs);
 
 /// <summary>
 /// The casts an autonomous bot completed, read from its recorded SMSG_SPELL_GO packets on the world thread during a wait
@@ -41,7 +43,8 @@ public sealed class CombatTrace(ScenarioContext context, ScenarioBot bot, Creatu
     {
         Player player = bot.RequirePlayer();
         float sx = player.X - _victimStart.X, sy = player.Y - _victimStart.Y;
-        ClosestToVictimStart = MathF.Min(ClosestToVictimStart, MathF.Sqrt((sx * sx) + (sy * sy)));
+        float spot = MathF.Sqrt((sx * sx) + (sy * sy));
+        ClosestToVictimStart = MathF.Min(ClosestToVictimStart, spot);
         SpellSystem spells = context.Services.GetRequiredService<SpellFeature>().System;
         if (!player.PetGuid.IsEmpty && player.Map?.FindObject(player.PetGuid) is Creature pet && ReferenceEquals(pet.Combat.Victim, victim))
             PetAttackedVictim = true;
@@ -51,7 +54,7 @@ public sealed class CombatTrace(ScenarioContext context, ScenarioBot bot, Creatu
             SpellGoView go = ScenarioDecoders.SpellGo(packet.Payload);
             if (go.Caster != bot.Guid.Value) continue;
             float dx = player.X - victim.X, dy = player.Y - victim.Y, dz = player.Z - victim.Z;
-            Casts.Add(new CombatCast(go.SpellId, spells.Store.Get(go.SpellId)?.Name ?? "?", MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)),
+            Casts.Add(new CombatCast(go.SpellId, spells.Store.Get(go.SpellId)?.Name ?? "?", MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)), spot,
                 player.MaxHealth == 0 ? 0f : player.Health * 100f / player.MaxHealth, go.Hits, !player.PetGuid.IsEmpty, packet.WorldMs));
         }
     }
@@ -114,6 +117,9 @@ public abstract class ClassCombatScenario : IPlayerbotScenario
 
     /// <summary>The least distance a ranged bot keeps from the wolf's starting spot while fighting.</summary>
     public const float RangedHold = 20f;
+
+    /// <summary>How far a ranged bot may still step toward the wolf's spot after its first attack (settling into its range).</summary>
+    public const float MaxAdvance = 5f;
 
     /// <summary>Where the bot is put: this many yards west of the wolf.</summary>
     protected virtual float StartDistance => 35f;
@@ -182,9 +188,12 @@ public abstract class ClassCombatScenario : IPlayerbotScenario
                 CombatCast first = trace.First(attack) ?? throw new ScenarioAssertionException($"no {attack}; it cast: [{trace}]");
                 ScenarioContext.Expect(first.Distance >= FirstCastDistance,
                     $"the first {attack} went off {first.Distance:F1} yards from the wolf, not from range ({FirstCastDistance} or more)");
-                // A ranged bot holds at its range and lets the enemy come: it never walks in on the wolf's spot.
+                // A ranged bot holds at its range and lets the enemy come: it never walks in on the wolf's spot, and once it has
+                // attacked it barely moves toward it (a melee bot would close in between casts).
                 ScenarioContext.Expect(trace.ClosestToVictimStart >= RangedHold,
                     $"the bot advanced to {trace.ClosestToVictimStart:F1} yards from where the wolf stood (a ranged bot holds at {RangedHold} or more)");
+                ScenarioContext.Expect(first.SpotDistance - trace.ClosestToVictimStart <= MaxAdvance,
+                    $"after its first {attack} the bot advanced {first.SpotDistance - trace.ClosestToVictimStart:F1} yards toward the wolf's spot (at most {MaxAdvance})");
             }
             return Task.CompletedTask;
         }).ConfigureAwait(false);

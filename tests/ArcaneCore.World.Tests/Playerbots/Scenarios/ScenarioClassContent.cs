@@ -154,7 +154,7 @@ internal static class ScenarioClassContent
         Rank(FriendAura(S.PowerWordFortitude, "Power Word: Fortitude", aura: 29, misc: 2, value: 3, cost: 15), 1),
 
         // --- shaman --------------------------------------------------------------------------------------------------------
-        Rank(Hostile(S.LightningBolt, "Lightning Bolt", school: 3, damage: 8, cost: 15, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
+        Rank(Hostile(S.LightningBolt, "Lightning Bolt", school: 3, damage: 5, cost: 15, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
         Rank(Heal(S.HealingWave, "Healing Wave", amount: 40, cost: 25, cast: CastOneAndHalf), 1),
         Rank(SelfAura(S.LightningShield, "Lightning Shield", aura: 4, misc: 0, value: 13, ThirtyMinutes, gcd: true, cost: 15), 1), // a dummy: its procs are not modelled
 
@@ -165,7 +165,7 @@ internal static class ScenarioClassContent
         Rank(FriendAura(S.ArcaneIntellect, "Arcane Intellect", aura: 29, misc: 3, value: 2, cost: 15), 1),
 
         // --- warlock -------------------------------------------------------------------------------------------------------
-        Rank(Hostile(S.ShadowBolt, "Shadow Bolt", school: 5, damage: 8, cost: 25, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
+        Rank(Hostile(S.ShadowBolt, "Shadow Bolt", school: 5, damage: 5, cost: 25, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
         Rank(SelfAura(S.DemonSkin, "Demon Skin", aura: 22, misc: 1, value: 30, ThirtyMinutes, gcd: true, cost: 10), 1),
         new SpellTemplateRow
         {
@@ -175,7 +175,7 @@ internal static class ScenarioClassContent
         },
 
         // --- druid ---------------------------------------------------------------------------------------------------------
-        Rank(Hostile(S.Wrath, "Wrath", school: 3, damage: 8, cost: 20, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
+        Rank(Hostile(S.Wrath, "Wrath", school: 3, damage: 5, cost: 20, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
         Rank(Heal(S.HealingTouch, "Healing Touch", amount: 45, cost: 25, cast: CastOneAndHalf), 1),
         Rank(FriendAura(S.MarkOfTheWild, "Mark of the Wild", aura: 22, misc: 1, value: 25, cost: 20), 1),
     ];
