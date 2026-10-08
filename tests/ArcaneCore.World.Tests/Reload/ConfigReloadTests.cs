@@ -318,6 +318,48 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotChat_IsLive_ProvidersIncluded_AndABadProviderIsRefused()
+    {
+        // PlayerbotChat reads World:Playerbots:Chat from this options object at every line and every provider attempt.
+        string path = Write("""
+            { "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Chat": {
+                "Enabled": false, "Channels": "Whisper, Say", "PerPlayerCooldownSeconds": 3, "MaxDailySpendUsd": 0.5,
+                "Providers": [ { "Kind": "OpenAICompatible", "BaseUrl": "http://localhost:11434/v1", "Model": "qwen3:0.6b", "ApiKeyEnvironmentVariable": "" },
+                               { "Kind": "Anthropic", "MaxRepliesPerHour": 30, "Headers": { "X-Title": "ArcaneCore" } } ] } } } }
+            """);
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions chat = playerbots.Chat;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(chat, playerbots.Chat); // changed in place: the chat service holds this object
+        Assert.False(chat.Enabled);
+        Assert.Equal(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatChannels.Whisper | global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatChannels.Say, chat.Channels);
+        Assert.Equal(3, chat.PerPlayerCooldownSeconds);
+        Assert.Equal(0.5, chat.MaxDailySpendUsd);
+        Assert.Equal(2, chat.Providers.Length);
+        Assert.Equal("qwen3:0.6b", chat.Providers[0].Model);
+        Assert.Equal("", chat.Providers[0].ApiKeyEnvironmentVariable);
+        Assert.Equal(30, chat.Providers[1].MaxRepliesPerHour);
+        Assert.Equal("ArcaneCore", chat.Providers[1].Headers["X-Title"]);
+        Assert.Equal(["OpenAICompatible", "Anthropic", "Builtin"], chat.EffectiveProviders().Select(p => p.Kind.ToString()));
+
+        // The same file again changes nothing (the provider list compares by value).
+        Assert.Contains("no changes", (await coordinator.ReloadAsync("config")).Message);
+
+        // A key sent in clear text to another host is refused, and the running providers stay.
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Chat": { "Providers": [ { "Kind": "OpenAICompatible", "BaseUrl": "http://example.com/v1", "Model": "m", "ApiKeyEnvironmentVariable": "OPENAI_API_KEY" } ] } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(2, chat.Providers.Length);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(chat.Enabled);
+        Assert.Empty(chat.Providers);
+        Assert.Equal(8, chat.PerPlayerCooldownSeconds);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -390,12 +432,17 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
-        // Of the playerbot options the movement transport and the whole risk section are in the reload set (the rest are read once
-        // at start).
+        // Of the playerbot options the movement transport and the whole risk and chat sections are in the reload set (the rest are
+        // read once at start; the chat provider list is one key).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:{property.Name}");
         }
 
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).

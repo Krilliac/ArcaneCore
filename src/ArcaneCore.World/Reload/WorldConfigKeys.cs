@@ -139,6 +139,20 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
+        // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every
+        // line and every provider attempt; the provider list is compared and replaced as one value.
+        LivePlayerbots("Chat:Enabled", o => o.Chat.Enabled, (o, v) => o.Chat.Enabled = v),
+        LivePlayerbotsValue("Chat:Providers", o => new Playerbots.Chat.PlayerbotChatProviderList([.. o.Chat.Providers.Select(p => p.Clone())]),
+            (o, v) => o.Chat.Providers = [.. v.Items.Select(p => p.Clone())], v => Playerbots.Chat.PlayerbotChatOptions.CheckProviders(v.Items)),
+        LivePlayerbotsValue("Chat:Channels", o => o.Chat.Channels, (o, v) => o.Chat.Channels = v, Playerbots.Chat.PlayerbotChatOptions.CheckChannels),
+        LivePlayerbotsValue("Chat:PerPlayerCooldownSeconds", o => o.Chat.PerPlayerCooldownSeconds, (o, v) => o.Chat.PerPlayerCooldownSeconds = v,
+            v => v is >= 0 and <= 3600 ? null : "must be 0..3600"),
+        LivePlayerbotsValue("Chat:MaxDailySpendUsd", o => o.Chat.MaxDailySpendUsd, (o, v) => o.Chat.MaxDailySpendUsd = v, Playerbots.Chat.PlayerbotChatOptions.CheckSpend),
+        LivePlayerbotsValue("Chat:MemoryExchanges", o => o.Chat.MemoryExchanges, (o, v) => o.Chat.MemoryExchanges = v, v => v is >= 0 and <= 16 ? null : "must be 0..16"),
+        LivePlayerbotsValue("Chat:TimeoutSeconds", o => o.Chat.TimeoutSeconds, (o, v) => o.Chat.TimeoutSeconds = v, v => v is >= 1 and <= 60 ? null : "must be 1..60"),
+        LivePlayerbotsValue("Chat:MaxQueuedRequests", o => o.Chat.MaxQueuedRequests, (o, v) => o.Chat.MaxQueuedRequests = v, v => v is >= 1 and <= 256 ? null : "must be 1..256"),
+        LivePlayerbots("Chat:NaturalLanguageCommands", o => o.Chat.NaturalLanguageCommands, (o, v) => o.Chat.NaturalLanguageCommands = v),
+
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).
         LiveSpeedRate("PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),

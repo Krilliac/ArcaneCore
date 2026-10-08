@@ -51,14 +51,24 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private readonly CancellationTokenSource _planningStop = new();
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
     private long _clockMs;
+    private Chat.PlayerbotChat? _chat;
+    private Chat.HttpBotChatClient? _chatClient;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
+
+    /// <summary>The bots' chat service (null before <see cref="Attach"/> and after shutdown; <c>.playerbot chat status</c>).</summary>
+    internal Chat.PlayerbotChat? Chat => _chat;
 
     public void Attach(WorldRuntime world)
     {
         _options.Validate();
         if (_options.AllowLocalLlm) _planner = new PlayerbotLocalPlanner(_options);
+        _chat = new Chat.PlayerbotChat(_options,
+            services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()),
+            services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
+            services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
+        if (_options.Enabled) _chat.LogConfiguration();
         _world = world;
         world.Updated += Update;
     }
@@ -297,8 +307,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
-            var active = new ActiveBot(bot, scope, session, NewBrain(session), new PlayerbotPartyAI(session, _options))
+            var active = new ActiveBot(bot, scope, session, NewBrain(session), new PlayerbotPartyAI(session, _options, _chat, bot.BotId))
             { Controller = controller };
+            active.Party.BrainGoal = () => (active.Brain.Goal, active.Brain.QuestId);
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
             retained = true;
             logger.LogInformation("Started managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
@@ -366,6 +377,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
+        if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
+        _chatClient?.Dispose();
+        _chatClient = null;
     }
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
@@ -447,6 +461,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             try { active.Party.Intake(mover); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "party", ex); }
         }
+        DeliverChatReplies();
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         long started = Stopwatch.GetTimestamp();
         for (int i = 0; i < bots.Length && budget.Remaining > 0; i++)
@@ -501,6 +516,26 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         { _checkpointMs = 0; _checkpoint = Task.Run(CheckpointAsync); }
+    }
+
+    /// <summary>
+    /// World thread: say the chat replies the workers finished, each through its bot's own CMSG_MESSAGECHAT (a client's answer: no
+    /// action budget). A reply for a bot that stopped, is scripted or left the world is dropped.
+    /// </summary>
+    private void DeliverChatReplies()
+    {
+        if (_chat is not { } chat) return;
+        foreach (Chat.BotChatReply reply in chat.DrainReplies())
+        {
+            if (!_active.TryGetValue(reply.BotId, out ActiveBot? active) || active.Paused || active.Controller is not null
+                || active.Session.State != SessionState.InWorld || active.Session.Player is not { } speaker) continue;
+            try { active.Party.DeliverChat(speaker, reply); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A chat reply is never worth a bot: it is dropped and the bot carries on.
+                logger.LogWarning(ex, "Playerbot {BotId} ({Name}) could not say a chat reply", active.Record.BotId, active.Name);
+            }
+        }
     }
 
     private async Task CheckpointAsync()

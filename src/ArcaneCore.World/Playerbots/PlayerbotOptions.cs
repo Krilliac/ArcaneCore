@@ -82,6 +82,12 @@ public sealed class PlayerbotOptions
     /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
     public PlayerbotRiskOptions Risk { get; set; } = new();
 
+    /// <summary>
+    /// Bots answer players who talk to them (<c>World:Playerbots:Chat</c>; live): built-in template replies by default, with optional
+    /// model providers (Anthropic, OpenAI-compatible, local servers) in front of them (docs/areas/playbots.md, Bot chat).
+    /// </summary>
+    public Chat.PlayerbotChatOptions Chat { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -125,6 +131,8 @@ public sealed class PlayerbotOptions
         Party.Validate();
         if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
         Risk.Validate();
+        if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
+        Chat.Validate();
     }
 }
 
