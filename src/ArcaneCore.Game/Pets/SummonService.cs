@@ -65,6 +65,7 @@ public sealed partial class SummonService : ISpellSummonSink
                 SummonDeadPet(player, context.Value, context.System);
             }
         });
+        spells.PlayerSpiritHealed += player => AutoReSummonPet(player); // Spell::EffectSpiritHeal → Player::AutoReSummonPet
         spells.RegisterEffect(SpellEffectName.DismissPet, context =>
         {
             if (context.Caster is Player player && player.Class == Class.Hunter

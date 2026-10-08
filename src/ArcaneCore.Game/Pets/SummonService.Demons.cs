@@ -43,23 +43,27 @@ public sealed partial class SummonService
     private void EffectSummonPet(SpellEffectContext context)
     {
         Unit caster = context.Caster;
-        SpellInfo spell = context.Spell;
-        uint entry = (uint)context.Effect.MiscValue;
         int petLevel = caster is Player ? caster.Level : Math.Max(caster.Level + (int)context.Effect.MultipleValue, 1);
+        SummonDemon(caster, context.Spell.Id, (uint)context.Effect.MiscValue, petLevel);
+    }
+
+    /// <summary>vmangos Unit::EffectSummonPet(spellId, petEntry, petLevel) for a demon entry (SpellEffects.cpp:3183-3327), without the database half.</summary>
+    private Creature? SummonDemon(Unit caster, uint spellId, uint entry, int petLevel)
+    {
         if (!UnsummonOldPetBeforeNewSummon(caster, entry))
         {
-            return;
+            return null;
         }
 
-        if (entry == 0 || !TryGetSystems(caster, spell.Id, out PetMapSystem? pets, out CreatureMapSystem? creatures))
+        if (entry == 0 || !TryGetSystems(caster, spellId, out PetMapSystem? pets, out CreatureMapSystem? creatures))
         {
-            return;
+            return null;
         }
 
         if (creatures.Content.FindTemplate(entry) is not { } template)
         {
-            Warn($"demon-template:{entry}", "creature entry {Entry} not found for spell {Spell}", entry, spell.Id);
-            return;
+            Warn($"demon-template:{entry}", "creature entry {Entry} not found for spell {Spell}", entry, spellId);
+            return null;
         }
 
         (float x, float y) = ClosePoint(caster, 0.0f, PetConstants.FollowDistance, caster.Orientation + PetConstants.FollowAngle);
@@ -67,8 +71,8 @@ public sealed partial class SummonService
         uint petNumber = NextPetNumber();
         Creature pet = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
         {
-            creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, spell.Id, TotemSlots.None, 0);
-            ApplyOwner(creature, caster, spell.Id);
+            creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, spellId, TotemSlots.None, 0);
+            ApplyOwner(creature, caster, spellId);
             InitPet(creature, SummonKind.Pet, caster, petNumber);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
@@ -84,11 +88,14 @@ public sealed partial class SummonService
         caster.SetPetGuid(pet.Guid);
         RemoveDemonicSacrifice(caster);
 
-        // Player::PetSpellInitialize
+        // Player::PetSpellInitialize; the spirit healer's re-summon remembers the pet (m_petEntry, m_petSpell, SpellEffects.cpp:3317-3324)
         if (caster is Player owner)
         {
             owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+            RememberPetForSpiritHealer(owner, pet);
         }
+
+        return pet;
     }
 
     /// <summary>

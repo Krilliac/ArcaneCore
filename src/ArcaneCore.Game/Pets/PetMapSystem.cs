@@ -194,9 +194,21 @@ public sealed class PetMapSystem : IMapUpdater
     /// <summary>vmangos Pet::Update (Pet.cpp:662-712) for the states a creature can be in here.</summary>
     private void UpdatePet(Creature pet, SummonLinks links, Unit? owner, uint diffMs)
     {
-        // The leash does not hold a pet its owner is possessing (!(owner->GetCharmGuid() == GetObjectGuid()), Pet.cpp:670).
+        // The leash does not hold a pet its owner is possessing (!(owner->GetCharmGuid() == GetObjectGuid()), Pet.cpp:670). A pet that lost its
+        // owner, is left behind or whose owner has no pet any more gives its reagents back (Unsummon(PET_SAVE_REAGENTS), Pet.cpp:668-674); one
+        // its owner replaced does not (PET_SAVE_NOT_IN_SLOT, Pet.cpp:688-694).
         if (owner is null || (!IsWithinLeash(pet, owner, Options) && owner.CharmGuid != pet.Guid)
-            || (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid))
+            || (links.Kind == SummonKind.Pet && owner.PetGuid.IsEmpty))
+        {
+            if (_service is { } service)
+            {
+                service.UnsummonReturningReagents(pet);
+            }
+
+            return;
+        }
+
+        if (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid)
         {
             _service?.Unsummon(pet);
             return;
@@ -209,9 +221,13 @@ public sealed class PetMapSystem : IMapUpdater
             if (links.Kind == SummonKind.Pet)
             {
                 _service?.QueueCurrentPetSave(deadOwner);
+                _service?.UnsummonReturningReagents(pet); // RemovePet(PET_SAVE_REAGENTS)
+            }
+            else
+            {
+                _service?.Unsummon(pet);
             }
 
-            _service?.Unsummon(pet);
             return;
         }
 
