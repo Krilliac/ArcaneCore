@@ -249,6 +249,43 @@ public sealed class RefreshCliTests : IDisposable
     }
 
     [Fact]
+    public async Task Refresh_RefusesAWorldBehindTheImportersSchema_UnlessToldToMigrate()
+    {
+        // A refresh built from a tree whose world schema is ahead (another lane's step merged in) must not migrate the live world as a
+        // side effect: it refuses and writes nothing; --migrate is the explicit way through (the world server's own start migrates too).
+        string world = await OldWorldAsync();
+        int current = WorldDbContext.Schema.CurrentVersion;
+        await using (WorldDbContext db = Open(world))
+        {
+            await Upgrade.UpgradeTestSupport.SetVersionAsync(db, "world", current - 1);
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump);
+        string dbc = Dbcs();
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.Equal(ExitCodes.Schema, code);
+        Assert.Contains("--migrate", error, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(world))
+        {
+            Assert.Equal(current - 1, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
+            Assert.Equal(0, await db.Set<WorldSafeLocRow>().CountAsync());
+        }
+
+        (code, output, error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc, "--migrate");
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains($"world schema {current - 1} -> {current}", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(world))
+        {
+            Assert.Equal(current, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
+            Assert.Equal(5, await db.Set<WorldSafeLocRow>().CountAsync());
+        }
+    }
+
+    [Fact]
     public async Task Refresh_ProcEventsWithoutAClassicDbRevision_NeedAnExplicitCooldownUnit()
     {
         string world = await OldWorldAsync();

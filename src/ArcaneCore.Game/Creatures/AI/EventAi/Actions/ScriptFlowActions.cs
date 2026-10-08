@@ -229,14 +229,22 @@ public sealed class AttackStartAction : EventAiActionHandler
     }
 }
 
-/// <summary>ACTION_T_ZONE_COMBAT_PULSE (38): in a dungeon every living player of the map enters the creature's fight (SetInCombatWithZone, :1097-1103).</summary>
+/// <summary>
+/// ACTION_T_ZONE_COMBAT_PULSE (38): in a dungeon or raid every living player of the map enters the creature's fight (SetInCombatWithZone),
+/// then a creature with no victim attacks the closest unit of its threat list (AttackClosestEnemy, :1097-1103).
+/// </summary>
 public sealed class ZoneCombatPulseAction : EventAiActionHandler
 {
     public override byte ActionType => 38;
 
     public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
     {
-        context.System?.SetInCombatWithZone(context.Me);
+        if (context.System is { } system)
+        {
+            system.SetInCombatWithZone(context.Me);
+            system.AttackClosestEnemy(context.Me);
+        }
+
         return true;
     }
 }
@@ -258,8 +266,10 @@ public sealed class RemoveAurasFromSpellAction : EventAiActionHandler
 }
 
 /// <summary>
-/// ACTION_T_SUMMON_ID (32): CreatureId, Target, SummonId. The creature_ai_summons row SummonId gives the position and the lifetime (seconds,
-/// 0: until it dies); the summon attacks the target unless the target is the creature itself; a missing row fails (:1003-1029).
+/// ACTION_T_SUMMON_ID (32): CreatureId, Target, SummonId. The creature_ai_summons row SummonId gives the position and the lifetime in
+/// milliseconds (the column is named spawntimesecs, but cmangos passes it to SummonCreature as the despawn time, :1018-1021); 0 despawns
+/// the summon as soon as it is out of combat. The summon attacks the target unless the target is the creature itself; a missing row
+/// fails (:1003-1029).
 /// </summary>
 public sealed class SummonIdAction : EventAiActionHandler
 {
@@ -274,7 +284,7 @@ public sealed class SummonIdAction : EventAiActionHandler
 
         Unit? target = context.SelectTarget(action.Param2, invocation, out _);
         system.SummonAt(context.Me, (uint)action.Param1, at.X, at.Y, at.Z, at.Orientation, action.Param2 == (int)EventAiTarget.Self ? null : target,
-            at.SpawnTimeSeconds * 1000);
+            at.LifetimeMs);
         return true;
     }
 }

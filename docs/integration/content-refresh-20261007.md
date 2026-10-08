@@ -19,7 +19,7 @@ tables empty: `world_safe_locs`, `game_graveyard_zone`, `battleground_template`,
 | `loaded 0 spell proc event conditions` | data (importer existed, never run) | 164 rows, cooldowns converted from seconds (z2815 < z2829) |
 | `Transports are disabled` | config, and `transports` empty | 9 rows; with `World:Transports:Enabled=true` the copy logs "9 routes, 9 ships sailing" |
 | `0 inn triggers` | data: `areatrigger_tavern` empty, no importer | new `AreaTriggerTavernDumpImporter`: 42 inns |
-| EventAI unsupported action 4, 5, 43, 56, 58, 64, event 14, 30 ... | code: 33 action and 10 event types had no handler | implemented (docs/areas/creature-ai.md); classic-db rows with an unsupported part: 1,011 rows of 660 entries before, 48 rows of 30 entries after |
+| EventAI unsupported action 4, 5, 43, 56, 58, 64, event 14, 30 ... | code: 33 action and 10 event types had no handler | implemented (docs/areas/creature-ai.md); rows of the live copy with an unsupported part, counted with the C# registry (below): 1,011 rows over 678 entries or spawn guids on the base, 48 rows over 30 on this branch |
 
 ## The refresh
 
@@ -55,6 +55,19 @@ continents (`import-map-dbc` reads maps 0 and 1 only):
 Not changed and still logged, unrelated to this lane: the optional DBC/dump paths (ItemSets, ItemRandomProperties, PageText,
 SpellItemEnchantment, CharSections), the class-mask file, 326 waypoint spawns without a path, and three spawns with entry 0.
 
+## EventAI: how the before/after figure was measured
+
+The world reports unsupported EventAI parts once per creature entry when it builds that creature's AI, and it builds a creature only
+when a player's presence loads its grid. The `run-before`/`run-after` worlds had no player online, so their logs have no
+`creature_ai_scripts ... unsupported` line at all: they neither show nor contradict the change. The figure therefore comes from
+`_logs/w3-content-import/eventai-registry-check/` (a throwaway console harness, not product code). It loads every
+`creature_ai_scripts` row of the live copy through the world's own loader (`EfCreatureDataStore`) and applies the rules of
+`EventAiEngine.Describe` with `EventAiRegistry.Default` and each handler's `UnsupportedReason`, so it measures the C# registry
+itself. Built against the base tree (`w3-content-import-red`, 56fc4d18): 10,843 rows, 1,011 with an unsupported part, over 678
+entries or spawn guids (`red2/04-eventai-registry-check-base.txt`). Built against this branch: 48 rows over 30
+(`green2/04-eventai-registry-check-lane.txt`: action 34 x37, spawned condition x6, action 48 x3, death condition x2). The earlier
+`eventai_static_check.py` count (1,011 / 660 and 48 / 30) used hand-copied type sets and grouped the spawn-guid rows under entry 0.
+
 ## Still unsupported in EventAI
 
 Action 34 SET_INST_DATA (37 rows: no instance scripts exist), action 48 CHANGE_MOVEMENT (3 rows), a death event with a condition (2) and a
@@ -62,11 +75,33 @@ spawned event with the zone condition (6). They stay in the per-entry warning.
 
 ## Applying it to the live server
 
-1. Stop the World daemon (the script refuses a database in use).
-2. `powershell -NoProfile -File D:\ArcaneCore-lanes\w3-content-import\tools\content\refresh-world-content.ps1 -WorldDatabase
+1. Merge and build the deploy that will serve the world afterwards; step 3 uses its importer (`-Importer`).
+2. Stop the World daemon (the script refuses a database in use).
+3. `powershell -NoProfile -File <worktree or deploy>\tools\content\refresh-world-content.ps1 -WorldDatabase
    C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\playable-content-20261005\complete-r5\world.db -DbcDirectory
-   D:\ArcaneCore-lanes\_logs\w3-content-import\dbc-effective` (default dump `D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`;
-   the backup goes to `complete-r5\content-refresh-backups\`; `-Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll`
-   to use a deploy build instead of the worktree's).
-3. Start the World daemon from a build that contains this branch (the EventAI handlers are code).
-4. Optional: `World:Transports:Enabled = true` in the profile's appsettings.json to sail the 9 ships.
+   D:\refs\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll`
+   (default dump `D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`; the backup, database and `-wal`, goes to
+   `complete-r5\content-refresh-backups\`). The DBC directory is a durable copy of the files extracted from the client's patch-2.MPQ,
+   with `SHA256SUMS` and a provenance `README.txt` beside them; the script checks the hashes. Without it, `-MpqTool
+   C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\playable-content-20261005\mpqcli-v0.11.0-windows-amd64.exe` extracts them again.
+4. Schema: this branch takes no schema version, and the refresh writes only tables that exist at world 41. Whether the live world
+   migrates depends on the deploy, not on this branch. If a lane merged with it raised the world schema (42-44 are reserved), the
+   deploy's importer refuses the world-41 database (exit 3, nothing written) instead of migrating it on the side; then either start
+   that deploy's World once first (it migrates at start) and run the refresh after stopping it again, or add `-Migrate` (the backup is
+   taken first). With only this branch the importer is at world 41 and nothing migrates.
+5. Start the World daemon from that deploy (the EventAI handlers are code).
+6. Optional: `World:Transports:Enabled = true` in the profile's appsettings.json to sail the 9 ships.
+
+## Review fixes (2026-10-08)
+
+* ACTION_T_SUMMON_ID: `creature_ai_summons.spawntimesecs` holds milliseconds (cmangos passes it to `SummonCreature`; z2815 values
+  10000..86400000). The lane multiplied it by 1000, which made a 10 s summon live 2.8 h and wrapped values above 4,294,967. The
+  record field is now `CreatureAiSummon.LifetimeMs` and is passed through unchanged.
+* A summon (actions 12 and 32) with lifetime 0 is cmangos `TEMPSPAWN_TIMED_OOC_DESPAWN` with 0 ms: it despawns as soon as it is
+  alive and out of combat (no z2815 row has 0, so this is latent).
+* ZONE_COMBAT_PULSE gates on the map template's type (`Map::IsDungeon`: instance or raid, not a battleground), skips players the
+  creature cannot attack, and a creature with no victim attacks the closest unit of its threat list (`AttackClosestEnemy`).
+* FRIENDLY_HP leaves the creature itself out when one of the row's actions casts at the event target a spell with
+  SPELL_ATTR_EX_EXCLUDE_CASTER (cmangos `friendlyHp.targetSelf`; 14 z2815 rows, for example 198303 with spell 3477).
+* `refresh` no longer migrates silently (`--migrate`, above); the script also hashes the `-wal` copy and checks `SHA256SUMS`.
+* Logs: `red2/` (the new tests failing on fd2095b6: 7 EventAI cases and the refresh schema gate) and `green2/`.

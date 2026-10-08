@@ -54,8 +54,9 @@ public sealed class OutOfCombatLineOfSightEvent : EventAiEventHandler
 /// <summary>
 /// EVENT_T_FRIENDLY_HP (14): HPDeficit, Radius, RepeatMin, RepeatMax, IsPercent. In combat, the friendly creature within Radius (itself
 /// included) that misses the most health, more than HPDeficit points (or percent), becomes the event target (DoSelectLowestHpFriendly,
-/// MostHPMissingInRangeCheck / MostHPPercentMissingInRangeCheck: alive, in combat, one it can assist). Entering combat arms it with the
-/// repeat timer (EnterCombat :1608-1615).
+/// MostHPMissingInRangeCheck / MostHPPercentMissingInRangeCheck: alive, in combat, one it can assist). The creature itself is left out when
+/// one of the row's actions casts at the event target (TARGET_T_EVENT_SPECIFIC) a spell that excludes its caster: cmangos computes
+/// friendlyHp.targetSelf so at load (CreatureEventAIMgr.cpp:1082-1096). Entering combat arms it with the repeat timer (EnterCombat :1608-1615).
 /// </summary>
 public sealed class FriendlyHealthEvent : FriendlySearchEventHandler
 {
@@ -71,7 +72,7 @@ public sealed class FriendlyHealthEvent : FriendlySearchEventHandler
         bool percent = holder.Param(4) != 0;
         float best = holder.Param(0);
         Creature? chosen = null;
-        foreach (Creature friend in EventAiSearch.Friends(context, holder.Param(1), includeSelf: true))
+        foreach (Creature friend in EventAiSearch.Friends(context, holder.Param(1), includeSelf: TargetsSelf(context, holder.Event)))
         {
             if (!friend.Combat.IsInCombat || friend.MaxHealth == 0)
             {
@@ -89,6 +90,11 @@ public sealed class FriendlyHealthEvent : FriendlySearchEventHandler
         holder.EventTarget = chosen;
         return chosen is not null;
     }
+
+    /// <summary>cmangos friendlyHp.targetSelf: false when an ACTION_T_CAST at TARGET_T_EVENT_SPECIFIC (12) uses a SPELL_ATTR_EX_EXCLUDE_CASTER spell.</summary>
+    private static bool TargetsSelf(EventAiContext context, CreatureAiEvent row)
+        => context.System?.AiServices.UnitSpells is not { } spells
+            || !row.Actions.Any(a => a.Type == (byte)EventAiActionType.Cast && a.Param2 == 12 && spells.ExcludesCaster((uint)a.Param1));
 }
 
 /// <summary>

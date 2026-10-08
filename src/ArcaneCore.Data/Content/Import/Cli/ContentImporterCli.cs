@@ -72,7 +72,8 @@ public static partial class ContentImporterCli
                                 areatrigger_template; WorldSafeLocs.dbc in --dbc-dir adds the safe locations the dump lacks.
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
-                                --dry-run writes nothing; --report <file>)
+                                --dry-run writes nothing; --report <file>). A world whose schema is behind this
+                                importer's is refused unless --migrate is given (refresh never migrates on its own).
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.

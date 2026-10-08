@@ -217,31 +217,60 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// cmangos Creature::SetInCombatWithZone (EventAI ZONE_COMBAT_PULSE): only in a dungeon or raid (an instanceable map with an
-    /// instance id); every living player on the map who is not a game master is put on the creature's threat list. Returns how many.
+    /// cmangos Creature::SetInCombatWithZone (Entities/Creature.cpp:2360-2403, EventAI ZONE_COMBAT_PULSE): only on a dungeon or raid map
+    /// (Map::IsDungeon, the map template's type: a battleground is not one); every living player on the map who is not a game master and
+    /// whom the creature can attack is put on the creature's threat list and in combat with it. Returns how many.
     /// </summary>
     public int SetInCombatWithZone(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        if (Map.InstanceId == 0 || !creature.IsAlive)
+        if (Map.Template is not { IsDungeon: true } || !creature.IsAlive)
         {
             return 0;
         }
 
-        int added = 0;
-        foreach (Player player in Map.Players.ToArray())
+        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster && Map.Combat.Hooks.CanAttack(creature, p))];
+        if (creature.Combat.Victim is null && players.Length > 0)
         {
-            if (!player.IsAlive || player.IsGameMaster)
-            {
-                continue;
-            }
-
-            EnterCombatWithTarget(creature, player);
-            added++;
+            // Engaged first: the unit AttackClosestEnemy would pick from the threat list once every player is on it.
+            EnterCombatWithTarget(creature, ClosestEnemy(creature, players.Concat(creature.Combat.Threat.Entries.Select(e => e.Target))));
         }
 
-        return added;
+        foreach (Player player in players)
+        {
+            EnterCombatWithTarget(creature, player);
+        }
+
+        return players.Length;
     }
+
+    /// <summary>
+    /// cmangos UnitAI::AttackClosestEnemy (BaseAI/UnitAI.cpp:863-888): the creature attacks the unit of its threat list that is closest to it.
+    /// False when it has a victim already or nothing on its threat list.
+    /// </summary>
+    public bool AttackClosestEnemy(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Combat.Victim is not null || creature.Combat.Threat.Entries.Count == 0)
+        {
+            return false;
+        }
+
+        Unit closest = ClosestEnemy(creature, creature.Combat.Threat.Entries.Select(e => e.Target));
+        if (creature.AI is { } ai)
+        {
+            ai.AttackStart(closest);
+        }
+        else
+        {
+            AttackStart(creature, closest);
+        }
+
+        return creature.Combat.Victim is not null;
+    }
+
+    private static Unit ClosestEnemy(Creature creature, IEnumerable<Unit> candidates)
+        => candidates.MinBy(u => ((u.X - creature.X) * (u.X - creature.X)) + ((u.Y - creature.Y) * (u.Y - creature.Y)) + ((u.Z - creature.Z) * (u.Z - creature.Z)))!;
 
     /// <summary>
     /// cmangos UnitAI::SetAIImmobilizedState (BaseAI/UnitAI.cpp:890-901; EventAI SET_IMMOBILIZED_STATE): the creature is rooted (the

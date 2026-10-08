@@ -125,7 +125,8 @@ docs/integration/creature-ai.md.
     generic timer (in and out of combat), 31 energy percent, 33 facing target (within 5 yd, victim's back or
     front half circle), 36 target not reachable; and (wave 3, `Events/ScriptLinkEvents.cs`) 10 out-of-combat line of sight (no victim;
     hostile or not-hostile unit, player only, range and line of sight, condition), 14 friendly health (the friend in combat within the radius
-    missing the most health, points or percent; itself included: cmangos' EXCLUDE_CASTER check of the cast spell is not made), 15 friendly
+    missing the most health, points or percent; itself included, unless one of the row's actions casts at the event target (12) a spell with
+    SPELL_ATTR_EX_EXCLUDE_CASTER, cmangos friendlyHp.targetSelf, CreatureEventAIMgr.cpp:1082-1096; 14 classic-db z2815 rows), 15 friendly
     crowd controlled (stunned, confused, fleeing or rooted friend in combat), 16 friendly missing buff (the three combat flags; the row's radius,
     where cmangos measures the buff spell's range), 17/25/26 summoned unit, summoned just died and summoned just despawned (summons by EventAI
     and spell summons of a creature caster; repeat timers are parameters 2 and 3), 30 receive AI event (event type, sender entry or any), 32
@@ -143,8 +144,9 @@ docs/integration/creature-ai.md.
     random sound, 10 random emote (-1 plays nothing), 15 quest event and 33 killed monster (through the `IEventAiQuestEvents` seam, bound by
     the world to the quest service; group credit within the group reward distance), 17 set unit field (UNIT block only), 18/19 set and remove
     unit flags, 28 remove auras of a spell, 29 ranged movement (chase distance; the angle is not modelled), 30/31 random phase and phase range,
-    32 summon at a `creature_ai_summons` position, 36 update template (health percent kept; the respawn restores the original), 38 zone
-    combat pulse (dungeon instances only), 40 sheath, 41 forced despawn (delay; a database spawn dies without a kill and respawns on its
+    32 summon at a `creature_ai_summons` position (its `spawntimesecs` lifetime is in milliseconds, as cmangos reads it), 36 update
+    template (health percent kept; the respawn restores the original), 38 zone combat pulse (only on a map whose template is a dungeon or
+    raid, so not a battleground, Map::IsDungeon; a creature with no victim then attacks the closest unit of its threat list), 40 sheath, 41 forced despawn (delay; a database spawn dies without a kill and respawns on its
     timer), 42 death prevention (health never below 1), 43 mount (entry's model or model id; 0 dismounts), 45 throw AI event (custom events
     A-F reach every living creature in range, the sender included; the other types the creatures that could assist against the invoker), 47
     stand state, 50 react state, 51 pause waypoints, 55 attack start, 56 despawn guardians, 58 set walk (RUN/WALK_DEFAULT; the chase
@@ -161,7 +163,8 @@ docs/integration/creature-ai.md.
     type; a death event with a condition id (no conditions system); a spawned event with the zone condition
     (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
     always off, so RANGED_MODE_ONLY rows never run); the combat-movement melee packet parameter.
-  - Summons still despawn on a flat timer (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN` is a later slice).
+  - Summons (12 and 32) with a lifetime count it down while alive, out of combat and uncharmed (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN`);
+    a lifetime of 0 is `TEMPSPAWN_TIMED_OOC_DESPAWN` with 0 ms: the summon goes as soon as it is alive and out of combat.
 - **Texts** (`creature_ai_texts`): say 25 yd, yell 300 yd, text emote 25 yd, boss emote and
   zone yell map-wide, whisper to the target. `$N` becomes the target name, and the text can
   carry an emote (SMSG_EMOTE).

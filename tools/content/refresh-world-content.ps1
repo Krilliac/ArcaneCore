@@ -20,11 +20,17 @@
   database as it was. Before writing, the script
 
     1. refuses a database another process holds open (stop the world server first),
-    2. copies the database to -BackupDirectory and checks the copy's SHA-256,
-    3. takes AreaTrigger.dbc and WorldSafeLocs.dbc from -DbcDirectory, or extracts them from the client's MPQs with -MpqTool
-       (mpqcli; patch-2.MPQ over patch.MPQ over dbc.MPQ, the client's own precedence). Nothing is downloaded.
+    2. copies the database to -BackupDirectory and checks the copy's SHA-256, and the same for a leftover -wal file (committed
+       pages not yet checkpointed, which the refresh's own connection would fold into the database),
+    3. takes AreaTrigger.dbc and WorldSafeLocs.dbc from -DbcDirectory (checked against its SHA256SUMS file when it has one), or
+       extracts them from the client's MPQs with -MpqTool (mpqcli; patch-2.MPQ over patch.MPQ over dbc.MPQ, the client's own
+       precedence). Nothing is downloaded.
 
   -DryRun reads everything and writes nothing (no backup either).
+
+  The world's schema must already be the importer's: a database behind it is refused (nothing written) unless -Migrate is given.
+  Run the refresh with the importer of the deploy that will serve the world afterwards; if that deploy raised the world schema,
+  either start its world server once first (it migrates at start) or pass -Migrate (the backup above is taken first).
 
 .PARAMETER WorldDatabase
   The SQLite world database to refresh (for example the path in Database:World:ConnectionString of the server's appsettings.json).
@@ -33,7 +39,8 @@
   The classic-db or vmangos world dump (.sql or .sql.gz). Default: D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz.
 
 .PARAMETER DbcDirectory
-  A directory holding the build-5875 AreaTrigger.dbc and WorldSafeLocs.dbc (the effective copies, patch-2 first).
+  A directory holding the build-5875 AreaTrigger.dbc and WorldSafeLocs.dbc (the effective copies, patch-2 first), for example
+  D:\refs\client-dbc-5875-effective. A SHA256SUMS file there (sha256sum format) is checked before anything is written.
 
 .PARAMETER MpqTool
   mpqcli.exe, used to extract the two DBCs from -ClientData when -DbcDirectory is not given.
@@ -53,6 +60,9 @@
 .PARAMETER Report
   Optional JSON report path (outside any git work tree).
 
+.PARAMETER Migrate
+  Let the refresh upgrade a world database whose schema is behind the importer's (arcane-content-importer refresh --migrate).
+
 .EXAMPLE
   powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory C:\srv\dbc-5875
 #>
@@ -67,7 +77,8 @@ param(
     [ValidateSet('auto', 'ms', 'seconds')][string]$CooldownUnit = 'auto',
     [string]$Importer,
     [string]$Report,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Migrate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,8 +136,25 @@ if (-not $DbcDirectory) {
     }
     $DbcDirectory = $temporaryDbc
 }
+$manifest = Join-Path $DbcDirectory 'SHA256SUMS'
+$expected = @{}
+if (Test-Path -LiteralPath $manifest -PathType Leaf) {
+    foreach ($line in Get-Content -LiteralPath $manifest) {
+        if ($line -match '^([0-9A-Fa-f]{64}) [ *]?(.+)$') { $expected[$Matches[2].Trim()] = $Matches[1].ToUpperInvariant() }
+    }
+}
 foreach ($name in 'AreaTrigger.dbc', 'WorldSafeLocs.dbc') {
-    if (-not (Test-Path -LiteralPath (Join-Path $DbcDirectory $name) -PathType Leaf)) { throw "$name is missing from $DbcDirectory" }
+    $file = Join-Path $DbcDirectory $name
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "$name is missing from $DbcDirectory" }
+    $actual = Get-Sha256 $file
+    if ($expected.Count -gt 0) {
+        if (-not $expected.ContainsKey($name)) { throw "$name is not listed in $manifest" }
+        if ($expected[$name] -ne $actual) { throw "$name does not match $manifest (sha256 $actual)" }
+        Write-Host "$name sha256 $actual (matches SHA256SUMS)"
+    }
+    else {
+        Write-Host "$name sha256 $actual"
+    }
 }
 
 try {
@@ -137,19 +165,24 @@ try {
         $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
         $backup = Join-Path $BackupDirectory ("{0}.{1}.bak" -f [System.IO.Path]::GetFileName($WorldDatabase), $stamp)
         Copy-Item -LiteralPath $WorldDatabase -Destination $backup
-        $wal = $WorldDatabase + '-wal'
-        if ((Test-Path -LiteralPath $wal) -and (Get-Item -LiteralPath $wal).Length -gt 0) {
-            Copy-Item -LiteralPath $wal -Destination ($backup + '-wal')
-        }
         $hash = Get-Sha256 $WorldDatabase
         if ((Get-Sha256 $backup) -ne $hash) { throw "the backup $backup does not match the database" }
         Write-Host "backup: $backup (sha256 $hash)"
+        $wal = $WorldDatabase + '-wal'
+        if ((Test-Path -LiteralPath $wal) -and (Get-Item -LiteralPath $wal).Length -gt 0) {
+            # Committed pages not yet checkpointed: the backup is the database plus this file, so both copies are checked.
+            Copy-Item -LiteralPath $wal -Destination ($backup + '-wal')
+            $walHash = Get-Sha256 $wal
+            if ((Get-Sha256 ($backup + '-wal')) -ne $walHash) { throw "the backup $backup-wal does not match $wal" }
+            Write-Host "backup: $backup-wal (sha256 $walHash)"
+        }
     }
 
     # 4. The refresh itself.
     $arguments = @('refresh', $Dump, '--database', $WorldDatabase, '--dbc-dir', $DbcDirectory, '--cooldown-unit', $CooldownUnit)
     if ($Report) { $arguments += @('--report', $Report) }
     if ($DryRun) { $arguments += '--dry-run' }
+    if ($Migrate) { $arguments += '--migrate' }
     if ($Importer.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
         & dotnet $Importer @arguments
     }

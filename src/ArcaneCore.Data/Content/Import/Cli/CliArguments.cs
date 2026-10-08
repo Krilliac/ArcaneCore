@@ -13,7 +13,7 @@ internal sealed class CliArguments
         ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--class-mask-file",
             "--player-stats-migrations-dir", "--cooldown-unit"];
 
-    private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose"];
+    private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose", "--migrate"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
@@ -24,7 +24,7 @@ internal sealed class CliArguments
         ["verify"] = ["--database", "--provider", "--connection-string"],
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
         ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run"],
-        ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run"],
+        ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run", "--migrate"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

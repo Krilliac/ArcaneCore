@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Graveyards;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.World.Battlegrounds;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
@@ -32,12 +33,14 @@ public static partial class ContentImporterCli
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
     /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, and <c>areatrigger_template</c> from
     /// <c>AreaTrigger.dbc</c>. Afterwards it checks the references the world logs at start (teleports and taverns without a trigger,
-    /// battleground start locations without a safe location, transports without a type-15 object).
+    /// battleground start locations without a safe location, transports without a type-15 object). The world's schema must already be this
+    /// importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live world as a side effect.
     /// </summary>
     private static async Task<int> RefreshAsync(CliArguments a, TextWriter o, CancellationToken ct)
     {
         RequireInputs(a);
         bool dryRun = a.Flag("--dry-run");
+        bool migrate = a.Flag("--migrate");
         Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
         if (!dryRun && target is null)
         {
@@ -191,7 +194,7 @@ public static partial class ContentImporterCli
             try
             {
                 await using WorldDbContext db = OpenWorld(target);
-                await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+                await EnsureRefreshSchemaAsync(db, migrate, o, ct).ConfigureAwait(false);
                 await ImportTransaction.RunAsync(db, async token =>
                 {
                     if (graveyards.HasRows)
@@ -260,6 +263,37 @@ public static partial class ContentImporterCli
     /// zNNNN"): seconds before z2829, milliseconds from it on. A dump whose revision cannot be read needs an explicit unit (fail closed:
     /// guessing wrong makes every proc cooldown a thousand times off).
     /// </summary>
+    /// <summary>
+    /// The refresh's schema gate: a world already at this importer's schema passes; one behind it is refused (nothing written) unless
+    /// <paramref name="migrate"/>, in which case it is upgraded first and the step is reported. Built together with a lane that raised the
+    /// world schema, a silent upgrade here would migrate the live world before the server that needs it is deployed.
+    /// </summary>
+    private static async Task EnsureRefreshSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct)
+    {
+        SchemaPlan before = await SchemaPlanner.PlanAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+        try
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema,
+                new SchemaUpgradeOptions { Policy = migrate ? SchemaPolicy.Always : SchemaPolicy.Never }, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (SchemaPolicyException ex)
+        {
+            string have = ex.DatabaseVersion is { } version ? $"schema version {version}" : $"no complete schema ({ex.State})";
+            throw new CliException(ExitCodes.Schema,
+                $"the world database has {have}, this importer's world schema is {ex.CodeVersion}; refresh does not migrate on its own. Start the " +
+                "world server from the build this importer belongs to once (it migrates at start) or pass --migrate. Nothing was changed.", ex);
+        }
+
+        if (before.DatabaseVersion is { } from && from != before.CodeVersion && migrate)
+        {
+            o.WriteLine($"world schema {from} -> {before.CodeVersion} (--migrate)");
+        }
+        else
+        {
+            o.WriteLine($"world schema {before.DatabaseVersion?.ToString(CultureInfo.InvariantCulture) ?? "?"}");
+        }
+    }
+
     internal static ProcCooldownUnit ResolveCooldownUnit(string? given, string? dbVersion)
     {
         switch ((given ?? "auto").ToLowerInvariant())

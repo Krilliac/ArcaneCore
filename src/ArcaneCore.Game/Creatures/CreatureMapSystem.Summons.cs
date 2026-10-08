@@ -30,6 +30,13 @@ public sealed partial class CreatureMapSystem
         /// also held while the creature is charmed.
         /// </summary>
         OutOfCombatUncharmed,
+
+        /// <summary>
+        /// cmangos TEMPSPAWN_TIMED_OOC_DESPAWN (Entities/TemporarySpawn.cpp:45-58): the lifetime counts down only while the creature is alive
+        /// and out of combat and starts again while it fights; a dead one is left to its corpse decay. EventAI uses it with 0 ms for a
+        /// summon with no lifetime, which then goes as soon as it is alive and out of combat.
+        /// </summary>
+        AliveOutOfCombat,
     }
 
     /// <summary>A temporary creature with a lifetime; <see cref="DespawnAtMs"/> moves forward while an out-of-combat timer is held.</summary>
@@ -66,7 +73,7 @@ public sealed partial class CreatureMapSystem
             Creature creature = summon.Creature;
             bool held = summon.Timer switch
             {
-                SummonTimer.OutOfCombat => creature.Combat.IsInCombat || !creature.IsAlive,
+                SummonTimer.OutOfCombat or SummonTimer.AliveOutOfCombat => creature.Combat.IsInCombat || !creature.IsAlive,
                 SummonTimer.OutOfCombatUncharmed => creature.Combat.IsInCombat || !creature.IsAlive || !creature.CharmerGuid.IsEmpty,
                 _ => false,
             };
@@ -95,8 +102,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// cmangos EventAI SUMMON: a temporary creature at the summoner's position that attacks
     /// <paramref name="target"/> and despawns after <paramref name="despawnMs"/> alive, out of combat and
-    /// uncharmed (TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN, CreatureEventAI.cpp:819-820; 0 = stays until
-    /// it dies or its grid unloads). A missing template is reported once and summons nothing.
+    /// uncharmed (TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN, CreatureEventAI.cpp:819-820). 0 is TEMPSPAWN_TIMED_OOC_DESPAWN
+    /// with 0 ms (:821-822): the summon despawns as soon as it is alive and out of combat, so one that does not
+    /// start fighting goes on the next update. A missing template is reported once and summons nothing.
     /// </summary>
     public Creature? Summon(Creature summoner, uint entry, Unit? target, uint despawnMs)
     {
@@ -122,10 +130,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner); // cmangos SummonCreature → JustSummoned
-        if (despawnMs > 0)
-        {
-            AddTimedSummon(summoned, despawnMs, SummonTimer.OutOfCombatUncharmed);
-        }
+        AddTimedSummon(summoned, despawnMs, despawnMs > 0 ? SummonTimer.OutOfCombatUncharmed : SummonTimer.AliveOutOfCombat);
 
         if (target is not null && target.IsAlive)
         {

@@ -21,6 +21,12 @@ public interface IUnitSpellQueries
 
     /// <summary>cmangos Unit::RemoveAurasDueToSpell (EventAI REMOVEAURASFROMSPELL); false when nothing could be removed.</summary>
     bool RemoveAuras(Unit unit, uint spellId) => false;
+
+    /// <summary>
+    /// Whether the spell carries cmangos SPELL_ATTR_EX_EXCLUDE_CASTER (vmangos SPELL_ATTR_EX_CANT_TARGET_SELF, 0x00080000): its caster cannot
+    /// be its target (EventAI FRIENDLY_HP then leaves the creature itself out, CreatureEventAIMgr.cpp:1082-1096). False for an unknown spell.
+    /// </summary>
+    bool ExcludesCaster(uint spellId) => false;
 }
 
 /// <summary><see cref="IUnitSpellQueries"/> over the world <see cref="SpellSystem"/>.</summary>
@@ -57,6 +63,8 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
         system.RemoveAuras(unit, spellId);
         return true;
     }
+
+    public bool ExcludesCaster(uint spellId) => spells().Store.Get(spellId) is { } spell && spell.HasAttribute(SpellAttributesEx.CantTargetSelf);
 
     public bool IsCasting(Unit unit)
     {

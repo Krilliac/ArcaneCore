@@ -2,9 +2,11 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -39,6 +41,11 @@ public sealed class ScriptLinkEventAiTests
             Removed.Add((unit, spellId));
             return Stacks.Remove((unit, spellId));
         }
+
+        /// <summary>The spells that carry SPELL_ATTR_EX_EXCLUDE_CASTER.</summary>
+        public HashSet<uint> CasterExcluded { get; } = [];
+
+        public bool ExcludesCaster(uint spellId) => CasterExcluded.Contains(spellId);
     }
 
     private sealed class FakeQuests : IEventAiQuestEvents
@@ -91,7 +98,8 @@ public sealed class ScriptLinkEventAiTests
     private static CreatureAiAction Marker(int spell, int target = (int)EventAiTarget.Self) => Act((byte)EventAiActionType.Cast, spell, target);
 
     private static Scene Start(IEnumerable<CreatureAiEvent> events, IEnumerable<CreatureSpawn>? more = null, float playerX = 40,
-        Action<CreatureTemplateBuilder>? template = null, IEnumerable<CreatureAiSummon>? summons = null, IEnumerable<CreatureTemplate>? templates = null)
+        Action<CreatureTemplateBuilder>? template = null, IEnumerable<CreatureAiSummon>? summons = null, IEnumerable<CreatureTemplate>? templates = null,
+        MapType? mapType = null, uint instanceId = 0)
     {
         var ai = new CreatureAiContent(events, [], summons: summons);
         CreatureContent content = new(
@@ -110,11 +118,28 @@ public sealed class ScriptLinkEventAiTests
         var spells = new FakeCaster();
         var unitSpells = new FakeUnitSpells();
         var quests = new FakeQuests();
+        WorldRuntime runtime = TestWorld.CreateRuntime();
+        if (mapType is { } type)
+        {
+            WorldMaps.Of(runtime).Load(new MapContent([new MapTemplate(0, 0, type, 0, 40, 0, -1, 0, 0, "EventAI map", "")], [], [], [], []));
+        }
+
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
-            new CreatureAiServices { Spells = spells, UnitSpells = unitSpells, QuestEvents = quests });
-        (Player player, FakeSession session) = AddPlayer(world, 1, playerX, 0);
+            new CreatureAiServices { Spells = spells, UnitSpells = unitSpells, QuestEvents = quests }, world: runtime, instanceId: instanceId);
+        (Player player, FakeSession session) = instanceId == 0 ? AddPlayer(world, 1, playerX, 0) : AddPlayerTo(world, map, 1, playerX);
         Creature me = system.Creatures.Single(c => c.Spawn?.Guid == 1);
         return new Scene(world, map, system, spells, unitSpells, quests, player, session, me);
+    }
+
+    /// <summary>A player put straight on <paramref name="map"/> (an instance copy the world's login resolver does not know).</summary>
+    private static (Player Player, FakeSession Session) AddPlayerTo(WorldRuntime world, Map map, uint guid, float x)
+    {
+        var session = new FakeSession((int)guid);
+        Player player = TestWorld.CreatePlayer(guid, x, 0, session);
+        map.AddPlayer(player);
+        world.RunTick(0);
+        session.Clear();
+        return (player, session);
     }
 
     // --- unit state ----------------------------------------------------------------------------------
@@ -353,7 +378,7 @@ public sealed class ScriptLinkEventAiTests
                 Row(4, 26, Marker(9026), p1: (int)Minion),   // SUMMONED_JUST_DESPAWN
                 Row(5, 25, Marker(9099), p1: (int)Other),    // another entry: never
             ],
-            summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 0)]);
+            summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 60000)]); // a lifetime of 0 would despawn the summon at once (below)
         Creature minion = s.Find(Minion);
         Assert.Equal((12f, 13f), (minion.X, minion.Y));
         Assert.True(s.Cast(9017));
@@ -379,6 +404,75 @@ public sealed class ScriptLinkEventAiTests
 
         Assert.Same(s.Me, minion.Combat.Victim);
         Assert.Same(s.Me, s.System.SummonerOf(minion));
+    }
+
+    [Fact]
+    public void SummonId_TheRowsLifetimeIsInMilliseconds_AndRunsOutOfCombat()
+    {
+        // creature_ai_summons.spawntimesecs holds milliseconds despite its name: cmangos passes it to SummonCreature as the despawn time
+        // (CreatureEventAI.cpp:1018-1019; TemporarySpawn.cpp uses std::chrono::milliseconds(m_lifetime)). z2815 rows: 10000 (4), 120000 (3),
+        // ... 86400000 (2).
+        using Scene s = Start([OnSpawn(1, Act(32, (int)Minion, (int)EventAiTarget.Self, 7))],
+            summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 10000)]);
+        Creature minion = s.Find(Minion);
+
+        Run(s.World, 9500);
+        Assert.NotNull(s.System.FindCreature(minion.Guid));
+        Run(s.World, 1000);
+        Assert.Null(s.System.FindCreature(minion.Guid));
+    }
+
+    [Fact]
+    public void SummonId_ALifetimeAboveFourMillionMilliseconds_DoesNotWrapAround()
+    {
+        // 4,294,968 x 1000 overflows a uint to 704; the summon has to stay for its 71.6 minutes (z2815 has 7200000 and 86400000, which wrap too).
+        using Scene s = Start([OnSpawn(1, Act(32, (int)Minion, (int)EventAiTarget.Self, 7))],
+            summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 4_294_968)]);
+        Creature minion = s.Find(Minion);
+
+        Run(s.World, 2000);
+
+        Assert.NotNull(s.System.FindCreature(minion.Guid));
+    }
+
+    [Theory]
+    [InlineData((byte)32)] // ACTION_T_SUMMON_ID with a row lifetime of 0 (CreatureEventAI.cpp:1020-1021)
+    [InlineData((byte)12)] // ACTION_T_SPAWN with a duration of 0 (:819-822)
+    public void ASummonWithNoLifetime_DespawnsAsSoonAsItIsOutOfCombat(byte actionType)
+    {
+        // cmangos TEMPSPAWN_TIMED_OOC_DESPAWN with 0 ms (TemporarySpawn.cpp:45-58): alive and out of combat, it has expired.
+        CreatureAiAction summon = actionType == 32
+            ? Act(32, (int)Minion, (int)EventAiTarget.Self, 7)
+            : Act(12, (int)Minion, (int)EventAiTarget.Self, 0);
+        using Scene s = Start(
+            [
+                OnSpawn(1, summon),
+                Row(2, 17, Marker(9017), p1: (int)Minion),   // SUMMONED_UNIT
+                Row(3, 26, Marker(9026), p1: (int)Minion),   // SUMMONED_JUST_DESPAWN
+            ],
+            summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 0)]);
+
+        Run(s.World, 300);
+
+        Assert.True(s.Cast(9017));
+        Assert.True(s.Cast(9026));
+        Assert.DoesNotContain(s.System.Creatures, c => c.Entry == Minion);
+    }
+
+    [Fact]
+    public void ASummonWithNoLifetime_StaysWhileItFights()
+    {
+        using Scene s = Start([], summons: [new CreatureAiSummon(7, 12, 13, 83.5f, 1f, 0)], playerX: 20,
+            templates: [Template(7204, t => { t.Faction = 14; t.MinLevelHealth = 5000; t.MaxLevelHealth = 5000; })]);
+        var invocation = new EventAiInvocation(0, 0, s.Player, null, null);
+
+        Assert.True(new SummonIdAction().Execute(s.Ai.Engine.Context, Act(32, 7204, (int)EventAiTarget.Invoker, 7), invocation));
+        Creature summoned = s.Find(7204);
+        Run(s.World, 1500);
+
+        Assert.NotNull(s.System.FindCreature(summoned.Guid));
+        Assert.True(summoned.Combat.IsInCombat);
+        Assert.Same(s.Player, summoned.Combat.Victim);
     }
 
     // --- AI events -------------------------------------------------------------------------------------------
@@ -435,6 +529,33 @@ public sealed class ScriptLinkEventAiTests
 
         Assert.Contains(s.Spells.Casts, c => c.Spell == 9014 && ReferenceEquals(c.Target, near));
         Assert.DoesNotContain(s.Spells.Casts, c => ReferenceEquals(c.Target, far));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FriendlyHealth_TakesTheCreatureItself_UnlessTheEventSpecificCastExcludesTheCaster(bool excludesCaster)
+    {
+        // cmangos CreatureEventAIMgr.cpp:1082-1096: friendlyHp.targetSelf is false when a CAST at TARGET_T_EVENT_SPECIFIC uses a
+        // SPELL_ATTR_EX_EXCLUDE_CASTER spell (z2815: 14 rows, e.g. 198303 with spell 3477); DoSelectLowestHpFriendly then skips the caster.
+        using Scene s = Start([Row(1, 14, Marker(9014, 12), p1: 10, p2: 30, p3: 1000, p4: 1000)],
+            more: [Spawn(2, Other, 5, 0)], playerX: 3,
+            template: t => { t.MinLevelHealth = 1000; t.MaxLevelHealth = 1000; });
+        if (excludesCaster)
+        {
+            s.UnitSpells.CasterExcluded.Add(9014);
+        }
+
+        Creature near = s.System.Creatures.Single(c => c.Spawn?.Guid == 2);
+        s.Map.Combat.DealDamage(s.Player, s.Me, 1, direct: false);
+        s.Map.Combat.DealDamage(s.Player, near, 1, direct: false);
+        s.Me.Health = 100;                 // misses 900: the most
+        near.Health = near.MaxHealth / 2;  // misses 27, more than the 10 asked
+
+        Run(s.World, 2000);
+
+        (uint Spell, Unit? Target, bool _) cast = s.Spells.Casts.First(c => c.Spell == 9014);
+        Assert.Same(excludesCaster ? near : s.Me, cast.Target);
     }
 
     [Fact]
@@ -558,6 +679,35 @@ public sealed class ScriptLinkEventAiTests
     public void ZoneCombatPulse_DoesNothingOutsideADungeon()
     {
         using Scene s = Start([], playerX: 60);
+
+        new ZoneCombatPulseAction().Execute(s.Ai.Engine.Context, Act(38), default);
+
+        Assert.False(s.Me.Combat.IsInCombat);
+    }
+
+    [Fact]
+    public void ZoneCombatPulse_InADungeon_EngagesEveryLivingPlayer_AndAttacksTheClosest()
+    {
+        // cmangos ACTION_T_ZONE_COMBAT_PULSE (CreatureEventAI.cpp:1097-1103): SetInCombatWithZone, then AttackClosestEnemy when there is
+        // no victim. The dungeon test is Map::IsDungeon (the map entry's type), not the instance id.
+        using Scene s = Start([], playerX: 70, mapType: MapType.Instance);
+        (Player near, _) = AddPlayer(s.World, 2, 45, 0);
+        Assert.Null(s.Me.Combat.Victim);
+
+        new ZoneCombatPulseAction().Execute(s.Ai.Engine.Context, Act(38), default);
+
+        Assert.True(s.Me.Combat.Threat.Contains(s.Player));
+        Assert.True(s.Me.Combat.Threat.Contains(near));
+        Assert.Same(near, s.Me.Combat.Victim);
+    }
+
+    [Fact]
+    public void ZoneCombatPulse_OnABattlegroundInstance_DoesNothing()
+    {
+        // Creature::SetInCombatWithZone: !pMap->IsDungeon() returns; MapEntry::IsDungeon is instance or raid, so a battleground is out.
+        using Scene s = Start([], playerX: 45, mapType: MapType.Battleground, instanceId: 3);
+        Assert.Equal(3u, s.Map.InstanceId);
+        Assert.Contains(s.Player, s.Map.Players);
 
         new ZoneCombatPulseAction().Execute(s.Ai.Engine.Context, Act(38), default);
 
