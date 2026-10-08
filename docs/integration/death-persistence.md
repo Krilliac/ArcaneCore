@@ -65,8 +65,19 @@ when the stored values are clamped to them.
   (`Player.cpp:15434`), tells the client to water walk, applies the ghost form hook, and sends
   `SMSG_CORPSE_RECLAIM_DELAY` with the remaining delay (`Player::SendCorpseReclaimDelay(load = true)`,
   `Player.cpp:20228-20260`: nothing when the ghost time is after the window or the delay has passed).
-- A character stored dead that never became a ghost, or a ghost without a body, comes back at half
-  health and mana, rage empty (`Player::LoadCorpse` -> `ResurrectPlayer(0.5f)`, `Player.cpp:15434-15439`).
+- A ghost without a body comes back alive at half health and mana, rage empty (`Player::LoadCorpse` ->
+  `ResurrectPlayer(0.5f)`, `Player.cpp:15427-15439`, which runs only for a player that is not alive and
+  has no corpse).
+- A character that is not a ghost loads alive whatever health it was stored with, including 0 (a death
+  that was never released). vmangos sets the dead state at load only from `PLAYER_FLAGS_GHOST`
+  (`Player.cpp:14973-14975`), so `LoadCorpse` does not resurrect such a player at half. It restores the
+  saved health and powers, clamped to the maximums (`Player.cpp:15062-15070`), and the player then
+  regenerates as an alive player (`Player.cpp:1240-1243`). `PlayerLife.ApplyVitals` keeps the saved
+  powers and sets health to at least 1. ArcaneCore's `Unit.IsAlive` also needs health above 0, so a
+  0-health alive player would regenerate but count as dead for auras, spells and targeting. The one
+  point is what the first regeneration tick would give anyway. A ghost with a body stored at 0 also
+  shows 1 health but stays dead through `PlayerLife.ApplyGhostState`, the same health vmangos gives a
+  ghost on release (`Player::BuildPlayerRepop`, `Player.cpp:4617`).
 
 ## Limits (explicit, nothing is stubbed behind them)
 - Not delivered from the design: rest state persistence; bank slot persistence; the Map.dbc import. The
