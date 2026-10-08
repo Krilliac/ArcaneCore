@@ -47,8 +47,9 @@ public sealed class FlametongueProcScript : ISpellScript
 /// <summary>
 /// Rockbiter Weapon proc (20865, 20866, 20867, 20868, 20870, 20871; SCRIPT_EFFECT; vmangos <c>Spell::EffectScriptEffect</c>, SpellEffects.cpp:4544-4561):
 /// on a target that can have a threat list and already holds the caster on it, the caster gains <c>value * main-hand attack time / 1000</c> threat,
-/// in whole numbers (uint32 arithmetic) and added raw (<c>addThreat(caster, threat)</c>: no threat spell, so no SPELLMOD_THREAT, and the default
-/// physical school for the caster's MOD_THREAT multiplier).
+/// in whole numbers (uint32 arithmetic) and added raw. vmangos calls the 2-argument <c>addThreat(caster, threat)</c>, which passes no threat spell
+/// (so no SPELLMOD_THREAT) and SPELL_SCHOOL_MASK_NONE (ThreatManager.h:192); Unit::ApplyTotalThreatModifier returns the threat unchanged for an
+/// empty mask (Unit.cpp:7414-7415), so no MOD_THREAT aura on the shaman (Tranquil Air Totem, Subtlety, Fetish of the Sand Reaver) scales it.
 /// </summary>
 [SpellScript(20865, 20866, 20867, 20868, 20870, 20871)]
 public sealed class RockbiterProcScript : ISpellScript
@@ -69,7 +70,8 @@ public sealed class RockbiterProcScript : ISpellScript
         }
 
         uint threat = unchecked((uint)context.Value * caster.Combat.GetAttackTime(WeaponAttackType.BaseAttack) / 1000u);
-        float total = ThreatCalc.Calc(new SpellThreatModifiers(context.System), caster, threat, false, ThreatCalc.PhysicalMask, null);
+        // No school and no threat spell: CalcThreat applies no modifier and the threat goes in as computed.
+        float total = ThreatCalc.Calc(new SpellThreatModifiers(context.System), caster, threat, false, schoolMask: 0, spell: null);
         target.Combat.Threat.AddThreat(caster, total);
     }
 }

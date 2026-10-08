@@ -37,7 +37,7 @@ Sanctuary's block-only proc and the 50% judgement procs need their `spell_proc_e
 | Piece | What it does | Code | vmangos |
 |---|---|---|---|
 | Flametongue Weapon proc (10 ids) | `(value + 3.85 * fire spell damage) * 0.01 * weapon speed` of the item that procced, dithered, dealt by Flametongue Attack 10444 cast with that item as its cast item. | `Shaman/ShamanWeaponScripts.cs` | spell_shaman.cpp:19-44 |
-| Rockbiter Weapon proc (6 ids) | `value * main-hand attack time / 1000` threat (whole numbers, added raw: no SPELLMOD_THREAT, physical school for MOD_THREAT) where the shaman is already on the list. | `ShamanWeaponScripts.cs` | SpellEffects.cpp:4544-4561 |
+| Rockbiter Weapon proc (6 ids) | `value * main-hand attack time / 1000` threat (whole numbers, added raw with no school: no SPELLMOD_THREAT and no MOD_THREAT multiplier, ThreatManager.h:192 and Unit.cpp:7414-7415) where the shaman is already on the list. | `ShamanWeaponScripts.cs` | SpellEffects.cpp:4544-4561 |
 
 The imbues themselves are temporary weapon enchantments (SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, crafting lane) whose COMBAT_SPELL enchantment effect is
 procced by `SpellSystem.HandleItemCombatProc` (Rockbiter Weapon's TOTEM effect adds weapon damage in `PlayerEnchantments`); Windfury Weapon and Frostbrand

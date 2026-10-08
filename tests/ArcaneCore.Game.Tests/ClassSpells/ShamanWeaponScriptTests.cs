@@ -24,6 +24,7 @@ public sealed class ShamanWeaponScriptTests : IDisposable
     private const uint FlametongueProc = 8026;
     private const uint RockbiterProc = 20865;
     private const uint RockbiterProcOdd = 20866;   // a rank whose value does not divide evenly
+    private const uint ModThreatAllSchools = 49_704; // a +100% MOD_THREAT aura on every school
     private const uint FlametongueEnchant = 49_701;
     private const uint Weapon = 49_702;
 
@@ -51,6 +52,10 @@ public sealed class ShamanWeaponScriptTests : IDisposable
             Spell(RockbiterProcOdd, Effect(SpellEffectName.ScriptEffect, 7, SpellImplicitTarget.UnitEnemy)) with
             {
                 School = SpellSchool.Nature, SpellFamilyName = 11, RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+            },
+            Spell(ModThreatAllSchools, Effect(SpellEffectName.ApplyAura, 100, aura: AuraType.ModThreat, misc: 0x7F)) with
+            {
+                Duration = new SpellDuration(-1, 0, -1), StartRecoveryCategory = 0, StartRecoveryTime = 0,
             });
         (_shaman, _) = _kit.AddPlayer(1);
         (_enemy, _) = _kit.AddPlayer(2, 2, 0);
@@ -155,16 +160,39 @@ public sealed class ShamanWeaponScriptTests : IDisposable
     }
 
     [Fact]
-    public void RockbiterProc_TheThreatIsWholeNumberArithmetic_AddedRawAsPhysicalThreat()
+    public void RockbiterProc_TheThreatIsWholeNumberArithmetic_AddedWithNoThreatSpell()
     {
-        // vmangos SpellEffects.cpp:4557-4558: addThreat(caster, damage * GetAttackTime(BASE_ATTACK) / 1000), uint32 arithmetic, no threat spell,
-        // the default physical school: 7 * 2600 / 1000 = 18, not 18.2.
+        // vmangos SpellEffects.cpp:4557-4558: addThreat(caster, damage * GetAttackTime(BASE_ATTACK) / 1000), uint32 arithmetic, no threat spell:
+        // 7 * 2600 / 1000 = 18, not 18.2.
         Map map = _kit.World.GetMap(0);
         var wolf = new CombatTestUnit();
         wolf.Relocate(3, 0, _shaman.Z, 0, 0);
         map.AddObject(wolf);
         map.Combat.Track(wolf);
         _shaman.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2600);
+        wolf.Combat.Threat.AddThreat(_shaman, 5);
+
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_shaman, RockbiterProcOdd, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
+
+        Assert.Equal(5f + 18f, wolf.Combat.Threat.GetThreat(_shaman), 3);
+    }
+
+    [Fact]
+    public void RockbiterProc_IsNotScaledByTheShamansModThreatAuras_BecauseVmangosAddsItWithNoSchool()
+    {
+        // vmangos SpellEffects.cpp:4558 calls the 2-argument addThreat, which ThreatManager.h:192 forwards with SPELL_SCHOOL_MASK_NONE, and
+        // Unit::ApplyTotalThreatModifier (Unit.cpp:7414-7415) returns the threat unchanged for an empty mask: Tranquil Air Totem, a cloak's
+        // Subtlety or Fetish of the Sand Reaver leave Rockbiter threat alone.
+        Map map = _kit.World.GetMap(0);
+        var wolf = new CombatTestUnit();
+        wolf.Relocate(3, 0, _shaman.Z, 0, 0);
+        map.AddObject(wolf);
+        map.Combat.Track(wolf);
+        _shaman.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2600);
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_shaman, ModThreatAllSchools, SpellCastTargets.ForUnit(_shaman.Guid), triggered: true));
+        var modifiers = new SpellThreatModifiers(_kit.System);
+        Assert.Equal(2f, modifiers.TotalThreatMultiplier(_shaman, (int)SpellSchool.Normal)); // the aura is live: physical threat would double
+        Assert.Equal(2f, modifiers.TotalThreatMultiplier(_shaman, (int)SpellSchool.Nature));
         wolf.Combat.Threat.AddThreat(_shaman, 5);
 
         Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_shaman, RockbiterProcOdd, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
