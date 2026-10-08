@@ -190,3 +190,26 @@ Update 2 (branch `claude/bot-revive`): the last two items.
   out a 30-second reclaim delay for 15 game minutes. The replay now registers a death clock that follows game time. With both
   changes, every death in three replays (Ironwander, Dawnrover, Mirthblade) was revived at the body, 1.8 to 38.6 yards from it,
   none through the spirit healer.
+
+Update 3 (branch `claude/bot-ghost-wait`): Dawnrover "a ghost for 5 minutes, 36 yards from its body, `stall=none`" in the
+wave-6 rehearsal (`docs/integration/wave6-20261008.md`).
+
+* It was not one long wait. The body's GUID in the polls changed from `F101...02` to `03` to `04` and the reclaim delay went
+  19, 84, 23, 89, 13 s: the ghost reclaimed its body each time and died again within seconds. Replayed from the rehearsal's
+  characters database (`rehearsal/profile/characters.db`, the bot dead with its body at -9131.9, 299.4, 92.3, and
+  `orig-characters.db`) on the real terrain: revived 36 yards below the ridge (out of every minion's reach by the 3-yard height
+  rule, which is the server's own), the bot chose a Skeletal Soldier (16422, level 6 to 7, a Scourge invasion minion) as its
+  next fight and died in under a second to its Scourge Strike (28265, EventAI `1642201`: cast at the victim every 5 to 10 s in
+  combat; an instant kill, as in the 1.11 event). Four deaths in ten minutes, every one to 16422 or 16423, each followed by
+  a longer reclaim delay. The reclaim distance (3D, 39 yards plus radii), the camped-body rule and the recovery's bounds were
+  all working; waiting out the reclaim delay is progress by design, and the stall watch only looked at living bots.
+* Fix: the stall watch also records deaths (`PlayerbotStallWatch.RecordDeath`). Three deaths within 60 yards on one map inside
+  10 minutes are a death loop, reported like a stall (`death loop: died 3 times in 99s within 60 yd of ... attackers=16422`)
+  while the bot is dead and until it has lived through a whole stall bound. A creature entry among the attackers at two deaths
+  is set aside for the goals (`FindTarget` skips suspended entries). On a death loop the death goes to the spirit healer
+  (`PlayerbotRecovery.TakeSpiritHealer`), and the errand the bot was last travelling for is set aside (its quest and NPC, every
+  trainer for a trainer visit).
+* Replays, before: deaths to the end of every 10-minute run (4 and 5 deaths). After (four runs): the loop is reported after the
+  third death, the bot revives at the Goldshire spirit healer and is alive for the rest of the run (no further death, 2921 to
+  4036 yards travelled). Still open: a route through the invasion area is not avoided as such (the bot only stops choosing
+  those creatures and that errand); a bot whose next errand lies the same way can still be killed on the road.

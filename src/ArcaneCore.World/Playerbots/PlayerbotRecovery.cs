@@ -153,6 +153,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private float _bestDistance = float.PositiveInfinity;
     private float _bestRouteLeft = float.PositiveInfinity;
     private bool _spiritHealer;
+    private bool _preferSpiritHealer;
     private Vector3? _spot;
     private object? _spotKey;
 
@@ -164,6 +165,16 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     /// <summary>Whether the spirit-healer fallback was taken for this death.</summary>
     internal bool UsingSpiritHealer => _spiritHealer;
+
+    /// <summary>Whether this death goes to the spirit healer from the start (<see cref="TakeSpiritHealer"/>).</summary>
+    internal bool SpiritHealerChosen => _preferSpiritHealer;
+
+    /// <summary>
+    /// Take the spirit healer for this death instead of the body: the bot keeps dying where its body lies (a death loop,
+    /// <see cref="PlayerbotStallWatch.RecordDeath"/>), so reviving there again would only repeat it. The body is still released
+    /// first; the choice lasts until the bot is alive again.
+    /// </summary>
+    internal void TakeSpiritHealer() => _preferSpiritHealer = true;
 
     /// <summary>The revive spot the ghost walks to or last chose (inspection and tests).</summary>
     internal Vector3? ReviveSpot => _spot;
@@ -234,8 +245,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
         bool hostile = atCorpse && wait <= 0 && Camped(player);
-        Vector3? spot = hostile && !stalled ? ChooseReviveSpot(player, corpse!) : null;
-        PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: false,
+        Vector3? spot = hostile && !stalled && !_preferSpiritHealer ? ChooseReviveSpot(player, corpse!) : null;
+        PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
             reviveSpotKnown: spot is not null);
         LastStep = step;
         switch (step)
@@ -293,6 +304,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _spotKey = null;
         _progressMs = -1;
         _spiritHealer = false;
+        _preferSpiritHealer = false;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
     }
