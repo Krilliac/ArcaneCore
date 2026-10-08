@@ -27,6 +27,8 @@ public sealed partial class SpellSystem
     private Dictionary<AuraType, AuraProcHandler>? _procHandlers;
     private readonly Dictionary<uint, IProcScript> _procScripts = [];
     private int _procDepth;
+    private ulong _procEvent;
+    private int _procEventDepth;
 
     /// <summary>The spell_proc_event conditions (empty until the world feature loads them).</summary>
     public ISpellProcEventCatalog ProcEvents { get; set; } = EmptySpellProcEventCatalog.Instance;
@@ -80,18 +82,19 @@ public sealed partial class SpellSystem
         }
 
         _procDepth++;
+        using ProcEventScope scope = BeginProcEvent(); // a standalone event (a kill outside a cast or swing) is its own event
         try
         {
-            uint now = NowMs;
+            ulong eventId = CurrentProcEvent;
             var triggered = new List<TriggeredProc>();
             if (procEvent.AttackerFlags != ProcFlags.None)
             {
-                CollectProcs(actor, isVictim: false, procEvent.Victim, procEvent, now, triggered);
+                CollectProcs(actor, isVictim: false, procEvent.Victim, procEvent, eventId, triggered);
             }
 
             if (procEvent.Victim is { IsAlive: true } victim && procEvent.VictimFlags != ProcFlags.None)
             {
-                CollectProcs(victim, isVictim: true, actor, procEvent, now, triggered);
+                CollectProcs(victim, isVictim: true, actor, procEvent, eventId, triggered);
             }
 
             HandleTriggers(procEvent, triggered);
@@ -104,10 +107,45 @@ public sealed partial class SpellSystem
         ProcEventProcessed?.Invoke(actor, procEvent);
     }
 
+    /// <summary>
+    /// The proc event in progress, or the last one when none is (0 before the first). Holders are stamped with it when they are applied or
+    /// refreshed (<see cref="SpellAuraHolder.AppliedInProcEvent"/>).
+    /// </summary>
+    internal ulong CurrentProcEvent => _procEvent;
+
+    /// <summary>
+    /// Open one proc event: a cast (its cast-end procs, every target's effects and hits, its triggered casts), a white swing, a periodic tick, or a
+    /// lone <see cref="ProcDamageAndSpell"/>. The outermost scope takes the next sequence number; nested scopes (a triggered cast inside a hit, a
+    /// kill inside a swing) belong to the event that encloses them. vmangos compares the aura's apply time with the time of the hit
+    /// (Unit.cpp:8958, <c>&gt;=</c>): every aura applied or refreshed while the hit was handled counts as applied by it, which is what one number per
+    /// outer event says without reading a clock that can wrap or move in between.
+    /// </summary>
+    internal ProcEventScope BeginProcEvent()
+    {
+        if (_procEventDepth++ == 0)
+        {
+            _procEvent++;
+        }
+
+        return new ProcEventScope(this);
+    }
+
+    /// <summary>Closes a <see cref="BeginProcEvent"/> scope (default: closes nothing).</summary>
+    internal readonly struct ProcEventScope(SpellSystem? system) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (system is not null)
+            {
+                system._procEventDepth--;
+            }
+        }
+    }
+
     private readonly record struct TriggeredProc(SpellProcEventRecord? Entry, SpellAuraHolder Holder, Unit Owner, Unit? Target, ProcFlags ProcFlag, bool IsVictim, ProcFlagsEx Extra);
 
     /// <summary>vmangos <c>Unit::ProcDamageAndSpellFor</c> (Unit.cpp:8917-9002): the auras of <paramref name="owner"/> the event can proc.</summary>
-    private void CollectProcs(Unit owner, bool isVictim, Unit? target, in ProcEvent e, uint now, List<TriggeredProc> triggered)
+    private void CollectProcs(Unit owner, bool isVictim, Unit? target, in ProcEvent e, ulong eventId, List<TriggeredProc> triggered)
     {
         ProcFlags procFlag = isVictim ? e.VictimFlags : e.AttackerFlags;
         // "Charges will not generate off auto attacks or npc attacks by trying to sit down and force a crit" (> 1.7.1, Unit.cpp:8981-8989).
@@ -129,10 +167,10 @@ public sealed partial class SpellSystem
             }
 
             // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
-            // an aura of the event's own actor applied at or after the event's time does not proc from it (Unit.cpp:8958 compares with >=). The
-            // engine is synchronous, so an aura the same hit put on (a nested triggered cast in the effect handlers) has AppliedAtMs == now. The
-            // clock is vmangos getMSTime and wraps after ~49.7 days: the signed difference keeps an aura applied before the wrap from looking new.
-            if (unchecked((int)(holder.AppliedAtMs - now)) >= 0 && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
+            // an aura of the event's own actor applied or refreshed at or after the event's time does not proc from it (Unit.cpp:8958 compares
+            // with >=). The engine is synchronous, so that is an aura applied or refreshed inside the current event (a nested triggered cast in
+            // the effect handlers): the holder carries the event's sequence number (BeginProcEvent), never a wrapping clock reading.
+            if (holder.AppliedInProcEvent == eventId && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
             {
                 continue;
             }

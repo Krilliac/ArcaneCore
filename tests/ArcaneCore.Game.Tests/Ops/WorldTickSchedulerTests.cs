@@ -63,6 +63,27 @@ public sealed class WorldTickSchedulerTests
     }
 
     [Fact]
+    public void AnIntervalShorterThanTheTimerGranularity_AlternatesOversleptWaitsWithImmediateTicks()
+    {
+        // A 5 ms tick on the ~15.6 ms Windows timer (the world test host): every wait wakes 15 ms later, a whole interval behind, so the
+        // missed start is given up and the start due now runs at once. Frames split evenly between ~15 ms and ~0 ms: their median says
+        // nothing about the cadence, their mean is the rate the timer allows (what TickWatchdogFeatureTests asserts).
+        var scheduler = new WorldTickScheduler(5);
+        var starts = new List<long>();
+        long now = 0;
+        for (int i = 0; i < 100; i++)
+        {
+            starts.Add(now);
+            if (scheduler.NextWait(now, now) > 0) now += 15;
+        }
+
+        var gaps = starts.Zip(starts.Skip(1), (a, b) => b - a).ToList();
+        Assert.All(gaps, gap => Assert.True(gap is 0 or 15, $"gap {gap}"));
+        Assert.InRange(gaps.Count(gap => gap == 0), 49, 50);
+        Assert.InRange(gaps.Average(), 7.4, 7.6); // 15 ms per two ticks
+    }
+
+    [Fact]
     public void AnOnTimeLoop_HasNoLateOrSkippedTicks()
     {
         var scheduler = new WorldTickScheduler(Interval);

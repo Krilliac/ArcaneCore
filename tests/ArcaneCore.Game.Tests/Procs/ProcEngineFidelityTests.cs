@@ -33,6 +33,8 @@ public sealed class ProcEngineFidelityTests
     private const uint SelfBuff = 993_010;
     private const uint SleepLike = 993_011;
     private const uint Hit = 993_012;
+    private const uint RefreshMark = 993_013;
+    private const uint RefreshThenHit = 993_014;
 
     private static SpellInfo Permanent(uint id, SpellEffectInfo effect) => Spell(id, effect) with
     {
@@ -101,7 +103,19 @@ public sealed class ProcEngineFidelityTests
             Duration = new SpellDuration(60000, 0, 60000),
             SpellVisual = 1,
         },
-        NoGcd(Spell(Hit, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Magic }));
+        NoGcd(Spell(Hit, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Magic }),
+        // A mark with no charges and no stacks, so the same caster's second application refreshes the holder in place (CanBeRefreshedBy).
+        NoGcd(Spell(RefreshMark, Effect(SpellEffectName.ApplyAura, -5, SpellImplicitTarget.UnitEnemy, AuraType.ModResistance, misc: 1))) with
+        {
+            Attributes = SpellAttributes.AuraIsDebuff,
+            Duration = new SpellDuration(60000, 0, 60000),
+            SpellVisual = 1,
+            ProcFlags = ProcFlags.TakeHarmfulSpell,
+            ProcChance = 100,
+        },
+        NoGcd(Spell(RefreshThenHit,
+            Effect(SpellEffectName.TriggerSpell, 0, SpellImplicitTarget.UnitEnemy, trigger: RefreshMark),
+            Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Magic }));
 
     private static (SpellTestKit Kit, Player Caster, Player Target) Kit()
     {
@@ -230,6 +244,62 @@ public sealed class ProcEngineFidelityTests
     }
 
     [Fact]
+    public void ASelfProcAuraOlderThanHalfTheMillisecondClock_StillProcs()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Kit();
+        using SpellTestKit _ = kit;
+        kit.Now = 0;
+        RuleTestSupport.Apply(kit, caster, ReflectOnly);
+        kit.Now = (1u << 31) + 10; // ~24.9 days later: a signed 32-bit difference reads the aura as applied in the future
+
+        kit.System.CastSpell(caster, Hit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.Equal(1, kit.System.GetAuras(caster).Single(h => h.Spell.Id == ReflectOnly).Charges); // DEAL_HARMFUL_SPELL procs: 2 -> 1
+    }
+
+    [Fact]
+    public void AnAuraTheSameEventApplied_DoesNotProcFromIt_EvenWhenTheClockMovesInsideTheEvent()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Kit();
+        using SpellTestKit _ = kit;
+        // The live world clock keeps running while one hit is handled: the nested cast stamps the mark, then the damage effect procs later.
+        kit.System.HolderAdded += holder =>
+        {
+            if (holder.Spell.Id == FreshMark)
+            {
+                kit.Now += 7;
+            }
+        };
+
+        kit.System.CastSpell(caster, MarkThenHit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.True(target.Health < 1000u, "effect 1 hit");
+        Assert.Equal(1, kit.System.GetAuras(target).SingleOrDefault(h => h.Spell.Id == FreshMark)?.Charges); // not procced, charge kept
+    }
+
+    [Fact]
+    public void AnAuraTheSameEventRefreshed_DoesNotProcFromIt()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Kit();
+        using SpellTestKit _ = kit;
+        var script = new CountingProcScript();
+        kit.System.RegisterProcScript(RefreshMark, script);
+        kit.System.CastSpell(caster, RefreshMark, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        SpellAuraHolder mark = kit.System.GetAuras(target).Single(h => h.Spell.Id == RefreshMark);
+        kit.Advance(1000);
+
+        kit.System.CastSpell(caster, RefreshThenHit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.True(target.Health < 1000u, "effect 1 hit");
+        Assert.Same(mark, kit.System.GetAuras(target).Single(h => h.Spell.Id == RefreshMark)); // refreshed in place, not replaced
+        Assert.Equal(0, script.Procs); // SpellAuras.cpp:368: the refresh resets the apply time, so the refreshing hit does not proc it
+
+        kit.Advance(1);
+        kit.System.CastSpell(caster, Hit, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.True(script.Procs > 0, "a later hit procs it");
+    }
+
+    [Fact]
     public void AReflectedDamagingSpell_ProcsWithProcExReflect()
     {
         (SpellTestKit kit, Player caster, Player reflector) = Kit();
@@ -307,6 +377,17 @@ public sealed class ProcEngineFidelityTests
         target.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
         target.SetUInt32(UpdateFields.UnitFieldPower1, 50);
         caster.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+    }
+
+    private sealed class CountingProcScript : IProcScript
+    {
+        public int Procs { get; private set; }
+
+        public AuraProcResult? OnProc(in AuraProcContext context)
+        {
+            Procs++;
+            return null;
+        }
     }
 
     private sealed class RecordingSink : IDamageSink
