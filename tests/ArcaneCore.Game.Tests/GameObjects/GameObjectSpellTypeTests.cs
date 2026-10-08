@@ -245,30 +245,23 @@ public sealed class GameObjectSpellTypeTests
     }
 
     [Fact]
-    public void AreaDamage_CannotBeClicked_AndWhenActivatedHurtsEveryLivingPlayerInItsRadius_ThenCloses()
+    public void AreaDamage_IsOutOfReach_AndEvenStandingOnIt_IsAnUnhandledUse_ThatHurtsNobody()
     {
         GameObjectTypeRig rig = Create([GoSpawn(1, FirePit, 3, 0)]);
-        (Player user, FakeSession session) = rig.Join(1);
-        (Player bystander, _) = rig.Join(2, 4, 0);
-        (Player outside, _) = rig.Join(3, 20, 0);
+        (Player near, FakeSession session) = rig.Join(1);
+        (Player onIt, _) = rig.Join(2, 3, 0);
         GameObject pit = rig.Single(FirePit);
-        uint before = user.Health;
         session.Clear();
 
-        // GameObjectInfo::GetInteractionDistance is 0 for this type (GameObjectDefines.h:780): no client can use it.
-        Assert.Equal(GameObjectUseResult.TooFar, rig.System.Use(user, pit.Guid));
-        Assert.Equal(before, user.Health);
+        // GameObjectInfo::GetInteractionDistance is 0 for this type (GameObjectDefines.h:780): only a user standing on it reaches it.
+        Assert.Equal(GameObjectUseResult.TooFar, rig.System.Use(near, pit.Guid));
 
-        Assert.Equal(GameObjectUseResult.Ok, rig.System.ActivateAreaDamage(pit));
-        Assert.Equal(before - 10, user.Health);
-        Assert.Equal(bystander.MaxHealth - 10, bystander.Health);
-        Assert.Equal(outside.MaxHealth, outside.Health);
-        Assert.NotEmpty(Packets(session, WorldOpcode.SmsgEnvironmentaldamagelog));
-        Assert.Equal(GameObjectState.Active, pit.State);
-        Assert.Equal(GameObjectUseResult.InUse, rig.System.ActivateAreaDamage(pit));
-
-        rig.Seconds(3);
+        // vmangos GameObject::Use has no case for GAMEOBJECT_TYPE_AREADAMAGE: "unhandled GameObject type" (GameObject.cpp:1982-1984).
+        Assert.Equal(GameObjectUseResult.Unsupported, rig.System.Use(onIt, pit.Guid));
+        Assert.Equal(onIt.MaxHealth, onIt.Health);
+        Assert.Equal(near.MaxHealth, near.Health);
         Assert.Equal(GameObjectState.Ready, pit.State);
+        Assert.Empty(Packets(session, WorldOpcode.SmsgEnvironmentaldamagelog));
     }
 
     [Fact]
