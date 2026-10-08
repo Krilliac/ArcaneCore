@@ -45,7 +45,7 @@ Stealth rank, `ClassScripts/Rogue.cpp:103-110`). By default one roll decides, wh
    warrior-mechanics S09 or spell-breadth S5); the choice must be made when that lane lands (config `Combo:ClearOnSelectionChange`, default vmangos).
 2. Stealth detection: vmangos' sniffed linear model is implemented; mangos-classic uses `0.3 x (30 + 5 x (level - 1) + modifiers - strength)`, front-only (`ObjectVisibility.cpp:152-178`). Not implemented.
 3. Neither reference clears combo points on leaving combat, although the lane brief lists it.
-4. Garrote scales with attack power only in vmangos (`SpellAuras.cpp:4341-4396`); not part of this lane's delivered scope.
+4. Garrote scales with attack power only in vmangos (`SpellAuras.cpp:4341-4396`); delivered with Rupture's attack power term by the class-scripts lane ([class-scripts](class-scripts.md)).
 5. `SpellItemEnchantment.dbc`, `SpellShapeshiftForm.dbc` and `SpellDuration.dbc` are not in the references: poison proc chances, form-30 flags and finisher durations cannot be verified without them.
 
 ## Limits (not stubs: absent, documented)

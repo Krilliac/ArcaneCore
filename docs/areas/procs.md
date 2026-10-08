@@ -148,9 +148,9 @@ class-scripts) must not run their builds against a database they intend to keep.
 - PERIODIC_HEALTH_FUNNEL (pets lane) and POWER_BURN_MANA are unsupported auras, so their ticks fire no procs yet (vmangos SpellAuras.cpp:5928,
   6300-6354); absorbs of a leech tick are not modelled (DrainAuras).
 
-- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers (Seal of Righteousness, Judgement of
-  Light/Wisdom, Illumination, Lightning Shield, Pyroclasm, Shadowguard, Blessed Recovery, set bonuses, Sweeping Strikes) belong to the class-scripts
-  lane through `RegisterProcScript`.
+- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers go through `RegisterProcScript`: Seal of
+  Righteousness and Judgement of Light/Wisdom are delivered ([class-scripts](class-scripts.md)); Illumination, Lightning Shield, Pyroclasm, Shadowguard,
+  Blessed Recovery, set bonuses and Sweeping Strikes are not yet.
 - Wyvern Sting's wake-up damage over time (24131/24134/24135 on removal, vmangos spell_hunter.cpp) is a hunter class script.
 - Pet melee and pet spells offer their events only through the same map combat and spell paths (no owner-side procs).
 - SPELL_ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET (ADD_TARGET_TRIGGER on the selected target only) and SPELLMOD_CHARGES on new holders.

@@ -14,7 +14,8 @@ namespace ArcaneCore.Game.Crafting.Enchanting;
 /// (main hand, off hand or ranged slot); EQUIP_SPELL casts the enchant's spell triggered at the owner with the item as cast item and removes the item's
 /// aura again (most 1.12 enchantments work this way: the stat is an aura of that spell); RESISTANCE and STAT move the update fields as deltas (the
 /// repository convention of <see cref="EquipmentStatsApplier"/>, derived values follow from the stat system); TOTEM adds the Rockbiter weapon damage
-/// (<c>amount * weapon delay / 1000</c>, shamans only); COMBAT_SPELL is inert here (the proc needs a melee outcome event, a documented limit).
+/// (<c>amount * weapon delay / 1000</c>, shamans only); COMBAT_SPELL is not applied here: it procs on a qualifying hit through
+/// <see cref="SpellSystem.HandleItemCombatProc"/> (vmangos Player::CastItemCombatSpell).
 /// What was applied is remembered per (item, slot) so a removal undoes exactly that, even after the slot changed.
 /// </para>
 /// <para>

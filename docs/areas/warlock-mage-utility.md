@@ -190,7 +190,7 @@ control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTes
 |---|---|
 | wlm-01 reagents and tools | already built by the crafting-professions lane (`SpellInfo.Items`, `ReagentCastCheck`, `ISpellCostTaker`); not duplicated. Review note for the integrator (from the design review, not re-read here): that lane check answers `ITEM_NOT_READY` (vmangos Spell.cpp:7279); retail and mangos-classic answer `SPELL_FAILED_REAGENTS` 0x5C (wow_messages smsg_cast_result.wowm:194) |
 | wlm-05 CREATE_ITEM and conjure, wlm-06 item use | owned by crafting-professions (CreateItem, `CastItem`); the lane brief marks both as cross-lane primitives. The Soul Shard code here already stores items through `PlayerInventory` directly |
-| wlm-09 SUMMON_DEMON, Curse of Doom | needs the demon summon with a ritual object and the Doomguard follow-up; not started |
+| wlm-09 SUMMON_DEMON, Curse of Doom | delivered by the class-scripts lane ([class-scripts](class-scripts.md)): SUMMON_DEMON and Curse of Doom's Doomguard; the ritual object destination and Inferno's Enslave Demon remain |
 | wlm-10 pet store, wlm-11 pet names | schema slices (they need the next free numbers, Characters 26 / World 29 at wave-4 integration; 21 was taken by the wave-4 modules, see [wave4-integration](../integration/wave4-integration.md)); not started, so no provider theories were written and no store was exercised on any provider. Everything delivered here is Game-layer code with no schema change |
 | wlm-12 rituals and player summon, wlm-14 mage portals | both need the reagent check and one shared TRANS_DOOR dispatcher (with fishing); blocked on crafting-professions |
 | wlm-13 soulstone and self resurrection | needs the item-use path (wlm-06) and the graveyards lane |
