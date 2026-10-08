@@ -985,6 +985,13 @@ How to read the tables:
 | `World:Playerbots:Party:MasterTimeoutSeconds` | `int` | `60` | - | Seconds a bot waits for an offline or departed master before it leaves the group and goes back to its own goals (1..3600). |
 | `World:Playerbots:Party:TeleportToLeader` | `bool` | `true` | - | Teleport to the master when it is more than 100 yards away or on another map (vmangos PartyBotAI .goname; on by default). |
 | `World:Playerbots:RestoreOnStartup` | `bool` | `false` | - | Log the saved managed bots back in when the world starts. |
+| `World:Playerbots:Risk:DangerMemorySeconds` | `int` | `300` | live | Seconds a bot remembers the creatures it retreated from or died to and the places that happened (0..86400): it does not pull a remembered creature again, and a remembered place raises the risk of fights there. |
+| `World:Playerbots:Risk:Enabled` | `bool` | `true` | live | Weigh fights and retreat from lost ones (on by default). Off: the bot takes the nearest target and fights to the end. |
+| `World:Playerbots:Risk:NearlyWonHealthPct` | `float` | `20` | live | A fight against a single enemy at or below this health percentage is nearly won and is not abandoned (0..60), unless the bot would die in less than half the time it needs to finish it. |
+| `World:Playerbots:Risk:PartyRetreatOnWipe` | `bool` | `true` | live | A bot in a real player's group follows its master's lead and never retreats on its own judgement; with this on (default) it does retreat when the group is wiping (the master dead, or half the group or more). |
+| `World:Playerbots:Risk:RecoverHealthPct` | `float` | `80` | live | After a retreat (or before a pull it is too hurt for) the bot recovers to this health and mana percentage (10..100). |
+| `World:Playerbots:Risk:RetreatHealthPct` | `float` | `35` | live | A losing bot retreats once its health falls to this percentage (5..95); one about to die retreats at any health. |
+| `World:Playerbots:Risk:Tolerance` | `float` | `1` | live | The aggressiveness knob (0.25..4, 1 by default). It scales the risk a bot accepts for a given reward before a pull and how far behind it may fall in a fight before it retreats: 2 takes fights twice as dangerous, 0.5 only half. |
 | `World:Playerbots:Scenarios:Enabled` | `bool` | `false` | - | Let an Administrator run registered bot scenarios against the live world (off by default). |
 | `World:Playerbots:Scenarios:MaxDurationSeconds` | `int` | `120` | - | Wall-clock bound of one scenario run in seconds (5..600). |
 | `World:Playerbots:Scenarios:StepTimeoutSeconds` | `int` | `20` | - | Default bound of one WaitUntil step in seconds (1..300). |

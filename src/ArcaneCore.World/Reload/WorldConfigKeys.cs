@@ -128,6 +128,17 @@ public static class WorldConfigKeys
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The other playerbot options are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
 
+        // Not vmangos keys: risk against reward and retreat (docs/areas/playbots-risk.md). PlayerbotRisk, PlayerbotRiskModel and the
+        // party AI read the shared PlayerbotOptions.Risk at every decision.
+        LivePlayerbots("Risk:Enabled", o => o.Risk.Enabled, (o, v) => o.Risk.Enabled = v),
+        LivePlayerbotsValue("Risk:Tolerance", o => o.Risk.Tolerance, (o, v) => o.Risk.Tolerance = v, v => PlayerbotRiskOptions.Check(v, 0.25f, 4f)),
+        LivePlayerbotsValue("Risk:RetreatHealthPct", o => o.Risk.RetreatHealthPct, (o, v) => o.Risk.RetreatHealthPct = v, v => PlayerbotRiskOptions.Check(v, 5, 95)),
+        LivePlayerbotsValue("Risk:NearlyWonHealthPct", o => o.Risk.NearlyWonHealthPct, (o, v) => o.Risk.NearlyWonHealthPct = v, v => PlayerbotRiskOptions.Check(v, 0, 60)),
+        LivePlayerbotsValue("Risk:RecoverHealthPct", o => o.Risk.RecoverHealthPct, (o, v) => o.Risk.RecoverHealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 100)),
+        LivePlayerbotsValue("Risk:DangerMemorySeconds", o => o.Risk.DangerMemorySeconds, (o, v) => o.Risk.DangerMemorySeconds = v,
+            v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
+        LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
+
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).
         LiveSpeedRate("PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
@@ -197,6 +208,15 @@ public static class WorldConfigKeys
             v => v.Playerbots is { } playerbots ? get(playerbots) : null,
             (view, v) => set(view.Playerbots!, (bool)v!),
             null);
+
+    /// <summary>A live playerbot key of another type, with its range check (a reload with a value outside it is refused).</summary>
+    private static WorldConfigKey LivePlayerbotsValue<T>(string path, Func<PlayerbotOptions, T> get, Action<PlayerbotOptions, T> set,
+        Func<T, string?> check)
+        => new(
+            $"{PlayerbotOptions.SectionName}:{path}",
+            v => v.Playerbots is { } playerbots ? get(playerbots) : null,
+            (view, v) => set(view.Playerbots!, (T)v!),
+            v => v is T value ? check(value) : null);
 
     private static WorldConfigKey Fixed(string path, Func<WorldConfigView, object?> read)
         => new($"{Root}:{path}", read, null, null);

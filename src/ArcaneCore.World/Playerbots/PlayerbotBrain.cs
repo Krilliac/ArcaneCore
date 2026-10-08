@@ -42,6 +42,20 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
+    private PlayerbotRisk? _risk;
+
+    /// <summary>Risk against reward and retreat (<see cref="PlayerbotRisk"/>; inspection and tests).</summary>
+    internal PlayerbotRisk Risk => _risk ??= NewRisk();
+
+    private PlayerbotRisk NewRisk()
+    {
+        var risk = new PlayerbotRisk(_session, _options, _combatSpells);
+        _recovery.Hazards = risk.HazardThreats;
+        return risk;
+    }
+
+    /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>).</summary>
+    internal string RiskReport => _options.Risk.Enabled ? Risk.Report : "decision=off";
 
     /// <summary>The ghost recovery (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
@@ -52,7 +66,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
     // The last errand the bot was travelling for (quest, trainer, vendor): what led it where it keeps dying.
-    private (PlayerbotGoalKind Goal, uint Entry, uint Quest) _errand;
+    private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
+    // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
+    private readonly List<(ObjectGuid Guid, uint Entry)> _attackers = [];
     private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
     private Task<string?>? _planTask;
     private string? _modelChoice;
@@ -130,6 +146,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
+                Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
                 _recovery.Update(player, recoveryInterval);
             }
             return;
@@ -169,6 +186,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
+
         if (PlayerbotMotion.ConsumeLoop(player))
         {
             // The motion gave up a loop (PlayerbotMotion): drop this intent, skip its target for a while, and let the
@@ -186,6 +204,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             if (!_deathIntentRetired)
             {
+                RecordDeath(player);
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -193,6 +212,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _recovery.Update(player, interval);
             return;
         }
+
+        // A retreat owns the bot until nothing threatens it (PlayerbotRetreat); out of combat the bot lays the trail back.
+        if (Risk.UpdateRetreat(player, interval))
+        {
+            DropIntent();
+            _goal = PlayerbotGoalKind.Retreat;
+            return;
+        }
+
+        Risk.Track(player);
+        // Every walk of this bot keeps out of its hazards (PlayerbotHazards), unless the estimate is off.
+        PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? Risk : null);
 
         if (_lootOpened && _target is { } pendingLoot)
         {
@@ -294,6 +325,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!player.Combat.IsInCombat && outgoingVictim is null && !hasDeadLootTarget)
         {
             SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
+            // After a retreat, or before a pull the bot is too hurt for: recover to World:Playerbots:Risk:RecoverHealthPct first.
+            if (Risk.KeepWaiting(player))
+            {
+                uint wanted = (uint)Math.Clamp(_options.Risk.RecoverHealthPct, 10f, 100f);
+                DropIntent();
+                _goal = PlayerbotGoalKind.Rest;
+                if (spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wanted, wanted, out _))
+                    Rest(player, wanted);
+                else if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+                return;
+            }
+
             if (_needsRest || spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, out _))
             {
                 Rest(player);
@@ -364,7 +407,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_target is null || _target.Map != player.Map)
         {
             Creature? previousTarget = _target;
-            _target = FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped);
+            uint preferred = _quests.PreferredCreatureEntry;
+            _target = _options.Risk.Enabled
+                ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0)
+                : FindTarget(player, preferred, IsSkipped);
             _rangedIdleMs = 0;
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
@@ -385,6 +431,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 return;
             }
             TargetEntry = _target.Entry;
+            // The way round a pack on the approach (PlayerbotRisk.FindDetour): followed before the direct chase.
+            if (Risk.Detour is { } detour) { _route = detour; Risk.Detour = null; }
         }
         Creature target = _target;
 
@@ -392,6 +440,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (target.IsAlive)
         {
+            // A losing fight is given up (PlayerbotRiskModel.Judge) before the next blow.
+            if (player.Combat.IsInCombat && Risk.ObserveFight(player, target))
+            {
+                DropIntent();
+                _goal = PlayerbotGoalKind.Retreat;
+                Risk.UpdateRetreat(player, interval);
+                return;
+            }
+
             if (_combatSpells.Update(player, target, interval))
             {
                 _rangedIdleMs = 0;
@@ -514,6 +571,23 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells);
     }
 
+    /// <summary>
+    /// With the risk estimate on, a bot killed within <see cref="DeadlyErrandMs"/> of walking an errand (the way to a trainer,
+    /// vendor or quest destination led through something that killed it) sets that errand aside at the first death, not only in a
+    /// death loop (<see cref="RecordDeath"/>).
+    /// </summary>
+    internal const uint DeadlyErrandMs = 30_000;
+
+    /// <summary>The goals set aside for a while (stalls, deadly errands; inspection and tests).</summary>
+    internal PlayerbotSuspensions Suspensions => _suspensions;
+
+    /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
+    internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
+    {
+        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor && (entry != 0 || quest != 0))
+            _errand = (goal, entry, quest, _session.World.NowMs);
+    }
+
     private void RetireDeathIntent()
     {
         // Death starts a new gameplay lifetime. Drop only controller-owned, transient
@@ -541,14 +615,25 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attacking = false;
     }
 
-    private void Rest(Player player)
+    private void DropIntent()
+    {
+        _target = null;
+        _route = null;
+        _attacking = false;
+        _lootOpened = false;
+        TargetEntry = 0;
+    }
+
+    /// <param name="wantedPct">Eat or drink below this percentage (the ordinary 45/35 when 0).</param>
+    private void Rest(Player player, uint wantedPct = 0)
     {
         SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
         if (spellFeature is null || player.Combat.IsInCombat
             || spellFeature.System.GetState(player.Guid)?.CurrentCast is
                 { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }
             || PlayerbotConsumables.HasActiveFoodDrink(player, spellFeature.System)
-            || !PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, out PlayerbotConsumable consumable))
+            || !PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wantedPct == 0 ? 45 : wantedPct,
+                wantedPct == 0 ? 35 : wantedPct, out PlayerbotConsumable consumable))
         { _needsRest = false; return; }
 
         Item item = consumable.Item;
@@ -600,9 +685,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     }
 
     internal static Creature? FindTarget(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null)
+        => FindTargets(player, preferredEntry, skip).FirstOrDefault();
+
+    /// <summary>
+    /// The candidates <see cref="FindTarget"/> chooses from, best first (the quest objective, then the nearest). A non-objective
+    /// may be at most <paramref name="maxLevelsAbove"/> levels above the bot (1 without the risk estimate); the named quest
+    /// objective may be any level when the risk estimate weighs it (<paramref name="maxLevelsAbove"/> above 1).
+    /// </summary>
+    internal static IEnumerable<Creature> FindTargets(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null,
+        int maxLevelsAbove = 1)
     {
         if (player.Map is not { } map)
-            return null;
+            return [];
 
         GroupManager? groups = (player.Session as WorldSession)?.Services.GetService<Social.SocialFeature>()?.Context.Groups;
         uint grayLevel = ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
@@ -611,7 +705,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .OfType<Creature>()
             .Where(creature => skip is null || !skip(creature))
             .Where(creature => creature.IsAlive && map.Combat.Hooks.CanAttack(player, creature))
-            .Where(creature => creature.Level <= player.Level + 1)
+            .Where(creature => creature.Level <= player.Level + maxLevelsAbove
+                || maxLevelsAbove > 1 && preferredEntry != 0 && creature.Entry == preferredEntry)
             // Grey creatures give no experience (XP::GetGrayLevel); idle grinding leaves them alone. A named quest
             // objective is still allowed: the quest asks for that creature whatever its level.
             .Where(creature => preferredEntry != 0 && creature.Entry == preferredEntry || creature.Level > grayLevel)
@@ -623,8 +718,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .Where(creature => preferredEntry != 0 || creature.Template.NpcFlags == 0)
             .Where(creature => float.IsFinite(creature.X) && float.IsFinite(creature.Y) && float.IsFinite(creature.Z))
             .OrderBy(creature => preferredEntry != 0 && creature.Entry == preferredEntry ? 0 : 1)
-            .ThenBy(creature => Distance(player, creature))
-            .FirstOrDefault();
+            .ThenBy(creature => Distance(player, creature));
     }
 
     /// <summary>Whether <paramref name="target"/> is inside the arc the server swings in (<see cref="CombatConstants.AutoAttackArc"/>).</summary>
@@ -726,13 +820,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void RememberAttackers(Player player)
     {
-        if (_goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor && (TargetEntry != 0 || QuestId != 0))
-            _errand = (_goal, TargetEntry, QuestId);
+        NoteErrand(_goal, TargetEntry, QuestId);
         _attackerEntries.Clear();
-        foreach (Unit attacker in player.Combat.Attackers)
-            if (attacker is Creature creature) _attackerEntries.Add(creature.Entry);
-        foreach (Unit threat in player.Combat.ThreatenedBy)
-            if (threat is Creature creature) _attackerEntries.Add(creature.Entry);
+        _attackers.Clear();
+        foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
+            if (unit is Creature creature && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
+                _attackers.Add((creature.Guid, creature.Entry));
     }
 
     /// <summary>
@@ -748,8 +841,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
         _attackerEntries.Clear();
+        Risk.OnDeath(player, _attackers);
+        _attackers.Clear();
         foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
-        if (!loop) return;
+        if (!loop)
+        {
+            if (_options.Risk.Enabled && _errand.Entry != 0 && unchecked(now - _errand.AtMs) <= DeadlyErrandMs)
+            {
+                _suspensions.SuspendEntry(_errand.Entry, now);
+                if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
+                _errand = default;
+            }
+
+            return;
+        }
+
         _recovery.TakeSpiritHealer();
         if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
         if (_errand.Goal == PlayerbotGoalKind.Train) _suspensions.SuspendTraining(now);

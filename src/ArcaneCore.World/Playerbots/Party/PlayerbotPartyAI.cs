@@ -77,6 +77,8 @@ internal sealed class PlayerbotPartyAI
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _combatSpells;
     private readonly PlayerbotRecovery _recovery;
+    private readonly PlayerbotRisk _risk;
+    private string? _wipe;
     private readonly PlayerbotReplyLimiter _replies = new();
     private readonly Random _random;
     private ObjectGuid _master;
@@ -110,6 +112,7 @@ internal sealed class PlayerbotPartyAI
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _combatSpells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
+        _risk = new PlayerbotRisk(session, options, _combatSpells);
         _random = new Random(session.AccountId);
     }
 
@@ -281,6 +284,39 @@ internal sealed class PlayerbotPartyAI
         }
     }
 
+    /// <summary>The retreat (inspection and tests): a party bot retreats only from a wiping group.</summary>
+    internal PlayerbotRetreat Retreat => _risk.Retreat;
+
+    /// <summary>
+    /// The risk line of a party bot: it follows its master's lead (<c>decision=follow-master</c>) and never weighs pulls or fights
+    /// on its own; with <see cref="PlayerbotRiskOptions.PartyRetreatOnWipe"/> it retreats from a wiping group.
+    /// </summary>
+    internal string RiskReport => !_options.Risk.Enabled ? "decision=off"
+        : _risk.Retreat.Active ? _risk.Report
+        : _wipe is { } wipe ? $"decision=follow-master last-retreat={wipe}" : "decision=follow-master";
+
+    /// <summary>
+    /// The group is wiping: the master is dead, or half the group or more (the bot counts, alive). Only the members online on the
+    /// bot's map are counted.
+    /// </summary>
+    internal static bool IsWiping(bool masterDead, int membersAlive, int membersDead) => masterDead || membersDead * 2 >= membersAlive + membersDead;
+
+    private bool GroupWiping(Player player, Player? master)
+    {
+        if (master is null || !ReferenceEquals(master.Map, player.Map)) return false;
+        if (Services.Social?.Groups.GetGroup(player.Guid) is not { } group) return false;
+        int alive = 0, dead = 0;
+        foreach (GroupMemberSlot slot in group.Members)
+        {
+            Player? member = slot.Guid == player.Guid ? player : _session.World.FindOnlinePlayer(slot.Guid);
+            if (member is null || !ReferenceEquals(member.Map, player.Map)) continue;
+            if (member.IsAlive) alive++;
+            else dead++;
+        }
+
+        return IsWiping(!master.IsAlive, alive, dead);
+    }
+
     /// <summary>The 'status' answer: level, health %, mana % (or "no mana") and what the bot is doing.</summary>
     internal string StatusLine(Player player)
     {
@@ -424,6 +460,7 @@ internal sealed class PlayerbotPartyAI
         bool dead = !player.IsAlive;
         if (dead && !_deathRetired)
         {
+            _risk.OnDeath(player);
             RetireDeath();
             _deathRetired = true;
         }
@@ -447,6 +484,35 @@ internal sealed class PlayerbotPartyAI
         _recovery.Reset();
 
         Player? master = _session.World.FindOnlinePlayer(_master);
+
+        // A party bot follows its master's lead: it never weighs a fight on its own and stays while the group fights. Only a wiping
+        // group (World:Playerbots:Risk:PartyRetreatOnWipe) sends it back the way it came, past the creatures' leash.
+        _risk.Track(player);
+        PlayerbotNavigation.Guard(player, null); // a party bot goes where its master goes
+        if (_risk.UpdateRetreat(player, interval))
+        {
+            Goal = PlayerbotGoalKind.Retreat;
+            return;
+        }
+
+        if (_options.Risk.Enabled && _options.Risk.PartyRetreatOnWipe && player.Combat.IsInCombat && GroupWiping(player, master))
+        {
+            var enemies = new List<Creature>();
+            foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
+                if (unit is Creature creature && creature.IsAlive && ReferenceEquals(creature.Map, player.Map) && !enemies.Contains(creature))
+                    enemies.Add(creature);
+            if (_target is { IsAlive: true } fighting && !enemies.Contains(fighting)) enemies.Add(fighting);
+            if (enemies.Count > 0)
+            {
+                _wipe = master is { IsAlive: false } ? "master-dead" : "group-wipe";
+                StopAttacking(player);
+                _risk.StartRetreat(player, enemies, _wipe);
+                Goal = PlayerbotGoalKind.Retreat;
+                _risk.UpdateRetreat(player, interval);
+                return;
+            }
+        }
+
         if (_restUntilMs != 0 && ContinueRest(player, master)) return;
 
         Creature? target = _mode == PlayerbotPartyMode.Passive ? null : SelectTarget(player, master);

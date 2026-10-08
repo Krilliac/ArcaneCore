@@ -48,6 +48,12 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
 
     /// <summary>The party mode while the party AI drives the bot (follow, stay or passive), otherwise null.</summary>
     public PlayerbotPartyMode? PartyMode { get; init; }
+
+    /// <summary>
+    /// The risk line (<see cref="PlayerbotRisk.Report"/>): the last pull verdict (<c>risk=... reward=... decision=avoid
+    /// reason=pack-of-3 target=...</c>), the fight estimate (<c>fight ttk=... ttd=... decision=...</c>) or the retreat.
+    /// </summary>
+    public string? Risk { get; init; }
 }
 
 internal static class PlayerbotInspector
@@ -105,6 +111,7 @@ internal static class PlayerbotInspector
             Stall = brain.StallReport ?? (brain.LastStall is { } last ? "last " + last : null),
             Master = partyDriven ? party!.MasterName : null,
             PartyMode = partyDriven ? party!.Mode : null,
+            Risk = partyDriven ? party!.RiskReport : brain.RiskReport,
         };
     }
 

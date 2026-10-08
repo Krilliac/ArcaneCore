@@ -162,6 +162,13 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         watch.Observe(new Vector3(player.X, player.Y, player.Z), player.IsAlive, host.World.NowMs);
                         if (!player.IsAlive && elapsed % 5_000 == 0 && bots.FindBrain(watch.BotId) is { } dead)
                             output.WriteLine($"{elapsed / 1000,4}s {name} recovery: {dead.Recovery.LastStep}/{dead.Recovery.LastSpiritHealerStep} spot={dead.Recovery.ReviveSpot} ({player.X:F1}, {player.Y:F1}, {player.Z:F1})");
+                        if (player.IsAlive && (player.Combat.IsInCombat || player.Health < player.MaxHealth || elapsed % 5_000 == 0) && string.Equals(Environment.GetEnvironmentVariable("ARCANECORE_TEST_BOT_REPLAY_TRACE"), name, StringComparison.OrdinalIgnoreCase)
+                            && bots.FindBrain(watch.BotId) is { } traced)
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{elapsed / 1000,4}s {name} L{player.Level} hp {player.Health}/{player.MaxHealth} attackers {string.Join(",", player.Combat.Attackers.OfType<ArcaneCore.Game.Creatures.Creature>().Select(c => $"{c.Entry}/L{c.Level}/{c.Health}/{c.MaxHealth}/dmg{c.Template.MinMeleeDamage}-{c.Template.MaxMeleeDamage}"))} goal {traced.Goal} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) [{traced.RiskReport}]"));
+                        if (!player.IsAlive && !watch.Dead && bots.FindBrain(watch.BotId) is { } fallen)
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{elapsed / 1000,4}s {name} died at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}): last enemies {string.Join(",", fallen.Risk.Tracker.LastEnemies.Select(c => $"{c.Entry}/L{c.Level}"))}; retreats {fallen.Risk.Retreat.Count} last {fallen.Risk.Retreat.Reason}/{fallen.Risk.Retreat.Outcome}; {fallen.Risk.LastEngagement}"));
                         if (!player.IsAlive)
                         {
                             if (player.Combat.Corpse is { } corpse) watch.Body = new Vector3(corpse.X, corpse.Y, corpse.Z);
@@ -182,7 +189,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         {
                             PlayerbotBrain? brain = bots.FindBrain(watch.BotId);
                             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")} {brain?.StallReport}"));
+                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")} {brain?.StallReport} [{brain?.RiskReport}]"));
                         }
                     }
 
@@ -191,7 +198,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             }
 
             foreach ((string name, Watch watch) in watches)
-                output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards");
+                output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards, deaths {watch.Deaths}");
             Assert.All(watches, pair => Assert.True(pair.Value.LongestStillMs < LongestStillMs,
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
@@ -225,10 +232,17 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
 
         public float Travelled { get; private set; }
 
+        /// <summary>Times the bot was seen dead after being seen alive (each death of the replay counts once).</summary>
+        public int Deaths { get; private set; }
+
+        private bool? _wasAlive; // unknown before the first look: a bot already dead at the start is not counted
+
         public void Observe(Vector3 position, bool alive, uint nowMs)
         {
             if (_last is { } last) Travelled += Vector3.Distance(last, position);
             _last = position;
+            if (_wasAlive == true && !alive) Deaths++;
+            _wasAlive = alive;
             if (!alive || _place is not { } place || Vector3.Distance(place, position) > SamePlaceYards)
             {
                 _place = alive ? position : null;

@@ -189,6 +189,43 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         return session.Services.GetService<SpellFeature>() is { } feature ? Refresh(player, feature) : PlayerbotAbilities.Empty;
     }
 
+    private PlayerbotAbilities? _escapes;
+    private int _escapeBookCount = -1;
+
+    /// <summary>
+    /// The class escapes the bot knows (<see cref="PlayerbotEscapes.All"/>), resolved from its book at the highest rank; rebuilt when
+    /// the book changes size.
+    /// </summary>
+    internal PlayerbotAbilities Escapes(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (session.Services.GetService<SpellFeature>() is not { } feature) return PlayerbotAbilities.Empty;
+        IReadOnlyList<uint> book = feature.Spellbook.GetSpells(player);
+        if (_escapes is not null && _escapeBookCount == book.Count) return _escapes;
+        _escapeBookCount = book.Count;
+        return _escapes = PlayerbotAbilities.Resolve([.. book.Select(feature.System.Store.Get).OfType<SpellInfo>()], PlayerbotEscapes.All);
+    }
+
+    /// <summary>Whether <paramref name="spell"/> can be cast at <paramref name="target"/> now (the rotation's castability check).</summary>
+    internal bool CanCastNow(Player player, SpellInfo spell, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (session.Services.GetService<SpellFeature>() is not { } feature || IsRefused(spell)) return false;
+        Unit? victim = ReferenceEquals(target, player) ? null : target;
+        RotationState view = View(player, feature, victim);
+        RotationUnit? unit = victim is null ? view.Self : view.Victim;
+        return unit is not null && view.CanCast(spell, unit);
+    }
+
+    /// <summary>Submit <paramref name="spell"/> at <paramref name="target"/> through CMSG_CAST_SPELL; true when the server took it.</summary>
+    internal bool CastAt(Player player, SpellInfo spell, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(spell);
+        ArgumentNullException.ThrowIfNull(target);
+        return session.Services.GetService<SpellFeature>() is { } feature && Cast(player, feature, spell, target.Guid);
+    }
+
     private PlayerbotClassRotation? Rotation(Player player, SpellFeature feature)
         => PlayerbotRotations.For(player.Class) is { } rotation && Refresh(player, feature).Count > 0 ? rotation : null;
 

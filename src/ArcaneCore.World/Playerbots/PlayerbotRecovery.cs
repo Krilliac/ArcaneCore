@@ -103,6 +103,12 @@ internal enum PlayerbotSpiritHealerStep
 /// </summary>
 internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions options)
 {
+    /// <summary>
+    /// The risk's hazards as threats (<see cref="PlayerbotRisk.HazardThreats"/>): a revive inside a remembered death or retreat, or
+    /// in reach of a creature that kills outright, is camped, and the revive spot is chosen outside them (set by the brain).
+    /// </summary>
+    internal Func<Player, IEnumerable<PlayerbotThreat>>? Hazards { get; set; }
+
     internal const long NoProgressMs = 60_000;
     internal const long StuckMs = 10_000;
 
@@ -244,7 +250,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
-        bool hostile = atCorpse && wait <= 0 && Camped(player);
+        bool hostile = atCorpse && wait <= 0 && Camped(player, Hazards?.Invoke(player) ?? []);
         Vector3? spot = hostile && !stalled && !_preferSpiritHealer ? ChooseReviveSpot(player, corpse!) : null;
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
             reviveSpotKnown: spot is not null);
@@ -453,10 +459,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// Whether a hostile creature would attack the bot revived where the ghost stands now (CMSG_RECLAIM_CORPSE revives it in
     /// place, vmangos MiscHandler.cpp:599): the ghost is inside a threat's aggro radius plus <see cref="CampMarginYards"/>.
     /// </summary>
-    internal static bool Camped(Player player)
+    internal static bool Camped(Player player) => Camped(player, []);
+
+    /// <param name="extra">More places to keep out of: the risk's hazards (remembered deaths and retreats, creatures that kill outright).</param>
+    internal static bool Camped(Player player, IEnumerable<PlayerbotThreat> extra)
     {
         var here = new Vector3(player.X, player.Y, player.Z);
-        foreach (PlayerbotThreat threat in Threats(player))
+        foreach (PlayerbotThreat threat in Threats(player).Concat(extra))
             if (threat.Reaches(here, CampMarginYards))
                 return true;
         return false;
@@ -484,7 +493,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             var at = new Vector3(creature.X, creature.Y, creature.Z);
             if (system is null)
             {
-                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0));
+                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0, creature));
                 continue;
             }
 
@@ -493,7 +502,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
             if (radius <= 0) continue;
             bool flyer = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR: no height limit
-            found.Add(new PlayerbotThreat(at, radius, flyer, radii));
+            found.Add(new PlayerbotThreat(at, radius, flyer, radii, creature));
         }
 
         return found;
@@ -507,7 +516,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (player.Map is null) return null;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
-        List<PlayerbotThreat> hostiles = Threats(player);
+        List<PlayerbotThreat> hostiles = [.. Threats(player), .. Hazards?.Invoke(player) ?? []];
         if (_spot is { } kept && IsReviveSpot(kept, body, hostiles)) return kept;
 
         Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
@@ -618,7 +627,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 /// A creature that would attack a revived bot (<see cref="PlayerbotRecovery.Threats"/>): where it stands, its aggro radius against
 /// the bot, whether it is free of the 3-yard height limit (a flyer), and the bounding radii the height limit takes off.
 /// </summary>
-internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, bool IgnoresHeight, float Radii)
+internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, bool IgnoresHeight, float Radii, Creature? Source = null)
 {
     /// <summary>
     /// Whether a bot standing at <paramref name="spot"/> is inside this creature's aggro reach plus <paramref name="margin"/>

@@ -125,6 +125,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply(FormattableString.Invariant($"BOTINSPECT death={value.DeathState} pos={value.PlayerX:F2},{value.PlayerY:F2},{value.PlayerZ:F2}"));
         context.Reply(FormattableString.Invariant($"BOTINSPECT movement=flags:{(uint)value.MovementFlags:X8} stand:{value.StandState} time:{value.MovementTimeMs} following:{value.Following} loops:{value.LoopsGivenUp}"));
         context.Reply($"BOTINSPECT stall={value.Stall ?? "none"}");
+        context.Reply($"BOTINSPECT {value.Risk ?? "decision=none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
@@ -222,5 +223,5 @@ public sealed class PlayerbotCommands : ICommandGroup
         => string.Create(CultureInfo.InvariantCulture,
             $"{status.BotId} {status.Name} state={status.State} desired={status.DesiredEnabled} goal={status.Goal} "
             + $"target={status.TargetEntry} quest={status.QuestId} map={status.MapId} health={status.Health} "
-            + $"error={status.ErrorCode ?? "none"}");
+            + $"error={status.ErrorCode ?? "none"}{(status.Risk is { } risk ? " " + risk : string.Empty)}");
 }
