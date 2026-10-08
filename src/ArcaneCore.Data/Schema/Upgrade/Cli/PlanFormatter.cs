@@ -102,17 +102,28 @@ internal static class PlanFormatter
     }
 
     /// <summary>
-    /// The operator-applied SQL: every statement an apply would issue plus the version-row write per step,
-    /// all prose as <c>--</c> comments so the whole output is a valid script. Database-level settings
-    /// (a new database's character set) and the creation of the database itself are not included.
+    /// The operator-applied SQL: every statement an apply would issue (DDL and the data moves of a foreign line's
+    /// migration, each where the apply runs it) plus the version-row write per step, all prose as <c>--</c> comments so the
+    /// whole output is a valid script. Database-level settings (a new database's character set) and the creation of the
+    /// database itself are not included.
     /// </summary>
-    public static void WriteScript(TextWriter writer, SchemaPlan plan)
+    /// <returns>
+    /// Null when the script was written. The refusal, with nothing but comments written, when the plan holds a data move
+    /// that cannot be written as SQL: a script without it would still record the version, and the database would then
+    /// read as already migrated, its rows never moved.
+    /// </returns>
+    public static string? WriteScript(TextWriter writer, SchemaPlan plan)
     {
         writer.WriteLine($"-- {Summary(plan)}");
-        if (plan.ForeignLine is { DataMoves.Count: > 0 } foreign)
+        PlannedDataMove[] unrenderable = [.. plan.Steps.SelectMany(s => s.DataMoves).Where(m => m.Script is null)];
+        if (unrenderable.Length > 0)
         {
-            // The data moves are statements the apply runs that this script does not render.
-            writer.WriteLine($"-- NOT RENDERED (run by 'arcane-db upgrade' or 'arcane-db migrate-codex --apply'): {OneLine(string.Join("; ", foreign.DataMoves.Select(m => m.Description)))}");
+            string refusal = OneLine(
+                $"no script for the {plan.Component} database: its migration moves rows this tool cannot write as SQL " +
+                $"({string.Join("; ", unrenderable.Select(m => m.Description))}), and a script without them would record the new " +
+                "schema version with the rows left behind. Run 'arcane-db migrate-codex --apply' (or 'arcane-db upgrade') instead.");
+            writer.WriteLine($"-- REFUSED: {refusal}");
+            return refusal;
         }
 
         if (plan.Refusal is not null)
@@ -123,19 +134,27 @@ internal static class PlanFormatter
         foreach (PlannedStep step in plan.Steps)
         {
             writer.WriteLine($"-- {plan.Component}: {step.Description} (version {step.Version})");
-            foreach (PlannedAction action in step.Actions)
+            for (int i = 0; i <= step.Actions.Count; i++)
             {
+                foreach (PlannedDataMove move in step.DataMoves.Where(m => m.AfterActions == i))
+                {
+                    writer.WriteLine($"-- data move ({move.Rows} rows now): {OneLine(move.Description)}");
+                    WriteStatements(writer, move.Script!);
+                }
+
+                if (i == step.Actions.Count)
+                {
+                    break;
+                }
+
+                PlannedAction action = step.Actions[i];
                 if (action.IsBlocking)
                 {
                     writer.WriteLine($"-- {DecisionLabel(action.Decision)}: {OneLine(action.Detail)}");
                 }
                 else if (action.Decision == ChangeDecision.Create && action.Script is not null)
                 {
-                    foreach (string statement in action.Script)
-                    {
-                        string text = statement.Trim();
-                        writer.WriteLine(text.EndsWith(';') ? text : text + ";");
-                    }
+                    WriteStatements(writer, action.Script);
                 }
             }
 
@@ -143,6 +162,17 @@ internal static class PlanFormatter
             {
                 writer.WriteLine(step.VersionStatement);
             }
+        }
+
+        return null;
+    }
+
+    private static void WriteStatements(TextWriter writer, IReadOnlyList<string> statements)
+    {
+        foreach (string statement in statements)
+        {
+            string text = statement.Trim();
+            writer.WriteLine(text.EndsWith(';') ? text : text + ";");
         }
     }
 

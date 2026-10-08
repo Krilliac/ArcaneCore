@@ -71,7 +71,21 @@ public sealed record PlannedAction(
 /// <param name="Description">What the step is (create, adopt, upgrade).</param>
 /// <param name="Actions">The changes in the order an apply runs them.</param>
 /// <param name="VersionStatement">With a script requested, the statement that records the version.</param>
-public sealed record PlannedStep(int Version, string Description, IReadOnlyList<PlannedAction> Actions, string? VersionStatement = null);
+public sealed record PlannedStep(int Version, string Description, IReadOnlyList<PlannedAction> Actions, string? VersionStatement = null)
+{
+    /// <summary>The data moves the step runs between its actions (a foreign line's migration step only), in order.</summary>
+    public IReadOnlyList<PlannedDataMove> DataMoves { get; init; } = [];
+}
+
+/// <summary>A row move an apply runs inside a step (<see cref="ForeignLineDataMove"/>), at its place among the step's actions.</summary>
+/// <param name="AfterActions">How many of the step's actions run before it.</param>
+/// <param name="Description">What moves where.</param>
+/// <param name="Rows">How many rows it would write now.</param>
+/// <param name="Script">
+/// With a script requested, its statements; null without a script, and null with one when the move cannot be written as
+/// SQL (<see cref="ForeignLineDataMove.Sql"/>): the script of such a plan is refused.
+/// </param>
+public sealed record PlannedDataMove(int AfterActions, string Description, long Rows, IReadOnlyList<string>? Script = null);
 
 /// <summary>
 /// What bringing one component's database to the current code would do, computed without

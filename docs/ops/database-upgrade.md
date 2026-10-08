@@ -64,6 +64,13 @@ the version-row write after each step; every other line is a `--` comment, so th
 (`D:\refs\vmangos-wiki\docs\Database-Setup.md:46-66`, `:88`). The script does not create the database or set its
 character set. Run `arcane-db check` afterwards.
 
+For a database the Codex line created (below) the script also carries the migration's row moves, each where the
+migration runs it: the `UPDATE` that copies `npc_template_service_metadata` into `creature_template` follows the
+`ALTER TABLE` statements of world step 21 and precedes the version write, so the script ends the database exactly as
+`upgrade` would. A plan holding a row move that cannot be written as SQL gets no script at all (only `--` comments,
+an error naming the move, exit code 4): a script that skipped the move would still record the merged version, after
+which the database reads as already migrated and the rows would never move. Use `migrate-codex --apply` then.
+
 ## Exit codes
 
 | Code | Meaning | Changed anything? |

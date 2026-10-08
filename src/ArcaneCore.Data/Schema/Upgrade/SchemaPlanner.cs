@@ -191,11 +191,21 @@ public static class SchemaPlanner
 
         /// <summary>
         /// Another line's database: one step that verifies or applies this build's steps after the divergence up to
-        /// the merged version and runs the data moves (counted, not run), then the ordinary steps after it.
+        /// the merged version and runs the data moves (counted, not run; with a script, rendered right after the step
+        /// they follow, where the bootstrapper runs them), then the ordinary steps after it.
         /// </summary>
         private async Task<SchemaPlan> PlanForeignLineAsync(ForeignLineMatch match, CancellationToken ct)
         {
+            var rows = new Dictionary<ForeignLineDataMove, long>(ReferenceEqualityComparer.Instance);
+            var moves = new List<string>();
+            foreach (ForeignLineDataMove move in match.DataMoves)
+            {
+                rows[move] = await move.CountAsync(_db, ct).ConfigureAwait(false);
+                moves.Add($"{move.Description} ({rows[move]} rows)");
+            }
+
             var actions = new List<PlannedAction>();
+            var placed = new List<PlannedDataMove>();
             foreach (SchemaStep step in match.Steps)
             {
                 HashSet<(string Table, string Column)> addedLater = SchemaChangeDecider.AddedLater(_definition, step);
@@ -203,18 +213,20 @@ public static class SchemaPlanner
                 {
                     await PlanChangeAsync(change, addedLater, actions, ct).ConfigureAwait(false);
                 }
+
+                // Where SchemaBootstrapper.MigrateForeignLineAsync runs it: right after the step it follows, before any later step.
+                placed.AddRange(match.DataMoves.Where(m => m.AfterMergedVersion == step.Version)
+                    .Select(m => new PlannedDataMove(actions.Count, m.Description, rows[m], _script ? m.Sql?.Invoke(_db) : null)));
             }
 
-            var moves = new List<string>();
-            foreach (ForeignLineDataMove move in match.DataMoves)
-            {
-                long rows = await move.CountAsync(_db, ct).ConfigureAwait(false);
-                moves.Add($"{move.Description} ({rows} rows)");
-            }
+            // A move after a step outside the migrated range is a line definition the bootstrapper refuses to run: listed
+            // without statements, so that a script of the plan is refused rather than written without it.
+            placed.AddRange(match.DataMoves.Where(m => match.Steps.All(s => s.Version != m.AfterMergedVersion))
+                .Select(m => new PlannedDataMove(actions.Count, m.Description, rows[m])));
 
             string description = $"migrate from the {match.Line.Name} numbering (schema version {match.ForeignVersion}): verify or apply steps " +
                                  $"{match.Line.DivergedAfter + 1}-{match.MergedVersion}" + (moves.Count == 0 ? string.Empty : "; " + string.Join("; ", moves));
-            var first = new PlannedStep(match.MergedVersion, description, actions, UpdateStatement(match.MergedVersion));
+            var first = new PlannedStep(match.MergedVersion, description, actions, UpdateStatement(match.MergedVersion)) { DataMoves = placed };
             SchemaPlan plan = await PlanStepsAsync(SchemaState.Behind, match.MergedVersion, [first], ct).ConfigureAwait(false);
             return plan with { DatabaseVersion = match.ForeignVersion, ForeignLine = match };
         }
