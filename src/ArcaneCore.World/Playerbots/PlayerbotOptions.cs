@@ -61,6 +61,9 @@ public sealed class PlayerbotOptions
     /// <summary>The scenario harness on a live world (<c>World:Playerbots:Scenarios</c>; off by default).</summary>
     public PlayerbotScenarioOptions Scenarios { get; set; } = new();
 
+    /// <summary>How a bot behaves in a real player's group (<c>World:Playerbots:Party</c>; <see cref="Party.PlayerbotPartyAI"/>).</summary>
+    public PlayerbotPartyOptions Party { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -99,6 +102,69 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: invalid bounded local model settings.");
         if (Scenarios is null || Scenarios.MaxDurationSeconds is < 5 or > 600 || Scenarios.StepTimeoutSeconds is < 1 or > 300)
             throw new InvalidOperationException($"{SectionName}:Scenarios: MaxDurationSeconds must be 5..600 and StepTimeoutSeconds 1..300.");
+        if (Party is null) throw new InvalidOperationException($"{SectionName}:Party is missing.");
+        Party.Validate();
+    }
+}
+
+/// <summary>Who may invite a managed bot into a group (<see cref="PlayerbotPartyOptions.InvitePolicy"/>).</summary>
+public enum PlayerbotInvitePolicy
+{
+    /// <summary>Only the names in <see cref="PlayerbotPartyOptions.Allowlist"/>.</summary>
+    None,
+
+    /// <summary>The allowlist, the bot's guild mates, and players on the bot's friend list or with the bot on theirs.</summary>
+    GuildOrFriends,
+
+    /// <summary>Every player.</summary>
+    Anyone,
+}
+
+/// <summary>What a grouped bot answers to a group loot roll (<see cref="PlayerbotPartyOptions.LootRoll"/>).</summary>
+public enum PlayerbotLootRoll
+{
+    Pass,
+    Greed,
+}
+
+/// <summary>
+/// <c>World:Playerbots:Party</c>: a bot in a real player's group (vmangos PartyBotAI; mangoszero playerbot actions). The bot
+/// accepts or declines invitations by <see cref="InvitePolicy"/>, follows and assists its master, takes the master's whispered or
+/// party-chat commands, answers loot rolls at once and goes where the master goes (docs/areas/playbots.md, Party bots).
+/// </summary>
+public sealed class PlayerbotPartyOptions
+{
+    /// <summary>The most names <see cref="Allowlist"/> may hold.</summary>
+    public const int MaxAllowlist = 64;
+
+    /// <summary>Who may invite a bot (<see cref="PlayerbotInvitePolicy.GuildOrFriends"/> by default).</summary>
+    public PlayerbotInvitePolicy InvitePolicy { get; set; } = PlayerbotInvitePolicy.GuildOrFriends;
+
+    /// <summary>Character names whose invitations a bot always accepts, whatever <see cref="InvitePolicy"/> says (case-insensitive).</summary>
+    public string[] Allowlist { get; set; } = [];
+
+    /// <summary>Teleport to the master when it is more than 100 yards away or on another map (vmangos PartyBotAI .goname; on by default).</summary>
+    public bool TeleportToLeader { get; set; } = true;
+
+    /// <summary>Revive a dead bot in place when vmangos <c>PartyBotAI::ShouldAutoRevive</c> says so (on by default); otherwise it runs back.</summary>
+    public bool AutoRevive { get; set; } = true;
+
+    /// <summary>The vote on every group loot roll (<see cref="PlayerbotLootRoll.Pass"/> by default: the items go to the players).</summary>
+    public PlayerbotLootRoll LootRoll { get; set; } = PlayerbotLootRoll.Pass;
+
+    /// <summary>Seconds a bot waits for an offline or departed master before it leaves the group and goes back to its own goals (1..3600).</summary>
+    public int MasterTimeoutSeconds { get; set; } = 60;
+
+    public void Validate()
+    {
+        const string section = PlayerbotOptions.SectionName + ":Party";
+        if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends or Anyone.");
+        if (!Enum.IsDefined(LootRoll)) throw new InvalidOperationException($"{section}: LootRoll must be Pass or Greed.");
+        if (MasterTimeoutSeconds is < 1 or > 3600) throw new InvalidOperationException($"{section}: MasterTimeoutSeconds must be 1..3600.");
+        if (Allowlist is null || Allowlist.Length > MaxAllowlist
+            || Allowlist.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 12 || !name.All(char.IsLetter))
+            || Allowlist.Distinct(StringComparer.OrdinalIgnoreCase).Count() != Allowlist.Length)
+            throw new InvalidOperationException($"{section}: Allowlist must hold at most {MaxAllowlist} distinct character names (letters only, at most 12).");
     }
 }
 
