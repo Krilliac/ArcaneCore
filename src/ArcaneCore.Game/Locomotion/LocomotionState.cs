@@ -119,7 +119,7 @@ public sealed class LocomotionState
     public AuraLedger Auras { get; } = new();
 
     /// <summary>
-    /// The configured speed rates this unit's speeds are set with (<see cref="LocomotionOptions.SpeedRates"/>, copied onto players at login and
+    /// The configured speed rates this unit's speeds are set with (<see cref="LocomotionOptions.GetSpeedRates"/>, copied onto players at login and
     /// at a rate change by <see cref="SpeedRates.Apply"/>; <see cref="PlayerSpeedRates.Retail"/> for everything else).
     /// </summary>
     public PlayerSpeedRates ConfiguredSpeedRates { get; set; } = PlayerSpeedRates.Retail;

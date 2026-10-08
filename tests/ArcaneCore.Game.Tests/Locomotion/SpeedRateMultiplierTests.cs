@@ -48,7 +48,7 @@ public sealed class SpeedRateMultiplierTests
         (Player player, FakeSession session) = kit.AddPlayer(1);
         var options = new LocomotionOptions { PlayerSwimBackSpeedRate = 2.0f, PlayerTurnRate = 3.0f };
 
-        SpeedRates.Apply(player, options.SpeedRates, options);
+        SpeedRates.Apply(player, options.GetSpeedRates(), options);
 
         Assert.Equal(2.5f * 2.0f, Speed(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgForceSwimBackSpeedChange).Payload));
         Assert.Equal(Unit.BaseTurnRate * 3.0f, Speed(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgForceTurnRateChange).Payload));
@@ -58,7 +58,7 @@ public sealed class SpeedRateMultiplierTests
         Assert.Equal(2.5f, player.SwimBackSpeed); // the speeds still wait for the ack
 
         session.Clear();
-        SpeedRates.Apply(player, options.SpeedRates, options);
+        SpeedRates.Apply(player, options.GetSpeedRates(), options);
         Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgForceTurnRateChange); // nothing new for the turn rate
     }
 
@@ -67,10 +67,10 @@ public sealed class SpeedRateMultiplierTests
     {
         var options = new LocomotionOptions { PlayerSpeedRate = 2.0f, PlayerRunSpeedRate = 1.5f, PlayerWalkSpeedRate = 0.5f };
 
-        PlayerSpeedRates rates = options.SpeedRates;
+        PlayerSpeedRates rates = options.GetSpeedRates();
 
         Assert.Equal(new PlayerSpeedRates(Walk: 1.0f, Run: 3.0f, RunBack: 2.0f, Swim: 2.0f, SwimBack: 2.0f, Turn: 1.0f), rates);
-        Assert.Equal(PlayerSpeedRates.Retail, new LocomotionOptions().SpeedRates);
+        Assert.Equal(PlayerSpeedRates.Retail, new LocomotionOptions().GetSpeedRates());
     }
 
     [Fact]

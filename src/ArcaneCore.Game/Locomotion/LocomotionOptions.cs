@@ -93,7 +93,7 @@ public sealed class LocomotionOptions
     public const float MaxSpeedRate = 10.0f;
 
     /// <summary>The player speed rates these options give: <see cref="PlayerSpeedRate"/> times each per-type rate, the turn rate alone.</summary>
-    public PlayerSpeedRates SpeedRates => new(
+    public PlayerSpeedRates GetSpeedRates() => new(
         Walk: PlayerSpeedRate * PlayerWalkSpeedRate,
         Run: PlayerSpeedRate * PlayerRunSpeedRate,
         RunBack: PlayerSpeedRate * PlayerRunBackSpeedRate,

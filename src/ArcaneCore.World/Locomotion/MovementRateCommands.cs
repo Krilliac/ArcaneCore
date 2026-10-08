@@ -44,7 +44,7 @@ public sealed class MovementRateCommands : ICommandGroup
     public static string Describe(LocomotionOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        PlayerSpeedRates effective = options.SpeedRates;
+        PlayerSpeedRates effective = options.GetSpeedRates();
         return string.Create(CultureInfo.InvariantCulture,
             $"Movement rates: speedrate {options.PlayerSpeedRate:0.###} x (run {options.PlayerRunSpeedRate:0.###}, runback {options.PlayerRunBackSpeedRate:0.###}, "
             + $"swim {options.PlayerSwimSpeedRate:0.###}, swimback {options.PlayerSwimBackSpeedRate:0.###}, walk {options.PlayerWalkSpeedRate:0.###}), turn {options.PlayerTurnRate:0.###}.\n"

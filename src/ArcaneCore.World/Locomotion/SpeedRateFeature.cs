@@ -28,9 +28,9 @@ public sealed class SpeedRateFeature(ILogger<SpeedRateFeature> logger) : IWorldF
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         world.PlayerLoggedIn += CatchUp;
-        if (LocomotionEnvironment.RegisteredOptions(world) is { } options && options.SpeedRates != PlayerSpeedRates.Retail)
+        if (LocomotionEnvironment.RegisteredOptions(world) is { } options && options.GetSpeedRates() != PlayerSpeedRates.Retail)
         {
-            PlayerSpeedRates rates = options.SpeedRates;
+            PlayerSpeedRates rates = options.GetSpeedRates();
             logger.LogWarning(
                 "non-retail player speed rates: walk {Walk}, run {Run}, run back {RunBack}, swim {Swim}, swim back {SwimBack}, turn {Turn}",
                 rates.Walk, rates.Run, rates.RunBack, rates.Swim, rates.SwimBack, rates.Turn);
@@ -41,9 +41,9 @@ public sealed class SpeedRateFeature(ILogger<SpeedRateFeature> logger) : IWorldF
     public Task OnPlayerLoadedAsync(WorldSession session, CharacterRecord character, Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (Options() is { } options && (options.SpeedRates != PlayerSpeedRates.Retail || player.Locomotion.ConfiguredSpeedRates != PlayerSpeedRates.Retail))
+        if (Options() is { } options && (options.GetSpeedRates() != PlayerSpeedRates.Retail || player.Locomotion.ConfiguredSpeedRates != PlayerSpeedRates.Retail))
         {
-            SpeedRates.Apply(player, options.SpeedRates, options);
+            SpeedRates.Apply(player, options.GetSpeedRates(), options);
         }
 
         return Task.CompletedTask;
@@ -53,9 +53,9 @@ public sealed class SpeedRateFeature(ILogger<SpeedRateFeature> logger) : IWorldF
     // configured speeds.
     private void CatchUp(Player player)
     {
-        if (Options() is { } options && player.Locomotion.ConfiguredSpeedRates != options.SpeedRates)
+        if (Options() is { } options && player.Locomotion.ConfiguredSpeedRates != options.GetSpeedRates())
         {
-            SpeedRates.Apply(player, options.SpeedRates, options);
+            SpeedRates.Apply(player, options.GetSpeedRates(), options);
         }
     }
 

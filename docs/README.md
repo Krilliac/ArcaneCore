@@ -58,6 +58,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Skills and professions | [skills](areas/skills.md) |
 | Player stats and combat formulas | [stats](areas/stats.md) |
 | Rested experience | [rested-xp](areas/rested-xp.md) |
+| Rates (every Rate.* knob, speed rates) | [rates](areas/rates.md) |
 | Character rename | [character-rename](areas/character-rename.md) |
 | Melee combat | [combat](areas/combat.md) |
 | Duels | [duels](areas/duels.md) |

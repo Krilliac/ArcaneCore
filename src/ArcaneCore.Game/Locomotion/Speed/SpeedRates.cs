@@ -6,7 +6,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Locomotion;
 
 /// <summary>
-/// The configured multipliers of a player's movement speeds (<see cref="LocomotionOptions.SpeedRates"/>): run, run back, swim, swim back and
+/// The configured multipliers of a player's movement speeds (<see cref="LocomotionOptions.GetSpeedRates"/>): run, run back, swim, swim back and
 /// walk already include <see cref="LocomotionOptions.PlayerSpeedRate"/>; <see cref="Turn"/> is the turn rate's own. All 1 is retail.
 /// </summary>
 public readonly record struct PlayerSpeedRates(float Walk, float Run, float RunBack, float Swim, float SwimBack, float Turn)
@@ -75,7 +75,7 @@ public static class SpeedRates
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(options);
-        PlayerSpeedRates rates = options.SpeedRates;
+        PlayerSpeedRates rates = options.GetSpeedRates();
         int count = 0;
         foreach (Player player in world.OnlinePlayers.ToArray())
         {
