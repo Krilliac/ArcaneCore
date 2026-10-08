@@ -6,6 +6,8 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
@@ -21,6 +23,60 @@ public sealed class InstanceStoreTests : IAsyncLifetime
     private readonly TestDatabases _databases = new();
 
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ScriptData_SurvivesStoreRecreation_AndLaterMetadataSaves(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice, _) = await CreateAsync(provider);
+        await WithStore(cs, async store =>
+        {
+            await store.SaveInstanceAsync(new InstanceRecord(101, 36, 1_700_007_200));
+            await store.SaveBindAsync(new CharacterInstanceBindRecord(alice, 101, false));
+            await store.SaveInstanceDataAsync(101, "3 0 0 0");
+            await store.SaveInstanceAsync(new InstanceRecord(101, 36, 1_700_010_000));
+        });
+
+        await WithStore(cs, async store =>
+        {
+            Assert.Equal("3 0 0 0", Assert.Single((await store.LoadAsync()).Instances).Data);
+            await store.DeleteInstanceAsync(101);
+            await store.SaveInstanceDataAsync(101, "stale write");
+            Assert.Empty((await store.LoadAsync()).Instances);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task CharactersV40Upgrade_AddsInstanceData_WithoutLosingExistingRow(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice, _) = await CreateAsync(provider);
+        await WithStore(cs, async store =>
+        {
+            await store.SaveInstanceAsync(new InstanceRecord(101, 36, 1_700_007_200));
+            await store.SaveBindAsync(new CharacterInstanceBindRecord(alice, 101, false));
+        });
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
+            string drop = $"ALTER TABLE {sql.DelimitIdentifier("instance")} DROP COLUMN {sql.DelimitIdentifier("data")}";
+            await db.Database.ExecuteSqlRawAsync(drop);
+            SchemaVersionRow version = await db.Set<SchemaVersionRow>().SingleAsync();
+            version.Version = ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version; // the step before v41-v42
+            await db.SaveChangesAsync();
+        }
+
+        for (int pass = 0; pass < 2; pass++)
+        {
+            await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+            InstanceRow row = await db.Set<InstanceRow>().SingleAsync();
+            Assert.Equal(101, row.Id);
+            Assert.Null(row.Data);
+            Assert.Equal(InstanceScriptDataModule.Version, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+        }
+    }
 
     [Theory]
     [MemberData(nameof(Providers))]

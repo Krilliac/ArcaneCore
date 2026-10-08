@@ -25,6 +25,8 @@ internal sealed class InMemoryInstanceStore : IInstanceStore
     /// <summary>The instances whose row exists (saved and not deleted), for the loot state double's scope check.</summary>
     public ConcurrentDictionary<uint, byte> Live { get; } = new();
 
+    public ConcurrentDictionary<uint, string> ScriptData { get; } = new();
+
     /// <summary>Raised after an instance row was deleted (the real store deletes the instance's chest loot in the same transaction).</summary>
     public event Action<uint>? Deleted;
 
@@ -47,11 +49,22 @@ internal sealed class InMemoryInstanceStore : IInstanceStore
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
     {
         Live.TryRemove(instanceId, out _);
+        ScriptData.TryRemove(instanceId, out _);
         Deleted?.Invoke(instanceId);
         await Record($"delete {instanceId}");
     }
 
     public Task SaveBindAsync(CharacterInstanceBindRecord bind, CancellationToken cancellationToken = default) => Record($"bind {bind.CharacterId} {bind.InstanceId} {bind.Permanent}");
+
+    public Task SaveInstanceDataAsync(uint instanceId, string data, CancellationToken cancellationToken = default)
+    {
+        if (Live.ContainsKey(instanceId))
+        {
+            ScriptData[instanceId] = data;
+        }
+
+        return Record($"data {instanceId} {data}");
+    }
 
     public Task DeleteBindAsync(int characterId, uint instanceId, CancellationToken cancellationToken = default) => Record($"unbind {characterId} {instanceId}");
 
