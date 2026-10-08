@@ -19,6 +19,7 @@ public static class FormDisplayTable
         DruidForms.Moonkin => new FormDisplay(alliance ? 15374u : 15375u, 1.0f),
         DruidForms.Tree => new FormDisplay(864, 1.0f),
         DruidForms.GhostWolf => new FormDisplay(4613, 0.80f),
+        (byte)ShapeshiftForm.SpiritOfRedemption => new FormDisplay(16031, 1.0f), // vmangos GetModelForForm, SpellAuras.cpp:2405-2407
         _ => null,
     };
 }

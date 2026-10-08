@@ -117,17 +117,22 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
-    /// CMSG_SET_ACTIVE_MOVER: u64 GUID of the unit the client now moves. Players only ever
-    /// move themselves until possession exists; a mismatch is logged (vmangos
-    /// HandleSetActiveMoverOpcode) and otherwise ignored.
+    /// CMSG_SET_ACTIVE_MOVER: u64 GUID of the unit the client now moves (vmangos HandleSetActiveMoverOpcode, MovementHandler.cpp:851-891,
+    /// through <see cref="Game.Pets.Control.CharmService.HandleSetActiveMover"/>): it must be the server's mover (the player, or what it
+    /// possesses); a mismatch is logged and the server's mover is kept. Leaving a pet moved with Eyes of the Beast hands the pet back to
+    /// its AI (and dismisses it beyond the visibility distance).
     /// </summary>
     private static void HandleSetActiveMover(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
-        ulong guid = reader.ReadUInt64();
-        if (guid != 0 && guid != player.Guid.Value)
+        var guid = new ObjectGuid(reader.ReadUInt64());
+        Game.Pets.SummonService? summons = session.Services.GetService<Pets.PetsFeature>()?.Service;
+        bool accepted = summons is not null
+            ? summons.Charms.HandleSetActiveMover(player, guid, summons)
+            : guid.IsEmpty || guid == player.Guid;
+        if (!accepted)
         {
-            session.Logger.LogWarning("[{Endpoint}] active mover 0x{Guid:X16} is not {Player}", session.RemoteEndpoint, guid, player.Name);
+            session.Logger.LogWarning("[{Endpoint}] active mover 0x{Guid:X16} is not the mover of {Player}", session.RemoteEndpoint, guid.Value, player.Name);
         }
     }
 }

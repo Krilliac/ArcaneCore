@@ -146,7 +146,7 @@ with the manual clock, a `ScenarioTimeProvider`, a SQLite character database (bo
 mail, quests and spells persist through the real EF stores) and small synthetic content
 (`ScenarioTestContent`: a mailbox and a quest giver at the human start, a hostile wolf with
 loot and a kobold quest target 60+ yards away, the Duel spell and flag, faction templates).
-The tests run the built-ins plus `proc-damage-shield` and `proc-reflect-duel` (`ProcScenarioTests`, docs/areas/procs.md), `group-loot` (group, free-for-all loot, kill, money split,
+The tests run the built-ins plus `proc-damage-shield` and `proc-reflect-duel` (`ProcScenarioTests`, docs/areas/procs.md), `control-possess`, `control-charm` and `spirit-of-redemption` (`UnitControlScenarioTests`, docs/areas/unit-control.md; decoders and client packets in `ScenarioControlPackets`), `group-loot` (group, free-for-all loot, kill, money split,
 item), `mail-item` (persisted letter with item, delivery delay, take), `melee-kill` (swing,
 kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.

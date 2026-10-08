@@ -141,7 +141,10 @@ weapon-less forms are decided by the hard-coded `IsAttackSpeedOverridenForm` (1,
   `IsInDisallowedMountForm` and the `NOT_ON_TAXI` branch of the dismount-on-cast rule (no flight state).
 - Druid trainer spells still blocked by other primitives: Thorns (damage shield), Soothe Animal, Challenging Roar (taunt),
   Nature's Grasp (proc), Hurricane (persistent area aura), Barkskin, Insect Swarm, Prowl openers (ACTION_CANCELS removal).
-- Forms 14 and 15 (creature bear and cat) and 32 (Spirit of Redemption: display 16031, boosts 27792 / 27795, 39 spells carry its\n  Stances bit) have rows in the form table but no handler: no player spell reaches 14 and 15, and Spirit of Redemption needs the\n  lethal-damage trigger of the priest talent (not on this base). An aura with such a form leaves the form byte alone and is\n  reported once.\n- Mana regeneration while shapeshifted is unconditional (vmangos `Regenerate(POWER_MANA)`); not verified against retail.
+- Forms 14 and 15 (creature bear and cat) have rows in the form table but no handler: no player spell reaches them. An aura with
+  such a form leaves the form byte alone and is reported once. Form 32 (Spirit of Redemption: display 16031, boosts 27792 / 27795)
+  is handled since the unit-control lane added the priest talent's lethal-damage trigger (`docs/areas/unit-control.md`).
+- Mana regeneration while shapeshifted is unconditional (vmangos `Regenerate(POWER_MANA)`); not verified against retail.
 - Persistence: forms ride the existing permanent `character_aura` rows; no schema or store change. Nothing in this lane touches
   the Characters or World schema, so no MariaDB/PostgreSQL provider test applies; the login restore is exercised through
   `SpellSystem.RestoreAuras` in memory only (no world-level login test, no database).

@@ -197,7 +197,7 @@ control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTes
 | wlm-17 ward reflect | in vmangos the reflect is only half the work (the reflected cast back at the caster) and the Frost/Fire Warding chance needs the spell-modifier engine; low payoff before that lane lands |
 | wlm-18 polymorph, wlm-21 stacking, wlm-19 persistent area auras | overlap aura-engine-completeness (Transform, stacking, persistent area auras); the regen and Health Funnel pieces they feed (wlm-15, wlm-04) are delivered |
 | wlm-20 Blink | needs a navmesh raycast primitive (vmangos `Map::GetWalkHitPosition`) that `IPathfinder` does not offer on this base; designing it as a seam without an implementation was not worth a half slice |
-| wlm-23 charm / Enslave Demon | no charm primitive on the base (as the design said) |
+| wlm-23 charm / Enslave Demon | delivered later by the unit-control lane (`docs/areas/unit-control.md`): SPELL_AURA_MOD_CHARM with the warlock demon's pet number and bar |
 | wlm-24 acceptance | the classic-db count assertions were replaced by oracle values quoted from the dump in each slice's tests (Drink, Evocation, Mage Armor, Demon Armor, Health Funnel, Life Tap, Lesser/Greater Invisibility, the Detect ranks, the demon spells); no opt-in dump test or mock-client scenario was added |
 
 Integration notes: the shared files touched are `SpellAuraHolder.cs` (two internal members), `SpellSystem.Death.cs` (one line), `SpellSystem.Auras.cs` (the per-second cost call),

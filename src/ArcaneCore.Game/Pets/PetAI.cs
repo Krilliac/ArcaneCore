@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
+using ArcaneCore.Game.Pets.Control;
 
 namespace ArcaneCore.Game.Pets;
 
@@ -20,7 +21,9 @@ namespace ArcaneCore.Game.Pets;
 /// its aggro radius; the creature area's relocation notify brings it creatures as well as players) and the imp's lack of a melee
 /// attack. Not ported (each needs data or primitives another area owns, docs/integration/pets.md): positive and ally autocast
 /// (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, the threat-list retarget of creature-owned
-/// pets, crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>) and possession.
+/// pets and crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>). It also drives a charmed or possessed creature (docs/areas/unit-control.md):
+/// the charm info and master come from the charm when the creature is not a pet, and while a player possesses it (UNIT_FLAG_POSSESSED)
+/// only the melee part runs (no return movement, no autocast), as in vmangos <c>PetAI::UpdateAI</c>.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -40,9 +43,14 @@ public sealed class PetAI : CreatureAI
         MeleeEnabled = creature.Entry != ImpEntry;
     }
 
-    private CharmInfo? Charm => Me.Summon?.Charm;
+    /// <summary>vmangos Unit::GetCharmInfo: the pet's own, or the one a charm or possession gave the creature (Pets/Control).</summary>
+    private CharmInfo? Charm => Me.GetCharmInfo();
 
-    private Unit? Owner => Me.GetOwner();
+    /// <summary>vmangos <c>m_creature->GetCharmerOrOwner()</c>: the charmer of a charmed creature, else the owner.</summary>
+    private Unit? Owner => Me.GetCharmerOrOwner();
+
+    /// <summary>vmangos <c>HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED)</c>: a player moves the creature (possession, Eyes of the Beast).</summary>
+    private bool PlayerControlled => (Me.UnitFlags & UnitFlags.Possessed) != 0;
 
     private MapCombat? Fight => Me.Map?.Combat;
 
@@ -78,6 +86,8 @@ public sealed class PetAI : CreatureAI
             return;
         }
 
+        // part of it must run during Eyes of the Beast to update melee hits
+        bool playerControlled = PlayerControlled;
         if (Me.Combat.Victim is { IsAlive: true })
         {
             if (NeedToStop(charm))
@@ -88,9 +98,15 @@ public sealed class PetAI : CreatureAI
 
             // DoMeleeAttackIfReady: the swing loop is the combat system's
         }
-        else
+        else if (!playerControlled)
         {
             HandleReturnMovement(charm);
+        }
+
+        // End of possessed pet updates
+        if (playerControlled)
+        {
+            return;
         }
 
         // Arrival at the follow point is the follow generator's FOLLOW_MOTION_TYPE inform (OnMovementInform), not a pause in
@@ -104,6 +120,12 @@ public sealed class PetAI : CreatureAI
     /// <summary>vmangos PetAI::_needToStop (PetAI.cpp:56-90).</summary>
     private bool NeedToStop(CharmInfo charm)
     {
+        // This is needed for charmed creatures, as once their target was reset other effects can trigger threat
+        if (!Me.CharmerGuid.IsEmpty && Me.Combat.Victim is { } charmVictim && charmVictim.Guid == Me.CharmerGuid)
+        {
+            return true;
+        }
+
         // Stop attacking when player is mounted
         if (Me.IsPet && !charm.Enabled)
         {
@@ -155,6 +177,12 @@ public sealed class PetAI : CreatureAI
     /// <summary>vmangos PetAI::HandleReturnMovement (PetAI.cpp:585-620): back to the stay point, or to the owner.</summary>
     private void HandleReturnMovement(CharmInfo charm)
     {
+        // Prevent activating movement when under control of spells such as "Eyes of the Beast"
+        if (PlayerControlled)
+        {
+            return;
+        }
+
         if (charm.CommandState == CommandState.Stay)
         {
             if (!charm.IsAtStay && !charm.IsReturning)

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -420,6 +421,13 @@ public sealed class Map
     /// players that have it in their visible set.
     /// </summary>
     public void BroadcastToObservers(WorldObject source, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+        => BroadcastToObservers(source, opcode, payload, except: null);
+
+    /// <summary>
+    /// <see cref="BroadcastToObservers(WorldObject, WorldOpcode, ReadOnlySpan{byte})"/> leaving out <paramref name="except"/> as well (vmangos
+    /// SendMessageToSetExcept: the possessor of a unit does not get the movement its own client sent).
+    /// </summary>
+    public void BroadcastToObservers(WorldObject source, WorldOpcode opcode, ReadOnlySpan<byte> payload, Player? except)
     {
         if (!_observers.TryGetValue(source.Guid, out HashSet<Player>? observers))
         {
@@ -428,7 +436,7 @@ public sealed class Map
 
         foreach (Player other in observers)
         {
-            if (!ReferenceEquals(other, source))
+            if (!ReferenceEquals(other, source) && !ReferenceEquals(other, except))
             {
                 other.Session.Send(opcode, payload);
             }
@@ -710,6 +718,12 @@ public sealed class Map
         {
             _movedObjects.Add(obj);
         }
+
+        // A player whose camera looks from this unit (possession, Eyes of the Beast) sees from its new place (vmangos Camera::Event_Moved).
+        if (UnitControl.ViewerOf(obj) is { } viewer && !ReferenceEquals(viewer, obj))
+        {
+            viewer.NeedsVisibilityUpdate = true;
+        }
     }
 
     /// <summary>
@@ -876,6 +890,13 @@ public sealed class Map
                     extra.Add(seen);
                 }
             }
+
+            // A camera somewhere else (vmangos Camera view point): what is around it is a candidate too.
+            if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
+            {
+                float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
+                extra.AddRange(Query(eye.X, eye.Y, eyeRadius, extra: null));
+            }
         }
 
         if (_observers.TryGetValue(center.Guid, out HashSet<Player>? observers))
@@ -938,7 +959,10 @@ public sealed class Map
     private void UpdateVisibilityOf(Player viewer, WorldObject target)
     {
         bool inVisibleList = viewer.VisibleObjects.Contains(target.Guid);
-        bool inRange = IsWithinVisibilityDistance(viewer, target, inVisibleList);
+
+        // vmangos Player::UpdateVisibilityOf(viewPoint, target): distance from the camera, and the camera's own body is always in range.
+        WorldObject eye = viewer.ViewPoint;
+        bool inRange = ReferenceEquals(eye, target) || IsWithinVisibilityDistance(eye, target, inVisibleList);
         bool allowed = PassesVisibilityRules(viewer, target, inVisibleList);
 
         if (inVisibleList && (!inRange || !allowed))

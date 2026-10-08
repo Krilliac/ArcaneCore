@@ -14,7 +14,8 @@ namespace ArcaneCore.Game.Spells;
 /// Moonkin): the Shapeshift Form Effect spell, the display and its scale, the power type switch (Cat energy, Bear rage, a
 /// druid leaving a form back to mana), Furor, the form byte, the linked boost spells, the known passives that need the
 /// form and Leader of the Pack; and for the forms that only share the form byte, Ghost Wolf (display and scale),
-/// Shadowform and Stealth (the byte alone: the stance gate of the 21 stealth spells and the Holy spells Shadowform blocks).
+/// Shadowform and Stealth (the byte alone: the stance gate of the 21 stealth spells and the Holy spells Shadowform blocks); and the Spirit of Redemption
+/// form 32 (display 16031, the linked spells 27792 and 27795, SpellAuras.cpp:2405-2407 and 5480-5483; docs/areas/unit-control.md).
 /// A form without a handler (the ones no spell uses) leaves its aura unhandled and is reported once.
 /// </summary>
 /// <remarks>
@@ -51,7 +52,13 @@ public sealed class ShapeshiftService
         (byte)ShapeshiftForm.BattleStance, (byte)ShapeshiftForm.DefensiveStance, (byte)ShapeshiftForm.BerserkerStance,
         DruidForms.Cat, DruidForms.Tree, DruidForms.Travel, DruidForms.Aquatic, DruidForms.Bear, DruidForms.DireBear, DruidForms.Moonkin,
         DruidForms.GhostWolf, DruidForms.Shadow, DruidForms.Stealth,
+        (byte)ShapeshiftForm.SpiritOfRedemption,
     ];
+
+    /// <summary>The linked spells of the Spirit of Redemption form, in vmangos order ("must be second", SpellAuras.cpp:5480-5483).</summary>
+    public const uint SpiritOfRedemptionBoost1 = 27792;
+
+    public const uint SpiritOfRedemptionBoost2 = 27795;
 
     private readonly SpellSystem _spells;
     private readonly ShapeshiftFormCatalog _forms;
@@ -131,6 +138,11 @@ public sealed class ShapeshiftService
         if (stance != 0)
         {
             return (stance, 0);
+        }
+
+        if (form == ShapeshiftForm.SpiritOfRedemption)
+        {
+            return (SpiritOfRedemptionBoost1, SpiritOfRedemptionBoost2);
         }
 
         FormBoosts boosts = FormBoostTable.Get((byte)form);

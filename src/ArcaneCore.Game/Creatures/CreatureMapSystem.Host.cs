@@ -106,6 +106,24 @@ public sealed partial class CreatureMapSystem
         _combatSubscribed = true;
     }
 
+    /// <summary>
+    /// vmangos Creature::AIM_Initialize after a charm or possession ended (SpellAuras.cpp:3097-3101, 3412-3418): the motion master starts
+    /// over from the default generator and the template's AI is built again. False when the creature is not this system's.
+    /// </summary>
+    internal bool ReinitializeAi(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (!_creatures.ContainsKey(creature.Guid))
+        {
+            return false;
+        }
+
+        ResetAiState(creature);
+        creature.Motion.Initialize(creature.Motion.Default, this, start: creature.IsAlive);
+        CreateAi(creature);
+        return true;
+    }
+
     private void CreateAi(Creature creature)
     {
         CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown, _options.ImplicitEventAi);

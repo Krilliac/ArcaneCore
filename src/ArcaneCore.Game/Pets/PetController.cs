@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
@@ -37,10 +38,14 @@ public sealed class PetController
 
     // --- lookups ----------------------------------------------------------------------------------
 
-    /// <summary>The unit <paramref name="guid"/> in the player's map when it is a pet-like creature the player owns, else null.</summary>
+    /// <summary>
+    /// The unit <paramref name="guid"/> in the player's map when it is a pet-like creature the player owns or controls (a pet, or a
+    /// creature it charms or possesses: vmangos <c>GetCharmerOrOwnerGuid() == player</c> and a charm info), else null.
+    /// </summary>
     private static (Creature Pet, CharmInfo Charm)? OwnedPet(Player player, ObjectGuid guid)
     {
-        if (guid.IsEmpty || player.Map?.FindObject(guid) is not Creature { Summon.Charm: { } charm } pet || pet.CharmerOrOwnerGuid != player.Guid)
+        if (guid.IsEmpty || player.Map?.FindObject(guid) is not Creature pet || pet.CharmerOrOwnerGuid != player.Guid
+            || pet.GetCharmInfo() is not { } charm)
         {
             return null;
         }
@@ -48,9 +53,12 @@ public sealed class PetController
         return (pet, charm);
     }
 
-    /// <summary>The player's current pet (UNIT_FIELD_SUMMON): what the spell-bearing requests require (vmangos <c>packet.guid != GetPlayer()->GetPetGuid()</c>).</summary>
+    /// <summary>
+    /// The player's current pet (UNIT_FIELD_SUMMON) or the creature it charms (UNIT_FIELD_CHARM): what the spell-bearing requests require
+    /// (vmangos <c>pet != GetPlayer()->GetPet() &amp;&amp; pet != GetPlayer()->GetCharm()</c>, PetHandler.cpp).
+    /// </summary>
     private static (Creature Pet, CharmInfo Charm)? CurrentPet(Player player, ObjectGuid guid)
-        => !guid.IsEmpty && guid == player.PetGuid ? OwnedPet(player, guid) : null;
+        => !guid.IsEmpty && (guid == player.PetGuid || guid == player.CharmGuid) ? OwnedPet(player, guid) : null;
 
     // --- SMSG_PET_SPELLS --------------------------------------------------------------------------
 
@@ -79,6 +87,13 @@ public sealed class PetController
     /// <summary>vmangos WorldSession::HandlePetAction (PetHandler.cpp:35-165).</summary>
     public void HandleAction(Player player, PetActionRequest request)
     {
+        // used also for a charmed player: its controller can only command it (melee) and set its reaction
+        if (!request.Pet.IsEmpty && player.Map?.FindObject(request.Pet) is Player charmedPlayer)
+        {
+            HandleCharmedPlayerAction(player, charmedPlayer, request);
+            return;
+        }
+
         if (OwnedPet(player, request.Pet) is not var (pet, charm) || !pet.IsAlive)
         {
             return;
@@ -123,21 +138,110 @@ public sealed class PetController
         }
     }
 
+    /// <summary>
+    /// vmangos HandlePetAction for a charmed player (PetHandler.cpp:57-62 "controller player can only do melee attack"): commands and
+    /// reactions only; Unit::HandlePetCommand's charmed-player branches (Unit.cpp:8740-8769): attack swings at the target, dismiss releases it.
+    /// The charmed player is not moved towards its target (vmangos MoveChase; players have no server movement generator here).
+    /// </summary>
+    private void HandleCharmedPlayerAction(Player controller, Player charmed, PetActionRequest request)
+    {
+        if (charmed.CharmerOrOwnerGuid != controller.Guid || !charmed.IsAlive || charmed.GetCharmInfo() is not { } charm)
+        {
+            return;
+        }
+
+        switch ((ActionType)request.Type)
+        {
+            case ActionType.Command:
+                switch ((CommandState)request.Action)
+                {
+                    case CommandState.Stay:
+                        charm.CommandState = CommandState.Stay;
+                        charm.IsCommandAttack = false;
+                        charm.IsCommandFollow = false;
+                        charm.IsFollowing = false;
+                        charm.IsReturning = false;
+                        charm.StayPosition = (charmed.X, charmed.Y, charmed.Z);
+                        break;
+                    case CommandState.Follow:
+                        charm.CommandState = CommandState.Follow;
+                        charm.IsCommandAttack = false;
+                        charm.IsAtStay = false;
+                        charm.IsReturning = true;
+                        charm.IsCommandFollow = true;
+                        charm.IsFollowing = false;
+                        break;
+                    case CommandState.Attack:
+                        Unit? target = request.Target.IsEmpty ? null : controller.Map?.FindObject(request.Target) as Unit;
+                        if (target is null)
+                        {
+                            SendFeedback(controller, PetFeedback.NothingToAttack);
+                            return;
+                        }
+
+                        if (controller.Map is not { } map || !map.Combat.Hooks.CanAttack(controller, target)
+                            || _spells()?.HasLiveAura(controller, AuraType.ModPacify) == true)
+                        {
+                            SendFeedback(controller, PetFeedback.CantAttackTarget);
+                            return;
+                        }
+
+                        if (charmed.Combat.Victim is { } victim && !ReferenceEquals(victim, target))
+                        {
+                            map.Combat.AttackStop(charmed);
+                        }
+
+                        charm.IsCommandAttack = true;
+                        charm.IsAtStay = false;
+                        charm.IsFollowing = false;
+                        charm.IsCommandFollow = false;
+                        charm.IsReturning = false;
+                        map.Combat.Attack(charmed, target, melee: true);
+                        controller.Session.Send(WorldOpcode.SmsgAiReaction, PetPackets.BuildAiReaction(charmed.Guid));
+                        break;
+                    case CommandState.Dismiss:
+                        _summons.Charms.Uncharm(controller);
+                        break;
+                }
+
+                break;
+
+            case ActionType.Reaction:
+                if (request.Action == (uint)ReactState.Passive)
+                {
+                    _spells()?.InterruptNonMeleeSpells(charmed);
+                    charmed.Map?.Combat.AttackStop(charmed);
+                }
+
+                if (request.Action <= (uint)ReactState.Aggressive)
+                {
+                    charm.ReactState = (ReactState)request.Action;
+                }
+
+                break;
+        }
+    }
+
     /// <summary>vmangos Unit::HandlePetCommand (Unit.cpp:8646-8764).</summary>
     public void HandleCommand(Creature pet, CommandState command, Unit? target)
     {
-        if (pet.Summon?.Charm is not { } charm || pet.GetOwner() is not { } owner)
+        if (pet.GetCharmInfo() is not { } charm || pet.GetCharmerOrOwner() is not { } owner)
         {
             return;
         }
 
         CreatureMapSystem? system = pet.System;
+        bool possessed = (pet.UnitFlags & UnitFlags.Possessed) != 0;
         switch (command)
         {
             case CommandState.Stay:
-                system?.StopMoving(pet);
-                pet.Motion.Clear();
-                charm.IsAtStay = true;
+                if (!possessed)
+                {
+                    system?.StopMoving(pet);
+                    pet.Motion.Clear();
+                    charm.IsAtStay = true;
+                }
+
                 charm.CommandState = CommandState.Stay;
                 charm.IsCommandAttack = false;
                 charm.IsCommandFollow = false;
@@ -147,9 +251,13 @@ public sealed class PetController
                 break;
 
             case CommandState.Follow:
-                pet.Map?.Combat.AttackStop(pet);
-                InterruptNonMeleeSpells(pet);
-                pet.Motion.MoveFollow(owner, PetConstants.FollowDistance, PetConstants.FollowAngle);
+                if (!possessed)
+                {
+                    pet.Map?.Combat.AttackStop(pet);
+                    InterruptNonMeleeSpells(pet);
+                    pet.Motion.MoveFollow(owner, PetConstants.FollowDistance, PetConstants.FollowAngle);
+                }
+
                 charm.CommandState = CommandState.Follow;
                 charm.IsCommandAttack = false;
                 charm.IsAtStay = false;
@@ -165,8 +273,17 @@ public sealed class PetController
             case CommandState.Dismiss:
                 // vmangos: dismissing a summoned pet is like killing it; a mini pet or guardian just goes. "Hunter pets are
                 // dismissed with a spell with a cast time" (Dismiss Pet, SPELL_EFFECT_DISMISS_PET), so the command leaves them.
-                // A charmed unit would be released (pCharmer->Uncharm()); charm is not modelled in this build.
-                if (pet.Summon?.Kind == SummonKind.Pet && owner is Player { Class: Class.Hunter })
+                // A charmed creature that is not a vmangos Pet (Pet, Guardian or MiniPet here) is released by its charmer (pCharmer->Uncharm(),
+                // Unit.cpp:8758-8769; review finding 32).
+                if (pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian or SummonKind.MiniPet } links)
+                {
+                    _summons.Charms.Uncharm(owner);
+                    break;
+                }
+
+                // GetPetType() == HUNTER_PET is the pet's own kind: its owner's class, not that of whoever controls it now (a priest's
+                // Mind Control on a hunter's pet).
+                if (links.Kind == SummonKind.Pet && pet.GetOwner() is Player { Class: Class.Hunter })
                 {
                     break;
                 }
@@ -191,8 +308,8 @@ public sealed class PetController
             return;
         }
 
-        // This is true if pet has no target or has target but targets differs.
-        if (pet.Combat.Victim == target && charm.IsCommandAttack)
+        // This is true if pet has no target or has target but targets differs (a possessed creature always re-attacks).
+        if (pet.Combat.Victim == target && charm.IsCommandAttack && (pet.UnitFlags & UnitFlags.Possessed) == 0)
         {
             return;
         }
@@ -498,9 +615,19 @@ public sealed class PetController
             return;
         }
 
-        if (player.Map?.FindObject(petGuid) is not Creature { Summon.Charm: not null } pet
-            || pet.OwnerGuid != player.Guid)
+        if (player.Map?.FindObject(petGuid) is not Creature pet || pet.OwnerGuid != player.Guid || pet.GetCharmInfo() is null)
         {
+            return;
+        }
+
+        // vmangos HandlePetAbandon (PetHandler.cpp:368-372): a unit that is not a Pet but is the player's charm is released.
+        if (pet.Summon?.Charm is null)
+        {
+            if (petGuid == player.CharmGuid)
+            {
+                _summons.Charms.Uncharm(player);
+            }
+
             return;
         }
 

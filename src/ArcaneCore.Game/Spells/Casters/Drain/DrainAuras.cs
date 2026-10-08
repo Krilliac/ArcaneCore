@@ -32,7 +32,7 @@ public static class DrainAuras
     /// target's health; the caster heals the damage dealt times EffectMultipleValue (1 when unset). Nothing happens
     /// while either side is dead; a target that dies ends the caster's channel of this spell.
     /// </summary>
-    private static void TickLeech(SpellSystem spells, SpellAuraHolder holder, SpellAura aura)
+    internal static void TickLeech(SpellSystem spells, SpellAuraHolder holder, SpellAura aura)
     {
         Unit target = holder.Target;
         if (!target.IsInWorld || !target.IsAlive || spells.AuraCaster(holder) is not { IsAlive: true } caster)
