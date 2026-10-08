@@ -369,7 +369,9 @@ public sealed class AuctionRecoveryTests
     public async Task Escrow_mismatch_backs_off_on_the_feature_clock()
     {
         var clock = new ManualQuestClock();
-        await using var fixture = await Fixture.CreateAsync(true, false, clock: clock);
+        // Exactly one failed read: the recovery timer retries a failed read on wall-clock ticks and, after three failures, backs off on the
+        // feature clock, which this test freezes. Without the hold, a slow escrow removal below let a fourth failure park the retry forever.
+        await using var fixture = await Fixture.CreateAsync(true, false, clock: clock, holdRetryAfterFirstFailure: true);
         AuctionRecord committed = fixture.Primary with { BidderId = 99, Bid = 80 };
         var unknown = NewCompletion<EconomyOutcome>();
         await fixture.OnWorld(() =>
@@ -387,6 +389,7 @@ public sealed class AuctionRecoveryTests
         }
 
         fixture.Control.RecoveryAvailable = true;
+        fixture.Control.RetryRelease.TrySetResult();
         Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 1, pollOnWorld: false));
         // The clock is frozen: a mismatch must not be re-read on every one-second timer tick.
         await Task.Delay(TimeSpan.FromSeconds(3.5));
@@ -568,7 +571,8 @@ public sealed class AuctionRecoveryTests
         }
 
         public static async Task<Fixture> CreateAsync(bool existing, bool failEscrow, bool loseAcknowledgement = true,
-            TimeProvider? clock = null, bool omitPrimaryEscrow = false, Func<CharacterDbContext, Task>? seed = null)
+            TimeProvider? clock = null, bool omitPrimaryEscrow = false, Func<CharacterDbContext, Task>? seed = null,
+            bool holdRetryAfterFirstFailure = false)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-auction-recovery-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -605,7 +609,10 @@ public sealed class AuctionRecoveryTests
                 }
             }
 
-            var control = new Control { FailEscrow = failEscrow, LoseAcknowledgement = loseAcknowledgement };
+            var control = new Control
+            {
+                FailEscrow = failEscrow, LoseAcknowledgement = loseAcknowledgement, HoldRetryAfterFirstFailure = holdRetryAfterFirstFailure,
+            };
             var services = new ServiceCollection();
             services.AddScoped(_ => new CharacterDbContext(options));
             services.AddScoped<IEconomyStore>(provider => new ControlledStore(
@@ -619,6 +626,7 @@ public sealed class AuctionRecoveryTests
         {
             Control.OtherRelease.TrySetResult();
             Control.SnapshotRelease.TrySetResult();
+            Control.RetryRelease.TrySetResult();
             await Feature.DisposeAsync();
             World.Dispose();
             await _saves.StopAsync();
@@ -631,6 +639,14 @@ public sealed class AuctionRecoveryTests
     {
         public bool FailEscrow { get; init; }
         public bool LoseAcknowledgement { get; init; }
+
+        /// <summary>
+        /// Fail only the first recovery read while storage is unavailable; the retry after it waits for <see cref="RetryRelease"/> (the test
+        /// sets <see cref="RecoveryAvailable"/> first) instead of failing again on every wall-clock timer tick.
+        /// </summary>
+        public bool HoldRetryAfterFirstFailure { get; init; }
+
+        public int UnavailableReads;
         public volatile bool RecoveryAvailable;
         public volatile bool LostAcknowledgement;
         public volatile bool HoldRecoverySnapshot;
@@ -655,6 +671,7 @@ public sealed class AuctionRecoveryTests
         public TaskCompletionSource OtherRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SnapshotCaptured { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SnapshotRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RetryRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class ControlledStore(IEconomyStore inner, Control control) : IEconomyStore
@@ -693,6 +710,14 @@ public sealed class AuctionRecoveryTests
         /// <summary>Every recovery, startup and deletion read goes through here; the hooks live on this one method.</summary>
         public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
         {
+            if (control.LostAcknowledgement && !control.RecoveryAvailable && control.HoldRetryAfterFirstFailure
+                && Interlocked.Increment(ref control.UnavailableReads) > 1)
+            {
+                // The held retry ignores the read budget: it must neither fail nor be retried while the test prepares storage.
+                await control.RetryRelease.Task.ConfigureAwait(false);
+                cancellationToken = CancellationToken.None;
+            }
+
             if (control.LostAcknowledgement && !control.RecoveryAvailable)
             {
                 control.RecoveryFailed.TrySetResult();

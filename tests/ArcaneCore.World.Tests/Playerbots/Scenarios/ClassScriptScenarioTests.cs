@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Game.Spells.Paladin;
@@ -21,11 +22,20 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// </summary>
 public sealed class ClassScriptScenarioTests
 {
+    // Judgement of Righteousness can crit (vmangos rolls it like any direct damage spell: +50%), so the damage assertion would flake on the
+    // stock 5% roll. The crit roll is pinned per test (the rest of the combat rules stay stock) and each outcome is asserted exactly.
     [Fact]
     public async Task SealOfRighteousness_AndJudgement_HitTheDuelOpponent()
     {
-        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
-        await world.RunPassingAsync(new SealAndJudgementDuelScenario());
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(FixedSpellCritRules.Register(crit: false));
+        await world.RunPassingAsync(new SealAndJudgementDuelScenario(judgementCrits: false));
+    }
+
+    [Fact]
+    public async Task SealOfRighteousness_AndJudgement_CriticalJudgementDealsTheCritAmount()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(FixedSpellCritRules.Register(crit: true));
+        await world.RunPassingAsync(new SealAndJudgementDuelScenario(judgementCrits: true));
     }
 
     [Fact]
@@ -195,11 +205,25 @@ internal sealed class SwiftmendScenario : IPlayerbotScenario
         bool critical = reader.ReadByte() != 0;
         return spell == spellId ? (amount, critical) : (0, false);
     }
+
+}
+/// <summary>
+/// The stock vanilla combat rules with the spell crit roll pinned (vmangos Unit::IsSpellCrit): a scenario that asserts an exact direct damage
+/// amount cannot leave it to the 5% base roll.
+/// </summary>
+internal sealed class FixedSpellCritRules(bool crit) : VanillaSpellCombatRules
+{
+    public static Action<IServiceCollection> Register(bool crit) => services => services.AddSingleton<ISpellCombatRules>(new FixedSpellCritRules(crit));
+
+    public override bool RollCrit(SpellSystem system, Unit caster, Unit target, SpellInfo spell) => crit;
 }
 
 /// <summary>A seals, strikes B in a duel until the seal procs, then judges B.</summary>
-internal sealed class SealAndJudgementDuelScenario : IPlayerbotScenario
+internal sealed class SealAndJudgementDuelScenario(bool judgementCrits = false) : IPlayerbotScenario
 {
+    /// <summary>vmangos SpellCriticalDamageBonus for a magic-class spell: +50%, 15 * 1.5 = 22 (truncated).</summary>
+    private const uint JudgementCritDamage = ClassScriptScenarioContent.JudgementDamage * 3 / 2;
+
     public string Name => "class-seal-judgement";
 
     public string Description => "Seal of Righteousness procs on white swings and Judgement turns it into Judgement of Righteousness";
@@ -231,44 +255,23 @@ internal sealed class SealAndJudgementDuelScenario : IPlayerbotScenario
             return Task.CompletedTask;
         });
 
-        (SpellDamageView Damage, bool Critical) judgement = await context.StepAsync("A judges B", async () =>
+        SpellDamageView judgement = await context.StepAsync("A judges B", async () =>
         {
             await context.SetHealthAsync(b, await b.ReadAsync(p => p.MaxHealth));
             long mark = b.Mark();
             ScenarioContext.Expect(await a.CastAsync(PaladinSpells.Judgement, b.Guid), "Judgement refused");
-            return await b.WaitForPacketAsync(WorldOpcode.SmsgSpellnonmeleedamagelog, payload => (ScenarioClassDecoders.SpellDamage(payload), IsCritical(payload)),
-                d => d.Item1.SpellId == ClassScriptScenarioContent.JudgementOfRighteousness, mark);
+            return await b.WaitForPacketAsync(WorldOpcode.SmsgSpellnonmeleedamagelog, ScenarioClassDecoders.SpellDamage,
+                d => d.SpellId == ClassScriptScenarioContent.JudgementOfRighteousness, mark);
         });
         await context.StepAsync("Judgement of Righteousness hit B and the seal is gone", async () =>
         {
-            // A Holy spell can crit: half again its damage (the build 5875 magic crit bonus), flagged in the log's hit info.
-            uint expected = (uint)ClassScriptScenarioContent.JudgementDamage;
-            expected = judgement.Critical ? expected + (expected / 2) : expected;
-            ScenarioContext.ExpectEqual(expected, judgement.Damage.Damage + judgement.Damage.Absorbed + judgement.Damage.Resisted, "judgement damage");
+            ScenarioContext.ExpectEqual(judgementCrits, judgement.Critical, "judgement crit flag (SMSG_SPELLNONMELEEDAMAGELOG hit info)");
+            ScenarioContext.ExpectEqual(judgementCrits ? JudgementCritDamage : (uint)ClassScriptScenarioContent.JudgementDamage,
+                judgement.Damage + judgement.Absorbed + judgement.Resisted, "judgement damage");
             await context.WaitUntilAsync("A no longer holds the seal",
                 () => !spells.HasAura(a.RequirePlayer(), ClassScriptScenarioContent.SealOfRighteousness), TimeSpan.FromSeconds(5));
             await context.ExpectAsync(a, "A lost the Judgement aura state", p => (p.GetUInt32(Game.UpdateFields.UnitFieldAurastate) & PaladinAuraRules.JudgementStateBit) == 0);
         });
-    }
-
-    /// <summary>
-    /// SMSG_SPELLNONMELEEDAMAGELOG's hit info (after packed target, packed caster, u32 spell, u32 damage, u8 school, u32 absorbed, u32 resisted,
-    /// u8 periodic, u8 unused, u32 blocked) has SPELL_HIT_TYPE_CRIT (2) for a critical hit.
-    /// </summary>
-    private static bool IsCritical(byte[] payload)
-    {
-        var reader = new PacketReader(payload);
-        _ = reader.ReadPackedGuid();
-        _ = reader.ReadPackedGuid();
-        _ = reader.ReadUInt32();
-        _ = reader.ReadUInt32();
-        _ = reader.ReadByte();
-        _ = reader.ReadUInt32();
-        _ = reader.ReadUInt32();
-        _ = reader.ReadByte();
-        _ = reader.ReadByte();
-        _ = reader.ReadUInt32();
-        return (reader.ReadUInt32() & 2) != 0;
     }
 }
 

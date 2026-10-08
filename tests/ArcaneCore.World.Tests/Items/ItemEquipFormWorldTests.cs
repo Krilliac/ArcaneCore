@@ -29,14 +29,17 @@ public sealed class ItemEquipFormWorldTests
         SpellContent baseContent = SpellTestServices.Content();
         SpellTemplateRow stance(uint id, string name, int form) => new()
         {
-            Id = id, SpellName = name, RangeIndex = 1, Effect1 = 6, EffectBasePoints1 = 0,
+            // DurationIndex 21 (-1, permanent) as the real stances and Equip: spells. Without a SpellDuration row these auras lasted 0 ms and
+            // expired on the next aura update: the waits raced a one-tick state, and "defensive removes item aura" passed only because the
+            // Battle Stance aura had already expired (it hid ItemEquipSpells.FitsForm keeping the item aura in Defensive Stance).
+            Id = id, SpellName = name, RangeIndex = 1, DurationIndex = 21, Effect1 = 6, EffectBasePoints1 = 0,
             EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 1,
             EffectApplyAuraName1 = (uint)AuraType.ModShapeshift, EffectMiscValue1 = form,
             StartRecoveryCategory = 0, StartRecoveryTime = 0,
         };
         SpellTemplateRow equip = new()
         {
-            Id = EquipAura, SpellName = "Equip Aura", RangeIndex = 1, Effect1 = 6, EffectBasePoints1 = 0,
+            Id = EquipAura, SpellName = "Equip Aura", RangeIndex = 1, DurationIndex = 21, Effect1 = 6, EffectBasePoints1 = 0,
             EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 1,
             EffectApplyAuraName1 = (uint)AuraType.Dummy, Stances = 1u << ((int)ShapeshiftForm.BattleStance - 1),
             StartRecoveryCategory = 0, StartRecoveryTime = 0,
