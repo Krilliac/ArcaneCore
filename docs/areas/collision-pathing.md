@@ -72,6 +72,9 @@ collision heights, async tile loading, the data-directory inspector. Transports 
 
 ## Verification status
 
-Synthetic tiles only (`tests/ArcaneCore.Game.Tests/Collision`). Green CI proves nothing about real extracted
-data: the first run against a real vmangos extraction must confirm the `.mmap` / `.mmtile` / `.vmtile`
-reading before anything else here is trusted.
+CI runs synthetic tiles only (`tests/ArcaneCore.Game.Tests/Collision`). The readers were checked against a real
+vmangos extraction of the 1.12.1 client on 2026-10-07 (`RealTerrainDataTests`, run with
+`ARCANECORE_TEST_TERRAIN_DIR` set; recipe and results in
+[../integration/maps-vmaps-mmaps.md](../integration/maps-vmaps-mmaps.md)): all `.map`, vmap and continent
+`.mmtile` files parse, start-position heights match the world database, and 4898 vmap queries agree with
+vmangos' native `VMapManager2`. Those tests skip in CI, so rerun them after any reader change.

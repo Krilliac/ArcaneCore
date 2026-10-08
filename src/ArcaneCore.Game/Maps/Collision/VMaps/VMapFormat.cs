@@ -43,15 +43,36 @@ public static class VMapFormat
     /// </summary>
     public static string TileFileName(uint mapId, int tileX, int tileY) => $"{mapId:D3}_{tileY:D2}_{tileX:D2}.vmtile";
 
-    /// <summary>A model file: the spawn's name plus <c>.vmo</c>.</summary>
-    public static string ModelFileName(string name) => name + ".vmo";
+    /// <summary>
+    /// A model file: the spawn's name plus <c>.vmo</c>, built the way vmangos builds it, as a C
+    /// string (<c>VMapManager2::acquireModelInstance</c>: <c>basepath + filename + ".vmo"</c>). Some
+    /// names are stored with their terminating NUL counted (VMapExtractor doodads, e.g.
+    /// <c>"Elfbed01.m2\0"</c>); the path then ends at the NUL, so the file is <c>Elfbed01.m2</c>
+    /// with no <c>.vmo</c>, which is also the name VMapAssembler wrote it under.
+    /// </summary>
+    public static string ModelFileName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        int nul = name.IndexOf('\0', StringComparison.Ordinal);
+        return nul >= 0 ? name[..nul] : name + ".vmo";
+    }
 
     /// <summary>
-    /// Whether a spawn's model name is a plain file name (no directory parts). Names come from the
+    /// Whether a spawn's model name is a plain file name (no directory parts), judged on the part a
+    /// C string uses (up to the first NUL, see <see cref="ModelFileName"/>). Names come from the
     /// data files, so anything that could walk out of the vmap directory is refused.
     /// </summary>
     public static bool IsSafeModelName(string name)
-        => !string.IsNullOrEmpty(name) && name.IndexOfAny(['/', '\\', ':', '\0']) < 0 && name != "." && name != ".." && !name.StartsWith("..", StringComparison.Ordinal);
+    {
+        if (name is null)
+        {
+            return false;
+        }
+
+        int nul = name.IndexOf('\0', StringComparison.Ordinal);
+        string file = nul >= 0 ? name[..nul] : name;
+        return file.Length > 0 && file.IndexOfAny(['/', '\\', ':']) < 0 && file != "." && file != ".." && !file.StartsWith("..", StringComparison.Ordinal);
+    }
 }
 
 /// <summary>A model placement record (vmangos <c>ModelSpawn</c>); positions and bounds are vmap internal coordinates.</summary>

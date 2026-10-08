@@ -149,6 +149,31 @@ public sealed class BihTreeTests
     }
 
     [Fact]
+    public void EmptyLeftChild_AsVmangosWritesIt_StillReachesTheRightChild()
+    {
+        // vmangos BIH::subdivide (BIH.cpp, "else nextIndex -= 3"): when nothing goes left the node
+        // allocates only its right child and stores offset = nextIndex - 3 with clipL = -inf, so for
+        // the most recently allocated node the (never visited) left offset equals the node itself.
+        // Real vmtrees contain such nodes (Eastern Kingdoms: the Deathknell crypt sits under one).
+        uint[] nodes =
+        [
+            (0u << 30) | 0u, BitConverter.SingleToUInt32Bits(float.NegativeInfinity), BitConverter.SingleToUInt32Bits(10),
+            (3u << 30) | 0u, 1, 0,
+        ];
+        BihTree tree = BihTree.FromRaw(new Vector3(0, 0, 0), new Vector3(30, 10, 10), nodes, [0]);
+
+        Assert.True(Hits(tree, new Vector3(15, 5, -5), Vector3.UnitZ));
+        Assert.True(Hits(tree, new Vector3(-5, 5, 5), Vector3.UnitX));
+        Assert.True(Hits(tree, new Vector3(35, 5, 5), -Vector3.UnitX));
+        Assert.False(Hits(tree, new Vector3(5, 5, -5), Vector3.UnitZ));
+
+        var visited = new List<int>();
+        tree.IntersectPoint(new Vector3(15, 5, 5), visited.Add);
+        tree.IntersectPoint(new Vector3(5, 5, 5), visited.Add);
+        Assert.Equal([0], visited);
+    }
+
+    [Fact]
     public void CorruptTree_YieldsNoHits_AndDoesNotThrowOrLoop()
     {
         // A child offset pointing at itself, one past the end, and a leaf overrunning the objects.

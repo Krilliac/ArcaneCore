@@ -16,7 +16,13 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// <para>
 /// The traversal here is ArcaneCore's own (an interval-clipping descent with an explicit stack),
 /// written from that description; it is bounds-checked so a corrupt tree yields no hits instead
-/// of throwing or looping (children must lie after their parent).
+/// of throwing or looping: a child is only entered when it lies after its parent.
+/// </para>
+/// <para>
+/// A node whose left side is empty stores <c>offset = right child - 3</c> with a left clip of -inf
+/// (vmangos <c>BIH::subdivide</c>, "nextIndex -= 3"); for the most recently allocated node that
+/// offset is the node itself. The clip keeps the left side from ever being entered, so the
+/// "after the parent" rule is applied to the child actually visited, not to the offset word.
 /// </para>
 /// </summary>
 public sealed class BihTree
@@ -216,11 +222,6 @@ public sealed class BihTree
                     break;
                 }
 
-                if (offset <= node)
-                {
-                    break; // children always follow their parent; anything else is corrupt
-                }
-
                 float clipLow = BitConverter.UInt32BitsToSingle(_tree[node + 1]);
                 float clipHigh = BitConverter.UInt32BitsToSingle(_tree[node + 2]);
                 float o = Axis(origin, axis);
@@ -228,7 +229,7 @@ public sealed class BihTree
 
                 if ((word & Bvh2Bit) != 0)
                 {
-                    if (!ClipSlab(o, d, clipLow, clipHigh, ref min, ref max))
+                    if (offset <= node || !ClipSlab(o, d, clipLow, clipHigh, ref min, ref max))
                     {
                         break;
                     }
@@ -237,12 +238,13 @@ public sealed class BihTree
                     continue;
                 }
 
-                int leftChild = offset;
-                int rightChild = offset + 3;
+                // Children always follow their parent; an entered child that does not is corrupt.
+                int leftChild = offset > node ? offset : -1;
+                int rightChild = offset + 3 > node ? offset + 3 : -1;
                 if (MathF.Abs(d) < 1e-12f)
                 {
-                    bool visitLeft = o <= clipLow;
-                    bool visitRight = o >= clipHigh;
+                    bool visitLeft = leftChild >= 0 && o <= clipLow;
+                    bool visitRight = rightChild >= 0 && o >= clipHigh;
                     if (visitLeft && visitRight && depth < MaxStack)
                     {
                         stack[depth++] = (rightChild, min, max);
@@ -269,12 +271,12 @@ public sealed class BihTree
                     ? (leftChild, MathF.Min(max, tLeft), rightChild, MathF.Max(min, tRight))
                     : (rightChild, MathF.Min(max, tRight), leftChild, MathF.Max(min, tLeft));
 
-                if (farMin <= max && depth < MaxStack)
+                if (far >= 0 && farMin <= max && depth < MaxStack)
                 {
                     stack[depth++] = (far, farMin, max);
                 }
 
-                if (min <= nearMax)
+                if (near >= 0 && min <= nearMax)
                 {
                     node = near;
                     max = nearMax;
@@ -325,17 +327,12 @@ public sealed class BihTree
                     break;
                 }
 
-                if (offset <= node)
-                {
-                    break;
-                }
-
                 float clipLow = BitConverter.UInt32BitsToSingle(_tree[node + 1]);
                 float clipHigh = BitConverter.UInt32BitsToSingle(_tree[node + 2]);
                 float p = Axis(point, axis);
                 if ((word & Bvh2Bit) != 0)
                 {
-                    if (p < clipLow || p > clipHigh)
+                    if (offset <= node || p < clipLow || p > clipHigh)
                     {
                         break;
                     }
@@ -344,8 +341,9 @@ public sealed class BihTree
                     continue;
                 }
 
-                bool visitLeft = p <= clipLow;
-                bool visitRight = p >= clipHigh;
+                // As in IntersectRay: only a child after its parent is entered.
+                bool visitLeft = offset > node && p <= clipLow;
+                bool visitRight = offset + 3 > node && p >= clipHigh;
                 if (visitLeft && visitRight && depth < MaxStack)
                 {
                     stack[depth++] = offset + 3;
