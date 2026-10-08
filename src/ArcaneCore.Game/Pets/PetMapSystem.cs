@@ -85,7 +85,7 @@ public sealed class PetMapSystem : IMapUpdater
 
         foreach (Creature pet in _summons.ToArray())
         {
-            if (pet.AI is not PetAI ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+            if (PetAI.Of(pet.AI) is not { } ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
             {
                 continue;
             }

@@ -9,14 +9,18 @@ namespace ArcaneCore.Game.Instances.Scripts.ScarletMonastery;
 /// <summary>ScriptDev2 boss_scarlet_commander_mograineAI (mangos-classic
 /// scarlet_monastery/boss_mograine_and_whitemane.cpp: Reset, Aggro, JustPreventedDeath,
 /// SpellHit, HandleLayOnHandsTimer, HandleRevivedTimer, ExecuteAction).</summary>
-public sealed class MograineAi(Creature creature, ScarletMonasteryInstance instance) : CreatureAI(creature)
+public sealed class MograineAi(Creature creature, ScarletMonasteryInstance instance) : ScriptedAI(creature)
 {
     private uint _strikeMs = 8400, _hammerMs = 9600, _reviveMs, _resumeMs;
     private bool _fakeDeath, _healed, _shielded;
 
     public bool IsFeigningDeath => _fakeDeath;
 
-    public override void OnRespawn()
+    /// <summary>Whether Lay on Hands has run (m_bHeal): death prevention is off and the next killing blow is real.</summary>
+    public bool IsRevived => _healed;
+
+    /// <summary>Reset: on respawn, and on an evade before the event started (EnterEvadeMode at NOT_STARTED runs CombatAI's, which resets).</summary>
+    protected override void Reset()
     {
         _fakeDeath = _healed = _shielded = false;
         _strikeMs = 8400;
@@ -43,10 +47,21 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
         if (!_fakeDeath) base.OnAttackedBy(attacker);
     }
 
-    /// <summary>CombatAI death prevention, called by the instance from DamageTaken before the combat clamp.</summary>
+    /// <summary>
+    /// CombatAI death prevention (JustPreventedDeath), called by the instance from DamageTaken before the combat clamp. Only while the
+    /// prevention is on: HandleLayOnHandsTimer turns it off (SetDeathPrevention(false)), so after the revival a killing blow kills.
+    /// Deviation: with no living Whitemane to raise him (boss_mograine_and_whitemane.cpp only asks that she is in storage) the
+    /// prevention is dropped and the blow kills, instead of leaving him at 1 hp for good.
+    /// </summary>
     public void OnLethalDamage()
     {
-        if (_fakeDeath || instance.FindWhitemane() is not { IsAlive: true } whitemane) return;
+        if (_fakeDeath || _healed || Me.InvincibilityHpThreshold == 0) return;
+        if (instance.FindWhitemane() is not { IsAlive: true } whitemane)
+        {
+            Me.InvincibilityHpThreshold = 0;
+            return;
+        }
+
         instance.SetData(ScarletMonasteryInstance.TypeMograineAndWhitemane, EncounterState.InProgress);
         whitemane.Motion.MovePoint(1, 1163.113370f, 1398.856812f, 32.527786f, run: true);
         if (whitemane.AI is WhitemaneAi ai) ai.BeginIntro();
@@ -73,9 +88,12 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
         _reviveMs = 3000;
     }
 
+    /// <summary>EnterEvadeMode: before the event, CombatAI's evade (and its Reset); once it ran, the event fails (the instance despawns both).</summary>
     public override void OnEvade()
     {
-        if (instance.GetData(ScarletMonasteryInstance.TypeMograineAndWhitemane) is not (EncounterState.NotStarted or EncounterState.Fail))
+        uint state = instance.GetData(ScarletMonasteryInstance.TypeMograineAndWhitemane);
+        if (state == EncounterState.NotStarted) Reset();
+        else if (state != EncounterState.Fail)
             instance.SetData(ScarletMonasteryInstance.TypeMograineAndWhitemane, EncounterState.Fail);
     }
 
@@ -127,13 +145,16 @@ public sealed class MograineAi(Creature creature, ScarletMonasteryInstance insta
 /// <summary>ScriptDev2 boss_high_inquisitor_whitemaneAI (mangos-classic
 /// scarlet_monastery/boss_mograine_and_whitemane.cpp: EnterCombat, MovementInform,
 /// HandleResurrection, HandleResurrectionCombat, ExecuteAction).</summary>
-public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance instance) : CreatureAI(creature)
+public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance instance) : ScriptedAI(creature)
 {
     private uint _healMs, _shieldMs, _smiteMs, _mindMs, _resurrectMs, _resumeMs;
     private bool _deepSleep, _intro;
 
     public bool DeepSleepTriggered => _deepSleep;
-    public override void OnRespawn()
+    public bool IsInIntro => _intro;
+
+    /// <summary>JustRespawned (CombatAI's Reset plus SetDeathPrevention(true)); the constructor's passive react state and ranged mode.</summary>
+    protected override void Reset()
     {
         _deepSleep = _intro = false;
         _healMs = 10_000;
@@ -173,7 +194,9 @@ public sealed class WhitemaneAi(Creature creature, ScarletMonasteryInstance inst
     {
         CombatMovement = true;
         MeleeEnabled = true;
-        if (instance.GetData(ScarletMonasteryInstance.TypeMograineAndWhitemane) is not (EncounterState.NotStarted or EncounterState.Fail))
+        uint state = instance.GetData(ScarletMonasteryInstance.TypeMograineAndWhitemane);
+        if (state == EncounterState.NotStarted) Reset();
+        else if (state != EncounterState.Fail)
             instance.SetData(ScarletMonasteryInstance.TypeMograineAndWhitemane, EncounterState.Fail);
     }
 

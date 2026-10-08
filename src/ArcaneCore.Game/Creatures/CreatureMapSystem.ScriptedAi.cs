@@ -54,6 +54,9 @@ public sealed partial class CreatureMapSystem
             ? factory(creature)
             : null;
 
+    /// <summary>Whether this map gives creatures of <paramref name="entry"/> a script AI (<see cref="RegisterEntryAi"/>).</summary>
+    internal bool HasEntryAi(uint entry) => _entryAis.ContainsKey(entry);
+
     private void RebuildAi(uint entry)
     {
         foreach (Creature creature in _creatures.Values.Where(c => c.Template.Entry == entry).ToArray())

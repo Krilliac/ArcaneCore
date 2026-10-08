@@ -437,8 +437,9 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal(10384, report.Templates);
         Assert.Equal(38, report.AiSummons);
         // classic-db has no creature_ai_texts rows; these are the 84 ScriptDev2 script_texts rows of the ported dungeons (Gnomeregan,
-        // Scarlet Monastery, Razorfen Downs/Kraul, Uldaman, Zul'Farrak) plus EMOTE_GENERIC_ENRAGED -1000003 that CreatureDumpImporter keeps.
-        Assert.Equal(84, report.AiTexts);
+        // Scarlet Monastery, Razorfen Downs/Kraul, Uldaman, Zul'Farrak) plus EMOTE_GENERIC_ENRAGED -1000003 that CreatureDumpImporter keeps,
+        // and Blastmaster Emi Shortfuse's gossip option (gossip_texts -3090000).
+        Assert.Equal(85, report.AiTexts);
 
         // Almost every row carries 1024/1025 and 39 rows are keyed by spawn guid.
         IReadOnlyCollection<CreatureAiScriptRow> scripts = importer.AiSnapshot().Scripts;

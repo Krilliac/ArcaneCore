@@ -1,32 +1,43 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps.Collision;
 
 namespace ArcaneCore.Game.Instances.Scripts.ZulFarrak;
 
 /// <summary>ScriptDev2 boss_zumrahAI (mangos-classic zulfarrak/boss_zumrah.cpp:
 /// Reset, MoveInLineOfSight, Aggro, JustSummoned, SelectNearbyShallowGrave, UpdateAI).</summary>
-public sealed class ZumrahAi(Creature creature, ZulFarrakInstance instance) : CreatureAI(creature)
+public sealed class ZumrahAi(Creature creature, ZulFarrakInstance instance) : ScriptedAI(creature)
 {
     public const uint Entry = 7271, Zombie = 7286, DeadHero = 7276, SummonZombiesSpell = 10247;
     private uint _boltMs, _volleyMs, _wardMs, _healMs, _zombieMs;
     private bool _hostile;
 
-    public override void OnRespawn()
+    /// <summary>Reset (spawn and every evade): the timers and the 10 yd attack distance. Turning hostile is not undone here.</summary>
+    protected override void Reset()
     {
         _boltMs = 1000;
         _volleyMs = (uint)Random.Shared.Next(6000, 30001);
         _wardMs = (uint)Random.Shared.Next(7000, 20001);
         _healMs = (uint)Random.Shared.Next(10000, 15001);
         _zombieMs = 1000;
+        CasterChaseDistance = 10f;
+    }
+
+    /// <summary>
+    /// A respawn also brings back the template faction and the intro. Deviation: boss_zumrah.cpp clears m_bHasTurnedHostile only in the
+    /// constructor and its temporary faction carries no restore flag; here a respawned Zum'rah is the neutral one players first meet.
+    /// </summary>
+    public override void OnRespawn()
+    {
+        base.OnRespawn();
         _hostile = false;
         Me.FactionTemplate = Me.Template.Faction;
-        CasterChaseDistance = 10f;
     }
 
     public override void MoveInLineOfSight(Unit who)
     {
-        if (!_hostile && who is Player && who.IsAlive && DistanceSq(who, Me) <= 9 * 9)
+        if (!_hostile && who is Player && who.IsAlive && DistanceSq(who, Me) <= 9 * 9 && Me.IsWithinLineOfSight(who))
         {
             _hostile = true;
             Me.FactionTemplate = 14;

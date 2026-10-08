@@ -324,7 +324,7 @@ public sealed class PetController
         charm.IsFollowing = false;
         charm.IsCommandFollow = false;
         charm.IsReturning = false;
-        if (pet.AI is PetAI petAi)
+        if (PetAI.Of(pet.AI) is { } petAi)
         {
             petAi.AttackTarget(target);
         }

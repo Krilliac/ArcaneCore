@@ -31,12 +31,22 @@ internal sealed class DungeonScriptHarness : IDisposable
 
     public DungeonScriptHarness(Func<Map, InstanceData> script, uint[] templateEntries, uint[] spawnEntries,
         RelayScriptCatalog? relays, CreatureAiServices? aiServices, params (uint Entry, GameObjectType Type)[] gameObjects)
+        : this(script, templateEntries, spawnEntries, relays, aiServices, null, null, gameObjects)
+    {
+    }
+
+    /// <summary>The full form: <paramref name="entryWaypoints"/> are script_waypoint paths (escorts), <paramref name="texts"/> AI texts.</summary>
+    public DungeonScriptHarness(Func<Map, InstanceData> script, uint[] templateEntries, uint[] spawnEntries,
+        RelayScriptCatalog? relays, CreatureAiServices? aiServices,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints, IEnumerable<CreatureAiText>? texts,
+        params (uint Entry, GameObjectType Type)[] gameObjects)
     {
         _fixture.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, script);
         var creatureContent = new CreatureContent(
             [.. templateEntries.Distinct().Select(e => Template(e))],
             [.. spawnEntries.Select((e, i) => Spawn(9000u + (uint)i, e, -16.4f + i * 2, -383.07f, 61.78f, mapId: Dungeon))],
-            [], [], [], new CreatureAiContent([], []) { RelayScripts = relays ?? RelayScriptCatalog.Empty });
+            [], [], [], new CreatureAiContent([], texts ?? []) { RelayScripts = relays ?? RelayScriptCatalog.Empty },
+            entryWaypoints: entryWaypoints);
         var objectContent = new GameObjectContent(
             [.. gameObjects.Select(go => go.Type == GameObjectType.Chest
                 ? GameObjectTestKit.GoTemplate(go.Entry, go.Type, (3, 1u))
@@ -58,6 +68,15 @@ internal sealed class DungeonScriptHarness : IDisposable
     }
 
     public Player Player { get; }
+
+    /// <summary>Another player, entered into the same dungeon instance (it stands where the first one entered).</summary>
+    public Player AddPlayer(uint guid)
+    {
+        Player player = _fixture.AddPlayer(guid);
+        Assert.True(_fixture.EnterDungeon(player));
+        _fixture.Tick();
+        return player;
+    }
     public Map Map => Player.Map!;
     public InstanceData Data => InstanceManager.InstanceDataOf(Map)!;
     public CreatureMapSystem Creatures => Map.FindUpdater<CreatureMapSystem>()!;

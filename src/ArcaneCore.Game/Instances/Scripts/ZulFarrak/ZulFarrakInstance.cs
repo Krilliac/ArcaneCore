@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Game.Instances.Scripts.ZulFarrak;
 
@@ -14,7 +15,9 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
     public const uint TypeVelratha = 0, TypeGahzrilla = 1, TypeAntusul = 2, TypeTheka = 3, TypeZumrah = 4;
     public const uint TypeNekrum = 5, TypeSezzziz = 6, TypeChief = 7, TypePyramid = 8;
     public const uint Antusul = 8127, SergeantBly = 7604, ShallowGrave = 128403, EndDoor = 146084;
-    public const uint GahzrillaGong = 141832, EventRelayOffset = 1_000_000;
+    public const uint GahzrillaGong = 141832;
+    /// <summary>dbscripts_on_event ids of event_go_zulfarrak_gong and event_spell_unlocking (as relays: RelayScriptCatalog.EventRelayId).</summary>
+    public const uint GongEvent = 2488, PyramidEvent = 2609;
     public const uint AntusulTrigger = 1447;
     private static readonly Dictionary<uint, uint> BossTypes = new()
     {
@@ -109,7 +112,7 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
     public bool TriggerGahzrillaGong(Player player, GameObject gong)
     {
         if (gong.Entry != GahzrillaGong || !StartGahzrilla()) return false;
-        Instance.FindUpdater<CreatureMapSystem>()?.StartRelayScript(EventRelayOffset + 2488, player, gong);
+        Instance.FindUpdater<CreatureMapSystem>()?.StartRelayScript(RelayScriptCatalog.EventRelayId(GongEvent), player, gong);
         return true;
     }
 

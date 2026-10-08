@@ -160,6 +160,11 @@ public sealed class CreatureDumpImporter
                 case "script_texts" when IsDungeonScriptText(Int(Get(row, "entry"))):
                     ReadAiText(row);
                     break;
+                // ScriptDev2 ADD_GOSSIP_ITEM_ID reads gossip_texts (entry, content_default; the -3xxxxxx range never meets script_texts'
+                // -1xxxxxx). Only the ported scripts' option lines are carried: Blastmaster Emi Shortfuse's GOSSIP_ITEM_START.
+                case "gossip_texts" when IsDungeonGossipText(Int(Get(row, "entry"))):
+                    ReadAiText(row);
+                    break;
                 case "dbscript_random_templates":
                     if (U32(row, "type") == 0)
                     {
@@ -174,12 +179,20 @@ public sealed class CreatureDumpImporter
                     }
                     break;
                 case "dbscripts_on_relay":
+                    if (RelayScriptCatalog.IsEventRelayId(U32(row, "id")))
+                    {
+                        // The block is ArcaneCore's home for dbscripts_on_event scripts; a real relay there would silently replace one.
+                        Warn($"dbscripts_on_relay {U32(row, "id")} is in the id block reserved for dbscripts_on_event scripts "
+                            + $"(from {RelayScriptCatalog.EventRelayIdOffset}); skipped");
+                        break;
+                    }
+
                     ReadRelayStep(row);
                     break;
-                // ScriptDev2's two Zul'Farrak event relays use the same row layout as dbscripts_on_relay.
-                // A high id keeps them distinct from the source relay ids without a schema change.
+                // ScriptDev2's two Zul'Farrak event relays use the same row layout as dbscripts_on_relay. They are stored as relays in
+                // the block RelayScriptCatalog reserves for event scripts, so no schema change is needed and no real relay id is taken.
                 case "dbscripts_on_event" when U32(row, "id") is 2488 or 2609:
-                    ReadRelayStep(row, U32(row, "id") + 1_000_000);
+                    ReadRelayStep(row, RelayScriptCatalog.EventRelayId(U32(row, "id")));
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -896,6 +909,9 @@ public sealed class CreatureDumpImporter
             or (>= -1129012 and <= -1129005)
             or (>= -1189036 and <= -1189000)
             or (>= -1209003 and <= -1209000);
+
+    // gossip_texts of the ported dungeon scripts: gnomeregan.cpp GOSSIP_ITEM_START.
+    private static bool IsDungeonGossipText(int id) => id == -3090000;
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
     private void ReadBroadcastText(DumpRow row)

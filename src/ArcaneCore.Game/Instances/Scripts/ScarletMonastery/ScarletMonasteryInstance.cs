@@ -82,15 +82,33 @@ public sealed class ScarletMonasteryInstance(Map map) : ScriptedInstance(map, 2)
             if (data == EncounterState.InProgress) DoUseDoorOrButton(WhitemaneDoor);
             if (data == EncounterState.Fail)
             {
+                // The wipe: both are read alive before either is despawned (ForcedDespawn kills at once). The one-shot 30 s respawn is
+                // SetRespawnDelay(30, true); without it they would come back on their ClassicDB 43200 s delay.
                 Creature? whitemane = GetSingleCreatureFromStorage(Whitemane);
+                if (whitemane is null) return;
                 Creature? mograine = GetSingleCreatureFromStorage(Mograine);
-                if (whitemane is null || mograine is null) return;
-                if (whitemane.IsAlive) whitemane.System?.ForcedDespawn(whitemane, 0);
-                if (mograine.IsAlive) mograine.System?.ForcedDespawn(mograine, 0);
-                if (whitemane.IsAlive && mograine.IsAlive)
+                if (mograine is null) return;
+                bool whitemaneAlive = whitemane.IsAlive, mograineAlive = mograine.IsAlive;
+                Encounters[0] = EncounterState.Fail; // a despawn below may evade the other boss, whose EnterEvadeMode must not fail it again
+                if (whitemaneAlive && mograineAlive)
                 {
+                    DespawnForWipe(whitemane, WipeRespawnSeconds);
+                    DespawnForWipe(mograine, WipeRespawnSeconds);
                     DoUseDoorOrButton(WhitemaneDoor);
                     Encounters[0] = EncounterState.NotStarted;
+                    return;
+                }
+                if (!mograineAlive && whitemaneAlive)
+                {
+                    DespawnForWipe(whitemane, WipeRespawnSeconds);
+                    DoUseDoorOrButton(WhitemaneDoor);
+                    Encounters[0] = data;
+                    return;
+                }
+                if (!whitemaneAlive && mograineAlive)
+                {
+                    DespawnForWipe(mograine, null);
+                    Encounters[0] = data;
                     return;
                 }
             }
@@ -137,6 +155,15 @@ public sealed class ScarletMonasteryInstance(Map map) : ScriptedInstance(map, 2)
                 Instance.FindUpdater<CreatureMapSystem>()?.StartRelayScript(9001, mograine, caster);
             SetData(TypeAshbringer, EncounterState.Done);
         }
+    }
+
+    /// <summary>Mograine's and Whitemane's respawn after a wipe (instance_scarlet_monastery.cpp SetData FAIL: SetRespawnDelay(30, true)).</summary>
+    public const uint WipeRespawnSeconds = 30;
+
+    private static void DespawnForWipe(Creature creature, uint? respawnSeconds)
+    {
+        if (respawnSeconds is { } seconds) creature.RespawnDelayOnceSeconds = seconds;
+        creature.System?.ForcedDespawn(creature, 0);
     }
 
     private void MakeFriendly(Creature creature)

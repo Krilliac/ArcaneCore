@@ -45,7 +45,7 @@ public sealed class ZulFarrakScriptTests
     public void Gong_StartsTheImportedEventRelay_AndSummonsGahzrillaOnce()
     {
         var relay = new RelayScriptCatalog(
-            [new RelayScriptStep(1_002_488, 2000, 0, 10, 7273, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            [new RelayScriptStep(RelayScriptCatalog.EventRelayId(ZulFarrakInstance.GongEvent), 2000, 0, 10, 7273, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 -10f, -380f, 61.78f, 0, 0, 0)], []);
         using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map), [7273], [], relay,
             (ZulFarrakInstance.GahzrillaGong, GameObjectType.Goober));

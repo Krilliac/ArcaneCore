@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Gnomeregan;
 
 /// <summary>ScriptDev2 boss_thermapluggAI and ActivateBombThermaplugg (mangos-classic
 /// gnomeregan/boss_thermaplugg.cpp: Reset, Aggro, JustDied, JustReachedHome, JustSummoned, UpdateAI, OnEffectExecute).</summary>
-public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance) : CreatureAI(creature)
+public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance) : ScriptedAI(creature)
 {
     public const uint Entry = 7800, WalkingBomb = 7915, KnockAway = 10101, KnockAwayAoe = 11130;
     public const uint ActivateBombA = 11511, ActivateBombB = 11795;
@@ -17,13 +17,21 @@ public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance
 
     public bool PhaseTwo => _phaseTwo;
 
-    public override void OnRespawn()
+    /// <summary>Reset (also at every evade): timers, phase one, spawn position and the landing list. The summoned-bomb list stays: it is
+    /// what JustReachedHome despawns after this evade.</summary>
+    protected override void Reset()
     {
         _knockMs = (uint)Random.Shared.Next(12000, 20001);
         _activateMs = (uint)Random.Shared.Next(10000, 15001);
         _phaseTwo = false;
+        _spawnX = _spawnY = _spawnZ = 0;
         _landingBombs.Clear();
-        _summonedBombs.Clear();
+    }
+
+    public override void OnRespawn()
+    {
+        base.OnRespawn();
+        _summonedBombs.Clear(); // a new life: the last one's bombs went with its death or its evade
     }
 
     public override void OnAggro(Unit target)

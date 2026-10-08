@@ -120,7 +120,12 @@ public sealed partial class SummonService
 
             pets.Options = _options;
             pets.Register(guardian, this);
-            AttachPetAi(guardian);
+            // vmangos FactorySelector::selectAI asks a guardian's script name first (AI/CreatureAISelector.cpp:39-46): a map that scripts
+            // the entry (Razorfen Kraul's Snufflenose Gopher, a ScriptedPetAI) already gave it that AI when it entered the world.
+            if (!creatures.HasEntryAi(guardian.Template.Entry))
+            {
+                AttachPetAi(guardian);
+            }
         }
     }
 
