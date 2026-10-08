@@ -309,18 +309,33 @@ public sealed class GameObjectLootDumpImporter
 
     private void ReadTemplate(DumpRow row)
     {
+        if (MapTemplate(row) is not { } mapped)
+        {
+            return;
+        }
+
+        if (_templates.TryGetValue(mapped.Row.Entry, out var existing) && existing.Patch > mapped.Patch)
+        {
+            return;
+        }
+
+        _templates[mapped.Row.Entry] = mapped;
+    }
+
+    /// <summary>
+    /// One <c>gameobject_template</c> dump row as the world stores it, with its vmangos <c>patch</c> (0 in a cmangos dump), or null for
+    /// a row of a later patch than 1.12. Of several rows of one entry the caller keeps the one with the highest patch. Also used by the
+    /// content refresh for the ship templates (<see cref="Content.Import.TransportDumpImporter"/>).
+    /// </summary>
+    internal static (int Patch, GameObjectTemplateRow Row)? MapTemplate(DumpRow row)
+    {
         int patch = row.Has("patch") ? (int)U32(row, "patch") : 0;
         if (patch > MaxPatch)
         {
-            return;
+            return null;
         }
 
         uint entry = U32(row, "entry");
-        if (_templates.TryGetValue(entry, out var existing) && existing.Patch > patch)
-        {
-            return;
-        }
-
         var data = new uint[24];
         for (int i = 0; i < data.Length; i++)
         {
@@ -343,7 +358,7 @@ public sealed class GameObjectLootDumpImporter
             MaxGold = U32(row, "maxgold"),
         };
         t.SetData(data);
-        _templates[entry] = (patch, t);
+        return (patch, t);
     }
 
     private void ReadSpawn(DumpRow row)

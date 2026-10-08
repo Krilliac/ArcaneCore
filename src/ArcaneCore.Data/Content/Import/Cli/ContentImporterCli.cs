@@ -68,8 +68,10 @@ public static partial class ContentImporterCli
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
-                                dbscripts_on_relay and dbscript_relay_template, and (with --dbc-dir holding AreaTrigger.dbc)
-                                areatrigger_template; WorldSafeLocs.dbc in --dbc-dir adds the safe locations the dump lacks.
+                                dbscripts_on_relay and dbscript_relay_template, the ships' gameobject_template rows (type 15;
+                                other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
+                                taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
+                                locations the dump lacks, TaxiPathNode.dbc there checks every ship's route.
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this

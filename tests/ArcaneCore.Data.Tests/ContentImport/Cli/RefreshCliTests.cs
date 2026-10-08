@@ -11,6 +11,7 @@ using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
 using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
+using ArcaneCore.Kernel.Npc;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -300,6 +301,166 @@ public sealed class RefreshCliTests : IDisposable
         Assert.True(explicitCode == ExitCodes.Ok, explicitError + output);
         await using WorldDbContext db = Open(world);
         Assert.Equal(3u, (await new EfSpellProcEventStore(db).LoadAsync()).Find(324)!.Cooldown);
+    }
+
+    /// <summary>A classic-db z2815 <c>gameobject_template</c> row (every column of the dump's header, data3..23 zero).</summary>
+    private static string GameObjectTemplate(uint entry, uint type, uint display, string name, uint data0, uint data1, uint data2)
+    {
+        string columns = "`entry`,`type`,`displayId`,`name`,`faction`,`flags`,`ExtraFlags`,`size`,"
+            + string.Join(",", Enumerable.Range(0, 24).Select(i => $"`data{i}`")) + ",`CustomData1`,`mingold`,`maxgold`,`StringId`,`ScriptName`";
+        string data = string.Join(",", new[] { data0, data1, data2 }.Concat(Enumerable.Repeat(0u, 21)));
+        string quoted = name.Replace("'", "\\'", StringComparison.Ordinal);
+        return $"INSERT INTO `gameobject_template` ({columns}) VALUES ({entry},{type},{display},'{quoted}',0,40,0,1,{data},0,0,0,0,'');\n";
+    }
+
+    /// <summary>
+    /// The two ships of the classic-db rows (Menethil - Theramore, path 292, and Menethil - Auberdine, path 295, both 30 yd/s and
+    /// 1 yd/s²), their periods, and a chest whose template the refresh must leave alone.
+    /// </summary>
+    private static string ShipDump()
+        => GameObjectTemplate(176231, 15, 3015, "Proudmore's Treasure", 292, 30, 1)
+            + GameObjectTemplate(176310, 15, 3015, "Serenity's Shore", 295, 30, 1)
+            + GameObjectTemplate(1617, 3, 270, "Silverleaf", 43, 1415, 0)
+            + "INSERT INTO `transports` (`entry`,`name`,`period`) VALUES (176231,'Menethil Harbor and Theramore Isle',329313),(176310,'Menethil Harbor and Auberdine',295579);\n";
+
+    /// <summary>
+    /// TaxiNodes.dbc (id, map, x, y, z, eight names, flags, two mounts), TaxiPath.dbc (id, from, to, cost) and TaxiPathNode.dbc (id,
+    /// path, index, map, x, y, z, action flag, delay): path 292 runs from map 0 to map 1, path 295 stays on map 0.
+    /// </summary>
+    private string TaxiDbcs(bool withPath295 = true)
+    {
+        Dbc("TaxiNodes.dbc", 16,
+            [2, 0, -8835.76f, 490.084f, 109.616f, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 541],
+            [6, 0, -4821.13f, -1152.4f, 502.295f, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 541]);
+        Dbc("TaxiPath.dbc", 4, [6, 2, 6, 120], [292, 0, 0, 0]);
+        var nodes = new List<object[]>
+        {
+            new object[] { 3001, 292, 0, 0, -3896f, -600f, 5f, 0, 0 },
+            new object[] { 3002, 292, 1, 0, -3900f, -610f, 5f, 2, 30 },
+            new object[] { 3003, 292, 2, 1, -3990f, -4720f, 5f, 0, 0 },
+            new object[] { 3004, 292, 3, 1, -4000f, -4725f, 5f, 2, 30 },
+        };
+        if (withPath295)
+        {
+            nodes.Add([3101, 295, 0, 0, -3700f, -580f, 5f, 0, 0]);
+            nodes.Add([3102, 295, 1, 0, -3720f, -590f, 5f, 2, 30]);
+            nodes.Add([3103, 295, 2, 0, -3000f, 200f, 5f, 2, 30]);
+        }
+
+        return Dbc("TaxiPathNode.dbc", 9, [.. nodes]);
+    }
+
+    private async Task AddMapsAsync(string world, params uint[] maps)
+    {
+        await using WorldDbContext db = Open(world);
+        foreach (uint map in maps)
+        {
+            db.Set<MapTemplateRow>().Add(new MapTemplateRow { Entry = map, MapName = "map " + map });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task Refresh_ImportsTheShipTemplates_AndTheTaxiTables_LeavingTheOtherObjectsAlone()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await AddMapsAsync(world, 0, 1);
+        await using (WorldDbContext db = Open(world))
+        {
+            // An older import's rows: a ship whose path and speed are stale, and the chest with its own name.
+            db.Set<GameObjectTemplateRow>().Add(new GameObjectTemplateRow { Entry = 176310, Type = 15, Name = "stale", Data0 = 7 });
+            db.Set<GameObjectTemplateRow>().Add(new GameObjectTemplateRow { Entry = 1617, Type = 3, Name = "Silverleaf (older import)", Data0 = 43 });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + "\n" + ShipDump());
+        Dbcs();
+        string dbc = TaxiDbcs();
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("  gameobject_template (type 15)  2", output, StringComparison.Ordinal);
+        Assert.Contains("  taxi_nodes  2", output, StringComparison.Ordinal);
+        Assert.Contains("  taxi_path  2", output, StringComparison.Ordinal);
+        Assert.Contains("TaxiPathNode.dbc: 7 row(s) on 2 path(s)", output, StringComparison.Ordinal);
+        Assert.True(output.Contains("refresh: every checked reference resolves", StringComparison.Ordinal), output);
+        await using (WorldDbContext check = Open(world))
+        {
+            GameObjectTemplateRow theramore = await check.Set<GameObjectTemplateRow>().SingleAsync(r => r.Entry == 176231);
+            Assert.Equal((15u, 3015u, "Proudmore's Treasure", 40u, 292u, 30u, 1u),
+                (theramore.Type, theramore.DisplayId, theramore.Name, theramore.Flags, theramore.Data0, theramore.Data1, theramore.Data2));
+            GameObjectTemplateRow auberdine = await check.Set<GameObjectTemplateRow>().SingleAsync(r => r.Entry == 176310);
+            Assert.Equal(("Serenity's Shore", 295u, 30u, 1u), (auberdine.Name, auberdine.Data0, auberdine.Data1, auberdine.Data2));
+            Assert.Equal("Silverleaf (older import)", (await check.Set<GameObjectTemplateRow>().SingleAsync(r => r.Entry == 1617)).Name);
+            Assert.Equal(2, await check.Set<TransportRow>().CountAsync());
+            TaxiNode stormwind = await check.Set<TaxiNode>().SingleAsync(n => n.Id == 2);
+            Assert.Equal((0u, -8835.76f, "Arathi Basin - Alliance Entrance", 0u, 541u),
+                (stormwind.MapId, stormwind.X, stormwind.Name, stormwind.MountHorde, stormwind.MountAlliance));
+            Assert.Equal([6u, 292u], await check.Set<TaxiPath>().OrderBy(p => p.Id).Select(p => p.Id).ToListAsync());
+            TaxiPath flight = await check.Set<TaxiPath>().SingleAsync(p => p.Id == 6);
+            Assert.Equal((2u, 6u, 120u), (flight.FromNode, flight.ToNode, flight.Price));
+        }
+
+        // A second run leaves the same rows.
+        (code, output, error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+        Assert.True(code == ExitCodes.Ok, error + output);
+        await using WorldDbContext again = Open(world);
+        Assert.Equal(3, await again.Set<GameObjectTemplateRow>().CountAsync());
+        Assert.Equal(2, await again.Set<TaxiNode>().CountAsync());
+        Assert.Equal(2, await again.Set<TaxiPath>().CountAsync());
+    }
+
+    [Fact]
+    public async Task Refresh_NamesTheShipsTheWorldCouldNotSail()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await AddMapsAsync(world, 0); // no Kalimdor: the Theramore route cannot be built
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<GameObjectTemplateRow>().Add(new GameObjectTemplateRow { Entry = 20808, Type = 15, Name = "TEST Ship", Data0 = 292, Data1 = 0, Data2 = 1 });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, ShipDump());
+        Dbcs(); // the portal's trigger, so only the ships are left to report
+        string dbc = TaxiDbcs(withPath295: false);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("check: transport 176231 (Proudmore's Treasure): path 292 sails on map 1, which has no map_template row", output, StringComparison.Ordinal);
+        Assert.Contains("check: transport 176310 (Serenity's Shore): path 295 has 0 TaxiPathNode.dbc row(s), a route needs at least 3", output, StringComparison.Ordinal);
+        Assert.Contains("check: transport 20808 (TEST Ship): speed 0 yd/s and acceleration 1 yd/s² (data1, data2) must both be positive", output, StringComparison.Ordinal);
+        Assert.Contains("refresh: 3 reference check(s) to look at", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Refresh_WithoutTheTaxiDbcs_LeavesTheTaxiTablesAlone_AndSaysTheRoutesWereNotChecked()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<TaxiNode>().Add(new TaxiNode { Id = 2, Name = "kept" });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, ShipDump());
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("no TaxiPathNode.dbc in", output, StringComparison.Ordinal);
+        Assert.Contains("the ship routes (gameobject_template type 15, data0) are not checked", output, StringComparison.Ordinal);
+        Assert.Contains("no TaxiNodes.dbc in", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("  taxi_nodes", output, StringComparison.Ordinal);
+        await using WorldDbContext check = Open(world);
+        Assert.Equal("kept", (await check.Set<TaxiNode>().SingleAsync()).Name);
+        Assert.Equal(2, await check.Set<GameObjectTemplateRow>().CountAsync(r => r.Type == 15));
     }
 
     [Theory]

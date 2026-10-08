@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Maps;
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Graveyards;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.World.Battlegrounds;
@@ -11,6 +13,7 @@ using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
 using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -31,10 +34,13 @@ public static partial class ContentImporterCli
     /// transaction, and only when the inputs carry it, so a second run with the same inputs leaves the same rows and a failure changes nothing.
     /// Tables: <c>world_safe_locs</c> and <c>game_graveyard_zone</c> (dump; <c>WorldSafeLocs.dbc</c> fills ids the dump lacks), the battleground
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
-    /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, and <c>areatrigger_template</c> from
-    /// <c>AreaTrigger.dbc</c>. Afterwards it checks the references the world logs at start (teleports and taverns without a trigger,
-    /// battleground start locations without a safe location, transports without a type-15 object). The world's schema must already be this
-    /// importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live world as a side effect.
+    /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, <c>areatrigger_template</c> from
+    /// <c>AreaTrigger.dbc</c>, and <c>taxi_nodes</c> / <c>taxi_path</c> from <c>TaxiNodes.dbc</c> / <c>TaxiPath.dbc</c>. The ships' own
+    /// <c>gameobject_template</c> rows (type 15) are written as the dump has them; every other object template is left alone. Afterwards it
+    /// checks the references the world logs at start (teleports and taverns without a trigger, battleground start locations without a safe
+    /// location, transports without a type-15 object, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build).
+    /// The world's schema must already be this importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh
+    /// never migrates a live world as a side effect.
     /// </summary>
     private static async Task<int> RefreshAsync(CliArguments a, TextWriter o, CancellationToken ct)
     {
@@ -127,6 +133,9 @@ public static partial class ContentImporterCli
         }
 
         IReadOnlyList<AreaTriggerTemplateRow>? triggers = null;
+        IReadOnlyList<TaxiNode>? taxiNodes = null;
+        IReadOnlyList<TaxiPath>? taxiPaths = null;
+        TaxiPathNodeCatalog? taxiPathNodes = null;
         if (dbcDirectory is not null)
         {
             string triggerPath = Path.Combine(dbcDirectory, "AreaTrigger.dbc");
@@ -146,10 +155,44 @@ public static partial class ContentImporterCli
                 int added = graveyards.AddMissingSafeLocs(locs);
                 o.WriteLine($"  WorldSafeLocs.dbc: {locs.Count} row(s), {added} not in the dump added");
             }
+
+            // The flight masters' nodes and paths (vmangos reads them from these DBCs; the world reads the tables), and the ships' paths.
+            string taxiNodesPath = Path.Combine(dbcDirectory, "TaxiNodes.dbc");
+            if (File.Exists(taxiNodesPath))
+            {
+                taxiNodes = ReadDbc("TaxiNodes.dbc", () => NpcServiceDbcReaders.LoadTaxiNodes(taxiNodesPath));
+            }
+            else
+            {
+                warnings.Add($"no TaxiNodes.dbc in '{dbcDirectory}': taxi_nodes is left as it is");
+            }
+
+            string taxiPathPath = Path.Combine(dbcDirectory, "TaxiPath.dbc");
+            if (File.Exists(taxiPathPath))
+            {
+                taxiPaths = ReadDbc("TaxiPath.dbc", () => NpcServiceDbcReaders.LoadTaxiPaths(taxiPathPath));
+            }
+            else
+            {
+                warnings.Add($"no TaxiPath.dbc in '{dbcDirectory}': taxi_path is left as it is");
+            }
+
+            string taxiPathNodePath = Path.Combine(dbcDirectory, "TaxiPathNode.dbc");
+            if (File.Exists(taxiPathNodePath))
+            {
+                DbcFile pathNodeFile = ReadDbc("TaxiPathNode.dbc", () => DbcFile.Load(taxiPathNodePath));
+                taxiPathNodes = ReadDbc("TaxiPathNode.dbc", () => NpcServiceDbcReaders.ReadTaxiPathNodes(pathNodeFile));
+                o.WriteLine($"  TaxiPathNode.dbc: {pathNodeFile.RecordCount.ToString(CultureInfo.InvariantCulture)} row(s) on {taxiPathNodes.PathCount.ToString(CultureInfo.InvariantCulture)} path(s)");
+            }
+            else
+            {
+                warnings.Add($"no TaxiPathNode.dbc in '{dbcDirectory}': the ship routes (gameobject_template type 15, data0) are not checked");
+            }
         }
         else
         {
             warnings.Add("no --dbc-dir: areatrigger_template is left as it is (it comes from AreaTrigger.dbc)");
+            warnings.Add("no --dbc-dir: taxi_nodes and taxi_path are left as they are, the ship routes (gameobject_template type 15, data0) are not checked");
         }
 
         GraveyardImportReport graveyardReport = graveyards.BuildReport();
@@ -178,10 +221,13 @@ public static partial class ContentImporterCli
         Count("game_weather", worldState.Weather.Count, worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0);
         Count(AreaTriggerTavernDataModule.Table, taverns.Ids.Count, taverns.SawTable);
         Count(TransportWorldDataModule.Table, transports.Rows.Count, transports.SawTable);
+        Count("gameobject_template (type 15)", transports.Ships.Count, transports.Ships.Count > 0);
         Count(SpellProcEventDataModule.Table, procs?.Content.Count ?? 0, procs is not null);
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
+        Count("taxi_nodes", taxiNodes?.Count ?? 0, taxiNodes is not null);
+        Count("taxi_path", taxiPaths?.Count ?? 0, taxiPaths is not null);
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -214,6 +260,7 @@ public static partial class ContentImporterCli
 
                     await taverns.ReplaceAsync(db, token).ConfigureAwait(false);
                     await transports.ReplaceAsync(db, token).ConfigureAwait(false);
+                    await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
@@ -226,9 +273,21 @@ public static partial class ContentImporterCli
                         await db.Set<AreaTriggerTemplateRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                         await ImportBatch.InsertAsync(db, triggers, token).ConfigureAwait(false);
                     }
+
+                    if (taxiNodes is not null)
+                    {
+                        await db.Set<TaxiNode>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                        await ImportBatch.InsertAsync(db, taxiNodes, token).ConfigureAwait(false);
+                    }
+
+                    if (taxiPaths is not null)
+                    {
+                        await db.Set<TaxiPath>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                        await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                    }
                 }, ct).ConfigureAwait(false);
 
-                checks = await RefreshChecksAsync(db, ct).ConfigureAwait(false);
+                checks = await RefreshChecksAsync(db, taxiPathNodes, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
             {
@@ -329,7 +388,7 @@ public static partial class ContentImporterCli
     }
 
     /// <summary>The references the world checks at start, read back after the write.</summary>
-    private static async Task<List<string>> RefreshChecksAsync(WorldDbContext db, CancellationToken ct)
+    private static async Task<List<string>> RefreshChecksAsync(WorldDbContext db, TaxiPathNodeCatalog? taxiPathNodes, CancellationToken ct)
     {
         var checks = new List<string>();
         IQueryable<AreaTriggerTemplateRow> triggers = db.Set<AreaTriggerTemplateRow>();
@@ -364,8 +423,50 @@ public static partial class ContentImporterCli
             checks.Add($"{ships.Count} transports row(s) name no gameobject_template of type 15: {Ids(ships)}");
         }
 
+        if (taxiPathNodes is not null)
+        {
+            checks.AddRange(await ShipRouteChecksAsync(db, taxiPathNodes, ct).ConfigureAwait(false));
+        }
+
         return checks;
 
         static string Ids(List<uint> ids) => string.Join(", ", ids.Take(20)) + (ids.Count > 20 ? $" ... ({ids.Count - 20} more)" : string.Empty);
+    }
+
+    /// <summary>
+    /// The ships the world would refuse at start (World <c>TransportFeature</c>, vmangos <c>TransportMgr::LoadTransportTemplates</c>): a type 15
+    /// template whose speed or acceleration (data1, data2) is not positive, whose TaxiPathNode.dbc path (data0) has fewer than the three nodes
+    /// a spline needs, or whose path touches a map without a <c>map_template</c> row.
+    /// </summary>
+    private static async Task<List<string>> ShipRouteChecksAsync(WorldDbContext db, TaxiPathNodeCatalog taxiPathNodes, CancellationToken ct)
+    {
+        var checks = new List<string>();
+        HashSet<uint> maps = [.. await db.Set<MapTemplateRow>().Select(m => m.Entry).ToListAsync(ct).ConfigureAwait(false)];
+        List<GameObjectTemplateRow> ships = await db.Set<GameObjectTemplateRow>().AsNoTracking().Where(g => g.Type == TransportDumpImporter.ShipType)
+            .OrderBy(g => g.Entry).ToListAsync(ct).ConfigureAwait(false);
+        foreach (GameObjectTemplateRow ship in ships)
+        {
+            string name = $"transport {ship.Entry.ToString(CultureInfo.InvariantCulture)} ({ship.Name})";
+            if (ship.Data1 == 0 || ship.Data2 == 0)
+            {
+                checks.Add($"{name}: speed {ship.Data1.ToString(CultureInfo.InvariantCulture)} yd/s and acceleration {ship.Data2.ToString(CultureInfo.InvariantCulture)} yd/s\u00b2 (data1, data2) must both be positive");
+                continue;
+            }
+
+            IReadOnlyList<TaxiPathNodeRecord> nodes = taxiPathNodes.Nodes(ship.Data0);
+            if (nodes.Count < 3)
+            {
+                checks.Add($"{name}: path {ship.Data0.ToString(CultureInfo.InvariantCulture)} has {nodes.Count.ToString(CultureInfo.InvariantCulture)} TaxiPathNode.dbc row(s), a route needs at least 3");
+                continue;
+            }
+
+            uint[] missing = [.. nodes.Select(n => n.MapId).Distinct().Where(m => !maps.Contains(m)).Order()];
+            if (missing.Length > 0)
+            {
+                checks.Add($"{name}: path {ship.Data0.ToString(CultureInfo.InvariantCulture)} sails on map {string.Join(", ", missing)}, which has no map_template row");
+            }
+        }
+
+        return checks;
     }
 }
