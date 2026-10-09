@@ -62,7 +62,8 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
                 continue;
             }
 
-            SpawnGroupMember[] members = [.. group.Members.Where(m => spawns.ContainsKey(m.Guid))];
+            // cmangos ObjectMgr::LoadSpawnGroups skips a spawn that is part of a pool ("incompatible"): its pool owns it.
+            SpawnGroupMember[] members = [.. group.Members.Where(m => spawns.ContainsKey(m.Guid) && !_content.Pools.IsPooled(m.Guid))];
             SpawnGroupRandomEntry[] entries = [.. group.RandomEntries.Where(e => _content.FindTemplate(e.Entry) is not null)];
             var state = new SpawnGroupState(group, members, entries, dungeon);
             _spawnGroups[group.Id] = state;

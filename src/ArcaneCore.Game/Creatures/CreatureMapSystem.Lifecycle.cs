@@ -209,6 +209,11 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
+            if (PoolRefusesAtLoad(spawn))
+            {
+                continue; // a pooled spawn exists only while its pool has it out (cmangos ObjectMgr::LoadCreatures, IsNotPartOfPoolOrEvent)
+            }
+
             if (_groupOfSpawn.TryGetValue(spawn.Guid, out Maps.SpawnGroups.SpawnGroupState? group))
             {
                 LoadGroupMember(group, spawn, grid); // its spawn group decides whether and as what it exists

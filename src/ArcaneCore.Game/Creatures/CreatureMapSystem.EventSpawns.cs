@@ -52,6 +52,12 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
+            if (_poolSpawns.ContainsKey(guid))
+            {
+                RefreshPoolMember(guid, SpawnAllowed(guid)); // its pool decides (cmangos GameEventMgr pool handling)
+                continue;
+            }
+
             Creature? live = FindLive(spawn, _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : []);
             bool allowed = SpawnAllowed(guid);
             if (!allowed)
