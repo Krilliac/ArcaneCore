@@ -3,7 +3,7 @@ using System.Collections.Frozen;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
-/// The resolved spell table plus the per-race/class starting spells and fixed teleport
+/// The resolved spell table plus the per-race/class starting spells and fixed spell
 /// destinations. Immutable after construction; shared by every map.
 /// </summary>
 public sealed class SpellStore
@@ -47,7 +47,7 @@ public sealed class SpellStore
     public IReadOnlyList<uint> GetCreateSpells(byte race, byte cls)
         => _createSpells.TryGetValue((race, cls), out uint[]? spells) ? spells : [];
 
-    /// <summary>The fixed destination of a TARGET_LOCATION_DATABASE teleport, if any.</summary>
+    /// <summary>The fixed destination of a TARGET_LOCATION_DATABASE effect, if any.</summary>
     public SpellTargetPosition? GetTargetPosition(uint spellId)
         => _targetPositions.TryGetValue(spellId, out SpellTargetPosition position) ? position : null;
 

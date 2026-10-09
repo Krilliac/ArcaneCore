@@ -5,6 +5,7 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
@@ -24,7 +25,7 @@ namespace ArcaneCore.World.Tests.Instances;
 public sealed class Aq40ImportedRuntimeTests
 {
     [RealWorldContentFact]
-    public async Task ImportedBossAisAttach_AndFankrissWebTeleportsThePlayer()
+    public async Task ImportedBossAisAttach_FankrissWebTeleports_AndViscidusGlobUsesDatabasePosition()
     {
         string directory = Path.Combine(Path.GetTempPath(), "arcane-aq40-runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -117,6 +118,25 @@ public sealed class Aq40ImportedRuntimeTests
             (float webX, float webY) = await host.PlayerStateAsync("Aqsmoke", p => (p.X, p.Y));
             Assert.Contains(new[] { (-8043.6f, 1254.1f), (-8003f, 1222.9f), (-8022.3f, 1149f) },
                 site => MathF.Abs(site.Item1 - webX) < 1f && MathF.Abs(site.Item2 - webY) < 1f);
+
+            await MoveNearAsync(host, client, teleports, -8000.18f, 928.60f, -51.90f);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15299), "Viscidus grid load");
+            await host.OnWorldAsync(() =>
+            {
+                var map = host.World.FindOnlinePlayer("Aqsmoke")!.Map!;
+                var creatures = map.FindUpdater<CreatureMapSystem>()!;
+                Creature viscidus = Assert.Single(creatures.Creatures, c => c.Entry == 15299);
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.Equal(531u, spells.Store.GetTargetPosition(25865)?.MapId);
+                Assert.Contains(spells.Store.Get(25865)!.Effects, e => e.Effect == SpellEffectName.SummonWild
+                    && (e.TargetA == SpellImplicitTarget.LocationDatabase || e.TargetB == SpellImplicitTarget.LocationDatabase));
+                Assert.Equal(SpellCastResult.CastOk,
+                    spells.CastSpell(viscidus, 25865, SpellCastTargets.ForSelf(), triggered: true));
+                Creature glob = Assert.Single(creatures.Creatures, c => c.Entry == 15667);
+                Assert.True(MathF.Abs(glob.X - (-8039.99f)) < 1f && MathF.Abs(glob.Y - 918.23f) < 1f,
+                    $"glob spawned at {glob.X}, {glob.Y} instead of its database target");
+            });
         }
         finally
         {
