@@ -8,6 +8,69 @@ database or report inside a git work tree unless git ignores the path.
 
 ## Delivered
 
+### Spawn groups and `gameobject_spawn_entry` (2026-10-08; world 43, `SpawnGroupDataModule`)
+
+**Schema.** `SpawnGroupDataModule` (`src/ArcaneCore.Data/World/SpawnGroups/`, one `IDataModule`, `Version = 43`; the script-engine lane
+also took 43, the integrator renumbers the one constant) creates six tables as classic-db z2815 has them: `gameobject_spawn_entry`
+(`SpawnGuid`, `Entry`), `spawn_group` (`Id`, `Name`, `Type` 0 creatures / 1 game objects, `MaxCount`, `WorldState` = a `conditions` entry,
+`WorldStateExpression`, `Flags`, `StringId`), `spawn_group_spawn` (`Id`, `Guid`, `SlotId`, `Chance`), `spawn_group_entry` (`Id`, `Entry`,
+`MinCount`, `MaxCount`, `Chance`), `spawn_group_formation` and `spawn_group_linked_group` (empty in z2815). z2815 has no
+`spawn_group_squad` and no `RespawnOverrideMin/Max` columns, so neither exists here.
+
+**Import.** `SpawnGroupDumpImporter` reads the six tables by column name in `import` (with `--replace` they are emptied first). `refresh`
+fills them the way it fills `creature_spawn_entry`: each part only when the world has none of its rows. `gameobject_spawn_entry` is
+written for the world's own spawns whose entry is 0 or one of the dump's entries for that guid. A group member is written only when the
+world has that spawn with the entry the dump's `creature`/`gameobject` row gives it (0 included), so a world built from other data, whose
+guids mean other spawns, gets no group. A group is written when one of its members is (with its entry and formation rows), and a link
+when both of its groups are. A second run with the same inputs changes nothing. `verify` now says how the entry-0 spawns are
+resolved.
+
+**Runtime** (`src/ArcaneCore.Game/Maps/SpawnGroups/SpawnGroupState.cs`, `CreatureMapSystem.SpawnGroups.cs`,
+`GameObjectMapSystem.SpawnGroups.cs`). These follow cmangos `SpawnGroup.cpp` and `ObjectMgr::LoadSpawnGroups`; no code is copied.
+* A spawn with `gameobject_spawn_entry` rows becomes one of them, chosen uniformly when the object is created
+  (`GetRandomGameObjectEntry` is an `irand` over the list, and the rows carry no weight). An in-place respawn keeps the entry, because none
+  of z2815's 71 alternative entries is a dynamic-guid template.
+* A group member is not created by its grid on its own. At every map update the group brings members into the world until it has its
+  `MaxCount`. A stored 0 is derived as cmangos does: every member when an entry has Chance 0, else the smaller of the members and the
+  summed entry `MaxCount`s. A member on its respawn time is skipped. A group of one waits until every member is off its respawn time (the
+  "rare mob" rule). Members are shuffled, and a `Chance` member rolls once per group life.
+* A member's entry is chosen in this order: its `*_spawn_entry` pick, else its own `id`, else a `spawn_group_entry` row. The `MinCount`
+  entries come first, then the explicitly chanced rows by a 1..100 roll, then the Chance-0 rows in random order, never past an entry's
+  `MaxCount`. A creature group in a dungeon keeps its chosen members once full.
+* A creature member leaves the group when its corpse is removed (its respawn time stays with the spawn id and is persisted as before),
+  when it is despawned and when its grid unloads. A game object member leaves when it despawns (looted, used up). The group may then bring
+  it, or another member, back. That is how the one-of-N chests, quest objects and ore nodes move between their spots.
+* Creature flags: AGGRO_TOGETHER (a member's aggro engages every member, without assistance calls). RESPAWN_TOGETHER (a member that
+  spawns, or one that reaches home after an evade, clears every member's respawn time). EVADE_TOGETHER (not used by z2815).
+  DESPAWN_ON_COND_FAIL takes the live members out when the condition stops holding, and they return a second after it holds again.
+* `spawn_group.WorldState` is asked through `ConditionEvaluator.EvaluateWithoutSubjects`, which `ConditionFeature` installs on every
+  creature and game object map system. Game events, holidays and AND/OR/NOT of them can be decided. A world-state (type 42) condition
+  cannot be decided, so it fails closed and its group does not spawn. 35 groups have a condition: 14 depend only on game events (13 directly, one through an OR), the other 21 on world
+  states set by scripts. `WorldStateExpression` is not implemented (z2815 never uses it).
+
+**Not implemented.** Formations (164 rows; the members stand at their own spawn points with their own movement), linked groups (none in
+z2815), squads and respawn overrides (not in z2815), `StringId` lookups (all 0), and the `.spawngroup` GM commands. Pooled and event-listed
+spawns are not excluded from groups as cmangos does (z2815 has no such overlap). Pools are not implemented at all, so the 1,215 pooled
+entry-0 objects with `gameobject_spawn_entry` rows now all appear, like every other pooled object. Differences from cmangos: a member for
+which no entry can be found is not spawned (cmangos keeps it in the group with entry 0 and its creation fails, which blocks the slot).
+Group aggro is immediate (cmangos waits CREATURE_CHECK_FOR_HELP_AGGRO_DELAY).
+
+**z2815 figures.** 5,001 `gameobject_spawn_entry` rows (1,809 spawns), 1,040 groups (659 creature, 381 game object; 13 have no member),
+3,772 members, 1,781 entries, 164 formations. Of the 3,614 entry-0 game objects, 1,809 resolve through `gameobject_spawn_entry` and
+1,805 through their group. Of the 2,802 entry-0 creatures, 2,234 resolve through `creature_spawn_entry` and 566 through their group. The
+last two (group 19980, Stormwind Battleground Emissaries) have no entry in cmangos either. Scratch SQLite world from the dump
+(2026-10-08), every spawn grid loaded, same seed:
+
+| | creatures alive | of them entry-0 | game objects spawned | of them entry-0 |
+|---|---|---|---|---|
+| base branch import | 65,742 | 2,234 | 42,489 | 0 |
+| this branch, conditions undecided | 66,132 | 2,727 | 44,369 | 2,269 |
+| this branch, every condition holding | 66,272 | 2,791 | 44,403 | 2,269 |
+
+The totals rise by less than the entry-0 counts because a group now holds back the members above its maximum: one Balgaras instead of
+seven, and one ore node of five. `refresh` of a copy of the base-branch world wrote the same rows as a fresh `import`, except the 13
+memberless groups.
+
 ### ScriptDev2 text and escort paths (2026-10-08; no schema change)
 
 `CreatureDumpImporter` reads classic-db `script_texts` into the existing negative-ID creature text store and reads `script_waypoint` into entry movement paths. An explicit `creature_movement_template` path wins for its whole entry/path pair, so the two sources' points are never mixed. In z2815, this adds 1,523 script texts and brings effective entry paths to 16,879 points on 604 paths; Grimstone (10096) has six points and Phalanx (9502) has two. These rows are needed for the Maraudon, Sunken Temple and Blackrock Depths ScriptDev2 encounters in [instances](instances.md). An existing world database needs a content refresh to receive them.
@@ -205,7 +268,8 @@ feature reads:
   world's own spawns whose entry is 0 or one of the dump's entries for that guid (`FillSpawnEntriesAsync`): the Codex-line worlds have it
   empty, so their 2802 spawns with `creature.id` 0 never appeared. On a copy of the wave-9 rehearsal's world (2026-10-08): 4799 rows (the
   dump's 4863 less the 64 of 32 guids that are in no `creature` row), leaving the 568 spawns that only cmangos spawn groups resolve. A second
-  run with the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
+  run with the same inputs leaves the same rows. `gameobject_spawn_entry` and the five spawn group tables (world 43) are filled the same
+  way (`SpawnGroupDumpImporter.FillAsync`; see "Spawn groups" above). It then checks what the world logs at start: teleports and taverns without a trigger,
   battleground start locations that are not safe locations, transports without a type-15 object, portals to a map with no
   `map_template` row (vmangos "unknown target map"), graveyard links to a zone with no `area_template` row (vmangos "not existing zone
   id"; checked only when the table has rows, as the world does), and, with `TaxiPathNode.dbc` in `--dbc-dir`, every ship the world would
@@ -298,15 +362,15 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 ## Limits (explicit, not done)
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
-  NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, `gameobject_spawn_entry`, equipment
+  NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, equipment
   and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates, pools and
   game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), `playercreateinfo_action` (215 rows, needs
   the action-button seam wired at character creation) and `playercreateinfo_skills` (77; no skills consumer), `race_info`/`class_info`
   (still dev seeds; their retail source is ChrRaces.dbc), graveyards. The unmapped columns of every read table are printed by `plan`.
-- **Spawns with id 0** (2,802 creatures, 3,614 game objects in z2815) are imported with entry 0: cmangos resolves them through
-  `creature_spawn_entry` / `gameobject_spawn_entry`. `creature_spawn_entry` is imported (and filled by `refresh` when empty), which
-  resolves 2,234 of the creatures; the other 568 need cmangos spawn groups (not imported). `gameobject_spawn_entry` (5,001 rows) is not
-  imported and the gameobject system has no alternative entries, so the 3,614 objects never spawn. `verify` notes them.
+- **Spawns with id 0** (2,802 creatures, 3,614 game objects in z2815) are imported with entry 0. cmangos resolves them through
+  `creature_spawn_entry` / `gameobject_spawn_entry` and spawn groups. All four kinds of row are imported, and `refresh` fills each when it
+  is empty (see "Spawn groups" above). Two creatures (group 19980) have no entry anywhere and never spawn, in cmangos too. `verify`
+  counts each kind.
 - **`spawnMask`** is not read: cmangos does not place a spawn whose mask is 0 in any grid (`src/game/Globals/ObjectMgr.cpp:2060-2063` creatures, `:2335-2338` game objects), the importer still imports it.
 - **cmangos class level stats** are not needed for z2815 (health/mana/damage are materialised in `creature_template`); a
   HEAD-layout dump that relies on `creature_template_classlevelstats` is not computed.

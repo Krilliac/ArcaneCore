@@ -55,6 +55,15 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     }
 
     /// <summary>
+    /// cmangos IsConditionSatisfied(conditionId, nullptr, map, nullptr, CONDITION_FROM_WORLDSTATE) as a spawn group asks it
+    /// (SpawnGroup::IsWorldstateConditionSatisfied): no player and no NPC, so only the types that need neither can be decided (game events,
+    /// holidays, and the AND/OR/NOT built from them). Null when it cannot be decided (a world-state or other subject type), false for a
+    /// missing condition.
+    /// </summary>
+    public bool? EvaluateWithoutSubjects(uint conditionId)
+        => Table.Find(conditionId) is { } condition ? Meets(condition, default, default) : false;
+
+    /// <summary>
     /// Count the rows that can and cannot be decided with the collaborators this evaluator has, so a
     /// startup log can say how much of the data is dead.
     /// </summary>

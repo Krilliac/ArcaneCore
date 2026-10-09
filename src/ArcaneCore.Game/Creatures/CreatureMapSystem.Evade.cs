@@ -81,6 +81,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Evaded?.Invoke(creature);
+        OnGroupMemberEvaded(creature); // cmangos Unit::TriggerEvadeEvents → CREATURE_GROUP_EVENT_EVADE
     }
 
     /// <summary>Raised after a creature entered evade mode (once per evade; not for a dead creature).</summary>

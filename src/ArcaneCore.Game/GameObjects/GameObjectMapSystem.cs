@@ -5,6 +5,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Loot;
@@ -90,6 +91,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _nextTemporaryCounter = maxGuid + 1;
+        InitializeSpawnGroups();
         if (loot is not null)
         {
             loot.Objects = this;
@@ -212,6 +214,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             UpdateTypeBehaviour(go);
         }
 
+        UpdateSpawnGroups();
         foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
         {
             if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
@@ -933,6 +936,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         go.System = null;
+        OnGroupMemberUntracked(go);
         return true;
     }
 
@@ -960,6 +964,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         {
             // GameObject.cpp:671 (<c>if (!m_respawnDelayTime) return;</c>): a NODESPAWN spawn stays in the world, only its loot and state reset.
             go.LootState = GameObjectLootState.Ready;
+            return;
+        }
+
+        if (_groupOfSpawn.ContainsKey(go.Spawn.Guid))
+        {
+            DespawnGroupMember(go, go.Spawn);
             return;
         }
 
@@ -1062,77 +1072,98 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)
             }
 
-            GameObjectTemplate? template = _content.FindTemplate(spawn.Entry);
+            if (_groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group))
+            {
+                LoadGroupMember(list, group, spawn); // its spawn group decides whether and as what it exists
+                continue;
+            }
+
+            // cmangos GameObject::LoadFromDB (GameObject.cpp:907): a spawn with gameobject_spawn_entry rows becomes one of them, chosen
+            // uniformly each time the object is created; an in-place respawn keeps it (none of classic-db's entries is a dynamic-guid one).
+            IReadOnlyList<uint> alternatives = _content.GetSpawnEntries(spawn.Guid);
+            GameObjectTemplate? template = alternatives.Count > 0 ? ChooseSpawnEntry(alternatives) : _content.FindTemplate(spawn.Entry);
             if (template is null)
             {
-                if (_warnedMissingTemplates.Add(spawn.Entry))
+                uint warnKey = alternatives.Count > 0 ? spawn.Guid | 0x8000_0000u : spawn.Entry;
+                if (_warnedMissingTemplates.Add(warnKey))
                 {
-                    _logger.LogWarning("gameobject spawn {Guid} on map {MapId} uses missing gameobject_template {Entry}; skipped", spawn.Guid, Map.MapId, spawn.Entry);
+                    _logger.LogWarning(
+                        alternatives.Count > 0
+                            ? "gameobject spawn {Guid} on map {MapId} has no gameobject_template for any of its gameobject_spawn_entry rows; skipped"
+                            : "gameobject spawn {Guid} on map {MapId} uses missing gameobject_template {Entry}; skipped",
+                        spawn.Guid, Map.MapId, spawn.Entry);
                 }
 
                 continue;
             }
 
-            var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
-            go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
-            go.System = this;
-            _objects[go.Guid] = go;
-            IndexRitual(go, tracked: true);
-            list.Add(go);
-            ConfigureQuestFlags(go);
-            NotifyInstanceScript(go);
-            if (DurableKeyOf(go) is { } durableKey)
-            {
-                // The stored chest decides: a consumed one stays despawned until its stored respawn
-                // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
-                _unloadedLoot.Remove(spawn.Guid);
-                _respawnAt.Remove(spawn.Guid);
-                if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
-                {
-                    go.LootState = GameObjectLootState.JustDeactivated;
-                    go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
-                        ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
-                    continue;
-                }
+            LoadSpawn(list, spawn, template);
+        }
+    }
 
-                if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
-                {
-                    go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
-                    continue;
-                }
-
-                go.ClearChangedFields();
-                Map.AddObject(go);
-                continue;
-            }
-
-            if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
-            {
-                // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
-                Loot!.RestoreGameObjectLoot(go, remaining);
-                if (go.Loot is not null)
-                {
-                    ActivateWithLeftovers(go);
-                }
-            }
-
-            bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
-            if (pending && respawnAt > _clockMs)
+    /// <summary>Create the object of one database spawn as <paramref name="template"/> (its own entry, or the one chosen for it).</summary>
+    private void LoadSpawn(List<GameObject> list, GameObjectSpawn spawn, GameObjectTemplate template)
+    {
+        _spawnEntries[spawn.Guid] = template.Entry;
+        var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
+        go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
+        go.System = this;
+        _objects[go.Guid] = go;
+        IndexRitual(go, tracked: true);
+        list.Add(go);
+        ConfigureQuestFlags(go);
+        NotifyInstanceScript(go);
+        if (DurableKeyOf(go) is { } durableKey)
+        {
+            // The stored chest decides: a consumed one stays despawned until its stored respawn
+            // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
+            _unloadedLoot.Remove(spawn.Guid);
+            _respawnAt.Remove(spawn.Guid);
+            if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
             {
                 go.LootState = GameObjectLootState.JustDeactivated;
-                go.RespawnAtMs = respawnAt;
-                continue;
+                go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
+                    ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
+                return;
             }
 
-            if (!pending && spawn.SpawnTimeSeconds < 0)
+            if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
             {
                 go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
-                continue;
+                return;
             }
 
             go.ClearChangedFields();
             Map.AddObject(go);
+            return;
         }
+
+        if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
+        {
+            // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
+            Loot!.RestoreGameObjectLoot(go, remaining);
+            if (go.Loot is not null)
+            {
+                ActivateWithLeftovers(go);
+            }
+        }
+
+        bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
+        if (pending && respawnAt > _clockMs)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated;
+            go.RespawnAtMs = respawnAt;
+            return;
+        }
+
+        if (!pending && spawn.SpawnTimeSeconds < 0)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
+            return;
+        }
+
+        go.ClearChangedFields();
+        Map.AddObject(go);
     }
 
     private void UnloadGrid(GridCoord coord)
@@ -1166,6 +1197,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             go.System = null;
+            OnGroupMemberUntracked(go);
         }
     }
 

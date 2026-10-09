@@ -186,8 +186,9 @@ Behaviour (cmangos `Creature::LoadFromDB` / `ResetEntry`, `Entities/Creature.cpp
 * `Creatures:Respawn:AlternateEntries=false` ignores the rows (a spawn with `id = 0` then never spawns, as before).
 
 Scale: of classic-db's 66,310 spawns, **2,802 have `id = 0`**. 2,234 of them (3.4 percent: 1,121 on map 0, 309 on map 1, 147 in map 209,
-147 in map 90 ...) are resolved by `creature_spawn_entry` and spawn now; the other **568 are resolved by cmangos spawn groups
-(`spawn_group_entry`) and still do not spawn** (creature groups are not implemented). `RealClassicDbDump_...` pins these figures.
+147 in map 90 ...) are resolved by `creature_spawn_entry`. 566 of the other 568 are resolved by cmangos spawn groups (`spawn_group_entry`,
+world 43, 2026-10-08; [content import](content-import.md), "Spawn groups"). The last two have no entry in cmangos either.
+`RealClassicDbDump_...` and `SpawnGroupDataTests` pin these figures.
 
 Differences from the references, on purpose: cmangos uses `creature.id` when it is not 0 and rolls only at respawn; vmangos rolls at
 load as well. One rule serves both dialects: a spawn that has rows always chooses among them (the 46 classic-db spawns with both an `id`
@@ -240,9 +241,9 @@ loses that one write (same window as vmangos' asynchronous character-database qu
 
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
   the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by default in vmangos): no column carries them yet.
-* **Creature groups, formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): data is mostly cmangos-shaped
-  (`spawn_group*`, 568 entry-0 spawns resolve through `spawn_group_entry` and still do not spawn) and needs a translator. No importer, schema or
-  behaviour was started.
+* **Formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): cmangos spawn groups are imported
+  and run (member count, entry choice, aggro and respawn together; [content import](content-import.md), "Spawn groups"). Their 164
+  formations, creature linking and pools are not implemented.
 * **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.
