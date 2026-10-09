@@ -105,7 +105,8 @@ public sealed class BuruAI : RaidBossAI
     }
     protected override void UpdateCombat(uint diffMs)
     {
-        if (!_transforming && Below(19))
+        // boss_buru.cpp ExecuteAction(BURU_PHASE_2_TRANSITION): GetHealthPercent() < 20.
+        if (!_transforming && HealthBelowPct(20))
         {
             _transforming = true;
             _transitionMs = 2000;
@@ -224,7 +225,8 @@ public sealed class AyamissAI : RaidBossAI
             Me.Motion.MovePoint(2, Me.Home.X, Me.Home.Y, Me.Home.Z, run: true);
             ResetThreat();
         }
-        if (!_frenzy && Below(19) && Cast(8269, Me)) _frenzy = true;
+        // boss_ayamiss.cpp ExecuteAction: the landing at GetHealthPercent() <= 70, AYAMISS_FRENZY at < 20.
+        if (!_frenzy && HealthBelowPct(20) && Cast(8269, Me)) _frenzy = true;
         base.UpdateCombat(diffMs);
     }
 }

@@ -13,7 +13,8 @@ namespace ArcaneCore.Game.Instances.Scripts.ZulGurub;
 /// <para>
 /// The fake death is SetCombatScriptStatus(true), not a combat stop: the creature keeps its combat and threat list, stops swinging,
 /// moving and choosing victims, and does not evade while it lies there (cmangos Unit::SelectHostileTarget: "do not evade during
-/// combat script running"). Once it rises, victim selection runs again, so after a wipe it evades and the slot fails.
+/// combat script running"). Once it rises, victim selection runs again, so after a wipe it evades: Thekal's slot then fails at home, a
+/// zealot's goes back to NOT_STARTED (<see cref="ThekalZealotAI"/>).
 /// </para></summary>
 public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBossAI(creature, slot)
 {
@@ -22,6 +23,8 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
     protected Unit? LastTarget;
     public bool FakeDeath => _fakeDeath;
     protected ZulGurubInstance? Raid => Instance as ZulGurubInstance;
+    /// <summary>The creature's own instance slot (TYPE_THEKAL 3, TYPE_LORKHAN 6, TYPE_ZATH 7).</summary>
+    protected uint Slot => slot;
 
     public void OnLethalDamage()
     {
@@ -111,10 +114,35 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
         return !Me.IsEvading;
     }
 
+    /// <summary>boss_thekalAI::JustReachedHome sets TYPE_THEKAL FAIL. The zealots have no JustReachedHome; their Reset sets NOT_STARTED.</summary>
+    protected virtual bool FailsAtHome => true;
+
     public override void OnReachedHome()
     {
-        base.OnReachedHome();
+        if (FailsAtHome) base.OnReachedHome();
         ResetActions();
+    }
+}
+
+/// <summary>
+/// mob_zealot_lorkhanAI::Reset and mob_zealot_zathAI::Reset: <c>SetData(TYPE_LORKHAN/TYPE_ZATH, NOT_STARTED)</c>. ScriptDev2 calls Reset
+/// when the evade starts (ScriptedAI::EnterEvadeMode) and when the creature respawns, so after a wipe the slot is back to NOT_STARTED,
+/// not FAIL.
+/// </summary>
+public abstract class ThekalZealotAI(Creature creature, uint slot) : ThekalCompanionAI(creature, slot)
+{
+    protected override bool FailsAtHome => false;
+
+    public override void OnEvade()
+    {
+        base.OnEvade();
+        Instance?.SetData(Slot, EncounterState.NotStarted);
+    }
+
+    public override void OnRespawn()
+    {
+        base.OnRespawn();
+        Instance?.SetData(Slot, EncounterState.NotStarted);
     }
 }
 
@@ -206,7 +234,8 @@ public sealed class ThekalAI : ThekalCompanionAI
 
     protected override void UpdateCombat(uint diffMs)
     {
-        if (_tiger && !_enraged && Below(10) && Cast(8269, Me)) _enraged = true;
+        // boss_thekal.cpp ExecuteAction(THEKAL_TIGER_ENRAGE): GetHealthPercent() < 11.
+        if (_tiger && !_enraged && HealthBelowPct(11) && Cast(8269, Me)) _enraged = true;
         base.UpdateCombat(diffMs);
     }
 
@@ -231,7 +260,7 @@ public sealed class ThekalAI : ThekalCompanionAI
 
 /// <summary>mangos-classic boss_thekal.cpp mob_zealot_lorkhanAI::OnFakeingDeath and
 /// ExecuteAction(ACTION_RESSURECTION).</summary>
-public sealed class LorKhanAI : ThekalCompanionAI
+public sealed class LorKhanAI : ThekalZealotAI
 {
     public LorKhanAI(Creature creature) : base(creature, 6)
     {
@@ -250,7 +279,7 @@ public sealed class LorKhanAI : ThekalCompanionAI
 
 /// <summary>mangos-classic boss_thekal.cpp mob_zealot_zathAI::OnFakeingDeath and
 /// ExecuteAction(ACTION_RESSURECTION).</summary>
-public sealed class ZathAI : ThekalCompanionAI
+public sealed class ZathAI : ThekalZealotAI
 {
     public ZathAI(Creature creature) : base(creature, 7)
     {

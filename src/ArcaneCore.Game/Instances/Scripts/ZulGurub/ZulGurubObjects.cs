@@ -10,10 +10,10 @@ public sealed partial class ZulGurubInstance
 {
     public override void OnObjectCreate(GameObject go)
     {
-        if (go.Entry is 180526 or 180497)
+        if (go.Entry is 180526 or GoForcefield)
         {
             StoreGameObject(go);
-            if (go.Entry == 180497)
+            if (go.Entry == GoForcefield)
                 OpenIf(go, GetData(4) is EncounterState.Done or EncounterState.Fail);
         }
     }

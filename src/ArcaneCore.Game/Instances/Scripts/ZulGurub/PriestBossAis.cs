@@ -71,13 +71,14 @@ public sealed class JeklikAI : RaidBossAI
     }
     protected override void UpdateCombat(uint diffMs)
     {
-        if (!_troll && Below(49) && Cast(24085, Me))
+        // boss_jeklik.cpp ExecuteAction: JEKLIK_PHASE_2 at GetHealthPercent() < 50, JEKLIK_PHASE_BATS at < 35.
+        if (!_troll && HealthBelowPct(50) && Cast(24085, Me))
         {
             _troll = true;
             System?.RemoveAuras(Me, 23966);
             ResetThreat();
         }
-        if (_troll && !_riders && Below(34))
+        if (_troll && !_riders && HealthBelowPct(35))
         {
             // SD2 boss_jeklikAI::ExecuteAction(JEKLIK_PHASE_BATS).
             if (SummonRiders()) _riders = true;
@@ -116,8 +117,9 @@ public sealed class VenoxisAI : RaidBossAI
             Cast(22413, Me, triggered: true);
             ResetThreat();
         }
-        if (!_frenzy && Below(19) && Cast(23537, Me)) _frenzy = true;
-        if (_snake && !_serpent && Below(24)) _serpent = true;
+        // boss_venoxis.cpp ExecuteAction: VENOXIS_PHASE_2 stops while GetHealthPercent() > 50, VENOXIS_FRENZY at < 20, VENOXIS_PHASE_3 at < 25.
+        if (!_frenzy && HealthBelowPct(20) && Cast(23537, Me)) _frenzy = true;
+        if (_snake && !_serpent && HealthBelowPct(25)) _serpent = true;
         base.UpdateCombat(diffMs);
     }
     public override void OnDeath(Unit? killer) { base.OnDeath(killer); System?.SayText(Me, 10460); }

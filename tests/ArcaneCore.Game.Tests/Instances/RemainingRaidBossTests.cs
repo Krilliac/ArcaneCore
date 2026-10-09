@@ -16,6 +16,7 @@ using ArcaneCore.Game.Instances.Scripts.ZulGurub;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -93,10 +94,8 @@ public sealed class RemainingRaidBossTests
     [InlineData(309u, 11348u, "ZathAI")]
     [InlineData(309u, 11380u, "JindoAI")]
     [InlineData(309u, 15114u, "GahzrankaAI")]
-    [InlineData(309u, 15082u, "GrilekAI")]
     [InlineData(309u, 15083u, "HazzarahAI")]
     [InlineData(309u, 15084u, "RenatakiAI")]
-    [InlineData(309u, 15085u, "WushoolayAI")]
     public void AdditionalBoss_HasDedicatedAi(uint map, uint entry, string ai)
     {
         using var raid = new Raid(map, entry);
@@ -131,10 +130,8 @@ public sealed class RemainingRaidBossTests
     [InlineData(309u, 11380u, 24306u, 6000u)]
     [InlineData(309u, 11382u, 16856u, 1000u)]
     [InlineData(309u, 15114u, 16099u, 8000u)]
-    [InlineData(309u, 15082u, 6524u, 16000u)]
     [InlineData(309u, 15083u, 24684u, 10000u)]
     [InlineData(309u, 15084u, 24649u, 8000u)]
-    [InlineData(309u, 15085u, 25033u, 10000u)]
     [InlineData(509u, 15340u, 15550u, 9000u)]
     [InlineData(509u, 15370u, 96u, 5000u)]
     [InlineData(509u, 15369u, 25748u, 5000u)]
@@ -250,6 +247,10 @@ public sealed class RemainingRaidBossTests
         Assert.False(zealot.FakeDeath);
         Assert.Equal(StandState.Stand, lorkhan.StandState);
         Assert.Equal(1u, lorkhan.InvincibilityHpThreshold);
+        // mob_zealot_lorkhanAI::Reset (run by the evade): TYPE_LORKHAN NOT_STARTED, and reaching home does not turn it into FAIL.
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(6));
+        lorkhan.AI.OnReachedHome();
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(6));
     }
 
     [Fact]
@@ -324,6 +325,201 @@ public sealed class RemainingRaidBossTests
         // EVENT_T_RANGE 0-5 yards: the tank stands in melee reach, so the EventAI casts Disarm. (1534104's Summon Player targets type 9,
         // which the host's EventAI does not resolve yet, so its absence would prove nothing here and is not asserted.)
         Assert.Contains(raid.Caster.Casts, c => c.Spell == 6713);
+    }
+
+    /// <summary>classic-db z2815 creature_ai_scripts rows of an Edge of Madness boss with AIName 'EventAI' (columns as in the dump).</summary>
+    private static CreatureAiEvent EdgeRow(uint id, uint creature, int p1, int p2, int p3, int p4, CreatureAiAction a1,
+        CreatureAiAction a2 = default, CreatureAiAction a3 = default) => new()
+    {
+        Id = id, CreatureId = creature, EventType = 0, Flags = 1025, Param1 = p1, Param2 = p2, Param3 = p3, Param4 = p4,
+        Action1 = a1, Action2 = a2, Action3 = a3,
+    };
+
+    [Fact]
+    public void Grilek_KeepsHisClassicDbEventAi_AndAvatarRaisesTheThreatOfAPlayerBelowTheTopByHalf()
+    {
+        // classic-db z2815 creature_template 15082 AIName 'EventAI', no ScriptName; neither reference core scripts him.
+        // 1508201: 11,24646,0,0 | 13,-50,1,0 | 13,50,5,0 (Avatar; victim threat -50%; +50% on a random target that is not top of the list).
+        // 1508202: 11,6524,0,0 (Ground Tremor).
+        using var raid = new Raid(309, 15082)
+        {
+            Make = e => Template(e, t => t.AIName = e == 15082 ? CreatureAiFactory.EventAIName : ""),
+            Ai = new CreatureAiContent(
+            [
+                EdgeRow(1508201, 15082, 15000, 20000, 25000, 35000, new CreatureAiAction(11, 24646, 0, 0),
+                    new CreatureAiAction(13, -50, 1, 0), new CreatureAiAction(13, 50, 5, 0)),
+                EdgeRow(1508202, 15082, 8000, 16000, 12000, 16000, new CreatureAiAction(11, 6524, 0, 0)),
+            ], []),
+        };
+        raid.Start();
+        Assert.Null(ArcaneCore.Game.Instances.Scripts.Raids.RaidBossAI.Create(raid.Boss));
+        Assert.IsType<CreatureEventAI>(raid.Boss.AI);
+
+        Player second = TestWorld.CreatePlayer(2, 2, 0, new FakeSession(), 309);
+        second.Relocate(2, 0, 50, 0, 0);
+        raid.World.AddPlayer(second);
+        var threat = raid.Boss.Combat.Threat;
+        threat.AddThreat(raid.Tank, 100f - threat.GetThreat(raid.Tank));
+        threat.AddThreat(second, 40f);
+        Assert.Equal(100f, threat.GetThreat(raid.Tank));
+
+        raid.Boss.AI!.OnUpdate(20000);
+
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 24646);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 6524);
+        // Percent changes, not flat threat: the tank halves to 50, the player below the top rises by half to 60 (a flat +50 would give
+        // 90), and the tank, being top, is never the one raised. The second player is now top: Avatar's "Switch Target".
+        Assert.Equal(50f, threat.GetThreat(raid.Tank), 3);
+        Assert.Equal(60f, threat.GetThreat(second), 3);
+    }
+
+    [Fact]
+    public void Wushoolay_KeepsHisClassicDbEventAi()
+    {
+        // classic-db z2815 creature_template 15085 AIName 'EventAI', no ScriptName; 1508501 Lightning Cloud, 1508502 Lightning Wave (target 4).
+        using var raid = new Raid(309, 15085)
+        {
+            Make = e => Template(e, t => t.AIName = e == 15085 ? CreatureAiFactory.EventAIName : ""),
+            Ai = new CreatureAiContent(
+            [
+                EdgeRow(1508501, 15085, 5000, 10000, 15000, 20000, new CreatureAiAction(11, 25033, 0, 0)),
+                EdgeRow(1508502, 15085, 8000, 16000, 12000, 16000, new CreatureAiAction(11, 24819, 4, 0)),
+            ], []),
+        };
+        raid.Start();
+        Assert.Null(ArcaneCore.Game.Instances.Scripts.Raids.RaidBossAI.Create(raid.Boss));
+        Assert.IsType<CreatureEventAI>(raid.Boss.AI);
+        raid.Boss.AI!.OnUpdate(16000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 25033);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 24819);
+    }
+
+    [Theory]
+    [InlineData(309u, 14517u, 500u, 24085u)] // boss_jeklik.cpp JEKLIK_PHASE_2: GetHealthPercent() < 50
+    [InlineData(309u, 14507u, 200u, 23537u)] // boss_venoxis.cpp VENOXIS_FRENZY: < 20
+    [InlineData(509u, 15370u, 200u, 24721u)] // boss_buru.cpp BURU_PHASE_2_TRANSITION: < 20 (then two seconds)
+    [InlineData(509u, 15369u, 200u, 8269u)]  // boss_ayamiss.cpp AYAMISS_FRENZY: < 20
+    public void HealthPhase_FiresJustBelowTheReferencePercent_ButNotAtIt(uint map, uint entry, uint thresholdPermille, uint spell)
+    {
+        using var raid = new Raid(map, entry);
+        raid.Start();
+        raid.Boss.MaxHealth = 1000; // fine enough that the band between the percent and one point below it holds a health value
+        raid.Boss.Health = thresholdPermille;
+        raid.Boss.AI!.OnUpdate(1);
+        raid.Boss.AI.OnUpdate(2000);
+        Assert.DoesNotContain(raid.Caster.Casts, cast => cast.Spell == spell);
+        raid.Boss.Health = thresholdPermille - 5; // half a percent below: the lane's old Below(n - 1) missed this band
+        raid.Boss.AI.OnUpdate(1);
+        raid.Boss.AI.OnUpdate(2000);
+        Assert.Contains(raid.Caster.Casts, cast => cast.Spell == spell);
+    }
+
+    [Fact]
+    public void ArlokkForcefield_ClosesOnThePull_OpensOnFailOrDone_AndADoneWithoutAPullLeavesItOpen()
+    {
+        // zulgurub.cpp SetData(TYPE_ARLOKK): DoUseOpenableObject(GO_FORCEFIELD, true) on DONE or FAIL, (…, false) on IN_PROGRESS.
+        // classic-db z2815 gameobject_template 180497 is a door (type 0) with startOpen (data0 1): it spawns open.
+        static (Raid Raid, GameObject Field) Setup()
+        {
+            var raid = new Raid(309, 14834);
+            raid.Start(aggro: false);
+            // The importer gives a startOpen door spawn go_state 0 (GameObjectLootDumpImporter): active, and its reset state too.
+            var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+                [GameObjectTestKit.GoTemplate(180497, GameObjectType.Door, (0, 1u))],
+                [GameObjectTestKit.GoSpawn(1, 180497, 0, 0) with { MapId = 309, Z = 50, State = (byte)GameObjectState.Active }], [], [], []));
+            raid.Map.AddUpdater(objects);
+            raid.World.RunTick(0);
+            GameObject field = Assert.Single(objects.GameObjects, g => g.Entry == 180497);
+            Assert.Equal(GameObjectState.Active, field.State);
+            return (raid, field);
+        }
+
+        (Raid pulled, GameObject field) = Setup();
+        using (pulled)
+        {
+            pulled.Data.SetData(4, EncounterState.InProgress);
+            Assert.Equal(GameObjectState.Ready, field.State);
+            pulled.Data.SetData(4, EncounterState.Fail);
+            Assert.Equal(GameObjectState.Active, field.State);
+            // FAIL then DONE (no new pull in between): the forcefield is already open and stays open.
+            pulled.Data.SetData(4, EncounterState.Done);
+            Assert.Equal(GameObjectState.Active, field.State);
+        }
+
+        (Raid gmKill, GameObject untouched) = Setup();
+        using (gmKill)
+        {
+            // Arlokk killed without the gong (or by a GM): DONE with no IN_PROGRESS before it. A toggle would close the open forcefield.
+            gmKill.Data.SetData(4, EncounterState.Done);
+            Assert.Equal(GameObjectState.Active, untouched.State);
+        }
+    }
+
+    [Fact]
+    public void Renataki_VanishPausesHisSpellListMeleeAndMovement_UntilTheDelay_WithNoAmbushOrSelfTeleport()
+    {
+        using var raid = new Raid(309, 15084);
+        raid.Start();
+        var ai = Assert.IsType<RenatakiAI>(raid.Boss.AI);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(30000); // spell list 1508401: Vanish at 25-30 s
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == RenatakiAI.Vanish);
+        Assert.False(ai.Vanished); // the fake caster runs no effects: nothing reported a hit yet
+
+        // RenatakiVanish::OnEffectExecute -> ReceiveAIEvent(AI_EVENT_CUSTOM_A) with the enemy hit.
+        ai.OnVanishHit(raid.Tank, spells: null);
+        Assert.True(ai.Vanished);
+        Assert.False(ai.MeleeEnabled);
+        Assert.False(ai.CombatMovement);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(RenatakiAI.VanishDelayMs - 1);
+        Assert.Empty(raid.Caster.Casts); // SetCombatScriptStatus(true): the spell list waits
+        ai.OnUpdate(1);
+        Assert.False(ai.Vanished);
+        Assert.True(ai.MeleeEnabled);
+        Assert.True(ai.CombatMovement);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell is 24337 or RenatakiAI.VanishTeleport);
+    }
+
+    [Fact]
+    public void RenatakiVanish_WithRealSpells_TheHitEnemyCastsTheTeleport_AndItsAuraEndsInThrashAndNoVanish()
+    {
+        // The shapes of the real spells (mangos-classic spell_template): 24699 a dummy on the enemies plus a self aura (20 s), 24700 an
+        // aura on its unit target (the stun), Thrash a self aura. RenatakiVanish (spell script) and RenatakiVanishTeleport (aura module).
+        static SpellInfo Instant(uint id, int durationMs, params SpellEffectInfo[] effects) => SpellTestKit.Spell(id, effects) with
+        {
+            Duration = new SpellDuration(durationMs, 0, durationMs),
+            SpellVisual = 1,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        using var kit = new PetTestKit(
+        [
+            Instant(RenatakiAI.Vanish, 20000, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy),
+                SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.Dummy)),
+            Instant(RenatakiAI.VanishTeleport, 2000, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)),
+            Instant(RenatakiAI.Thrash, 10000, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.Dummy)),
+        ]);
+        SpellScriptDispatcher.Install(kit.Spells.System, new SpellScriptRegistry([new RenatakiVanishScript()]));
+        (Player player, _) = kit.AddPlayer(1, 5, 5);
+        Creature renataki = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 6, 5, 0, 0);
+        var ai = new RenatakiAI(renataki);
+        renataki.AI = ai;
+        ai.AttackStart(player);
+        SpellSystem spells = kit.Spells.System;
+
+        spells.CastSpell(renataki, RenatakiAI.Vanish, SpellCastTargets.ForUnit(player.Guid), triggered: true);
+        Assert.True(ai.Vanished);
+        Assert.True(spells.HasAura(renataki, RenatakiAI.Vanish));
+
+        ai.OnUpdate(RenatakiAI.VanishDelayMs);
+        Assert.False(ai.Vanished);
+        SpellAuraHolder teleport = Assert.Single(spells.GetAuras(renataki), h => h.Spell.Id == RenatakiAI.VanishTeleport);
+        Assert.Equal(player.Guid, teleport.CasterGuid); // the vanish target casts it on him, as target->CastSpell(m_creature, ...)
+
+        spells.RemoveAuras(renataki, RenatakiAI.VanishTeleport);
+        Assert.True(spells.HasAura(renataki, RenatakiAI.Thrash));
+        Assert.False(spells.HasAura(renataki, RenatakiAI.Vanish));
     }
 
     [Fact]
@@ -481,10 +677,14 @@ public sealed class RemainingRaidBossTests
         Creature ohgan = raid.Spawn(14988);
         raid.Map.Combat.Kill(raid.Tank, ohgan);
         Assert.Single(raid.Caster.Casts, cast => cast.Spell == 23537);
+        Assert.Equal(EncounterState.InProgress, raid.Data.GetData(5));
+        // boss_mandokirAI::EnterEvadeMode: TYPE_OHGAN FAIL when the evade starts, before he is home.
         raid.Boss.AI.OnEvade();
         Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 15117);
+        Assert.Equal(EncounterState.Fail, raid.Data.GetData(5));
         raid.Boss.AI.OnReachedHome();
         Assert.Equal(15271u, raid.Boss.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.Equal(EncounterState.Fail, raid.Data.GetData(5));
     }
 
     [Fact]

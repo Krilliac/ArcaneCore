@@ -158,12 +158,18 @@ public sealed class MandokirAI : RaidBossAI
         foreach (Creature spirit in _spirits) System?.ForcedDespawn(spirit, 0);
         _spirits.Clear();
     }
-    public override void OnEvade() { DespawnSpirits(); base.OnEvade(); }
+    /// <summary>boss_mandokirAI::EnterEvadeMode: TYPE_OHGAN FAIL and the spirits despawned when the evade starts, not when he is home.</summary>
+    public override void OnEvade()
+    {
+        Instance?.SetData(ZulGurubInstance.TypeOhgan, EncounterState.Fail);
+        DespawnSpirits();
+        base.OnEvade();
+    }
 
-    /// <summary>cmangos HomeMovementGenerator::Finalize reloads the creature addon: he is mounted again at home.</summary>
+    /// <summary>cmangos HomeMovementGenerator::Finalize reloads the creature addon: he is mounted again at home. No state change here
+    /// (the base would set FAIL a second time; the reference has no JustReachedHome).</summary>
     public override void OnReachedHome()
     {
-        base.OnReachedHome();
         if (_mountDisplay != 0) Me.SetUInt32(UpdateFields.UnitFieldMountdisplayid, _mountDisplay);
     }
 

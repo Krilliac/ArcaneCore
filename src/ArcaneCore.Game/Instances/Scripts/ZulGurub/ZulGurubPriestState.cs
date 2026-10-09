@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
 
 namespace ArcaneCore.Game.Instances.Scripts.Classic;
@@ -99,8 +100,11 @@ public sealed partial class ZulGurubInstance
         }
 
         Encounters[type] = data;
-        if (type == 4 && data is EncounterState.InProgress or EncounterState.Done or EncounterState.Fail)
-            DoUseDoorOrButton(180497);
+        // zulgurub.cpp SetData(TYPE_ARLOKK): DoUseOpenableObject(GO_FORCEFIELD, true) on DONE or FAIL, (…, false) on IN_PROGRESS.
+        if (type == 4 && data is EncounterState.Done or EncounterState.Fail)
+            UseOpenableObject(GoForcefield, open: true);
+        else if (type == 4 && data == EncounterState.InProgress)
+            UseOpenableObject(GoForcefield, open: false);
         if (data == EncounterState.Done && GetSingleCreatureFromStorage(14834) is { IsAlive: true } hakkar)
         {
             Instance.FindUpdater<CreatureMapSystem>()?.CastSpell(hakkar, 24693, hakkar, triggered: true);
@@ -108,5 +112,21 @@ public sealed partial class ZulGurubInstance
 
         SaveIfDone(data);
         return true;
+    }
+
+    /// <summary>GO_FORCEFIELD (zulgurub.h), Arlokk's forcefield: a door whose template starts open (classic-db z2815 gameobject_template
+    /// 180497, type 0, data0 startOpen 1).</summary>
+    public const uint GoForcefield = 180497;
+
+    /// <summary>
+    /// ScriptedInstance::DoUseOpenableObject / GameObject::UseOpenableObject (mangos-classic sc_instance.cpp, GameObject.cpp): idempotent.
+    /// Opening uses the object only while it is ready (closed), closing only while it is active (open); otherwise nothing happens. Unlike
+    /// a plain <see cref="ScriptedInstance.DoUseDoorOrButton"/> toggle, a DONE that never had an IN_PROGRESS (a GM kill, Arlokk killed
+    /// without the gong) leaves the open forcefield open.
+    /// </summary>
+    private void UseOpenableObject(uint entry, bool open)
+    {
+        if (GetSingleGameObjectFromStorage(entry) is { } go && (go.State == GameObjectState.Active) != open)
+            DoUseDoorOrButton(entry);
     }
 }
