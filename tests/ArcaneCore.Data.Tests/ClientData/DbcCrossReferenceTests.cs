@@ -1,5 +1,6 @@
 using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.Data.Tests.Skills;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -51,6 +52,33 @@ public sealed class DbcCrossReferenceTests
         DbcReferenceResult result = DbcCrossReferences.RunDbc(temp.Path).Single(r => r.Reference.Name == "Spell.dbc.SpellVisualID");
         Assert.Equal((1, 1, 1L), (result.ReferencedIds, result.DanglingIds, result.DanglingRows));
         Assert.Equal([77L], result.Samples);
+    }
+
+    [Fact]
+    public void Build5875KnownClientGap_IsSeparatedFromUnexpectedDanglingIds()
+    {
+        using var temp = new TempDirectory();
+        DbdLayout area = ClientDbcDbdLayouts.All["AreaTable.dbc"];
+        int continent = area.Columns.Single(c => c.Name == "ContinentID").Offset / 4;
+        uint[] row = new uint[area.Fields];
+        row[0] = 67;
+        row[continent] = 17;
+        File.WriteAllBytes(Path.Combine(temp.Path, "AreaTable.dbc"), SyntheticDbc.Image(area.Fields, area.RecordSize, row));
+        SyntheticDbc.Write(temp.Path, "Map.dbc", rows: 1);
+
+        IReadOnlyList<DbcReferenceResult> knownResults = DbcCrossReferences.RunDbc(temp.Path);
+        DbcReferenceResult known = knownResults.Single(r => r.Reference.Name == "AreaTable.dbc.ContinentID");
+        Assert.Equal(DbcReferenceStatus.KnownClientGap, known.Status);
+        Assert.Equal((1, 1L), (known.DanglingIds, known.DanglingRows));
+        Assert.Contains("known client-data gap", known.Describe(), StringComparison.Ordinal);
+        string summary = DbcCrossReferences.Lines(knownResults)[0];
+        Assert.Contains("0 with dangling ids (0 ids, 0 rows)", summary, StringComparison.Ordinal);
+        Assert.EndsWith(", 1 known client-data gaps (1 ids, 1 rows)", summary, StringComparison.Ordinal);
+
+        row[continent] = 99;
+        File.WriteAllBytes(Path.Combine(temp.Path, "AreaTable.dbc"), SyntheticDbc.Image(area.Fields, area.RecordSize, row));
+        DbcReferenceResult unexpected = DbcCrossReferences.RunDbc(temp.Path).Single(r => r.Reference.Name == "AreaTable.dbc.ContinentID");
+        Assert.Equal(DbcReferenceStatus.Dangling, unexpected.Status);
     }
 
     private static string NewWorld(string directory, params string[] statements)
@@ -120,6 +148,19 @@ public sealed class DbcCrossReferenceTests
         Assert.Null(group.ForeignColumn);
         DbdField parent = ClientDbcDbdLayouts.All["Map.dbc"].Columns.Single(c => c.Name == "ParentMapID");
         Assert.Equal(("AreaTable", "ID"), (parent.ForeignTable, parent.ForeignColumn));
+        DbdField footstep = ClientDbcDbdLayouts.All["FootstepTerrainLookup.dbc"].Columns.Single(c => c.Name == "CreatureFootstepID");
+        Assert.Null(footstep.ForeignTable);
+    }
+
+    [RealDbcFact]
+    public void Build5875ClientSet_HasOnlyTheDocumentedForeignKeyGaps()
+    {
+        string directory = Environment.GetEnvironmentVariable(RealDbcFactAttribute.Variable)!;
+        IReadOnlyList<DbcReferenceResult> results = DbcCrossReferences.RunDbc(directory);
+        Assert.Equal(173, results.Count);
+        Assert.Equal(22, results.Count(r => r.Status == DbcReferenceStatus.KnownClientGap));
+        Assert.DoesNotContain(results, r => r.Status is DbcReferenceStatus.Dangling or DbcReferenceStatus.Skipped);
+        Assert.Equal(147, results.Where(r => r.Status == DbcReferenceStatus.KnownClientGap).Sum(r => r.DanglingIds));
     }
 
     [Fact]
