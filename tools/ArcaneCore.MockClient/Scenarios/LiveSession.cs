@@ -415,6 +415,16 @@ internal static class LiveSession
         return Encoding.UTF8.GetString(payload, 17, (int)length - 1);
     }
 
+    /// <summary>
+    /// SMSG_NOTIFICATION: one CString (vmangos WorldSession::SendNotification). Printed so a refused line ("You don't know that
+    /// language", a mute) is visible instead of looking like a silently dropped command (wave-10 rehearsal, ghost GM).
+    /// </summary>
+    internal static string DecodeNotification(byte[] payload)
+    {
+        int end = Array.IndexOf(payload, (byte)0);
+        return Encoding.UTF8.GetString(payload, 0, end < 0 ? payload.Length : end);
+    }
+
     private static async Task DrainAsync(WorldClient client, TextWriter output, string local, TimeSpan quiet, CancellationToken ct)
     {
         while (true)
@@ -446,6 +456,10 @@ internal static class LiveSession
                 float z = BinaryPrimitives.ReadSingleLittleEndian(frame.Payload.AsSpan(12));
                 output.WriteLine(FormattableString.Invariant($"{Stamp()} [{local}] < SMSG_NEW_WORLD map {map} ({x:F1}, {y:F1}, {z:F1}); sending MSG_MOVE_WORLDPORT_ACK"));
                 await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, ct).ConfigureAwait(false);
+            }
+            else if (frame.Opcode == (ushort)WorldOpcode.SmsgNotification)
+            {
+                output.WriteLine($"{Stamp()} [{local}] < notification: {DecodeNotification(frame.Payload)}");
             }
             else if (frame.Opcode == (ushort)WorldOpcode.SmsgTransferAborted)
             {

@@ -48,6 +48,13 @@ public sealed class LiveSessionTests : IDisposable
     }
 
     [Fact]
+    public void ANotificationBuiltByTheServer_IsDecoded()
+    {
+        Assert.Equal("You don't know that language", LiveSession.DecodeNotification(ChatPackets.BuildNotification("You don't know that language")));
+        Assert.Equal(string.Empty, LiveSession.DecodeNotification([]));
+    }
+
+    [Fact]
     public void AWhisperScriptLine_IsReadBackByTheServersOwnReader_AsAWhisperToTheTarget()
     {
         var reader = new PacketReader(LiveSession.ScriptPacket("/w Ironwander what level are you?"));
