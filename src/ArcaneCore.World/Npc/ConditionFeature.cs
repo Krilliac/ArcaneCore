@@ -193,6 +193,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
                     && c.Template.ExtraFlagsDialect == CreatureExtraFlagsDialect.CMangos
                     && (c.Template.ExtraFlags & 0x00200000u) != 0) : null,
             WorldScript = (id, state) => services.GetService<WorldState.WarEffortFeature>()?.WorldScriptCondition(id, state)
+                ?? services.GetService<WorldState.ScourgeInvasionFeature>()?.WorldScriptCondition(id, state)
                 ?? runtimeConditions.WorldScriptCondition(id, state),
             // AQ20 boss variables follow the saved encounter slots, including immediately after Load.
             WorldState = (player, id) => player.Map is { } map ? MapVariable(map, id) : null,

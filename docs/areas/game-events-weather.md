@@ -334,7 +334,7 @@ unchecked: any field may be set, the HUD shows only the ones a WorldStateUI row 
   (it needs the economy lane); nothing is stubbed.
 - **Darkmoon Faire schedules** (`schedule_type` 2-10, computed): rejected loudly (event disabled, issue line), not implemented: classic-db has no row that uses them.
 - **Hardcoded vmangos events** (`HardcodedEvents.cpp`: elemental invasion, nightmare dragons, Darkmoon, goblets, Scourge invasion, AQ war effort):
-  only the seam exists for vmangos-specific handlers (`IWorldEventHandler`, with `hardcoded` / `disabled` handling in the service). The mangos-classic AQ resource counters and phases 1-3 now have a separate durable owner ([war-effort-20261009.md](../integration/war-effort-20261009.md)); the remaining event mechanics still need handlers.
+  only the seam exists for vmangos-specific handlers (`IWorldEventHandler`, with `hardcoded` / `disabled` handling in the service). The mangos-classic AQ phases and Colossus flags have a separate durable owner ([war-effort-20261009.md](../integration/war-effort-20261009.md)); the six Scourge zone counts and event gates do too ([scourge-invasion-20261009.md](../integration/scourge-invasion-20261009.md)). Their remaining choreography still needs handlers.
 - **Weekly recompute**: mangos-classic recomputes computed schedules at the weekly reset (World.cpp:2337); ArcaneCore has no weekly reset, so they are
   recomputed when the local calendar day changes. There is no `ScheduleRecompute` option because `WeeklyReset` could not work.
 - **Event creature spells and equipment**, **event mails**, **`.npc info` / `.gobject info` event lines**: see above.
