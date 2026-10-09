@@ -72,6 +72,38 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     [Fact]
+    public async Task ARefusedCreation_SaysWhy_InTheResultAndTheLog()
+    {
+        // The wave-9 rehearsal: '.playerbot create Bot7' answered "create-failed" and logged "(InvalidOperationException)" only.
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        var log = new CapturingLogger();
+        await using WorldTestHost host = Start(accounts, characters, owners, logger: log);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+
+        PlayerbotOperationResult refused = await feature.CreateAsync("Bot7", 1, 1);
+        Assert.False(refused.Success);
+        Assert.Equal("character-create-refused: the name may contain only letters of the realm's alphabet (no digits, symbols or mixed alphabets) (CharNameMixedLanguages)", refused.Code);
+        Assert.Equal("Bot7", refused.Name);
+        Assert.Contains(log.Entries, e => e.Message == "Managed playerbot creation of 'Bot7' failed: the name may contain only letters of the realm's alphabet (no digits, symbols or mixed alphabets) (CharNameMixedLanguages)");
+        Assert.Empty(await owners.LoadAllAsync());
+
+        // the refusal left nothing behind: a valid name is created next
+        Assert.True((await feature.CreateAsync("Botseven", 1, 1)).Success);
+    }
+
+    [Fact]
+    public void DescribeCreateRefusal_NamesTheRuleAndTheCode()
+    {
+        Assert.Equal("the account's character limit is reached (CharCreateAccountLimit)",
+            ManagedPlayerbotFeature.DescribeCreateRefusal((int)ArcaneCore.Protocol.CharResult.CharCreateAccountLimit));
+        Assert.Equal("the name is reserved (CharNameReserved)", ManagedPlayerbotFeature.DescribeCreateRefusal((int)ArcaneCore.Protocol.CharResult.CharNameReserved));
+        Assert.Equal("no SMSG_CHAR_CREATE answer", ManagedPlayerbotFeature.DescribeCreateRefusal(-1));
+        Assert.Equal("character creation failed (result 0x99)", ManagedPlayerbotFeature.DescribeCreateRefusal(0x99));
+    }
+
+    [Fact]
     public async Task MaxRegisteredBots_BoundsCreation()
     {
         var accounts = new InMemoryAccountStore();
