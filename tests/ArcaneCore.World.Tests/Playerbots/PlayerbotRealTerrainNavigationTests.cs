@@ -404,6 +404,25 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
         Assert.True(left <= 4f, $"stopped {left:F1} yards from Guard Thomas");
     }
 
+    /// <summary>
+    /// Live 2026-10-09: Ironwander stood on the mountainside north of Coldridge Valley, on navigation-mesh polygons flagged as steep
+    /// slopes, for over two hours (<c>stalled 7960s: goal=Grind target=1196</c>). Every bot query excludes steep slopes, so every route
+    /// from there, to the Ice Claw Bear 107 yards away or 30 yards in any direction, answered no path. Now the way off the slope is
+    /// the mesh's own path with the steep polygons allowed, down to walkable ground, and the bot walks on to the bear's spawn.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task FromIronwandersSlope_TheBotWalksDownToTheIceClawBear()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(IronwanderSlope);
+        float left = await terrain.WalkTowardAsync(IceClawBear, 5f, 300_000, output, new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 });
+        Assert.True(left <= 5f, $"stopped {left:F1} yards from the Ice Claw Bear's spawn");
+    }
+
+    // Where Ironwander stood (live characters database, 2026-10-09) and the nearest Ice Claw Bear spawn (creature 1196, spawn 3059).
+    private static readonly Vector3 IronwanderSlope = new(-5605.634f, 155.793f, 453.322f);
+    private static readonly Vector3 IceClawBear = new(-5515.43f, 212.82f, 399.737f);
+
     // Guard Thomas (creature 261, spawn 80880), the ender of quest 35, at the bridge east of Elwynn.
     private static readonly Vector3 GuardThomas = new(-9610.23f, -1032.05f, 41.3058f);
 
