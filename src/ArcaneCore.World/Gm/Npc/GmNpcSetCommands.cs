@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Character;
 
 namespace ArcaneCore.World.Gm.Npc;
 
@@ -16,6 +17,7 @@ public sealed class GmNpcSetCommands : ICommandExtension
         new ChatCommand("set", AccountSecurity.GameMaster, "Syntax: .npc set $subcommand", Children:
         [
             new ChatCommand("flag", AccountSecurity.GameMaster, "Syntax: .npc set flag #flags\nChange the selected creature's NPC service flags for its current life.", SetFlag, RetailLevel: 3),
+            new ChatCommand("faction", AccountSecurity.GameMaster, "Syntax: .npc set faction #faction\nChange the selected creature's faction for its current life.", NpcFactionCommands.SetFaction, RetailLevel: 3),
         ], RetailLevel: 3),
     ];
 

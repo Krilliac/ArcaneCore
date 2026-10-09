@@ -30,6 +30,8 @@ internal sealed class FakeLootCoordinator(WorldRuntime world) : ILootStateCoordi
 
     public bool RefuseActors { get; set; }
 
+    public bool RefuseStarts { get; set; }
+
     public LootOutcome NextOutcome { get; set; } = LootOutcome.After;
 
     public Dictionary<LootStateKey, LootStateRecord> Cache { get; } = [];
@@ -64,7 +66,7 @@ internal sealed class FakeLootCoordinator(WorldRuntime world) : ILootStateCoordi
         Assert.True(LootStateRules.IsLegalSuccessor(operation.Expected, operation.Updated, operation.Awards),
             "the game planned a transition the store would refuse");
         Assert.Equal(Find(operation.Key), operation.Expected);
-        if (IsBlocked(operation.Key))
+        if (RefuseStarts || IsBlocked(operation.Key))
         {
             return false;
         }

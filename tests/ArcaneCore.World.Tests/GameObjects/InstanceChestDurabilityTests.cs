@@ -55,16 +55,18 @@ public sealed class InstanceChestDurabilityTests
 
         public LootSettlements Settlements => Context.Feature!.Settlements!;
 
-        public static Fixture Start(InstanceStoreSnapshot? storedInstances = null, IReadOnlyList<LootStateRecord>? storedChests = null)
+        public static Fixture Start(InstanceStoreSnapshot? storedInstances = null, IReadOnlyList<LootStateRecord>? storedChests = null,
+            LockEntry? chestLock = null, Action<IServiceCollection>? configureServices = null)
         {
             var words = new uint[GameObjectTemplate.DataCount];
+            words[0] = chestLock?.Id ?? 0;
             words[1] = ChestEntry;
             words[15] = 1; // chest.groupLootRules: only such chests use the group round robin (vmangos Player.cpp:7680-7698)
             var template = new GameObjectTemplate { Entry = ChestEntry, Type = (uint)GameObjectType.Chest, Name = "Durable chest", Data = words };
             // The dungeon entrance puts the player at (-16.4, -383.07, 61.78): the chest is 2.4 yd away.
             var content = new GameObjectContent([template],
                 [new GameObjectSpawn { Guid = ChestSpawn, Entry = ChestEntry, MapId = Deadmines, X = -14f, Y = -383.07f, Z = 61.78f, SpawnTimeSeconds = 600 }],
-                [], [], []);
+                chestLock is null ? [] : [chestLock], [], []);
             var loot = new LootContent(
                 [
                     (LootTableKind.GameObject, new LootStoreRow(ChestEntry, Cloth, 100, 0, 2, 2)),
@@ -82,7 +84,7 @@ public sealed class InstanceChestDurabilityTests
             {
                 using (items.Use())
                 {
-                    return new Fixture { Host = WorldTestHost.Start(), Context = context, Items = items };
+                    return new Fixture { Host = WorldTestHost.Start(configureServices: configureServices), Context = context, Items = items };
                 }
             }
             finally
@@ -352,6 +354,43 @@ public sealed class InstanceChestDurabilityTests
         await UseChestAsync(alice);
         Assert.Equal(2, Window(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse)).Count);
         Assert.Equal(1u, f.Store.States[new LootStateKey(instance, ChestSpawn)].Generation);
+    }
+
+    [Fact]
+    public async Task GatheringOpen_OfADungeonNode_RaisesTheSkillOnlyWhenItsGenerationCommitted()
+    {
+        // vmangos Spell::EffectOpenLock rolls Player::UpdateGatherSkill after the open (SpellEffects.cpp:2191-2207). The durable
+        // open accepts the cast first and refuses it when the generation does not commit: that refusal must not raise the skill.
+        await using Fixture f = Fixture.Start(
+            chestLock: Skills.GatheringWorldTests.Lock(Skills.GatheringWorldTests.VeinLock, Skills.GatheringWorldTests.LockTypeMining, 1),
+            configureServices: Skills.GatheringWorldTests.Configure);
+        await using WorldTestClient alice = await f.EnterWorldAsync("DLOOTM", "Dlootmm");
+        uint instance = await f.EnterDungeonAsync(alice, "Dlootmm");
+        Player player = await f.Host.PlayerAsync("Dlootmm");
+        Game.Spells.SpellSystem spells = f.Host.WorldServices.GetRequiredService<global::ArcaneCore.World.Spells.SpellFeature>().System;
+        spells.Random = new Skills.GatheringWorldTests.FixedRandom(int.MaxValue); // no orange failure
+        await f.Host.OnWorldAsync(() => player.Skills!.Set(Kernel.Skills.SkillIds.Mining, 1, 75, 1));
+        GameObject node = await f.Host.OnWorldAsync(() => f.SystemOf(instance).Find(new ObjectGuid(ChestGuid()))!);
+
+        f.Store.ThrowBeforeApplying = true; // the generation does not commit
+        await alice.SendAsync(WorldOpcode.CmsgCastSpell, MineTheChest());
+        await alice.ReadUntilAsync(WorldOpcode.SmsgLootReleaseResponse);
+        Assert.Equal((ushort)1, await f.Host.OnWorldAsync(() => player.Skills!.GetValuePure(Kernel.Skills.SkillIds.Mining)));
+        Assert.DoesNotContain(player.Guid, await f.Host.OnWorldAsync(() => node.SkillupSet.ToList()));
+
+        f.Store.ThrowBeforeApplying = false;
+        await alice.SendAsync(WorldOpcode.CmsgCastSpell, MineTheChest());
+        Assert.Equal(2, Window(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse)).Count);
+        await f.Host.WaitForWorldAsync(() => player.Skills!.GetValuePure(Kernel.Skills.SkillIds.Mining) == 2, "the committed open raises the skill");
+        Assert.Contains(player.Guid, await f.Host.OnWorldAsync(() => node.SkillupSet.ToList()));
+    }
+
+    private static byte[] MineTheChest()
+    {
+        var w = new PacketWriter(16);
+        w.WriteUInt32(Skills.GatheringWorldTests.MiningCast);
+        new Game.Spells.SpellCastTargets { Mask = Game.Spells.SpellCastTargetFlags.GameObject, GameObject = new ObjectGuid(ChestGuid()) }.Write(w);
+        return w.ToArray();
     }
 
     [Fact]

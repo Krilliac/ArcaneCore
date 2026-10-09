@@ -40,5 +40,43 @@ internal sealed class InMemoryMapDataStore : IMapDataStore
 /// <summary>Registers <see cref="InMemoryMapDataStore"/> in every <see cref="WorldTestHost"/>.</summary>
 internal sealed class MapTestServices : IWorldTestServices
 {
-    public void Register(IServiceCollection services) => services.AddSingleton<IMapDataStore, InMemoryMapDataStore>();
+    public void Register(IServiceCollection services)
+    {
+        services.AddSingleton<IMapDataStore, InMemoryMapDataStore>();
+        services.AddSingleton<IGameTeleStore, InMemoryGameTeleStore>();
+    }
+}
+
+internal sealed class InMemoryGameTeleStore : IGameTeleStore
+{
+    private readonly List<GameTele> _rows = [.. InMemoryMapDataStore.Content.GameTeles];
+
+    public Task<GameTele?> AddAsync(GameTele location, CancellationToken cancellationToken = default)
+    {
+        lock (_rows)
+        {
+            if (_rows.Any(t => string.Equals(t.Name, location.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Task.FromResult<GameTele?>(null);
+            }
+
+            GameTele added = location with { Id = _rows.Max(t => t.Id) + 1 };
+            _rows.Add(added);
+            return Task.FromResult<GameTele?>(added);
+        }
+    }
+
+    public Task<GameTele?> DeleteAsync(string name, CancellationToken cancellationToken = default)
+    {
+        lock (_rows)
+        {
+            GameTele? row = _rows.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (row is not null)
+            {
+                _rows.Remove(row);
+            }
+
+            return Task.FromResult(row);
+        }
+    }
 }

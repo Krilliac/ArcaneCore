@@ -329,9 +329,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// The spells area's open-lock effect (herb gathering, mining, lockpicking, opening with a
     /// key): <paramref name="lockType"/> is the effect's misc value, <paramref name="keyItemId"/>
     /// the casting item. On success a chest opens its loot and a door/button activates. The cast
-    /// time and skill-ups belong to the spell (not done here).
+    /// time and skill-ups belong to the spell (not done here): <paramref name="onChestOpened"/> runs
+    /// with the chest once its loot window really opened, which for a dungeon chest is only after
+    /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>),
+    /// and at once when the chest's script takes the open over (vmangos Spell::EffectOpenLock rolls the
+    /// gathering skill after SendLoot whatever the object did with it, SpellEffects.cpp:2163-2207).
     /// </summary>
-    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0)
+    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
+        Action<GameObject>? onChestOpened = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
@@ -373,14 +378,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
         if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
@@ -398,7 +403,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
             // Spell::SendLoot hands the chest to GameObject::Use too, so a key or lockpick opening starts the chest event as the click does.
-            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go) : GameObjectUseResult.NeedsQuest,
+            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go, onChestOpened) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
@@ -616,9 +621,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// server-side quest gate or direct-use lock check to refuse it. Limit: a restocking chest (GO_NOT_READY) refuses the open here and so
     /// starts no event, where cmangos would start it with the empty loot window.
     /// </summary>
-    private GameObjectUseResult OpenChestStartingEvent(Player player, GameObject go)
+    private GameObjectUseResult OpenChestStartingEvent(Player player, GameObject go, Action<GameObject>? onOpened = null)
     {
-        GameObjectUseResult opened = OpenChest(player, go);
+        GameObjectUseResult opened = OpenChest(player, go, onOpened);
         if (opened == GameObjectUseResult.Ok)
         {
             StartDbEvent(go.Template.GetData(6), player, go);
@@ -638,11 +643,22 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return questId == 0 || Quests?.IsQuestIncomplete(player, questId) == true;
     }
 
+    /// <summary>A script took the open over: a chest never reaches its loot window, so its open callback runs now.</summary>
+    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened)
+    {
+        if (go.Type == GameObjectType.Chest)
+        {
+            onChestOpened?.Invoke(go);
+        }
+
+        return GameObjectUseResult.Ok;
+    }
+
     /// <summary>vmangos CannotBeUsedUnderImmunity (GameObjectDefines.h:602-619) against UNIT_FLAG_IMMUNE.</summary>
     private static bool IsRefusedForImmunity(Player player, GameObject go)
         => go.Template.CannotBeUsedUnderImmunity() && (player.UnitFlags & UnitFlags.Immune) != 0;
 
-    private GameObjectUseResult OpenChest(Player player, GameObject go)
+    private GameObjectUseResult OpenChest(Player player, GameObject go, Action<GameObject>? onOpened = null)
     {
         if (Loot is null)
         {
@@ -677,8 +693,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         LootResult opened = key is { } durable
-            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable)
-            : Loot.OpenGameObject(player, go, go.Template.GetData(1));
+            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable, onOpened)
+            : Loot.OpenGameObject(player, go, go.Template.GetData(1), onOpened);
         return opened switch
         {
             LootResult.Ok => GameObjectUseResult.Ok,

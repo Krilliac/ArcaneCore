@@ -334,7 +334,9 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
         ChatCommand? abbreviation = null;
         foreach (ChatCommand command in level)
         {
-            if (filter && !IsAvailable(command, security))
+            // A parent can have a more restricted default handler than a child (.learn is level 5,
+            // .learn all_lang is level 1 in vmangos Chat.cpp:492-507). Keep such a parent traversable.
+            if (filter && !IsListed(command, security))
             {
                 continue;
             }

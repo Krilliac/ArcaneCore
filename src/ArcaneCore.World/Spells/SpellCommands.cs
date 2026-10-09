@@ -17,7 +17,7 @@ public sealed class SpellCommands : ICommandGroup
 {
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
-        new ChatCommand("learn", AccountSecurity.GameMaster, "Syntax: .learn #spell — teach a spell to the selected player or yourself.", Learn),
+        new ChatCommand("learn", AccountSecurity.Administrator, "Syntax: .learn #spell — teach a spell to the selected player or yourself.", Learn, RetailLevel: 5),
         new ChatCommand("unlearn", AccountSecurity.GameMaster, "Syntax: .unlearn #spell — make the selected player or yourself forget a spell.", Unlearn),
         new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself.", Cast),
         new ChatCommand("unaura", AccountSecurity.GameMaster, "Syntax: .unaura #spell|all — remove auras from the selected player or yourself.", Unaura),
