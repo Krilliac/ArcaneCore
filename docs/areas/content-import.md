@@ -201,7 +201,11 @@ feature reads:
   game-event importer, or migrated from the Codex-line schema, which leaves them empty: every holiday NPC then stands in the world all year
   and its quests are offered out of season); a world that has events keeps its own (an import, a GM's `game_event.disabled`). On a copy of
   the wave-8 rehearsal's world (2026-10-08, classic-db z2815): 67 events, 38 times, 3219 creature and 12274 gameobject event spawns, 977
-  creature data rows, 61 event quests, 1 mail. A second run with the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
+  creature data rows, 61 event quests, 1 mail. `creature_spawn_entry` is filled the same way, only when it is empty and only for the
+  world's own spawns whose entry is 0 or one of the dump's entries for that guid (`FillSpawnEntriesAsync`): the Codex-line worlds have it
+  empty, so their 2802 spawns with `creature.id` 0 never appeared. On a copy of the wave-9 rehearsal's world (2026-10-08): 4799 rows (the
+  dump's 4863 less the 64 of 32 guids that are in no `creature` row), leaving the 568 spawns that only cmangos spawn groups resolve. A second
+  run with the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
   battleground start locations that are not safe locations, transports without a type-15 object, portals to a map with no
   `map_template` row (vmangos "unknown target map"), graveyard links to a zone with no `area_template` row (vmangos "not existing zone
   id"; checked only when the table has rows, as the world does), and, with `TaxiPathNode.dbc` in `--dbc-dir`, every ship the world would
@@ -294,13 +298,15 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 ## Limits (explicit, not done)
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
-  NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, `creature_spawn_entry`/`gameobject_spawn_entry`, equipment
+  NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, `gameobject_spawn_entry`, equipment
   and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates, pools and
   game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), `playercreateinfo_action` (215 rows, needs
   the action-button seam wired at character creation) and `playercreateinfo_skills` (77; no skills consumer), `race_info`/`class_info`
   (still dev seeds; their retail source is ChrRaces.dbc), graveyards. The unmapped columns of every read table are printed by `plan`.
 - **Spawns with id 0** (2,802 creatures, 3,614 game objects in z2815) are imported with entry 0: cmangos resolves them through
-  `creature_spawn_entry` / `gameobject_spawn_entry` (not imported), so the runtime cannot spawn them. `verify` notes them.
+  `creature_spawn_entry` / `gameobject_spawn_entry`. `creature_spawn_entry` is imported (and filled by `refresh` when empty), which
+  resolves 2,234 of the creatures; the other 568 need cmangos spawn groups (not imported). `gameobject_spawn_entry` (5,001 rows) is not
+  imported and the gameobject system has no alternative entries, so the 3,614 objects never spawn. `verify` notes them.
 - **`spawnMask`** is not read: cmangos does not place a spawn whose mask is 0 in any grid (`src/game/Globals/ObjectMgr.cpp:2060-2063` creatures, `:2335-2338` game objects), the importer still imports it.
 - **cmangos class level stats** are not needed for z2815 (health/mana/damage are materialised in `creature_template`); a
   HEAD-layout dump that relies on `creature_template_classlevelstats` is not computed.

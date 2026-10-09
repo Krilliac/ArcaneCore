@@ -82,6 +82,8 @@ public static partial class ContentImporterCli
                                 from the dump's instance_template) and area_template (every area).
                                 The seven game-event tables are filled when the world has no game_event row (a world built
                                 before the game-event importer); a world with events keeps its own.
+                                creature_spawn_entry (the entries of the spawns whose creature.id is 0) is filled the same
+                                way, when it is empty, for the world's own spawns whose entry is 0 or one of the dump's.
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
