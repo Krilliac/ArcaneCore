@@ -181,7 +181,8 @@ public sealed class CreatureDumpImporter
                     ReadAiText(row);
                     break;
                 // ScriptDev2 ADD_GOSSIP_ITEM_ID reads gossip_texts (entry, content_default; the -3xxxxxx range never meets script_texts'
-                // -1xxxxxx). Only the ported scripts' option lines are carried: Blastmaster Emi Shortfuse's GOSSIP_ITEM_START.
+                // -1xxxxxx). Only the ported scripts' option lines are carried: Blastmaster Emi Shortfuse's GOSSIP_ITEM_START and the
+                // Blackwing Lair Victor Nefarius / Vaelastrasz options.
                 case "gossip_texts" when IsDungeonGossipText(Int(Get(row, "entry"))):
                     ReadAiText(row);
                     break;
@@ -1012,8 +1013,9 @@ public sealed class CreatureDumpImporter
         }
     }
 
-    // gossip_texts of the ported dungeon scripts: gnomeregan.cpp GOSSIP_ITEM_START.
-    private static bool IsDungeonGossipText(int id) => id == -3090000;
+    // gossip_texts of the ported dungeon scripts: gnomeregan.cpp GOSSIP_ITEM_START; boss_victor_nefarius.cpp GOSSIP_ITEM_NEFARIUS_1..3
+    // (-3469000..-3469002) and boss_vaelastrasz.cpp GOSSIP_ITEM_VAEL_1..2 (-3469003, -3469004).
+    private static bool IsDungeonGossipText(int id) => id is -3090000 or (>= -3469004 and <= -3469000);
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
     private void ReadBroadcastText(DumpRow row)
