@@ -86,6 +86,10 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15275) => new VeknilashAI(creature),
             (TempleOfAhnQirajInstance, 15276) => new VeklorAI(creature),
             (TempleOfAhnQirajInstance, 15316 or 15317) => new TwinBugAI(creature),
+            (TempleOfAhnQirajInstance, 15957) => new OuroSpawnerAI(creature),
+            (TempleOfAhnQirajInstance, 15517) => new OuroAI(creature),
+            (TempleOfAhnQirajInstance, 15712) => new OuroMoundAI(creature),
+            (TempleOfAhnQirajInstance, 15718) => new OuroScarabAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),

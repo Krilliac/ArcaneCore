@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps.Collision;
@@ -234,6 +235,46 @@ public sealed class Aq40ImportedRuntimeTests
                 var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
                 Assert.Equal(EncounterState.Done, raid.GetData(TempleOfAhnQirajInstance.Twins));
                 Assert.True(raid.HasCompletedEncounter(715));
+            });
+
+            await MoveNearAsync(host, client, teleports, -9173.58f, 2103.85f, -64.79f);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15517), "Ouro spawn from imported spawner");
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var map = player.Map!;
+                var creatures = map.FindUpdater<CreatureMapSystem>()!;
+                Creature ouro = Assert.Single(creatures.Creatures, c => c.Entry == 15517);
+                var ai = Assert.IsType<OuroAI>(ouro.AI);
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                var objects = map.FindUpdater<GameObjectMapSystem>()!;
+                Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(ouro, 26133, SpellCastTargets.ForSelf(), triggered: true));
+                Assert.Contains(objects.GameObjects, go => go.Entry == 180795 && go.IsSpawned);
+                Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(ouro, 26594, SpellCastTargets.ForSelf(), triggered: true));
+                Assert.DoesNotContain(objects.GameObjects, go => go.Entry == 180795 && go.IsSpawned);
+                Assert.True(ai.AttackStart(player) || ReferenceEquals(ouro.Combat.Victim, player));
+                ai.OnUpdate(90_001);
+                Assert.True((ouro.UnitFlags & UnitFlags.NotSelectable) != 0);
+                Assert.Equal(5, creatures.Creatures.Count(c => c.Entry == 15712));
+                Assert.Contains(creatures.Creatures, c => c.Entry == 15717);
+                ai.OnUpdate(30_001);
+                Assert.True((ouro.UnitFlags & UnitFlags.NotSelectable) == 0);
+                Assert.DoesNotContain(creatures.Creatures, c => c.Entry == 15712);
+                ouro.Health = ouro.MaxHealth / 5 - 1;
+                ai.OnUpdate(1);
+                Assert.True(spells.HasAura(ouro, 26615));
+                ai.OnUpdate(10_001);
+                Creature mound = Assert.Single(creatures.Creatures, c => c.Entry == 15712);
+                Assert.IsType<OuroMoundAI>(mound.AI).OnUpdate(30_001);
+                Assert.Equal(3, creatures.Creatures.Count(c => c.Entry == 15718));
+                Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(ouro, 26133, SpellCastTargets.ForSelf(), triggered: true));
+                Assert.Contains(objects.GameObjects, go => go.Entry == 180795 && go.IsSpawned);
+                map.Combat.Kill(player, ouro);
+                Assert.DoesNotContain(objects.GameObjects, go => go.Entry == 180795 && go.IsSpawned);
+                var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                Assert.Equal(EncounterState.Done, raid.GetData(TempleOfAhnQirajInstance.Ouro));
+                Assert.True(raid.HasCompletedEncounter(716));
             });
         }
         finally
