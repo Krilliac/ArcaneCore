@@ -4,6 +4,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Npc;
@@ -198,6 +199,85 @@ public sealed class PlayerbotQuestGoalsTests
             Session.Kick();
             await Session.ManagedClosed;
             await Host.DisposeAsync();
+        }
+    }
+}
+
+/// <summary>
+/// A quest's creature objective that is friendly to the bot is credited another way (an item or a spell used on it: quest 5441
+/// "Lazy Peons", the Foreman's Blackjack on a sleeping peon of the bot's own faction). The bot does not hunt it: in the live stress
+/// test (2026-10-08) bots in the Valley of Trials walked from peon to peon they could not attack (goal Grind target 10556) and on out
+/// of the valley to their deaths.
+/// </summary>
+public sealed class PlayerbotKillObjectiveTests
+{
+    private static readonly FactionTemplateCatalog Factions = new(
+    [
+        new FactionTemplateRecord(1, 0, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12), // the player
+        new FactionTemplateRecord(12, 0, 0, OwnMask: 2, FriendlyMask: 3, HostileMask: 0), // a peon of its own side
+        new FactionTemplateRecord(14, 0, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 1), // a monster
+        new FactionTemplateRecord(7, 0, 0, OwnMask: 0, FriendlyMask: 0, HostileMask: 0), // a neutral beast
+    ]);
+
+    [Theory]
+    [InlineData(12u, false)]
+    [InlineData(14u, true)]
+    [InlineData(7u, true)]
+    [InlineData(999u, true)] // unknown template: unresolved, still an objective
+    public void OnlyACreatureNotFriendlyToTheBot_IsAKillObjective(uint npcTemplate, bool killable)
+        => Assert.Equal(killable, PlayerbotQuestGoals.IsKillable(CreatePlayer(), npcTemplate, Factions, reactions: null));
+
+    [Fact]
+    public void WithReputation_AFriendlyReaction_IsNotAKillObjective()
+    {
+        Player player = CreatePlayer();
+        Assert.False(PlayerbotQuestGoals.IsKillable(player, 14, Factions, new Reaction(ArcaneCore.Game.Reputation.ReputationRank.Friendly)));
+        Assert.True(PlayerbotQuestGoals.IsKillable(player, 12, Factions, new Reaction(ArcaneCore.Game.Reputation.ReputationRank.Neutral)));
+    }
+
+    private sealed class Reaction(ArcaneCore.Game.Reputation.ReputationRank rank) : ArcaneCore.Game.Reputation.INpcReactionSource
+    {
+        public bool TryGetNpcReaction(Player player, FactionTemplateRecord npc, FactionTemplateRecord playerTemplate,
+            out ArcaneCore.Game.Reputation.ReputationRank reaction)
+        {
+            reaction = rank;
+            return true;
+        }
+    }
+
+    private static Player CreatePlayer()
+    {
+        var character = new ArcaneCore.Kernel.Characters.CharacterRecord
+        {
+            Id = 1, AccountId = 1, Name = "Peon", Race = 2, Class = 1, Gender = 0, Level = 3,
+            MapId = 1, ZoneId = 14, X = 0, Y = 0, Z = 0,
+        };
+        var appearance = new PlayerAppearance(
+            DisplayId: 51, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,
+            MaxHealth: 60, MaxPower: 1000, StartPower: 0, NextLevelXp: 400);
+        return new Player(character, appearance, new KillObjectiveSession());
+    }
+
+    private sealed class KillObjectiveSession : IPlayerSession
+    {
+        public int AccountId => 1;
+
+        public ArcaneCore.Kernel.Accounts.AccountSecurity Security => ArcaneCore.Kernel.Accounts.AccountSecurity.Player;
+
+        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+        {
+        }
+
+        public void ProcessWorldPackets(Player player)
+        {
+        }
+
+        public void Kick()
+        {
+        }
+
+        public void OnLoggedOut()
+        {
         }
     }
 }

@@ -19,7 +19,7 @@ namespace ArcaneCore.World.Playerbots;
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
 internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default)
+    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -61,7 +61,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
     private readonly PlayerbotStallWatch _stall = new();
-    private readonly PlayerbotSuspensions _suspensions = new();
+    private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
+
+    /// <summary>A goal this bot's stall set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>), until the feature logs it.</summary>
+    internal string? SharedSetAside { get; set; }
     // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
@@ -553,6 +556,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void GiveUpStalledGoal(Player player)
     {
         uint now = _session.World.NowMs;
+        if (shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now) is { } everyone) SharedSetAside = everyone;
         switch (_goal)
         {
             case PlayerbotGoalKind.Quest:

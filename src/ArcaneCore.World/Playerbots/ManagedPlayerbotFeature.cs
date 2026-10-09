@@ -428,7 +428,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
-    private PlayerbotBrain NewBrain(WorldSession session) => new(session, _options, _planner, _planningStop.Token);
+    private PlayerbotBrain NewBrain(WorldSession session) => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides);
+
+    // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
+    private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
+
+    /// <summary>The goals set aside for every bot (inspection and tests).</summary>
+    internal PlayerbotSharedSetAsides SharedSetAsides => _sharedSetAsides;
 
     /// <summary>The goal the bot reports and persists: its party AI's while that drives it, otherwise the brain's.</summary>
     private (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId) GoalOf(ActiveBot active)
@@ -600,6 +606,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             {
                 active.StallsLogged = active.Brain.StallCount;
                 logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", active.Record.BotId, active.Name, stall);
+                if (active.Brain.SharedSetAside is { } everyone)
+                {
+                    active.Brain.SharedSetAside = null;
+                    logger.LogWarning("Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside",
+                        PlayerbotSharedSetAsides.BotsToShare, everyone);
+                }
             }
         }
     }
