@@ -23,8 +23,8 @@ public interface IQuestScriptAI
 /// Map::ScriptsStart): <c>quest_template.StartScript</c> when a quest is taken from a creature or game object (Player::AddQuest,
 /// Player.cpp:12517-12535, after the giver's <see cref="IQuestScriptAI"/>), <c>quest_template.CompleteScript</c> when one is rewarded
 /// (Player::RewardQuest, :12695-12713), and the gossip scripts (<see cref="QuestNpcServices.GossipScriptStarted"/>). The giver is the
-/// script's source and the player its target; the gossip scripts say which is which. A quest taken from an item, or shared by another
-/// player, has no giver on the map and runs no script.
+/// script's source and the player its target; the gossip scripts say which is which. A shared quest uses its player giver.
+/// An item-started quest uses the accepting player as the map runner's source because inventory items are not world objects.
 /// </summary>
 public static class CreatureQuestScripts
 {
@@ -121,9 +121,10 @@ public static class CreatureQuestScripts
         return factory is null ? [.. explored] : [.. explored.Union(factory.ScriptedEventQuests)];
     }
 
-    /// <summary>The creature or game object on the player's map; anything else (an item, a player) gives no script.</summary>
+    /// <summary>Resolve a world giver, including a sharing player; represent an inventory item by its owning player for map scheduling.</summary>
     private static WorldObject? Giver(Player player, ObjectGuid guid)
-        => player.Map?.FindObject(guid) is { } found && found is Creature or GameObject ? found : null;
+        => guid.High == HighGuid.Item ? player : player.Map?.FindObject(guid) is { } found
+            && found is Creature or GameObject or Player ? found : null;
 
     private sealed class Subscription(Action dispose) : IDisposable
     {

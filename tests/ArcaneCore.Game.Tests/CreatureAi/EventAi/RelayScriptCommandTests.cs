@@ -48,6 +48,46 @@ public sealed class RelayScriptCommandTests
     }
 
     [Fact]
+    public void DoorCommands_OpenAndCloseWithTheMapClock()
+    {
+        using Town t = Start([Step(0, 11, dataLong: DoorGuid), Step(100, 12, dataLong: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10)]);
+        GameObject door = Assert.Single(t.Objects.GameObjects);
+        t.Wave();
+        Assert.Equal(GameObjectState.Active, door.State);
+        Run(t.World, 100);
+        Assert.Equal(GameObjectState.Ready, door.State);
+    }
+
+    [Fact]
+    public void ObjectLockAndDelayedDespawn_UseTheSelectedGameObject()
+    {
+        using Town t = Start([
+            Step(0, 27, dataLong: 4, flags: FlagBuddyByGuid | FlagBuddyByGo, buddy: DoorEntry, radius: DoorGuid),
+            Step(0, 40, dataLong: 100, flags: FlagBuddyAsTarget | FlagBuddyByGuid | FlagBuddyByGo,
+                buddy: DoorEntry, radius: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10)], objectType: GameObjectType.Chest);
+        GameObject door = Assert.Single(t.Objects.GameObjects);
+        t.Wave();
+        Assert.True((door.Flags & GameObjectFlags.NoInteract) != 0);
+        Assert.True(door.IsSpawned);
+        Run(t.World, 99);
+        Assert.True(door.IsSpawned);
+        Run(t.World, 1);
+        Assert.False(door.IsSpawned);
+    }
+
+    [Fact]
+    public void DistanceSound_UsesTheSourceGuidInItsPacket()
+    {
+        using Town t = Start([Step(0, 16, dataLong: 6209, dataLong2: 2, flags: FlagReverse)]);
+        t.Wave();
+        byte[] sound = Assert.Single(Packets(t.Session, WorldOpcode.SmsgPlayObjectSound));
+        Assert.Equal(6209u, BitConverter.ToUInt32(sound, 0));
+        Assert.Equal(t.Elly.Guid.Value, BitConverter.ToUInt64(sound, 4));
+    }
+
+    [Fact]
     public void ZulFarrakPrisonerRelay_ChangesTheBuddyFaction()
     {
         using Town t = Start([Step(0, 22, dataLong: 495, buddy: BuddyEntry, radius: 50, flags: 4)],
@@ -97,7 +137,7 @@ public sealed class RelayScriptCommandTests
 
     private static Town Start(IEnumerable<RelayScriptStep> steps, IEnumerable<CreatureSpawn>? more = null, IEnumerable<CreatureAiEvent>? rows = null,
         bool patrol = false, IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null, IEnumerable<GameObjectSpawn>? objects = null,
-        bool fightingBuddy = false)
+        bool fightingBuddy = false, GameObjectType objectType = GameObjectType.Door)
     {
         var ai = new CreatureAiContent([WaveRow(), .. rows ?? []], [], new BroadcastTextCatalog([]))
         {
@@ -115,7 +155,7 @@ public sealed class RelayScriptCommandTests
         var spells = new FakeCaster();
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = spells });
         var goSystem = new GameObjectMapSystem(map, new GameObjectContent(
-            [GameObjectTestKit.GoTemplate(DoorEntry, GameObjectType.Door)], objects ?? [], [], [], []));
+            [GameObjectTestKit.GoTemplate(DoorEntry, objectType)], objects ?? [], [], [], []));
         map.AddUpdater(goSystem);
         (Player player, FakeSession session) = AddPlayer(world, 1, 0, 10);
         Creature elly = system.Creatures.Single(c => c.Template.Entry == WolfEntry);

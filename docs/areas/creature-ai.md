@@ -307,9 +307,18 @@ the map clock with the relay runner and executor above (one runner per namespace
 - **Event credit**: an exploration/event quest is withheld unless something can complete it. `DbScriptQuestCredit` counts every quest a
   DB script's QUEST_EXPLORED names (relays included) and every escort quest of an entry script (`CreatureAiFactory.ScriptedEventQuests`),
   read through `QuestNpcServices.ScriptCreditedQuests`; classic-db quests such as 2843 are offered because of it.
-- **Not run**: `dbscripts_on_event` has no caller yet (the spell effect SEND_EVENT and the game object events that start it are not
-  ported), and the commands this executor does not know (for example 11 OPEN_DOOR in quest 6482's start script, 34 TERMINATE_COND) are
-  reported and skipped as for the relays. Quests started by an item run no script (cmangos uses the item as source).
+- **Event callers**: SEND_EVENT starts an event DB script after the instance script declines it; chest data6 and goober data2
+  start one with the user as source and object as target (vmangos Spell::EffectSendEvent, SpellEffects.cpp:1761-1775;
+  GameObject::Use, GameObject.cpp:1572-1577; cmangos StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3478).
+  A button has a linked-trap field, not an event-id field. Spell effects carry an explicit game-object target but not an implicitly selected spell-focus game object.
+- **Additional commands**: 2/4/5 field operations, 9 object respawn, 12 close door, 14 remove a whole aura, 16 direct and distance
+  sound, 17 create or remove an item, 23 morph, 24 mount, 27 object lock flags, 34 conditional termination, 40 timed object despawn,
+  43 reset door or button, 44 update creature template, and 48 unit flags now dispatch through the relay runner
+  (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1932, 2004-2047, 2074-2111, 2130-2153,
+  2204-2255, 2411-2458, 2499-2524, 2723-2755, 2873-3020). See the
+  [DB script engine report](../integration/db-script-engine-20261008.md) for the command coverage ceiling and remaining variants.
+- **Quest sources**: a sharing player now starts a quest script as its source. An item-started quest starts with its owner as the map
+  source because inventory items are not world objects in the runner; item-specific source behavior remains unavailable.
 
 Proof over real rows: `ClassicDbScriptedQuestTests` (World.Tests) imports a z2815 excerpt into a schema-42 database, loads it through the
 stores and runs quests 2843 (QUEST_EXPLORED at 10 s), 2480 (MOVE_TO, then QUEST_EXPLORED at 30 s), 8984 (CompleteScript 9028: NPC flags,
