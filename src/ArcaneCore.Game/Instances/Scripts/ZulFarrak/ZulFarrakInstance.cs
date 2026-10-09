@@ -9,12 +9,12 @@ namespace ArcaneCore.Game.Instances.Scripts.ZulFarrak;
 /// <summary>ScriptDev2 instance_zulfarrak (mangos-classic zulfarrak/instance_zulfarrak.cpp:
 /// OnCreatureCreate, OnObjectCreate, SetData, combat/evade/death hooks and Update).</summary>
 [InstanceScript(MapId)]
-public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
+public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 10)
 {
     public const uint MapId = 209;
     public const uint TypeVelratha = 0, TypeGahzrilla = 1, TypeAntusul = 2, TypeTheka = 3, TypeZumrah = 4;
-    public const uint TypeNekrum = 5, TypeSezzziz = 6, TypeChief = 7, TypePyramid = 8;
-    public const uint Antusul = 8127, SergeantBly = 7604, ShallowGrave = 128403, EndDoor = 146084;
+    public const uint TypeNekrum = 5, TypeSezzziz = 6, TypeChief = 7, TypePyramid = 8, TypeEndDoor = 9;
+    public const uint Antusul = 8127, SergeantBly = 7604, Weegli = 7607, ShallowGrave = 128403, EndDoor = 146084;
     public const uint GahzrillaGong = 141832;
     /// <summary>dbscripts_on_event ids of event_go_zulfarrak_gong and event_spell_unlocking (as relays: RelayScriptCatalog.EventRelayId).</summary>
     public const uint GongEvent = 2488, PyramidEvent = 2609;
@@ -29,6 +29,7 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
     private readonly List<ObjectGuid> _pyramidTrolls = [];
     private uint _pyramidTimer;
     private bool _zumrahRegistered;
+    private bool _weegliRegistered;
     private readonly GahzrillaGongAi _gongAi = new();
 
     public IReadOnlyList<ObjectGuid> ShallowGraves => _graves;
@@ -39,12 +40,17 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
     public override void OnCreatureCreate(Creature creature)
     {
         uint entry = creature.Template.Entry;
-        if (entry is Antusul or SergeantBly) StoreCreature(creature);
+        if (entry is Antusul or SergeantBly or Weegli) StoreCreature(creature);
         if (PyramidTrollEntries.Contains(entry)) _pyramidTrolls.Add(creature.Guid);
         if (entry == 7271 && !_zumrahRegistered && creature.System is { } system)
         {
             _zumrahRegistered = true;
             system.RegisterEntryAi(7271, c => new ZumrahAi(c, this), rebuildExisting: creature.AI is not null);
+        }
+        if (entry == Weegli && !_weegliRegistered && creature.System is { } weegliSystem)
+        {
+            _weegliRegistered = true;
+            weegliSystem.RegisterEntryAi(Weegli, c => new WeegliBlastfuseAi(c, this), rebuildExisting: creature.AI is not null);
         }
     }
 
@@ -56,7 +62,7 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
         else if (go.Entry == EndDoor)
         {
             StoreGameObject(go);
-            OpenIf(go, GetData(TypePyramid) == EncounterState.Done);
+            OpenIf(go, GetData(TypeEndDoor) == EncounterState.Done);
         }
     }
 
@@ -71,7 +77,7 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
 
     public override void SetData(uint type, uint data)
     {
-        if (type >= 9) return;
+        if (type >= 10 || (type == TypeEndDoor && Encounters[type] == EncounterState.Done && data == EncounterState.Done)) return;
         Encounters[type] = data;
         if (type is TypeNekrum or TypeSezzziz && data == EncounterState.Done
             && GetData(type == TypeNekrum ? TypeSezzziz : TypeNekrum) == EncounterState.Done)
@@ -79,19 +85,15 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
         if (type == TypePyramid)
         {
             if (data == EncounterState.InProgress) _pyramidTimer = 20_000;
-            else if (data == EncounterState.Done)
-            {
-                _pyramidTimer = 0;
-                // Deviation: instance_zulfarrak.cpp only opens GO_END_DOOR in OnObjectCreate once the pyramid is DONE; live, the door is
-                // blown by Weegli's DB script (vmangos instance_zulfarrak.cpp EVENT_END_DOOR), which this port does not include. Opening
-                // it here keeps Chief Ukorz Sandscalp reachable until that escort is ported.
-                if (GetSingleGameObjectFromStorage(EndDoor) is { } door) door.State = GameObjectState.Active;
-            }
+            else if (data == EncounterState.Done) _pyramidTimer = 0;
         }
+        else if (type == TypeEndDoor && data == EncounterState.Done
+            && GetSingleGameObjectFromStorage(EndDoor) is { State: GameObjectState.Ready })
+            DoUseDoorOrButton(EndDoor);
         SaveIfDone(data);
     }
 
-    public override uint GetData(uint type) => type < 9 ? Encounters[type] : 0;
+    public override uint GetData(uint type) => type < 10 ? Encounters[type] : 0;
 
     /// <summary>
     /// ProcessEventId_event_go_zulfarrak_gong and ProcessEventId_event_spell_unlocking (zulfarrak.cpp:39-75), reached through
