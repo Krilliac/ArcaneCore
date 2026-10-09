@@ -40,5 +40,14 @@ public sealed class WarEffortImportedContentTests
         days.CommandText = "SELECT COUNT(*) FROM conditions WHERE type=40 AND value1=$field AND value2=0";
         days.Parameters.AddWithValue("$field", WarEffortCatalog.DaysLeftCondition);
         Assert.Equal(1L, (long)days.ExecuteScalar()!);
+
+        using SqliteCommand gong = db.CreateCommand();
+        gong.CommandText = "SELECT COUNT(*) FROM gameobject_involvedrelation WHERE Id=$object AND Quest=$quest";
+        gong.Parameters.AddWithValue("$object", WarEffortCatalog.GongObject);
+        gong.Parameters.AddWithValue("$quest", WarEffortCatalog.GongQuest);
+        Assert.Equal(1L, (long)gong.ExecuteScalar()!);
+        using SqliteCommand phases = db.CreateCommand();
+        phases.CommandText = "SELECT COUNT(*) FROM game_event WHERE entry BETWEEN 120 AND 124 AND schedule_type=0";
+        Assert.Equal(5L, (long)phases.ExecuteScalar()!);
     }
 }

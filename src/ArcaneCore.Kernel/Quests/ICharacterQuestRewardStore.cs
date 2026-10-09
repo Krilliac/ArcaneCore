@@ -27,7 +27,8 @@ public sealed record CharacterQuestRewardRequest(
     IReadOnlyList<uint>? LearnedSpells = null,
     IReadOnlyList<CharacterReputationRow>? ReputationAfter = null,
     bool InsertIfMissing = false,
-    WarEffortContribution? WarEffort = null);
+    WarEffortContribution? WarEffort = null,
+    bool WarEffortGong = false);
 
 public enum QuestRewardCommitResult
 {

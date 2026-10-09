@@ -196,6 +196,18 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                     }
                 }
             }
+            if (request.WarEffortGong)
+            {
+                if (request.ExpectedQuest.Quest != WarEffortCatalog.GongQuest)
+                    throw new InvalidOperationException("invalid AQ gong quest reward");
+                WarEffortPhaseRow? phase = await db.Set<WarEffortPhaseRow>()
+                    .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+                if (phase?.Phase == (byte)WarEffortPhase.Gong)
+                {
+                    phase.Phase = (byte)WarEffortPhase.TenHourWar;
+                    phase.PhaseEndsAtUnix = DateTimeOffset.UtcNow.AddHours(10).ToUnixTimeSeconds();
+                }
+            }
 
             db.ChangeTracker.DetectChanges();
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -108,7 +109,9 @@ public sealed partial class QuestNpcFeature
                 WarEffort: ArcaneCore.Kernel.WorldData.WorldState.WarEffortCatalog.ForQuest(questId) is { } resource
                     && Services.Quests.Get(questId) is { } warQuest && warQuest.ReqItemId[0] != 0 && warQuest.ReqItemCount[0] != 0
                         ? new ArcaneCore.Kernel.WorldData.WorldState.WarEffortContribution(resource.Id, warQuest.ReqItemCount[0])
-                        : null);
+                        : null,
+                WarEffortGong: questId == ArcaneCore.Kernel.WorldData.WorldState.WarEffortCatalog.GongQuest
+                    && player.Map?.FindObject(plan.QuestGiver) is GameObject { Entry: ArcaneCore.Kernel.WorldData.WorldState.WarEffortCatalog.GongObject });
             saves.HoldCharacter(id);
             if (!player.BeginQuestSettlement(operationId))
             {

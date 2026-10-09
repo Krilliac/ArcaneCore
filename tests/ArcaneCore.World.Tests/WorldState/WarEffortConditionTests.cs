@@ -41,7 +41,10 @@ public sealed class WarEffortConditionTests
         public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(new GameEventContent(
                 [new GameEventRecord(120, 0, 525600, 1, 0, 0, "AQ gathering"),
-                 new GameEventRecord(121, 0, 525600, 1, 0, 0, "AQ transport")],
+                 new GameEventRecord(121, 0, 525600, 1, 0, 0, "AQ transport"),
+                 new GameEventRecord(122, 0, 525600, 1, 0, 0, "AQ gong"),
+                 new GameEventRecord(123, 0, 525600, 1, 0, 0, "AQ war"),
+                 new GameEventRecord(124, 0, 525600, 1, 0, 0, "AQ done")],
                 [], [], [], [], [], []));
 
         public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default)
@@ -129,5 +132,43 @@ public sealed class WarEffortConditionTests
         Assert.Equal(true, state.WorldScriptCondition(WarEffortCatalog.DaysLeftCondition, 3, now));
         Assert.Equal(false, state.WorldScriptCondition(WarEffortCatalog.DaysLeftCondition, 2, now));
         Assert.Equal(true, state.WorldScriptCondition(WarEffortCatalog.DaysLeftCondition, 1, now.AddDays(2)));
+    }
+
+    [Fact]
+    public void GongRewardAndTenHourDeadlineMoveThePhaseEventsToDone()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<MemoryStore>();
+        services.AddScoped<IWarEffortStateStore>(sp => sp.GetRequiredService<MemoryStore>());
+        services.AddScoped<IGameEventDataStore, Events>();
+        services.AddSingleton(sp => new GameEventFeature(sp, NullLogger<GameEventFeature>.Instance));
+        services.AddSingleton(sp => new WarEffortFeature(sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<GameEventFeature>(), NullLogger<WarEffortFeature>.Instance));
+        using ServiceProvider provider = services.BuildServiceProvider();
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
+            new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
+            NullLogger<WorldRuntime>.Instance);
+        GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
+        events.Attach(world);
+        WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.Attach(world);
+        MemoryStore store = provider.GetRequiredService<MemoryStore>();
+
+        store.SetState(new WarEffortSnapshot(WarEffortPhase.Gong, 0, new long[WarEffortCatalog.ResourceCount]));
+        world.RunTick(5_000);
+        Assert.True(events.IsActiveEvent(122));
+
+        store.SetState(new WarEffortSnapshot(WarEffortPhase.TenHourWar,
+            DateTimeOffset.UtcNow.AddHours(10).ToUnixTimeSeconds(), new long[WarEffortCatalog.ResourceCount]));
+        world.RunTick(5_000);
+        Assert.False(events.IsActiveEvent(122));
+        Assert.True(events.IsActiveEvent(123));
+
+        store.SetState(new WarEffortSnapshot(WarEffortPhase.TenHourWar,
+            DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeSeconds(), new long[WarEffortCatalog.ResourceCount]));
+        world.RunTick(5_000);
+        Assert.Equal(WarEffortPhase.Done, store.State.Phase);
+        Assert.False(events.IsActiveEvent(123));
+        Assert.True(events.IsActiveEvent(124));
     }
 }

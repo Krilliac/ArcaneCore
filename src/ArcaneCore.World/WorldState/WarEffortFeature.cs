@@ -68,6 +68,9 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
                 if (state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0
                     && state.PhaseEndsAtUnix <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                     SetPhase(WarEffortPhase.Gong, 0);
+                else if (state.Phase == WarEffortPhase.TenHourWar && state.PhaseEndsAtUnix > 0
+                    && state.PhaseEndsAtUnix <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                    SetPhase(WarEffortPhase.Done, 0);
                 SyncPhaseEvent();
             }
             catch (Exception ex)

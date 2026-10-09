@@ -12,6 +12,8 @@ public static class WarEffortCatalog
     public const uint DaysLeftCondition = 2113;
     public const ushort GatheringEvent = 120;
     public const ushort TransportingEvent = 121;
+    public const uint GongQuest = 8743;
+    public const uint GongObject = 180717;
     public const int ResourceCount = 30;
 
     public static IReadOnlyList<WarEffortResource> Resources { get; } =
