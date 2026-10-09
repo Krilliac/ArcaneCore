@@ -990,8 +990,10 @@ public sealed partial class SpellSystem
         }
 
         // vmangos Spell.cpp:5320 also lets a dead unit cast a triggered spell no aura triggered; here only a creature's script cast takes that
-        // exception (EventAI "cast on death"), a dead player still needs SPELL_ATTR_ALLOW_CAST_WHILE_DEAD.
-        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0
+        // exception (EventAI "cast on death"), a dead player still needs SPELL_ATTR_ALLOW_CAST_WHILE_DEAD. A passive spell is exempt, as in
+        // vmangos (`!(Attributes & SPELL_ATTR_PASSIVE)`): a character that logs in as a ghost must still get its passives (languages,
+        // proficiencies), or it knows no language and every chat line, '.' commands included, is refused (wave-10 rehearsal).
+        if (!caster.IsAlive && !spell.IsPassive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0
             && !(caster is Creatures.Creature && triggered && triggeringSpell is null))
         {
             return SpellCastResult.CasterDead;
