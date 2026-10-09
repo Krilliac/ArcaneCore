@@ -200,6 +200,33 @@ internal sealed class PlayerbotPartyAI
 
         // The capture queue is bounded (drop-oldest): an invitation still pending without its packet is answered as from the leader.
         if (Services.Social?.Groups.GetInvite(player.Guid) is not null) OnInvite(player, []);
+        // A quest a group member shared (CMSG_PUSHQUESTTOPARTY): the offer is the server's pending share (vmangos m_questShareInfo); the
+        // SMSG_QUESTGIVER_QUEST_DETAILS that came with it is left in the queue for the brain's own quest exchanges, which ignore a player.
+        if (Services.Quests?.ShareInfoOf(player) is { } offer) OnQuestShare(player, offer);
+    }
+
+    /// <summary>
+    /// Answer a shared quest as a client does from its quest window: accept it (CMSG_QUESTGIVER_ACCEPT_QUEST with the sharer's guid,
+    /// vmangos <c>HandleQuestgiverAcceptQuestOpcode</c> with a player as giver) when the sharer is in the bot's group and the bot can
+    /// take a quest the server settles; otherwise decline (MSG_QUEST_PUSH_RESULT, QUEST_PARTY_MSG_DECLINE_QUEST, vmangos
+    /// <c>HandleQuestPushResult</c>), which clears the offer either way.
+    /// </summary>
+    private void OnQuestShare(Player player, ArcaneCore.Game.Npc.QuestShareInfo offer)
+    {
+        ArcaneCore.Game.Npc.QuestNpcServices quests = Services.Quests!;
+        bool grouped = Services.Social?.Groups is { } groups && groups.AreInSameGroup(player.Guid, offer.Sharer);
+        var writer = new PacketWriter(13);
+        writer.WriteUInt64(offer.Sharer.Value);
+        if (grouped && quests.IsRewardable(offer.QuestId) && quests.CanTakeQuest(player, offer.QuestId) == true)
+        {
+            writer.WriteUInt32(offer.QuestId);
+            Act(WorldOpcode.CmsgQuestgiverAcceptQuest, writer.ToArray(), budgeted: false);
+        }
+        else
+        {
+            writer.WriteByte((byte)ArcaneCore.Game.Quests.QuestShareMessage.DeclineQuest);
+            Act(WorldOpcode.MsgQuestPushResult, writer.ToArray(), budgeted: false);
+        }
     }
 
     private void OnInvite(Player player, byte[] payload)
@@ -1054,6 +1081,8 @@ internal sealed class PlayerbotPartyAI
         public TeleportService? Teleports => session.Services.GetService<TeleportFeature>()?.Teleports;
 
         public SpellFeature? Spells => session.Services.GetService<SpellFeature>();
+
+        public ArcaneCore.Game.Npc.QuestNpcServices? Quests => session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services;
 
         public TaxiFlightSystem? Flights => session.Services.GetService<NpcServicesFeature>()?.Flights;
 

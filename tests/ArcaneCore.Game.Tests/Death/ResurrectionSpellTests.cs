@@ -34,6 +34,69 @@ public sealed class ResurrectionSpellTests
             StartRecoveryTime = 0,
         };
 
+    /// <summary>
+    /// The shape of the real 1.12.1 player resurrection rows (classic-db z2815 <c>spell_template</c> 2006 Resurrection, 7328 Redemption,
+    /// 2008 Ancestral Spirit, 20484 Rebirth): no implicit target (EffectImplicitTargetA1 0), <c>Targets</c> TARGET_FLAG_CORPSE (0x8000),
+    /// no SPELL_ATTR_EX2_ALLOW_DEAD_TARGET (it can target the dead only through the corpse flag, vmangos IsDeathOnlySpell), range index 4.
+    /// </summary>
+    internal static SpellInfo RealShapedResurrection(uint id) =>
+        SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.ResurrectNew, 69, SpellImplicitTarget.None, misc: 135)) with
+        {
+            Targets = 0x8000,
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+
+    /// <summary>
+    /// A 1.12 client aims the real rows at the dead player's unit while the body is unreleased: vmangos Spell::CheckRange and the line of
+    /// sight check of Spell::CheckCast measure any explicit unit target (Spell.cpp:6861-6940), whatever the implicit target, so a dead
+    /// player out of range or behind a wall is refused, one in range is offered the resurrection.
+    /// </summary>
+    [Fact]
+    public void RealShapedRow_AtAnUnreleasedBody_IsRangeAndSightChecked_AndOffered()
+    {
+        using var kit = new SpellTestKit(RealShapedResurrection(Flat));
+        Requests(kit);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player far, FakeSession farSession) = kit.AddPlayer(2, 60);
+        (Player near, FakeSession nearSession) = kit.AddPlayer(3, 10);
+        far.Map!.Combat.KillPlayer(far);
+        near.Map!.Combat.KillPlayer(near);
+
+        Assert.Equal(SpellCastResult.OutOfRange, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForUnit(far.Guid), triggered: false));
+        Assert.DoesNotContain(farSession.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
+        WorldCollision.Of(kit.World).Install(new FakeLineOfSight { WallX = 5 });
+        Assert.Equal(SpellCastResult.LineOfSight, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForUnit(near.Guid), triggered: false));
+        WorldCollision.Of(kit.World).Install(new FakeLineOfSight());
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForUnit(near.Guid), triggered: false));
+        Assert.Single(nearSession.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
+    }
+
+    /// <summary>
+    /// Once released, the client aims the real rows at the corpse (TARGET_FLAG_CORPSE, the ghost itself cannot be targeted): the owner is
+    /// offered the resurrection (vmangos Spell::SetTargetMap, Spell.cpp:3106-3117). Without a unit or a corpse there is nothing to resurrect
+    /// (vmangos ValidateExplicitTargetMask expects one of them for a corpse-flag spell): refused, nobody is offered anything.
+    /// </summary>
+    [Fact]
+    public void RealShapedRow_AtAReleasedCorpse_OffersTheGhost_WithoutATarget_IsRefused()
+    {
+        using var kit = new SpellTestKit(RealShapedResurrection(Flat));
+        Requests(kit);
+        (Player caster, FakeSession casterSession) = kit.AddPlayer(1);
+        (Player target, FakeSession session) = kit.AddPlayer(2, 10);
+        target.Map!.Combat.KillPlayer(target);
+        Assert.True(target.Map!.Combat.RepopPlayer(target));
+        session.Clear();
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.DoesNotContain(casterSession.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.CorpseAlly, Corpse = target.Combat.Corpse!.Guid };
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Flat, targets, triggered: false));
+        Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
+    }
+
     [Theory]
     [InlineData(SpellEffectName.Resurrect)]
     [InlineData(SpellEffectName.ResurrectNew)]

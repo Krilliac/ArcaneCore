@@ -232,6 +232,20 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         return session.Services.GetService<SpellFeature>() is { } feature && Cast(player, feature, spell, target.Guid);
     }
 
+    /// <summary>
+    /// Submit <paramref name="spell"/> at a player's corpse the way a 1.12 client does once that player released (the ghost cannot be
+    /// targeted): CMSG_CAST_SPELL with TARGET_FLAG_CORPSE (0x8000, the resurrection rows' own <c>Targets</c>) and the corpse guid. The
+    /// server resolves the corpse to its owner (vmangos Spell::SetTargetMap, Spell.cpp:3106-3117). True when the server took it.
+    /// </summary>
+    internal bool CastAtCorpse(Player player, SpellInfo spell, Corpse corpse)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(spell);
+        ArgumentNullException.ThrowIfNull(corpse);
+        return session.Services.GetService<SpellFeature>() is { } feature
+            && Cast(player, feature, spell, new SpellCastTargets { Mask = SpellCastTargetFlags.CorpseAlly, Corpse = corpse.Guid });
+    }
+
     private PlayerbotClassRotation? Rotation(Player player, SpellFeature feature)
         => PlayerbotRotations.For(player.Class) is { } rotation && Refresh(player, feature).Count > 0 ? rotation : null;
 
@@ -297,15 +311,17 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     }
 
     private bool Cast(Player player, SpellFeature feature, SpellInfo spell, ObjectGuid target)
+        => Cast(player, feature, spell, target == player.Guid
+            ? spell.IsPositive && IsExplicitUnit(spell) ? SpellCastTargets.ForUnit(target) : SpellCastTargets.ForSelf()
+            : SpellCastTargets.ForUnit(target));
+
+    private bool Cast(Player player, SpellFeature feature, SpellInfo spell, SpellCastTargets targets)
     {
         // A spell with a cast time needs the bot standing (vmangos DoCastSpell stops the mover); instants go while moving.
         if (spell.GetCastTime(player.Level) > 0 && player.Movement.HasFlag(MovementFlags.MaskMoving)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
             return true;
 
-        SpellCastTargets targets = target == player.Guid
-            ? spell.IsPositive && IsExplicitUnit(spell) ? SpellCastTargets.ForUnit(target) : SpellCastTargets.ForSelf()
-            : SpellCastTargets.ForUnit(target);
         var writer = new PacketWriter(24);
         writer.WriteUInt32(spell.Id);
         targets.Write(writer);

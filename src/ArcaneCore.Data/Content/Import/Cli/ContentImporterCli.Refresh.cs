@@ -136,6 +136,16 @@ public static partial class ContentImporterCli
             instances.Read(reader);
         }
 
+        // The seven game-event tables (both dialects). Worlds built before the game-event importer, or migrated from the Codex-line
+        // schema, have them empty: every holiday's NPCs then stand in the world all year and its quests are always offered (the
+        // wave-8 rehearsal's bots took "Winter's Presents" and "Dearest Colara," in October). They are filled only when the world has
+        // no event at all, so a world whose events were imported (or disabled by a GM, game_event.disabled) keeps them.
+        var gameEvents = new GameEventDumpImporter();
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            gameEvents.Read(reader);
+        }
+
         // World schema 42: the quest, gossip and event DB scripts, script_waypoint, the script ids of quest_template and gossip_menu, and the
         // gossip options that run a script (older importers skipped those options).
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -299,6 +309,22 @@ public static partial class ContentImporterCli
         Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
         Count("taxi_nodes", taxiNodes?.Count ?? 0, taxiNodes is not null);
         Count("taxi_path", taxiPaths?.Count ?? 0, taxiPaths is not null);
+        GameEventImportReport eventReport = gameEvents.BuildReport();
+        bool anyEvents = eventReport.Events > 0;
+        string[] eventTables = [GameEventDataModule.EventTable, GameEventDataModule.TimeTable, GameEventDataModule.CreatureTable,
+            GameEventDataModule.GameObjectTable, GameEventDataModule.CreatureDataTable, GameEventDataModule.QuestTable, GameEventDataModule.MailTable];
+        int[] eventRows = [eventReport.Events, eventReport.Times, eventReport.Creatures, eventReport.GameObjects, eventReport.CreatureData,
+            eventReport.Quests, eventReport.Mails];
+        for (int i = 0; i < eventTables.Length; i++)
+        {
+            Count(eventTables[i], eventRows[i], anyEvents);
+        }
+
+        if (anyEvents)
+        {
+            warnings.AddRange(eventReport.Warnings);
+        }
+
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -363,6 +389,24 @@ public static partial class ContentImporterCli
                     {
                         await db.Set<TaxiPath>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                    }
+
+                    if (anyEvents)
+                    {
+                        int existing = await db.Set<GameEventRow>().CountAsync(token).ConfigureAwait(false);
+                        if (existing == 0)
+                        {
+                            await gameEvents.WriteAsync(db, replace: true, token).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            foreach (string table in eventTables)
+                            {
+                                counts.Remove(table);
+                            }
+
+                            o.WriteLine($"  game_event: the world has {existing.ToString(CultureInfo.InvariantCulture)} event(s) already; the seven game-event tables are left as they are");
+                        }
                     }
                 }, ct).ConfigureAwait(false);
 

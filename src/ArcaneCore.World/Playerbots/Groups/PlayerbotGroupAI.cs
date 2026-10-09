@@ -57,7 +57,7 @@ internal sealed class PlayerbotGroupAI
     internal const uint RestBelowPct = 50;
 
     /// <summary>The player resurrection spells (vmangos IsResurrectionSpell; classic names, any rank).</summary>
-    internal static readonly string[] ResurrectionSpells = ["Resurrection", "Redemption", "Ancestral Spirit"];
+    internal static readonly string[] ResurrectionSpells = ["Resurrection", "Redemption", "Ancestral Spirit", "Rebirth"];
 
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
@@ -110,6 +110,12 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The bot's spells (its group role is set here).</summary>
     internal PlayerbotCombatSpells Spells => _spells;
 
+    /// <summary>
+    /// Share <paramref name="questId"/> with the group: CMSG_PUSHQUESTTOPARTY, the client's "Share Quest" (vmangos
+    /// <c>HandlePushQuestToParty</c>: every member within 14 yards who can take it is offered it). True when the server took it.
+    /// </summary>
+    internal bool PushQuest(uint questId) => Act(WorldOpcode.CmsgPushquesttoparty, BitConverter.GetBytes(questId), budgeted: false);
+
     /// <summary>The bot's corpse run (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
 
@@ -118,6 +124,9 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>The last resurrection cast (inspection and tests: the dead member's name).</summary>
     internal string? LastResurrection { get; private set; }
+
+    /// <summary>Whether that cast was aimed at the member's corpse (it had released) rather than at its unreleased body.</summary>
+    internal bool LastResurrectionAtCorpse { get; private set; }
 
     /// <summary>How long a dead member waits for a resurrection before it releases (a test seam, never configuration-bound).</summary>
     internal long DeadWaitMs { get; set; } = PlayerbotGroupCoordinator.DeadWaitMs;
@@ -530,19 +539,29 @@ internal sealed class PlayerbotGroupAI
             || ResurrectionSpell(player) is not { } spell) return false;
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
-            if (member.Guid == player.Guid || _session.World.FindOnlinePlayer(member.Guid) is not { } dead) continue;
-            if (dead.IsAlive || (dead.Flags & PlayerFlags.Ghost) != 0 || !ReferenceEquals(dead.Map, map)) continue;
+            if (member.Guid == player.Guid || _session.World.FindOnlinePlayer(member.Guid) is not { } dead || dead.IsAlive) continue;
+            // An unreleased body is the dead player's unit; once it released, the ghost cannot be targeted and the cast goes at its corpse
+            // (a 1.12 client does the same: TARGET_FLAG_CORPSE), wherever the ghost is (vmangos resolves the corpse to its owner).
+            Corpse? corpse = (dead.Flags & PlayerFlags.Ghost) != 0 ? dead.Combat.Corpse : null;
+            if ((dead.Flags & PlayerFlags.Ghost) != 0 && (corpse is null || !corpse.IsInWorld || !ReferenceEquals(corpse.Map, map))) continue;
+            if (corpse is null && !ReferenceEquals(dead.Map, map)) continue;
             if (ArcaneCore.Game.Death.Resurrection.ResurrectionRequests.IsRequested(dead)) continue;
+            WorldObject body = corpse ?? (WorldObject)dead;
             Goal = PlayerbotGoalKind.Group;
-            if (Distance(player, dead) > ResurrectYards)
+            if (Distance(player, body) > ResurrectYards)
             {
-                WalkTo(player, new Vector3(dead.X, dead.Y, dead.Z), _options.ThinkIntervalMs == 0 ? 1u : (uint)_options.ThinkIntervalMs, toward: false);
+                WalkTo(player, new Vector3(body.X, body.Y, body.Z), _options.ThinkIntervalMs == 0 ? 1u : (uint)_options.ThinkIntervalMs, toward: false);
                 return true;
             }
 
             if (!PlayerbotMovementControl.Stop(_session, player)) return true;
             _route = null;
-            if (_spells.CastAt(player, spell, dead)) LastResurrection = dead.Name;
+            if (corpse is not null ? _spells.CastAtCorpse(player, spell, corpse) : _spells.CastAt(player, spell, dead))
+            {
+                LastResurrection = dead.Name;
+                LastResurrectionAtCorpse = corpse is not null;
+            }
+
             _resurrectAtMs = Now + 3_000;
             return true;
         }
@@ -550,19 +569,23 @@ internal sealed class PlayerbotGroupAI
         return false;
     }
 
-    /// <summary>The resurrection spell the bot knows (its highest rank), or null.</summary>
+    /// <summary>The resurrection spell the bot knows (its highest rank) and carries the reagents for (Rebirth's seed), or null.</summary>
     internal SpellInfo? ResurrectionSpell(Player player)
     {
         if (!PlayerbotGroupContent.CanHeal(player.Class) || _session.Services.GetService<SpellFeature>() is not { } feature) return null;
         SpellInfo? best = null;
         foreach (uint id in feature.Spellbook.GetSpells(player))
             if (feature.System.Store.Get(id) is { } spell && ResurrectionSpells.Contains(spell.Name, StringComparer.Ordinal)
+                && spell.Reagents.All(r => r.Item <= 0 || r.Count == 0 || player.Inventory.GetItemCount((uint)r.Item) >= r.Count)
                 && (best is null || spell.Id > best.Id))
                 best = spell;
         return best;
     }
 
-    /// <summary>The nearest corpse whose round-robin loot this bot holds: walk to it and open it.</summary>
+    /// <summary>
+    /// The nearest corpse with something for this bot: the round-robin loot it holds, or a quest item it needs (vmangos shows a quest
+    /// drop to every member who needs it, whoever holds the corpse: <c>LootItem::AllowedForPlayer</c>). Walk to it and open it.
+    /// </summary>
     private bool LootHeld(Player player, uint interval)
     {
         if (player.Map is not { } map || _session.Services.GetService<GameObjectLootFeature>()?.FindSystem(map)?.Loot is not { } loot) return false;
@@ -571,7 +594,7 @@ internal sealed class PlayerbotGroupAI
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature { IsAlive: false } corpse) continue;
-            if (loot.FindLoot(guid) is not { } bag || bag.Owner != player.Guid || bag.IsClosed || bag.IsEmpty) continue;
+            if (loot.FindLoot(guid) is not { } bag || bag.IsClosed || bag.IsEmpty || !bag.HasSomethingFor(player)) continue;
             if (_lootTries.TryGetValue(guid, out int tries) && tries >= 3) continue;
             float distance = Distance(player, corpse);
             if (distance <= best) { best = distance; nearest = corpse; }

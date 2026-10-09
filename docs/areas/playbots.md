@@ -50,6 +50,30 @@ whatever the think interval. Brain, goals and scripted controllers only choose r
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 
+**Game events.** A bot respects the server's game-event state (`World:GameEvents`, `game_event_quest`, `game_event_creature`): a quest
+of an event that is not running is never offered to it (the server's `CanTakeQuest`, vmangos `Quest::IsActive`) nor turned in
+(`IsRewardable`, vmangos `PrepareQuestMenu`), and one already in its log is kept but its objectives are not hunted (alone or as a group
+goal) until the event runs again; a quest giver or ender whose spawn is listed under an event is not a destination while the spawn gate
+keeps it out of the world (`PlayerbotWorldDestinations.IsPresent`), so a complete quest whose only ender is a holiday NPC is not walked
+to off season. This needs the world's game-event tables: a world migrated from the Codex-line schema has them empty (the live world of
+the wave-8 rehearsal: bots took "Winter's Presents" 8827, "Dearest Colara," 8898 and the Lunar Festival and Midsummer quests in October)
+until `arcane-content-importer refresh` fills them (docs/areas/content-import.md).
+
+The live snapshot replay (`PlayerbotLiveSnapshotReplayTests`: `ARCANECORE_TEST_BOT_REPLAY_DB`, `ARCANECORE_TEST_WORLD_DB`,
+`ARCANECORE_TEST_TERRAIN_DIR`, optional `ARCANECORE_TEST_BOT_REPLAY_SETTINGS` without a `Database` section, `..._NAMES`, `..._TRACE`,
+`..._TIME`) runs the game-event clock from the snapshot's moment (`ARCANECORE_TEST_BOT_REPLAY_TIME`, ISO 8601, else the characters
+file's last write time) with game time, as it already ran the death clock: before, events followed the real date while the replay ran
+its game time about 30 times faster, so a replay in December would have turned Winter Veil on for an October snapshot. It waits for each
+step's quest reward writes (on the fast clock a bot's 15-second exchange deadline ran out while the write was on its way, and the reward
+counted as refused) and prints each bot's quests taken, rewarded and still open.
+
+A far goal (a quest giver or ender, a corpse) is approached a step at a time (`PlayerbotNavigation.TryPlanToward`): the point
+`MaxPathPoints - 2` yards along the straight line (at most 90% of `MaxRouteYards`), or the walkable point the mesh reaches nearest to it.
+Navigation-mesh tiles load with the map's grids round the players, so that point may lie on a tile not loaded yet, where the mesh
+answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the terrain stepper refuses over any hill; the step is then
+halved (down to 24 yards) until it stays on the loaded mesh, and walking it loads the next tile. Before, the bot stood at such a tile edge
+for good: the wave-8 rehearsal's quest-35 stall (Dawnrover 107 yards north of the Elwynn tile boundary, 610 yards from Guard Thomas).
+
 `World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
 those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
 through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the

@@ -1009,6 +1009,15 @@ public sealed partial class SpellSystem
             return casterState;
         }
 
+        // vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6757-6761, asked for a client's own cast at :5346): a spell whose Targets
+        // expect a corpse (the player resurrections, Remove Insignia) needs a unit or a corpse in the client's target block.
+        if (!triggered && strict && caster is Player
+            && (spell.Targets & (uint)(SpellCastTargetFlags.CorpseAlly | SpellCastTargetFlags.CorpseEnemy)) != 0
+            && (targets.Mask & (SpellCastTargetFlags.Unit | SpellCastTargetFlags.CorpseAlly | SpellCastTargetFlags.CorpseEnemy)) == 0)
+        {
+            return SpellCastResult.BadTargets;
+        }
+
         if (!triggered)
         {
             // The caster's own state (stun, confuse, fear, silence, pacify) and the immunity-granting-spell bypass (vmangos Spell::CheckCasterAuras).
@@ -1714,9 +1723,17 @@ public sealed partial class SpellSystem
         return (targets.Mask & (SpellCastTargetFlags.CorpseAlly | SpellCastTargetFlags.CorpseEnemy)) != 0 ? ResolveCorpseOwner(caster, targets.Corpse) : null;
     }
 
+    /// <summary>
+    /// The spell is aimed at one explicit unit (or the owner of an explicit corpse), which CheckCast then checks: present, alive or dead as
+    /// the spell allows, in range and in sight (vmangos Spell::CheckCast and CheckRange measure <c>m_targets.getUnitTarget()</c> whatever the
+    /// implicit target). A resurrect effect always is: the real player rows (Resurrection 2006, Redemption 7328, Ancestral Spirit 2008,
+    /// Rebirth 20484) name no implicit target at all (TARGET_NONE) and the corpse flag in <c>Targets</c>, and the effect takes the explicit unit
+    /// or corpse owner (Spell.cpp:3106-3117); without one the client sent nothing to resurrect (vmangos ValidateExplicitTargetMask).
+    /// </summary>
     private static bool NeedsUnitTarget(SpellInfo spell)
         => spell.Effects.Any(e => !e.IsEmpty && (IsExplicitUnitTarget(e.TargetA)
-            || (e.TargetA == SpellImplicitTarget.LocationCasterDest && e.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)));
+            || (e.TargetA is SpellImplicitTarget.LocationCasterDest or SpellImplicitTarget.None
+                && e.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)));
 
     internal static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty

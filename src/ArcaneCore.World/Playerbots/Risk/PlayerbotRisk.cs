@@ -205,7 +205,7 @@ internal sealed class PlayerbotRisk
             foreach ((ObjectGuid, bool) old in _verdicts.Where(v => unchecked((int)(v.Value.UntilMs - now)) <= 0).Select(v => v.Key).ToArray())
                 _verdicts.Remove(old);
 
-        PlayerbotEngagementFacts facts = Facts(player, target, questObjective, out Vector3 spot, out List<PlayerbotThreat> pathThreats);
+        PlayerbotEngagementFacts facts = Facts(player, target, questObjective, out Vector3 spot, out HashSet<ObjectGuid> fight);
         PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
         // Too strong alone, but a few players would take it: a "needs a group of N" goal instead of abandoning the objective.
         if (verdict.Decision == PlayerbotEngageDecision.Avoid && questObjective && _options.Groups.Enabled
@@ -217,7 +217,7 @@ internal sealed class PlayerbotRisk
 
         if (verdict.Decision == PlayerbotEngageDecision.Detour)
         {
-            detour = FindDetour(player, target, spot, pathThreats);
+            detour = FindDetour(player, spot, fight);
             if (detour is null) verdict = verdict with { Decision = PlayerbotEngageDecision.Avoid, Reason = $"pack-of-{facts.Enemies.Count}" };
         }
 
@@ -227,10 +227,10 @@ internal sealed class PlayerbotRisk
         return verdict;
     }
 
+    /// <param name="fight">The creatures the fight itself brings (the target, its assistance, those covering the fight spot), not those on the way.</param>
     private PlayerbotEngagementFacts Facts(Player player, Creature target, bool questObjective, out Vector3 spot,
-        out List<PlayerbotThreat> pathThreats)
+        out HashSet<ObjectGuid> fight)
     {
-        pathThreats = [];
         Map? map = player.Map;
         CreatureMapSystem? system = map?.FindUpdater<CreatureMapSystem>();
         Vector3 here = new(player.X, player.Y, player.Z), there = new(target.X, target.Y, target.Z);
@@ -261,6 +261,8 @@ internal sealed class PlayerbotRisk
                 enemies.Add(Enemy(creature, RiskJoin.FightSpot, player));
             }
 
+        fight = [.. counted];
+
         // ... and those whose radius covers the way there (the planned route, sampled every 3 yards).
         if (PlayerbotNavigation.TryPlan(player, spot, _options, out PlayerbotRoute? approach) && approach is not null)
             foreach (PlayerbotThreat threat in threats)
@@ -268,7 +270,6 @@ internal sealed class PlayerbotRisk
                 {
                     counted.Add(creature.Guid);
                     enemies.Add(Enemy(creature, RiskJoin.Path, player));
-                    pathThreats.Add(threat);
                 }
 
         float? mana = null;
@@ -321,12 +322,20 @@ internal sealed class PlayerbotRisk
 
     /// <summary>
     /// A way round the creatures on the approach: a waypoint to either side of the straight line (15, 25 or 35 yards off its
-    /// middle), reached on the navigation, from which the route and the last straight leg to the fight spot stay out of every
-    /// path creature's aggro reach (with a 2-yard margin). Null when none does.
+    /// middle), reached on the navigation, from which the route and the last straight leg to the fight spot stay out of the aggro
+    /// reach (with a 2-yard margin) of every visible creature that would attack the bot and is not part of the fight anyway, and out of
+    /// the bot's hazards. Null when none does.
+    /// <para>
+    /// Every such creature, not only those on the straight approach: a way round one pack can run into another that stood clear of the
+    /// straight line (vmangos BasicAI::MoveInLineOfSight aggroes on whatever the bot walks past). One already reaching where the bot
+    /// stands is no reason to refuse every way (it is part of where the bot is, not of the way).
+    /// </para>
     /// </summary>
-    private PlayerbotRoute? FindDetour(Player player, Creature target, Vector3 spot, List<PlayerbotThreat> pathThreats)
+    private PlayerbotRoute? FindDetour(Player player, Vector3 spot, HashSet<ObjectGuid> fight)
     {
         Vector3 here = new(player.X, player.Y, player.Z);
+        List<PlayerbotThreat> avoid = [.. PlayerbotRecovery.Threats(player)
+            .Where(threat => threat.Source is { } creature && !fight.Contains(creature.Guid) && !threat.Reaches(here, 0f))];
         Vector3 flat = new(spot.X - here.X, spot.Y - here.Y, 0);
         if (flat.Length() < 1f) return null;
         Vector3 side = Vector3.Normalize(new Vector3(-flat.Y, flat.X, 0));
@@ -337,7 +346,8 @@ internal sealed class PlayerbotRisk
                 Vector3 waypoint = middle + (side * offset * sign);
                 if (!PlayerbotNavigation.TryPlan(player, waypoint, _options, out PlayerbotRoute? route) || route is null) continue;
                 List<Vector3> points = [.. route.Points, spot];
-                if (pathThreats.Any(threat => Covers(threat with { Radius = threat.Radius + 2f }, points))) continue;
+                if (avoid.Any(threat => Covers(threat with { Radius = threat.Radius + 2f }, points))) continue;
+                if (Blocking(player, points) is not null) continue;
                 return route;
             }
 

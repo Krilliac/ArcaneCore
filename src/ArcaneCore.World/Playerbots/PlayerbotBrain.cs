@@ -605,6 +605,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>The goals set aside for a while (stalls, deadly errands; inspection and tests).</summary>
     internal PlayerbotSuspensions Suspensions => _suspensions;
 
+    /// <summary>The quest exchanges (inspection and tests).</summary>
+    internal PlayerbotQuestGoals QuestGoals => _quests;
+
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
     {
