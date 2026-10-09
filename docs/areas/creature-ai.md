@@ -311,14 +311,16 @@ the map clock with the relay runner and executor above (one runner per namespace
   start one with the user as source and object as target (vmangos Spell::EffectSendEvent, SpellEffects.cpp:1761-1775;
   GameObject::Use, GameObject.cpp:1572-1577; cmangos StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3478).
   A button has a linked-trap field, not an event-id field. Spell effects carry an explicit game-object target but not an implicitly selected spell-focus game object.
-- **Additional commands**: 2/4/5 field operations, 9 object respawn, 12 close door, 14 remove a whole aura, 16 direct and distance
+- **Additional commands**: 2/4/5 field operations, 9 object respawn (a not-spawned-by-default object appears for datalong2 seconds), 12 close door, 14 remove a whole aura, 16 direct and distance
   sound, 17 create or remove an item, 23 morph, 24 mount, 27 object lock flags, 34 conditional termination, 40 timed object despawn,
   43 reset door or button, 44 update creature template, and 48 unit flags now dispatch through the relay runner
   (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1932, 2004-2047, 2074-2111, 2130-2153,
   2204-2255, 2411-2458, 2499-2524, 2723-2755, 2873-3020). See the
   [DB script engine report](../integration/db-script-engine-20261008.md) for the command coverage ceiling and remaining variants.
-- **Quest sources**: a sharing player now starts a quest script as its source. An item-started quest starts with its owner as the map
-  source because inventory items are not world objects in the runner; item-specific source behavior remains unavailable.
+- **Quest sources**: a sharing player now starts a quest script as its source. An item-started quest starts with no source and the
+  player as target: as in cmangos ScriptAction::HandleScriptStep (DBScripts/ScriptMgr.cpp:1720-1760), where an item is no world object,
+  only the steps whose buddy search finds a source run (vmangos Player::AddQuest, Player.cpp:12889-12891, runs none). Item field
+  commands (2/4/5 on the item itself) are not carried out.
 
 Proof over real rows: `ClassicDbScriptedQuestTests` (World.Tests) imports a z2815 excerpt into a schema-42 database, loads it through the
 stores and runs quests 2843 (QUEST_EXPLORED at 10 s), 2480 (MOVE_TO, then QUEST_EXPLORED at 30 s), 8984 (CompleteScript 9028: NPC flags,

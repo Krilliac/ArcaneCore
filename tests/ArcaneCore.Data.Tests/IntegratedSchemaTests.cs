@@ -161,7 +161,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(CreatureScriptNameDataModule.Version, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(43, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43)
         Assert.Equal(42, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
