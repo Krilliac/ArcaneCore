@@ -87,6 +87,18 @@ public sealed class BugTrioTests
         Assert.False(Assert.IsType<KriAI>(a.Kri.AI).IsEating);
     }
 
+    [Fact]
+    public void VemKnockdown_WaitsForSomeoneInMeleeRange()
+    {
+        using var a = new Arena();
+        a.Tank.Relocate(-8560, 2138, 0, 0, 0);
+        a.Vem.AI!.OnUpdate(8000);
+        Assert.DoesNotContain(a.Spells.Casts, c => c.Spell == 19128);
+        a.Tank.Relocate(a.Vem.X, a.Vem.Y, a.Vem.Z, 0, 0);
+        a.Vem.AI.OnUpdate(1);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 19128);
+    }
+
     [Theory]
     [InlineData(15511u, 26350u)]
     [InlineData(15543u, 26580u)]

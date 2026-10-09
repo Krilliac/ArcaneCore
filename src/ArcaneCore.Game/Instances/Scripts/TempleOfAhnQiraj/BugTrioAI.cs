@@ -164,7 +164,10 @@ public sealed class VemAI : BugTrioAI
         }, () => RandomDelay(15000, 20000));
         AddAction(15000, 20000, () => Victim is { } victim && MapCombat.CanReachWithMeleeAutoAttack(Me, victim)
             && Cast(18670, victim), () => RandomDelay(10000, 14000));
-        AddAction(5000, 8000, () => Victim is { } victim && Cast(19128, victim), () => RandomDelay(15000, 20000));
+        // vmangos boss_vemAI::UpdateBugAI: Knockdown needs someone in melee range, then hits the current victim.
+        AddAction(5000, 8000, () => Victim is { } victim
+            && RandomTarget(u => MapCombat.CanReachWithMeleeAutoAttack(Me, u)) is not null
+            && Cast(19128, victim), () => RandomDelay(15000, 20000));
     }
     public override void OnDeath(Unit? killer) { Cast(25790, triggered: true); base.OnDeath(killer); }
     public override void OnSpellHitTarget(Unit target, SpellInfo spell)

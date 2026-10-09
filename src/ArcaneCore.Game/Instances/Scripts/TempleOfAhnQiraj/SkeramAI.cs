@@ -118,8 +118,9 @@ public sealed class SkeramAI : RaidBossAI
 
     public override void OnDeath(Unit? killer)
     {
-        ClearFulfillment();
-        if (_isImage) { System?.Despawn(Me); return; }
+        // vmangos boss_skeramAI::JustDied: only an image cancels its True Fulfillment; the true
+        // prophet's death leaves the controlled player's buffs running as a reward.
+        if (_isImage) { ClearFulfillment(); System?.Despawn(Me); return; }
         DespawnImages();
         System?.SayText(Me, 11447);
         base.OnDeath(killer);

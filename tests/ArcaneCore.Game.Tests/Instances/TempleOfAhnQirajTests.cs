@@ -61,7 +61,9 @@ public sealed class TempleOfAhnQirajTests
         Assert.True(Assert.IsType<SkeramAI>(first.AI).IsImage);
         Assert.Equal(1000u, first.MaxHealth);
         Assert.Equal(740u, first.Health);
-        Assert.Equal(3, a.Spells.Casts.Count(c => c.Spell is 4801 or 8195 or 20449));
+        uint[] blinks = [.. a.Spells.Casts.Where(c => c.Spell is 4801 or 8195 or 20449).Select(c => c.Spell)];
+        Assert.Equal(3, blinks.Length);
+        Assert.Equal(3, blinks.Distinct().Count());
         a.Map.Combat.Kill(a.Tank, a.Boss);
         Assert.Equal(EncounterState.Done, a.Raid.GetData(TempleOfAhnQirajInstance.Skeram));
         Assert.DoesNotContain(first, a.Creatures.Creatures);
@@ -81,6 +83,18 @@ public sealed class TempleOfAhnQirajTests
         Assert.Equal(EncounterState.Fail, a.Raid.GetData(TempleOfAhnQirajInstance.Skeram));
         Assert.Contains(a.Spells.RemovedAuras, entry => ReferenceEquals(entry.Unit, a.Tank) && entry.Spell == 785);
         Assert.Equal(75u, a.Ai.NextSplitPercent);
+    }
+
+    [Fact]
+    public void Skeram_TrueProphetDeath_LeavesTheFulfillmentBuffsRunning()
+    {
+        // vmangos boss_skeramAI::JustDied cancels True Fulfillment only for an image.
+        using var a = new Arena();
+        a.Ai.OnUpdate(15000);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 785 && ReferenceEquals(c.Target, a.Tank));
+        a.Map.Combat.Kill(a.Tank, a.Boss);
+        Assert.Equal(EncounterState.Done, a.Raid.GetData(TempleOfAhnQirajInstance.Skeram));
+        Assert.DoesNotContain(a.Spells.RemovedAuras, entry => ReferenceEquals(entry.Unit, a.Tank) && entry.Spell is 785 or 2313);
     }
 
     [Fact]
