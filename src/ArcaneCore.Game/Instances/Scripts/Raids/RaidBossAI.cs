@@ -57,10 +57,11 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (ZulGurubInstance, 11380) => new JindoAI(creature),
             (ZulGurubInstance, 11382) => new MandokirAI(creature),
             (ZulGurubInstance, 15114) => new GahzrankaAI(creature),
-            (ZulGurubInstance, 15082) => new GrilekAI(creature),
+            // Gri'lek (15082) and Wushoolay (15085) have no entry here: classic-db z2815 gives both AIName 'EventAI' and no ScriptName
+            // (creature_ai_scripts 1508201-1508202, 1508501-1508502), and neither reference core scripts them, so the host's
+            // CreatureEventAI runs them. A factory entry would shadow that EventAI, because this lookup runs before AIName.
             (ZulGurubInstance, 15083) => new HazzarahAI(creature),
             (ZulGurubInstance, 15084) => new RenatakiAI(creature),
-            (ZulGurubInstance, 15085) => new WushoolayAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             _ => null,
         };
@@ -78,7 +79,11 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
 
+    /// <summary>Health at or below <paramref name="percent"/> (ScriptDev2 <c>GetHealthPercent() &lt;= pct</c>).</summary>
     protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
+
+    /// <summary>Health strictly below <paramref name="percent"/>: exactly ScriptDev2's <c>GetHealthPercent() &lt; pct</c>, in integers.</summary>
+    protected bool HealthBelowPct(uint percent) => (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * percent;
 
     protected Unit? RandomTarget()
     {
