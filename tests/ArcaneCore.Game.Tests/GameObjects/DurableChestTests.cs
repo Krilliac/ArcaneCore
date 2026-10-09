@@ -169,6 +169,50 @@ public sealed class DurableChestTests
     }
 
     [Fact]
+    public void RefusedInitialGeneration_ReleasesTheClient_AndLeavesTheChestReady()
+    {
+        Rig rig = CreateRig();
+        rig.Durable.RefuseStarts = true; // settlement capacity or a refused start
+        (Player alice, FakeSession session) = rig.Join(1);
+        GameObject chest = rig.Chest;
+
+        Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(alice, chest.Guid));
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Equal(GameObjectLootState.Ready, chest.LootState);
+        Assert.Equal(GameObjectState.Ready, chest.State);
+        Assert.Equal(GameObjectFlags.None, chest.Flags & GameObjectFlags.InUse);
+        Assert.Null(chest.Loot);
+        Assert.Empty(rig.Durable.Started);
+
+        rig.Durable.RefuseStarts = false;
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, chest.Guid));
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
+    }
+
+    [Fact]
+    public void DurableOpenCallback_WaitsForTheLootWindow_AndSkipsRefusedGeneration()
+    {
+        Rig rig = CreateRig();
+        rig.Durable.Manual = true;
+        (Player alice, FakeSession session) = rig.Join(1);
+        int opened = 0;
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(alice, rig.Chest.Guid, LockType.Open,
+            onChestOpened: _ => opened++));
+        Assert.Equal(0, opened);
+        rig.Durable.Complete(LootOutcome.Before);
+        Assert.Equal(0, opened);
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(alice, rig.Chest.Guid, LockType.Open,
+            onChestOpened: _ => opened++));
+        rig.Durable.Complete(LootOutcome.After);
+        Assert.Equal(1, opened);
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
+    }
+
+    [Fact]
     public void ChestWithoutGroupLootRules_LeavesTheRoundRobinPointerAndOwnerAlone()
     {
         // vmangos Player.cpp:7680-7698: only a chest with chest.groupLootRules calls Group::UpdateLooterGuid.
@@ -480,12 +524,15 @@ public sealed class DurableChestTests
     {
         Rig rig = CreateRig();
         (Player alice, FakeSession aliceSession) = rig.Join(1);
-        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
         rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
         rig.System.Use(alice, rig.Chest.Guid);
         ParsedLoot window = Window(aliceSession);
         Assert.Equal(1, rig.Durable.Find(Key)!.LootOwnerCharacterId);
         Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(bob, rig.Chest.Guid)); // only the owner may take shared stacks
+        Assert.Single(Packets(bobSession, WorldOpcode.SmsgLootReleaseResponse));
+        Assert.Empty(Packets(bobSession, WorldOpcode.SmsgLootResponse));
+        Assert.Equal(GameObjectFlags.None, rig.Chest.Flags & GameObjectFlags.InUse);
 
         rig.Loot.Release(alice, rig.Chest.Guid); // leftovers: everybody may loot them
         LootOperation release = rig.Durable.Started.Last();

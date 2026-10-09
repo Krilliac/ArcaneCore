@@ -123,6 +123,8 @@ copied). Each piece of code cites file:line.
 - Item casts (`CMSG_USE_ITEM`) supply key items to the lock check, including skeleton keys. Mineral veins can reopen
   after loot release up to their configured number of uses (`GameObjectMapSystem.Chests.cs`, vmangos
   `WorldSession::DoLootRelease`). Their per-player skill-up set survives each reopen until the node respawns.
+- A gathering spell raises skill only after the chest loot window opens. For a durable dungeon chest the roll waits
+  for the generation commit; a refused generation raises no skill ([GM and loot gap lane](../integration/gm-and-loot-gaps-20261008.md)).
 - The fishing catch calls `PlayerSkills.UpdateFishing` ([fishing and special loot](fishing-special-loot.md)).
 
 ## Limits (not delivered, stated so nothing reads as done)

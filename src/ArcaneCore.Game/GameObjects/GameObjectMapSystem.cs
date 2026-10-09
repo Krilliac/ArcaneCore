@@ -329,9 +329,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// The spells area's open-lock effect (herb gathering, mining, lockpicking, opening with a
     /// key): <paramref name="lockType"/> is the effect's misc value, <paramref name="keyItemId"/>
     /// the casting item. On success a chest opens its loot and a door/button activates. The cast
-    /// time and skill-ups belong to the spell (not done here).
+    /// time and skill-ups belong to the spell (not done here): <paramref name="onChestOpened"/> runs
+    /// with the chest once its loot window really opened, which for a dungeon chest is only after
+    /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>).
     /// </summary>
-    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0)
+    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
+        Action<GameObject>? onChestOpened = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
@@ -397,7 +400,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
-            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
+            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go, onChestOpened) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
@@ -622,7 +625,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private static bool IsRefusedForImmunity(Player player, GameObject go)
         => go.Template.CannotBeUsedUnderImmunity() && (player.UnitFlags & UnitFlags.Immune) != 0;
 
-    private GameObjectUseResult OpenChest(Player player, GameObject go)
+    private GameObjectUseResult OpenChest(Player player, GameObject go, Action<GameObject>? onOpened = null)
     {
         if (Loot is null)
         {
@@ -657,8 +660,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         LootResult opened = key is { } durable
-            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable)
-            : Loot.OpenGameObject(player, go, go.Template.GetData(1));
+            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable, onOpened)
+            : Loot.OpenGameObject(player, go, go.Template.GetData(1), onOpened);
         return opened switch
         {
             LootResult.Ok => GameObjectUseResult.Ok,
