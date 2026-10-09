@@ -33,6 +33,10 @@ public sealed class GroupPetVitalsWorldTests
         await using (WorldTestClient owner = await host.EnterWorldAsync("PVOWNER", "Pvowner"))
         await using (WorldTestClient member = await host.EnterWorldAsync("PVMEMBER", "Pvmember"))
         {
+            // This test runs every out-of-range pass itself and reads the packet each one sends. The server's 1 s timer pass would race it:
+            // landing between a change and the test's pass it sends that change first (read by a drain, or by the wrong ReadUntilAsync),
+            // and the test's pass then has nothing to send.
+            await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SocialFeature>().PeriodicStatsPass = false);
             await host.OnWorldAsync(() =>
             {
                 Player player = host.World.FindOnlinePlayer("Pvowner")!;
