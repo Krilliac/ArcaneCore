@@ -125,6 +125,32 @@ public sealed class CreatureDumpImporter
     /// <summary>The quest, gossip and event DB scripts and <c>script_waypoint</c> rows read with the creature tables (world schema 42).</summary>
     public DbScriptDumpImporter DbScripts => _dbScripts;
 
+    /// <summary>Selected creature_template ScriptName values read from the dump, including empty names.</summary>
+    public IReadOnlyDictionary<uint, string> ScriptNames => _templates.ToDictionary(pair => pair.Key, pair => pair.Value.Row.ScriptName);
+
+    /// <summary>Refresh only ScriptName on templates already in the world; other creature fields keep their current values.</summary>
+    public async Task<int> RefreshScriptNamesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        IReadOnlyDictionary<uint, string> names = ScriptNames;
+        if (names.Count == 0)
+        {
+            return 0;
+        }
+
+        int updated = 0;
+        foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (names.TryGetValue(template.Entry, out string? name) && template.ScriptName != name)
+            {
+                template.ScriptName = name;
+                updated++;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return updated;
+    }
+
     /// <summary>
     /// How template <c>ExtraFlags</c> / <c>flags_extra</c> are decoded. <see cref="CreatureExtraFlagsDialect.Unknown"/> (the
     /// default) detects it per row from the column name: <c>flags_extra</c> is vmangos, <c>ExtraFlags</c> is cmangos.
@@ -621,6 +647,7 @@ public sealed class CreatureDumpImporter
             CorpseDecaySeconds = U32(row, "CorpseDecay"),
             ExtraFlags = U32(row, "ExtraFlags", "flags_extra"),
             AIName = Truncate(Str(row, "AIName", "ai_name"), 64),
+            ScriptName = Truncate(Str(row, "ScriptName", "script_name"), 64),
 
             // Behaviour columns: cmangos Detection/CallForHelp/Pursuit/Leash/Timeout (mangos.sql creature_template),
             // vmangos detection_range/call_for_help_range/leash_range (CreatureDefines.h:250-252). A missing

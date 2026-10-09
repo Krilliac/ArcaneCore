@@ -122,6 +122,9 @@ public sealed record CreatureTemplate
     /// </summary>
     public string AIName { get; init; } = string.Empty;
 
+    /// <summary>ClassicDB creature_template.ScriptName: named script AI, selected before AIName.</summary>
+    public string ScriptName { get; init; } = string.Empty;
+
     /// <summary>vmangos <c>CreatureInfo::detection_range</c> default (Objects/CreatureDefines.h:250); classic-db <c>Detection</c> column default.</summary>
     public const float DefaultDetectionRange = 18.0f;
 

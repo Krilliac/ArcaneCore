@@ -30,7 +30,7 @@ public sealed class TableSpecDriftTests
 
     // Columns of the real classic-db tables that no importer reads (names taken from the cmangos schema).
     private static readonly string[] s_unmappedSamples =
-        ["trainer_id", "KillCredit1", "ScriptName", "Comment", "StringId1", "ResistanceFire", "MechanicImmuneMask", "VendorTemplateId", "equipment_id"];
+        ["trainer_id", "KillCredit1", "Comment", "StringId1", "ResistanceFire", "MechanicImmuneMask", "VendorTemplateId", "equipment_id"];
 
     public static IEnumerable<object[]> ObservableTables()
     {

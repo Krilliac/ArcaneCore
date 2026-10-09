@@ -41,7 +41,7 @@ public static class ContentTableSpecs
         "MinMeleeDmg", "MaxMeleeDmg", "MinRangedDmg", "MaxRangedDmg", "MeleeAttackPower", "RangedAttackPower",
         "MeleeBaseAttackTime", "base_attack_time", "RangedBaseAttackTime", "ranged_attack_time",
         "DamageSchool", "damage_school", "PetSpellDataId", "pet_spell_list_id", "MovementType", "movement_type",
-        "CorpseDecay", "ExtraFlags", "flags_extra", "AIName", "ai_name",
+        "CorpseDecay", "ExtraFlags", "flags_extra", "AIName", "ai_name", "ScriptName", "script_name",
         "patch", "static_flags1", "static_flags2", "health_multiplier", "mana_multiplier", "armor_multiplier",
         "damage_multiplier", "damage_variance",
         // GameObjectLootDumpImporter.ReadCreatureLoot

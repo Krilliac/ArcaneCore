@@ -48,6 +48,110 @@ public sealed class RelayScriptCommandTests
     }
 
     [Fact]
+    public void DoorCommands_OpenAndCloseWithTheMapClock()
+    {
+        using Town t = Start([Step(0, 11, dataLong: DoorGuid), Step(100, 12, dataLong: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10)]);
+        GameObject door = Assert.Single(t.Objects.GameObjects);
+        t.Wave();
+        Assert.Equal(GameObjectState.Active, door.State);
+        Run(t.World, 100);
+        Assert.Equal(GameObjectState.Ready, door.State);
+    }
+
+    [Fact]
+    public void ObjectLockAndDelayedDespawn_UseTheSelectedGameObject()
+    {
+        using Town t = Start([
+            Step(0, 27, dataLong: 4, flags: FlagBuddyByGuid | FlagBuddyByGo, buddy: DoorEntry, radius: DoorGuid),
+            Step(0, 40, dataLong: 100, flags: FlagBuddyAsTarget | FlagBuddyByGuid | FlagBuddyByGo,
+                buddy: DoorEntry, radius: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10)], objectType: GameObjectType.Chest);
+        GameObject door = Assert.Single(t.Objects.GameObjects);
+        t.Wave();
+        Assert.True((door.Flags & GameObjectFlags.NoInteract) != 0);
+        Assert.True(door.IsSpawned);
+        Run(t.World, 99);
+        Assert.True(door.IsSpawned);
+        Run(t.World, 1);
+        Assert.False(door.IsSpawned);
+    }
+
+    [Fact]
+    public void RespawnGameObject_ShowsAHiddenSpawnForItsDespawnDelay()
+    {
+        // cmangos SCRIPT_COMMAND_RESPAWN_GAMEOBJECT (ScriptMgr.cpp:2001-2046): a spawn that is not spawned by default
+        // (negative spawntimesecs) appears for datalong2 seconds and then leaves again.
+        using Town t = Start([Step(0, 9, dataLong: DoorGuid, dataLong2: 2)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10, spawnTimeSeconds: -60)], objectType: GameObjectType.Chest);
+        GameObject chest = Assert.Single(t.Objects.GameObjects);
+        Assert.False(chest.IsSpawned);
+        t.Wave();
+        Assert.True(chest.IsSpawned);
+        Run(t.World, 1_999);
+        Assert.True(chest.IsSpawned);
+        Run(t.World, 1);
+        Assert.False(chest.IsSpawned);
+    }
+
+    [Fact]
+    public void RespawnGameObject_WithoutADespawnDelay_LeavesTheShownSpawnInTheWorld()
+    {
+        // ClassicDB dbscripts_on_event 466-468 (the Water Well Cleansing Aura, 2904, spawntimesecs -180) have datalong2 0. cmangos
+        // SetRespawnTime(0) leaves m_respawnDelay 0, so IsSpawned() stays true and the object stays (GameObject.h:757-768); it must not be
+        // removed again on the next tick.
+        using Town t = Start([Step(0, 9, dataLong: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10, spawnTimeSeconds: -180)], objectType: GameObjectType.Chest);
+        GameObject aura = Assert.Single(t.Objects.GameObjects);
+        Assert.False(aura.IsSpawned);
+        t.Wave();
+        Assert.True(aura.IsSpawned);
+        Run(t.World, 60_000);
+        Assert.True(aura.IsSpawned);
+    }
+
+    [Fact]
+    public void ModifyUnitFlags_Toggle_RemovesTheWholeMaskWhenAnyBitIsSet_AndSetsItOtherwise()
+    {
+        // cmangos SCRIPT_COMMAND_MODIFY_UNIT_FLAGS (ScriptMgr.cpp:2993-3016) toggles with HasFlag, which is true for any bit of the mask
+        // (Object.h:476-480): not a XOR.
+        const UnitFlags mask = UnitFlags.PetRename | UnitFlags.PetAbandon; // two bits nothing else in the test reads
+        using Town t = Start([Step(0, 48, dataLong: (uint)mask, dataLong2: 2, flags: FlagReverse)]);
+        t.Elly.UnitFlags = (t.Elly.UnitFlags & ~mask) | UnitFlags.PetRename;
+
+        t.Wave();
+        Assert.Equal((UnitFlags)0, t.Elly.UnitFlags & mask);
+
+        Run(t.World, 100);
+        t.Wave();
+        Assert.Equal(mask, t.Elly.UnitFlags & mask);
+    }
+
+    [Fact]
+    public void CreateItem_WithTheAdditionalFlag_DestroysTheCount()
+    {
+        // cmangos SCRIPT_COMMAND_CREATE_ITEM (ScriptMgr.cpp:2241-2255): SCRIPT_FLAG_COMMAND_ADDITIONAL destroys instead of creating; ClassicDB
+        // has one such row (dbscripts_on_gossip 7166, the Cultist Engineer's 8 shards).
+        using Town t = Start([Step(0, 17, dataLong: ItemTestData.QuestPelt, dataLong2: 8, flags: FlagAdditional)]);
+        ItemTestData.Wire(t.Player.Inventory);
+        ItemTestData.Give(t.Player.Inventory, ItemTestData.QuestPelt, 10);
+
+        t.Wave();
+
+        Assert.Equal(2u, t.Player.Inventory.GetItemCount(ItemTestData.QuestPelt));
+    }
+
+    [Fact]
+    public void DistanceSound_UsesTheSourceGuidInItsPacket()
+    {
+        using Town t = Start([Step(0, 16, dataLong: 6209, dataLong2: 2, flags: FlagReverse)]);
+        t.Wave();
+        byte[] sound = Assert.Single(Packets(t.Session, WorldOpcode.SmsgPlayObjectSound));
+        Assert.Equal(6209u, BitConverter.ToUInt32(sound, 0));
+        Assert.Equal(t.Elly.Guid.Value, BitConverter.ToUInt64(sound, 4));
+    }
+
+    [Fact]
     public void ZulFarrakPrisonerRelay_ChangesTheBuddyFaction()
     {
         using Town t = Start([Step(0, 22, dataLong: 495, buddy: BuddyEntry, radius: 50, flags: 4)],
@@ -97,7 +201,7 @@ public sealed class RelayScriptCommandTests
 
     private static Town Start(IEnumerable<RelayScriptStep> steps, IEnumerable<CreatureSpawn>? more = null, IEnumerable<CreatureAiEvent>? rows = null,
         bool patrol = false, IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null, IEnumerable<GameObjectSpawn>? objects = null,
-        bool fightingBuddy = false)
+        bool fightingBuddy = false, GameObjectType objectType = GameObjectType.Door)
     {
         var ai = new CreatureAiContent([WaveRow(), .. rows ?? []], [], new BroadcastTextCatalog([]))
         {
@@ -115,7 +219,7 @@ public sealed class RelayScriptCommandTests
         var spells = new FakeCaster();
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = spells });
         var goSystem = new GameObjectMapSystem(map, new GameObjectContent(
-            [GameObjectTestKit.GoTemplate(DoorEntry, GameObjectType.Door)], objects ?? [], [], [], []));
+            [GameObjectTestKit.GoTemplate(DoorEntry, objectType)], objects ?? [], [], [], []));
         map.AddUpdater(goSystem);
         (Player player, FakeSession session) = AddPlayer(world, 1, 0, 10);
         Creature elly = system.Creatures.Single(c => c.Template.Entry == WolfEntry);
