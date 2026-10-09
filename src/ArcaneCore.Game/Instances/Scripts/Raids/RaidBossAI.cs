@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
@@ -69,6 +70,10 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             // CreatureEventAI runs them. A factory entry would shadow that EventAI, because this lookup runs before AIName.
             (ZulGurubInstance, 15083) => new HazzarahAI(creature),
             (ZulGurubInstance, 15084) => new RenatakiAI(creature),
+            (TempleOfAhnQirajInstance temple, 15263) => new SkeramAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15511) => new KriAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15543) => new YaujAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15544) => new VemAI(creature, temple),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),
