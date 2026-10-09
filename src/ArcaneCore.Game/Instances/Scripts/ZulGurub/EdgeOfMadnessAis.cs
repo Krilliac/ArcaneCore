@@ -98,14 +98,6 @@ public sealed class RenatakiAI : RaidBossAI
         CombatMovement = true;
     }
 
-    /// <summary>cmangos UnitAI::SetMeleeEnabled: a change starts or stops the swing at the current victim.</summary>
-    private void SetMeleeEnabled(bool enabled)
-    {
-        if (enabled == MeleeEnabled) return;
-        MeleeEnabled = enabled;
-        if (Victim is { } victim) System?.SetMelee(Me, victim, enabled);
-    }
-
     /// <summary>boss_renatakiAI::Reset: combat script off, melee and combat movement on.</summary>
     protected override void ResetActions()
     {
