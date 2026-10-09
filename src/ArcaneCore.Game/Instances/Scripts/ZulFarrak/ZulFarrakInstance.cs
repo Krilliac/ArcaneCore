@@ -93,6 +93,29 @@ public sealed class ZulFarrakInstance(Map map) : ScriptedInstance(map, 9)
 
     public override uint GetData(uint type) => type < 9 ? Encounters[type] : 0;
 
+    /// <summary>
+    /// ProcessEventId_event_go_zulfarrak_gong and ProcessEventId_event_spell_unlocking (zulfarrak.cpp:39-75), reached through
+    /// ScriptedEvents.Start for every start of event 2488 or 2609 (the SEND_EVENT of Unlocking 10738, a goober or chest event). For a
+    /// player source this handler owns the event: an allowed start runs the event's imported copy (the relay
+    /// <see cref="RelayScriptCatalog.EventRelayId"/>, the same rows as dbscripts_on_event), and true keeps the dbscripts_on_event script
+    /// itself from running a second wave; a later start finds the encounter started and does nothing, as cmangos returns true then. Any
+    /// other source gets false and the DB script, as in cmangos.
+    /// </summary>
+    public override bool OnSpellEvent(Unit caster, uint eventId)
+    {
+        if (eventId is not (PyramidEvent or GongEvent) || caster is not Player player)
+        {
+            return false;
+        }
+
+        if (eventId == PyramidEvent ? StartPyramid() : StartGahzrilla())
+        {
+            Instance.FindUpdater<CreatureMapSystem>()?.StartRelayScript(RelayScriptCatalog.EventRelayId(eventId), player, null);
+        }
+
+        return true;
+    }
+
     /// <summary>event_spell_unlocking: start once and permit the DB relay to spawn its trolls.</summary>
     public bool StartPyramid()
     {

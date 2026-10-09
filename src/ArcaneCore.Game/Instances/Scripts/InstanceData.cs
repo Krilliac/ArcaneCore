@@ -142,9 +142,9 @@ public abstract partial class InstanceData : IMapUpdater
     }
 
     /// <summary>
-    /// cmangos ProcessEventId after SPELL_EFFECT_SEND_EVENT fires on this map (SpellEffects.cpp EffectSendEvent → StartEvents_Event).
-    /// True when this script handles <paramref name="eventId"/> (including any dbscripts_on_event content it stands in for); false
-    /// leaves the event unhandled, and the spell system reports it as not implemented.
+    /// cmangos ProcessEventId, asked first by StartEvents_Event (DBScripts/ScriptMgr.cpp:3445-3451) for a SEND_EVENT spell effect and for
+    /// a chest or goober event of this map (<see cref="ScriptedEvents.Start"/>). True when this script handles <paramref name="eventId"/>
+    /// and the event's dbscripts_on_event script must not run (the ScriptDev2 handler returned true); false lets the DB script start.
     /// </summary>
     public virtual bool OnSpellEvent(Unit caster, uint eventId) => false;
 

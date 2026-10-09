@@ -307,21 +307,32 @@ the map clock with the relay runner and executor above (one runner per namespace
 - **Event credit**: an exploration/event quest is withheld unless something can complete it. `DbScriptQuestCredit` counts every quest a
   DB script's QUEST_EXPLORED names (relays included) and every escort quest of an entry script (`CreatureAiFactory.ScriptedEventQuests`),
   read through `QuestNpcServices.ScriptCreditedQuests`; classic-db quests such as 2843 are offered because of it.
-- **Event callers**: SEND_EVENT starts an event DB script after the instance script declines it (only an event with no
-  dbscripts_on_event rows is logged as unsupported; one already running for the same caster and target is skipped, as cmangos
-  Map::ScriptsStart does, Maps/Map.cpp:2181-2193). Chest data6 and goober data2 start one with the user as source and object as
-  target (vmangos Spell::EffectSendEvent, SpellEffects.cpp:1761-1775; cmangos GameObject::Use, GameObject.cpp:1548-1560 and
-  1683-1688, StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3478). The goober event starts before the goober questId gate, as in
-  cmangos (vmangos GameObject.cpp:1564-1580 gates it first). The chest event starts on the direct use and on the spell path
-  (key, lockpick: Spell::SendLoot passes a chest to GameObject::Use, SpellEffects.cpp:2142-2145), but only once the chest passed
-  the quest gate and the lock and actually opened, so a refused use springs no ambush; every ClassicDB chest whose event has rows
-  is locked. A button has a linked-trap field, not an event-id field. Spell effects carry an explicit game-object target but not an
-  implicitly selected spell-focus game object.
+- **Event callers**: SEND_EVENT, chest data6 and goober data2 start an event through `ScriptedEvents.Start` (cmangos
+  StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3482). The event's ScriptDev2 handler answers first: the map's
+  `InstanceData.OnSpellEvent` (Zul'Farrak 2488/2609, Blackrock Spire 4884, Scholomance 5618-5623), else `ScriptedEvents.GatedOff`
+  for the ClassicDB handlers with rows but no instance-script port (3938 purify food: only a player at a game object; 8302 Razorgore
+  possess: never; 8420/8428 Dreadsteed: never, the ritual is not ported; 10495 Gluth's Decimate: only with Gluth on the map). Only
+  when it declines does the dbscripts_on_event script start; an event with no handler and no rows is logged as unsupported. A run is
+  unique by its unit (players included) or game-object source, else by such a target (SCRIPT_EXEC_PARAM_UNIQUE_BY_SOURCE/TARGET,
+  :3476-3481), and a duplicate start is skipped as cmangos Map::ScriptsStart does (Maps/Map.cpp:2181-2193): one player runs one copy
+  of an event, two players run two. Chest and goober events have the user as source and the object as target (vmangos
+  Spell::EffectSendEvent, SpellEffects.cpp:1761-1775; cmangos GameObject::Use, GameObject.cpp:1548-1560 and 1683-1688). The goober
+  event starts before the goober questId gate, as in cmangos (vmangos GameObject.cpp:1564-1580 gates it first), but after
+  ArcaneCore's own in-use refusal, so a repeated use while the goober is activated fires nothing. The chest event starts on the
+  direct use and on the spell path (key, lockpick: Spell::SendLoot passes a chest to GameObject::Use, SpellEffects.cpp:2142-2145),
+  but only once the chest passed the quest gate and the lock and actually opened, so a refused use springs no ambush; every ClassicDB
+  chest whose event has rows is locked. A button has a linked-trap field, not an event-id field. Spell effects carry an explicit
+  game-object target but not an implicitly selected spell-focus game object.
+- **Conditions**: a row's condition_id and TERMINATE_COND decide the map condition types 36 DEAD_OR_AWAY, 37 CREATURE_IN_RANGE and
+  39 SPAWN_COUNT (and AND/OR/NOT over them) in the script engine (`CreatureMapSystem.RelayConditions`, cmangos Conditions.cpp:299-308,
+  424-466, 484-489), with the script's own target and source; player conditions still go to the world's condition evaluator. 41 of
+  ClassicDB's 44 loaded TERMINATE_COND rows are of the map kind (escort quests stop and fail when the player dies or leaves or the
+  escort dies). An undecidable condition never fails a quest.
 - **Additional commands**: 2/4/5 field operations, 9 object respawn (a not-spawned-by-default object appears for datalong2 seconds, and stays with datalong2 0 as in cmangos), 12 close door, 14 remove a whole aura, 16 direct and distance
   sound, 17 create or remove an item, 23 morph, 24 mount, 27 object lock flags, 34 conditional termination, 40 timed object despawn,
   43 reset door or button, 44 update creature template, and 48 unit flags now dispatch through the relay runner
-  (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1932, 2004-2047, 2074-2111, 2130-2153,
-  2204-2255, 2411-2458, 2499-2524, 2723-2755, 2873-3020). See the
+  (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1924, 2001-2047, 2074-2111, 2130-2154,
+  2203-2256, 2411-2459, 2499-2525, 2720-2758, 2887-3016). See the
   [DB script engine report](../integration/db-script-engine-20261008.md) for the command coverage ceiling and remaining variants.
 - **Quest sources**: a sharing player now starts a quest script as its source. An item-started quest starts with no source and the
   player as target: as in cmangos ScriptAction::HandleScriptStep (DBScripts/ScriptMgr.cpp:1720-1760), where an item is no world object,

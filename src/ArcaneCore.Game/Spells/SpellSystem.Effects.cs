@@ -282,8 +282,10 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos Spell::EffectSendEvent (SpellEffects.cpp:1761-1775) and cmangos StartEvents_Event (DBScripts/ScriptMgr.cpp:3445):
-    /// instance scripts get first refusal, then the event DB script starts with caster and effect target.
+    /// vmangos Spell::EffectSendEvent (SpellEffects.cpp:1761-1775) and cmangos StartEvents_Event (DBScripts/ScriptMgr.cpp:3445-3482),
+    /// through <see cref="Instances.Scripts.ScriptedEvents.Start"/>: the script handler of the event answers first, then the event DB
+    /// script starts with caster and effect target. Only an event no handler takes and with no dbscripts_on_event rows is unsupported; one
+    /// already running for the same object is skipped as a success, as cmangos Map::ScriptsStart does (Maps/Map.cpp:2181-2193).
     /// </summary>
     private void EffectSendEvent(SpellEffectContext context)
     {
@@ -293,28 +295,17 @@ public sealed partial class SpellSystem
         }
 
         uint eventId = context.Effect.MiscValue > 0 ? (uint)context.Effect.MiscValue : 0;
-        if (eventId == 0)
+        if (eventId == 0 || context.Caster.Map is not { } map)
         {
             ReportUnsupported("send event", eventId, context.Spell.Id);
             return;
         }
 
-        if (context.Caster.Map?.FindUpdater<Instances.Scripts.InstanceData>()?.OnSpellEvent(context.Caster, eventId) == true)
-        {
-            return;
-        }
-
-        WorldObject target = context.Caster.Map?.FindObject(context.Cast.Targets.GameObject) ?? context.Target;
-        Creatures.CreatureMapSystem? scripts = context.Caster.Map?.FindUpdater<Creatures.CreatureMapSystem>();
-        // Only missing content is unsupported: StartDbScript is also false for an event already running for this caster and target
-        // (RelayScriptRunner.IsRunning), which cmangos Map::ScriptsStart (Maps/Map.cpp:2181-2193) skips as a success, not an error.
-        if (scripts?.HasDbScript(Kernel.WorldData.Creatures.DbScriptKind.Event, eventId) != true)
+        WorldObject target = map.FindObject(context.Cast.Targets.GameObject) ?? context.Target;
+        if (Instances.Scripts.ScriptedEvents.Start(map, eventId, context.Caster, target) == Instances.Scripts.ScriptedEventResult.NoScript)
         {
             ReportUnsupported("send event", eventId, context.Spell.Id);
-            return;
         }
-
-        scripts.StartDbScript(Kernel.WorldData.Creatures.DbScriptKind.Event, eventId, context.Caster, target);
     }
 
     /// <summary>

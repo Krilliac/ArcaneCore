@@ -812,21 +812,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.OnCooldown;
         }
 
+        // An object still in use (activated until its auto-close time) refuses the use before anything else, so a repeated or crafted
+        // CMSG_GAMEOBJ_USE in that window neither shows the page again nor re-fires the goober event. The client offers no use of a
+        // GO_FLAG_IN_USE object and cmangos has no server-side refusal; ArcaneCore's InUse check stands for it, as the chest path does.
+        uint autoCloseSeconds = go.Template.AutoCloseSeconds();
+        if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
+        {
+            return GameObjectUseResult.InUse;
+        }
+
         // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
         ShowGooberPageOrGossip(player, go);
-        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1696): goober.eventId (data2) starts before the
+        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1688): goober.eventId (data2) starts before the
         // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
         StartDbEvent(go.Template.GetData(2), player, go);
         int questId = GooberQuestId(go);
         if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
         {
             return GameObjectUseResult.NeedsQuest;
-        }
-
-        uint autoCloseSeconds = go.Template.AutoCloseSeconds();
-        if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
-        {
-            return GameObjectUseResult.InUse;
         }
 
         Quests?.GameObjectUsed(player, go.Entry, go.Guid);

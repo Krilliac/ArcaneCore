@@ -132,11 +132,16 @@ public sealed class DungeonScriptHooksTests
         using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map), [7604], [7604], relays);
         var data = Assert.IsType<ZulFarrakInstance>(run.Data);
 
-        Assert.True(DungeonScriptHooks.OnSpellFinished(Cast(run.Player, DungeonScriptHooks.UnlockingSpell), completed: true));
+        // event_spell_unlocking is the instance's SEND_EVENT handler now, not a completed-cast hook (one owner of the wave).
+        Assert.False(DungeonScriptHooks.OnSpellFinished(Cast(run.Player, DungeonScriptHooks.UnlockingSpell), completed: true));
+        Assert.Equal(0, run.Creatures.PendingRelaySteps);
+
+        Assert.True(data.OnSpellEvent(run.Player, ZulFarrakInstance.PyramidEvent));
         Assert.Equal(EncounterState.InProgress, data.GetData(ZulFarrakInstance.TypePyramid));
         Assert.Equal(1, run.Creatures.PendingRelaySteps);
 
-        Assert.False(DungeonScriptHooks.OnSpellFinished(Cast(run.Player, DungeonScriptHooks.UnlockingSpell), completed: true));
+        Assert.True(data.OnSpellEvent(run.Player, ZulFarrakInstance.PyramidEvent));
         Assert.Equal(1, run.Creatures.PendingRelaySteps); // event_spell_unlocking returns true: the DB script does not run again
+        Assert.False(data.OnSpellEvent(run.Creature(7604), ZulFarrakInstance.PyramidEvent)); // a creature source gets the DB script
     }
 }
