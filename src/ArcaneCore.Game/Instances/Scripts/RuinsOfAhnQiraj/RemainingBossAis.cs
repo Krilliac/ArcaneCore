@@ -6,24 +6,8 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 
-/// <summary>mangos-classic ruins_of_ahnqiraj/ruins_of_ahnqiraj.cpp
-/// DoSendNextArmyWave and boss_rajaxx.cpp; the instance drives the seven army waves. Rajaxx's own aggro
-/// does not start the event (OnCreatureEnterCombat has no Rajaxx case: Andorov's dialogue does); his
-/// death completes it and his evade fails it (OnCreatureDeath, OnCreatureEvade).</summary>
-public sealed class RajaxxAI : RaidBossAI
-{
-    public RajaxxAI(Creature creature) : base(creature, null)
-    {
-        // ClassicDB z2815 creature_ai_scripts 1534101-1534107; the script AI
-        // supersedes EventAI, so keep its combat spell cadence here.
-        AddAction(7000, 9000, () => Cast(6713, Victim), () => RandomDelay(7000, 9000));
-        AddAction(12000, 18000, () => Cast(25599, Me), () => RandomDelay(16000, 21000));
-        AddAction(8000, 12000, () => Cast(20477, RandomTarget()), () => RandomDelay(8000, 12000));
-        AddAction(600000, () => Cast(8269, Me), () => 120000);
-    }
-    public override void OnRespawn() { base.OnRespawn(); Cast(18943, Me, triggered: true); }
-    public override void OnDeath(Unit? killer) => Instance?.SetData(1, EncounterState.Done);
-}
+// General Rajaxx (15341) has no script AI: mangos-classic has none, and his ClassicDB z2815 EventAI (creature_ai_scripts
+// 1534101-1534107) runs him. The instance completes and fails the event (RuinsOfAhnQirajEvents.cs OnCreatureDeath, OnCreatureEvade).
 
 /// <summary>mangos-classic ruins_of_ahnqiraj/boss_moam.cpp boss_moamAI::Reset,
 /// ExecuteAction and SummonManaFiendsMoam::OnEffectExecute.</summary>
@@ -264,8 +248,10 @@ public sealed class OssirianAI : RaidBossAI
     {
         base.ResetActions();
         _supremeMs = 45000;
-        Cast(19818, Me, triggered: true);
-        Cast(25176, Me, triggered: true);
+        // CAST_TRIGGERED | CAST_AURA_NOT_PRESENT.
+        if (System?.HasAura(Me, 19818) != true) Cast(19818, Me, triggered: true);
+        if (System?.HasAura(Me, 25176) != true) Cast(25176, Me, triggered: true);
+        Raid?.RespawnFirstCrystal(); // boss_ossirianAI::Reset: RespawnFirstCrystal
     }
     public override void OnAggro(Unit target)
     {
@@ -281,10 +267,16 @@ public sealed class OssirianAI : RaidBossAI
             Raid?.SpawnOssirianCrystals(1);
         }
     }
+    /// <summary>ExecuteAction(OSSIRIAN_SUPREME): CAST_AURA_NOT_PRESENT, so while Supreme stands the action stays ready and is retried;
+    /// when it is cast again he yells one of SAY_SUPREME_1-3.</summary>
     protected override void UpdateCombat(uint diffMs)
     {
         _supremeMs = _supremeMs > diffMs ? _supremeMs - diffMs : 0;
-        if (_supremeMs == 0 && Cast(25176, Me)) _supremeMs = 45000;
+        if (_supremeMs == 0 && System?.HasAura(Me, 25176) != true && Cast(25176, Me))
+        {
+            System?.SayText(Me, -1509018 - System.RandomInt(0, 2));
+            _supremeMs = 45000;
+        }
         base.UpdateCombat(diffMs);
     }
 }

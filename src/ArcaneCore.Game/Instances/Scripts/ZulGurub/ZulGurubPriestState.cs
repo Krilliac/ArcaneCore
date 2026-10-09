@@ -41,11 +41,21 @@ public sealed partial class ZulGurubInstance
             }
         }
 
-        if (creature.Template.Entry == 11382) StoreCreature(creature);
+        if (creature.Template.Entry is 11382 or 11380) StoreCreature(creature); // Mandokir, Jin'do (SAY_GRATS_JINDO)
     }
+
+    /// <summary>Jin'do (11380) from <c>m_npcEntryGuidStore</c>.</summary>
+    public Creature? FindJindo() => GetSingleCreatureFromStorage(11380);
 
     private void OnRaidUnitKilled(Unit? killer, Unit victim)
     {
+        // mob_ohganAI::KilledUnit: a player Ohgan kills in combat is revived by the closest Chained Spirit, as with Mandokir's own kills.
+        if (victim is Player && killer is Creature { Entry: 14988, IsAlive: true } ohgan && ohgan.Combat.IsInCombat &&
+            GetSingleCreatureFromStorage(11382)?.AI is MandokirAI raptorOwner)
+        {
+            raptorOwner.ReviveWithChainedSpirit(victim);
+        }
+
         if (victim is not Creature creature)
         {
             return;

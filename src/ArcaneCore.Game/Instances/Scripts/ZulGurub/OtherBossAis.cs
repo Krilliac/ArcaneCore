@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Instances.Scripts.Raids;
+using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Instances.Scripts.ZulGurub;
 
@@ -87,11 +89,20 @@ public sealed class JindoAI : RaidBossAI
     public override void OnAggro(Unit target) => System?.SayText(Me, 10449);
 }
 
-/// <summary>vmangos zulgurub/boss_mandokir.cpp boss_mandokirAI::Reset/UpdateAI and
-/// mangos-classic zulgurub/boss_mandokir.cpp Aggro/KilledUnit.</summary>
+/// <summary>mangos-classic zulgurub/boss_mandokir.cpp boss_mandokirAI::Aggro, EnterEvadeMode, JustDied, SpellHitTarget, ReceiveAIEvent,
+/// KilledUnit, JustSummoned, SummonedCreatureJustDied and MovementInform; the combat cadence of vmangos boss_mandokirAI::Reset/UpdateAI.
+/// Threatening Gaze (24314) reaches the AI through <see cref="ThreateningGazeAuraModule"/>, as the reference ThreateningGaze AuraScript does.</summary>
 public sealed class MandokirAI : RaidBossAI
 {
+    /// <summary>cmangos AI_EVENT_CUSTOM_A / AI_EVENT_CUSTOM_B: Threatening Gaze put on / taken off a player.</summary>
+    public const uint AiEventGazeApplied = 1000, AiEventGazeRemoved = 1001;
+    /// <summary>POINT_DOWNSTAIRS: the instance sends him down the stairs on TYPE_OHGAN SPECIAL (zulgurub.cpp SetData).</summary>
+    public const uint PointDownstairs = 1;
+    private const uint ChainedSpirit = 15117, Ohgan = 14988;
     private bool _ohganDead;
+    private int _killCount;
+    private float _gazeThreat;
+    private uint _mountDisplay;
     private readonly List<Creature> _spirits = [];
     // mangos-classic boss_mandokir.cpp aSpirits: fixed in-world positions.
     private static readonly (float X, float Y, float Z, float O)[] SpiritPositions =
@@ -124,26 +135,134 @@ public sealed class MandokirAI : RaidBossAI
             foreach (var p in SpiritPositions)
                 _spirits.Add(system.SpawnTemporary(template, p.X, p.Y, p.Z, p.O, Me));
         }
+        // "At combat start Mandokir is mounted so we must unmount it first" (creature_template_addon 11382 mount 15271).
+        uint mount = Me.GetUInt32(UpdateFields.UnitFieldMountdisplayid);
+        if (mount != 0)
+        {
+            _mountDisplay = mount;
+            Me.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 0);
+        }
         Cast(24349, Me);
     }
+
+    /// <summary>MovementInform(POINT_DOWNSTAIRS): at the foot of the stairs he loses IMMUNE_TO_PLAYER and pulls every player of the map.</summary>
+    public override void OnMovementInform(MovementGeneratorType type, uint pointId)
+    {
+        if (type != MovementGeneratorType.Point || pointId != PointDownstairs || Instance is null) return;
+        Me.UnitFlags &= ~UnitFlags.ImmuneToPlayer;
+        System?.SetInCombatWithZone(Me);
+    }
+
     private void DespawnSpirits()
     {
         foreach (Creature spirit in _spirits) System?.ForcedDespawn(spirit, 0);
         _spirits.Clear();
     }
     public override void OnEvade() { DespawnSpirits(); base.OnEvade(); }
+
+    /// <summary>cmangos HomeMovementGenerator::Finalize reloads the creature addon: he is mounted again at home.</summary>
+    public override void OnReachedHome()
+    {
+        base.OnReachedHome();
+        if (_mountDisplay != 0) Me.SetUInt32(UpdateFields.UnitFieldMountdisplayid, _mountDisplay);
+    }
+
+    /// <summary>SummonedCreatureJustDied(NPC_OHGAN): enrage and EMOTE_RAGE.</summary>
     public void OnOhganDeath()
     {
         if (_ohganDead) return;
         _ohganDead = true;
         Cast(23537, Me, triggered: true);
+        System?.SayText(Me, 10545);
     }
-    protected override void ResetActions() { base.ResetActions(); _ohganDead = false; }
+
+    /// <summary>JustSummoned(NPC_OHGAN): the raptor joins on his victim.</summary>
+    public override void OnJustSummoned(Creature summoned)
+    {
+        if (summoned.Entry == Ohgan && Victim is { } victim) summoned.AI?.AttackStart(victim);
+    }
+
+    /// <summary>SpellHitTarget(SPELL_CHARGE): a charge wipes his threat list.</summary>
+    public override void OnSpellHitTarget(Unit target, SpellInfo spell)
+    {
+        if (spell.Id == 24408) ResetThreat();
+    }
+
+    /// <summary>ReceiveAIEvent: on Threatening Gaze the watch lines and the watched player's threat are noted; when the gaze ends, a living
+    /// player whose threat rose is summoned when out of sight (25104) and charged (24315).</summary>
+    public override void OnReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue)
+    {
+        if (eventType == AiEventGazeApplied && invoker is not null)
+        {
+            System?.SayText(Me, 10604, invoker);
+            System?.SayText(Me, 10628, invoker);
+            _gazeThreat = Me.Combat.Threat.GetThreat(invoker);
+        }
+        else if (eventType == AiEventGazeRemoved && invoker is Player { IsAlive: true } watched &&
+                 Me.Combat.Threat.GetThreat(watched) > _gazeThreat)
+        {
+            if (System is { } system && !system.IsInLineOfSight(Me, watched)) Cast(25104, watched, triggered: true);
+            Cast(24315, watched, triggered: true);
+        }
+    }
+
+    /// <summary>KilledUnit: every third player kill levels him up (with Jin'do's congratulation while Jin'do lives), and in combat the
+    /// closest Chained Spirit within 50 yards revives the player.</summary>
+    public override void OnKilledUnit(Unit victim)
+    {
+        if (victim is not Player) return;
+        if (++_killCount == 3)
+        {
+            System?.SayText(Me, 10505);
+            if (Raid?.FindJindo() is { IsAlive: true } jindo) System?.SayText(jindo, 10601);
+            Cast(24312, Me, triggered: true);
+            _killCount = 0;
+        }
+        if (Me.Combat.IsInCombat) ReviveWithChainedSpirit(victim);
+    }
+
+    /// <summary>mob_ohganAI::KilledUnit and boss_mandokirAI::KilledUnit: GetClosestCreatureWithEntry(victim, NPC_CHAINED_SPIRIT, 50) casts 24341.</summary>
+    public void ReviveWithChainedSpirit(Unit victim)
+    {
+        if (System is not { } system) return;
+        if (system.CreaturesOfEntryInRange(victim, ChainedSpirit, 50).FirstOrDefault(c => c.IsAlive) is { } spirit)
+            system.CastSpell(spirit, 24341, victim, triggered: false);
+    }
+
+    private ZulGurubInstance? Raid => Instance as ZulGurubInstance;
+
+    protected override void ResetActions()
+    {
+        base.ResetActions();
+        _ohganDead = false;
+        _killCount = 0;
+        _gazeThreat = 0;
+    }
     public override void OnDeath(Unit? killer)
     {
         DespawnSpirits();
         base.OnDeath(killer);
         Cast(24342, Me, triggered: true);
+    }
+}
+
+/// <summary>mangos-classic boss_mandokir.cpp ThreateningGaze AuraScript: putting on and taking off 24314 sends its caster's AI
+/// AI_EVENT_CUSTOM_A / AI_EVENT_CUSTOM_B with the gazed player as the invoker.</summary>
+public sealed class ThreateningGazeAuraModule : ISpellHandlerModule
+{
+    public const uint ThreateningGaze = 24314;
+
+    public void Register(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        system.HolderAdded += holder => Notify(holder, MandokirAI.AiEventGazeApplied);
+        system.HolderRemoved += holder => Notify(holder, MandokirAI.AiEventGazeRemoved);
+    }
+
+    private static void Notify(SpellAuraHolder holder, uint eventType)
+    {
+        if (holder.Spell.Id != ThreateningGaze || holder.Target.Map?.FindObject(holder.CasterGuid) is not Creature caster) return;
+        caster.ReceiveAiEvent(eventType, holder.Target, holder.Target);
     }
 }
 

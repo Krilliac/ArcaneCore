@@ -9,7 +9,12 @@ namespace ArcaneCore.Game.Instances.Scripts.ZulGurub;
 
 /// <summary>mangos-classic zulgurub/boss_thekal.cpp boss_thekalBaseAI::JustPreventedDeath,
 /// Revive, PreventRevive and the one-shot ACTION_RESSURECTION timer. Lethal damage is reported by the
-/// instance before the combat host's invincibility clamp.</summary>
+/// instance before the combat host's invincibility clamp.
+/// <para>
+/// The fake death is SetCombatScriptStatus(true), not a combat stop: the creature keeps its combat and threat list, stops swinging,
+/// moving and choosing victims, and does not evade while it lies there (cmangos Unit::SelectHostileTarget: "do not evade during
+/// combat script running"). Once it rises, victim selection runs again, so after a wipe it evades and the slot fails.
+/// </para></summary>
 public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBossAI(creature, slot)
 {
     private bool _fakeDeath;
@@ -23,10 +28,10 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
         if (_fakeDeath || Me.InvincibilityHpThreshold == 0) return;
         LastTarget = Victim;
         System?.InterruptCast(Me);
+        Me.Map?.Combat.AttackStop(Me);
         System?.MoveIdle(Me);
-        Me.Map?.Combat.CombatStop(Me);
         Me.Target = default;
-        Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToNpc;
+        Me.UnitFlags |= UnitFlags.NotSelectable; // UNIT_FLAG_UNINTERACTIBLE
         Me.StandState = StandState.Dead;
         Cast(19951, Me, triggered: true);
         _fakeDeath = true;
@@ -56,16 +61,23 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
         _fakeDeath = false;
         _resurrectMs = 0;
         Me.InvincibilityHpThreshold = 1;
-        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToNpc);
+        Me.UnitFlags &= ~UnitFlags.NotSelectable;
         Me.StandState = StandState.Stand;
         System?.RemoveAuras(Me, 19951);
+    }
+
+    /// <summary>A fake-dead creature does not fight back (its combat script is running).</summary>
+    public override void OnAttackedBy(Unit attacker)
+    {
+        if (!_fakeDeath) base.OnAttackedBy(attacker);
     }
 
     public override void OnUpdate(uint diffMs)
     {
         if (_fakeDeath)
         {
-            Me.Map?.Combat.CombatStop(Me);
+            // Still in combat, but no swing: an attack restarted by another path is dropped again.
+            if (Victim is not null) Me.Map?.Combat.AttackStop(Me);
             if (_resurrectMs != 0)
             {
                 _resurrectMs = _resurrectMs > diffMs ? _resurrectMs - diffMs : 0;
@@ -76,17 +88,27 @@ public abstract class ThekalCompanionAI(Creature creature, uint slot) : RaidBoss
         base.OnUpdate(diffMs);
     }
 
-    protected virtual void Revive()
+    /// <summary>boss_thekalBaseAI::Revive: full health, threat reset, back to fighting. With nobody left to fight (a wipe while it lay
+    /// there) it evades at once, as cmangos' next SelectHostileTarget does; false then.</summary>
+    protected virtual bool Revive()
     {
         _fakeDeath = false;
         _resurrectMs = 0;
         Me.Health = Me.MaxHealth;
-        Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToNpc);
+        Me.UnitFlags &= ~UnitFlags.NotSelectable;
         Me.StandState = StandState.Stand;
         System?.RemoveAuras(Me, 19951);
         ResetThreat();
         Instance?.SetData(slot, EncounterState.InProgress);
-        if (LastTarget is { IsAlive: true } target) AttackStart(target);
+        if (!Me.Combat.IsInCombat)
+        {
+            EnterEvadeMode();
+            return false;
+        }
+
+        if (LastTarget is { IsAlive: true } target && Me.Combat.Threat.Contains(target)) AttackStart(target);
+        UpdateVictim(); // SelectHostileTarget: in combat with an empty threat list it evades
+        return !Me.IsEvading;
     }
 
     public override void OnReachedHome()
@@ -151,18 +173,18 @@ public sealed class ThekalAI : ThekalCompanionAI
     }
 
     // "resurrect him in any case"
-    protected override void OnResurrectTimer() => Revive();
+    protected override void OnResurrectTimer() => _ = Revive();
 
-    protected override void Revive()
+    protected override bool Revive()
     {
-        base.Revive();
-        if (!CanPreventAddsResurrect()) return;
+        if (!base.Revive() || !CanPreventAddsResurrect()) return false;
         // boss_thekalAI::OnRevive: uninteractible, no melee, impact visual, tiger form five seconds later.
         Me.UnitFlags |= UnitFlags.NotSelectable;
         MeleeEnabled = false;
         Me.Target = default;
         Cast(24171, Me);
         _tigerDelay = 5000;
+        return true;
     }
 
     public override void OnUpdate(uint diffMs)
@@ -222,7 +244,7 @@ public sealed class LorKhanAI : ThekalCompanionAI
 
     protected override void OnResurrectTimer()
     {
-        if (Instance?.GetData(3) != EncounterState.Special || Instance.GetData(7) != EncounterState.Special) Revive();
+        if (Instance?.GetData(3) != EncounterState.Special || Instance.GetData(7) != EncounterState.Special) _ = Revive();
     }
 }
 
@@ -242,6 +264,6 @@ public sealed class ZathAI : ThekalCompanionAI
 
     protected override void OnResurrectTimer()
     {
-        if (Instance?.GetData(3) != EncounterState.Special || Instance.GetData(6) != EncounterState.Special) Revive();
+        if (Instance?.GetData(3) != EncounterState.Special || Instance.GetData(6) != EncounterState.Special) _ = Revive();
     }
 }

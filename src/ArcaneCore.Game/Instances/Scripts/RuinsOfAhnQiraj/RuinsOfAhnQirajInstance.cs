@@ -25,6 +25,8 @@ public sealed partial class RuinsOfAhnQirajInstance(Map instance) : ScriptedInst
         {
             StoreCreature(creature);
         }
+
+        if (creature.Template.Entry == 15590) RespawnFirstCrystal(); // a trigger appeared: the first crystal may be due
     }
 
     public override void OnObjectCreate(GameObject go)

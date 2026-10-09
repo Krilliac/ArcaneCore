@@ -3,7 +3,10 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Game.Combat;
@@ -32,13 +35,22 @@ public sealed class RemainingRaidBossTests
         public Creature Boss { get; private set; } = null!;
         public Player Tank { get; private set; } = null!;
 
+        /// <summary>creature_ai_scripts rows for the map's creatures (EventAI templates).</summary>
+        public CreatureAiContent? Ai { get; init; }
+
+        /// <summary>How a template is built for an entry (default: <see cref="CreatureTestSupport.Template"/>).</summary>
+        public Func<uint, CreatureTemplate> Make { get; init; } = e => Template(e);
+
         public void Start(bool aggro = true)
         {
+            // The real map_template type (ZG and AQ20 are MAP_RAID): SetInCombatWithZone only works in a dungeon or raid.
+            WorldMaps.Of(World).Load(new MapContent([new MapTemplate(mapId, 0, MapType.Raid, 0, 40, 0, -1, 0, 0, "raid", "")], [], [], [], []));
             Map = World.GetMap(mapId);
             Data = Assert.IsAssignableFrom<InstanceData>(InstanceScriptRegistry.Default.Create(Map));
             Data.Initialize();
             Map.AddUpdater(Data);
-            Creatures = new CreatureMapSystem(Map, Content([Template(entry), .. extraEntries.Select(e => Template(e))], []),
+            CreatureTemplate[] templates = [Make(entry), .. extraEntries.Select(Make)];
+            Creatures = new CreatureMapSystem(Map, Ai is null ? Content(templates, []) : new CreatureContent(templates, [], [], [], [], Ai),
                 new CreatureOptions { AggroRate = 0, RespawnPacifyMs = 0 }, random: new Random(1),
                 aiServices: new CreatureAiServices { Spells = Caster, Hostility = new AlwaysHostile() });
             Map.AddUpdater(Creatures);
@@ -47,12 +59,12 @@ public sealed class RemainingRaidBossTests
             Tank.Relocate(0, 0, z, 0, 0);
             World.AddPlayer(Tank);
             World.RunTick(0);
-            Boss = Creatures.SpawnTemporary(Template(entry), 1, 0, z, 0);
+            Boss = Creatures.SpawnTemporary(Make(entry), 1, 0, z, 0);
             if (aggro) Boss.AI!.AttackStart(Tank);
         }
 
         public Creature Spawn(uint otherEntry)
-            => Creatures.SpawnTemporary(Template(otherEntry), 2, 0, mapId == 309 ? 50 : 450, 0);
+            => Creatures.SpawnTemporary(Make(otherEntry), 2, 0, mapId == 309 ? 50 : 450, 0);
 
         public void Dispose() => World.Dispose();
     }
@@ -85,7 +97,6 @@ public sealed class RemainingRaidBossTests
     [InlineData(309u, 15083u, "HazzarahAI")]
     [InlineData(309u, 15084u, "RenatakiAI")]
     [InlineData(309u, 15085u, "WushoolayAI")]
-    [InlineData(509u, 15341u, "RajaxxAI")]
     public void AdditionalBoss_HasDedicatedAi(uint map, uint entry, string ai)
     {
         using var raid = new Raid(map, entry);
@@ -124,7 +135,6 @@ public sealed class RemainingRaidBossTests
     [InlineData(309u, 15083u, 24684u, 10000u)]
     [InlineData(309u, 15084u, 24649u, 8000u)]
     [InlineData(309u, 15085u, 25033u, 10000u)]
-    [InlineData(509u, 15341u, 25599u, 18000u)]
     [InlineData(509u, 15340u, 15550u, 9000u)]
     [InlineData(509u, 15370u, 96u, 5000u)]
     [InlineData(509u, 15369u, 25748u, 5000u)]
@@ -210,6 +220,37 @@ public sealed class RemainingRaidBossTests
     }
 
     [Fact]
+    public void ThekalFakeDeath_StaysInCombatWithoutSwinging_AndAWipeWhileHeLiesThereFailsTheEncounter()
+    {
+        // boss_thekalBaseAI::JustPreventedDeath is SetCombatScriptStatus(true), not a combat stop. Driven by world ticks, so the lethal
+        // hit's own combat re-link (DealDamage after the DamageTaken hook) and the host's victim selection are part of the test.
+        using var raid = new Raid(309, 14509);
+        raid.Start();
+        raid.World.RunTick(100);
+        Assert.Same(raid.Tank, raid.Boss.Combat.Victim);
+        raid.Map.Combat.DealDamage(raid.Tank, raid.Boss, raid.Boss.Health + 100);
+        var thekal = Assert.IsType<ThekalAI>(raid.Boss.AI);
+        Assert.True(thekal.FakeDeath);
+        raid.World.RunTick(100);
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        Assert.Null(raid.Boss.Combat.Victim);
+        Assert.Equal(EncounterState.Special, raid.Data.GetData(3));
+
+        // The raid wipes while he lies there: no evade yet (combat script running) ...
+        raid.Map.Combat.Kill(raid.Boss, raid.Tank);
+        Assert.False(raid.Tank.IsAlive);
+        for (int i = 0; i < 9; i++) raid.World.RunTick(1000);
+        Assert.True(thekal.FakeDeath);
+        Assert.False(raid.Boss.IsEvading);
+
+        // ... and once the ten seconds are up he rises with nobody to fight, evades, and the encounter fails at home.
+        for (int i = 0; i < 3; i++) raid.World.RunTick(1000);
+        Assert.False(thekal.FakeDeath);
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        Assert.Equal(EncounterState.Fail, raid.Data.GetData(3));
+    }
+
+    [Fact]
     public void Rajaxx_HisOwnPullDoesNotStartTheArmy_AndACaptainEvadeFailsIt()
     {
         using var raid = new Raid(509, 15341, 15391);
@@ -221,8 +262,35 @@ public sealed class RemainingRaidBossTests
         Assert.True(captain.Combat.IsInCombat);
         captain.AI!.EnterEvadeMode();
         Assert.Equal(EncounterState.Fail, raid.Data.GetData(1));
+        // OnCreatureDeath(NPC_RAJAXX): the instance, not a script AI, completes the event.
         raid.Map.Combat.Kill(raid.Tank, raid.Boss);
         Assert.Equal(EncounterState.Done, raid.Data.GetData(1));
+    }
+
+    [Fact]
+    public void Rajaxx_KeepsHisClassicDbEventAi()
+    {
+        // classic-db z2815 creature_template 15341 AIName 'EventAI', creature_ai_scripts 1534101-1534107 (the disarm and summon rows).
+        CreatureAiEvent Row(uint id, byte type, uint flags, int p1, int p2, int p3, int p4, CreatureAiAction action) => new()
+        {
+            Id = id, CreatureId = 15341, EventType = type, Flags = flags, Param1 = p1, Param2 = p2, Param3 = p3, Param4 = p4, Action1 = action,
+        };
+        using var raid = new Raid(509, 15341)
+        {
+            Make = e => Template(e, t => t.AIName = e == 15341 ? CreatureAiFactory.EventAIName : ""),
+            Ai = new CreatureAiContent(
+            [
+                Row(1534101, 9, 1025, 0, 5, 7000, 9000, new CreatureAiAction(11, 6713, 4, 0)),
+                Row(1534104, 9, 1025, 50, 120, 8000, 12000, new CreatureAiAction(11, 20477, 9, 0)),
+            ], []),
+        };
+        raid.Start();
+        Assert.Null(ArcaneCore.Game.Instances.Scripts.Raids.RaidBossAI.Create(raid.Boss));
+        Assert.IsType<CreatureEventAI>(raid.Boss.AI);
+        for (int i = 0; i < 4; i++) raid.World.RunTick(500);
+        // EVENT_T_RANGE 0-5 yards: the tank stands in melee reach, so the EventAI casts Disarm. (1534104's Summon Player targets type 9,
+        // which the host's EventAI does not resolve yet, so its absence would prove nothing here and is not asserted.)
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 6713);
     }
 
     [Fact]
@@ -260,6 +328,43 @@ public sealed class RemainingRaidBossTests
         raid.Data.OnObjectUsed(raid.Tank, crystal);
         Assert.Contains(raid.Caster.Casts, c => c.Spell is 25177 or 25178 or 25180 or 25181 or 25183);
         Assert.Empty(objects.GameObjects);
+    }
+
+    [Fact]
+    public void OssirianCrystal_WorksBeforeThePull_AndTheTickDoesNotRaiseAReplacement()
+    {
+        // GOUse_go_ossirian_crystal has no encounter-state gate. The first crystal comes from RespawnFirstCrystal (a reset), not from a
+        // per-tick "keep one standing" scan: once used, the next one only comes from Ossirian's SpellHit (DoSpawnNextCrystal).
+        using var raid = new Raid(509, 15339, 15590);
+        raid.Start(aggro: false);
+        raid.Spawn(15590);
+        raid.Spawn(15590).Relocate(30, 0, 450, 0, 0);
+        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(180619, GameObjectType.Button)], [], [], [], []));
+        raid.Map.AddUpdater(objects);
+        raid.Data.Update(1);
+        GameObject crystal = Assert.Single(objects.GameObjects);
+        raid.Data.OnObjectUsed(raid.Tank, crystal);
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(5));
+        Assert.Contains(raid.Caster.Casts, c => c.Spell is 25177 or 25178 or 25180 or 25181 or 25183);
+        for (int i = 0; i < 3; i++) raid.Data.Update(100);
+        Assert.Empty(objects.GameObjects);
+    }
+
+    [Fact]
+    public void OssirianSupreme_IsRecastOnlyOnceItIsGone()
+    {
+        // ExecuteAction(OSSIRIAN_SUPREME): DoCastSpellIfCan(SPELL_SUPREME, CAST_AURA_NOT_PRESENT), retried while the aura stands.
+        using var raid = new Raid(509, 15339);
+        raid.Start();
+        raid.Caster.Auras.Add((raid.Boss, 25176));
+        raid.Caster.Casts.Clear();
+        raid.Boss.AI!.OnUpdate(45000);
+        raid.Boss.AI.OnUpdate(10000);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 25176);
+        raid.Caster.Auras.Remove((raid.Boss, 25176));
+        raid.Boss.AI.OnUpdate(1);
+        Assert.Single(raid.Caster.Casts, c => c.Spell == 25176);
     }
 
     [Fact]
@@ -332,16 +437,79 @@ public sealed class RemainingRaidBossTests
     }
 
     [Fact]
-    public void Mandokir_PullSummonsChainedSpirits_AndOhganDeathEnragesHim()
+    public void Mandokir_PullSummonsChainedSpiritsAndUnmounts_AndOhganDeathEnragesHim()
     {
         using var raid = new Raid(309, 11382, 15117, 14988);
-        raid.Start();
+        raid.Start(aggro: false);
+        raid.Boss.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 15271); // creature_template_addon 11382
+        raid.Boss.AI!.AttackStart(raid.Tank);
         Assert.Equal(19, raid.Creatures.Creatures.Count(c => c.Entry == 15117));
+        Assert.Equal(0u, raid.Boss.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
         Creature ohgan = raid.Spawn(14988);
         raid.Map.Combat.Kill(raid.Tank, ohgan);
         Assert.Single(raid.Caster.Casts, cast => cast.Spell == 23537);
-        raid.Boss.AI!.OnEvade();
+        raid.Boss.AI.OnEvade();
         Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 15117);
+        raid.Boss.AI.OnReachedHome();
+        Assert.Equal(15271u, raid.Boss.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
+
+    [Fact]
+    public void Mandokir_ArrivingDownstairs_DropsPlayerImmunityAndPullsTheRaid()
+    {
+        // zulgurub.cpp SetData(TYPE_OHGAN, SPECIAL) sends him to POINT_DOWNSTAIRS; boss_mandokirAI::MovementInform engages there.
+        // classic-db z2815 creature_template 11382 UnitFlags 33600 includes UNIT_FLAG_IMMUNE_TO_PLAYER.
+        using var raid = new Raid(309, 11382);
+        raid.Start(aggro: false);
+        raid.Boss.UnitFlags |= UnitFlags.ImmuneToPlayer;
+        raid.Boss.Relocate(-12190f, -1948.37f, 130.31f, 0, 0); // a few yards up the stairs
+        raid.Data.SetData(5, EncounterState.Special);
+        Assert.Equal(MovementGeneratorType.Point, raid.Boss.Motion.CurrentType);
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        for (int i = 0; i < 20 && !raid.Boss.Combat.IsInCombat; i++) raid.World.RunTick(200);
+        Assert.Equal(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.ImmuneToPlayer));
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        Assert.True(raid.Boss.Combat.Threat.Contains(raid.Tank));
+    }
+
+    [Fact]
+    public void Mandokir_ThreateningGaze_ChargesOnlyWhenTheWatchedPlayersThreatRose()
+    {
+        using var raid = new Raid(309, 11382);
+        raid.Start();
+        Creature boss = raid.Boss;
+        raid.Caster.Casts.Clear();
+        boss.ReceiveAiEvent(MandokirAI.AiEventGazeApplied, raid.Tank, raid.Tank);
+        boss.ReceiveAiEvent(MandokirAI.AiEventGazeRemoved, raid.Tank, raid.Tank);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 24315);
+
+        boss.ReceiveAiEvent(MandokirAI.AiEventGazeApplied, raid.Tank, raid.Tank);
+        boss.Combat.Threat.AddThreat(raid.Tank, 100f);
+        boss.ReceiveAiEvent(MandokirAI.AiEventGazeRemoved, raid.Tank, raid.Tank);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 24315 && c.Target == raid.Tank);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 25104); // in line of sight: no summon first
+    }
+
+    [Fact]
+    public void Mandokir_EveryThirdPlayerKillLevelsHimUp_AndASpiritRevivesHisAndOhgansVictims()
+    {
+        using var raid = new Raid(309, 11382, 15117, 14988);
+        raid.Start();
+        Creature spirit = raid.Spawn(15117); // within 50 yards of the tank
+        raid.Caster.Casts.Clear();
+        for (int kill = 1; kill <= 3; kill++)
+        {
+            raid.Boss.AI!.OnKilledUnit(raid.Tank);
+            Assert.Equal(kill == 3 ? 1 : 0, raid.Caster.Casts.Count(c => c.Spell == 24312));
+            Assert.Equal(kill, raid.Caster.Casts.Count(c => c.Spell == 24341 && c.Target == raid.Tank));
+        }
+
+        // mob_ohganAI::KilledUnit, through the map's kill hook.
+        Creature ohgan = raid.Spawn(14988);
+        ohgan.AI!.AttackStart(raid.Tank);
+        raid.Map.Combat.Kill(ohgan, raid.Tank);
+        Assert.Equal(4, raid.Caster.Casts.Count(c => c.Spell == 24341 && c.Target == raid.Tank));
+        Assert.True(spirit.IsAlive);
     }
 
     [Fact]
@@ -364,25 +532,76 @@ public sealed class RemainingRaidBossTests
     }
 
     [Fact]
-    public void Andorov_GossipAndDialogue_StartTheRajaxxWaves()
+    public void RajaxxWaves_ASoldierBelongsToItsClosestCaptainOnly()
     {
-        using var raid = new Raid(509, 15348, 15471, 15473, 15391);
+        // Two captains 38 yards apart: a warrior 23 yards from the first and 15 from the second is the second wave's.
+        using var raid = new Raid(509, 15339, 15391, 15392, 15387);
         raid.Start();
+        Creature first = raid.Spawn(15391), second = raid.Spawn(15392), warrior = raid.Spawn(15387);
+        second.Relocate(40, 0, 450, 0, 0);
+        warrior.Relocate(25, 0, 450, 0, 0);
+        raid.Data.SetData(1, EncounterState.InProgress);
+        Assert.True(first.Combat.IsInCombat);
+        Assert.False(warrior.Combat.IsInCombat);
+        raid.Map.Combat.Kill(raid.Tank, first);
+        raid.Data.Update(1);
+        Assert.True(second.Combat.IsInCombat);
+        Assert.True(warrior.Combat.IsInCombat);
+    }
+
+    [Fact]
+    public void Andorov_StartsTheIntroAtTheGossip_TheAttackAtThePoint_AndBecomesAVendorWhenRajaxxDies()
+    {
+        using var raid = new Raid(509, 15348, 15471, 15473, 15391, 15341)
+        {
+            // classic-db z2815: Andorov and the Kaldorei Elites carry UNIT_FLAG_IMMUNE_TO_NPC (UnitFlags 37376).
+            Make = e => Template(e, t => t.UnitFlags = e is 15471 or 15473 ? (uint)UnitFlags.ImmuneToNpc : 0),
+        };
+        raid.Start();
+        Creature rajaxx = raid.Spawn(15341);
         raid.Map.Combat.Kill(raid.Tank, raid.Boss);
         Creature andorov = Assert.Single(raid.Creatures.Creatures, c => c.Entry == 15471);
+        Creature[] elites = [.. raid.Creatures.Creatures.Where(c => c.Entry == 15473)];
+        Assert.Equal(4, elites.Length);
         var ai = Assert.IsType<AndorovAI>(andorov.AI);
         var npc = new NpcInfo(andorov.Guid, andorov.Entry, 0, NpcFlags.Gossip,
             raid.Map.MapId, andorov.X, andorov.Y, andorov.Z, andorov.BoundingRadius,
             true, false, false, false, 0);
+
+        // JustRespawned: five seconds, then he runs to the intro point.
+        ai.OnUpdate(5000);
+        foreach (uint point in new uint[] { 0, 1, 2 }) ai.OnMovementInform(MovementGeneratorType.Point, point);
         Assert.Equal("Let's find out.", Assert.Single(ai.Hello(raid.Tank, npc)!.Items).Text);
+
+        // GossipSelect -> DoMoveToEventLocation: the creature immunity goes and SAY_ANDOROV_INTRO_1-2 run, but nothing starts.
         ai.SelectReply(raid.Tank, npc, 1, 1001);
+        Assert.Equal(0u, (uint)(andorov.UnitFlags & UnitFlags.ImmuneToNpc));
+        Assert.All(elites, e => Assert.Equal(0u, (uint)(e.UnitFlags & UnitFlags.ImmuneToNpc)));
+        ai.OnUpdate(7000);
+        ai.OnUpdate(20000);
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(1));
+
+        // MovementInform(POINT_ID_MOVE_ATTACK): SAY_ANDOROV_INTRO_3, 4 s, INTRO_4, 6 s, ATTACK_START, which starts the event.
         ai.OnMovementInform(MovementGeneratorType.Point, 3);
         ai.OnMovementInform(MovementGeneratorType.Point, 4);
-        ai.OnUpdate(1);
-        ai.OnUpdate(7000);
         ai.OnUpdate(4000);
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(1));
         ai.OnUpdate(6000);
         Assert.Equal(EncounterState.InProgress, raid.Data.GetData(1));
+        Assert.Same(ScriptedGossipMenu.Nothing, ai.Hello(raid.Tank, npc));
+
+        // Rajaxx dies: AI_EVENT_CUSTOM_A makes him a vendor; 135 seconds later he says goodbye and leaves.
+        raid.Map.Combat.Kill(raid.Tank, rajaxx);
+        Assert.Equal(EncounterState.Done, raid.Data.GetData(1));
+        Assert.NotEqual(0u, andorov.NpcFlags & (uint)NpcFlags.Vendor);
+        Assert.Equal("Let's see what you have.", Assert.Single(ai.Hello(raid.Tank, npc)!.Items).Text);
+        Assert.True(ai.SelectReply(raid.Tank, npc, 1, 1).Vendor);
+        ai.OnUpdate(134000);
+        raid.World.RunTick(900);
+        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 15471);
+        raid.World.RunTick(100); // 135 s: SAY_ANDOROV_DESPAWN, ForcedDespawn(2500)
+        raid.World.RunTick(3000);
+        Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 15471);
     }
 
     [Theory]

@@ -40,7 +40,6 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (BlackwingLairInstance, 11983) => new FiremawAI(creature),
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
-            (RuinsOfAhnQirajInstance, 15341) => new RajaxxAI(creature),
             (RuinsOfAhnQirajInstance, 15340) => new MoamAI(creature),
             (RuinsOfAhnQirajInstance, 15370) => new BuruAI(creature),
             (RuinsOfAhnQirajInstance, 15369) => new AyamissAI(creature),
