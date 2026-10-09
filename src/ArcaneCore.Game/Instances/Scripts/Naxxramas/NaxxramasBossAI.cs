@@ -16,7 +16,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
 {
     private readonly uint _entry;
     private uint _phaseTimer, _secondaryTimer, _doomCount, _phaseCount, _balconyWaves, _corpseTimer;
-    private uint _eruptionStep;
+    private uint _eruptionStep, _manaBurnTimer;
     private bool _balcony, _dance, _enraged, _embraced;
     private bool _sporeWest;
     private readonly List<Creature> _adds = [];
@@ -120,16 +120,11 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
         if (_entry == 15956)
         {
             Cast(29103, triggered: true);
-            foreach (Creature guard in _adds.Where(c => c.Entry == 16573 && c.IsAlive))
+            // creature_linking_template (16573, 533, 15956, flags 1031) FLAG_AGGRO_ON_AGGRO: the database guards join the pull.
+            foreach (Creature guard in StaticGuards().Where(c => c.IsAlive))
                 guard.AI?.AttackStart(target);
         }
         if (_entry == 16011) _sporeWest = Random(0, 1) == 0;
-    }
-
-    public override void OnRespawn()
-    {
-        base.OnRespawn();
-        InitialGuards();
     }
 
     public override void OnJustSummoned(Creature summoned)
@@ -143,13 +138,12 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
             summoned.AI?.AttackStart(raider);
     }
 
-    private void InitialGuards()
-    {
-        if (_entry != 15956 || Raid.GetData(NaxxramasInstance.AnubRekhan) == EncounterState.Done) return;
-        // vmangos boss_anubrekhanAI::CheckSpawnInitialCryptGuards: visible before pull.
-        Spawn(16573, 3291.26f, -3502.08f, 287.26f);
-        Spawn(16573, 3285.29f, -3446.64f, 287.26f);
-    }
+    // Anub'Rekhan's two pre-pull Crypt Guards are world content, not script summons. ClassicDB z2815 spawns them on map 533
+    // (GUIDs 5331024 and 5331025, the two points vmangos boss_anubrekhanAI::CheckSpawnInitialCryptGuards summons at) and links them
+    // to the boss with creature_linking_template (16573, 533, 15956, 1031). mangos-classic boss_anubrekhan.cpp relies on exactly
+    // that and never summons them; summoning as well (the vmangos form, written for a database without the spawns) doubled them.
+    private IEnumerable<Creature> StaticGuards()
+        => System?.Creatures.Where(c => c.Entry == 16573 && c.Spawn is not null).ToArray() ?? [];
 
     public override void OnSpellHit(Unit caster, SpellInfo spell)
     {
@@ -170,14 +164,21 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
 
     public override void OnEvade()
     {
+        // mangos-classic boss_anubrekhanAI::EnterEvadeMode: the summoned guards go first (Reset despawns them, SPELL_DESPAWN_GUARDS
+        // 29379), then the linked database guards come back (FLAG_RESPAWN_ON_EVADE): dead or exploded ones respawn, living ones evade.
         base.OnEvade(); // resets and marks the encounter failed unless it is done
-        InitialGuards();
+        if (_entry != 15956 || System is not { } system) return;
+        foreach (Creature guard in StaticGuards())
+        {
+            if (!guard.IsAlive) system.ForceRespawn(guard);
+            else if (guard.Combat.IsInCombat) guard.AI?.EnterEvadeMode();
+        }
     }
 
-    private Creature? Spawn(uint entry, float x, float y, float z, Unit? attack = null, bool track = true)
+    private Creature? Spawn(uint entry, float x, float y, float z, Unit? attack = null, bool track = true, float orientation = 0)
     {
         if (System?.Content.FindTemplate(entry) is not { } template) return null;
-        Creature add = System.SpawnTemporary(template, x, y, z, 0, Me);
+        Creature add = System.SpawnTemporary(template, x, y, z, orientation, Me);
         if (track && !_adds.Contains(add)) _adds.Add(add);
         if (attack is not null && add.AI is not null) add.AI.AttackStart(attack);
         return add;
@@ -226,8 +227,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
         // 20-25 s, mana burn from 15 s (10 s), one-shot player ports at 40 s, or at 18 and 48 s after a dance.
         ClearActions();
         Spell(29998, afterDance ? 5000u : 30000u, afterDance ? 5000u : 30000u, 20000, 25000);
-        Spell(29310, afterDance ? 10000u : 15000u, afterDance ? 10000u : 15000u, 3000, 3000,
-            () => RandomTarget(u => u is Player && u.PowerType == PowerType.Mana));
+        _manaBurnTimer = afterDance ? 10000u : 15000u;
         _secondaryTimer = afterDance ? 10000u : 15000u;
         _portTimers.Clear();
         if (afterDance) _portTimers.AddRange([18000, 48000]);
@@ -246,7 +246,45 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
             Player player = candidates[(int)Random(0, (uint)candidates.Count - 1)];
             candidates.Remove(player);
             _portedThisRotation.Add(player.Guid);
-            Cast(29273, player, triggered: true);
+            // ClassicDB z2815 spell 29273: TELEPORT_UNITS at UNIT_CASTER to its spell_target_position, so the player is the caster
+            // (mangos-classic boss_heigan.cpp: target->CastSpell(target, SPELL_TELEPORT_PLAYERS)). Cast by Heigan it moved Heigan.
+            System?.CastSpellByUnit(player, 29273, player, triggered: true);
+        }
+    }
+
+    private bool ManaBurn()
+    {
+        // vmangos boss_heiganAI::CheckManausersAndRepeat: Mana Burn (29310, an area around Heigan) only when a living mana user on
+        // the threat list is within 28 yd of him (3D, centre to centre); 3 s after a cast, otherwise looked at again in 1 s.
+        bool inRange = Me.Combat.Threat.Entries.Select(e => e.Target).OfType<Player>().Any(p =>
+            p.IsAlive && p.PowerType == PowerType.Mana && ReferenceEquals(p.Map, Me.Map)
+            && DistanceSquared(p, Me) < ManaBurnReach * ManaBurnReach);
+        return inRange && Cast(29310, Me);
+    }
+
+    private const float ManaBurnReach = 28f;
+
+    // vmangos naxxramas.h eyeStalkPossitions: EventStartDance summons a plague-wave creature (17293) at each eye stalk for the
+    // 45-second dance, each casting Plague Wave (30243) on itself.
+    private static readonly (float X, float Y, float Z, float O)[] EyeStalks =
+    [
+        (2761.28f,-3765.37f,275.08f,1.24f),(2770.17f,-3782.11f,275.08f,1.33f),(2798.11f,-3788.94f,275.08f,2.35f),
+        (2797.91f,-3776.86f,275.08f,2.25f),(2792.06f,-3762.52f,275.08f,2.9f),(2789.87f,-3752.15f,275.08f,2.74f),
+        (2804.21f,-3757.96f,275.08f,3.9f),(2821.16f,-3759.75f,275.08f,4.47f),(2834.64f,-3751.23f,275.08f,4.27f),
+        (2843.54f,-3768.08f,275.08f,3.06f),(2862.4f,-3758.3f,275.08f,4.8f),(2877.8f,-3762.46f,275.08f,4.8f),
+        (2894.11f,-3757.89f,275.08f,4.56f),(2895.25f,-3779.5f,275.08f,2.4f),(2881.59f,-3782.22f,275.08f,2.79f),
+        (2867.2f,-3778.21f,275.08f,3.01f),(2851.39f,-3776.54f,275.08f,2.69f),(2846.16f,-3789.13f,275.08f,1.79f),
+        (2830.09f,-3776.49f,275.08f,0.94f),(2813.34f,-3780.97f,275.08f,1.84f),
+    ];
+
+    private void SummonPlagueWaves()
+    {
+        // vmangos boss_heiganAI::SummmonPlagueWave: TEMPSUMMON_TIMED_DESPAWN 45000, pCloud->CastSpell(pCloud, SPELL_PLAGUE_WAVE, true).
+        foreach (var stalk in EyeStalks)
+        {
+            if (Spawn(17293, stalk.X, stalk.Y, stalk.Z, track: false, orientation: stalk.O) is not { } wave) continue;
+            System?.CastSpell(wave, 30243, wave, true);
+            System?.ForcedDespawn(wave, 45000);
         }
     }
 
@@ -254,9 +292,11 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
     {
         // vmangos boss_maexxnaAI::DoCastWebWrap: up to three random non-tank players who are not
         // already wrapped, each sent to its own wall point.
+        // The 40-second cooldown restarts whether or not anyone was wrapped (vmangos UpdateAI: m_uiWebWrapTimer = WebWrapCooldown()
+        // after DoCastWebWrap, "probably no point checking if successfull"), so an empty pool is still a completed action.
         List<Player> pool = Me.Combat.Threat.Entries.Skip(1).Select(e => e.Target)
-            .OfType<Player>().Where(p => p.IsAlive && !(System?.HasAura(p, 28622) ?? false)).ToList();
-        if (pool.Count == 0) return false;
+            .OfType<Player>().Where(p => p.IsAlive && !p.IsGameMaster && !(System?.HasAura(p, 28622) ?? false)).ToList();
+        if (pool.Count == 0) return true;
         var candidates = new List<Player>();
         while (candidates.Count < 3 && pool.Count > 0)
         {
@@ -288,7 +328,9 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
             if (!Due(ref wrap.Timer, diffMs)) continue;
             if (!wrap.Cocoon)
             {
-                Cast(28622, wrap.Target, triggered: true);
+                // ClassicDB z2815 spell 28622: both effects APPLY_AURA (stun, periodic damage) at UNIT_CASTER, so the wrapped player casts
+                // it on itself (vmangos boss_maexxnaAI::UpdateWraps: pl->CastSpell(pl, 28622, true)).
+                System?.CastSpellByUnit(wrap.Target, 28622, wrap.Target, triggered: true);
                 wrap.Cocoon = true;
                 wrap.Timer = 3000;
             }
@@ -354,6 +396,8 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
             Erupt();
             _secondaryTimer = _dance ? 3000u : 10000u;
         }
+        if (_entry == 15936 && !_dance && Due(ref _manaBurnTimer, diffMs))
+            _manaBurnTimer = ManaBurn() ? 3000u : 1000u;
         if (_entry == 15936 && !_dance)
             for (int i = _portTimers.Count - 1; i >= 0; i--)
             {
@@ -465,6 +509,7 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
                     SetMeleeEnabled(false); CombatMovement = false;
                     System?.MoveIdle(Me);
                     Cast(29350, Me, triggered: true);
+                    SummonPlagueWaves();
                     _portedThisRotation.Clear(); // vmangos EventStartDance: portedPlayersThisPhase.clear()
                     _portTimers.Clear();
                     _phaseTimer = 45000;

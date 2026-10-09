@@ -114,13 +114,19 @@ public sealed class NaxxramasInstance(Map map) : ScriptedInstance(map, 15)
         return activated;
     }
 
-    public override void OnAreaTrigger(Player player, uint triggerId)
-    {
-        // vmangos instance_naxxramas::OnAreaTrigger, AREATRIGGER_HUB_TO_FROSTWYRM.
-        if (triggerId == 4156 && WingsCleared)
-            Instance.FindUpdater<GameObjectMapSystem>()?.Teleports.Teleport(
-                player, 533, 3498.13f, -5349.6f, 144.967f, 1.48353f);
-    }
+    /// <summary>The hub's Frostwyrm Lair trigger (vmangos naxxramas.h AREATRIGGER_HUB_TO_FROSTWYRM).</summary>
+    public const uint FrostwyrmTrigger = 4156;
+
+    /// <summary>
+    /// mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger(AREATRIGGER_FROSTWYRM_TELE): "Area trigger handles teleport
+    /// in DB", the script only stops it until Maexxna, Loatheb, the Four Horsemen and Thaddius are done. ClassicDB z2815 has that row
+    /// (areatrigger_teleport 4156 "Naxxramas (Entrance)", map 533 at 3498.28,-5349.9,144.968), and TeleportHandlers runs it after the
+    /// trigger listeners whatever they did, so the requirement must be a veto, not a scripted teleport of its own (vmangos
+    /// onNaxxramasAreaTrigger teleports itself, for a database without the row). Every non-GM is held back, dead or alive (vmangos
+    /// ports only the living).
+    /// </summary>
+    public override bool BlocksAreaTriggerTeleport(Player player, uint triggerId)
+        => triggerId == FrostwyrmTrigger && !WingsCleared;
 
     public override void OnCreatureDeath(Creature creature)
     {

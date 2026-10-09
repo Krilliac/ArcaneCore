@@ -12,6 +12,7 @@ using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
@@ -48,22 +49,61 @@ public sealed class NaxxramasTests
         public Player Tank { get; private set; } = null!;
         public NaxxramasBossAI AI => Assert.IsType<NaxxramasBossAI>(Boss.AI);
 
-        public Raid(uint entry, params uint[] extras)
+        public Raid(uint entry, params uint[] extras) : this(entry, extras, [], null)
+        {
+        }
+
+        /// <param name="spawns">Database spawns of map 533 (loaded with the tank's grid).</param>
+        /// <param name="spells">The creature spell seam; the recording <see cref="Caster"/> when null.</param>
+        public Raid(uint entry, uint[] extras, CreatureSpawn[] spawns, ICreatureSpellCaster? spells)
         {
             Map = World.GetMap(533);
             Instance = new NaxxramasInstance(Map); Instance.Initialize(); Map.AddUpdater(Instance);
             uint[] entries = [entry, .. extras];
-            Creatures = new CreatureMapSystem(Map, Content(entries.Select(e => Template(e)).ToArray(), []),
+            Creatures = new CreatureMapSystem(Map, Content(entries.Select(e => Template(e)).ToArray(), spawns),
                 new CreatureOptions { AggroRate = 0, RespawnPacifyMs = 0 }, random: new Random(1),
-                aiServices: new CreatureAiServices { Spells = Caster, Hostility = new AlwaysHostile() });
+                aiServices: new CreatureAiServices { Spells = spells ?? Caster, Hostility = new AlwaysHostile() });
             Map.AddUpdater(Creatures);
             Tank = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(), 533);
             Tank.Relocate(0, 0, 0, 0, 0); World.AddPlayer(Tank); World.RunTick(0);
             Boss = Creatures.SpawnTemporary(Template(entry), 1, 0, 0, 0);
             AI.AttackStart(Tank);
         }
+        public Player AddPlayer(uint guid, float x, PowerType power = PowerType.Rage)
+        {
+            Player player = power == PowerType.Mana ? ManaPlayer(guid) : TestWorld.CreatePlayer(guid, x, 0, new FakeSession(), 533);
+            player.Relocate(x, 0, 0, 0, 0); World.AddPlayer(player); World.RunTick(0);
+            return player;
+        }
+
         public void Dispose() => World.Dispose();
     }
+
+    private static Player ManaPlayer(uint guid)
+    {
+        var character = new ArcaneCore.Kernel.Characters.CharacterRecord
+        {
+            Id = (int)guid, AccountId = 1, Name = $"P{guid}", Race = (byte)Race.Human, Class = (byte)Class.Mage,
+            Gender = (byte)Gender.Male, Level = 60, MapId = 533, ZoneId = 3456, X = 0, Y = 0, Z = 0,
+        };
+        var appearance = new PlayerAppearance(
+            DisplayId: 49, FactionTemplate: 1, PowerType.Mana, BaseHealth: 3000, BaseMana: 4000,
+            MaxHealth: 3000, MaxPower: 4000, StartPower: 4000, NextLevelXp: 0);
+        return new Player(character, appearance, new FakeSession());
+    }
+
+    // ClassicDB z2815 spell_template 29273 "Teleport" (Heigan's port): effect 1 TELEPORT_UNITS, implicit targets A UNIT_CASTER (1) and
+    // B spell_target_position (17); effect 2 SANCTUARY (79) at UNIT_CASTER. spell_target_position 29273: map 533, 2905.63,-3769.96,273.62.
+    private static SpellInfo HeiganPort() => SpellTestKit.Spell(29273,
+        SpellTestKit.Effect(SpellEffectName.TeleportUnits, 0, SpellImplicitTarget.UnitCaster, targetB: SpellImplicitTarget.LocationDatabase),
+        SpellTestKit.Effect(SpellEffectName.Sanctuary, 0, SpellImplicitTarget.UnitCaster)) with { Range = new SpellRange(0, 50000) };
+
+    // ClassicDB z2815 spell_template 28622 "Web Wrap": duration index 3 (60 s), effect 1 APPLY_AURA 12 (stun) and effect 2 APPLY_AURA 3
+    // (periodic damage 657 every 2 s), both at UNIT_CASTER (1).
+    private static SpellInfo WebWrapAura() => SpellTestKit.Spell(28622,
+        SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModStun),
+        SpellTestKit.Effect(SpellEffectName.ApplyAura, 657, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 2000))
+        with { Duration = new SpellDuration(60000, 0, 60000) };
     [Fact]
     public void QuarterDoorsAndPortals_FollowBossState_AndReload()
     {
@@ -137,8 +177,10 @@ public sealed class NaxxramasTests
     }
 
     [Fact]
-    public void FourWingClears_EnableHubPortalAndFrostwyrmTrigger()
+    public void FourWingClears_EnableHubPortal_AndStopVetoingTheFrostwyrmTeleportRow()
     {
+        // mangos-classic naxxramas.cpp DoHandleAreaTrigger: ClassicDB's areatrigger_teleport 4156 does the teleport, the script
+        // only blocks it until the four wings are done (the World test NaxxramasFrostwyrmGateTests runs the row's evaluation).
         using WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(533);
         var raid = new NaxxramasInstance(map); raid.Initialize(); map.AddUpdater(raid);
@@ -150,13 +192,19 @@ public sealed class NaxxramasTests
         GameObject hub = objects.Summon(181229, 0, 0, 0, 0)!;
         Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(), 533);
         player.Relocate(0, 0, 0, 0, 0); world.AddPlayer(player); world.RunTick(0);
-        raid.OnAreaTrigger(player, 4156);
-        Assert.Empty(teleports.Calls);
-        foreach (uint boss in new uint[] { 2, 5, 8, 12 }) raid.SetData(boss, EncounterState.Done);
+        Assert.True(raid.BlocksAreaTriggerTeleport(player, NaxxramasInstance.FrostwyrmTrigger));
+        foreach (uint boss in new uint[] { 2, 5, 8 })
+        {
+            raid.SetData(boss, EncounterState.Done);
+            Assert.True(raid.BlocksAreaTriggerTeleport(player, NaxxramasInstance.FrostwyrmTrigger));
+        }
+        raid.SetData(12, EncounterState.Done);
         Assert.True(raid.WingsCleared);
         Assert.Equal(GameObjectState.Active, hub.State);
-        raid.OnAreaTrigger(player, 4156);
-        Assert.Equal((533u, 3498.13f, -5349.6f, 144.967f), Assert.Single(teleports.Calls));
+        Assert.False(raid.BlocksAreaTriggerTeleport(player, NaxxramasInstance.FrostwyrmTrigger));
+        // The script never teleports on its own: the database row would run as well and move the player twice.
+        raid.OnAreaTrigger(player, NaxxramasInstance.FrostwyrmTrigger);
+        Assert.Empty(teleports.Calls);
     }
 
     [Fact]
@@ -246,19 +294,43 @@ public sealed class NaxxramasTests
         Assert.False(caster.IsAlive);
     }
 
+    // ClassicDB z2815 map-533 Crypt Guard spawns 5331024 and 5331025 (placed next to the test tank so their grid loads).
+    private static CreatureSpawn[] DatabaseGuards() =>
+        [Spawn(5331024, 16573, 4, 4, 0, mapId: 533), Spawn(5331025, 16573, 4, -4, 0, mapId: 533)];
+
     [Fact]
-    public void AnubRekhan_StartsWithTwoGuards_AndLocustAddsAnother()
+    public void AnubRekhan_UsesTheTwoDatabaseGuards_AndLocustAddsAnother()
     {
-        using var raid = new Raid(15956, 16573);
-        Assert.Equal(2, raid.Creatures.Creatures.Count(c => c.Entry == 16573));
+        // mangos-classic boss_anubrekhan.cpp: the pre-pull guards are the database spawns, never summoned on top of them.
+        using var raid = new Raid(15956, [16573], DatabaseGuards(), null);
+        Creature[] guards = raid.Creatures.Creatures.Where(c => c.Entry == 16573).ToArray();
+        Assert.Equal(2, guards.Length);
+        Assert.All(guards, g => Assert.NotNull(g.Spawn));
+        Assert.All(guards, g => Assert.True(g.Combat.IsInCombat)); // FLAG_AGGRO_ON_AGGRO
         raid.AI.OnUpdate(120000);
         Assert.Equal(3, raid.Creatures.Creatures.Count(c => c.Entry == 16573));
     }
 
     [Fact]
+    public void AnubRekhan_EvadeDropsTheSummonedGuard_AndRespawnsTheDeadDatabaseGuard()
+    {
+        // mangos-classic boss_anubrekhanAI::EnterEvadeMode (SPELL_DESPAWN_GUARDS) then creature_linking FLAG_RESPAWN_ON_EVADE.
+        using var raid = new Raid(15956, [16573, 16698], DatabaseGuards(), null);
+        raid.AI.OnUpdate(120000); // locust swarm summons a third guard
+        Creature dead = raid.Creatures.Creatures.First(c => c.Entry == 16573 && c.Spawn is not null);
+        raid.Map.Combat.Kill(raid.Tank, dead);
+        raid.AI.OnEvade();
+        Creature[] guards = raid.Creatures.Creatures.Where(c => c.Entry == 16573).ToArray();
+        Assert.Equal(2, guards.Length);
+        Assert.All(guards, g => Assert.NotNull(g.Spawn));
+        Assert.All(guards, g => Assert.True(g.IsAlive));
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.AnubRekhan));
+    }
+
+    [Fact]
     public void CryptGuard_UsesWebAcidCleaveAndHalfHealthEnrage()
     {
-        using var raid = new Raid(15956, 16573);
+        using var raid = new Raid(15956, [16573], DatabaseGuards(), null);
         Creature guard = raid.Creatures.Creatures.First(c => c.Entry == 16573);
         var ai = Assert.IsType<NaxxramasCryptGuardAI>(guard.AI);
         guard.Health = guard.MaxHealth / 2;
@@ -281,7 +353,7 @@ public sealed class NaxxramasTests
     [Fact]
     public void AnubRekhan_DeadCryptGuardExplodesOnCorpseTimer()
     {
-        using var raid = new Raid(15956, 16573, 16698);
+        using var raid = new Raid(15956, [16573, 16698], DatabaseGuards(), null);
         Creature guard = raid.Creatures.Creatures.First(c => c.Entry == 16573);
         raid.Map.Combat.Kill(raid.Tank, guard);
         Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 16698);
@@ -322,9 +394,36 @@ public sealed class NaxxramasTests
         using var raid = new Raid(15936, 17293);
         raid.AI.OnUpdate(90000);
         Assert.True(raid.AI.IsDancing);
+        // vmangos boss_heiganAI::EventStartDance: a plague-wave creature at each of the 20 eye stalks casts Plague Wave on itself.
+        Assert.Equal(20, raid.Caster.Casts.Count(c => c.Spell == 30243));
+        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 17293 && c.X == 2761.28f && c.Y == -3765.37f);
+        raid.AI.OnUpdate(4000);
         Assert.Contains(raid.Caster.Casts, c => c.Spell == 29371);
-        raid.AI.OnUpdate(45000);
+        raid.AI.OnUpdate(41000);
         Assert.False(raid.AI.IsDancing);
+    }
+
+    [Fact]
+    public void Heigan_ManaBurnOnlyWithAManaUserWithin28Yards_ThenEveryThreeSeconds()
+    {
+        // vmangos boss_heiganAI::CheckManausersAndRepeat: looked at from 15 s, again every 1 s, 3 s after a cast.
+        using var raid = new Raid(15936, 17293);
+        Player mage = raid.AddPlayer(2, 60, PowerType.Mana); // 59 yd from Heigan
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        raid.Boss.Combat.Threat.AddThreat(mage, 10);
+        int Burns() => raid.Caster.Casts.Count(c => c.Spell == 29310);
+        raid.AI.OnUpdate(15000);
+        Assert.Equal(0, Burns());
+        mage.Relocate(20, 0, 0, 0, 0); // 19 yd
+        raid.AI.OnUpdate(999);
+        Assert.Equal(0, Burns());
+        raid.AI.OnUpdate(1);
+        Assert.Equal(1, Burns());
+        Assert.Equal(raid.Boss, raid.Caster.Casts.Last(c => c.Spell == 29310).Target);
+        raid.AI.OnUpdate(2999);
+        Assert.Equal(1, Burns());
+        raid.AI.OnUpdate(1);
+        Assert.Equal(2, Burns());
     }
 
     [Fact]
@@ -357,7 +456,14 @@ public sealed class NaxxramasTests
         raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
         raid.Boss.Combat.Threat.AddThreat(first, 100);
         raid.Boss.Combat.Threat.AddThreat(second, 50);
-        Unit?[] Ports() => raid.Caster.Casts.Where(c => c.Spell == 29273).Select(c => c.Target).ToArray();
+        // mangos-classic boss_heigan.cpp: the ported player is the caster (target->CastSpell(target, SPELL_TELEPORT_PLAYERS)).
+        Unit?[] Ports()
+        {
+            Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 29273);
+            var ports = raid.Caster.UnitCasts.Where(c => c.Spell == 29273).ToArray();
+            Assert.All(ports, c => Assert.Same(c.Caster, c.Target));
+            return ports.Select(c => (Unit?)c.Caster).ToArray();
+        }
         raid.AI.OnUpdate(39999);
         Assert.Empty(Ports());
         raid.AI.OnUpdate(1);
@@ -373,6 +479,22 @@ public sealed class NaxxramasTests
         Assert.Equal(4, Ports().Length);
         raid.AI.OnUpdate(30000); // 48 s: both were ported this rotation, so nobody is left
         Assert.Equal(4, Ports().Length);
+    }
+
+    [Fact]
+    public void Heigan_PortMovesThePlayer_NotHeigan_WithTheClassicDbSpell()
+    {
+        var spells = new SpellSystem(new SpellStore([HeiganPort()], [],
+            [(29273, new SpellTargetPosition(533, 2905.63f, -3769.96f, 273.62f, 3.13f))]), () => 10000);
+        using var raid = new Raid(15936, [17293], [], new SpellSystemCreatureCaster(spells));
+        Player ported = raid.AddPlayer(2, 2);
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        raid.Boss.Combat.Threat.AddThreat(ported, 100);
+        (float X, float Y, float Z) heigan = (raid.Boss.X, raid.Boss.Y, raid.Boss.Z);
+        raid.AI.OnUpdate(40000);
+        Assert.Equal((2905.63f, -3769.96f, 273.62f), (ported.X, ported.Y, ported.Z));
+        Assert.Equal(heigan, (raid.Boss.X, raid.Boss.Y, raid.Boss.Z));
+        Assert.Equal((0f, 0f), (raid.Tank.X, raid.Tank.Y)); // the tank is skipped
     }
 
     [Fact]
@@ -422,11 +544,47 @@ public sealed class NaxxramasTests
         Assert.Contains(healer.X, new[] { 3562.40f, 3560.78f, 3554.95f, 3549.02f,
             3538.34f, 3526.43f, 3507.84f, 3493.35f });
         raid.AI.OnUpdate(1999);
-        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 28622);
+        Assert.DoesNotContain(raid.Caster.UnitCasts, c => c.Spell == 28622);
         raid.AI.OnUpdate(1);
-        Assert.Contains(raid.Caster.Casts, c => c.Spell == 28622);
+        // vmangos boss_maexxnaAI::UpdateWraps: pl->CastSpell(pl, 28622, true); Maexxna never casts it.
+        Assert.Contains(raid.Caster.UnitCasts, c => c.Spell == 28622 && c.Caster == healer && c.Target == healer);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 28622);
         raid.AI.OnUpdate(3000);
         Assert.Single(raid.Creatures.Creatures, c => c.Entry == 16486);
+    }
+
+    [Fact]
+    public void Maexxna_WebWrapLandsOnThePlayer_AndTheCocoonsDeathReleasesIt()
+    {
+        var spells = new SpellSystem(new SpellStore([WebWrapAura()], [], []), () => 10000);
+        using var raid = new Raid(15952, [16486], [], new SpellSystemCreatureCaster(spells));
+        Player healer = raid.AddPlayer(2, 2);
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        raid.Boss.Combat.Threat.AddThreat(healer, 100);
+        raid.AI.OnUpdate(20000);
+        raid.AI.OnUpdate(2000);
+        Assert.True(spells.HasAura(healer, 28622));
+        Assert.False(spells.HasAura(raid.Boss, 28622));
+        raid.AI.OnUpdate(3000);
+        Creature cocoon = Assert.Single(raid.Creatures.Creatures, c => c.Entry == 16486);
+        // vmangos mob_webwrapAI::JustDied: killing the cocoon frees the wrapped player.
+        raid.Map.Combat.Kill(raid.Tank, cocoon);
+        Assert.False(spells.HasAura(healer, 28622));
+    }
+
+    [Fact]
+    public void Maexxna_WrapWithNobodyToWrap_StillWaitsTheFullCooldown()
+    {
+        // vmangos boss_maexxnaAI::UpdateAI resets the 40 s web wrap timer whether or not DoCastWebWrap found anyone.
+        using var raid = new Raid(15952, 16486);
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        raid.AI.OnUpdate(20000); // only the tank: nobody to wrap
+        Player healer = raid.AddPlayer(2, 2);
+        raid.Boss.Combat.Threat.AddThreat(healer, 100);
+        raid.AI.OnUpdate(39999);
+        Assert.Equal(2f, healer.X);
+        raid.AI.OnUpdate(1);
+        Assert.NotEqual(2f, healer.X);
     }
 
     [Fact]
