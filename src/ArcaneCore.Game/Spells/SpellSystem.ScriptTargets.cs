@@ -15,7 +15,7 @@ public sealed partial class SpellSystem
     /// Spell::CheckScriptTargeting, which keeps a valid explicit target and otherwise takes the one nearest unit any
     /// spell_script_target row lists (a single unit, Spell.cpp:445-575); TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC (7)
     /// fills the source area and keeps the units whose entry and state a row matches, or every unit when the spell has
-    /// no rows (Spell.cpp:2356-2398). The caster is excluded from both. vmangos fails a 38 cast with no target
+    /// no rows (Spell.cpp:2356-2398). A listed creature caster may select itself with 38, while area 7 excludes the caster. vmangos fails a 38 cast with no target
     /// (SPELL_FAILED_BAD_TARGETS); here the effect only gets no unit.
     /// </summary>
     private List<(Unit Unit, float Multiplier)> SelectScriptTargets(
@@ -34,7 +34,7 @@ public sealed partial class SpellSystem
 
         bool Matches(Unit unit)
         {
-            if (ReferenceEquals(unit, cast.Caster)) return false;
+            if (!nearest && ReferenceEquals(unit, cast.Caster)) return false;
             if (rows.Count == 0) return unit.IsAlive;
             return rows.Any(row => (row.InverseEffectMask & (1u << effectIndex)) == 0
                 && (row.TargetEntry == 0 && row.Type == ScriptTargetPlayer && unit is Player

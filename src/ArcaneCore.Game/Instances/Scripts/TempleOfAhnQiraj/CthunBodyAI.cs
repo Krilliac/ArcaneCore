@@ -147,9 +147,7 @@ public sealed class CthunBodyAI : RaidBossAI
         if (Me.Map?.Combat.SpellMitigation is { } spells)
         {
             spells.RemoveAuras(Me, 26156);
-            // The imported script-target spell reports CastOk but drops its aura in this core;
-            // apply the same spell's holder directly so the vulnerable phase is real.
-            spells.AddAura(Me, 26235, caster: Me);
+            Cast(26235, Me, triggered: true);
         }
         System?.SayText(Me, 11476);
         if (_grabbed is { } grabbed) Me.Map?.Combat.SpellMitigation?.RemoveAuras(grabbed, 26332);

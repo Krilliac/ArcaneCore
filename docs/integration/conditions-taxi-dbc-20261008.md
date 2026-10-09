@@ -37,7 +37,7 @@ ArcaneCore keeps mangos-classic numbering because z2815 uses it; vmangos reuses 
 
 ### 2026-10-09 instance fact follow-up
 
-`IInstanceConditionFacts` now lets `ConditionFeature` read saved instance encounter state. On map 509, conditions 6500-6505 read the six AQ20 boss slots as variables 4811, 2174, and 4812-4815: zero until each boss is Done, one afterward. On map 531, conditions 717/718 read DungeonEncounter 715/716 from the Twin Emperors and Ouro slots. These values also work immediately after the script loads a saved instance. The other ten type-42 rows and the war-effort/invasion type-40 rows still need their owning systems. The Twin Emperors and Ouro encounter scripts also need gameplay completion paths before ordinary play can set their slots Done.
+`IInstanceConditionFacts` lets `ConditionFeature` read saved instance encounter state. On map 509, conditions 6500-6505 read the six AQ20 boss slots as variables 4811, 2174, and 4812-4815: zero until each boss is Done, one afterward. On map 531, conditions 717/718 read DungeonEncounter 715/716 from the Twin Emperors and Ouro slots. These values also work immediately after the script loads a saved instance. The other ten type-42 rows and the war-effort/invasion type-40 rows still need their owning systems. Twin Emperors and Ouro now have encounter AIs and imported-content runtime checks that reach Done; a multiplayer raid and original-client run remain outstanding.
 
 ## Taxi and DBC
 

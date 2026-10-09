@@ -62,6 +62,25 @@ public sealed class ScriptTargetSelectionTests
     }
 
     [Fact]
+    public void ScriptNearCaster_CanSelectTheListedCreatureCaster()
+    {
+        using PetTestKit kit = Kit(new SpellStore.ScriptTarget(NearestSpell, 1, PetTestKit.WildEntry, 0));
+        (Player player, _) = kit.AddPlayer(1);
+        Creature caster = Spawn(kit, PetTestKit.WildEntry, 5, player);
+
+        Assert.Equal(SpellCastResult.CastOk,
+            kit.Spells.System.CastSpell(caster, NearestSpell, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.True(kit.Spells.System.HasAura(caster, NearestSpell));
+
+        kit.Spells.System.RemoveAuras(caster, NearestSpell);
+        Creature other = Spawn(kit, PetTestKit.WildEntry, 10, player);
+        Assert.Equal(SpellCastResult.CastOk,
+            kit.Spells.System.CastSpell(caster, NearestSpell, SpellCastTargets.ForUnit(other.Guid), triggered: true));
+        Assert.True(kit.Spells.System.HasAura(other, NearestSpell));
+        Assert.False(kit.Spells.System.HasAura(caster, NearestSpell));
+    }
+
+    [Fact]
     public void ScriptAoeAtSource_KeepsListedEntriesInTheRadius_AndHonoursTheInverseEffectMask()
     {
         using PetTestKit kit = Kit(
