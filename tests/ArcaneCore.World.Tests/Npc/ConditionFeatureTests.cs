@@ -78,8 +78,10 @@ public sealed class ConditionFeatureTests
         Assert.False(feature.IsSatisfied(LevelFive, CreatePlayer(level: 4), null));
         Assert.True(feature.IsSatisfied(EventSeven, player, null));    // configured active
         Assert.False(feature.IsSatisfied(Holiday, player, null));      // default: no holiday active
-        Assert.False(feature.IsSatisfied(Script, player, null));       // unsupported: hidden
-        Assert.Equal(1, feature.Current.Summarize().UnavailableByType[(int)ConditionType.WorldScript]);
+        Assert.False(feature.IsSatisfied(Script, player, null));       // no world-script producer yet: unknown, hidden
+        Assert.Equal(1, feature.Current.Unavailable[(int)ConditionType.WorldScript]);
+        ConditionRuntimeState.For(world).SetWorldScriptCondition(0, 0, true);
+        Assert.True(feature.IsSatisfied(Script, player, null));
     }
 
     [Fact]
@@ -91,6 +93,25 @@ public sealed class ConditionFeatureTests
         feature.Attach(world);
         Assert.Equal(0, feature.Current.Table.Count);
         Assert.False(feature.IsSatisfied(LevelFive, CreatePlayer(level: 60), null));
+    }
+
+    [Fact]
+    public void WorldStateConditionReadsThePlayersMapVariable()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Player player = CreatePlayer(level: 1);
+        world.AddPlayer(player);
+        var runtime = ConditionRuntimeState.For(world);
+        runtime.SetMapVariable(player.Map!, 4811, -2);
+        var table = ConditionTable.Build([new ConditionRecord(1, 42, 4811, 1, unchecked((uint)-2), 0, 0)]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.True(evaluator.IsSatisfied(1, player, null));
+        runtime.SetMapVariable(player.Map!, 4811, 0);
+        Assert.False(evaluator.IsSatisfied(1, player, null));
     }
 
     [Fact]

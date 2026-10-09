@@ -82,7 +82,8 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     public bool IsTypeAvailable(ConditionType type) => type switch
     {
         ConditionType.Not or ConditionType.Or or ConditionType.And or ConditionType.None or ConditionType.ItemEquipped
-            or ConditionType.Team or ConditionType.RaceClass or ConditionType.Level or ConditionType.Gender => true,
+            or ConditionType.Team or ConditionType.RaceClass or ConditionType.Level or ConditionType.Gender
+            or ConditionType.DeadOrAway => true,
         ConditionType.Aura => Context.HasAura is not null,
         ConditionType.Item or ConditionType.ItemWithBank => Context.ItemCount is not null,
         ConditionType.AreaId => Context.ZoneAndArea is not null,
@@ -97,6 +98,12 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         ConditionType.ActiveHoliday => Context.IsHolidayActive is not null,
         ConditionType.Spell => Context.HasSpell is not null,
         ConditionType.InstanceScript => Context.InstanceScript is not null,
+        ConditionType.CompletedEncounter => Context.CompletedEncounter is not null,
+        ConditionType.LastWaypoint => Context.LastWaypoint is not null,
+        ConditionType.CreatureInRange => Context.CreatureInRange is not null,
+        ConditionType.SpawnCount => Context.SpawnCount is not null,
+        ConditionType.WorldScript => Context.WorldScript is not null,
+        ConditionType.WorldState => Context.WorldState is not null,
         _ => false,
     };
 
@@ -303,12 +310,71 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
                     ? c.Value2 switch { 0 => hasSpell(p5, c.Value1), 1 => !hasSpell(p5, c.Value1), _ => false } : null);
             case ConditionType.InstanceScript:
                 return Unknown(c, target.Player is { } p6 ? Context.InstanceScript?.Invoke(p6, c.Value1) : null);
+            case ConditionType.CompletedEncounter:
+                return Unknown(c, target.Player is { } encounterPlayer
+                    ? Context.CompletedEncounter?.Invoke(encounterPlayer, c.Value1, c.Value2) : null);
+            case ConditionType.LastWaypoint:
+            {
+                uint? reached = target.Player is { } waypointPlayer && source.Npc is { } sourceCreature
+                    ? Context.LastWaypoint?.Invoke(waypointPlayer, sourceCreature) : null;
+                return Unknown(c, reached is { } waypoint ? c.Value2 switch
+                {
+                    0 => waypoint == c.Value1,
+                    1 => waypoint >= c.Value1,
+                    2 => waypoint < c.Value1,
+                    _ => false,
+                } : null);
+            }
+            case ConditionType.DeadOrAway:
+            {
+                Player? player = target.Player;
+                NpcInfo? npc = source.Npc;
+                return c.Value1 switch
+                {
+                    0 => player is null || !player.IsAlive || (c.Value2 > 0 && npc is not null && Away(player, npc, c.Value2)),
+                    1 or 2 => Unknown(c, player is not null ? Context.DeadOrAwayGroup?.Invoke(player, npc, c.Value1, c.Value2) : null),
+                    3 => npc is null || !npc.IsAlive,
+                    _ => false,
+                };
+            }
+            case ConditionType.CreatureInRange:
+                return Unknown(c, target.Player is { } rangePlayer
+                    ? Context.CreatureInRange?.Invoke(rangePlayer, c.Value1, c.Value2) : null);
+            case ConditionType.SpawnCount:
+                return Unknown(c, target.Player is { } spawnPlayer && Context.SpawnCount?.Invoke(spawnPlayer, c.Value1) is { } spawned
+                    ? spawned >= c.Value2 : null);
+            case ConditionType.WorldScript:
+                return Unknown(c, Context.WorldScript?.Invoke(c.Value1, c.Value2));
+            case ConditionType.WorldState:
+            {
+                int? value = target.Player is { } statePlayer ? Context.WorldState?.Invoke(statePlayer, c.Value1) : null;
+                return Unknown(c, value is { } state ? CompareWorldState(c.Value2, state, unchecked((int)c.Value3)) : null);
+            }
             case ConditionType.Gender:
                 return target.Player is { } gendered ? (uint)gendered.Gender == c.Value1 : Unknown(c, null);
             default:
                 return Unknown(c, null);
         }
     }
+
+    private static bool Away(Player player, NpcInfo source, uint range)
+    {
+        if (player.MapId != source.MapId) return true;
+        double dx = player.X - source.X, dy = player.Y - source.Y, dz = player.Z - source.Z;
+        return dx * dx + dy * dy + dz * dz > (double)range * range;
+    }
+
+    // mangos-classic Conditions.cpp ConditionEntry::CheckOp (132-145), signed int32.
+    private static bool CompareWorldState(uint operation, int value, int operand) => operation switch
+    {
+        1 => value == operand,
+        2 => value != operand,
+        3 => value < operand,
+        4 => value <= operand,
+        5 => value > operand,
+        6 => value >= operand,
+        _ => true,
+    };
 
     /// <summary>The operands in evaluation order: value3 and value4 when set, then value1 and value2 (Conditions.cpp:157-176).</summary>
     private static IEnumerable<uint> OperandIds(ConditionEntry c)

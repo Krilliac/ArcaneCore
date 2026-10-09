@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Npc;
 
 namespace ArcaneCore.Game.Conditions;
 
@@ -67,4 +68,25 @@ public sealed record ConditionContext
 
     /// <summary>cmangos CONDITION_INSTANCE_SCRIPT: null when the player has no instance script.</summary>
     public Func<Player, uint, bool?>? InstanceScript { get; init; }
+
+    /// <summary>DungeonEncounter ids whose instance completion bits are set (Conditions.cpp:393-411).</summary>
+    public Func<Player, uint, uint, bool?>? CompletedEncounter { get; init; }
+
+    /// <summary>The source creature's last reached waypoint, or null when it cannot be resolved.</summary>
+    public Func<Player, NpcInfo, uint?>? LastWaypoint { get; init; }
+
+    /// <summary>Modes 1 and 2 of DEAD_OR_AWAY: all group or instance players dead or away.</summary>
+    public Func<Player, NpcInfo?, uint, uint, bool?>? DeadOrAwayGroup { get; init; }
+
+    /// <summary>Whether a live creature of the entry is within range of the player.</summary>
+    public Func<Player, uint, uint, bool?>? CreatureInRange { get; init; }
+
+    /// <summary>Number of currently spawned creatures of the entry in the player's map.</summary>
+    public Func<Player, uint, uint?>? SpawnCount { get; init; }
+
+    /// <summary>Global world script condition (war effort, invasion or transport state).</summary>
+    public Func<uint, uint, bool?>? WorldScript { get; init; }
+
+    /// <summary>Signed map variable for CONDITION_WORLDSTATE; absent variable is zero.</summary>
+    public Func<Player, uint, int?>? WorldState { get; init; }
 }
