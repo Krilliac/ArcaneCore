@@ -77,6 +77,9 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15509) => new HuhuranAI(creature),
             (TempleOfAhnQirajInstance temple, 15516) => new SarturaAI(creature, temple),
             (TempleOfAhnQirajInstance temple, 15984) => new SarturaRoyalGuardAI(creature, temple),
+            (TempleOfAhnQirajInstance, 15510) => new FankrissAI(creature),
+            (TempleOfAhnQirajInstance, 15630) => new SpawnOfFankrissAI(creature),
+            (TempleOfAhnQirajInstance, 15962) => new FankrissHatchlingAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),
