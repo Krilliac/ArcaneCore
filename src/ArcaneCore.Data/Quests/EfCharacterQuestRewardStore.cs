@@ -2,12 +2,14 @@ using System.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Spells;
+using ArcaneCore.Data.Characters.WorldState;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
+using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Quests;
@@ -161,6 +163,37 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                     {
                         CharacterId = id, Faction = faction.Faction, Standing = faction.Standing, Flags = faction.Flags,
                     });
+                }
+            }
+
+            if (request.WarEffort is { } contribution)
+            {
+                WarEffortResource? resource = WarEffortCatalog.ForQuest(request.ExpectedQuest.Quest);
+                if (resource is null || resource.Id != contribution.ResourceId || contribution.ItemCount == 0
+                    || db.Model.FindEntityType(typeof(WarEffortPhaseRow)) is null
+                    || db.Model.FindEntityType(typeof(WarEffortCounterRow)) is null)
+                    throw new InvalidOperationException("invalid AQ war-effort contribution in quest reward");
+
+                WarEffortPhaseRow? phase = await db.Set<WarEffortPhaseRow>()
+                    .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+                if (phase?.Phase == (byte)WarEffortPhase.Gathering)
+                {
+                    List<WarEffortCounterRow> counters = await db.Set<WarEffortCounterRow>()
+                        .ToListAsync(cancellationToken).ConfigureAwait(false);
+                    WarEffortCounterRow? counter = counters.FirstOrDefault(r => r.ResourceId == resource.Id);
+                    if (counter is null)
+                    {
+                        counter = new WarEffortCounterRow { ResourceId = resource.Id };
+                        db.Add(counter);
+                        counters.Add(counter);
+                    }
+
+                    counter.Count = checked(counter.Count + contribution.ItemCount);
+                    if (WarEffortCatalog.Resources.All(r => counters.FirstOrDefault(c => c.ResourceId == r.Id)?.Count >= r.Goal))
+                    {
+                        phase.Phase = (byte)WarEffortPhase.Transporting;
+                        phase.PhaseEndsAtUnix = DateTimeOffset.UtcNow.AddDays(5).ToUnixTimeSeconds();
+                    }
                 }
             }
 

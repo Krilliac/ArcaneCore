@@ -74,7 +74,7 @@ public sealed class InstanceStoreTests : IAsyncLifetime
             InstanceRow row = await db.Set<InstanceRow>().SingleAsync();
             Assert.Equal(101, row.Id);
             Assert.Null(row.Data);
-            Assert.Equal(InstanceScriptDataModule.Version, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+            Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
         }
     }
 

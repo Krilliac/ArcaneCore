@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
+using ArcaneCore.Kernel.WorldData.WorldState;
 
 namespace ArcaneCore.Kernel.Quests;
 
@@ -25,7 +26,8 @@ public sealed record CharacterQuestRewardRequest(
     CharacterQuestStatus RewardedQuest,
     IReadOnlyList<uint>? LearnedSpells = null,
     IReadOnlyList<CharacterReputationRow>? ReputationAfter = null,
-    bool InsertIfMissing = false);
+    bool InsertIfMissing = false,
+    WarEffortContribution? WarEffort = null);
 
 public enum QuestRewardCommitResult
 {
