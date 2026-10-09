@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
@@ -149,6 +150,20 @@ public sealed class Aq40ImportedRuntimeTests
                 Creature glob = Assert.Single(creatures.Creatures, c => c.Entry == 15667);
                 Assert.True(MathF.Abs(glob.X - (-8039.99f)) < 1f && MathF.Abs(glob.Y - 918.23f) < 1f,
                     $"glob spawned at {glob.X}, {glob.Y} instead of its database target");
+
+                Player wandUser = host.World.FindOnlinePlayer("Aqsmoke")!;
+                SpellInfo shoot = Assert.IsType<SpellInfo>(spells.Store.Get(5019));
+                Assert.Equal(SpellSchool.Normal, shoot.School);
+                wandUser.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Mage);
+                Assert.Equal(InventoryResult.Ok, wandUser.Inventory.AddItem(7514, 1, out Item? wand));
+                Assert.NotNull(wand);
+                Assert.Equal((uint)SpellSchool.Frost, wand.Template.Damages[0].School);
+                wandUser.Inventory.RemoveItem(wand.BagSlot, wand.Slot);
+                wandUser.Inventory.EquipItem(InventorySlots.Ranged, wand);
+                for (int i = 0; i < 200; i++) viscidusAi.OnSpellHit(wandUser, shoot);
+                Assert.True(spells.HasAura(viscidus, 25937));
+                spells.RemoveAuras(viscidus, 25937);
+                wandUser.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
 
                 SpellInfo frost = Assert.IsType<SpellInfo>(spells.Store.Get(116));
                 Assert.Equal(SpellSchool.Frost, frost.School);

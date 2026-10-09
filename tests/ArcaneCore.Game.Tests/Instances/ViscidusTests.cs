@@ -3,11 +3,14 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -133,6 +136,40 @@ public sealed class ViscidusTests
         Assert.DoesNotContain(arena.Casts.Casts, c => c.Spell == 25938);
         for (int i = 0; i < 150; i++) arena.Ai.OnSpellHit(arena.Tank, physical);
         Assert.Contains(arena.Casts.Casts, c => c.Spell == 25938);
+    }
+
+    [Fact]
+    public void FrostWandShootCountsAsFrost_ButOtherWandsDoNot()
+    {
+        SpellInfo shoot = Spell(5019, Effect(SpellEffectName.SchoolDamage, 1)) with { School = SpellSchool.Normal };
+        using (var fire = new Arena())
+        {
+            EquipWand(fire.Tank, SpellSchool.Fire);
+            for (int i = 0; i < 200; i++) fire.Ai.OnSpellHit(fire.Tank, shoot);
+            Assert.DoesNotContain(fire.Casts.Casts, c => c.Spell is 26034 or 26036 or 25937);
+        }
+
+        using var frost = new Arena();
+        EquipWand(frost.Tank, SpellSchool.Frost);
+        for (int i = 0; i < 100; i++) frost.Ai.OnSpellHit(frost.Tank, shoot);
+        Assert.Contains(frost.Casts.Casts, c => c.Spell == 26034);
+        for (int i = 0; i < 100; i++) frost.Ai.OnSpellHit(frost.Tank, shoot);
+        Assert.Contains(frost.Casts.Casts, c => c.Spell == 25937);
+    }
+
+    private static void EquipWand(Player player, SpellSchool school)
+    {
+        const uint entry = 940501;
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Mage);
+        ItemTestData.Wire(player.Inventory);
+        player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate
+        {
+            Entry = entry, Class = 2, SubClass = 19, InventoryType = 26, MaxDurability = 40,
+            Damages = [new ItemDamage(5, 6, (uint)school)],
+        }]);
+        Item item = ItemTestData.Give(player.Inventory, entry);
+        player.Inventory.RemoveItem(item.BagSlot, item.Slot);
+        player.Inventory.EquipItem(InventorySlots.Ranged, item);
     }
 
     [Fact]

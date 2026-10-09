@@ -71,7 +71,10 @@ public sealed class ViscidusAI : RaidBossAI
     public override void OnSpellHit(Unit caster, SpellInfo spell)
     {
         if (ReferenceEquals(caster, Me) || !Me.IsAlive) return;
-        if (_stage == Stage.Normal && spell.School == SpellSchool.Frost)
+        // Shoot (5019) carries a physical spell school even when a frost wand deals the damage.
+        // vmangos boss_viscidusAI::SpellHit reads the equipped wand's first damage school here.
+        SpellSchool? hitSchool = spell.Id == 5019 ? SpellSystem.EquippedWandDamageSchool(caster) : spell.School;
+        if (_stage == Stage.Normal && hitSchool == SpellSchool.Frost)
         {
             _frostHits++;
             if (_frostHits == 200)
