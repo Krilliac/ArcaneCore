@@ -14,6 +14,8 @@ Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, pha
 The [raid port record](../integration/raid-mc-ony-20261008.md) lists each behavior's reference, tests, data dependencies and remaining acceptance limits.
 These have deterministic test coverage; a complete imported-world or real-client raid run is not recorded.
 
+Temple of Ahn'Qiraj (531) now has instance state and Skeram/Bug Trio scripts. See the [AQ40 slice record](../integration/raid-aq40-20261008.md) for encounter behavior, tests and the remaining bosses.
+
 ## Delivered
 
 | Slice | Behaviour | Reference |

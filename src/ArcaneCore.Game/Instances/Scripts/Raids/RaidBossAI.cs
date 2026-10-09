@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
 using ArcaneCore.Game.Pets;
@@ -40,6 +41,10 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
             (BlackwingLairInstance, 11983) => new FiremawAI(creature),
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
+            (TempleOfAhnQirajInstance temple, 15263) => new SkeramAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15511) => new KriAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15543) => new YaujAI(creature, temple),
+            (TempleOfAhnQirajInstance temple, 15544) => new VemAI(creature, temple),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             _ => null,
         };
