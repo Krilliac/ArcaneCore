@@ -26,7 +26,7 @@ The following are behavior adaptations from read-only GPL references, with no GP
 
 ## Files changed
 
-New ZG scripts: `PriestBossAis.cs`, `ThekalAis.cs`, `OtherBossAis.cs` (also `ThreateningGazeAuraModule`, an `ISpellHandlerModule`), `EdgeOfMadnessAis.cs`, `ZulGurubObjects.cs`. New AQ20 scripts: `RemainingBossAis.cs`, `AndorovAI.cs`, `RaidSummonScripts.cs`, `RuinsOfAhnQirajEvents.cs`. Modified shared script files: `Classic/ZulGurubInstance.cs`, `Raids/RaidBossAI.cs` (optional encounter slot and the new boss entries; no Rajaxx entry), `RuinsOfAhnQiraj/RuinsOfAhnQirajInstance.cs`, `ZulGurub/HakkarAI.cs` (one line), `ZulGurub/ZulGurubPriestState.cs`. Tests: `tests/ArcaneCore.Game.Tests/Instances/RemainingRaidBossTests.cs`. Documentation: this file and `docs/areas/instances.md`.
+New ZG scripts: `PriestBossAis.cs`, `ThekalAis.cs`, `OtherBossAis.cs` (also `ThreateningGazeAuraModule`, an `ISpellHandlerModule`), `EdgeOfMadnessAis.cs`, `ZulGurubObjects.cs`. New AQ20 scripts: `RemainingBossAis.cs`, `AndorovAI.cs`, `RaidSummonScripts.cs`, `RuinsOfAhnQirajEvents.cs`. Modified shared script files: `Classic/ZulGurubInstance.cs`, `Raids/RaidBossAI.cs` (optional encounter slot and the new boss entries; no Rajaxx entry), `RuinsOfAhnQiraj/RuinsOfAhnQirajInstance.cs`, `ZulGurub/HakkarAI.cs` (one line), `ZulGurub/ZulGurubPriestState.cs`. Tests: `tests/ArcaneCore.Game.Tests/Instances/RemainingRaidBossTests.cs` and `ThreateningGazeModuleTests.cs`. Documentation: this file and `docs/areas/instances.md`.
 
 ## Data and verification boundary
 
@@ -64,10 +64,26 @@ Load-bearing check: each fix was reverted in turn, the project rebuilt (fresh `A
 | `dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build` | 7,592 passed, 13 skipped, 0 failed |
 | `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build` | 3,161 passed, 29 skipped, 0 failed |
 
+## Final intake check (2026-10-08)
+
+A third pass rebuilt the branch tip and reran the gates, then made three mutations to check that tests caught them: Lor'Khan resurrecting regardless of Thekal and Zath, the wave shortcut on a dead wave removed, and Buru's 15% egg damage zeroed. The wave and Buru tests failed. The Lor'Khan mutation passed every test, because the existing Thekal tests always kill the zealots before Thekal, so Thekal's `CanPreventAddsResurrect` stops the zealot timers first. Two tests were added:
+
+- `ThekalZealot_RisesAlone_ButStaysDownWhenThekalAndTheOtherZealotAreAlreadyDown` covers a lone zealot rising after ten seconds. It then kills Lor'Khan, Thekal and Zath in that order, and Lor'Khan's own `ACTION_RESSURECTION` check must keep him down. The test fails against the mutation.
+- `ThreateningGazeModuleTests.GazeHolderAddedAndRemoved_SendsTheCasterAiBothEventsWithThePlayer_AndOtherAurasDoNot` casts a real 24314 aura holder from a creature through `SpellSystem`, with the module discovered by reflection. It then removes the holder and checks that both AI events (1000/1001) reach the caster's AI with the player as invoker. The test fails when the `HolderRemoved` subscription is removed.
+
+Two short comments in `RuinsOfAhnQirajEvents.cs` that paraphrased reference comments closely were reworded.
+
+| Gate (final, native) | Result |
+|---|---|
+| `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false` | 0 warnings, 0 errors (no MSB3491; `ArcaneCore.Game.dll` timestamp after the last revert) |
+| Game filter `RemainingRaidBossTests` or `ThreateningGazeModuleTests` | 66 passed, 0 failed |
+| `dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build` | 7,594 passed, 13 skipped, 0 failed |
+| `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build` | 3,161 passed, 29 skipped, 0 failed |
+
 ## Remaining limits
 
 - **Rajaxx EventAI target types (host gap, outside this lane):** ClassicDB 1534104 casts Summon Player at target type 9 (`TARGET_T_HOSTILE_RANDOM_NOT_TOP_PLAYER`). `EventAiContext.SelectTarget` resolves types 0-7 and 10-12 and 15, but not 8 or 9, so the host's EventAI fails that action. Disarm, Thundercrash, the threat drop, Frenzy and the yells resolve. This finding comes from reading the code, not from a test.
-- **Threatening Gaze wiring:** `ThreateningGazeAuraModule` forwards 24314 holder add/remove to the caster's AI. The tests drive the AI events directly, and no test applies the real aura from a creature caster.
+- **Threatening Gaze wiring:** `ThreateningGazeAuraModule` forwards 24314 holder add/remove to the caster's AI. `ThreateningGazeModuleTests` applies and removes the real holder from a creature caster with a recording AI. The Mandokir gaze tests still drive `MandokirAI` with the AI events directly, and no single test covers the whole gaze, threat rise and charge chain through the real spell system.
 - **Mandokir:** vmangos' level increase per kill (`SetLevel`) and its Vilebranch-dead reset placement (`CheckVilebranchState`) are not ported; MC's behaviour is. Spirit despawn is direct instead of through 24342's script effect.
 - **Edge event day:** VM `instance_zulgurub.cpp::SetData(TYPE_RANDOM_BOSS)` maps active events 29-32 to the four bosses, but `SpawnRandomBoss` is disabled there. ArcaneCore has the event service and ClassicDB event rows, but this instance script has no injected active-event state or Edge altar summon entry point. The four combat AIs can run when spawned; automatic event-day selection is still absent.
 - **Rajaxx waves:** the host does not import the reference's `AQ20_*` creature-group string IDs, so waves are the closest-captain partition above. A wave follows as soon as the previous one is dead; MC shortcuts only the last captain's wave (`OnCreatureGroupDespawn(AQ20_ZERRAN)`) but documents the "after the previous wave is finished" rule. Andorov's evade returns him to the intro or attack point through his home position instead of a scripted MovePoint, and the elites follow him again from their home after a fight. Neither path has a world-tick test. His vendor list depends on the imported `npc_vendor` rows for 15471, which were not checked.
