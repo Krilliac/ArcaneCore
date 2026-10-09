@@ -97,3 +97,15 @@ the effect has several unit targets; vmangos calls the handler per target, which
 - Rework verification: Release `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false` 0 warnings, 0 errors (fresh DLL
   timestamps). Full Game: 7,548 passed, 13 skipped, 0 failed. Full World: 3,161 passed, 29 skipped, 0 failed. Data was not rerun (the
   rework touches no Data code or schema). `git diff --check` clean.
+
+## Re-verification of the reworked tip (2026-10-08)
+
+A second intake pass rebuilt tip `12d974b7` and re-ran every touched test project in full; no code changed.
+
+- Release `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false`: 0 warnings, 0 errors (fresh DLL timestamps).
+- Full Game: 7,548 passed, 13 skipped, 0 failed. Full World: 3,161 passed, 29 skipped, 0 failed. Full Data (including the
+  `Resilience` group that stalled in the lane run, with a 5-minute hang timeout that did not fire): 1,341 passed, 15 skipped, 0 failed.
+  Kernel: 32 passed.
+- Mutation check: with the chest `StartDbEvent`, the SEND_EVENT `StartDbScript` call, the TERMINATE_COND polarity and the command 9
+  despawn delay broken together, 10 of the 39 tests in `ChestEventScriptTests`, `SendEventDbScriptTests`, `RelayScriptCommandTests` and
+  `DbScriptRuntimeTests` failed (3 chest, 2 SEND_EVENT, 4 TERMINATE_COND, 1 command 9); all 39 passed with the code restored.
