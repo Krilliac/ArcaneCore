@@ -305,11 +305,16 @@ public sealed partial class SpellSystem
         }
 
         WorldObject target = context.Caster.Map?.FindObject(context.Cast.Targets.GameObject) ?? context.Target;
-        if (context.Caster.Map?.FindUpdater<Creatures.CreatureMapSystem>()?.StartDbScript(
-            Kernel.WorldData.Creatures.DbScriptKind.Event, eventId, context.Caster, target) != true)
+        Creatures.CreatureMapSystem? scripts = context.Caster.Map?.FindUpdater<Creatures.CreatureMapSystem>();
+        // Only missing content is unsupported: StartDbScript is also false for an event already running for this caster and target
+        // (RelayScriptRunner.IsRunning), which cmangos Map::ScriptsStart (Maps/Map.cpp:2181-2193) skips as a success, not an error.
+        if (scripts?.HasDbScript(Kernel.WorldData.Creatures.DbScriptKind.Event, eventId) != true)
         {
             ReportUnsupported("send event", eventId, context.Spell.Id);
+            return;
         }
+
+        scripts.StartDbScript(Kernel.WorldData.Creatures.DbScriptKind.Event, eventId, context.Caster, target);
     }
 
     /// <summary>

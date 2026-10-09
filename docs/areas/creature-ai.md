@@ -307,11 +307,17 @@ the map clock with the relay runner and executor above (one runner per namespace
 - **Event credit**: an exploration/event quest is withheld unless something can complete it. `DbScriptQuestCredit` counts every quest a
   DB script's QUEST_EXPLORED names (relays included) and every escort quest of an entry script (`CreatureAiFactory.ScriptedEventQuests`),
   read through `QuestNpcServices.ScriptCreditedQuests`; classic-db quests such as 2843 are offered because of it.
-- **Event callers**: SEND_EVENT starts an event DB script after the instance script declines it; chest data6 and goober data2
-  start one with the user as source and object as target (vmangos Spell::EffectSendEvent, SpellEffects.cpp:1761-1775;
-  GameObject::Use, GameObject.cpp:1572-1577; cmangos StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3478).
-  A button has a linked-trap field, not an event-id field. Spell effects carry an explicit game-object target but not an implicitly selected spell-focus game object.
-- **Additional commands**: 2/4/5 field operations, 9 object respawn (a not-spawned-by-default object appears for datalong2 seconds), 12 close door, 14 remove a whole aura, 16 direct and distance
+- **Event callers**: SEND_EVENT starts an event DB script after the instance script declines it (only an event with no
+  dbscripts_on_event rows is logged as unsupported; one already running for the same caster and target is skipped, as cmangos
+  Map::ScriptsStart does, Maps/Map.cpp:2181-2193). Chest data6 and goober data2 start one with the user as source and object as
+  target (vmangos Spell::EffectSendEvent, SpellEffects.cpp:1761-1775; cmangos GameObject::Use, GameObject.cpp:1548-1560 and
+  1683-1688, StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3478). The goober event starts before the goober questId gate, as in
+  cmangos (vmangos GameObject.cpp:1564-1580 gates it first). The chest event starts on the direct use and on the spell path
+  (key, lockpick: Spell::SendLoot passes a chest to GameObject::Use, SpellEffects.cpp:2142-2145), but only once the chest passed
+  the quest gate and the lock and actually opened, so a refused use springs no ambush; every ClassicDB chest whose event has rows
+  is locked. A button has a linked-trap field, not an event-id field. Spell effects carry an explicit game-object target but not an
+  implicitly selected spell-focus game object.
+- **Additional commands**: 2/4/5 field operations, 9 object respawn (a not-spawned-by-default object appears for datalong2 seconds, and stays with datalong2 0 as in cmangos), 12 close door, 14 remove a whole aura, 16 direct and distance
   sound, 17 create or remove an item, 23 morph, 24 mount, 27 object lock flags, 34 conditional termination, 40 timed object despawn,
   43 reset door or button, 44 update creature template, and 48 unit flags now dispatch through the relay runner
   (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1932, 2004-2047, 2074-2111, 2130-2153,

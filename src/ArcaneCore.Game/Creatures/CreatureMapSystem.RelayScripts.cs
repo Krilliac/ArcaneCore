@@ -85,6 +85,13 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// Whether script <paramref name="scriptId"/> of <paramref name="kind"/> has steps. <see cref="StartDbScript"/> is also false for a
+    /// script that already runs for the same source and target, which is not missing content.
+    /// </summary>
+    public bool HasDbScript(DbScriptKind kind, uint scriptId)
+        => kind == DbScriptKind.Relay ? _content.Ai.RelayScripts.Get(scriptId).Count > 0 : _content.Ai.DbScripts.Get(kind, scriptId).Count > 0;
+
+    /// <summary>
     /// cmangos Map::ScriptsStart(SCRIPT_TYPE_RELAY, id, source, target): run relay <paramref name="relayId"/> with
     /// <paramref name="source"/> and <paramref name="target"/>. False when the relay does not exist or already runs for the pair.
     /// </summary>
@@ -476,10 +483,14 @@ public sealed partial class CreatureMapSystem
                     return false;
                 }
 
-                // Not spawned by default (negative spawntimesecs): spawned for datalong2 seconds, then gone again
-                // (SetLootState(GO_READY), SetRespawnTime(despawnDelay), Refresh).
+                // Not spawned by default (negative spawntimesecs): shown, then gone again after datalong2 seconds (SetLootState(GO_READY),
+                // SetRespawnTime(despawnDelay), Refresh). The latest SetRespawnTime replaces an earlier one, so a stale timer is dropped.
+                // datalong2 0 schedules nothing: SetRespawnTime(0) leaves m_respawnDelay 0, which IsSpawned() treats as spawned, so the
+                // object stays (cmangos GameObject.h:757-768). ClassicDB has three such rows: dbscripts_on_event 466-468, the Water Well
+                // Cleansing Aura (2904) of quests 754/758/760. vmangos (ScriptCommands.cpp:383) would clamp the delay to 5 s instead.
                 objects.ForceRespawn(go);
-                if (go.IsSpawned)
+                _scriptObjectDespawns.RemoveAll(pending => pending.GameObject == go);
+                if (go.IsSpawned && step.DataLong2 > 0)
                     _scriptObjectDespawns.Add((go, _clockMs + (step.DataLong2 * 1000L)));
                 return false;
             }
@@ -663,15 +674,15 @@ public sealed partial class CreatureMapSystem
                 }
                 return false;
 
-            case 48: // SCRIPT_COMMAND_MODIFY_UNIT_FLAGS (ScriptMgr.cpp:2994-3020)
-                if (source is Creature flagTarget)
-                    flagTarget.UnitFlags = step.DataLong2 switch
-                    {
-                        0 => flagTarget.UnitFlags & ~(UnitFlags)step.DataLong,
-                        1 => flagTarget.UnitFlags | (UnitFlags)step.DataLong,
-                        2 => flagTarget.UnitFlags ^ (UnitFlags)step.DataLong,
-                        _ => flagTarget.UnitFlags,
-                    };
+            case 48: // SCRIPT_COMMAND_MODIFY_UNIT_FLAGS (ScriptMgr.cpp:2993-3016)
+                if (source is Creature flagTarget && step.DataLong2 <= 2)
+                {
+                    UnitFlags mask = (UnitFlags)step.DataLong;
+                    // Toggle (2) is not a XOR: HasFlag is true when any bit of the mask is set (Object.h:476-480), and then the whole
+                    // mask is removed; otherwise the whole mask is set.
+                    bool remove = step.DataLong2 == 0 || (step.DataLong2 == 2 && (flagTarget.UnitFlags & mask) != 0);
+                    flagTarget.UnitFlags = remove ? flagTarget.UnitFlags & ~mask : flagTarget.UnitFlags | mask;
+                }
                 return false;
 
             case 31: // SCRIPT_COMMAND_TERMINATE_SCRIPT (:2569-2703)

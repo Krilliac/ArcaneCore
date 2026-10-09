@@ -397,7 +397,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
-            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
+            // Spell::SendLoot hands the chest to GameObject::Use too, so a key or lockpick opening starts the chest event as the click does.
+            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
@@ -585,8 +586,6 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     private GameObjectUseResult UseChest(Player player, GameObject go)
     {
-        // cmangos GameObject::Use, GAMEOBJECT_TYPE_CHEST (GameObject.cpp:1554-1560): event id is data6.
-        StartDbEvent(go.Template.GetData(6), player, go);
         // GameObject::Use, chest (GameObject.cpp:1472-1479): the click springs the chest's linked trap, whatever the lock or quest say.
         TriggerLinkedTrap(go, player);
         if (!ChestQuestAllows(player, go))
@@ -600,10 +599,29 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return locked;
         }
 
-        GameObjectUseResult opened = OpenChest(player, go);
+        GameObjectUseResult opened = OpenChestStartingEvent(player, go);
         if (opened == GameObjectUseResult.Ok && key is not null)
         {
             UseUpKey(player, key);
+        }
+
+        return opened;
+    }
+
+    /// <summary>
+    /// Opens the chest and, once it opened, starts its event (chest.eventId, data6). mangos-classic GameObject::Use, GAMEOBJECT_TYPE_CHEST
+    /// (GameObject.cpp:1548-1560) starts the event, and both chest paths reach that Use: the direct use and the spell path (Spell::SendLoot,
+    /// SpellEffects.cpp:2142-2145, which shows the loot after it). ArcaneCore starts it only for a use that passed the quest gate, the lock
+    /// and the open itself, so a refused use (or a crafted CMSG_GAMEOBJ_USE on a locked chest) cannot spring the ambush; cmangos has no
+    /// server-side quest gate or direct-use lock check to refuse it. Limit: a restocking chest (GO_NOT_READY) refuses the open here and so
+    /// starts no event, where cmangos would start it with the empty loot window.
+    /// </summary>
+    private GameObjectUseResult OpenChestStartingEvent(Player player, GameObject go)
+    {
+        GameObjectUseResult opened = OpenChest(player, go);
+        if (opened == GameObjectUseResult.Ok)
+        {
+            StartDbEvent(go.Template.GetData(6), player, go);
         }
 
         return opened;
@@ -777,7 +795,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
         ShowGooberPageOrGossip(player, go);
-        // vmangos GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1572-1577): data2 fires before the quest gate.
+        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1696): goober.eventId (data2) starts before the
+        // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
         StartDbEvent(go.Template.GetData(2), player, go);
         int questId = GooberQuestId(go);
         if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)

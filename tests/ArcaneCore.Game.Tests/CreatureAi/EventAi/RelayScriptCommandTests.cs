@@ -95,6 +95,53 @@ public sealed class RelayScriptCommandTests
     }
 
     [Fact]
+    public void RespawnGameObject_WithoutADespawnDelay_LeavesTheShownSpawnInTheWorld()
+    {
+        // ClassicDB dbscripts_on_event 466-468 (the Water Well Cleansing Aura, 2904, spawntimesecs -180) have datalong2 0. cmangos
+        // SetRespawnTime(0) leaves m_respawnDelay 0, so IsSpawned() stays true and the object stays (GameObject.h:757-768); it must not be
+        // removed again on the next tick.
+        using Town t = Start([Step(0, 9, dataLong: DoorGuid)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10, spawnTimeSeconds: -180)], objectType: GameObjectType.Chest);
+        GameObject aura = Assert.Single(t.Objects.GameObjects);
+        Assert.False(aura.IsSpawned);
+        t.Wave();
+        Assert.True(aura.IsSpawned);
+        Run(t.World, 60_000);
+        Assert.True(aura.IsSpawned);
+    }
+
+    [Fact]
+    public void ModifyUnitFlags_Toggle_RemovesTheWholeMaskWhenAnyBitIsSet_AndSetsItOtherwise()
+    {
+        // cmangos SCRIPT_COMMAND_MODIFY_UNIT_FLAGS (ScriptMgr.cpp:2993-3016) toggles with HasFlag, which is true for any bit of the mask
+        // (Object.h:476-480): not a XOR.
+        const UnitFlags mask = UnitFlags.PetRename | UnitFlags.PetAbandon; // two bits nothing else in the test reads
+        using Town t = Start([Step(0, 48, dataLong: (uint)mask, dataLong2: 2, flags: FlagReverse)]);
+        t.Elly.UnitFlags = (t.Elly.UnitFlags & ~mask) | UnitFlags.PetRename;
+
+        t.Wave();
+        Assert.Equal((UnitFlags)0, t.Elly.UnitFlags & mask);
+
+        Run(t.World, 100);
+        t.Wave();
+        Assert.Equal(mask, t.Elly.UnitFlags & mask);
+    }
+
+    [Fact]
+    public void CreateItem_WithTheAdditionalFlag_DestroysTheCount()
+    {
+        // cmangos SCRIPT_COMMAND_CREATE_ITEM (ScriptMgr.cpp:2241-2255): SCRIPT_FLAG_COMMAND_ADDITIONAL destroys instead of creating; ClassicDB
+        // has one such row (dbscripts_on_gossip 7166, the Cultist Engineer's 8 shards).
+        using Town t = Start([Step(0, 17, dataLong: ItemTestData.QuestPelt, dataLong2: 8, flags: FlagAdditional)]);
+        ItemTestData.Wire(t.Player.Inventory);
+        ItemTestData.Give(t.Player.Inventory, ItemTestData.QuestPelt, 10);
+
+        t.Wave();
+
+        Assert.Equal(2u, t.Player.Inventory.GetItemCount(ItemTestData.QuestPelt));
+    }
+
+    [Fact]
     public void DistanceSound_UsesTheSourceGuidInItsPacket()
     {
         using Town t = Start([Step(0, 16, dataLong: 6209, dataLong2: 2, flags: FlagReverse)]);
