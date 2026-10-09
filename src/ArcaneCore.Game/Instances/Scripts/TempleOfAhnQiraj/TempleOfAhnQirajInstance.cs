@@ -27,6 +27,8 @@ public sealed partial class TempleOfAhnQirajInstance(Map map) : ScriptedInstance
         716 => GetData(Ouro) == EncounterState.Done,
         _ => null,
     };
+    /// <summary>ClassicDB dungeon encounter 711 publishes completed world state 4823 for Sartura.</summary>
+    public int? MapVariable(uint id) => id == 4823 ? (GetData(Sartura) == EncounterState.Done ? 1 : 0) : null;
     public override bool IsEncounterInProgress => Encounters.Any(state => state is EncounterState.InProgress or EncounterState.Special);
     public override bool CheckConditionCriteriaMeet(Player player, uint conditionId)
         => conditionId < Encounters.Length && Encounters[conditionId] == EncounterState.Done;

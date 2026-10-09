@@ -151,6 +151,8 @@ public sealed class ConditionFeatureTests
         var uldamanCreatures = new CreatureMapSystem(uldamanMap, new CreatureContent([], [], [], [], []));
         uldamanMap.AddUpdater(uldamanCreatures);
         Map aqMap = world.GetMap(531);
+        var aqRaid = new TempleOfAhnQirajInstance(aqMap);
+        aqMap.AddUpdater(aqRaid);
         var aqCreatures = new CreatureMapSystem(aqMap, new CreatureContent([], [], [], [], []));
         aqMap.AddUpdater(aqCreatures);
 
@@ -169,6 +171,8 @@ public sealed class ConditionFeatureTests
         Assert.False(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
         Assert.True(aqCreatures.SpawnGroupCondition!(sarturaTrash));
         Assert.False(aqCreatures.SpawnGroupCondition!(annoraGroup));
+        aqRaid.SetData(TempleOfAhnQirajInstance.Sartura, EncounterState.Done);
+        Assert.False(aqCreatures.SpawnGroupCondition!(sarturaTrash));
         uldaman.SetVariable(UldamanInstance.VariableSpawnAnnora, 1);
         Assert.True(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
     }
@@ -237,6 +241,34 @@ public sealed class ConditionFeatureTests
         raid.Load(saved);
         Assert.True(evaluator.IsSatisfied(717, player, null));
         Assert.True(evaluator.IsSatisfied(718, player, null));
+    }
+
+    [Fact]
+    public void SarturaCompletionTurnsOffHerImportedTrashGroupCondition_AfterReloadToo()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(531);
+        var raid = new TempleOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 531);
+        world.AddPlayer(player);
+        var table = ConditionTable.Build([new ConditionRecord(5310010, 42, 4823, 1, 0, 0, 0)]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.True(evaluator.EvaluateOnMap(5310010, map));
+        Assert.True(evaluator.IsSatisfied(5310010, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Sartura, EncounterState.Done);
+        Assert.False(evaluator.EvaluateOnMap(5310010, map));
+        Assert.False(evaluator.IsSatisfied(5310010, player, null));
+
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        Assert.True(evaluator.EvaluateOnMap(5310010, map));
+        raid.Load(saved);
+        Assert.False(evaluator.EvaluateOnMap(5310010, map));
     }
 
     [Fact]

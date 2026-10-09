@@ -45,7 +45,11 @@ ArcaneCore keeps mangos-classic numbering because z2815 uses it; vmangos reuses 
 
 ### 2026-10-09 DB script world-state producer follow-up
 
-ClassicDB writes those eight quest/event variables through `SCRIPT_COMMAND_SET_WORLDSTATE` (53): relay 4072 writes 19020, relay 61935 writes 19021, and quest/movement/relay steps write 6506, 6507, 19997, 30011, 19990 and 19951. The shared DB script executor now handles command 53 using signed `dataint2`, publishing to the runtime map facts and to an instance script's explicit variables when one exists. Synthetic quest-start and creature-movement tests cover positive and negative values and instance routing; the imported-world smoke executes ClassicDB relay 4072 and observes variable 19020 change. Other trigger paths for those rows still need direct gameplay acceptance. AQ40 variable 4823 has no producer for a nonzero transition, and type-40 world-script facts remain unowned.
+ClassicDB writes those eight quest/event variables through `SCRIPT_COMMAND_SET_WORLDSTATE` (53): relay 4072 writes 19020, relay 61935 writes 19021, and quest/movement/relay steps write 6506, 6507, 19997, 30011, 19990 and 19951. The shared DB script executor now handles command 53 using signed `dataint2`, publishing to the runtime map facts and to an instance script's explicit variables when one exists. Synthetic quest-start and creature-movement tests cover positive and negative values and instance routing; the imported-world smoke executes ClassicDB relay 4072 and observes variable 19020 change. Other trigger paths for those rows still need direct gameplay acceptance. At this point AQ40 variable 4823 had no producer for a nonzero transition, and type-40 world-script facts remained unowned.
+
+### 2026-10-09 Sartura completion variable follow-up
+
+ClassicDB z2815 `instance_dungeon_encounters` row 711 (map 531, Battleguard Sartura) names completed world state 4823. `TempleOfAhnQirajInstance` now derives variable 4823 as zero until Sartura is Done and one afterward, including immediately after loading the saved encounter. The imported groups 5310014-5310021 require condition 5310010 (`4823 == 0`), so they can be selected before completion and stop qualifying afterward. Their flags do not request despawn on condition failure; existing living members are not forcibly removed by this change. Focused tests exercise the player condition, the spawn-group callback, and save/load. The type-40 world-script facts remain unowned.
 
 ## Taxi and DBC
 
