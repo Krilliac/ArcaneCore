@@ -43,7 +43,7 @@ public sealed class ConditionOptions
 /// rebuild by another feature never holds a stale one.
 /// </summary>
 public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
-    : IWorldFeature, IConditionEvaluator
+    : IWorldFeature, IConditionEvaluator, IConditionTableEvaluator
 {
     private ConditionEvaluator _current = new(ConditionTable.Empty, new ConditionContext());
     private WorldRuntime? _world;

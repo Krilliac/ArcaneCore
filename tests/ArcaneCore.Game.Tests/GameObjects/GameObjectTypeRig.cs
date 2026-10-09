@@ -116,6 +116,8 @@ internal sealed class GameObjectTypeRig
     public const uint CooldownTrapButton = 321;
     public const uint EventChest = 322;      // a key-locked chest with a chest.eventId (data6), as Trelane's and Benedict's chests
     public const uint QuestEventChest = 323; // a lockless chest with an event and a chest.questId (data8)
+    public const uint EventGoober = 324;      // a goober with a goober.eventId (data2) and no auto-close time
+    public const uint InUseEventGoober = 325; // the same with a 5 s auto-close time (data3), in use until it runs out
     public const uint ChestEvent = 9043;
     public const uint ChestQuest = 696;
 
@@ -202,6 +204,8 @@ internal sealed class GameObjectTypeRig
             GoTemplate(CooldownTrapButton, GameObjectType.Button, (3, CooldownTrap)),
             GoTemplate(EventChest, GameObjectType.Chest, (0, PlainKeyLock), (1, ChestLoot), (6, ChestEvent)),
             GoTemplate(QuestEventChest, GameObjectType.Chest, (1, ChestLoot), (6, ChestEvent), (8, ChestQuest)),
+            GoTemplate(EventGoober, GameObjectType.Goober, (2, ChestEvent)),
+            GoTemplate(InUseEventGoober, GameObjectType.Goober, (2, ChestEvent), (3, 5 * 0x10000)),
         ];
         var content = new GameObjectContent(templates, spawns, Locks, [], []);
         var lootContent = new LootContent([(LootTableKind.GameObject, Row(ChestLoot, Hide, 100))], []);

@@ -29,7 +29,7 @@ public sealed record ConditionSummary(int Total, int Evaluable, IReadOnlyDiction
 /// </para>
 /// World thread only.
 /// </summary>
-public sealed class ConditionEvaluator(ConditionTable table, ConditionContext context) : IConditionEvaluator
+public sealed class ConditionEvaluator(ConditionTable table, ConditionContext context) : IConditionEvaluator, IConditionTableEvaluator
 {
     /// <summary>Alliance team id (SharedDefines.h:338).</summary>
     private const uint Alliance = 469;
@@ -42,6 +42,9 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     public ConditionTable Table { get; } = table ?? throw new ArgumentNullException(nameof(table));
 
     public ConditionContext Context { get; } = context ?? throw new ArgumentNullException(nameof(context));
+
+    /// <summary>This evaluator (<see cref="IConditionTableEvaluator"/>).</summary>
+    ConditionEvaluator IConditionTableEvaluator.Current => this;
 
     /// <summary>Evaluations that hit an undecidable leaf, by condition type id.</summary>
     public IReadOnlyDictionary<int, long> Unavailable => _unavailable;
