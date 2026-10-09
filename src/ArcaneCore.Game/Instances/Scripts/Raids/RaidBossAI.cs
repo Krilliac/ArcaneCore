@@ -83,6 +83,9 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15299) => new ViscidusAI(creature),
             (TempleOfAhnQirajInstance, 15667) => new ViscidusGlobAI(creature),
             (TempleOfAhnQirajInstance, 15922) => new ViscidusToxinTriggerAI(creature),
+            (TempleOfAhnQirajInstance, 15275) => new VeknilashAI(creature),
+            (TempleOfAhnQirajInstance, 15276) => new VeklorAI(creature),
+            (TempleOfAhnQirajInstance, 15316 or 15317) => new TwinBugAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -17,6 +18,7 @@ public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10
     public const uint Skeram = 0, Sartura = 1, Fankriss = 2, Huhuran = 3,
         Twins = 4, CThun = 5, BugTrio = 6, Viscidus = 7, Ouro = 8;
     private readonly HashSet<ObjectGuid> _deadBugs = [];
+    private bool _twinsDamageSubscribed;
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
     public bool? HasCompletedEncounter(uint dbcEncounterId) => dbcEncounterId switch
@@ -76,8 +78,33 @@ public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10
     public override void OnCreatureCreate(Creature creature)
     {
         if (creature.Entry is 15511 or 15543 or 15544
-            || creature.Entry == 15263 && creature.System?.SummonerOf(creature) is null)
+            || creature.Entry == 15263 && creature.System?.SummonerOf(creature) is null
+            || creature.Entry is 15275 or 15276)
             StoreCreature(creature);
+        if (creature.Entry is 15275 or 15276 && !_twinsDamageSubscribed)
+        {
+            _twinsDamageSubscribed = true;
+            Instance.Combat.DamageTaken += MirrorTwinDamage;
+        }
+    }
+
+    public Creature? OtherTwin(Creature twin) => GetSingleCreatureFromStorage(twin.Entry == 15275 ? 15276u : 15275u);
+
+    private void MirrorTwinDamage(Unit attacker, Unit victim, uint damage)
+    {
+        if (victim is not Creature { Entry: 15275 or 15276 } twin
+            || OtherTwin(twin) is not { IsAlive: true } brother || twin.MaxHealth == 0 || brother.MaxHealth == 0)
+            return;
+        uint mirrored = (uint)Math.Min(brother.Health,
+            (ulong)damage * brother.MaxHealth / twin.MaxHealth);
+        brother.Health = Math.Max(1u, brother.Health > mirrored ? brother.Health - mirrored : 1u);
+    }
+
+    internal void RestoreTwins(CreatureMapSystem system)
+    {
+        foreach (uint entry in new uint[] { 15275, 15276 })
+            if (system.Creatures.FirstOrDefault(c => c.Entry == entry) is { IsAlive: false } twin)
+                system.ForceRespawn(twin);
     }
 
     internal void RestoreBugTrio(CreatureMapSystem system)

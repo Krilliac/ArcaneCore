@@ -1,5 +1,6 @@
 using ArcaneCore.Data;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
@@ -7,6 +8,8 @@ using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
@@ -165,6 +168,72 @@ public sealed class Aq40ImportedRuntimeTests
                 foreach (uint spellId in Enumerable.Range(25865, 20).Select(id => (uint)id))
                     Assert.Contains(creatures.Creatures, c => c.Entry == 15667
                         && c.GetUInt32(UpdateFields.UnitCreatedBySpell) == spellId);
+            });
+
+            await MoveNearAsync(host, client, teleports, -9023.67f, 1176.24f, -104.23f);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15275)
+                && host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                    .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15276), "Twin Emperors grid load");
+            uint twinNilashBeforeHeal = 0, twinLorBeforeHeal = 0;
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var map = player.Map!;
+                var creatures = map.FindUpdater<CreatureMapSystem>()!;
+                Creature nilash = Assert.Single(creatures.Creatures, c => c.Entry == 15275);
+                Creature lor = Assert.Single(creatures.Creatures, c => c.Entry == 15276);
+                var nilashAi = Assert.IsType<VeknilashAI>(nilash.AI);
+                var lorAi = Assert.IsType<VeklorAI>(lor.AI);
+                Assert.Contains(creatures.Creatures, c => c.Entry is 15316 or 15317 && c.AI is TwinBugAI);
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.True(ImmunityRules.IsImmuneToDamage(spells, nilash,
+                    SpellSchoolMasks.Of(SpellSchool.Frost), spells.Store.Get(116)));
+                Assert.True(ImmunityRules.IsImmuneToDamage(spells, lor,
+                    SpellSchoolMasks.Of(SpellSchool.Normal), null));
+
+                Assert.True(nilashAi.AttackStart(player) || ReferenceEquals(nilash.Combat.Victim, player));
+                Assert.Equal(EncounterState.InProgress,
+                    ((TempleOfAhnQirajInstance)map.FindUpdater<InstanceData>()!).GetData(TempleOfAhnQirajInstance.Twins));
+                Assert.Contains(creatures.Creatures, c => c.Entry == 15277 && ReferenceEquals(c.Combat.Victim, player));
+                uint beforeNilash = nilash.Health, beforeLor = lor.Health;
+                map.Combat.DealDamage(player, nilash, 1000);
+                Assert.Equal(beforeNilash - 1000, nilash.Health);
+                Assert.Equal(beforeLor - (uint)(1000ul * lor.MaxHealth / nilash.MaxHealth), lor.Health);
+                nilashAi.OnUpdate(15_001);
+                Assert.Contains(creatures.Creatures, c => c.Entry is 15316 or 15317 && spells.HasAura(c, 802));
+                Assert.True(spells.HasAura(nilash, 18943));
+                (float nilashX, float lorX) = (nilash.X, lor.X);
+                lorAi.OnUpdate(40_001);
+                Assert.InRange(nilash.X, lorX - 1f, lorX + 1f);
+                Assert.InRange(lor.X, nilashX - 1f, nilashX + 1f);
+                Assert.Contains(creatures.Creatures, c => c.Entry is 15316 or 15317 && spells.HasAura(c, 804));
+                lorAi.OnUpdate(2000);
+                nilashAi.OnUpdate(2000);
+                creatures.NearTeleport(lor, nilash.X + 8f, nilash.Y, nilash.Z, 0);
+                nilash.Health -= 100_000;
+                lor.Health -= 100_000;
+                (twinNilashBeforeHeal, twinLorBeforeHeal) = (nilash.Health, lor.Health);
+                lorAi.OnUpdate(1600);
+            });
+            await host.WaitForWorldAsync(() =>
+            {
+                var creatures = host.World.FindOnlinePlayer("Aqsmoke")!.Map!.FindUpdater<CreatureMapSystem>()!;
+                return creatures.Creatures.Single(c => c.Entry == 15275).Health > twinNilashBeforeHeal
+                    && creatures.Creatures.Single(c => c.Entry == 15276).Health > twinLorBeforeHeal;
+            }, "paired Heal Brother completion");
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var map = player.Map!;
+                var creatures = map.FindUpdater<CreatureMapSystem>()!;
+                Creature nilash = Assert.Single(creatures.Creatures, c => c.Entry == 15275);
+                Creature lor = Assert.Single(creatures.Creatures, c => c.Entry == 15276);
+                map.Combat.Kill(player, nilash);
+                Assert.False(lor.IsAlive);
+                var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                Assert.Equal(EncounterState.Done, raid.GetData(TempleOfAhnQirajInstance.Twins));
+                Assert.True(raid.HasCompletedEncounter(715));
             });
         }
         finally
