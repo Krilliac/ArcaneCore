@@ -114,6 +114,22 @@ public sealed class LocationDumpImporter
         return BuildReport();
     }
 
+    /// <summary>Replace only the portal table from this dump; GM teleports and exploration relations are untouched.</summary>
+    public async Task<int> ReplacePortalsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        IReadOnlyCollection<AreaTriggerTeleportRow> portals = Snapshot().Portals;
+        if (portals.Count == 0)
+            throw new ImportSchemaException("the dump has no areatrigger_teleport rows");
+
+        await ImportTransaction.RunAsync(db, async token =>
+        {
+            await db.Set<AreaTriggerTeleportRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+            await ImportBatch.InsertAsync(db, portals, token).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
+        return portals.Count;
+    }
+
     // vmangos progressive rows: patch_min <= 10 <= patch_max (a table without the columns always applies), as the other quest relations.
     private void ReadQuestTrigger(DumpRow row)
     {

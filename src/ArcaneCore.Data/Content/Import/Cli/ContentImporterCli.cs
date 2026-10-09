@@ -35,8 +35,8 @@ internal sealed class CliException(int exitCode, string message, Exception? inne
 /// <c>arcane-content-importer</c>: reads cmangos classic-db / vmangos world dumps (plain or gzip)
 /// and client DBCs into the world database, with the checks of <see cref="ContentScanner"/>
 /// first. The logic lives here, in the data library, so the tests drive it in-process; the tool
-/// project is a one-line host. Commands: <c>plan</c> (read-only report), <c>import</c>,
-/// <c>import-dbc</c> and <c>verify</c>. See <see cref="ExitCodes"/> for the exit codes.
+/// project is a one-line host. Commands include <c>plan</c>, <c>import</c>, <c>refresh</c>,
+/// <c>refresh-portals</c> and <c>verify</c>. See <see cref="ExitCodes"/> for the exit codes.
 /// </summary>
 public static partial class ContentImporterCli
 {
@@ -94,6 +94,11 @@ public static partial class ContentImporterCli
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
                                 importer's is refused unless --migrate is given (refresh never migrates on its own).
+          refresh-portals <dump>...
+                                replace only areatrigger_teleport from the dump in one transaction;
+                                other location and world tables are untouched. Existing portal rows not
+                                in the dump are removed. Requires an existing current-schema world;
+                                --dry-run parses and counts without writing.
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.
@@ -152,6 +157,7 @@ public static partial class ContentImporterCli
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "refresh-portals" => await RefreshPortalsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
