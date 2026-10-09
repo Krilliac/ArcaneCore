@@ -486,6 +486,16 @@ public sealed class Map
         }
     }
 
+    private MapUpdateDiagnostics? _diagnostics;
+
+    /// <summary>The map's diagnostics record, cleared for the next update (one per map; world thread).</summary>
+    internal MapUpdateDiagnostics ReusableDiagnostics()
+    {
+        _diagnostics ??= new MapUpdateDiagnostics();
+        _diagnostics.Reset();
+        return _diagnostics;
+    }
+
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
         => Update(diffMs, diagnostics: null);
@@ -493,6 +503,7 @@ public sealed class Map
     internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
         diagnostics?.Begin();
+        GridLifecycleCounters gridsBefore = diagnostics is not null ? _grid.Counters : default;
         // (1) in-world packets
         foreach (Player player in _players.Values.ToArray())
         {
@@ -527,6 +538,8 @@ public sealed class Map
             }
         }
 
+        diagnostics?.EndPackets();
+
         // Snapshot only when membership changes. Heartbeat callbacks can add/remove units: keep this tick's
         // snapshot intact and rebuild next tick, still skipping removed units below. Timers and dictionary order
         // are unchanged (vmangos Object.cpp WorldObject::Update / Unit.cpp Unit::Heartbeat).
@@ -544,6 +557,7 @@ public sealed class Map
             if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
                 && unit is not Player { IsQuestSettlementPending: true })
                 unit.UpdateHeartbeat(diffMs);
+        diagnostics?.EndHeartbeat();
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
@@ -566,6 +580,8 @@ public sealed class Map
                 _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
                 CountUpdaterFault(updater);
             }
+
+            diagnostics?.EndUpdater(updater);
         }
 
         if (diagnostics is not null)
@@ -657,7 +673,9 @@ public sealed class Map
 
         // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
         _grid.Update(diffMs);
+        diagnostics?.EndGrid();
         _terrain.CleanUp(diffMs);
+        diagnostics?.EndTerrain();
 
         // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
         if (_afterUpdate.Count > 0)
@@ -677,7 +695,12 @@ public sealed class Map
             }
         }
 
-        diagnostics?.Complete();
+        if (diagnostics is not null)
+        {
+            diagnostics.EndDeferred();
+            diagnostics.Grids = _grid.Counters - gridsBefore;
+            diagnostics.Complete();
+        }
     }
 
     /// <summary>
