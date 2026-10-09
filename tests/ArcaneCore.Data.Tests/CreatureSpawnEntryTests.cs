@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Tests;
 /// <c>creature_spawn_entry</c> (<see cref="CreatureSpawnEntryDataModule"/>): the creature entries a spawn row can become. cmangos-classic
 /// keys them by spawn guid and leaves <c>creature.id</c> at 0 (ObjectMgr.cpp:1826-1869, Creature::LoadFromDB); vmangos spells them
 /// <c>creature.id</c>, <c>id2</c> ... <c>id5</c> (CreatureData::ChooseCreatureId). classic-db has 4,863 such rows for 2,280 spawns, and
-/// 2,234 of its 66,310 spawns (3.4 percent) have <c>id = 0</c> and get their entry from these rows (another 568 get it from spawn groups). Rows here are hand-written; no GPL rows are copied.
+/// 2,234 of its 66,310 spawns (3.4 percent) have <c>id = 0</c> and get their entry from these rows (566 of the other 568 get it from spawn groups). Rows here are hand-written; no GPL rows are copied.
 /// </summary>
 public sealed class CreatureSpawnEntryTests : IAsyncLifetime
 {
@@ -172,8 +172,8 @@ public sealed class CreatureSpawnEntryTests : IAsyncLifetime
         Assert.Equal(2280, withEntries.Count);
         CreatureSpawnRow[] placeholders = [.. importer.Snapshot().Spawns.Where(s => s.Entry == 0)];
 
-        // 2,802 spawns have id 0: 2,234 are resolved by creature_spawn_entry rows (they spawn now), the other 568 by cmangos spawn groups
-        // (spawn_group_entry), which this lane does not implement: they still do not spawn (see docs/areas/creature-movement-spawns.md).
+        // 2,802 spawns have id 0: 2,234 are resolved by creature_spawn_entry rows, 566 of the other 568 by cmangos spawn groups
+        // (spawn_group_entry, world 43; SpawnGroupDataTests), and two have no entry in cmangos either.
         Assert.Equal(2802, placeholders.Length);
         Assert.Equal(2234, placeholders.Count(s => withEntries.Contains(s.Guid)));
     }

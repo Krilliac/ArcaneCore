@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
+
 namespace ArcaneCore.Kernel.WorldData.Creatures;
 
 /// <summary>
@@ -446,6 +448,12 @@ public sealed class CreatureContent
     /// ascending and distinct; empty for a spawn with one fixed entry. Part of the spawn data, so a definitions swap does not touch it.
     /// </summary>
     public IReadOnlyList<uint> GetSpawnEntries(uint spawnGuid) => _spawnEntries.GetValueOrDefault(spawnGuid) ?? [];
+
+    /// <summary>
+    /// The cmangos spawn groups of creature spawns (<c>spawn_group</c> rows of type 0 with their spawns and entries): which members of a group
+    /// exist at once and which entry an entry-0 member becomes (docs/areas/content-import.md, spawn groups).
+    /// </summary>
+    public SpawnGroupCatalog SpawnGroups { get; init; } = SpawnGroupCatalog.Empty;
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
 

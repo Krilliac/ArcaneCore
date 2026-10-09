@@ -11,6 +11,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
+using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
@@ -84,6 +85,8 @@ public static partial class ContentImporterCli
                                 before the game-event importer); a world with events keeps its own.
                                 creature_spawn_entry (the entries of the spawns whose creature.id is 0) is filled the same
                                 way, when it is empty, for the world's own spawns whose entry is 0 or one of the dump's.
+                                gameobject_spawn_entry likewise; the five spawn group tables when spawn_group is empty, for
+                                the members the world has with the entry the dump gives them.
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
@@ -349,6 +352,7 @@ public static partial class ContentImporterCli
         var npc = new NpcDumpImporter();
         var conditions = new ConditionsDumpImporter();
         var battlegrounds = new BattlegroundDumpImporter();
+        var spawnGroups = new SpawnGroupDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -433,6 +437,12 @@ public static partial class ContentImporterCli
             battlegrounds.Read(reader);
         }
 
+        // gameobject_spawn_entry and the cmangos spawn group tables (world 43): read by column name.
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            spawnGroups.Read(reader);
+        }
+
         IReadOnlyList<string> appliedStatsMigrations = [];
         if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
         {
@@ -504,6 +514,7 @@ public static partial class ContentImporterCli
         NpcImportReport npcReport = npc.BuildReport();
         ConditionsImportReport conditionsReport = conditions.BuildReport();
         BattlegroundImportReport battlegroundReport = battlegrounds.BuildReport();
+        SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -529,6 +540,7 @@ public static partial class ContentImporterCli
                     npcReport = await npc.WriteAsync(db, replace, token).ConfigureAwait(false);
                     conditionsReport = await conditions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     battlegroundReport = await battlegrounds.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    spawnGroupReport = await spawnGroups.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -549,6 +561,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(startingSkillReport.Warnings);
         warnings.AddRange(npcReport.Diagnostics);
         warnings.AddRange(battlegroundReport.Warnings);
+        warnings.AddRange(spawnGroupReport.Warnings);
         if (totemReport.SummonedWithoutRow.Count > 0)
         {
             warnings.Add($"{totemReport.SummonedWithoutRow.Count} summoned totem creature(s) have no spell mapping "
@@ -597,6 +610,12 @@ public static partial class ContentImporterCli
         imported["gameobject_battleground"] = battlegroundReport.GameObjectEvents;
         imported["battlemaster_entry"] = battlegroundReport.Battlemasters;
         skipped["battleground_rows"] = battlegroundReport.SkippedRows;
+        imported[SpawnGroupDataModule.GameObjectSpawnEntryTable] = spawnGroupReport.GameObjectSpawnEntries;
+        imported[SpawnGroupDataModule.GroupTable] = spawnGroupReport.Groups;
+        imported[SpawnGroupDataModule.SpawnTable] = spawnGroupReport.Spawns;
+        imported[SpawnGroupDataModule.EntryTable] = spawnGroupReport.Entries;
+        imported[SpawnGroupDataModule.FormationTable] = spawnGroupReport.Formations;
+        imported[SpawnGroupDataModule.LinkedGroupTable] = spawnGroupReport.LinkedGroups;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
@@ -897,12 +916,37 @@ public static partial class ContentImporterCli
             int missingCreatures = await db.Set<CreatureSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !templates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
             IQueryable<CreatureSpawnEntryRow> spawnEntries = db.Set<CreatureSpawnEntryRow>();
-            int randomEntryCreatures = await db.Set<CreatureSpawnRow>()
-                .CountAsync(s => s.Entry == 0 && !spawnEntries.Any(e => e.SpawnGuid == s.Guid), ct).ConfigureAwait(false);
             IQueryable<GameObjectTemplateRow> objectTemplates = db.Set<GameObjectTemplateRow>();
             int missingObjects = await db.Set<GameObjectSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !objectTemplates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
-            int randomEntryObjects = await db.Set<GameObjectSpawnRow>().CountAsync(s => s.Entry == 0, ct).ConfigureAwait(false);
+
+            // Spawns with entry 0: an entry comes from *_spawn_entry, else from the spawn_group_entry rows (with a template) of the spawn's group.
+            IQueryable<GameObjectSpawnEntryRow> objectSpawnEntries = db.Set<GameObjectSpawnEntryRow>();
+            IQueryable<SpawnGroupRow> groups = db.Set<SpawnGroupRow>();
+            IQueryable<SpawnGroupSpawnRow> members = db.Set<SpawnGroupSpawnRow>();
+            IQueryable<SpawnGroupEntryRow> groupEntries = db.Set<SpawnGroupEntryRow>();
+            IQueryable<CreatureSpawnRow> zeroCreatures = db.Set<CreatureSpawnRow>().Where(s => s.Entry == 0);
+            int creaturesBySpawnEntry = await zeroCreatures.CountAsync(s => spawnEntries.Any(e => e.SpawnGuid == s.Guid), ct).ConfigureAwait(false);
+            int creaturesByGroup = await zeroCreatures.CountAsync(s => !spawnEntries.Any(e => e.SpawnGuid == s.Guid)
+                && members.Any(m => m.Guid == s.Guid && groups.Any(g => g.Id == m.Id && g.Type == 0)
+                    && groupEntries.Any(e => e.Id == m.Id && templates.Any(t => t.Entry == e.Entry))), ct).ConfigureAwait(false);
+            int randomEntryCreatures = await zeroCreatures.CountAsync(ct).ConfigureAwait(false) - creaturesBySpawnEntry - creaturesByGroup;
+            IQueryable<GameObjectSpawnRow> zeroObjects = db.Set<GameObjectSpawnRow>().Where(s => s.Entry == 0);
+            int objectsBySpawnEntry = await zeroObjects.CountAsync(s => objectSpawnEntries.Any(e => e.SpawnGuid == s.Guid), ct).ConfigureAwait(false);
+            int objectsByGroup = await zeroObjects.CountAsync(s => !objectSpawnEntries.Any(e => e.SpawnGuid == s.Guid)
+                && members.Any(m => m.Guid == s.Guid && groups.Any(g => g.Id == m.Id && g.Type == 1)
+                    && groupEntries.Any(e => e.Id == m.Id && objectTemplates.Any(t => t.Entry == e.Entry))), ct).ConfigureAwait(false);
+            int randomEntryObjects = await zeroObjects.CountAsync(ct).ConfigureAwait(false) - objectsBySpawnEntry - objectsByGroup;
+            int creatureGroups = await groups.CountAsync(g => g.Type == 0, ct).ConfigureAwait(false);
+            int objectGroups = await groups.CountAsync(g => g.Type == 1, ct).ConfigureAwait(false);
+            o.WriteLine($"  gameobject_spawn_entry  {(await objectSpawnEntries.CountAsync(ct).ConfigureAwait(false)).ToString(CultureInfo.InvariantCulture)}");
+            o.WriteLine($"  spawn_group  {creatureGroups.ToString(CultureInfo.InvariantCulture)} creature, {objectGroups.ToString(CultureInfo.InvariantCulture)} gameobject");
+            o.WriteLine($"  spawn_group_spawn  {(await members.CountAsync(ct).ConfigureAwait(false)).ToString(CultureInfo.InvariantCulture)}");
+            o.WriteLine($"  spawn_group_entry  {(await groupEntries.CountAsync(ct).ConfigureAwait(false)).ToString(CultureInfo.InvariantCulture)}");
+            o.WriteLine($"entry-0 creature spawns: {creaturesBySpawnEntry.ToString(CultureInfo.InvariantCulture)} resolved by creature_spawn_entry, "
+                + $"{creaturesByGroup.ToString(CultureInfo.InvariantCulture)} by spawn_group_entry, {randomEntryCreatures.ToString(CultureInfo.InvariantCulture)} by nothing");
+            o.WriteLine($"entry-0 gameobject spawns: {objectsBySpawnEntry.ToString(CultureInfo.InvariantCulture)} resolved by gameobject_spawn_entry, "
+                + $"{objectsByGroup.ToString(CultureInfo.InvariantCulture)} by spawn_group_entry, {randomEntryObjects.ToString(CultureInfo.InvariantCulture)} by nothing");
 
             int giversWithoutTemplate = await db.Set<CreatureQuestStarterRow>()
                 .CountAsync(r => !templates.Any(t => t.Entry == r.Id), ct).ConfigureAwait(false);
@@ -964,12 +1008,12 @@ public static partial class ContentImporterCli
 
             if (randomEntryCreatures > 0)
             {
-                o.WriteLine($"note: {randomEntryCreatures} creature spawn(s) have entry 0 and no creature_spawn_entry rows, so they never spawn (cmangos also resolves entry 0 through spawn_group_entry, which is not imported)");
+                o.WriteLine($"note: {randomEntryCreatures} creature spawn(s) have entry 0 and neither creature_spawn_entry rows nor a spawn group with entries, so they never spawn");
             }
 
             if (randomEntryObjects > 0)
             {
-                o.WriteLine($"note: {randomEntryObjects} gameobject spawn(s) have entry 0 (cmangos resolves these through gameobject_spawn_entry, which is not imported yet)");
+                o.WriteLine($"note: {randomEntryObjects} gameobject spawn(s) have entry 0 and neither gameobject_spawn_entry rows nor a spawn group with entries, so they never spawn");
             }
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))

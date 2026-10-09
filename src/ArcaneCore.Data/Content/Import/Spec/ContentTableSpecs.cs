@@ -203,6 +203,13 @@ public static class ContentTableSpecs
                 "animprogress", "state",
             ],
             s_spawnSignatures),
+        // gameobject_spawn_entry and the cmangos spawn group tables (world 43, SpawnGroupDumpImporter; classic-db z2815 has no spawn_group_squad).
+        new("gameobject_spawn_entry", [new KeyColumn("guid"), new KeyColumn("entry")], [], []),
+        new("spawn_group", [new KeyColumn("Id")], ["Name", "Type", "MaxCount", "WorldState", "WorldStateExpression", "Flags", "StringId"], []),
+        new("spawn_group_spawn", [new KeyColumn("Id"), new KeyColumn("Guid")], ["SlotId", "Chance"], []),
+        new("spawn_group_entry", [new KeyColumn("Id"), new KeyColumn("Entry")], ["MinCount", "MaxCount", "Chance"], []),
+        new("spawn_group_formation", [new KeyColumn("Id")], ["FormationType", "FormationSpread", "FormationOptions", "PathId", "MovementType", "Comment"], []),
+        new("spawn_group_linked_group", [new KeyColumn("Id"), new KeyColumn("LinkedId")], [], []),
         new("gameobject_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], []),
         new("gameobject_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], []),
         new("creature_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
