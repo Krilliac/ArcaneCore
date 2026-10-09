@@ -306,6 +306,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             _outboundPacketObserver?.Observe(opcode, payload.ToArray());
+            CapturePacket(false, opcode, payload);
         }
 
         if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)
@@ -536,6 +537,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             deadline.Disarm();
+            CapturePacket(true, (WorldOpcode)rawOpcode, payload);
             if (!await DispatchAsync((WorldOpcode)rawOpcode, payload).ConfigureAwait(false))
             {
                 return;
@@ -906,6 +908,8 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             _state = SessionState.Closed;
+            _packetCapture?.Dispose();
+            _packetCapture = null;
             _outbound.Writer.TryComplete();
         }
 

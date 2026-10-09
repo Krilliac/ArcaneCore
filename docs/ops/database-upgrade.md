@@ -19,6 +19,9 @@ but not qualified: `arcane-db status` prints a warning, take the backup seriousl
 
 ## Procedure
 
+For client data inspection without a database connection, run `arcane-db dbc dump <File> [--id N] [--json]`.
+It prints fields using the generated build-5875 WoWDBDefs layout; `File` can be a path or a file in `ClientData:DbcDirectory`.
+
 ```text
 1. stop realm, world and every tool
 2. back up each database          (arcane-db backup-info prints the command; SQLite: --backup-dir)

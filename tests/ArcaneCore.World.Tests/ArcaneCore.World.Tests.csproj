@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
     <ProjectReference Include="..\..\src\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
     <ProjectReference Include="..\ThirdParty\WowWorldMessages\WowWorldMessages.Vanilla.csproj" />
+    <ProjectReference Include="..\..\tools\ArcaneCore.Sniff\ArcaneCore.Sniff.csproj" />
   </ItemGroup>
 
   <!-- Codex-line databases (schema of commit 0e07c29b) for the renumbering migration's bot-load test, shared with ArcaneCore.Data.Tests. -->

@@ -79,6 +79,7 @@ public sealed partial class WorldSession
             || opcode is not (WorldOpcode.CmsgCharCreate or WorldOpcode.CmsgPlayerLogin or WorldOpcode.CmsgCharEnum)
             || !_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.Session is null
             || !handler.AllowsState(_state)) return false;
+        CapturePacket(true, opcode, payload);
         await handler.Session(this, payload).ConfigureAwait(false);
         return !_kick.IsCancellationRequested;
     }
@@ -92,6 +93,7 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
         handler.World(this, player, payload);
@@ -116,6 +118,7 @@ public sealed partial class WorldSession
         {
             if (_state == SessionState.Closed) return;
             byte[] copy = payload.ToArray();
+            CapturePacket(false, opcode, payload);
             ManagedPacketObserver?.Invoke(opcode, copy);
             _outboundPacketObserver?.Observe(opcode, copy);
             // Bounded transport: no socket writer or unconsumed unbounded channel exists for bots.
@@ -164,6 +167,8 @@ public sealed partial class WorldSession
         {
             if (_state == SessionState.Closed) return;
             _state = SessionState.Closed;
+            _packetCapture?.Dispose();
+            _packetCapture = null;
             _managedPackets.Clear();
             _managedPacketBytes = 0;
             _outbound.Writer.TryComplete();
