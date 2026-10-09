@@ -91,6 +91,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// <summary>World service callbacks passed to each ScriptDev2 instance at creation.</summary>
     public Action<Player, uint, ObjectGuid>? ScriptCreatureCredit { get; set; }
     public Action<Player, uint>? ScriptCastPlayerSpell { get; set; }
+    public Action<Player, uint, ObjectGuid>? ScriptCastPlayerTargetSpell { get; set; }
 
     /// <summary>Shows a system chat line to a player (default: none).</summary>
     public Action<Player, string> SystemMessage { get; set; } = static (_, _) => { };
@@ -865,6 +866,7 @@ public sealed partial class InstanceManager : IMapResolver
         data.HolidayActive = holidayId => HolidayActive(holidayId);
         data.CreatureCredit = ScriptCreatureCredit;
         data.CastPlayerSpell = ScriptCastPlayerSpell;
+        data.CastPlayerTargetSpell = ScriptCastPlayerTargetSpell;
         data.Saving = (_, text) =>
         {
             if (save.IsDeleted)

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Features;
@@ -51,6 +52,7 @@ public sealed class DungeonEventFeatureTests
         world.RunTick(0);
 
         Assert.IsType<NpcGossipScriptChain>(npcs.GossipScript);
+        Assert.Contains(ArcaneCore.World.Tests.Npc.GossipScriptLayers.Of(npcs.GossipScript), script => script is BlackwingLairGossip);
     }
 
     private sealed class NoGossip : INpcGossipScript

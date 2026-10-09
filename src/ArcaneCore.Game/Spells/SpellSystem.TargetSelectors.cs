@@ -4,6 +4,12 @@ using ArcaneCore.Game.Spells.Targets;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
+/// A per-spell veto of one selected unit (mangos-classic Spell::OnCheckTarget, the spell-id exceptions such as Nefarian's class calls):
+/// false drops the unit from the effect's targets whatever selected it.
+/// </summary>
+public delegate bool SpellTargetFilter(SpellCast cast, SpellEffectInfo effect, Unit target);
+
+/// <summary>
 /// An implicit-target selector registered through <see cref="SpellSystem.RegisterTargetSelector"/>:
 /// the units one effect hits. Returns an empty list when nothing qualifies (never null).
 /// </summary>
@@ -45,6 +51,27 @@ public sealed partial class SpellSystem
             throw new InvalidOperationException($"Spell {spell} already owns implicit target {(uint)target}.");
         }
     }
+
+    private readonly Dictionary<uint, SpellTargetFilter> _spellTargetFilters = [];
+
+    /// <summary>
+    /// A filter over every unit any implicit target of <paramref name="spell"/> selects, built-in or registered (mangos-classic
+    /// Spell::OnCheckTarget). It runs after the selection, so an area capped at MaxAffectedTargets is capped first. Registering one
+    /// spell twice is an error.
+    /// </summary>
+    public void RegisterSpellTargetFilter(uint spell, SpellTargetFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (!_spellTargetFilters.TryAdd(spell, filter))
+        {
+            throw new InvalidOperationException($"Spell {spell} already has a target filter.");
+        }
+    }
+
+    private List<(Unit Unit, float Multiplier)> FilterRegistered(SpellCast cast, SpellEffectInfo effect, List<(Unit Unit, float Multiplier)> units)
+        => _spellTargetFilters.TryGetValue(cast.Spell.Id, out SpellTargetFilter? filter)
+            ? units.FindAll(entry => filter(cast, effect, entry.Unit))
+            : units;
 
     /// <summary>Whether <paramref name="target"/> has a registered selector flagged location-only.</summary>
     public bool IsRegisteredLocationTarget(SpellImplicitTarget target)

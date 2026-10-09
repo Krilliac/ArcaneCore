@@ -11,6 +11,12 @@ BWL/ZG/AQ20 progression; the report lists the remaining encounters, content requ
 The additional Zul'Gurub and Ruins of Ahn'Qiraj boss scripts and their remaining event, content and client limits are recorded in
 [the ZG/AQ20 continuation](../integration/raid-zg-aq20-remaining-20261008.md).
 
+The later Blackwing Lair encounter extension is documented in [its lane record](../integration/raid-bwl-completion-20261008.md):
+Razorgore's orb/eggs/waves, Vaelastrasz, Ebonroc, Chromaggus, Victor Nefarius/Nefarian and their gates. Synthetic phase tests do not
+replace imported-world, multiplayer or real-client acceptance. `BlackwingLairTargetModule` resolves the BWL script targets the built-in
+targeting lacks (Possess 38, Destroy Egg 40/46, Nefarius' Corruption 7, Raise Drakonids 51) and narrows Nefarian's class calls through
+`SpellSystem.RegisterSpellTargetFilter` (the per-spell counterpart of mangos-classic `Spell::OnCheckTarget`).
+
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
 Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, phase transitions, summons and gossip scripts.
