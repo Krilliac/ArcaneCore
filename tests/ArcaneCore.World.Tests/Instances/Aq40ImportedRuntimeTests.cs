@@ -1,4 +1,5 @@
 using ArcaneCore.Data;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
@@ -127,7 +128,14 @@ public sealed class Aq40ImportedRuntimeTests
                 var map = host.World.FindOnlinePlayer("Aqsmoke")!.Map!;
                 var creatures = map.FindUpdater<CreatureMapSystem>()!;
                 Creature viscidus = Assert.Single(creatures.Creatures, c => c.Entry == 15299);
+                var viscidusAi = Assert.IsType<ViscidusAI>(viscidus.AI);
                 var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.True(spells.HasAura(viscidus, 25994));
+                Assert.True(spells.HasAura(viscidus, 25926));
+                Creature trigger = Assert.IsType<Creature>(creatures.SummonAt(viscidus, 15922,
+                    viscidus.X, viscidus.Y, viscidus.Z, 0, null, 180_000));
+                Assert.IsType<ViscidusToxinTriggerAI>(trigger.AI).OnUpdate(3000);
+                Assert.True(spells.HasAura(trigger, 26575));
                 Assert.Equal(531u, spells.Store.GetTargetPosition(25865)?.MapId);
                 Assert.Contains(spells.Store.Get(25865)!.Effects, e => e.Effect == SpellEffectName.SummonWild
                     && (e.TargetA == SpellImplicitTarget.LocationDatabase || e.TargetB == SpellImplicitTarget.LocationDatabase));
@@ -136,6 +144,27 @@ public sealed class Aq40ImportedRuntimeTests
                 Creature glob = Assert.Single(creatures.Creatures, c => c.Entry == 15667);
                 Assert.True(MathF.Abs(glob.X - (-8039.99f)) < 1f && MathF.Abs(glob.Y - 918.23f) < 1f,
                     $"glob spawned at {glob.X}, {glob.Y} instead of its database target");
+
+                SpellInfo frost = Assert.IsType<SpellInfo>(spells.Store.Get(116));
+                Assert.Equal(SpellSchool.Frost, frost.School);
+                for (int i = 0; i < 200; i++) viscidusAi.OnSpellHit(host.World.FindOnlinePlayer("Aqsmoke")!, frost);
+                Assert.True(spells.HasAura(viscidus, 25937));
+                spells.RemoveAuras(viscidus, 25937);
+                for (int i = 0; i < 199; i++) viscidusAi.OnSpellHit(host.World.FindOnlinePlayer("Aqsmoke")!, frost);
+                Assert.False(spells.HasAura(viscidus, 25937));
+                viscidusAi.OnSpellHit(host.World.FindOnlinePlayer("Aqsmoke")!, frost);
+                Assert.True(spells.HasAura(viscidus, 25937));
+                for (int i = 0; i < 150; i++)
+                    viscidusAi.OnMeleeHitReceived(new ArcaneCore.Game.Combat.MeleeDamageInfo
+                    {
+                        Attacker = host.World.FindOnlinePlayer("Aqsmoke")!, Target = viscidus,
+                        Outcome = ArcaneCore.Game.Combat.MeleeHitOutcome.Normal,
+                    });
+                Assert.False(spells.HasAura(viscidus, 25937));
+                Assert.Equal(21, creatures.Creatures.Count(c => c.Entry == 15667));
+                foreach (uint spellId in Enumerable.Range(25865, 20).Select(id => (uint)id))
+                    Assert.Contains(creatures.Creatures, c => c.Entry == 15667
+                        && c.GetUInt32(UpdateFields.UnitCreatedBySpell) == spellId);
             });
         }
         finally
