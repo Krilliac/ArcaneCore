@@ -53,14 +53,21 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// cmangos Map::ScriptsStart for the independent quest, gossip and event namespaces. Source and target must be live
-    /// world objects on this map; the executor resolves them again when a delayed command becomes due.
+    /// world objects on this map; the executor resolves them again when a delayed command becomes due. A null source stands for one that
+    /// is no world object (an item: cmangos ScriptAction::HandleScriptStep, ScriptMgr.cpp:1720-1760), so only the steps whose buddy search
+    /// finds a source run.
     /// </summary>
-    public bool StartDbScript(DbScriptKind kind, uint scriptId, WorldObject source, WorldObject? target)
+    public bool StartDbScript(DbScriptKind kind, uint scriptId, WorldObject? source, WorldObject? target)
     {
-        ArgumentNullException.ThrowIfNull(source);
         if (kind == DbScriptKind.Relay)
         {
+            ArgumentNullException.ThrowIfNull(source);
             return StartRelayScript(scriptId, source, target);
+        }
+
+        if (source is null && target is null)
+        {
+            throw new ArgumentNullException(nameof(source), "a DB script needs a source or a target");
         }
 
         if (!_dbScriptRunners.TryGetValue(kind, out RelayScriptRunner? runner))
@@ -74,7 +81,7 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        return runner.Start(steps, source.Guid, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
+        return runner.Start(steps, source?.Guid ?? default, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
     }
 
     /// <summary>

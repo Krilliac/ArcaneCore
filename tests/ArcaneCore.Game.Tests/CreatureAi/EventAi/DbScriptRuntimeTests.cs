@@ -88,6 +88,26 @@ public sealed class DbScriptRuntimeTests
         }
     }
 
+    [Fact]
+    public void ScriptWithoutAWorldSource_RunsOnlyTheStepsWhoseBuddyIsTheSource()
+    {
+        // An item-started quest (cmangos ScriptAction::HandleScriptStep, ScriptMgr.cpp:1720-1760: an item is no world object): the kill
+        // credit without a buddy has no source and is skipped; the emote with a buddy entry finds the wolf near the player and runs on it.
+        RelayScriptStep plain = Emote(0, 0) with { Command = 8, DataLong = 2044 };
+        RelayScriptStep buddied = Emote(0, 26) with { BuddyEntry = WolfEntry, SearchRadius = 30 };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, plain), (DbScriptKind.QuestStart, buddied)]) };
+        var objectives = new ObjectiveRecorder();
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(
+            new CreatureContent([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai), new CreatureAiServices { ScriptQuests = objectives });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, source: null, player));
+            Assert.Empty(objectives.KillCredit);
+            Assert.Equal(26u, Assert.Single(system.Creatures).GetUInt32(UpdateFields.UnitNpcEmotestate));
+        }
+    }
+
     private sealed class ObjectiveRecorder : IScriptQuestEvents
     {
         public List<uint> Explored { get; } = [];
