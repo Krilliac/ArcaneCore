@@ -68,6 +68,33 @@ public sealed class PlayerbotStallTests
     }
 
     /// <summary>
+    /// A stall that outlasts the give-up gives the goal up again after each further stall bound, still reported and counted as one
+    /// stall. Before, the goal was given up only once, when the stall began: Ironwander (live 2026-10-09) was reported
+    /// <c>stalled 7960s</c> and gave nothing up after its first two minutes.
+    /// </summary>
+    [Fact]
+    public async Task AStallThatOutlastsTheGiveUp_GivesTheGoalUpAgainEachStallBound()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
+        try
+        {
+            // No terrain: every route is refused and nothing changes. 35 seconds: the stall at 10, again at 20 and 30.
+            for (int think = 0; think < 350; think++)
+            {
+                await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return true; });
+                await host.World.AdvanceClockAsync(100);
+            }
+
+            Assert.StartsWith("stalled 3", await host.OnWorldAsync(() => brain.StallReport));
+            Assert.Equal(1, await host.OnWorldAsync(() => brain.StallCount));
+            Assert.Equal(3, await host.OnWorldAsync(() => brain.StallGiveUps));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// The stall of a running managed bot is visible where an operator looks: the error column of <c>.playerbot list</c> (and
     /// <c>status</c>). Before, a bot standing still for hours showed <c>state=Running error=none</c>.
     /// </summary>

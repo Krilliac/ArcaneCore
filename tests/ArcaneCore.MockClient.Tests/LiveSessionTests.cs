@@ -1,4 +1,10 @@
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using ArcaneCore.Game;
+using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Packets;
@@ -153,5 +159,89 @@ public sealed class LiveSessionTests : IDisposable
 
         Assert.Null(LiveSession.SelectCharacter([], "Fresh", false, out bool emptyCreate));
         Assert.True(emptyCreate);
+    }
+
+    /// <summary>
+    /// In a crowd the server never falls silent (movement and update packets every few milliseconds). The session still sends its
+    /// script lines and its say lines on the interval, and the stream stays framed: the next read after the session is a whole
+    /// packet. Before, every send waited for 400 ms of silence first, so a mock client among the stress bots sent its first line
+    /// and nothing after it (no GM command, no observer probe) for the whole run.
+    /// </summary>
+    [Fact]
+    public async Task UnderAContinuousPacketStream_ScriptAndSayLinesAreStillSentOnTheInterval()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        Task<TcpClient> accepted = listener.AcceptTcpClientAsync(deadline.Token).AsTask();
+        await using WorldClient client = await WorldClient.ConnectAsync((IPEndPoint)listener.LocalEndpoint, deadline.Token);
+        using TcpClient server = await accepted;
+        NetworkStream stream = server.GetStream();
+
+        // The server streams an SMSG_PONG every 5 ms (about 15 on the Windows timer), never 400 ms apart, until the test ends.
+        using var streaming = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        int streamed = 0;
+        Task producer = Task.Run(async () =>
+        {
+            byte[] pong = new byte[8];
+            BinaryPrimitives.WriteUInt16BigEndian(pong, 6);
+            BinaryPrimitives.WriteUInt16LittleEndian(pong.AsSpan(2), (ushort)WorldOpcode.SmsgPong);
+            try
+            {
+                while (true)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(pong.AsSpan(4), (uint)Interlocked.Increment(ref streamed));
+                    await stream.WriteAsync(pong, streaming.Token);
+                    await Task.Delay(5, streaming.Token);
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+
+        // What the client sends: its chat lines, read whole frame by frame.
+        var chat = new ConcurrentQueue<string>();
+        Task consumer = Task.Run(async () =>
+        {
+            byte[] header = new byte[6];
+            try
+            {
+                while (true)
+                {
+                    await stream.ReadExactlyAsync(header, streaming.Token);
+                    byte[] payload = new byte[BinaryPrimitives.ReadUInt16BigEndian(header) - 4];
+                    await stream.ReadExactlyAsync(payload, streaming.Token);
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2)) == (uint)WorldOpcode.CmsgMessagechat)
+                        chat.Enqueue(Encoding.UTF8.GetString(payload.AsSpan(8, payload.Length - 9)));
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or EndOfStreamException or IOException) { }
+        });
+
+        string script = Path.Combine(_dir, "script.txt");
+        File.WriteAllLines(script, [".gm on"]);
+        var options = new LiveSession.Options((IPEndPoint)listener.LocalEndpoint, "A", "B", "C", [".gps"], TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromSeconds(2), StopFile: null, script, CharacterExplicit: false);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        bounded.CancelAfter(TimeSpan.FromSeconds(8)); // the session itself lasts 2 seconds
+        int sent = -1;
+        try
+        {
+            sent = await LiveSession.ExchangeAsync(client, options, TextWriter.Null, "test", bounded.Token);
+        }
+        catch (OperationCanceledException) when (!deadline.IsCancellationRequested) { }
+
+        // The stream is still framed: the next read is a whole SMSG_PONG with its counter.
+        WorldFrame next = await client.ReadAsync(deadline.Token);
+        Assert.Equal((ushort)WorldOpcode.SmsgPong, next.Opcode);
+        Assert.Equal(4, next.Payload.Length);
+
+        await Task.Delay(200, deadline.Token); // the last lines reach the server
+        await streaming.CancelAsync();
+        await Task.WhenAll(producer, consumer);
+        string[] lines = [.. chat];
+        Assert.True(Volatile.Read(ref streamed) > 50, $"the server streamed only {streamed} packets");
+        Assert.Equal(".gm on", lines.FirstOrDefault());
+        Assert.True(lines.Count(line => line == ".gps") >= 5, $"sent {lines.Length} chat lines under the stream: {string.Join(" | ", lines)}");
+        Assert.Equal(lines.Length, sent);
     }
 }

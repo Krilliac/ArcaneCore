@@ -74,6 +74,17 @@ answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the t
 halved (down to 24 yards) until it stays on the loaded mesh, and walking it loads the next tile. Before, the bot stood at such a tile edge
 for good: the wave-8 rehearsal's quest-35 stall (Dawnrover 107 yards north of the Elwynn tile boundary, 610 yards from Guard Thomas).
 
+Every bot route excludes the mesh's steep polygons (`NavTerrain.SteepSlopes`). A bot standing on steep ground, or on a patch of walkable
+polygons among them, got no route at all (no path, or a partial path ending at the patch's edge) and stood there for good: Ironwander on
+the mountainside north of Coldridge Valley (-5605.6, 155.8, 453.3), live 2026-10-09, `stalled 7960s: goal=Grind target=1196` (the goal
+and target were the last ones it had chosen; every plan since had failed). When the ordinary query fails and the bot is not on walkable
+ground with an off-mesh destination, `PlayerbotNavigation` asks the mesh again with steep polygons allowed and takes that path up to its
+first corner on walkable ground from which the ordinary query is a route, refusing any way that leads more than
+`SteepEscapeClimbYards` (1.5) above the bot (`PlayerbotSteepGroundTests`; on the real terrain
+`FromIronwandersSlope_TheBotWalksDownToTheIceClawBear`). The stall watch also gives the goal up again after every further stall bound
+without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
+and logged once.
+
 `World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
 those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
 through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the

@@ -39,11 +39,11 @@ public sealed class PlayerbotWorldDestinationsTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 float before = player.X;
                 Assert.False(destinations.Update(player, 6, 500));
-                Assert.Equal(1, pathfinder.Calls);
+                Assert.Equal(2, pathfinder.Calls); // the refused route, then whether the bot stands on walkable ground (it does)
                 Assert.Equal(before, player.X);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
-                Assert.Equal(2, pathfinder.Calls);
+                Assert.Equal(3, pathfinder.Calls);
                 Assert.Equal(before, player.X);
                 Assert.Equal(6u, destinations.TargetEntry);
                 PlayerbotMotion.ElapseForTests(player, 500);

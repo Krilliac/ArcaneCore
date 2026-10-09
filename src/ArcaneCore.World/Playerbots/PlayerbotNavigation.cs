@@ -214,9 +214,7 @@ internal static class PlayerbotNavigation
         // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350). The old 512 polygons ran out on the
         // real Dun Morogh mesh well inside the route bound: 200 yards from Coldridge Valley to the Rockjaw Raiders (quest 179)
         // answered no path with 512 and an 18-corner path with 2048, so the bot stood still with that goal for good.
-        PathResult path = map.Collision.FindPath(start, destination,
-            new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
-                ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = partial, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
+        PathResult path = Query(map, start, destination, options, partial, steep: false);
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
@@ -226,36 +224,113 @@ internal static class PlayerbotNavigation
                 (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out route);
             return !straightRefused;
         }
+
+        if (Usable(player, path, start, destination, goal, partial, options, out float distance))
+        {
+            // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
+            // collision data. A line of sight at their own height hits the floor model itself inside any building (the Deathknell
+            // crypt, the Goldshire inn), and the floor probe finds nothing at some spots the mesh covers (on the crypt's stairs, at
+            // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
+            // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
+            route = new PlayerbotRoute(path.Points.ToArray(), distance, navigated: true);
+            return true;
+        }
+
+        // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
+        // walkable ground among steep slopes only when it ends close by (the patch's edge); any other refusal stays one.
+        if ((path.Type & PathType.NoPath) != 0
+                ? OnWalkableMesh(map, start)
+                : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards)
+            return false;
+        return TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route);
+    }
+
+    /// <summary>
+    /// A partial route ending this close to the bot (flat yards) may mean it stands on a patch of walkable ground among steep slopes
+    /// (<see cref="TryLeaveSteepGround"/>); one ending farther away is an ordinary refusal and costs no further query.
+    /// </summary>
+    internal const float SteepPatchYards = 15f;
+
+    /// <summary>One query of the navigation mesh, with steep slopes excluded as for every bot route, or allowed (<paramref name="steep"/>).</summary>
+    private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep)
+        => map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
+            ExcludeFlags = steep ? NavTerrain.Empty : NavTerrain.SteepSlopes, AllowPartial = partial,
+            MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
+
+    /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes, and its length.</summary>
+    private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
+        PlayerbotOptions options, out float distance)
+    {
+        distance = 0;
         if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards))
             return false;
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
         // place given up after a loop. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && Vector2.Distance(Flat(path.End), Flat(destination)) > 1f
-            && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards
+            && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(from), Flat(goal)) - PartialProgressYards
                 || PlayerbotMotion.IsBlacklisted(player, path.End)))
             return false;
 
-        // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
-        // collision data. A line of sight at their own height hits the floor model itself inside any building (the Deathknell
-        // crypt, the Goldshire inn), and the floor probe finds nothing at some spots the mesh covers (on the crypt's stairs, at
-        // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
-        // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
-        float distance = 0;
-        for (int index = 0; index < path.Points.Count; index++)
-        {
-            Vector3 point = path.Points[index];
-            if (!Finite(point)) return false;
-            if (index > 0) distance += Vector3.Distance(path.Points[index - 1], point);
-        }
-
-        if (!float.IsFinite(distance) || distance > options.MaxRouteYards)
-            return false;
-
-        route = new PlayerbotRoute(path.Points.ToArray(), distance, navigated: true);
-        return true;
+        for (int index = 1; index < path.Points.Count; index++)
+            distance += Vector3.Distance(path.Points[index - 1], path.Points[index]);
+        return float.IsFinite(distance) && distance <= options.MaxRouteYards;
     }
 
     private static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
+
+    /// <summary>How far above where the bot stands a way off steep ground may lead (<see cref="TryLeaveSteepGround"/>).</summary>
+    internal const float SteepEscapeClimbYards = 1.5f;
+
+    /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
+    private const int SteepEscapeCorners = 16;
+
+    /// <summary>
+    /// Every bot route excludes the navigation mesh's steep polygons (<see cref="NavTerrain.SteepSlopes"/>). A bot standing on steep
+    /// ground, or on a patch of walkable polygons among them, then gets no route anywhere: the mesh finds no walkable polygon within
+    /// three yards of it (no path), or only the patch's own edge (a partial path that never closes). The way off is the mesh's own
+    /// path with the steep polygons allowed, cut at its first corner on walkable ground from which the ordinary query is a route,
+    /// and only while no corner leads more than <see cref="SteepEscapeClimbYards"/> above the bot: a player slides down a slope it
+    /// cannot walk up. A destination off the walkable mesh from walkable ground gets no route, as before.
+    /// <para>
+    /// Live 2026-10-09: Ironwander (a warrior, level 7) stood on the mountainside north of Coldridge Valley at -5605.6, 155.8, 453.3,
+    /// seven yards above the slope's floor, for over two hours. Every route from there answered no path, so every goal failed before
+    /// it began: the Ice Claw Bear it last chose (entry 1196) was marked unreachable, the exploration refused, and the stall watch's
+    /// give-up had nothing to give up. With the steep polygons allowed the mesh leads down to the bear's meadow in 129 yards, past
+    /// a walkable patch at -5573, 185.6, 441.4 whose own edge ends every ordinary route.
+    /// </para>
+    /// </summary>
+    private static bool TryLeaveSteepGround(Player player, Map map, Vector3 start, Vector3 destination, Vector3 goal,
+        PlayerbotOptions options, bool partial, out PlayerbotRoute? route)
+    {
+        route = null;
+        PathResult steep = Query(map, start, destination, options, partial: true, steep: true);
+        if (!steep.HasPath || (steep.Type & (PathType.NotUsingPath | PathType.DestForced | PathType.FlyPath)) != 0) return false;
+
+        float distance = 0;
+        for (int index = 1; index < steep.Points.Count && index <= SteepEscapeCorners; index++)
+        {
+            Vector3 point = steep.Points[index];
+            if (!Finite(point) || point.Z > start.Z + SteepEscapeClimbYards) return false;
+            distance += Vector3.Distance(steep.Points[index - 1], point);
+            if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
+            if (!OnWalkableMesh(map, point)) continue;
+            if (Vector3.Distance(point, destination) > 1f
+                && !Usable(player, Query(map, point, destination, options, partial, steep: false), point, destination, goal, partial, options, out _))
+                continue;
+            route = new PlayerbotRoute(steep.Points.Take(index + 1).ToArray(), distance, navigated: true);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the mesh finds walkable (not steep) ground at <paramref name="point"/>: the path from it to itself is not refused (Detour
+    /// locates no polygon there otherwise). One more query on a refused plan; a plan that succeeds never makes it.
+    /// </summary>
+    private static bool OnWalkableMesh(Map map, Vector3 point)
+        => (map.Collision.FindPath(point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
+            ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
 
     /// <summary>
     /// Follow <paramref name="route"/> this think (<see cref="PlayerbotMotion.Follow"/>): start, switch or keep moving.

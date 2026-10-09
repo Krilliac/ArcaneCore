@@ -190,39 +190,7 @@ internal static class LiveSession
         string local = client.LocalEndPoint?.ToString() ?? "?";
         output.WriteLine($"{Stamp()} IN WORLD as {chosen.Name}; connection {local} -> {world}");
 
-        DateTime end = DateTime.UtcNow + options.Duration;
-        int sequence = 0;
-        int sent = 0;
-        int scriptIndex = 0;
-        while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
-        {
-            if (options.StopFile is not null && File.Exists(options.StopFile))
-            {
-                output.WriteLine($"{Stamp()} stop file seen");
-                break;
-            }
-
-            foreach (string scripted in NewScriptLines(options.ScriptFile, ref scriptIndex))
-            {
-                output.WriteLine($"{Stamp()} [{local}] > {scripted}");
-                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, ScriptPacket(scripted), ct).ConfigureAwait(false);
-                await DrainAsync(client, output, local, ReplyQuietPeriod, ct).ConfigureAwait(false);
-            }
-
-            if (options.Say.Count > 0)
-            {
-                string text = options.Say[sent++ % options.Say.Count];
-                output.WriteLine($"{Stamp()} [{local}] > {text}");
-                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, SayPacket(text), ct).ConfigureAwait(false);
-            }
-            else
-            {
-                await client.SendAsync((ushort)WorldOpcode.CmsgPing, ScenarioWire.Ping(unchecked((uint)++sequence), 0), ct).ConfigureAwait(false);
-            }
-
-            await DrainAsync(client, output, local, ReplyQuietPeriod, ct).ConfigureAwait(false);
-            await Task.Delay(options.Interval, ct).ConfigureAwait(false);
-        }
+        await ExchangeAsync(client, options, output, local, ct).ConfigureAwait(false);
 
         try
         {
@@ -237,6 +205,62 @@ internal static class LiveSession
 
         return 0;
     }
+
+    /// <summary>
+    /// The session in the world: the scripted lines, the say lines (or pings) on the interval, every reply printed. Sending does not
+    /// wait for the server to fall silent: between sends every frame that arrives is read and printed until the next send is due.
+    /// One task does both, a send only between two whole frames, so the stream stays framed.
+    /// <para>
+    /// Before, each send was followed by reading until <see cref="ReplyQuietPeriod"/> of silence. In a crowd (stress-w9: 2000 bots,
+    /// movement and update packets every few milliseconds) the silence never came: the client sent its first line and nothing after
+    /// it, no GM command and no observer probe, for the whole run.
+    /// </para>
+    /// </summary>
+    /// <returns>The chat lines sent.</returns>
+    internal static async Task<int> ExchangeAsync(WorldClient client, Options options, TextWriter output, string local, CancellationToken ct)
+    {
+        DateTime end = DateTime.UtcNow + options.Duration;
+        int sequence = 0;
+        int sent = 0;
+        int chats = 0;
+        int scriptIndex = 0;
+        while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
+        {
+            if (options.StopFile is not null && File.Exists(options.StopFile))
+            {
+                output.WriteLine($"{Stamp()} stop file seen");
+                break;
+            }
+
+            foreach (string scripted in NewScriptLines(options.ScriptFile, ref scriptIndex))
+            {
+                output.WriteLine($"{Stamp()} [{local}] > {scripted}");
+                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, ScriptPacket(scripted), ct).ConfigureAwait(false);
+                chats++;
+                // The reply's own window (it comes back before the next line goes out), but never past the session's end.
+                await DrainAsync(client, output, local, Min(DateTime.UtcNow + ReplyQuietPeriod, end), ct).ConfigureAwait(false);
+            }
+
+            if (options.Say.Count > 0)
+            {
+                string text = options.Say[sent++ % options.Say.Count];
+                output.WriteLine($"{Stamp()} [{local}] > {text}");
+                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, SayPacket(text), ct).ConfigureAwait(false);
+                chats++;
+            }
+            else
+            {
+                await client.SendAsync((ushort)WorldOpcode.CmsgPing, ScenarioWire.Ping(unchecked((uint)++sequence), 0), ct).ConfigureAwait(false);
+            }
+
+            // Read and print whatever arrives until the next send is due (or the session ends).
+            await DrainAsync(client, output, local, Min(DateTime.UtcNow + options.Interval, end), ct).ConfigureAwait(false);
+        }
+
+        return chats;
+    }
+
+    private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
     private static async Task LogoutAsync(ScenarioConnection connection, CancellationToken cancellationToken)
     {
@@ -425,19 +449,30 @@ internal static class LiveSession
         return Encoding.UTF8.GetString(payload, 0, end < 0 ? payload.Length : end);
     }
 
-    private static async Task DrainAsync(WorldClient client, TextWriter output, string local, TimeSpan quiet, CancellationToken ct)
+    /// <summary>
+    /// Read and print every frame that arrives until <paramref name="until"/> (UTC). Only the wait for a frame's first byte is cut
+    /// at the deadline (<see cref="WorldClient.WaitForTrafficAsync"/> consumes nothing); a frame that has begun is read whole, so
+    /// the caller sends between frames and the stream stays framed. Under constant traffic it returns at the deadline all the same.
+    /// </summary>
+    private static async Task DrainAsync(WorldClient client, TextWriter output, string local, DateTime until, CancellationToken ct)
     {
         while (true)
         {
+            TimeSpan left = until - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero)
+            {
+                return;
+            }
+
             using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            wait.CancelAfter(quiet);
+            wait.CancelAfter(left);
             try
             {
                 await client.WaitForTrafficAsync(wait.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return; // quiet: no more reply is coming for this line
+                return; // nothing more before the deadline
             }
 
             WorldFrame frame = await client.ReadAsync(ct).ConfigureAwait(false);

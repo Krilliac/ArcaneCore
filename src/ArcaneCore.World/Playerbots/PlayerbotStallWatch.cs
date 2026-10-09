@@ -57,6 +57,7 @@ internal sealed class PlayerbotStallWatch
     private uint _anchorMap;
     private Fingerprint _fingerprint;
     private uint _progressMs;
+    private uint _gaveUpMs;
 
     /// <summary>The current stall (null while the bot makes progress): a death loop first, else a living bot standing still.</summary>
     internal string? Report => _deathLoopReport ?? _stallReport;
@@ -66,6 +67,12 @@ internal sealed class PlayerbotStallWatch
 
     /// <summary>Stalls reported so far.</summary>
     internal int Count { get; private set; }
+
+    /// <summary>
+    /// Times <see cref="Observe"/> told the caller to give its goal up: when a stall begins, and again after each further stall bound
+    /// it lasts (the goal given up first was not the one holding the bot).
+    /// </summary>
+    internal int GiveUps { get; private set; }
 
     /// <summary>
     /// Forget the living watch (death, a new life: the recovery has its own bounds). A death loop stays reported
@@ -105,8 +112,10 @@ internal sealed class PlayerbotStallWatch
     }
 
     /// <summary>
-    /// Look at the bot once per think. True exactly when a new stall begins (the caller gives up the goal); the stall stays
-    /// reported until the bot makes progress.
+    /// Look at the bot once per think. True when a new stall begins, and again after every further stall bound without progress
+    /// (the caller gives up the goal it holds then); the stall stays reported, and counted once, until the bot makes progress.
+    /// Before, the goal was given up only when the stall began: a bot whose next goal held it just the same was reported stalled
+    /// for hours and never gave anything up again (Ironwander, live 2026-10-09: <c>stalled 7960s: goal=Grind target=1196</c>).
     /// </summary>
     internal bool Observe(Player player, PlayerbotGoalKind goal, uint target, uint quest, uint nowMs, uint stallMs,
         Func<Player, Fingerprint> fingerprint)
@@ -133,7 +142,10 @@ internal sealed class PlayerbotStallWatch
         bool fresh = _stallReport is null;
         _stallReport = string.Create(CultureInfo.InvariantCulture,
             $"stalled {idle / 1000}s: goal={goal} target={target} quest={quest} at {position.X:F1},{position.Y:F1},{position.Z:F1} map {player.MapId}");
-        if (!fresh) return false;
+        if (!fresh && unchecked(nowMs - _gaveUpMs) < stallMs) return false;
+        _gaveUpMs = nowMs;
+        GiveUps++;
+        if (!fresh) return true;
         LastReport = _stallReport;
         Count++;
         return true;
