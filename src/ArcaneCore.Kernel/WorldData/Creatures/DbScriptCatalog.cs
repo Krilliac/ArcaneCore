@@ -7,6 +7,7 @@ public enum DbScriptKind : byte
     QuestStart = 1,
     Event = 5,
     Gossip = 6,
+    CreatureMovement = 8,
     Relay = 9,
 }
 

@@ -78,13 +78,14 @@ public sealed class InstanceAndMovementActionTests
     private static Scene Start(IEnumerable<CreatureAiEvent> rows, InstanceData? script = null, Func<Map, InstanceData>? scriptFor = null,
         CreatureAiServices? services = null, byte movementType = 0, float wander = 0,
         IEnumerable<(uint SpawnGuid, CreatureWaypoint Point)>? spawnPath = null,
-        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null)
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? waypointPaths = null)
     {
         var spells = new FakeCaster();
         var content = new CreatureContent(
             [Template(configure: t => t.AIName = CreatureAiFactory.EventAIName)],
             [Spawn(1, WolfEntry, 0, 0, movementType: movementType, wander: wander)],
-            spawnPath ?? [], [], [], new CreatureAiContent(rows, []), entryWaypoints: entryPaths);
+            spawnPath ?? [], [], [], new CreatureAiContent(rows, []), entryWaypoints: (entryPaths ?? []).Concat(waypointPaths ?? []));
         WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0, 101);
         if ((script ?? scriptFor?.Invoke(map)) is { } instance)
@@ -219,7 +220,6 @@ public sealed class InstanceAndMovementActionTests
     [Theory]
     [InlineData(3, 1, 0)] // PATH_MOTION_TYPE
     [InlineData(4, 1, 0)] // LINEAR_WP_MOTION_TYPE
-    [InlineData(2, 1, 2)] // CHANGE_MOVEMENT_FLAG_WAYPOINT_PATH: a waypoint_path path
     public void ChangeMovement_WhatIsNotSupported_FailsAndChangesNothing(int type, int path, int flags)
     {
         using Scene s = Start([Row(1, EventAiEventType.Aggro, Act(48, type, path, flags), Cast(903), flags: CombatAction)], movementType: 1, wander: 5,
@@ -229,6 +229,17 @@ public sealed class InstanceAndMovementActionTests
 
         Assert.Equal(MovementGeneratorType.Random, s.Wolf.Motion.DefaultType);
         Assert.DoesNotContain(s.Spells.Casts, c => c.Spell == 903);
+    }
+
+    [Fact]
+    public void ChangeMovement_WaypointPathFlag_UsesTheSharedPathId()
+    {
+        using Scene s = Start([Row(1, EventAiEventType.TimerOutOfCombat, Act(48, 2, 51, 2), p1: 1000, p2: 1000)],
+            waypointPaths: [(CreatureContent.WaypointPathEntry, CreatureContent.WaypointPathBit | 51u,
+                new CreatureWaypoint(1, 15, 0, 83.5f, 100, 0))]);
+        Run(s.World, 1500);
+        Assert.Equal(MovementGeneratorType.Waypoint, s.Wolf.Motion.DefaultType);
+        Assert.Equal(15f, s.Wolf.Spline!.EndX);
     }
 
     // --- EVENT_T_DEATH with a condition --------------------------------------------------------------------

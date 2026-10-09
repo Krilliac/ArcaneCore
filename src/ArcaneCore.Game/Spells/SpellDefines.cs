@@ -201,6 +201,9 @@ public enum SpellImplicitTarget : uint
     UnitNearCaster = 4,
     UnitCasterPet = 5,
     UnitEnemy = 6,
+
+    /// <summary>TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC: units at the source filtered by spell_script_target (vmangos Spell::SetTargetMap).</summary>
+    EnumUnitsScriptAoeAtSrcLoc = 7,
     LocationCasterHomeBind = 9,
     EnumUnitsEnemyAoeAtSrcLoc = 15,
     EnumUnitsEnemyAoeAtDestLoc = 16,
@@ -224,6 +227,9 @@ public enum SpellImplicitTarget : uint
     UnitParty = 35,
     EnumUnitsEnemyWithinCasterRange = 36,
     UnitFriendAndParty = 37,
+
+    /// <summary>TARGET_UNIT_SCRIPT_NEAR_CASTER: the nearest unit spell_script_target lists (vmangos Spell::CheckScriptTargeting).</summary>
+    UnitScriptNearCaster = 38,
     UnitFriendChainHeal = 45,
     LocationCasterTargetPosition = 53,
 

@@ -177,20 +177,16 @@ public sealed partial class CreatureMapSystem
 
             case 2:
             {
-                if ((step.DataLong3 & 0x2) != 0)
-                {
-                    ReportRelay(step, $"MOVEMENT waypoint with datalong3 {step.DataLong3} (a waypoint_path path)");
-                    return;
-                }
-
                 if ((step.DataLong3 & 0x1) != 0 && target is null)
                 {
                     return; // "pass target true and target nullptr: skipping"
                 }
 
-                IReadOnlyList<CreatureWaypoint> path = step.DataLong2 == 0
-                    ? _content.ResolveWaypointPath(mover.Spawn?.Guid ?? 0, mover.Template.Entry).Points
-                    : _content.GetEntryWaypoints(mover.Template.Entry, step.DataLong2);
+                IReadOnlyList<CreatureWaypoint> path = (step.DataLong3 & 0x2) != 0
+                    ? _content.GetWaypointPath(step.DataLong2)
+                    : step.DataLong2 == 0
+                        ? _content.ResolveWaypointPath(mover.Spawn?.Guid ?? 0, mover.Template.Entry).Points
+                        : _content.GetEntryWaypoints(mover.Template.Entry, step.DataLong2);
                 if (path.Count == 0)
                 {
                     ReportRelay(step, $"MOVEMENT waypoint path {step.DataLong2} missing for entry {mover.Template.Entry}");
@@ -198,7 +194,7 @@ public sealed partial class CreatureMapSystem
                 }
 
                 StopMoving(mover);
-                mover.Motion.Initialize(new WaypointMovementGenerator(path), this, start: true);
+                mover.Motion.Initialize(new WaypointMovementGenerator(path, (step.DataLong3 & 0x1) != 0 ? target!.Guid : default), this, start: true);
                 break;
             }
 

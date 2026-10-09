@@ -55,7 +55,9 @@ public static class SpellStoreFactory
             positions.Add((row.Id, new SpellTargetPosition(row.TargetMap, row.TargetPositionX, row.TargetPositionY, row.TargetPositionZ, row.TargetOrientation)));
         }
 
-        return new SpellStore(spells, createSpells, positions);
+        return new SpellStore(spells, createSpells, positions,
+            content.ScriptTargets.Where(r => known.Contains(r.SpellId))
+                .Select(r => new SpellStore.ScriptTarget(r.SpellId, r.Type, r.TargetEntry, r.InverseEffectMask)));
     }
 
     /// <summary>One <c>spell_template</c> row as a <see cref="SpellInfo"/> (indices resolved; an unknown index reads as 0, like a DBC lookup miss).</summary>

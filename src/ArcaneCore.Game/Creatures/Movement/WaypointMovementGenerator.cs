@@ -21,7 +21,8 @@ internal static class CreatureMovementGates
 /// <list type="bullet">
 /// <item>Legs walk, unless the template runs always (:240) or <see cref="CreatureMovementOptions.HonorWaypointRunColumn"/> is on and the Run column of the node is set.</item>
 /// <item>The route to a node goes through the pathfinder of the map (:235 MOVE_PATHFINDING; a straight line without navmeshes).</item>
-/// <item>Arriving at a node records it as the last reached one and tells the AI (MovementInform(WAYPOINT, node), :158-160) before the delay starts.</item>
+/// <item>Arriving at a node records it as the last reached one, starts the node's <c>dbscripts_on_creature_movement</c> script (ScriptsStart, :152-156;
+/// the source is the creature, the target the relay MOVEMENT target or the creature) and tells the AI (MovementInform(WAYPOINT, node), :158-160) before the delay starts.</item>
 /// <item>The last reached node is where evade sends the creature (<see cref="GetResetPosition"/>, :292-303).</item>
 /// <item>A creature that cannot move starts no leg and its timers stand still; a casting one stops, and when the cast ends it sets off for the same node again (:249-272).</item>
 /// <item>Interrupted by combat it keeps its node; resumed it heads for the same node again (Reset, StartMoveNow, :108-126).</item>
@@ -30,11 +31,11 @@ internal static class CreatureMovementGates
 /// reached" (<c>!m_lastReachedWaypoint</c>), which cmangos does not. The data ArcaneCore loads is cmangos-shaped, so a node is reached
 /// when it is reached.
 /// <para>
-/// Limits (docs/areas/creature-movement-spawns.md): node scripts, wander at a node, sub-paths (<c>path_id</c>), non-repeating paths,
+/// Limits (docs/areas/creature-movement-spawns.md): wander at a node, sub-paths (<c>path_id</c>), non-repeating paths,
 /// <c>SetNextWaypoint</c>, interaction pauses and group formations are not driven.
 /// </para>
 /// </summary>
-internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> path) : ICreatureMovementGenerator
+internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> path, ObjectGuid targetGuid = default) : ICreatureMovementGenerator
 {
     /// <summary>vmangos: an orientation of 100 means "keep the travel direction".</summary>
     public const float NoOrientation = 100f;
@@ -146,6 +147,14 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
         _arrivalDone = true;
         CreatureWaypoint node = path[_current];
         _lastReachedPoint = node.Point;
+        if (node.ScriptId != 0)
+        {
+            mover.OnWaypointScript(creature, node.ScriptId, targetGuid);
+            if (!creature.IsInWorld || !ReferenceEquals(creature.Motion.Top, this))
+            {
+                return false; // the script removed the creature or replaced this generator
+            }
+        }
         mover.OnMovementFinished(creature, MovementGeneratorType.Waypoint, node.Point);
         if (!creature.IsAlive)
         {

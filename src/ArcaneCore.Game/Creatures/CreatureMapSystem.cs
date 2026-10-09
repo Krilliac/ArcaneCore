@@ -157,6 +157,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         _clockMs += diffMs;
         SendCatchUpMoves();
+        UpdateLinkedFollowers();
         UpdateCreatures(diffMs);
         UpdateSpawnGroups();
         UpdatePendingAi();
@@ -187,6 +188,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     void ICreatureMover.OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
         => OnMovementFinished(creature, type, pointId);
+
+    void ICreatureMover.OnWaypointScript(Creature creature, uint scriptId, ObjectGuid targetGuid)
+        => StartDbScript(DbScriptKind.CreatureMovement, scriptId, creature,
+            targetGuid.IsEmpty ? creature : Map.FindObject(targetGuid));
 
     double ICreatureMover.NextDouble() => _random.NextDouble();
 

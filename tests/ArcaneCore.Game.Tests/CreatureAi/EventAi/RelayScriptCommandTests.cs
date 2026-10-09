@@ -37,6 +37,18 @@ public sealed class RelayScriptCommandTests
     private const uint FlagBuddyByGo = 0x400;
 
     [Fact]
+    public void Movement_WaypointPathBit_UsesTheSharedPath()
+    {
+        (uint Entry, uint PathId, CreatureWaypoint Point)[] path =
+            [(CreatureContent.WaypointPathEntry, CreatureContent.WaypointPathBit | 9997u,
+                new CreatureWaypoint(1, 18, 0, 83.5f, 100, 0))];
+        using Town t = Start([Step(0, 20, dataLong: 2, dataLong2: 9997, dataLong3: 2, flags: FlagReverse)], entryPaths: path);
+        t.Wave();
+        Assert.Equal(MovementGeneratorType.Waypoint, t.Elly.Motion.DefaultType);
+        Assert.Equal(18f, t.Elly.Spline!.EndX);
+    }
+
+    [Fact]
     public void ZulFarrakCageRelay_OpensTheSpawnGuidDoor()
     {
         using Town t = Start([Step(0, 11, dataLong: DoorGuid, dataLong2: 9_000_000)],
