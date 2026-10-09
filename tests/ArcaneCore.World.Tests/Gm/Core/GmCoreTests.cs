@@ -77,13 +77,7 @@ public sealed class GmCoreTests
     [Fact]
     public void TheShippedAppSettings_SpellOutTheDefaults()
     {
-        string? dir = AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "src", "ArcaneCore.World", "appsettings.json")))
-        {
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        Assert.NotNull(dir);
+        string dir = RepositorySource.RequireRoot();
         IConfiguration configuration = new ConfigurationBuilder()
             .AddJsonFile(Path.Combine(dir, "src", "ArcaneCore.World", "appsettings.json")).Build();
 
