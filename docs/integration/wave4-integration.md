@@ -191,7 +191,7 @@ Final head, one pass per project, no failures:
 Data.Tests skips are all environment-gated facts, none is provider-only when a MariaDB or PostgreSQL server is configured. Nine need the classic-db dump, under
 three different variable names (`ARCANECORE_CLASSICDB_DUMP` for `CreatureMovementTemplateTests`, `CreatureBehaviourImportTests`, `GameObjectSpawnDataTests` and
 `CreatureSpawnEntryTests`; `ARCANE_CLASSICDB_DUMP`, the spelling of `ClassicDbDumpFactAttribute` in `tests/ArcaneCore.Data.Tests/WorldState`, which falls back to
-`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` when unset, for `WeatherImportCliTests`, `GameEventImporterTests`, `WorldStateDataTests` and `SpawnGroupDataTests` (the 2026-10-08 spawn-groups lane);
+`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` when unset, for `WeatherImportCliTests`, `GameEventImporterTests`, `WorldStateDataTests`, `SpawnGroupDataTests` (the 2026-10-08 spawn-groups lane) and `PoolDataTests` (the 2026-10-09 pools lane);
 `ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and seven need a build-5875 DBC directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`,
 `ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`, `CharacterAppearanceDbcReaderTests` from the wave-4 optional-dbcs lane, `ClientEffectDbcReaderTests`
 from the `.fx` client-data lane, `ClientDataTests` from the 2026-10-08 client-data lane, and `DbcCrossReferenceTests` from the DBC content review; the last class adds a gated full-set check). `DataTestsSkipAttributionTests` checks this paragraph against the attributes. One more, the read-committed bid/deletion theory in

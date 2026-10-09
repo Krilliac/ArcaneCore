@@ -25,7 +25,7 @@ public sealed class SpellProcEventSchemaTests : IAsyncLifetime
         Assert.Equal(39, SpellProcEventDataModule.Version);
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == SpellProcEventDataModule.Version);
         Assert.Equal(["spell_proc_event"], step.Changes.OfType<CreateTableChange>().Select(c => c.Table));
-        Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
+        Assert.DoesNotContain(SpellProcEventDataModule.Version, WorldDbContext.Schema.ReservedGapVersions); // v39 is a real step (a later lane may hold a placeholder)
     }
 
     [Theory]
