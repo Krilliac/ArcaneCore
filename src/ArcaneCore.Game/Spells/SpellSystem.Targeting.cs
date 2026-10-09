@@ -398,7 +398,22 @@ public sealed partial class SpellSystem
             found.Add(unit);
         }
 
-        CapTargets(found, cast.Spell.MaxAffectedTargets);
+        if (_closestAreaTargetSpells.Contains(cast.Spell.Id))
+        {
+            found.Sort((a, b) =>
+            {
+                float ad = ((a.X - x) * (a.X - x)) + ((a.Y - y) * (a.Y - y)) + ((a.Z - z) * (a.Z - z));
+                float bd = ((b.X - x) * (b.X - x)) + ((b.Y - y) * (b.Y - y)) + ((b.Z - z) * (b.Z - z));
+                int order = ad.CompareTo(bd);
+                return order != 0 ? order : a.Guid.Value.CompareTo(b.Guid.Value);
+            });
+            if (cast.Spell.MaxAffectedTargets > 0 && found.Count > cast.Spell.MaxAffectedTargets)
+                found.RemoveRange((int)cast.Spell.MaxAffectedTargets, found.Count - (int)cast.Spell.MaxAffectedTargets);
+        }
+        else
+        {
+            CapTargets(found, cast.Spell.MaxAffectedTargets);
+        }
         return [.. found.Select(u => (u, 1.0f))];
     }
 

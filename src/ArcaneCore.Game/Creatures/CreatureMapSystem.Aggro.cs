@@ -67,14 +67,15 @@ public sealed partial class CreatureMapSystem
     /// hostility seam calls it an enemy (the reputation lane's answer for players, the faction templates between creatures); and it
     /// is in line of sight.
     /// </summary>
-    public bool CanAggroOnSight(Creature creature, Unit who)
+    /// <param name="scriptedRange">A boss script's sight range, when it overrides the ordinary level-based aggro distance.</param>
+    public bool CanAggroOnSight(Creature creature, Unit who, float? scriptedRange = null)
     {
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(who);
         return IsAggroTarget(creature, who)
             && IsProximityAggroAllowedFor(creature, who)
             && CanInitiateAttack(creature)
-            && IsInAggroReach(creature, who)
+            && IsInAggroReach(creature, who, scriptedRange)
             && Map.Combat.Hooks.CanAttack(creature, who)
             && _ai.Hostility.IsHostile(creature, who)
             && CanSeeForAggro(creature, who);
@@ -177,7 +178,7 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>The vertical limit (bounding radii taken off, INHABIT_AIR exempt) and the aggro radius (plain distance, strictly inside).</summary>
-    private bool IsInAggroReach(Creature creature, Unit who)
+    private bool IsInAggroReach(Creature creature, Unit who, float? scriptedRange = null)
     {
         float radii = creature.BoundingRadius + who.BoundingRadius;
         bool canFly = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR
@@ -187,7 +188,7 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        float range = GetAttackDistance(creature, who) + (_options.AggroUsesBoundingRadius ? radii : 0f);
+        float range = (scriptedRange ?? GetAttackDistance(creature, who)) + (_options.AggroUsesBoundingRadius ? radii : 0f);
         return DistanceSquared(creature, who) < range * range;
     }
 
