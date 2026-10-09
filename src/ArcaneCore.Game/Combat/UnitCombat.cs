@@ -45,6 +45,9 @@ public sealed class UnitCombat
 
     public bool IsInCombat => (Owner.UnitFlags & UnitFlags.InCombat) != 0;
 
+    /// <summary>Time of the last Sanctuary effect (vmangos Unit::m_lastSanctuaryTime).</summary>
+    public uint LastSanctuaryMs { get; internal set; }
+
     /// <summary>Pending vmangos extra attacks (Unit::m_extraAttacks).</summary>
     public uint ExtraAttacks => _extraAttacks;
 

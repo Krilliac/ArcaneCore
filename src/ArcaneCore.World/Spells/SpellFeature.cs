@@ -127,6 +127,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
                     () => reputationFeature.Reputation,
                     CombatHookRelations.Instance);
             }
+            if (factionTemplates is not null)
+                System.IsContestedGuard = unit => factionTemplates.Find(unit.FactionTemplate)?.IsContestedGuard == true;
             System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
                 && teleports.Teleports.IsBeingTeleportedFar(player);
             ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();
