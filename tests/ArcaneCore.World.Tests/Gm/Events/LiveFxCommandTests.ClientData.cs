@@ -19,12 +19,15 @@ public sealed partial class LiveFxCommandTests
     private static Task<Realm> StartWithClientDataAsync(string directory)
         => StartAsync(configuration: new() { [DirectoryKey] = directory });
 
-    /// <summary>Every system line the GM gets for one command (lookups answer with several).</summary>
+    /// <summary>
+    /// Every system line the GM gets for one command (lookups answer with several): waits for the first chat line, then collects the
+    /// rest. A quiet window alone returned nothing when a loaded world answered later than the window.
+    /// </summary>
     private static async Task<List<string>> LinesAsync(Realm realm, string line)
     {
         await realm.Gm.SendChatAsync(ChatType.Say, Language.Common, line);
         var lines = new List<string>();
-        foreach ((WorldOpcode opcode, byte[] payload) in await realm.Gm.CollectAsync(Quiet))
+        foreach ((WorldOpcode opcode, byte[] payload) in await realm.Gm.CollectFromAsync(WorldOpcode.SmsgMessagechat, Quiet))
         {
             if (opcode == WorldOpcode.SmsgMessagechat && ChatMessage.Parse(payload) is { Type: ChatType.System } chat)
             {
