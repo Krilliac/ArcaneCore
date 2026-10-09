@@ -27,6 +27,7 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
     private uint _overloadMs;
     private uint _sapphironSpawnMs;
     private uint _guardianCheckMs;
+    private bool _respawnHorsemen;
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
     public override bool IsEncounterInProgress => Encounters.Contains(EncounterState.InProgress)
@@ -38,6 +39,7 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
         _horsemenDead.Clear();
         _constructAddsDead.Clear();
         _addReviveMs = _overloadMs = _sapphironSpawnMs = _guardianCheckMs = 0;
+        _respawnHorsemen = false;
     }
 
     public override void SetData(uint type, uint data)
@@ -51,10 +53,9 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
             return;
         }
         if (Encounters[type] == data) return;
-        uint previous = Encounters[type];
         Encounters[type] = data;
         if (type == Sapphiron && data == EncounterState.Special) _sapphironSpawnMs = 22000;
-        OnPartTwoStateChanged(type, previous, data);
+        OnPartTwoStateChanged(type, data);
         SaveIfDone(data);
     }
 
@@ -81,6 +82,11 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
 
     public override void Update(uint diffMs)
     {
+        if (_respawnHorsemen)
+        {
+            _respawnHorsemen = false;
+            RespawnDeadHorsemen();
+        }
         if (_guardianCheckMs > 0)
         {
             if (_guardianCheckMs > diffMs) _guardianCheckMs -= diffMs;
@@ -134,7 +140,24 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
         }
     }
 
-    public override void OnCreatureCreate(Creature creature) => StoreCreature(creature);
+    public override void OnCreatureCreate(Creature creature)
+    {
+        StoreCreature(creature);
+        // vmangos instance_naxxramas::OnCreatureCreate: a horseman created dead while the encounter is not done respawns, so the
+        // four distinct deaths (counted in memory only, like vmangos m_horsemenDeathCounter) stay reachable after a restart or a
+        // grid reload. Deferred to the next instance update: the creature is still being added to the map here.
+        if (creature.Entry is 16065 or 16062 or 16064 or 16063 && !creature.IsAlive && GetData(Horsemen) != EncounterState.Done)
+            _respawnHorsemen = true;
+    }
+
+    /// <summary>vmangos instance_naxxramas::SetData(TYPE_FOUR_HORSEMEN, FAIL): every dead horseman comes back.</summary>
+    private void RespawnDeadHorsemen()
+    {
+        if (GetData(Horsemen) == EncounterState.Done || Instance.FindUpdater<CreatureMapSystem>() is not { } system) return;
+        foreach (uint entry in HorsemenEntries)
+            if (GetSingleCreatureFromStorage(entry) is { IsAlive: false } dead)
+                system.ForceRespawn(dead);
+    }
 
     public override void OnCreatureDeath(Creature creature)
     {
@@ -173,12 +196,12 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
 
     public override void OnAreaTrigger(Player player, uint triggerId)
     {
-        // mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger.
+        // mangos-classic naxxramas.cpp AreaTrigger_at_naxxramas: game masters and the dead trigger nothing.
+        if (player.IsGameMaster || !player.IsAlive) return;
+        // mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger: Kel'Thuzad's trigger only sets the encounter
+        // in progress; SetData starts the channel (KelThuzadAI.BeginPhaseOne). He enters combat in phase two, not here.
         if (triggerId == 4112 && GetData(KelThuzad) is EncounterState.NotStarted or EncounterState.Fail)
-        {
-            if (GetSingleCreatureFromStorage(15990)?.AI is KelThuzadAI boss)
-                boss.AttackStart(player);
-        }
+            SetData(KelThuzad, EncounterState.InProgress);
         else if (triggerId == 4113 && GetData(Thaddius) == EncounterState.NotStarted
             && GetSingleCreatureFromStorage(15928) is { } thaddius)
         {

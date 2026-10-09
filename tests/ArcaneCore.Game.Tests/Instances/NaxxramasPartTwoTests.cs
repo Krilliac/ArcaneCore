@@ -5,6 +5,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.CreatureAi;
@@ -12,6 +13,8 @@ using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 
 namespace ArcaneCore.Game.Tests.Instances;
@@ -28,15 +31,18 @@ public sealed class NaxxramasPartTwoTests
         public Creature Boss { get; private set; } = null!;
         public Player Tank { get; private set; } = null!;
 
-        public Raid Initialize(bool activateThaddius = true, bool attackBoss = true)
+        public Raid Initialize(bool activateThaddius = true, bool attackBoss = true, IEnumerable<CreatureSpawn>? spawns = null)
         {
+            // Map 533 is a raid (map_template map_type 2): SetInCombatWithZone only works in a dungeon.
+            WorldMaps.Of(World).Load(new MapContent(
+                [new MapTemplate(533, 0, MapType.Raid, 3456, 40, 7, 0, 3005.68f, -3447.77f, "Naxxramas", "instance_naxxramas")], [], [], [], []));
             Map = World.GetMap(533);
             Instance = Assert.IsType<NaxxramasInstance>(InstanceScriptRegistry.Default.Create(Map));
             Instance.Initialize();
             Map.AddUpdater(Instance);
             uint[] entries = [entry, 16803, 16137, 16124, 16127, 16125, 16148,
                 16126, 16150, 16065, 16062, 16064, 16063, 16697, 15929, 15930, 15928, 15989, 15990, 16441];
-            Creatures = new CreatureMapSystem(Map, Content([.. entries.Distinct().Select(e => Template(e))], []),
+            Creatures = new CreatureMapSystem(Map, Content([.. entries.Distinct().Select(e => Template(e))], spawns ?? []),
                 new CreatureOptions { AggroRate = 0, RespawnPacifyMs = 0 }, random: new Random(1),
                 aiServices: new CreatureAiServices { Spells = Caster, Hostility = new AlwaysHostile() });
             Map.AddUpdater(Creatures);
@@ -51,7 +57,8 @@ public sealed class NaxxramasPartTwoTests
                 Instance.RecordConstructAddDeath(15930);
                 Instance.Update(14000);
             }
-            if (attackBoss && (entry != 15928 || activateThaddius)) Boss.AI!.AttackStart(Tank);
+            if (attackBoss && entry == 15990) Instance.OnAreaTrigger(Tank, 4112); // Kel'Thuzad starts from his trigger, not a pull
+            else if (attackBoss && (entry != 15928 || activateThaddius)) Boss.AI!.AttackStart(Tank);
             return this;
         }
 
@@ -255,7 +262,10 @@ public sealed class NaxxramasPartTwoTests
     public void Horsemen_CastTheirMarks_AndShieldAtHalfHealth()
     {
         using var raid = new Raid(16065).Initialize();
-        raid.Boss.AI!.OnUpdate(12000);
+        // vmangos boss_four_horsemen_shared::Reset m_uiMarkTimer = 20000.
+        raid.Boss.AI!.OnUpdate(19999);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == 28833);
+        raid.Boss.AI.OnUpdate(1);
         Assert.Contains(raid.Caster.Casts, c => c.Spell == 28833);
         raid.Boss.Health = raid.Boss.MaxHealth / 2;
         raid.Boss.AI.OnUpdate(1);
@@ -263,14 +273,22 @@ public sealed class NaxxramasPartTwoTests
     }
 
     [Theory]
-    [InlineData(16065u, 28833u, 0u)]
-    [InlineData(16062u, 28834u, 28881u)]
-    [InlineData(16064u, 28832u, 28884u)]
-    [InlineData(16063u, 28835u, 28883u)]
-    public void EachHorsemanHasItsOwnMarkAndSpecial(uint entry, uint mark, uint special)
+    [InlineData(16065u, 28833u, 0u, 12000u)]
+    [InlineData(16062u, 28834u, 28881u, 0u)]
+    [InlineData(16064u, 28832u, 28884u, 30000u)]
+    [InlineData(16063u, 28835u, 28883u, 12000u)]
+    public void EachHorsemanHasItsOwnMarkAndSpecial(uint entry, uint mark, uint special, uint firstSpecial)
     {
         using var raid = new Raid(entry).Initialize();
-        raid.Boss.AI!.OnUpdate(12000);
+        // vmangos Aggro EVENT_BOSS_ABILITY: Blaumeux and Zeliek 12 s, Korth'azz 30 s; Mograine's Righteous Fire is cast on aggro.
+        if (firstSpecial > 1)
+        {
+            raid.Boss.AI!.OnUpdate(firstSpecial - 1);
+            Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == special);
+            Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 16697);
+            raid.Boss.AI.OnUpdate(1);
+        }
+        raid.Boss.AI!.OnUpdate(30000 - firstSpecial);
         Assert.Contains(raid.Caster.Casts, c => c.Spell == mark);
         if (entry == 16065)
             Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 16697);
@@ -452,9 +470,9 @@ public sealed class NaxxramasPartTwoTests
         second.Relocate(2, 0, 270, 0, 0);
         second.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
         raid.World.AddPlayer(second); raid.World.RunTick(0);
+        raid.Boss.AI!.OnUpdate(325000);
         raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
         raid.Boss.Combat.Threat.AddThreat(second, 1);
-        raid.Boss.AI!.OnUpdate(325000);
         int before = raid.Caster.Casts.Count;
         uint[] order = [];
         foreach (uint step in new uint[] { 10000, 4000, 6000, 10000, 20000, 10000 })
@@ -507,5 +525,212 @@ public sealed class NaxxramasPartTwoTests
         Assert.Equal(full, target.Health);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(target, 28833, SpellCastTargets.ForSelf(), triggered: true));
         Assert.Equal(full - 250, target.Health);
+    }
+    // --- movement and melee state (intake review: a bare MeleeEnabled set left the swing and the chase running) -------------
+
+    private static void AssertStandsWithoutSwinging(Creature creature)
+    {
+        Assert.False(creature.AI!.CombatMovement);
+        Assert.False(creature.AI.MeleeEnabled);
+        Assert.False(creature.Combat.IsMeleeAttacking);
+        Assert.NotEqual(MovementGeneratorType.Chase, creature.Motion.CurrentType);
+    }
+
+    private static void AssertChasesAndSwings(Creature creature)
+    {
+        Assert.True(creature.AI!.CombatMovement);
+        Assert.True(creature.AI.MeleeEnabled);
+        Assert.True(creature.Combat.IsMeleeAttacking);
+        Assert.Equal(MovementGeneratorType.Chase, creature.Motion.CurrentType);
+    }
+
+    [Fact]
+    public void Gothik_OnTheBalcony_NeitherChasesNorSwings_UntilTheGroundPhase()
+    {
+        // mangos-classic boss_gothik.cpp Reset/Aggro SetCombatMovement(false) + SetMeleeEnabled(false); HandleGroundPhase turns both on.
+        using var raid = new Raid(16060).Initialize();
+        Assert.Same(raid.Tank, raid.Boss.Combat.Victim);
+        AssertStandsWithoutSwinging(raid.Boss);
+        raid.World.RunTick(1000);
+        AssertStandsWithoutSwinging(raid.Boss);
+        raid.Boss.AI!.OnUpdate(274000);
+        AssertChasesAndSwings(raid.Boss);
+    }
+
+    [Fact]
+    public void Sapphiron_AirPhaseStopsChaseAndSwing_LandingResumesBoth()
+    {
+        using var raid = new Raid(15989).Initialize();
+        AssertChasesAndSwings(raid.Boss);
+        raid.Boss.AI!.OnUpdate(46000);
+        AssertStandsWithoutSwinging(raid.Boss);
+        for (int i = 0; i < 6; i++) raid.Boss.AI.OnUpdate(i == 0 ? 6000u : 3500u);
+        raid.Boss.AI.OnUpdate(500);
+        AssertStandsWithoutSwinging(raid.Boss);
+        raid.Boss.AI.OnUpdate(10000);
+        AssertChasesAndSwings(raid.Boss);
+    }
+
+    [Fact]
+    public void ThaddiusAdd_FakeDeathStopsChaseAndSwing_ReviveResumesBoth()
+    {
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
+        raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        stalagg.AI!.AttackStart(raid.Tank);
+        AssertChasesAndSwings(stalagg);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        Assert.Equal(1u, stalagg.Health);
+        AssertStandsWithoutSwinging(stalagg);
+        Assert.True(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+        raid.World.RunTick(1000);
+        AssertStandsWithoutSwinging(stalagg);
+        // Feugen did not fall within ten seconds: Stalagg gets up and fights again.
+        raid.Instance.Update(10000);
+        Assert.False(((ThaddiusAddAI)stalagg.AI).IsFakingDeath);
+        Assert.Equal(stalagg.MaxHealth, stalagg.Health);
+        Assert.True(stalagg.AI.CombatMovement);
+        Assert.True(stalagg.AI.MeleeEnabled);
+    }
+
+    [Fact]
+    public void ThaddiusAdd_HitFromOutsideItsAggroRadius_StartsTheEncounterAndPullsThePartner()
+    {
+        // vmangos CreatureAI::AttackedBy -> AttackStart -> Aggro: the encounter starts, the door shuts, the other add joins.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 60, 0, 270, 0);
+        Creature feugen = raid.Creatures.SpawnTemporary(Template(15930), 70, 0, 270, 0);
+        Assert.False(stalagg.Combat.IsInCombat);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, 10);
+        Assert.Same(raid.Tank, stalagg.Combat.Victim);
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        Assert.True(feugen.Combat.IsInCombat);
+    }
+
+    [Fact]
+    public void KelThuzad_TriggerStartsTheChannelOutOfCombat_AndPhaseTwoChasesAndSwings()
+    {
+        // naxxramas.cpp DoHandleAreaTrigger only sets IN_PROGRESS; boss_kelthuzad.cpp "does not enter combat until phase 2".
+        using var raid = new Raid(15990).Initialize(attackBoss: false);
+        raid.Instance.OnAreaTrigger(raid.Tank, 4112);
+        Assert.Equal(EncounterState.InProgress, raid.Instance.GetData(NaxxramasInstance.KelThuzad));
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 29423);
+        Assert.Null(raid.Boss.Combat.Victim);
+        Assert.False(raid.Boss.Combat.IsInCombat);
+        AssertStandsWithoutSwinging(raid.Boss);
+        Assert.NotEqual(0u, (uint)(raid.Boss.UnitFlags & UnitFlags.NotSelectable));
+        raid.World.RunTick(1000);
+        raid.Boss.AI!.OnUpdate(60000);
+        Assert.Null(raid.Boss.Combat.Victim);
+        Assert.False(raid.Boss.AI.AttackStart(raid.Tank)); // no pull, no retaliation in phase one
+        Assert.Null(raid.Boss.Combat.Victim);
+        raid.Boss.AI.OnUpdate(265000);
+        Assert.Same(raid.Tank, raid.Boss.Combat.Victim);
+        Assert.Equal(0u, (uint)(raid.Boss.UnitFlags & (UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer)));
+        AssertChasesAndSwings(raid.Boss);
+    }
+
+    [Fact]
+    public void KelThuzad_PhaseOneFailsWhenNoLivingPlayerIsLeft()
+    {
+        using var raid = new Raid(15990).Initialize();
+        raid.Map.Combat.Kill(null, raid.Tank);
+        raid.Boss.AI!.OnUpdate(1000);
+        Assert.Equal(EncounterState.Fail, raid.Instance.GetData(NaxxramasInstance.KelThuzad));
+        Assert.Null(raid.Boss.Combat.Victim);
+    }
+
+    [Fact]
+    public void AreaTriggers_IgnoreGameMastersAndTheDead()
+    {
+        // mangos-classic AreaTrigger_at_naxxramas: IsGameMaster() || !IsAlive() returns before DoHandleAreaTrigger.
+        using var raid = new Raid(15990).Initialize(attackBoss: false);
+        raid.Creatures.SpawnTemporary(Template(15928), 5, 0, 270, 0);
+        raid.Tank.Flags |= PlayerFlags.Gm;
+        raid.Instance.OnAreaTrigger(raid.Tank, 4112);
+        raid.Instance.OnAreaTrigger(raid.Tank, 4113);
+        Assert.Equal(EncounterState.NotStarted, raid.Instance.GetData(NaxxramasInstance.KelThuzad));
+        Assert.Equal(EncounterState.NotStarted, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+        raid.Tank.Flags &= ~PlayerFlags.Gm;
+        raid.Map.Combat.Kill(null, raid.Tank);
+        raid.Instance.OnAreaTrigger(raid.Tank, 4112);
+        raid.Instance.OnAreaTrigger(raid.Tank, 4113);
+        Assert.Equal(EncounterState.NotStarted, raid.Instance.GetData(NaxxramasInstance.KelThuzad));
+        Assert.Equal(EncounterState.NotStarted, raid.Instance.GetData(NaxxramasInstance.Thaddius));
+    }
+
+    private static readonly CreatureSpawn[] HorsemenSpawns =
+    [
+        Spawn(53301, 16065, 2, 0, 270, 533, respawnSeconds: 604800), Spawn(53302, 16062, 3, 0, 270, 533, respawnSeconds: 604800),
+        Spawn(53303, 16064, 4, 0, 270, 533, respawnSeconds: 604800), Spawn(53304, 16063, 5, 0, 270, 533, respawnSeconds: 604800),
+    ];
+
+    [Fact]
+    public void FourHorsemen_WipeRespawnsTheDeadAndSendsTheRestHome_SoFourDeathsStillComplete()
+    {
+        // vmangos instance_naxxramas.cpp SetData(TYPE_FOUR_HORSEMEN, FAIL) respawns dead horsemen and resets the death counter.
+        using var raid = new Raid(16028).Initialize(attackBoss: false, spawns: HorsemenSpawns);
+        raid.World.RunTick(0);
+        Creature Horseman(uint entry) => raid.Creatures.Creatures.Single(c => c.Entry == entry);
+        Horseman(16065).AI!.AttackStart(raid.Tank);
+        Assert.All(NaxxramasInstance.HorsemenEntries, e => Assert.True(Horseman(e).Combat.IsInCombat));
+        raid.Map.Combat.Kill(raid.Tank, Horseman(16065));
+        raid.Map.Combat.Kill(raid.Tank, Horseman(16062));
+        raid.Instance.SetData(NaxxramasInstance.Horsemen, EncounterState.Fail);
+        Assert.All(NaxxramasInstance.HorsemenEntries, e => Assert.True(Horseman(e).IsAlive));
+        Assert.All(NaxxramasInstance.HorsemenEntries, e => Assert.False(Horseman(e).Combat.IsInCombat));
+        foreach (uint entry in NaxxramasInstance.HorsemenEntries.Take(3))
+        {
+            raid.Map.Combat.Kill(raid.Tank, Horseman(entry));
+            Assert.NotEqual(EncounterState.Done, raid.Instance.GetData(NaxxramasInstance.Horsemen));
+        }
+        raid.Map.Combat.Kill(raid.Tank, Horseman(NaxxramasInstance.HorsemenEntries[3]));
+        Assert.Equal(EncounterState.Done, raid.Instance.GetData(NaxxramasInstance.Horsemen));
+    }
+
+    [Fact]
+    public void FourHorsemen_ADeadHorsemanLoadedBeforeTheEncounterIsDoneRespawns()
+    {
+        // vmangos instance_naxxramas::OnCreatureCreate: a dead horseman respawns while TYPE_FOUR_HORSEMEN is not DONE.
+        using var raid = new Raid(16028).Initialize(attackBoss: false, spawns: HorsemenSpawns.Take(1));
+        raid.World.RunTick(0);
+        Creature blaumeux = raid.Creatures.Creatures.Single(c => c.Entry == 16065);
+        raid.Map.Combat.Kill(raid.Tank, blaumeux);
+        Assert.False(blaumeux.IsAlive);
+        raid.Instance.OnCreatureCreate(blaumeux); // what a grid reload or a restart with a saved respawn time delivers
+        raid.Instance.Update(1);
+        Assert.True(blaumeux.IsAlive);
+    }
+
+    [Fact]
+    public void Horsemen_MarkHalvesEveryThreatEntry()
+    {
+        using var raid = new Raid(16065).Initialize();
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        float before = raid.Boss.Combat.Threat.Entries.Single(e => e.Target == raid.Tank).Threat;
+        raid.Boss.AI!.OnUpdate(20000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 28833);
+        Assert.Equal(before / 2, raid.Boss.Combat.Threat.Entries.Single(e => e.Target == raid.Tank).Threat, 3);
+    }
+
+    [Fact]
+    public void Patchwerk_HatefulStrikeUsesCombatReach_NotAFixedFiveYards()
+    {
+        // vmangos DoHatefulStrike -> CanReachWithMeleeSpellAttack: Patchwerk's reach 3 + player 1.5 + 4/3 = 5.83 yd.
+        using var raid = new Raid(16028).Initialize();
+        raid.Boss.SetFloat(UpdateFields.UnitFieldCombatreach, 3f);
+        Player offTank = TestWorld.CreatePlayer(2, 0, 0, new FakeSession(), 533);
+        Player outside = TestWorld.CreatePlayer(3, 0, 0, new FakeSession(), 533);
+        offTank.Relocate(1 + 5.6f, 0, 270, 0, 0);
+        outside.Relocate(1 + 6.2f, 0, 270, 0, 0);
+        raid.World.AddPlayer(offTank); raid.World.AddPlayer(outside); raid.World.RunTick(0);
+        raid.Tank.Health = raid.Tank.MaxHealth / 4;
+        offTank.Health = offTank.MaxHealth / 2;
+        outside.Health = outside.MaxHealth;
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 1000);
+        raid.Boss.Combat.Threat.AddThreat(outside, 90);
+        raid.Boss.Combat.Threat.AddThreat(offTank, 80);
+        raid.Boss.AI!.OnUpdate(1200);
+        Assert.Equal(offTank, Assert.Single(raid.Caster.Casts, c => c.Spell == 28308).Target);
     }
 }

@@ -68,6 +68,29 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
 
+    /// <summary>
+    /// cmangos UnitAI::SetMeleeEnabled: the flag for later AttackStart calls and the swing already running at the victim (a bare
+    /// <see cref="CreatureAI.MeleeEnabled"/> set leaves an active swing going, because the map's melee loop reads the combat state).
+    /// </summary>
+    protected void SetMeleeEnabled(bool enabled)
+    {
+        MeleeEnabled = enabled;
+        if (Victim is { } victim)
+        {
+            System?.SetMelee(Me, victim, enabled);
+        }
+    }
+
+    /// <summary>
+    /// cmangos UnitAI::SetCombatMovement: on chases the victim at once, off drops the chase and stops where the creature stands
+    /// (<see cref="CreatureMapSystem.ApplyCombatMovement"/>; a bare <see cref="CreatureAI.CombatMovement"/> set keeps the chase running).
+    /// </summary>
+    protected void SetCombatMovement(bool enabled)
+    {
+        CombatMovement = enabled;
+        System?.ApplyCombatMovement(Me);
+    }
+
     public override void OnAggro(Unit target) => Instance?.SetData(encounter, EncounterState.InProgress);
 
     public override void OnDeath(Unit? killer) => Instance?.SetData(encounter, EncounterState.Done);

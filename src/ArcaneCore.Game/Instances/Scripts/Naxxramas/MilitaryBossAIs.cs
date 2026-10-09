@@ -12,8 +12,12 @@ namespace ArcaneCore.Game.Instances.Scripts.Naxxramas;
 /// </summary>
 public sealed class RazuviousAI : RaidBossAI
 {
-    // mangos-classic boss_razuvious.cpp SAY_UNDERSTUDY_TAUNT_1..4.
+    // mangos-classic boss_razuvious.cpp SAY_UNDERSTUDY_TAUNT_1..4, and its AddOnAggroText/AddOnKillText/AddOnDeathText
+    // broadcast texts (SAY_AGGRO1..4, SAY_SLAY, SAY_DEATH).
     private static readonly int[] UnderstudyTauntTexts = [13077, 13072, 13073, 13074];
+    private static readonly int[] AggroTexts = [13075, 13076, 13078, 13080];
+    private const int SlayText = 13081, DeathText = 13079;
+    private uint _killTextCooldown;
 
     public RazuviousAI(Creature creature) : base(creature, NaxxramasInstance.Razuvious)
     {
@@ -24,8 +28,23 @@ public sealed class RazuviousAI : RaidBossAI
     public override void OnAggro(Unit target)
     {
         base.OnAggro(target);
+        System?.SayText(Me, AggroTexts[(int)RandomDelay(0, AggroTexts.Length - 1)]);
         EnsureUnderstudies();
         System?.SetInCombatWithZone(Me);
+    }
+
+    /// <summary>mangos-classic CombatAI::KilledUnit: a player kill says SAY_SLAY, then ten seconds of silence.</summary>
+    public override void OnKilledUnit(Unit victim)
+    {
+        if (victim is not Player || _killTextCooldown > 0) return;
+        _killTextCooldown = 10000;
+        System?.SayText(Me, SlayText, victim);
+    }
+
+    protected override void ResetActions()
+    {
+        base.ResetActions();
+        _killTextCooldown = 0;
     }
 
     private void EnsureUnderstudies()
@@ -56,6 +75,7 @@ public sealed class RazuviousAI : RaidBossAI
 
     public override void OnDeath(Unit? killer)
     {
+        System?.SayText(Me, DeathText);
         Cast(29125, Me, triggered: true);
         base.OnDeath(killer);
     }
@@ -63,6 +83,7 @@ public sealed class RazuviousAI : RaidBossAI
     protected override void UpdateCombat(uint diffMs)
     {
         if (Me.Z > 285) { EnterEvadeMode(); return; }
+        _killTextCooldown = _killTextCooldown > diffMs ? _killTextCooldown - diffMs : 0;
         base.UpdateCombat(diffMs);
     }
 }
@@ -87,13 +108,19 @@ public sealed class GothikAI : RaidBossAI
         base.OnAggro(target);
         Cast(29230, Me, triggered: true);
         Me.UnitFlags |= UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable;
-        MeleeEnabled = false;
+        // mangos-classic boss_gothik.cpp Aggro: on the balcony he neither chases nor swings. CreatureMapSystem.AttackStart has
+        // already started the swing and the chase before this hook, so both are turned off on the live state, not just flagged.
+        SetCombatMovement(false);
+        SetMeleeEnabled(false);
         System?.SetInCombatWithZone(Me);
     }
 
     protected override void ResetActions()
     {
         base.ResetActions();
+        // mangos-classic boss_gothik.cpp Reset: "Only attack and be attackable while on ground".
+        SetMeleeEnabled(false);
+        SetCombatMovement(false);
         _elapsed = 0;
         _teleport = 0;
         _teleports = 0;
@@ -118,7 +145,10 @@ public sealed class GothikAI : RaidBossAI
             System?.RemoveAuras(Me, 28009);
             System?.RemoveAuras(Me, 28011);
             Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable);
-            MeleeEnabled = true;
+            // mangos-classic boss_gothik.cpp HandleGroundPhase: DoResetThreat, then melee and combat movement back on.
+            foreach (var entry in Me.Combat.Threat.Entries.ToArray()) Me.Combat.Threat.ModifyThreatPercent(entry.Target, -100);
+            SetMeleeEnabled(true);
+            SetCombatMovement(true);
             Cast(28025, Me, triggered: true);
         }
         if (!_ground) return;
@@ -146,7 +176,6 @@ public sealed class GothikAI : RaidBossAI
     {
         ClearSummons();
         Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable);
-        MeleeEnabled = true;
         base.OnReachedHome();
     }
 
@@ -192,9 +221,16 @@ public sealed class HorsemanAI : RaidBossAI
             16064 => (28832u, 28932u),
             _ => (28835u, 28934u),
         };
-        AddAction(12000, () => Cast(_mark, Me), () => 12000);
-        if (creature.Entry != 16062)
-            AddAction(5000, Special, () => creature.Entry == 16065 ? 12000u : RandomDelay(10000, 15000));
+        // vmangos boss_four_horsemen.cpp boss_four_horsemen_shared::Reset m_uiMarkTimer = 20 s, then 12 s after each cast.
+        AddAction(20000, CastMark, () => 12000);
+        // vmangos Aggro EVENT_BOSS_ABILITY: Blaumeux 12 s (repeat 12 s), Korth'azz 30 s (repeat 12-15 s),
+        // Zeliek 12 s (repeat 10-14 s). Mograine has no timed special (his Righteous Fire is a passive proc).
+        switch (creature.Entry)
+        {
+            case 16065: AddAction(12000, Special, () => 12000); break;
+            case 16064: AddAction(30000, Special, () => RandomDelay(12000, 15000)); break;
+            case 16063: AddAction(12000, Special, () => RandomDelay(10000, 14000)); break;
+        }
         AddAction(1200000, () => Cast(26662, Me), () => 300000);
     }
 
@@ -211,6 +247,18 @@ public sealed class HorsemanAI : RaidBossAI
             if (entry != Me.Entry && system.Creatures.FirstOrDefault(c => c.Entry == entry && c.IsAlive && !c.Combat.IsInCombat) is { } other)
                 other.AI?.AttackStart(target);
         }
+    }
+
+    /// <summary>
+    /// vmangos boss_four_horsemen_shared::UpdateAI: after a successful mark every threat entry that holds threat loses half of it
+    /// ("todo: this behavior should get some more confirmation" in vmangos).
+    /// </summary>
+    private bool CastMark()
+    {
+        if (!Cast(_mark, Me)) return false;
+        foreach (var entry in Me.Combat.Threat.Entries.ToArray())
+            if (entry.Threat > 0) Me.Combat.Threat.ModifyThreatPercent(entry.Target, -50);
+        return true;
     }
 
     private Player? RandomPlayer()

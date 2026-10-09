@@ -38,11 +38,12 @@ public sealed class PatchwerkAI : RaidBossAI
         if (tank is null) return false;
         // vmangos DoHatefulStrike: walk the threat list counting only players in melee reach (the tank
         // included), stop after four, and take the highest current health among them other than the tank.
+        // Reach is vmangos CanReachWithMeleeSpellAttack: both combat reaches + 4/3, at least 5 yd, in 2D.
         Unit? target = Me.Combat.Threat.Entries
             .Select(e => e.Target)
             .OfType<Player>()
             .Where(p => p.IsAlive && p.IsInWorld && p.Map == Me.Map)
-            .Where(p => { float x = p.X - Me.X, y = p.Y - Me.Y; return x * x + y * y <= 25; })
+            .Where(p => MapCombat.CanReachWithMeleeSpellAttack(Me, p))
             .Take(4)
             .Where(p => p != tank)
             .OrderByDescending(p => p.Health)
@@ -85,15 +86,16 @@ public sealed class GrobbulusAI : RaidBossAI
 
     protected override void UpdateCombat(uint diffMs)
     {
+        // vmangos boss_grobbulus.cpp UpdateSlimeStream: while the victim is out of melee auto-attack reach the countdown
+        // runs and Slime Stream repeats every SLIMESTREAM_REPEAT_CD (1.5 s); in reach it restarts at 1.5 s.
         if (Victim is { } victim)
         {
-            float x = victim.X - Me.X, y = victim.Y - Me.Y;
-            if (x * x + y * y > 25)
+            if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim))
             {
                 if (_slimeStream > diffMs) _slimeStream -= diffMs;
                 else if (Cast(28137, Me, triggered: true)) _slimeStream = 1500;
             }
-            else _slimeStream = 5000;
+            else _slimeStream = 1500;
         }
         base.UpdateCombat(diffMs);
     }
@@ -201,10 +203,11 @@ public sealed class ThaddiusAI : RaidBossAI
 
     protected override void UpdateCombat(uint diffMs)
     {
+        // vmangos boss_thaddius.cpp UpdateAI: the Ball Lightning countdown runs only while the victim is out of melee
+        // auto-attack reach (CanReachWithMeleeAutoAttack); in reach it is held at one second.
         if (Victim is { } victim)
         {
-            float x = victim.X - Me.X, y = victim.Y - Me.Y;
-            if (x * x + y * y > 25)
+            if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim))
             {
                 if (_ballLightning > diffMs) _ballLightning -= diffMs;
                 else if (Cast(28299, victim)) _ballLightning = 1500;
@@ -241,16 +244,31 @@ public sealed class ThaddiusAddAI : RaidBossAI
 
     public override void OnAttackedBy(Unit attacker)
     {
+        if (_fakingDeath) return; // SD2 SetCombatScriptStatus(true): a feigning add reacts to nothing
         // The core's death-prevention threshold clamps a lethal hit to one HP.
-        // SD2 boss_thaddiusAddsAI::DamageTaken then holds the add in fake death.
-        if (!_fakingDeath && Me.Health <= 1)
+        // SD2 boss_thaddiusAddsAI::JustPreventedDeath then holds the add in fake death.
+        if (Me.Health <= 1)
         {
-            _fakingDeath = true;
-            Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
-            MeleeEnabled = false;
-            System?.StopMoving(Me);
-            (Instance as NaxxramasInstance)?.RecordConstructAddDeath(Me.Entry);
+            StartFakeDeath();
+            return;
         }
+
+        // vmangos CreatureAI::AttackedBy: an idle add hit from outside its aggro radius still starts the fight through
+        // AttackStart, so OnAggro sets the encounter, shuts the door and pulls the other add (MograineWhitemaneAi pattern).
+        base.OnAttackedBy(attacker);
+    }
+
+    private void StartFakeDeath()
+    {
+        // mangos-classic boss_thaddius.cpp boss_thaddiusAddsAI::JustPreventedDeath: stop casting, stand still, stop swinging,
+        // become unselectable; the motion master gets nothing but idle until the revive.
+        _fakingDeath = true;
+        System?.AiServices.Spells?.Interrupt(Me);
+        Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
+        SetMeleeEnabled(false);
+        SetCombatMovement(false);
+        System?.StopMoving(Me);
+        (Instance as NaxxramasInstance)?.RecordConstructAddDeath(Me.Entry);
     }
 
     public override void OnUpdate(uint diffMs)
@@ -258,13 +276,22 @@ public sealed class ThaddiusAddAI : RaidBossAI
         if (!_fakingDeath) base.OnUpdate(diffMs);
     }
 
+    /// <summary>Whether the add lies at one health point waiting for its partner (SD2 m_isFakingDeath).</summary>
+    internal bool IsFakingDeath => _fakingDeath;
+
     internal void Revive()
     {
+        // mangos-classic boss_thaddiusAddsAI::Revive -> DoResetThreat, Reset: full health, selectable, chasing and swinging again.
+        // Limit: SD2's 1.5 s PauseCombatMovement hold before the chase resumes is not modelled.
+        bool wasFaking = _fakingDeath;
         _fakingDeath = false;
         Me.Health = Me.MaxHealth;
         Me.InvincibilityHpThreshold = 1;
         Me.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
-        MeleeEnabled = true;
+        if (wasFaking)
+            foreach (var entry in Me.Combat.Threat.Entries.ToArray()) Me.Combat.Threat.ModifyThreatPercent(entry.Target, -100);
+        SetMeleeEnabled(true);
+        SetCombatMovement(true);
     }
 
     private bool MagneticPull()

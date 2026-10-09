@@ -231,6 +231,34 @@ public sealed partial class MapCombat
         return (dx * dx) + (dy * dy) < reach * reach && dz * dz < CombatConstants.DefaultMeleeZLimit;
     }
 
+    /// <summary>
+    /// vmangos WorldObject::CanReachWithMeleeSpellAttack (Object.cpp:1874-1888) with GetCombatReachToTarget(ability = true): the same reach
+    /// as <see cref="CanReachWithMeleeAutoAttack"/>, but 2D only ("melee spells ignore Z-axis checks"). Limit: the ability leeway tests
+    /// both units' flag-based speed above 70 % of run speed; this uses the auto-attack test (both moving, neither walking).
+    /// </summary>
+    public static bool CanReachWithMeleeSpellAttack(Unit attacker, Unit victim)
+    {
+        if (!victim.IsInWorld)
+        {
+            return false;
+        }
+
+        float reach = MeleeReach(attacker) + MeleeReach(victim) + CombatConstants.BaseMeleeRangeOffset;
+        if (reach < CombatConstants.AttackDistance)
+        {
+            reach = CombatConstants.AttackDistance;
+        }
+
+        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim))
+        {
+            reach += CombatConstants.LeewayBonusRange;
+        }
+
+        float dx = attacker.X - victim.X;
+        float dy = attacker.Y - victim.Y;
+        return (dx * dx) + (dy * dy) < reach * reach;
+    }
+
     private static float MeleeReach(Unit unit)
     {
         float reach = unit.GetFloat(UpdateFields.UnitFieldCombatreach);

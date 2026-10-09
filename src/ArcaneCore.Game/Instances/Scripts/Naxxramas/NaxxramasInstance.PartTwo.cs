@@ -28,7 +28,7 @@ public sealed partial class NaxxramasInstance
     }
     // Only the Military/Construct/Frostwyrm doors are owned here. These IDs and their
     // transitions come from mangos-classic naxxramas.h and instance_naxxramas::SetData.
-    private void OnPartTwoStateChanged(uint type, uint previous, uint state)
+    private void OnPartTwoStateChanged(uint type, uint state)
     {
         switch (type)
         {
@@ -53,7 +53,17 @@ public sealed partial class NaxxramasInstance
                 }
                 break;
             case Horsemen:
-                if (state == EncounterState.Fail) _horsemenDead.Clear();
+                if (state == EncounterState.Fail)
+                {
+                    // vmangos instance_naxxramas.cpp SetData(TYPE_FOUR_HORSEMEN, FAIL): the death counter restarts and every dead
+                    // horseman respawns. A horseman still fighting goes home with the rest (vmangos HandleEvadeOutOfHome evades all
+                    // four together), so a partial wipe leaves four fresh horsemen and four deaths still to earn.
+                    _horsemenDead.Clear();
+                    RespawnDeadHorsemen();
+                    foreach (uint entry in HorsemenEntries)
+                        if (GetSingleCreatureFromStorage(entry) is { IsAlive: true, IsEvading: false } horseman && horseman.Combat.IsInCombat)
+                            horseman.AI?.EnterEvadeMode();
+                }
                 if (state is (EncounterState.Fail or EncounterState.Done)
                     && Instance.FindUpdater<CreatureMapSystem>() is { } horsemenCreatures)
                     foreach (Creature spirit in horsemenCreatures.Creatures.Where(c => c.Entry is 16775 or 16776 or 16777 or 16778).ToArray())
@@ -99,6 +109,8 @@ public sealed partial class NaxxramasInstance
                 break;
             case KelThuzad:
                 SetDoor(181228, state is not EncounterState.InProgress);
+                if (state == EncounterState.InProgress && GetSingleCreatureFromStorage(15990)?.AI is KelThuzadAI kelThuzad)
+                    kelThuzad.BeginPhaseOne();
                 if (state is EncounterState.Fail or EncounterState.Done)
                 {
                     _guardianCheckMs = 0;

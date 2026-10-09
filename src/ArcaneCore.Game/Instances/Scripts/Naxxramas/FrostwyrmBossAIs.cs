@@ -43,6 +43,9 @@ public sealed class SapphironAI : RaidBossAI
         _airDelay = 46000;
         _icebolts = 0;
         _iceTargets.Clear();
+        // mangos-classic boss_sapphiron.cpp Reset: combat movement and melee on.
+        SetCombatMovement(true);
+        SetMeleeEnabled(true);
     }
 
     protected override void UpdateCombat(uint diffMs)
@@ -59,7 +62,10 @@ public sealed class SapphironAI : RaidBossAI
                     _icebolts = 0;
                     _iceTargets.Clear();
                     Cast(18430, Me, triggered: true);
-                    MeleeEnabled = false;
+                    // mangos-classic boss_sapphiron.cpp ExecuteAction(SAPPHIRON_AIR_PHASE): lift-off stops the chase and the swing.
+                    // Limit: the MovePoint to aLiftOffPosition and the hover flag are not modelled; he lifts off where he stands.
+                    SetCombatMovement(false);
+                    SetMeleeEnabled(false);
                 }
             }
             base.UpdateCombat(diffMs);
@@ -103,22 +109,27 @@ public sealed class SapphironAI : RaidBossAI
                 _airDelay = 46000;
                 _phaseTime = 0;
                 _iceTargets.Clear();
-                MeleeEnabled = true;
+                // mangos-classic boss_sapphiron.cpp HandleGroundPhase: chase and melee again (MoveChase on the victim).
+                SetCombatMovement(true);
+                SetMeleeEnabled(true);
                 break;
         }
     }
 }
 
 /// <summary>
-/// mangos-classic naxxramas/boss_kelthuzad.cpp boss_kelthuzadAI::{SpellHit,
+/// mangos-classic naxxramas/boss_kelthuzad.cpp boss_kelthuzadAI::{Reset,SpellHit,
 /// UpdateSummoning,StartPhase2,ExecuteAction,HandleLichKingAnswer}: five-minute
 /// channel and add timeline, guardians below 40%. mangos-classic drives phase two from a
 /// creature spell list; the timers here are vmangos boss_kelthuzad.cpp UpdateP2P3/DoChains
 /// (first casts at 10/14/20/30/50/60 s, with its fissure/blast/volley spacing).
+/// Kel'Thuzad "does not enter combat until phase 2": area trigger 4112 only sets the encounter in progress
+/// (naxxramas.cpp DoHandleAreaTrigger), which starts the channel through <see cref="BeginPhaseOne"/>; the
+/// phase-one timeline then runs out of combat, without a victim, chase or swing, until StartPhase2.
 /// </summary>
 public sealed class KelThuzadAI : RaidBossAI
 {
-    private enum Phase { Adds, Combat, Guardians }
+    private enum Phase { Idle, Adds, Combat, Guardians }
     private Phase _phase;
     private uint _elapsed;
     private uint _frostBolt, _nova, _chains, _mana, _fissure, _blast, _guardianDelay;
@@ -135,19 +146,42 @@ public sealed class KelThuzadAI : RaidBossAI
 
     public KelThuzadAI(Creature creature) : base(creature, NaxxramasInstance.KelThuzad) { }
 
-    public override void OnAggro(Unit target)
+    /// <summary>Whether the boss is in the add phase (channel running, not in combat).</summary>
+    internal bool InPhaseOne => _phase == Phase.Adds;
+
+    /// <summary>
+    /// mangos-classic instance_naxxramas::SetData(TYPE_KELTHUZAD, IN_PROGRESS): Kel'Thuzad casts the channel visual and the add
+    /// timeline starts. He stays out of combat, immune and unselectable.
+    /// </summary>
+    internal void BeginPhaseOne()
     {
-        base.OnAggro(target);
-        Me.UnitFlags |= UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable;
-        MeleeEnabled = false;
+        if (_phase != Phase.Idle || !Me.IsAlive) return;
+        _phase = Phase.Adds;
+        _elapsed = 0;
         _channelStarted = Cast(29423, Me, triggered: true);
-        System?.SetInCombatWithZone(Me);
+    }
+
+    /// <summary>Phase one and the idle wait never take a victim: no aggro on sight, no retaliation, no assistance call.</summary>
+    public override bool AttackStart(Unit target) => _phase is not (Phase.Idle or Phase.Adds) && base.AttackStart(target);
+
+    public override void OnUpdate(uint diffMs)
+    {
+        switch (_phase)
+        {
+            case Phase.Idle: return;
+            case Phase.Adds: UpdatePhaseOne(diffMs); return;
+            default: base.OnUpdate(diffMs); return;
+        }
     }
 
     protected override void ResetActions()
     {
         base.ResetActions();
-        _phase = Phase.Adds;
+        // mangos-classic boss_kelthuzad.cpp Reset: immune to players, unselectable, no melee; combat movement waits for StartPhase2.
+        Me.UnitFlags |= UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable;
+        SetMeleeEnabled(false);
+        SetCombatMovement(false);
+        _phase = Phase.Idle;
         _elapsed = 0;
         _channelStarted = false;
         // vmangos boss_kelthuzad.cpp EVENT_PHASE_TWO_START schedule.
@@ -158,38 +192,64 @@ public sealed class KelThuzadAI : RaidBossAI
         _guardianStarted = false;
     }
 
-    protected override void UpdateCombat(uint diffMs)
+    private void UpdatePhaseOne(uint diffMs)
     {
-        if (_phase == Phase.Adds)
+        uint before = _elapsed / 1000;
+        _elapsed = (uint)Math.Min(uint.MaxValue, (ulong)_elapsed + diffMs);
+        uint after = _elapsed / 1000;
+        if (!_channelStarted) _channelStarted = Cast(29423, Me, triggered: true);
+        if (before < 4 && after >= 4)
+            for (int i = 0; i < 9; i++) Cast(28421, Me, triggered: true);
+        if (before < 9 && after >= 9)
+            for (int i = 0; i < 3; i++) Cast(28422, Me, triggered: true);
+        if (before < 12 && after >= 12) Cast(28423, Me, triggered: true);
+        CastTimeline(SoldierTimeline, before, after);
+        CastTimeline(AbominationTimeline, before, after);
+        CastTimeline(WeaverTimeline, before, after);
+        if (before < 310 && after >= 310 && System is { } creatures)
+            foreach (Creature add in creatures.Creatures.Where(c => c.Entry is (16427 or 16428 or 16429)
+                && !c.Combat.IsInCombat).ToArray())
+                creatures.ForcedDespawn(add, 0);
+        if (_elapsed >= 325000)
         {
-            uint before = _elapsed / 1000;
-            _elapsed = (uint)Math.Min(uint.MaxValue, (ulong)_elapsed + diffMs);
-            uint after = _elapsed / 1000;
-            if (!_channelStarted) _channelStarted = Cast(29423, Me, triggered: true);
-            if (before < 4 && after >= 4)
-                for (int i = 0; i < 9; i++) Cast(28421, Me, triggered: true);
-            if (before < 9 && after >= 9)
-                for (int i = 0; i < 3; i++) Cast(28422, Me, triggered: true);
-            if (before < 12 && after >= 12) Cast(28423, Me, triggered: true);
-            CastTimeline(SoldierTimeline, before, after);
-            CastTimeline(AbominationTimeline, before, after);
-            CastTimeline(WeaverTimeline, before, after);
-            if (before < 310 && after >= 310 && System is { } creatures)
-                foreach (Creature add in creatures.Creatures.Where(c => c.Entry is (16427 or 16428 or 16429)
-                    && !c.Combat.IsInCombat).ToArray())
-                    creatures.ForcedDespawn(add, 0);
-            if (_elapsed >= 325000)
-            {
-                _phase = Phase.Combat;
-                System?.RemoveAuras(Me, 29423);
-                foreach (var timeline in new[] { SoldierTimeline, AbominationTimeline, WeaverTimeline })
-                    foreach (var step in timeline) System?.RemoveAuras(Me, step.Spell);
-                Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable);
-                MeleeEnabled = true;
-            }
+            StartPhaseTwo();
             return;
         }
 
+        // boss_kelthuzad.cpp SpellHit(SPELL_CHANNEL_VISUAL_EFFECT): "Kel'Thuzad does not enter combat until phase 2, so we check
+        // every second if there are still players alive and force him to evade otherwise" (GetPlayerInMap(true, false)).
+        if (after > before && !(Me.Map?.Players.Any(p => p.IsAlive && !p.IsGameMaster) ?? false))
+            WipePhaseOne();
+    }
+
+    /// <summary>mangos-classic boss_kelthuzad.cpp StartPhase2: attackable, chasing and swinging, in combat with the zone.</summary>
+    private void StartPhaseTwo()
+    {
+        _phase = Phase.Combat;
+        System?.RemoveAuras(Me, 29423);
+        foreach (var timeline in new[] { SoldierTimeline, AbominationTimeline, WeaverTimeline })
+            foreach (var step in timeline) System?.RemoveAuras(Me, step.Spell);
+        Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable);
+        SetCombatMovement(true);
+        SetMeleeEnabled(true);
+        if ((System?.SetInCombatWithZone(Me) ?? 0) == 0) WipePhaseOne();
+    }
+
+    /// <summary>mangos-classic boss_kelthuzad.cpp EnterEvadeMode from the phase-one player check: adds gone, channel off, encounter failed.</summary>
+    private void WipePhaseOne()
+    {
+        if (System is { } creatures)
+            foreach (Creature add in creatures.Creatures.Where(c => c.Entry is (16427 or 16428 or 16429)).ToArray())
+                creatures.ForcedDespawn(add, 0);
+        System?.RemoveAuras(Me, 29423);
+        foreach (var timeline in new[] { SoldierTimeline, AbominationTimeline, WeaverTimeline })
+            foreach (var step in timeline) System?.RemoveAuras(Me, step.Spell);
+        ResetActions();
+        Instance?.SetData(NaxxramasInstance.KelThuzad, EncounterState.Fail);
+    }
+
+    protected override void UpdateCombat(uint diffMs)
+    {
         if (_phase == Phase.Combat && (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * 40)
         {
             _phase = Phase.Guardians;
@@ -304,12 +364,6 @@ public sealed class KelThuzadAI : RaidBossAI
         return targets.Length == 0 ? null : targets[System!.RandomInt(0, targets.Length - 1)];
     }
 
-    public override void OnReachedHome()
-    {
-        Me.UnitFlags &= ~(UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable);
-        MeleeEnabled = true;
-        base.OnReachedHome();
-    }
 
     private void CastTimeline((uint Second, uint Spell)[] timeline, uint before, uint after)
     {
