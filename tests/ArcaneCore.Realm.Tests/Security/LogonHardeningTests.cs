@@ -101,8 +101,11 @@ public sealed class LogonHardeningTests
             dir = Path.GetDirectoryName(dir);
         }
 
-        Assert.NotNull(path);
-        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path!));
+        // An artifacts-path build places the Realm project's shipped config beside the test DLL,
+        // outside the source-tree ancestor chain.
+        path ??= Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        Assert.True(File.Exists(path));
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         Assert.False(doc.RootElement.GetProperty("Auth").GetProperty("AutocreateAccounts").GetBoolean());
     }
 
