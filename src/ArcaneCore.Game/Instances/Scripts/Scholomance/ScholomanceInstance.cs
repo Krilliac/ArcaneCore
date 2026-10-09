@@ -315,20 +315,17 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
             return;
         }
 
-        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is not { } gandling)
-        {
-            return;
-        }
-
-        // Christmas Gandling while the Feast of Winter Veil runs (instance_scholomance.cpp:254-256).
-        if (IsHolidayActive(HolidayFeastOfWinterVeil))
-        {
-            gandling.System?.CastSpell(gandling, SpellXmasGandling, gandling, triggered: false);
-        }
-
-        if (!byPlayerEnter)
+        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is { } gandling
+            && !byPlayerEnter)
         {
             gandling.System?.SayText(gandling, -1289000);
+        }
+
+        // Christmas Gandling while the Feast of Winter Veil runs (instance_scholomance.cpp:254-256). The guard above returned when Gandling
+        // already existed, so a stored Gandling here is the one just summoned (OnCreatureCreate stores him).
+        if (IsHolidayActive(HolidayFeastOfWinterVeil) && GetSingleCreatureFromStorage(NpcGandling) is { IsAlive: true } summoned)
+        {
+            summoned.System?.CastSpell(summoned, SpellXmasGandling, summoned, triggered: false);
         }
     }
 }
