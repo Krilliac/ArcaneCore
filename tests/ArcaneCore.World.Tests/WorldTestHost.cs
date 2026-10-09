@@ -48,7 +48,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
         BanOptions? banOptions)
     {
-        _sessionOptions = sessionOptions ?? new WorldSessionOptions();
+        _sessionOptions = sessionOptions ?? new WorldSessionOptions { PreAuthTimeout = TestPreAuthTimeout };
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
         Bans = new Bans.InMemoryBanStore(StatusEvents);
         var collection = new ServiceCollection();
@@ -109,6 +109,14 @@ internal sealed class WorldTestHost : IAsyncDisposable
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _acceptLoop = Task.Run(AcceptLoopAsync);
     }
+
+    /// <summary>
+    /// The pre-auth deadline of a host started without session options. The retail 10 s (World:PreAuthTimeout) is a wall-clock limit on
+    /// the client: a test whose continuation the thread pool held back for 10 s under full-suite load had its connection closed between
+    /// SMSG_AUTH_CHALLENGE and CMSG_AUTH_SESSION ("an established connection was aborted"). Here it is only a bound on a hung test; the
+    /// deadline itself is tested with its own short value (CodexNetAuthWorldTests).
+    /// </summary>
+    public static readonly TimeSpan TestPreAuthTimeout = TimeSpan.FromMinutes(2);
 
     public InMemoryAccountStore Accounts { get; } = new();
 
