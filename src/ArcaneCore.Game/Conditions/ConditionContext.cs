@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 
 namespace ArcaneCore.Game.Conditions;
@@ -89,4 +90,7 @@ public sealed record ConditionContext
 
     /// <summary>Signed map variable for CONDITION_WORLDSTATE; absent variable is zero.</summary>
     public Func<Player, uint, int?>? WorldState { get; init; }
+
+    /// <summary>The same variable when a spawn group evaluates its condition with a map but no player.</summary>
+    public Func<Map, uint, int?>? MapWorldState { get; init; }
 }

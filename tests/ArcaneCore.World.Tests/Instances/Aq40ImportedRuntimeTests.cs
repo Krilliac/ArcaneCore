@@ -92,6 +92,13 @@ public sealed class Aq40ImportedRuntimeTests
                 Assert.IsType<HuhuranAI>(Assert.Single(creatures.Creatures, c => c.Entry == 15509).AI);
             });
 
+            // ClassicDB group 5310014 is gated by condition 5310010 (map variable 4823 == 0).
+            // Spawn groups have a map but no player when they ask the condition engine.
+            await MoveNearAsync(host, client, teleports, -8398f, 2061f, 116.21f);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Spawn?.Guid == 5310013),
+                "Sartura trash group gated on map variable zero");
+
             await MoveNearAsync(host, client, teleports, -8281.88f, 1688.65f, -25.94f);
             await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
                 .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15516), "Sartura grid load");

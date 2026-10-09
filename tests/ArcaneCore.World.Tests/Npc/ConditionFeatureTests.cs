@@ -1,13 +1,17 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Conditions;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Instances.Scripts.Uldaman;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.Configuration;
@@ -38,6 +42,16 @@ public sealed class ConditionFeatureTests
             ]);
     }
 
+    private sealed class MapConditionStore : IConditionContentStore
+    {
+        public Task<IReadOnlyList<ConditionRecord>> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ConditionRecord>>(
+            [
+                new(700001, 42, UldamanInstance.VariableSpawnAnnora, 1, 1, 0, 0),
+                new(5310010, 42, 4823, 1, 0, 0, 0),
+            ]);
+    }
+
     private static ServiceProvider Services(bool withStore, params (string Key, string Value)[] settings)
     {
         var services = new ServiceCollection();
@@ -57,6 +71,14 @@ public sealed class ConditionFeatureTests
         => new(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
             new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
             NullLogger<WorldRuntime>.Instance);
+
+    private static ServiceProvider MapServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConditionContentStore, MapConditionStore>();
+        services.AddSingleton(sp => new ConditionFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<ConditionFeature>.Instance));
+        return services.BuildServiceProvider();
+    }
 
     [Fact]
     public void FeatureIsDiscoveredAsAWorldFeature()
@@ -115,6 +137,40 @@ public sealed class ConditionFeatureTests
         Assert.True(evaluator.IsSatisfied(1, player, null));
         runtime.SetMapVariable(player.Map!, 4811, 0);
         Assert.False(evaluator.IsSatisfied(1, player, null));
+    }
+
+    [Fact]
+    public void SpawnGroupWorldStateReadsTheOwningMapAndUldamanInstanceVariable()
+    {
+        using ServiceProvider services = MapServices();
+        using WorldRuntime world = NewWorld(services);
+        Map uldamanMap = world.GetMap(UldamanInstance.MapId);
+        var uldaman = new UldamanInstance(uldamanMap);
+        uldamanMap.AddUpdater(uldaman);
+        uldaman.Initialize();
+        var uldamanCreatures = new CreatureMapSystem(uldamanMap, new CreatureContent([], [], [], [], []));
+        uldamanMap.AddUpdater(uldamanCreatures);
+        Map aqMap = world.GetMap(531);
+        var aqCreatures = new CreatureMapSystem(aqMap, new CreatureContent([], [], [], [], []));
+        aqMap.AddUpdater(aqCreatures);
+
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        world.RunTick(50);
+        var annoraGroup = new SpawnGroupDefinition
+        {
+            Id = 7000001, Type = SpawnGroupType.Creature, WorldStateCondition = 700001,
+        };
+        var sarturaTrash = new SpawnGroupDefinition
+        {
+            Id = 5310014, Type = SpawnGroupType.Creature, WorldStateCondition = 5310010,
+        };
+
+        Assert.False(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
+        Assert.True(aqCreatures.SpawnGroupCondition!(sarturaTrash));
+        Assert.False(aqCreatures.SpawnGroupCondition!(annoraGroup));
+        uldaman.SetVariable(UldamanInstance.VariableSpawnAnnora, 1);
+        Assert.True(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
     }
 
     [Fact]

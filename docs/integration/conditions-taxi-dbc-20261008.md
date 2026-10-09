@@ -37,7 +37,11 @@ ArcaneCore keeps mangos-classic numbering because z2815 uses it; vmangos reuses 
 
 ### 2026-10-09 instance fact follow-up
 
-`IInstanceConditionFacts` lets `ConditionFeature` read saved instance encounter state. On map 509, conditions 6500-6505 read the six AQ20 boss slots as variables 4811, 2174, and 4812-4815: zero until each boss is Done, one afterward. On map 531, conditions 717/718 read DungeonEncounter 715/716 from the Twin Emperors and Ouro slots. These values also work immediately after the script loads a saved instance. The other ten type-42 rows and the war-effort/invasion type-40 rows still need their owning systems. Twin Emperors and Ouro now have encounter AIs and imported-content runtime checks that reach Done; a multiplayer raid and original-client run remain outstanding.
+`IInstanceConditionFacts` lets `ConditionFeature` read saved instance encounter state. On map 509, conditions 6500-6505 read the six AQ20 boss slots as variables 4811, 2174, and 4812-4815: zero until each boss is Done, one afterward. On map 531, conditions 717/718 read DungeonEncounter 715/716 from the Twin Emperors and Ouro slots. These values also work immediately after the script loads a saved instance. This slice did not wire the other ten type-42 rows or the war-effort/invasion type-40 rows to their owners. Twin Emperors and Ouro now have encounter AIs and imported-content runtime checks that reach Done; a multiplayer raid and original-client run remain outstanding.
+
+### 2026-10-09 spawn-group map context follow-up
+
+`spawn_group.WorldState` is evaluated with its owning map and no player, including through AND/OR/NOT conditions. Previously the evaluator received no map, making all type-42 leaves unknown and keeping their groups out. The map fact reader now uses saved instance facts first, explicitly set `InstanceData` variables next, and the runtime map variable fallback last. Uldaman's variable 700001 now reaches its imported Annora group condition, and the imported AQ40 condition 5310010 reads map variable 4823's zero default so the Sartura trash groups appear. Focused tests cover map scoping, composite propagation, Uldaman's zero-to-one transition, and a Sartura group spawning from a copied ClassicDB world. The quest and event variables 6506, 6507, 19020, 19021, 19997, 30011, 19990, and 19951 still need producers; AQ40 variable 4823 has no owner for a nonzero transition. The type-40 world-script facts remain unowned.
 
 ## Taxi and DBC
 

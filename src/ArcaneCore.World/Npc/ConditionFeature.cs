@@ -50,7 +50,6 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
     private ConditionEvaluator _current = new(ConditionTable.Empty, new ConditionContext());
     private WorldRuntime? _world;
     private ConditionTable? _table;
-    private Func<Kernel.WorldData.SpawnGroups.SpawnGroupDefinition, bool?>? _spawnGroupCondition;
 
     public ConditionOptions Options { get; } = new();
 
@@ -81,13 +80,12 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
 
         LogSummary(table);
-        _spawnGroupCondition = group => Current.EvaluateWithoutSubjects(group.WorldStateCondition);
         world.WorldTick += _ => InstallSpawnGroupConditions(world);
     }
 
     /// <summary>
-    /// cmangos spawn groups ask their <c>spawn_group.WorldState</c> condition with no player (SpawnGroup::IsWorldstateConditionSatisfied):
-    /// every creature and game object map system gets <see cref="ConditionEvaluator.EvaluateWithoutSubjects"/> over the current table
+    /// cmangos spawn groups ask their <c>spawn_group.WorldState</c> condition with a map but no player
+    /// (SpawnGroup::IsWorldstateConditionSatisfied). Each map system gets the current evaluator with its owning map
     /// (systems attach at different times, so it is installed from the world tick). Undecidable conditions keep their group out.
     /// </summary>
     private void InstallSpawnGroupConditions(WorldRuntime world)
@@ -96,12 +94,12 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         {
             if (map.FindUpdater<Game.Creatures.CreatureMapSystem>() is { SpawnGroupCondition: null } creatures)
             {
-                creatures.SpawnGroupCondition = _spawnGroupCondition;
+                creatures.SpawnGroupCondition = group => Current.EvaluateOnMap(group.WorldStateCondition, map);
             }
 
             if (map.FindUpdater<Game.GameObjects.GameObjectMapSystem>() is { SpawnGroupCondition: null } objects)
             {
-                objects.SpawnGroupCondition = _spawnGroupCondition;
+                objects.SpawnGroupCondition = group => Current.EvaluateOnMap(group.WorldStateCondition, map);
             }
         }
     }
@@ -142,6 +140,17 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         ReputationService? reputation = services.GetService<ReputationFeature>()?.Service;
         ReputationService? ranked = reputation is { Factions.Count: > 0 } ? reputation : null;
         ConditionRuntimeState runtimeConditions = ConditionRuntimeState.For(world);
+        int? MapVariable(Map map, uint id)
+        {
+            if (map.FindUpdater<InstanceData>() is { } instance)
+            {
+                int? encounter = (instance as IInstanceConditionFacts)?.MapVariable(id);
+                if (encounter.HasValue) return encounter;
+                if (instance.TryGetVariable(id, out int explicitValue)) return explicitValue;
+            }
+
+            return runtimeConditions.GetMapVariable(map, id);
+        }
         return new ConditionContext
         {
             ItemCount = (player, item, bank) => player.Inventory.GetItemCount(item, bank),
@@ -185,9 +194,8 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
                     && (c.Template.ExtraFlags & 0x00200000u) != 0) : null,
             WorldScript = runtimeConditions.WorldScriptCondition,
             // AQ20 boss variables follow the saved encounter slots, including immediately after Load.
-            WorldState = (player, id) => player.Map is { } map
-                ? (map.FindUpdater<InstanceData>() as IInstanceConditionFacts)?.MapVariable(id)
-                    ?? runtimeConditions.GetMapVariable(map, id) : null,
+            WorldState = (player, id) => player.Map is { } map ? MapVariable(map, id) : null,
+            MapWorldState = MapVariable,
 
             // GetHonorRankInfo().rank (the PvP_RANK condition, classic-db/mangos-classic type 11). Without honor the condition stays
             // undecidable and fails closed, as before.

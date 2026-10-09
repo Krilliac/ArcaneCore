@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 
 namespace ArcaneCore.Game.Conditions;
@@ -54,7 +55,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     {
         ArgumentNullException.ThrowIfNull(player);
         return Table.Find(conditionId) is { } condition
-            && Meets(condition, new Subject(player, null), source is null ? default : new Subject(null, source)) == true;
+            && Meets(condition, new Subject(player, null), source is null ? default : new Subject(null, source), player.Map) == true;
     }
 
     /// <summary>
@@ -64,7 +65,14 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     /// missing condition.
     /// </summary>
     public bool? EvaluateWithoutSubjects(uint conditionId)
-        => Table.Find(conditionId) is { } condition ? Meets(condition, default, default) : false;
+        => Table.Find(conditionId) is { } condition ? Meets(condition, default, default, null) : false;
+
+    /// <summary>Evaluate a spawn-group condition with its owning map and no player or NPC.</summary>
+    public bool? EvaluateOnMap(uint conditionId, Map map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        return Table.Find(conditionId) is { } condition ? Meets(condition, default, default, map) : false;
+    }
 
     /// <summary>
     /// Count the rows that can and cannot be decided with the collaborators this evaluator has, so a
@@ -115,7 +123,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         ConditionType.CreatureInRange => Context.CreatureInRange is not null,
         ConditionType.SpawnCount => Context.SpawnCount is not null,
         ConditionType.WorldScript => Context.WorldScript is not null,
-        ConditionType.WorldState => Context.WorldState is not null,
+        ConditionType.WorldState => Context.WorldState is not null || Context.MapWorldState is not null,
         _ => false,
     };
 
@@ -151,7 +159,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     // ---- Meets / Evaluate ------------------------------------------------------------------
 
     /// <summary>cmangos ConditionEntry::Meets (Conditions.cpp:109-130); null is "cannot be decided".</summary>
-    private bool? Meets(ConditionEntry condition, Subject target, Subject source)
+    private bool? Meets(ConditionEntry condition, Subject target, Subject source, Map? map)
     {
         if ((condition.Flags & ConditionFlags.SwapTargets) != 0)
         {
@@ -163,7 +171,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
             return false;
         }
 
-        bool? result = Evaluate(condition, target, source);
+        bool? result = Evaluate(condition, target, source, map);
         return (condition.Flags & ConditionFlags.ReverseResult) != 0 ? !result : result;
     }
 
@@ -182,19 +190,19 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         _ => true,
     };
 
-    private bool? Evaluate(ConditionEntry c, Subject target, Subject source)
+    private bool? Evaluate(ConditionEntry c, Subject target, Subject source, Map? map)
     {
         switch (c.Type)
         {
             case ConditionType.Not:
-                return !MeetsById(c.Value1, target, source);
+                return !MeetsById(c.Value1, target, source, map);
             case ConditionType.Or:
             {
                 // Conditions.cpp:157-165: the optional third and fourth first, then the first two.
                 bool? result = false;
                 foreach (uint id in OperandIds(c))
                 {
-                    result = Or(result, MeetsById(id, target, source));
+                    result = Or(result, MeetsById(id, target, source, map));
                     if (result == true)
                     {
                         return true;
@@ -209,7 +217,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
                 bool? result = true;
                 foreach (uint id in OperandIds(c))
                 {
-                    result = And(result, MeetsById(id, target, source));
+                    result = And(result, MeetsById(id, target, source, map));
                     if (result == false)
                     {
                         return false;
@@ -359,7 +367,8 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
                 return Unknown(c, Context.WorldScript?.Invoke(c.Value1, c.Value2));
             case ConditionType.WorldState:
             {
-                int? value = target.Player is { } statePlayer ? Context.WorldState?.Invoke(statePlayer, c.Value1) : null;
+                int? value = target.Player is { } statePlayer ? Context.WorldState?.Invoke(statePlayer, c.Value1)
+                    : map is not null ? Context.MapWorldState?.Invoke(map, c.Value1) : null;
                 return Unknown(c, value is { } state ? CompareWorldState(c.Value2, state, unchecked((int)c.Value3)) : null);
             }
             case ConditionType.Gender:
@@ -405,8 +414,8 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         yield return c.Value2;
     }
 
-    private bool? MeetsById(uint id, Subject target, Subject source)
-        => Table.Find(id) is { } condition ? Meets(condition, target, source) : null;
+    private bool? MeetsById(uint id, Subject target, Subject source, Map? map)
+        => Table.Find(id) is { } condition ? Meets(condition, target, source, map) : null;
 
     private static bool? Or(bool? a, bool? b) => a == true || b == true ? true : a is null || b is null ? null : false;
 
