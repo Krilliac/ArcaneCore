@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Raids;
 /// combat-only countdowns, reset on evade/respawn, and retry a ready action until its cast succeeds.
 /// Melee and victim selection remain with CreatureMapSystem.
 /// </summary>
-public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorAI(creature)
+public abstract class RaidBossAI(Creature creature, uint? encounter) : AggressorAI(creature)
 {
     private sealed class ActionTimer(Func<uint> initial, Func<bool> execute, Func<uint> repeat)
     {
@@ -40,6 +40,28 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
             (BlackwingLairInstance, 11983) => new FiremawAI(creature),
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
+            (RuinsOfAhnQirajInstance, 15341) => new RajaxxAI(creature),
+            (RuinsOfAhnQirajInstance, 15340) => new MoamAI(creature),
+            (RuinsOfAhnQirajInstance, 15370) => new BuruAI(creature),
+            (RuinsOfAhnQirajInstance, 15369) => new AyamissAI(creature),
+            (RuinsOfAhnQirajInstance, 15339) => new OssirianAI(creature),
+            (RuinsOfAhnQirajInstance, 15514) => new BuruEggAI(creature),
+            (RuinsOfAhnQirajInstance, 15471) => new AndorovAI(creature),
+            (RuinsOfAhnQirajInstance, 15473) => new KaldoreiEliteAI(creature),
+            (ZulGurubInstance, 14517) => new JeklikAI(creature),
+            (ZulGurubInstance, 14507) => new VenoxisAI(creature),
+            (ZulGurubInstance, 14510) => new MarliAI(creature),
+            (ZulGurubInstance, 14509) => new ThekalAI(creature),
+            (ZulGurubInstance, 11347) => new LorKhanAI(creature),
+            (ZulGurubInstance, 11348) => new ZathAI(creature),
+            (ZulGurubInstance, 14515) => new ArlokkAI(creature),
+            (ZulGurubInstance, 11380) => new JindoAI(creature),
+            (ZulGurubInstance, 11382) => new MandokirAI(creature),
+            (ZulGurubInstance, 15114) => new GahzrankaAI(creature),
+            (ZulGurubInstance, 15082) => new GrilekAI(creature),
+            (ZulGurubInstance, 15083) => new HazzarahAI(creature),
+            (ZulGurubInstance, 15084) => new RenatakiAI(creature),
+            (ZulGurubInstance, 15085) => new WushoolayAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             _ => null,
         };
@@ -57,11 +79,35 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
 
-    public override void OnAggro(Unit target) => Instance?.SetData(encounter, EncounterState.InProgress);
+    protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
 
-    public override void OnDeath(Unit? killer) => Instance?.SetData(encounter, EncounterState.Done);
+    protected Unit? RandomTarget()
+    {
+        Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
+            .Where(t => t.IsAlive && t.IsInWorld && ReferenceEquals(t.Map, Me.Map))];
+        return targets.Length == 0 ? null : targets[System!.RandomInt(0, targets.Length - 1)];
+    }
 
-    public override void OnReachedHome() => Instance?.SetData(encounter, EncounterState.Fail);
+    protected void ResetThreat()
+    {
+        foreach (var entry in Me.Combat.Threat.Entries.ToArray())
+            Me.Combat.Threat.ModifyThreatPercent(entry.Target, -100);
+    }
+
+    public override void OnAggro(Unit target)
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.InProgress);
+    }
+
+    public override void OnDeath(Unit? killer)
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.Done);
+    }
+
+    public override void OnReachedHome()
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.Fail);
+    }
 
     public override void OnEvade() => ResetActions();
 
