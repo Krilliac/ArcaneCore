@@ -3,6 +3,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
@@ -35,7 +37,13 @@ public sealed class Aq40ImportedRuntimeTests
                 ["Database:World:Provider"] = "Sqlite",
                 ["Database:World:ConnectionString"] = $"Data Source={copy};Pooling=False",
             }).Build();
-            await using var host = WorldTestHost.Start(configureServices: services =>
+            string? terrain = Environment.GetEnvironmentVariable("ARCANECORE_TEST_TERRAIN_DIR");
+            await using var host = WorldTestHost.Start(configure: options =>
+            {
+                if (terrain is not { Length: > 0 }) return;
+                Assert.True(Directory.Exists(Path.Combine(terrain, "maps")), "terrain maps directory is missing");
+                options.Maps.DataDirectory = terrain;
+            }, configureServices: services =>
             {
                 ServiceDescriptor appearance = services.Last(d => d.ServiceType == typeof(IWorldDataStore));
                 services.AddSingleton(config);
@@ -56,6 +64,9 @@ public sealed class Aq40ImportedRuntimeTests
                 var player = host.World.FindOnlinePlayer("Aqsmoke")!;
                 var map = player.Map!;
                 Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                if (terrain is { Length: > 0 })
+                    Assert.True(map.Collision.GetHeight(player.X, player.Y, player.Z) > TerrainTile.InvalidHeight,
+                        "AQ40 extracted terrain has no floor beneath Fankriss");
                 CreatureMapSystem creatures = Assert.IsType<CreatureMapSystem>(map.FindUpdater<CreatureMapSystem>());
                 Creature fankriss = Assert.Single(creatures.Creatures, c => c.Entry == 15510);
                 Assert.IsType<FankrissAI>(fankriss.AI);
