@@ -49,5 +49,20 @@ public sealed class WarEffortImportedContentTests
         using SqliteCommand phases = db.CreateCommand();
         phases.CommandText = "SELECT COUNT(*) FROM game_event WHERE entry BETWEEN 120 AND 124 AND schedule_type=0";
         Assert.Equal(5L, (long)phases.ExecuteScalar()!);
+
+        foreach (uint entry in new[] { WarEffortCatalog.ColossusOfAshi, WarEffortCatalog.ColossusOfRegal,
+            WarEffortCatalog.ColossusOfZora })
+        {
+            using SqliteCommand boss = db.CreateCommand();
+            boss.CommandText = "SELECT COUNT(*) FROM creature_template WHERE Entry=$entry AND ScriptName='npc_silithus_boss'";
+            boss.Parameters.AddWithValue("$entry", entry);
+            Assert.Equal(1L, (long)boss.ExecuteScalar()!);
+            boss.CommandText = "SELECT COUNT(*) FROM creature_spawn WHERE Entry=$entry AND MapId=1";
+            Assert.Equal(1L, (long)boss.ExecuteScalar()!);
+        }
+
+        using SqliteCommand deathEvents = db.CreateCommand();
+        deathEvents.CommandText = "SELECT COUNT(*) FROM game_event_quest WHERE event BETWEEN 125 AND 127";
+        Assert.Equal(3L, (long)deathEvents.ExecuteScalar()!);
     }
 }

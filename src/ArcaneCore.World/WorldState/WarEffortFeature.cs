@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
@@ -19,6 +21,8 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
     private bool _hasStore;
     private GameEventService? _events;
     private uint _reloadMs;
+    private readonly HashSet<CreatureMapSystem> _bossSystems = [];
+    private readonly HashSet<int> _pendingBossDeaths = [];
 
     public WarEffortSnapshot Snapshot => Volatile.Read(ref _snapshot);
 
@@ -36,7 +40,15 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
 
         events.ServiceCreated += Wire;
         if (events.Service is { } current) Wire(current);
-        world.WorldTick += OnTick;
+        world.WorldTick += diffMs =>
+        {
+            InstallBossAis(world);
+            OnTick(diffMs);
+        };
+        world.MapUnloading += map =>
+        {
+            if (map.FindUpdater<CreatureMapSystem>() is { } system) _bossSystems.Remove(system);
+        };
     }
 
     public bool? WorldScriptCondition(uint field, uint state)
@@ -55,6 +67,49 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
         service.AddListener(this);
     }
 
+    private void InstallBossAis(WorldRuntime world)
+    {
+        if (!_hasStore) return;
+        foreach (Map map in world.Maps.Where(m => m.MapId == 1))
+        {
+            if (map.FindUpdater<CreatureMapSystem>() is not { } creatures || !_bossSystems.Add(creatures)) continue;
+            creatures.RegisterEntryAi(WarEffortCatalog.ColossusOfAshi, creature => new SilithusBossAi(creature, this));
+            creatures.RegisterEntryAi(WarEffortCatalog.ColossusOfRegal, creature => new SilithusBossAi(creature, this));
+            creatures.RegisterEntryAi(WarEffortCatalog.ColossusOfZora, creature => new SilithusBossAi(creature, this));
+        }
+    }
+
+    internal void OnBossDied(Creature boss)
+    {
+        if (!_hasStore || boss.Map?.MapId != 1 || WarEffortCatalog.BossIndex(boss.Entry) is not { } bossIndex)
+            return;
+        _pendingBossDeaths.Add(bossIndex);
+        FlushBossDeaths();
+    }
+
+    private void FlushBossDeaths()
+    {
+        if (_pendingBossDeaths.Count == 0) return;
+        try
+        {
+            using IServiceScope scope = scopes.CreateScope();
+            IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
+            foreach (int bossIndex in _pendingBossDeaths.ToArray())
+            {
+                store.MarkBossKilledAsync(bossIndex).GetAwaiter().GetResult();
+                _pendingBossDeaths.Remove(bossIndex);
+            }
+            Reload();
+            SyncPhaseEvent();
+        }
+        catch (Exception ex)
+        {
+            // A storage outage must not interrupt CreatureMapSystem.OnCreatureDied before it sets corpse state.
+            // Keep the idempotent flag in memory and retry on the next five-second refresh.
+            logger.LogError(ex, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
+        }
+    }
+
     private void OnTick(uint diffMs)
     {
         if (!_hasStore) return;
@@ -63,6 +118,7 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
         {
             try
             {
+                FlushBossDeaths();
                 Reload();
                 WarEffortSnapshot state = Snapshot;
                 if (state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0
@@ -117,5 +173,33 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
 
         if (desired != 0 && service.IsValidEvent(desired) && !service.IsActiveEvent(desired))
             service.StartEvent(desired);
+
+        for (int bossIndex = 0; bossIndex < 3; bossIndex++)
+        {
+            ushort eventId = WarEffortCatalog.BossDeathEvent(bossIndex);
+            bool shouldRun = Snapshot.Phase == WarEffortPhase.TenHourWar
+                && (Snapshot.KilledBossMask & (1 << bossIndex)) != 0;
+            if (shouldRun && service.IsValidEvent(eventId) && !service.IsActiveEvent(eventId)) service.StartEvent(eventId);
+            else if (!shouldRun && service.IsActiveEvent(eventId)) service.StopEvent(eventId);
+        }
+    }
+
+    private sealed class SilithusBossAi(Creature creature, WarEffortFeature feature) : CreatureAI(creature)
+    {
+        public override bool AggroesOnSight => true;
+
+        public override void OnRespawn()
+        {
+            int textId = Me.Entry switch
+            {
+                WarEffortCatalog.ColossusOfAshi => 11426,
+                WarEffortCatalog.ColossusOfRegal => 11424,
+                WarEffortCatalog.ColossusOfZora => 11425,
+                _ => 0,
+            };
+            if (textId != 0) System?.SayText(Me, textId);
+        }
+
+        public override void OnDeath(Unit? killer) => feature.OnBossDied(Me);
     }
 }

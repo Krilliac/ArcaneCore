@@ -77,9 +77,16 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
 
         if (phase is not null && !Enum.IsDefined((WarEffortPhase)phase.Phase))
             throw new InvalidOperationException($"invalid AQ phase {phase.Phase}");
+        byte bossMask = 0;
+        foreach (int bossId in await db.Set<WarEffortBossKillRow>().AsNoTracking()
+            .Select(r => r.BossId).ToListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (bossId is < 0 or > 2) throw new InvalidOperationException($"invalid AQ boss id {bossId}");
+            bossMask |= (byte)(1 << bossId);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new WarEffortSnapshot(phase is null ? WarEffortPhase.Disabled : (WarEffortPhase)phase.Phase,
-            phase?.PhaseEndsAtUnix ?? 0, counters);
+            phase?.PhaseEndsAtUnix ?? 0, counters, bossMask);
     }
 
     public async Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
@@ -101,5 +108,20 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
         row.PhaseEndsAtUnix = phaseEndsAtUnix;
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> MarkBossKilledAsync(int bossIndex, CancellationToken cancellationToken = default)
+    {
+        if (bossIndex is < 0 or > 2) throw new ArgumentOutOfRangeException(nameof(bossIndex));
+        await using SqliteRewardWriterCoordinator.Lease writer =
+            await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        if (await db.Set<WarEffortBossKillRow>().AnyAsync(r => r.BossId == bossIndex, cancellationToken)
+            .ConfigureAwait(false)) return false;
+        db.Add(new WarEffortBossKillRow { BossId = bossIndex });
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 }

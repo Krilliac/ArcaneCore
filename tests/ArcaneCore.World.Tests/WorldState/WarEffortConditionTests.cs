@@ -26,6 +26,14 @@ public sealed class WarEffortConditionTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> MarkBossKilledAsync(int bossIndex, CancellationToken cancellationToken = default)
+        {
+            byte mask = (byte)(1 << bossIndex);
+            bool first = (State.KilledBossMask & mask) == 0;
+            State = State with { KilledBossMask = (byte)(State.KilledBossMask | mask) };
+            return Task.FromResult(first);
+        }
+
         public void CompletePeacebloom()
         {
             long[] counters = [.. State.Counters];
@@ -44,7 +52,10 @@ public sealed class WarEffortConditionTests
                  new GameEventRecord(121, 0, 525600, 1, 0, 0, "AQ transport"),
                  new GameEventRecord(122, 0, 525600, 1, 0, 0, "AQ gong"),
                  new GameEventRecord(123, 0, 525600, 1, 0, 0, "AQ war"),
-                 new GameEventRecord(124, 0, 525600, 1, 0, 0, "AQ done")],
+                 new GameEventRecord(124, 0, 525600, 1, 0, 0, "AQ done"),
+                 new GameEventRecord(125, 0, 525600, 1, 0, 0, "Ashi dead"),
+                 new GameEventRecord(126, 0, 525600, 1, 0, 0, "Regal dead"),
+                 new GameEventRecord(127, 0, 525600, 1, 0, 0, "Zora dead")],
                 [], [], [], [], [], []));
 
         public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default)
@@ -169,6 +180,41 @@ public sealed class WarEffortConditionTests
         world.RunTick(5_000);
         Assert.Equal(WarEffortPhase.Done, store.State.Phase);
         Assert.False(events.IsActiveEvent(123));
+        Assert.True(events.IsActiveEvent(124));
+    }
+
+    [Fact]
+    public void SavedColossusKillsActivateOnlyTheirPhaseFourQuestEvents()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<MemoryStore>();
+        services.AddScoped<IWarEffortStateStore>(sp => sp.GetRequiredService<MemoryStore>());
+        services.AddScoped<IGameEventDataStore, Events>();
+        services.AddSingleton(sp => new GameEventFeature(sp, NullLogger<GameEventFeature>.Instance));
+        services.AddSingleton(sp => new WarEffortFeature(sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<GameEventFeature>(), NullLogger<WarEffortFeature>.Instance));
+        using ServiceProvider provider = services.BuildServiceProvider();
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
+            new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
+            NullLogger<WorldRuntime>.Instance);
+        GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
+        events.Attach(world);
+        WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.Attach(world);
+        MemoryStore store = provider.GetRequiredService<MemoryStore>();
+        store.SetState(new WarEffortSnapshot(WarEffortPhase.TenHourWar,
+            DateTimeOffset.UtcNow.AddHours(10).ToUnixTimeSeconds(), new long[WarEffortCatalog.ResourceCount],
+            KilledBossMask: 0b101));
+        world.RunTick(5_000);
+        Assert.True(events.IsActiveEvent(123));
+        Assert.True(events.IsActiveEvent(125));
+        Assert.False(events.IsActiveEvent(126));
+        Assert.True(events.IsActiveEvent(127));
+
+        store.SetState(store.State with { Phase = WarEffortPhase.Done, PhaseEndsAtUnix = 0 });
+        world.RunTick(5_000);
+        Assert.False(events.IsActiveEvent(125));
+        Assert.False(events.IsActiveEvent(127));
         Assert.True(events.IsActiveEvent(124));
     }
 }

@@ -14,6 +14,9 @@ public static class WarEffortCatalog
     public const ushort TransportingEvent = 121;
     public const uint GongQuest = 8743;
     public const uint GongObject = 180717;
+    public const uint ColossusOfAshi = 15742;
+    public const uint ColossusOfRegal = 15741;
+    public const uint ColossusOfZora = 15740;
     public const int ResourceCount = 30;
 
     public static IReadOnlyList<WarEffortResource> Resources { get; } =
@@ -55,6 +58,22 @@ public static class WarEffortCatalog
 
     public static WarEffortResource? ForField(uint field)
         => Resources.FirstOrDefault(r => r.WorldStateField == field);
+
+    public static int? BossIndex(uint creatureEntry) => creatureEntry switch
+    {
+        ColossusOfAshi => 0,
+        ColossusOfRegal => 1,
+        ColossusOfZora => 2,
+        _ => null,
+    };
+
+    public static ushort BossDeathEvent(int bossIndex) => bossIndex switch
+    {
+        0 => 125,
+        1 => 126,
+        2 => 127,
+        _ => throw new ArgumentOutOfRangeException(nameof(bossIndex)),
+    };
 }
 
 public enum WarEffortPhase : byte
@@ -68,7 +87,8 @@ public enum WarEffortPhase : byte
 }
 
 /// <summary>Immutable snapshot of the global AQ state loaded from character storage.</summary>
-public sealed record WarEffortSnapshot(WarEffortPhase Phase, long PhaseEndsAtUnix, IReadOnlyList<long> Counters)
+public sealed record WarEffortSnapshot(WarEffortPhase Phase, long PhaseEndsAtUnix, IReadOnlyList<long> Counters,
+    byte KilledBossMask = 0)
 {
     public static WarEffortSnapshot Disabled { get; } = new(WarEffortPhase.Disabled, 0, new long[WarEffortCatalog.ResourceCount]);
 
@@ -91,4 +111,5 @@ public interface IWarEffortStateStore
 {
     Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default);
     Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default);
+    Task<bool> MarkBossKilledAsync(int bossIndex, CancellationToken cancellationToken = default);
 }

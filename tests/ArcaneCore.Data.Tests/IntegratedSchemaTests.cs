@@ -139,6 +139,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule.Version),
             (typeof(InstanceScriptDataModule), DatabaseComponent.Characters, InstanceScriptDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -168,7 +169,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(46, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46)
-        Assert.Equal(43, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43)
+        Assert.Equal(44, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

@@ -98,6 +98,26 @@ public sealed class WarEffortRewardTests : IAsyncLifetime
         Assert.Equal(state.PhaseEndsAtUnix, afterDuplicate.PhaseEndsAtUnix);
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ColossusDeathFlagsAreDurableAndIdempotent(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            var store = new EfWarEffortStateStore(db);
+            Assert.True(await store.MarkBossKilledAsync(0));
+            Assert.False(await store.MarkBossKilledAsync(0));
+            Assert.True(await store.MarkBossKilledAsync(2));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.MarkBossKilledAsync(3));
+        }
+
+        WarEffortSnapshot saved = await LoadAsync(connection);
+        Assert.Equal((byte)0b101, saved.KilledBossMask);
+    }
+
     private async Task<(DatabaseConnectionOptions, CharacterQuestRewardRequest)> CreateAsync(
         DatabaseProvider provider, uint questId = 8549, bool repeatable = true)
     {
