@@ -585,6 +585,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     private GameObjectUseResult UseChest(Player player, GameObject go)
     {
+        // cmangos GameObject::Use, GAMEOBJECT_TYPE_CHEST (GameObject.cpp:1554-1560): event id is data6.
+        StartDbEvent(go.Template.GetData(6), player, go);
         // GameObject::Use, chest (GameObject.cpp:1472-1479): the click springs the chest's linked trap, whatever the lock or quest say.
         TriggerLinkedTrap(go, player);
         if (!ChestQuestAllows(player, go))
@@ -775,6 +777,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
         ShowGooberPageOrGossip(player, go);
+        // vmangos GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1572-1577): data2 fires before the quest gate.
+        StartDbEvent(go.Template.GetData(2), player, go);
         int questId = GooberQuestId(go);
         if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
         {
