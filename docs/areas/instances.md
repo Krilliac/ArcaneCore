@@ -17,6 +17,11 @@ replace imported-world, multiplayer or real-client acceptance. `BlackwingLairTar
 targeting lacks (Possess 38, Destroy Egg 40/46, Nefarius' Corruption 7, Raise Drakonids 51) and narrows Nefarian's class calls through
 `SpellSystem.RegisterSpellTargetFilter` (the per-spell counterpart of mangos-classic `Spell::OnCheckTarget`).
 
+Naxxramas map 533 now has a 15-slot instance state, four wing return portals and the Arachnid/Plague quarter encounters. The
+[part-1 raid record](../integration/raid-naxx-1-20261008.md) gives reference functions, content requirements, tests and the remaining fidelity limits.
+The Military Quarter, Construct Quarter, Sapphiron and Kel'Thuzad (slots 6-14) live in the same partial class
+(`NaxxramasInstance.PartTwo.cs`); the [part-2 raid record](../integration/raid-naxx-part2-20261008.md) covers them.
+
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
 Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, phase transitions, summons and gossip scripts.

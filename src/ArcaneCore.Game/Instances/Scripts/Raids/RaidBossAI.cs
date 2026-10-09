@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.Classic;
+using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
 using ArcaneCore.Game.Pets;
 
@@ -69,6 +70,19 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (ZulGurubInstance, 15083) => new HazzarahAI(creature),
             (ZulGurubInstance, 15084) => new RenatakiAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
+            (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
+                => new NaxxramasBossAI(creature, raid),
+            (NaxxramasInstance raid, 16573) => new NaxxramasCryptGuardAI(creature, raid),
+            (NaxxramasInstance, 16061) => new RazuviousAI(creature),
+            (NaxxramasInstance, 16060) => new GothikAI(creature),
+            (NaxxramasInstance, 16065 or 16062 or 16064 or 16063) => new HorsemanAI(creature),
+            (NaxxramasInstance, 16028) => new PatchwerkAI(creature),
+            (NaxxramasInstance, 15931) => new GrobbulusAI(creature),
+            (NaxxramasInstance, 15932) => new GluthAI(creature),
+            (NaxxramasInstance, 15929 or 15930) => new ThaddiusAddAI(creature),
+            (NaxxramasInstance, 15928) => new ThaddiusAI(creature),
+            (NaxxramasInstance, 15989) => new SapphironAI(creature),
+            (NaxxramasInstance, 15990) => new KelThuzadAI(creature),
             _ => null,
         };
     }
@@ -87,6 +101,30 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
 
     /// <summary>Health at or below <paramref name="percent"/> (ScriptDev2 <c>GetHealthPercent() &lt;= pct</c>).</summary>
     protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
+
+    /// <summary>
+    /// cmangos UnitAI::SetMeleeEnabled: the flag for later AttackStart calls and the swing already running at the victim (a bare
+    /// <see cref="CreatureAI.MeleeEnabled"/> set leaves an active swing going, because the map's melee loop reads the combat state).
+    /// </summary>
+    protected void SetMeleeEnabled(bool enabled)
+    {
+        MeleeEnabled = enabled;
+        if (Victim is { } victim)
+        {
+            System?.SetMelee(Me, victim, enabled);
+        }
+    }
+
+    /// <summary>
+    /// cmangos UnitAI::SetCombatMovement: on chases the victim at once, off drops the chase and stops where the creature stands
+    /// (<see cref="CreatureMapSystem.ApplyCombatMovement"/>; a bare <see cref="CreatureAI.CombatMovement"/> set keeps the chase running).
+    /// </summary>
+    protected void SetCombatMovement(bool enabled)
+    {
+        CombatMovement = enabled;
+        System?.ApplyCombatMovement(Me);
+    }
+
 
     /// <summary>Health strictly below <paramref name="percent"/>: exactly ScriptDev2's <c>GetHealthPercent() &lt; pct</c>, in integers.</summary>
     protected bool HealthBelowPct(uint percent) => (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * percent;
