@@ -25,7 +25,8 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellStore.ScriptTarget> rows = Store.GetScriptTargets(cast.Spell.Id);
         if (nearest && rows.Count == 0) return [];
         // vmangos SetTargetMap: the effect radius, else the spell's maximum range (Spell.cpp:2049-2053).
-        float radius = effect.Radius > 0 ? effect.Radius : cast.Spell.Range.Max;
+        float baseRadius = TargetMapRadius(cast.Spell, effect, effectIndex);
+        float radius = baseRadius > 0 ? baseRadius : cast.Spell.Range.Max;
         if (radius <= 0) return [];
         // mangos-classic Spell::CheckScriptTargeting bounds the "anywhere" range (50000) of an entry search to 200 yards.
         if (nearest && radius >= 50_000f) radius = 200f;
