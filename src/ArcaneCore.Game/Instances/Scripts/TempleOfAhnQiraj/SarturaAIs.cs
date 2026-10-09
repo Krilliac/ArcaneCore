@@ -212,6 +212,15 @@ public sealed class SarturaRoyalGuardAI
         base.OnEvade();
     }
 
+    public override void OnUpdate(uint diffMs)
+    {
+        // ClassicDB z2815 row 1598403 (EVENT_T_TARGET_NOT_REACHABLE) would be shadowed by this
+        // scripted AI. Check before victim selection can refresh the chase generator.
+        if (Victim is { } unreachable && !Me.Motion.IsReachable)
+            Cast(21727, unreachable);
+        base.OnUpdate(diffMs);
+    }
+
     protected override void UpdateCombat(uint diffMs)
     {
         bool whirling = UpdateWhirlwind(diffMs);

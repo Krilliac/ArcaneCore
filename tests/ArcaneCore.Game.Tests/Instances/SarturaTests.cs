@@ -13,6 +13,14 @@ namespace ArcaneCore.Game.Tests.Instances;
 
 public sealed class SarturaTests
 {
+    private sealed class UnreachableGenerator : ICreatureMovementGenerator
+    {
+        public MovementGeneratorType Type => MovementGeneratorType.Idle;
+        public bool IsReachable => false;
+        public void Initialize(Creature creature, ICreatureMover mover) { }
+        public bool Update(Creature creature, ICreatureMover mover, uint diffMs) => true;
+    }
+
     private sealed class Arena : IDisposable
     {
         public WorldRuntime World { get; } = TestWorld.CreateRuntime();
@@ -133,5 +141,18 @@ public sealed class SarturaTests
 
         Assert.Equal(EncounterState.Fail, a.Raid.GetData(TempleOfAhnQirajInstance.Sartura));
         Assert.True(a.Guard.IsAlive);
+    }
+
+    [Fact]
+    public void RoyalGuardSummonsItsVictimWhenTheChaseCannotReachThem()
+    {
+        using var a = new Arena();
+        a.Pull();
+        a.Guard.Motion.Initialize(new UnreachableGenerator(), a.Creatures, start: true);
+        Assert.False(a.Guard.Motion.IsReachable);
+
+        a.GuardAi.OnUpdate(1);
+
+        Assert.Contains(a.Casts.Casts, c => c.Spell == 21727 && ReferenceEquals(c.Target, a.Tank));
     }
 }
