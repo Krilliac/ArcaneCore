@@ -115,6 +115,8 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _manager.ScriptCreatureCredit = (player, entry, guid) => services.GetService<QuestNpcFeature>()?.Services.KilledMonsterCredit(player, entry, guid);
         _manager.ScriptCastPlayerSpell = (player, spell) => services.GetService<SpellFeature>()?.System.CastSpell(player, spell,
             SpellCastTargets.ForSelf(), triggered: true);
+        _manager.ScriptCastPlayerTargetSpell = (player, spell, target) => services.GetService<SpellFeature>()?.System.CastSpell(
+            player, spell, SpellCastTargets.ForUnit(target), triggered: true);
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;

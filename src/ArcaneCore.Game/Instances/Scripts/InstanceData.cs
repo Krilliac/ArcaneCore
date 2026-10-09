@@ -57,6 +57,9 @@ public abstract class InstanceData : IMapUpdater
     public Action<Player, uint, ObjectGuid>? CreatureCredit { get; internal set; }
     public Action<Player, uint>? CastPlayerSpell { get; internal set; }
 
+    /// <summary>Scripted player spell with an explicit unit target (BWL Orb of Domination).</summary>
+    public Action<Player, uint, ObjectGuid>? CastPlayerTargetSpell { get; internal set; }
+
     /// <summary>vmangos <c>Initialize</c>: a fresh state (called for every creation, before <see cref="Load"/>).</summary>
     public virtual void Initialize()
     {
