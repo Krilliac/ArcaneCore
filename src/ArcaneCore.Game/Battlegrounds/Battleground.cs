@@ -27,6 +27,8 @@ public abstract partial class Battleground
     private readonly int[] _startDelays = [BattlegroundConstants.StartDelay2MinMs, BattlegroundConstants.StartDelay1MinMs, BattlegroundConstants.StartDelay30SecMs, BattlegroundConstants.StartDelayNoneMs];
     private BattlegroundStartEvents _events;
     private bool _prematureCountDown;
+    private bool _forceStartRequested;
+    private uint? _forceStopTimerMs;
     private uint _prematureCountDownTimer;
     private uint _ageMs;
 
@@ -177,6 +179,25 @@ public abstract partial class Battleground
         AddToFreeSlotQueue();
     }
 
+    /// <summary>vmangos .bg start sets the start delay to zero (MiscCommands.cpp:1805-1820). The normal start events still run in order.</summary>
+    public void ForceStart()
+    {
+        if (Status == BattlegroundStatus.WaitJoin)
+        {
+            _forceStartRequested = true;
+            StartDelayMs = 0;
+        }
+    }
+
+    /// <summary>vmangos BattleGround::StopBattleGround schedules the premature finish after 100 ms (BattleGround.cpp:1857-1861).</summary>
+    public void ForceStop()
+    {
+        if (Status is BattlegroundStatus.WaitJoin or BattlegroundStatus.InProgress)
+        {
+            _forceStopTimerMs = 100;
+        }
+    }
+
     /// <summary>vmangos <c>AddToBGFreeSlotQueue</c>: once.</summary>
     public void AddToFreeSlotQueue()
     {
@@ -217,6 +238,18 @@ public abstract partial class Battleground
             }
 
             return true;
+        }
+
+        if (_forceStopTimerMs is { } stopAfter)
+        {
+            if (diffMs >= stopAfter)
+            {
+                _forceStopTimerMs = null;
+                EndBattleground(null);
+                return true;
+            }
+
+            _forceStopTimerMs = stopAfter - diffMs;
         }
 
         UpdatePrematureFinish(diffMs);
@@ -319,7 +352,7 @@ public abstract partial class Battleground
             }
 
             StartingEventCloseDoors();
-            StartDelayMs = _startDelays[0];
+            StartDelayMs = _forceStartRequested ? 0 : _startDelays[0];
             if (StartMessageIds[0] != 0)
             {
                 Host.Announce(StartMessageIds[0], BattlegroundChatKind.Neutral, ObjectGuid.Empty);
@@ -345,6 +378,7 @@ public abstract partial class Battleground
             Host.Announce(StartMessageIds[3], BattlegroundChatKind.Neutral, ObjectGuid.Empty);
             Status = BattlegroundStatus.InProgress;
             StartDelayMs = _startDelays[3];
+            _forceStartRequested = false;
             Host.PlaySoundToAll(BattlegroundConstants.SoundStart);
         }
 

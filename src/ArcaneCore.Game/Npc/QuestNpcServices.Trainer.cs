@@ -10,6 +10,14 @@ public sealed record ClassTrainerQuote(uint TeachingSpell, uint LearnedSpell, ui
 /// <summary>Trainers (vmangos SendTrainerList, HandleTrainerBuySpellOpcode, Creature::IsTrainerOf, Player::GetTrainerSpellState).</summary>
 public sealed partial class QuestNpcServices
 {
+    /// <summary>The learned spell of an available trainer offer, using the same GREEN check as the trainer window.</summary>
+    public uint AvailableTrainerSpell(Player player, TrainerSpell row)
+    {
+        TrainerSpellInfo? info = Deps.Spells?.DescribeTrainerSpell(row.Spell);
+        return info is not null && GetTrainerSpellState(player, row, info) == TrainerSpellState.Green
+            ? info.LearnedSpell : 0;
+    }
+
     /// <summary>TRAIN_FAIL_UNAVAILABLE / NOT_ENOUGH_MONEY / NOT_ENOUGH_SKILL (vmangos TrainingFailureReason).</summary>
     private const uint TrainFailUnavailable = 0;
     private const uint TrainFailNotEnoughMoney = 1;

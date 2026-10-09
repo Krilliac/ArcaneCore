@@ -14,9 +14,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
 | `Player` | 0 | 6 |
-| `Moderator` | 1 | 22 |
-| `GameMaster` | 3 | 162 |
-| `Administrator` | 6 | 232 |
+| `Moderator` | 1 | 23 |
+| `GameMaster` | 3 | 178 |
+| `Administrator` | 6 | 256 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -91,7 +91,19 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.instance listbinds` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .instance listbinds — the instance binds of the selected player (or yourself). |
 | `.instance unbind` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .instance unbind #mapid\|all — drop binds of the selected player (or yourself), except the map you are in. |
 | `.instance stats` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .instance stats — loaded instance maps and stored saves. |
-| `.learn` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .learn #spell — teach a spell to the selected player or yourself. |
+| `.learn` ... | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .learn #spell — teach a spell to the selected player or yourself. |
+| `.learn all` | 6 | Administrator | declared retail level | Learn all eligible class spells of the selected player. |
+| `.learn all_gm` | 3 | GameMaster | declared retail level | Learn the reference GM spell list. |
+| `.learn all_crafts` | 3 | GameMaster | declared retail level | Learn every profession and secondary recipe. |
+| `.learn all_default` | 2 | GameMaster | declared retail level | Learn the selected player's race/class and rewarded-quest spells. |
+| `.learn all_lang` | 1 | Moderator | declared retail level | Learn all loaded language spells. |
+| `.learn all_myclass` | 5 | Administrator | declared retail level | Learn your class spells and talents. |
+| `.learn all_myspells` | 5 | Administrator | declared retail level | Learn your class spells. |
+| `.learn all_mytalents` | 5 | Administrator | declared retail level | Learn your class talents at their highest rank. |
+| `.learn all_mytaxis` | 2 | GameMaster | declared retail level | Discover taxi nodes near known flightmasters. |
+| `.learn all_recipes` | 3 | GameMaster | declared retail level | Syntax: .learn all_recipes $profession |
+| `.learn all_trainer` | 3 | GameMaster | declared retail level | Syntax: .learn all_trainer [#trainerTemplate] |
+| `.learn all_items` | 3 | GameMaster | declared retail level | Learn usable recipes taught by loaded items. |
 | `.list` ... | 3 | GameMaster | declared retail level | Syntax: .list $subcommand |
 | `.list creature` | 3 | GameMaster | declared retail level | Syntax: .list creature #creature_id [#max_count] Output the database spawns of the creature template (default 10). |
 | `.list object` | 3 | GameMaster | declared retail level | Syntax: .list object #object_id [#max_count] Output the database spawns of the gameobject template (default 10). |
@@ -118,6 +130,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify energy` | 3 | GameMaster | declared retail level | Syntax: .modify energy #newenergy [#newmaxenergy] Change the energy (and maximum energy) of the selected player, or yours. |
 | `.modify rage` | 3 | GameMaster | declared retail level | Syntax: .modify rage #newrage [#newmaxrage] Change the rage (and maximum rage) of the selected player, or yours. |
 | `.modify tp` | 4 | Administrator | declared retail level | Syntax: .modify tp #amount Set the free talent points of the selected player, or yours. |
+| `.modify faction` | 3 | GameMaster | declared retail level | Syntax: .modify faction [#faction [#unitflags [#npcflags [#dynamicflags]]]] |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
 | `.modify xprate` | 0 | Player | declared retail level | Syntax: .modify xprate #rate Set your experience rate (a game master sets the selected player's) to #rate times normal experience gain. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
@@ -133,6 +146,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.npc near` | 2 | GameMaster | declared retail level | Syntax: .npc near [#radius] List the creatures within #radius yards (default 10), nearest first. |
 | `.npc set` ... | 3 | GameMaster | declared retail level | Syntax: .npc set $subcommand |
 | `.npc set flag` | 3 | GameMaster | declared retail level | Syntax: .npc set flag #flags Change the selected creature's NPC service flags for its current life. |
+| `.npc set faction` | 3 | GameMaster | declared retail level | Syntax: .npc set faction #faction Change the selected creature's faction for its current life. |
 | `.quest` ... | 3 | GameMaster | declared retail level | Syntax: .quest $subcommand Type .quest to see the list of possible subcommands or .help quest $subcommand to see info on subcommands. |
 | `.quest add` | 6 | Administrator | declared retail level | Syntax: .quest add #quest_id\|[$quest_title]\|#shift-click-quest-link Add the quest to the log of the selected player (or yourself) without its requirements; a quest started by an item is refused. |
 | `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |
@@ -144,6 +158,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.reset` ... | 3 | GameMaster | declared retail level | Syntax: .reset $subcommand Type .reset to see the list of possible subcommands or .help reset $subcommand to see info on subcommands. |
 | `.reset talents` | 3 | GameMaster | declared retail level | Syntax: .reset talents [$playername] Remove all talents of the selected player or the named one (online now, or at the next login when offline), for free. |
 | `.reset all` | 6 | Administrator | declared retail level | Syntax: .reset all talents Request a free talent reset of every character at its next login. |
+| `.reset spells` | 5 | Administrator | declared retail level | Syntax: .reset spells — replace the selected player's spellbook with race/class defaults and rewarded quest spells. |
+| `.reset stats` | 5 | Administrator | declared retail level | Syntax: .reset stats [$playername] — reapply the current level's base stats. |
 | `.server` ... | 0 | Player | stored level through the map | Server status. |
 | `.server info` | 0 | Player | stored level through the map | Syntax: .server info Display the server version, the players online and the uptime. |
 | `.server motd` | 0 | Player | stored level through the map | Syntax: .server motd Show the server message of the day. |
@@ -158,7 +174,13 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |
+| `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
+| `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
+| `.bg` ... | 3 | GameMaster | declared retail level | Syntax: .bg status\|start\|stop |
+| `.bg status` | 3 | GameMaster | declared retail level | Show running battlegrounds and queue counts for your bracket. |
+| `.bg start` | 3 | GameMaster | declared retail level | Start the battleground you are in now. |
+| `.bg stop` | 3 | GameMaster | declared retail level | Stop the battleground you are in after a short countdown. |
 | `.aura` | 4 | Administrator | declared retail level | Syntax: .aura #spell Apply a spell's auras to the selected unit or yourself. |
 | `.unaura` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unaura #spell\|all — remove auras from the selected player or yourself. |
 | `.announce` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .announce $MessageToBroadcast Send a global message to all players online in chat log. |
@@ -173,7 +195,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command] Display usage instructions for the given command; without a command, the commands you can use. |
 | `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
-| `.unlearn` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
+| `.unlearn` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
+| `.unlearn all_gm` | 3 | GameMaster | declared retail level | Forget the reference GM spell list. |
+| `.unlearn all_crafts` | 3 | GameMaster | declared retail level | Forget profession and secondary recipes. |
+| `.unlearn all_recipes` | 3 | GameMaster | declared retail level | Syntax: .unlearn all_recipes $profession |
 | `.distance` | 3 | GameMaster | stored level through the map | Syntax: .distance Display the 3D distance to the selected object. |
 | `.angle` | 3 | GameMaster | stored level through the map | Syntax: .angle Display the angle to the selected object. |
 | `.recall` | 1 | Moderator | declared retail level | Syntax: .recall [$playername] Teleport the selected player (or the named one, or yourself) back to where it was before the last command teleport. |
