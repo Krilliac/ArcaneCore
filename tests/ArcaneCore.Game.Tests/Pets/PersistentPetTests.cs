@@ -10,6 +10,10 @@ using Xunit;
 
 namespace ArcaneCore.Game.Tests.Pets;
 
+/// <remarks>
+/// The waits on background persistence work are hang bounds, not timings: the continuations run on the thread pool, which a fully
+/// loaded test run can delay for seconds (a 2 s bound timed out a read that had already completed).
+/// </remarks>
 public sealed class PersistentPetTests
 {
     [Fact]
@@ -25,7 +29,7 @@ public sealed class PersistentPetTests
         kit.Service.ForgetCharacter(1);
         result.SetResult(row);
 
-        Assert.Null(await read.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Null(await read.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.False(kit.Service.SummonDeadPet(player, 50, kit.Spells.System));
         Assert.True(player.PetGuid.IsEmpty);
     }
@@ -43,7 +47,7 @@ public sealed class PersistentPetTests
         kit.Service.SavePersistence = (snapshot, _) => { saved = snapshot; return Task.CompletedTask; };
 
         kit.Creatures.KillCreature(pet);
-        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(2));
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(saved);
         Assert.Equal(0u, saved.Health);
         kit.Creatures.Despawn(pet);
@@ -115,7 +119,7 @@ public sealed class PersistentPetTests
         pet.Health = 41;
         pet.SetUInt32(UpdateFields.UnitFieldPower5, 501);
         kit.Service.QueueCurrentPetSave(player);
-        await firstSeen.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstSeen.Task.WaitAsync(TimeSpan.FromSeconds(30));
         pet.Health = 73;
         pet.SetUInt32(UpdateFields.UnitFieldPower5, 902);
         kit.Service.QueueCurrentPetSave(player);
@@ -124,7 +128,7 @@ public sealed class PersistentPetTests
         Assert.False(flush.IsCompleted);
         Assert.False(stop.IsCompleted);
         release.SetResult();
-        await Task.WhenAll(flush, stop).WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.WhenAll(flush, stop).WaitAsync(TimeSpan.FromSeconds(30));
 
         PersistentPetSnapshot[] saved = writes.ToArray();
         Assert.Equal(2, saved.Length);
@@ -152,7 +156,7 @@ public sealed class PersistentPetTests
         kit.Service.QueueCurrentPetSave(player);
         pet.Health = 62;
         kit.Service.QueueCurrentPetSave(player);
-        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Contains(writes, s => s.Health == 62);
     }
 
