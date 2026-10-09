@@ -191,9 +191,11 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            if (_spawnGate is { } gate && !gate.AllowsCreature(spawn.Guid))
+            if (!SpawnAllowed(spawn.Guid))
             {
-                continue; // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load)
+                // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load), or an
+                // instance spawn gated on a map variable (cmangos spawn_group WorldState)
+                continue;
             }
 
             // A spawn with creature_spawn_entry rows becomes one of them; the entry part of its GUID is the one chosen when the object was
@@ -291,7 +293,14 @@ public sealed partial class CreatureMapSystem
         creature.Motion.Initialize(CreateMovementGenerator(creature), this, start: creature.DeathState == CreatureDeathState.Alive);
 
         // vmangos Creature::AddToWorld -> ZoneScript::OnCreatureCreate: the instance script hears of every creature placed in its map.
-        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureCreate(creature);
+        if (Map.FindUpdater<Instances.Scripts.InstanceData>() is { } instanceData)
+        {
+            instanceData.OnCreatureCreate(creature);
+            if (creature.IsAlive)
+            {
+                instanceData.NotifyCreatureAlive(creature); // a member of a script's creature group
+            }
+        }
         CreateAi(creature);
         if (creature.DeathState == CreatureDeathState.Alive)
         {
@@ -301,6 +310,11 @@ public sealed partial class CreatureMapSystem
 
     private void RemoveFromWorld(Creature creature)
     {
+        if (creature.IsAlive)
+        {
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.NotifyCreatureGone(creature); // cmangos ClearCreatureGroup at RemoveFromWorld
+        }
+
         _creatures.Remove(creature.Guid);
         _corpseDespawns.Remove(creature);
         _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
@@ -353,6 +367,9 @@ public sealed partial class CreatureMapSystem
         creature.Combat.DeathState = DeathState.Dead;
         Map.Combat.Untrack(creature);
         CorpseRemoving?.Invoke(creature);
+        // mangos-classic Creature::RemoveCorpse -> InstanceData::OnCreatureDespawn (Creature.cpp:287-288): still on the map, so a triggered
+        // cast at the corpse (The Beast's Finkle is Einhorn) works.
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDespawn(creature);
         _ai.Spells?.OnCreatureRemoved(creature);
         Map.RemoveObject(creature);
         ForgetObservers(creature);
@@ -435,7 +452,11 @@ public sealed partial class CreatureMapSystem
         creature.FollowMovementDisabled = false;
         creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
-        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureRespawn(creature);
+        if (Map.FindUpdater<Instances.Scripts.InstanceData>() is { } respawnData)
+        {
+            respawnData.OnCreatureRespawn(creature);
+            respawnData.NotifyCreatureAlive(creature);
+        }
     }
 
     private void ForgetObservers(Creature creature)

@@ -22,6 +22,41 @@ public sealed class UldamanInstance(Map map) : ScriptedInstance(map, 2)
     private uint _keeperCooldown;
     private uint _keepersFallen;
     private bool _archaedasRegistered;
+    private bool _spawnHooksRegistered;
+
+    /// <summary>mangos-classic WORLD_STATE_CUSTOM_SPAWN_ANNORA (World/WorldStateDefines.h:162): 1 once the Cleft Scorpid group is gone.</summary>
+    public const uint VariableSpawnAnnora = 700001;
+
+    /// <summary>
+    /// The classic-db z2815 spawn groups behind it (Updates/Instances/070_uldaman.sql, imported as 7000000/7000001): "Uldaman - Cleft Scorpid
+    /// (10) - Annora" with the creature spawns 7000200-7000209, and "Uldaman - Annora (11073)" with spawn 7000324 and WorldState condition
+    /// 700001 (CONDITION_WORLDSTATE, variable 700001 equal to 1). The source checks group id 700000 (instance_uldaman.cpp:83-87); the database
+    /// it ships with numbers the group 7000000, so the port names the group by its members.
+    /// </summary>
+    public const uint ScorpidGroup = 7000000, AnnoraSpawnGuid = 7000324;
+    public static readonly uint[] ScorpidSpawnGuids = [.. Enumerable.Range(7000200, 10).Select(i => (uint)i)];
+
+    public override void Initialize()
+    {
+        base.Initialize();
+        // instance_uldaman::Initialize: GetVariableManager().SetVariable(WORLD_STATE_CUSTOM_SPAWN_ANNORA, 0).
+        SetVariable(VariableSpawnAnnora, 0);
+        if (!_spawnHooksRegistered)
+        {
+            _spawnHooksRegistered = true;
+            RegisterCreatureGroup(ScorpidGroup, ScorpidSpawnGuids);
+            GateCreatureSpawnOnVariable(AnnoraSpawnGuid, VariableSpawnAnnora, 1);
+        }
+    }
+
+    /// <summary>instance_uldaman::OnCreatureGroupDespawn: the last Cleft Scorpid of the group is gone, Annora appears.</summary>
+    protected override void OnCreatureGroupDespawn(uint groupId, Creature last)
+    {
+        if (groupId == ScorpidGroup)
+        {
+            SetVariable(VariableSpawnAnnora, 1);
+        }
+    }
 
     public uint KeepersFallen => _keepersFallen;
     public uint KeeperCooldownMs => _keeperCooldown;

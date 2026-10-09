@@ -25,6 +25,9 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
     public const uint GoBrazierOfTheHerald = 175564;
     public const uint NpcKirtonos = 10506, NpcGandling = 1853, NpcGuardian = 11598;
 
+    /// <summary>mangos-classic SPELL_XMAS_GANDLING (scholomance.h:74) and HOLIDAY_FEAST_OF_WINTER_VEIL (Globals/SharedDefines.h:1239).</summary>
+    public const uint SpellXmasGandling = 26199, HolidayFeastOfWinterVeil = 141;
+
     private static readonly uint[] RoomDoors = [177375, 177377, 177376, 177372, 177373, 177371];
     private static readonly uint[] BossEntries = [10506, 11622, 10508, 10505, 11261, 10901, 10507, 10504, 10502, NpcGandling];
     private static readonly uint[] PortalEvents = [5620, 5619, 5618, 5623, 5622, 5621];
@@ -312,8 +315,18 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
             return;
         }
 
-        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is { } gandling
-            && !byPlayerEnter)
+        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is not { } gandling)
+        {
+            return;
+        }
+
+        // Christmas Gandling while the Feast of Winter Veil runs (instance_scholomance.cpp:254-256).
+        if (IsHolidayActive(HolidayFeastOfWinterVeil))
+        {
+            gandling.System?.CastSpell(gandling, SpellXmasGandling, gandling, triggered: false);
+        }
+
+        if (!byPlayerEnter)
         {
             gandling.System?.SayText(gandling, -1289000);
         }

@@ -62,6 +62,24 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
         base.OnAttackedBy(attacker);
     }
 
+    /// <summary>
+    /// npc_disciple_of_naralexAI::EnterEvadeMode (mangos-classic wailing_cavernsScripts.cpp:174-191): at the circle stop (point 30) the
+    /// disciple keeps channelling the cleansing and stays where it is - loot tap cleared, combat stopped without interrupting the cast,
+    /// the chase dropped, Reset, then walking. Anywhere else the escort's evade (back to the combat start position).
+    /// </summary>
+    public override bool OnEnterEvadeMode()
+    {
+        if (_point != 30)
+        {
+            return false;
+        }
+
+        System?.StopCombatInPlace(Me);
+        Reset();
+        SetRun(false);
+        return true;
+    }
+
     protected override void JustStartedEscort()
         => instance.SetData(WailingCavernsInstance.TypeDisciple, EncounterState.InProgress);
 
