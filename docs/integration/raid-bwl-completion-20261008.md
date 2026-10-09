@@ -70,3 +70,34 @@ Intake verification (native, Release, `-m:1 -nodeReuse:false`, 0 warnings / 0 er
 Red proofs (feature broken, test fails, feature restored): importer filter back to -3090000 only (2 Data tests fail); throne check removed (2 gossip tests fail); Vaelastrasz and Victor faction changes removed (Vaelastrasz intro test and Victor gossip test fail); duplicate eggs counted and drakonid threshold 41 (Razorgore and Victor drakonid tests fail); Bronze gate always passing (Bronze test fails).
 
 Still not established: the orb's Possess under real client control, imported-world/multiplayer clears, the technicians' flight paths, the Scepter quest timer, and MC's Razorgore despawn-and-respawn on wipe (this port evades him home instead).
+
+## Rework after review (2026-10-08)
+
+Review findings and what was done. Spell targets were re-read from `D:/ArcaneCore-data/client-dbc-5875/Spell.dbc` and the ClassicDB z2815 `spell_script_target` rows (`(19832,1,12435)`, `(19873,0,177807)`, `(23642,1,13020)`, `(23362,0,179804)`).
+
+| # | Finding | Result |
+|---|---|---|
+| 1 | Possess 19832 (target A 38), Destroy Egg 19873 (A 40 / A 46), Nefarius' Corruption 23642 (B 7) and Raise Drakonids 23362 (B 51) had no selector, so the orb chain could not work in production. | Fixed. New `BlackwingLairTargetModule` (an `ISpellHandlerModule`, discovered like `MoltenCoreTargetModule`) registers each with `RegisterSpellTargetSelector`: Possess takes the explicit Razorgore if in range, else the nearest; Destroy Egg puts the explicit or nearest ready egg within the 10 yd range into the cast's object target and destination; Corruption hits every Vaelastrasz in the 100 yd radius; Raise Drakonids' ACTIVATE_OBJECT has no unit (the instance raises the bones). `DestroyEggScript` now acts in `OnEffectExecute` on the DUMMY effect (target selection runs after `OnCast`) and refuses the cast with `BadTargets` when no egg is in range (CheckCast script targeting). ACTIVATE_OBJECT (effect 86) itself is still not a spell-system effect; it is reported once as not implemented and the script does the work. |
+| 2 | Class calls hit the whole raid, once per member of the class. | Fixed. `NefarianAI.ClassCall` casts the call once, self-centred (MC `ExecuteAction`). A new seam `SpellSystem.RegisterSpellTargetFilter` (applied after any selection, built-in or registered: MC `Spell::OnCheckTarget`) keeps only live players of the called class for 23397/23398/23401/23410/23414/23418/23425/23427/23436. Target B 15 is a built-in area, so a selector could not override it. |
+| 3 | Nefarian's aggro set IN_PROGRESS, so a later drakonid death could re-arm SPECIAL and spawn a second Nefarian. | Fixed. `NefarianAI.OnAggro` no longer touches TYPE_NEFARIAN (MC has no Aggro hook). The instance already ignores a repeated value (`SetData` returns when the state is unchanged), which with SPECIAL kept is MC's "don't store the same thing twice". |
+| 4 | Phase-one wipe runs `ResetRazorgore` twice. | Disproved. `BlackwingLairInstance.SetData` returns early when the stored value equals the new one, so the `OnReachedHome` FAIL after the `OnUpdate` FAIL does nothing. The Razorgore test now drives `OnReachedHome` after the wipe and asserts a single Fireball 23024; removing the guard makes it fail. |
+| 5a | Razorgore's exit not shut during Vaelastrasz. | Fixed. On every TYPE_VAELASTRASZ change except SPECIAL, with Razorgore done, door 176965 is closed while Vaelastrasz is IN_PROGRESS and open otherwise. MC toggles the door on each such change; this sets the state the toggle sequence reaches and cannot drift after a reload. |
+| 5b | Chromatic Mutation applied only 23174. | Fixed. 23175 and 23177 are added to the target too (MC `SpellEffects.cpp` case 23173 casts both on the player; vmangos adds them as auras). MC's `RemoveAllAuras` before the mutation is still narrowed to the five afflictions. |
+| 5c | Drakonid Bones might never exist in production. | Confirmed and fixed. ClassicDB drakonid EventAI (`1426102`..`1430202`) casts 23363 on death, whose only effect is SUMMON_OBJECT_WILD 179804; the spell system has no such effect (noted in `BattlegroundWorldHost`). The instance now places the bones where each tracked drakonid dies (skipping a duplicate at the same spot) and clears its bone list on FAIL. |
+| 5d | Victor's identity relied on Z > 430. | Fixed. The instance stores a Victor Nefarius that has no summoner (MC `!IsTemporarySummon()`); Vaelastrasz's intro now summons his Nefarius with himself as summoner. The instance's own post-wipe replacement has no summoner and is stored. |
+
+Schema: unchanged (auth 5, characters 42, world 42). No reference code copied.
+
+Tests. New `BlackwingLairTargetingTests` cast the spells through the real `SpellSystem` with their 5875 target types (no recording caster): the orb's Possess through the same `CastPlayerTargetSpell` wiring as `InstanceFeature`; Destroy Egg with no object target (nearest egg, then the next, then `BadTargets` for an egg 40 yd away); Corruption on Vaelastrasz only; one Wild Magic cast reaching both mages and not the warrior; Raise Drakonids with no "implicit target" report, and bones from a drakonid death raised into a construct. `RaidBossScriptTests` gained the Vaelastrasz door and Chromatic Mutation tests and extended the Razorgore, Nefarian, Victor drakonid and throne-Victor tests; the old explicit-object Destroy Egg test was removed.
+
+Red proofs (each restored afterwards; the first attempt's patch did not compile and the run passed on the stale binary, so the binaries were checked by timestamp for the counted runs): module registration skipped, per-player class-call loop restored, companion auras removed, door block disabled, `SetData` repeat guard removed, Victor back to `Z > 430`, bones disabled — 11 tests failed (all five targeting tests, Chromatic Mutation, Victor drakonids, Nefarian, Razorgore wipe, throne Victor, door). `NefarianAI.OnAggro` override removed alone — the Victor drakonid test (state after landing) and the Nefarian test failed.
+
+Verification (native, Release, `-m:1 -nodeReuse:false`, 0 warnings / 0 errors, 6.7 GB available before the builds):
+
+| Run | Result |
+|---|---|
+| Game `BlackwingLairTargetingTests` + `RaidBossScriptTests` + `RaidHostTests` | 64 passed, 0 failed |
+| Game full | 7,559 passed, 13 skipped, 0 failed |
+| World full | 3,161 passed, 29 skipped, 0 failed |
+
+Not run: MockClient (no change to packet handling) and Data (importer unchanged since intake). Still not established: Possess under real client control (the charm/pet-bar path of a possessed boss in a 1.12.1 client), imported-world and multiplayer clears, the technicians' flight paths, the Scepter quest timer, MC's Razorgore despawn-and-respawn on wipe, and ACTIVATE_OBJECT as a spell effect.

@@ -85,6 +85,8 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            units = FilterRegistered(cast, effect, units);
+
             foreach ((Unit unit, float multiplier) in units)
             {
                 if (!result.TryGetValue(unit, out SpellTargetEntry? entry))

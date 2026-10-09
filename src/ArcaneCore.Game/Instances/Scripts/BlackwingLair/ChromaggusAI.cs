@@ -89,6 +89,10 @@ public sealed class ChromaggusAI : RaidBossAI
             {
                 foreach (uint id in Afflictions) System?.RemoveAuras(target, id);
                 Cast(23174, target, triggered: true);
+                // MC SpellEffects.cpp case 23173 (the player casts both on itself) / vmangos boss_chromaggus AddAura:
+                // 23175 damage and haste, 23177 maximum health and healing.
+                System?.AddAura(target, 23175, permanent: false);
+                System?.AddAura(target, 23177, permanent: false);
             }
         }
         return true;

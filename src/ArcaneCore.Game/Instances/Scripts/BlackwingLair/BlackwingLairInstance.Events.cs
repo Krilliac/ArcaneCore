@@ -25,7 +25,10 @@ public sealed partial class BlackwingLairInstance
     public int BrokenEggCount => _brokenEggs.Count;
     public int DrakonidDeaths => _drakonidDeaths;
 
-    /// <summary>SD2 OnCreatureCreate stores only the throne-room Lord Victor Nefarius (not Vaelastrasz's intro summon).</summary>
+    /// <summary>
+    /// SD2 OnCreatureCreate stores only the Lord Victor Nefarius that is not a temporary summon (<c>!IsTemporarySummon()</c>): the throne-room
+    /// one, or the instance's own replacement after a wipe, never Vaelastrasz's intro summon (which <see cref="VaelastraszAI"/> summons as his).
+    /// </summary>
     public bool IsEncounterVictor(ObjectGuid guid) => _victor is { } victor && victor.Guid == guid;
 
     public override void Initialize()
@@ -70,7 +73,7 @@ public sealed partial class BlackwingLairInstance
     public override void OnCreatureCreate(Creature creature)
     {
         if (creature.Entry is 12435 or 13020 or 11583 or 12557) StoreCreature(creature);
-        if (creature.Entry == 10162 && creature.Z > 430)
+        if (creature.Entry == 10162 && Instance.FindUpdater<CreatureMapSystem>()?.SummonerOf(creature) is null)
         {
             _victor = creature;
             StoreCreature(creature);
@@ -104,8 +107,9 @@ public sealed partial class BlackwingLairInstance
             case 12422: if (_defenders.Remove(creature.Guid)) _dragonCount--; break;
             case >= 14261 and <= 14265:
             case 14302:
-                if (_drakonids.Remove(creature.Guid) && GetData(7) == EncounterState.InProgress
-                    && ++_drakonidDeaths >= 42) SetData(7, EncounterState.Special);
+                if (!_drakonids.Remove(creature.Guid)) break;
+                LeaveBones(creature);
+                if (GetData(7) == EncounterState.InProgress && ++_drakonidDeaths >= 42) SetData(7, EncounterState.Special);
                 break;
         }
     }
@@ -126,6 +130,19 @@ public sealed partial class BlackwingLairInstance
         if (triggerId == 3626 && player.IsAlive && !player.IsGameMaster
             && GetSingleCreatureFromStorage(13020) is { AI: VaelastraszAI vael })
             vael.BeginIntro();
+    }
+
+    /// <summary>
+    /// ClassicDB z2815 creature_ai_scripts 1426102..1430202: every drakonid casts 23363 Summon Drakonid Corpse Trigger on death, whose only
+    /// effect is SUMMON_OBJECT_WILD 179804 at the caster (Spell.dbc 5875). The spell system has no SUMMON_OBJECT_WILD effect, so the
+    /// instance places the Drakonid Bones itself; <see cref="RaiseBones"/> raises them in phase three.
+    /// </summary>
+    private void LeaveBones(Creature drakonid)
+    {
+        if (Instance.FindUpdater<GameObjectMapSystem>() is { } objects
+            && !objects.GameObjects.Any(go => go.Entry == 179804 && go.IsSpawned
+                && MathF.Abs(go.X - drakonid.X) < 0.01f && MathF.Abs(go.Y - drakonid.Y) < 0.01f))
+            objects.Summon(179804, drakonid.X, drakonid.Y, drakonid.Z, drakonid.Orientation);
     }
 
     private void SetOrbLocked(bool locked)
@@ -198,6 +215,7 @@ public sealed partial class BlackwingLairInstance
             foreach (ObjectGuid guid in _bones)
                 if (Instance.FindUpdater<GameObjectMapSystem>()?.Find(guid) is { } bone)
                     bone.LootState = GameObjectLootState.JustDeactivated;
+            _bones.Clear();
         }
     }
 

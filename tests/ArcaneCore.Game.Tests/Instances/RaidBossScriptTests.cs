@@ -144,27 +144,13 @@ public sealed class RaidBossScriptTests
         wiped.Boss.AI!.OnUpdate(1);
         Assert.Equal(EncounterState.Fail, failed.GetData(0));
         Assert.Equal(0, failed.BrokenEggCount);
+        // The evade ends at home, where RaidBossAI reports FAIL again: the instance ignores the repeat (one death line and Fireball).
+        wiped.Boss.AI.OnReachedHome();
+        Assert.Single(wiped.Caster.Casts, c => c.Spell == 23024);
         wipeObjects.Update(wiped.Map, 1);
         failed.Update(30000);
         Assert.Equal(2, failed.EggCount);
         Assert.Equal(2, wipeObjects.GameObjects.Count(go => go.Entry == 177807));
-    }
-
-    [Fact]
-    public void DestroyEggSpell_UsesItsExplicitGameObjectTarget()
-    {
-        using var raid = new Raid(469, 12435);
-        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
-            [GameObjectTestKit.GoTemplate(177807, GameObjectType.Goober)], [], [], [], []));
-        raid.Map.AddUpdater(objects);
-        GameObject egg = objects.Summon(177807, 1, 0, 450, 0)!;
-        var spell = SpellTestKit.Spell(19873,
-            SpellTestKit.Effect(SpellEffectName.ScriptEffect, 0, SpellImplicitTarget.GameObject));
-        var spells = new SpellSystem(new SpellStore([spell], [], []), () => 0, units: new MapUnits());
-        SpellScriptDispatcher.Install(spells, SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly));
-        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = egg.Guid };
-        Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(raid.Boss, 19873, targets, triggered: true));
-        Assert.Equal(EncounterState.Special, raid.Data.GetData(0));
     }
 
     [Fact]
@@ -350,8 +336,15 @@ public sealed class RaidBossScriptTests
             raid.Boss.X, raid.Boss.Y, raid.Boss.Z, 0.5f, true, false, false, false, 0);
         Assert.Equal("I've made no mistakes.", Assert.Single(gossip.Hello(raid.Tank, throne)!.Items).Text);
 
-        // Vaelastrasz's intro summon (vmangos/MC aNefariusSpawnLoc, z 412) is not the encounter's Victor.
-        Creature summoned = raid.Creatures.SpawnTemporary(Template(10162), -7466.16f, -1040.80f, 412.053f, 2.14675f);
+        // Vaelastrasz's intro summon (MC SummonCreature from his AI: a temporary summon) is not the encounter's Victor.
+        Creature vael = raid.Creatures.SpawnTemporary(Template(13020), -7466f, -1040f, 412.053f, 0);
+        Creature summoned = raid.Creatures.SpawnTemporary(Template(10162), -7466.16f, -1040.80f, 412.053f, 2.14675f, summoner: vael);
+        var bwl = Assert.IsType<BlackwingLairInstance>(raid.Data);
+        Assert.False(bwl.IsEncounterVictor(summoned.Guid));
+        // Identity does not depend on height: a summon placed at the throne is still not the encounter's Victor.
+        Creature high = raid.Creatures.SpawnTemporary(Template(10162), 2, 0, 482.03f, 0, summoner: vael);
+        Assert.False(bwl.IsEncounterVictor(high.Guid));
+        Assert.True(bwl.IsEncounterVictor(raid.Boss.Guid));
         var intro = new NpcInfo(summoned.Guid, summoned.Entry, 0, NpcFlags.Gossip, 469,
             summoned.X, summoned.Y, summoned.Z, 0.5f, true, false, false, false, 0);
         Assert.Empty(gossip.Hello(raid.Tank, intro)!.Items);
@@ -363,6 +356,9 @@ public sealed class RaidBossScriptTests
     public void VictorNefarius_DrakonidDeathsTriggerDragonSpawnAfterFiveSeconds()
     {
         using var raid = new Raid(469, 10162, engage: false, 14265, 14302, 11583);
+        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(179804, GameObjectType.Generic)], [], [], [], []));
+        raid.Map.AddUpdater(objects);
         var victor = Assert.IsType<VictorNefariusAI>(raid.Boss.AI);
         Assert.True(victor.BeginIntro());
         victor.OnUpdate(1000); victor.OnUpdate(7000); victor.OnUpdate(4000);
@@ -375,11 +371,25 @@ public sealed class RaidBossScriptTests
         var bwl = Assert.IsType<BlackwingLairInstance>(raid.Data);
         Assert.Equal(42, bwl.DrakonidDeaths);
         Assert.Equal(EncounterState.Special, bwl.GetData(7));
+        // Each drakonid left its bones where it died (all 42 died at x 2, so one stack).
+        Assert.Single(objects.GameObjects, go => go.Entry == 179804);
+        Creature straggler = raid.Creatures.SpawnTemporary(Template(14302), 6, 0, 450, 0);
         bwl.Update(4999);
         Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 11583);
         bwl.Update(1);
         Creature dragon = Assert.Single(raid.Creatures.Creatures, c => c.Entry == 11583);
         raid.Creatures.Update(raid.Map, 2500);
+
+        // Nefarian lands and attacks; a drakonid that outlived phase one then dies. No second Nefarian (MC keeps SPECIAL).
+        var nef = Assert.IsType<NefarianAI>(dragon.AI);
+        nef.OnMovementInform(MovementGeneratorType.Point, 1);
+        nef.OnMovementInform(MovementGeneratorType.Point, 2);
+        nef.OnUpdate(4000);
+        Assert.Equal(EncounterState.Special, bwl.GetData(7));
+        raid.Map.Combat.Kill(raid.Tank, straggler);
+        bwl.Update(5000);
+        Assert.Single(raid.Creatures.Creatures, c => c.Entry == 11583);
+        Assert.Equal(EncounterState.Special, bwl.GetData(7));
         dragon.AI!.OnReachedHome();
         Assert.Equal(EncounterState.Fail, bwl.GetData(7));
         Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 10162 && c.IsAlive);
@@ -400,15 +410,52 @@ public sealed class RaidBossScriptTests
         nef.OnUpdate(3999);
         Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(7));
         nef.OnUpdate(1);
-        Assert.Equal(EncounterState.InProgress, raid.Data.GetData(7));
+        // MC boss_nefarianAI has no Aggro hook: landing and attacking leave TYPE_NEFARIAN as the instance set it.
+        Assert.Equal(EncounterState.NotStarted, raid.Data.GetData(7));
         nef.OnUpdate(35000);
-        Assert.Contains(raid.Caster.Casts, c => c.Spell is >= 23397 and <= 23436);
+        // The tank is a warrior: one self-centred Berserk (23397), narrowed to warriors by BlackwingLairTargetModule.
+        var call = Assert.Single(raid.Caster.Casts, c => c.Spell is >= 23397 and <= 23436);
+        Assert.Equal(23397u, call.Spell);
+        Assert.Null(call.Target);
         raid.Boss.Health = raid.Boss.MaxHealth / 10;
         nef.OnUpdate(1);
         Assert.Single(raid.Caster.Casts, c => c.Spell == 23362);
         Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 14605);
         raid.Map.Combat.Kill(raid.Tank, raid.Boss);
         Assert.Equal(EncounterState.Done, raid.Data.GetData(7));
+    }
+
+    [Fact]
+    public void RazorgoreExit_ClosesWhileVaelastraszIsFought_AndReopensOtherwise()
+    {
+        using var raid = new Raid(469, 13020, engage: false);
+        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(176965, GameObjectType.Door)], [], [], [], []));
+        raid.Map.AddUpdater(objects);
+        GameObject exit = objects.Summon(176965, 5, 0, 450, 0)!;
+        raid.Data.SetData(0, EncounterState.Done);
+        Assert.Equal(GameObjectState.Active, exit.State);
+        raid.Data.SetData(1, EncounterState.Special);
+        Assert.Equal(GameObjectState.Active, exit.State);
+        raid.Data.SetData(1, EncounterState.InProgress);
+        Assert.Equal(GameObjectState.Ready, exit.State);
+        raid.Data.SetData(1, EncounterState.Fail);
+        Assert.Equal(GameObjectState.Active, exit.State);
+        raid.Data.SetData(1, EncounterState.InProgress);
+        raid.Data.SetData(1, EncounterState.Done);
+        Assert.Equal(GameObjectState.Active, exit.State);
+    }
+
+    [Fact]
+    public void Chromaggus_ChromaticMutationAlsoAppliesBothCompanionAuras()
+    {
+        using var raid = new Raid(469, 14020);
+        foreach (uint affliction in new uint[] { 23153, 23154, 23155, 23169, 23170 })
+            raid.Caster.Auras.Add((raid.Tank, affliction));
+        raid.Boss.AI!.OnUpdate(7000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 23174 && ReferenceEquals(c.Target, raid.Tank));
+        Assert.Contains(raid.Caster.AddedAuras, a => a.Spell == 23175 && ReferenceEquals(a.Unit, raid.Tank));
+        Assert.Contains(raid.Caster.AddedAuras, a => a.Spell == 23177 && ReferenceEquals(a.Unit, raid.Tank));
     }
 
     [Fact]

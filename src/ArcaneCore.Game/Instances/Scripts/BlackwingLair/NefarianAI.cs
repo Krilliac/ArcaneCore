@@ -52,6 +52,14 @@ public sealed class NefarianAI : RaidBossAI
 
     public override bool AttackStart(Unit target) => _landed && base.AttackStart(target);
 
+    /// <summary>
+    /// mangos-classic boss_nefarianAI has no Aggro hook: TYPE_NEFARIAN stays SPECIAL from the 42nd drakonid to his death or evade.
+    /// Setting IN_PROGRESS here would let a later drakonid death pass the instance's IN_PROGRESS check and spawn a second Nefarian.
+    /// </summary>
+    public override void OnAggro(Unit target)
+    {
+    }
+
     /// <summary>MC boss_nefarianAI::JustDied: SAY_DEATH (vmangos broadcast_text 9971), then TYPE_NEFARIAN DONE.</summary>
     public override void OnDeath(Unit? killer)
     {
@@ -87,12 +95,16 @@ public sealed class NefarianAI : RaidBossAI
         }
     }
 
+    /// <summary>
+    /// MC ExecuteAction NEFARIAN_CLASS_CALL: the class of a random player, one self-centred cast of its call. The call's enemy area
+    /// (target B 15) is narrowed to that class by <see cref="BlackwingLairTargetModule"/> (MC Spell::OnCheckTarget).
+    /// </summary>
     private bool ClassCall()
     {
-        Player[] players = [.. Me.Map?.Players.Where(p => p.IsAlive) ?? []];
+        Player[] players = [.. Me.Map?.Players.Where(p => p.IsAlive && !p.IsGameMaster) ?? []];
         if (players.Length == 0) return false;
         Class chosen = players[System?.RandomInt(0, players.Length - 1) ?? 0].Class;
-        (uint spell, int text) call = chosen switch
+        (uint spell, int text) = chosen switch
         {
             Class.Warrior => (23397u, 9855), Class.Paladin => (23418u, 9853),
             Class.Hunter => (23436u, 9849), Class.Rogue => (23414u, 9856),
@@ -100,13 +112,9 @@ public sealed class NefarianAI : RaidBossAI
             Class.Mage => (23410u, 9850), Class.Warlock => (23427u, 9852),
             Class.Druid => (23398u, 9851), _ => (0u, 0),
         };
-        (uint spell, int text) = call;
-        if (spell == 0) return false;
-        bool cast = false;
-        foreach (Player player in players.Where(p => p.Class == chosen))
-            cast |= Cast(spell, player, triggered: true);
-        if (cast) System?.SayText(Me, text);
-        return cast;
+        if (spell == 0 || !Cast(spell)) return false;
+        System?.SayText(Me, text);
+        return true;
     }
 
     protected override void ResetActions()

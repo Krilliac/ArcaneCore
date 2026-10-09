@@ -88,7 +88,7 @@ public sealed class VaelastraszAI : RaidBossAI
                 // SummonCreature(NPC_LORD_VICTOR_NEFARIUS, aNefariusSpawnLoc, TEMPSPAWN_TIMED_DESPAWN, 25000).
                 if (System?.Content.FindTemplate(10162) is { } template)
                 {
-                    _nefarius = System.SpawnTemporary(template, -7466.16f, -1040.80f, 412.053f, 2.14675f);
+                    _nefarius = System.SpawnTemporary(template, -7466.16f, -1040.80f, 412.053f, 2.14675f, summoner: Me);
                     System.ForcedDespawn(_nefarius, 25000);
                 }
                 _introMs = 1000;

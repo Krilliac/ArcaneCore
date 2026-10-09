@@ -43,6 +43,14 @@ public sealed partial class BlackwingLairInstance(Map instance) : ScriptedInstan
             UpdateNefarian(data);
         }
 
+        // MC SetData TYPE_VAELASTRASZ: "prevent the players from running back to the first room" - Razorgore's exit is shut while
+        // Vaelastrasz is fought and open again otherwise (MC toggles it on every change but SPECIAL; this sets the state it reaches).
+        if (type == 1 && data != EncounterState.Special && GetData(0) == EncounterState.Done
+            && GetSingleGameObjectFromStorage(176965) is { } razorgoreExit)
+        {
+            razorgoreExit.State = data == EncounterState.InProgress ? GameObjectState.Ready : GameObjectState.Active;
+        }
+
         uint door = type switch
         {
             0 => 176965u, 1 => 179364u, 2 => 179365u, 6 => 179117u, _ => 0u,
