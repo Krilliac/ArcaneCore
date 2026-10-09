@@ -1,6 +1,9 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
@@ -115,6 +118,72 @@ public sealed class ConditionFeatureTests
     }
 
     [Fact]
+    public void RuinsBossCompletionChangesTheSixContentMapVariableConditions_AndSurvivesLoad()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(509);
+        var raid = new RuinsOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 509);
+        world.AddPlayer(player);
+        uint[] variables = [4811, 2174, 4812, 4813, 4814, 4815];
+        var table = ConditionTable.Build(variables.Select((id, slot) =>
+            new ConditionRecord((uint)(6500 + slot), 42, id, 1, 0, 0, 0)));
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.True(evaluator.IsSatisfied(6500 + slot, player, null));
+        for (uint slot = 0; slot < variables.Length; slot++)
+            raid.SetData(slot, EncounterState.Done);
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.False(evaluator.IsSatisfied(6500 + slot, player, null));
+
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.True(evaluator.IsSatisfied(6500 + slot, player, null));
+        raid.Load(saved);
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.False(evaluator.IsSatisfied(6500 + slot, player, null));
+    }
+
+    [Fact]
+    public void TempleEncounterConditionsReadTwinsAndOuroFromTheInstanceSave()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(531);
+        var raid = new TempleOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 531);
+        world.AddPlayer(player);
+        var table = ConditionTable.Build(
+        [
+            new ConditionRecord(717, 31, 715, 0, 0, 0, 0),
+            new ConditionRecord(718, 31, 716, 0, 0, 0, 0),
+        ]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.False(evaluator.IsSatisfied(717, player, null));
+        Assert.False(evaluator.IsSatisfied(718, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Twins, EncounterState.Done);
+        Assert.True(evaluator.IsSatisfied(717, player, null));
+        Assert.False(evaluator.IsSatisfied(718, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Ouro, EncounterState.Done);
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        Assert.False(evaluator.IsSatisfied(717, player, null));
+        raid.Load(saved);
+        Assert.True(evaluator.IsSatisfied(717, player, null));
+        Assert.True(evaluator.IsSatisfied(718, player, null));
+    }
+
+    [Fact]
     public void TheNpcServicesPickUpTheFeature_AsTheirConditionEvaluator()
     {
         using ServiceProvider services = Services(true);
@@ -142,12 +211,12 @@ public sealed class ConditionFeatureTests
         Assert.True(early.IsSatisfied(LevelFive, player, null));
     }
 
-    private static Player CreatePlayer(byte level)
+    private static Player CreatePlayer(byte level, uint mapId = 0)
     {
         var character = new CharacterRecord
         {
             Id = 1, AccountId = 1, Name = "Cond", Race = 1, Class = 1, Gender = 0, Level = level,
-            MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
+            MapId = mapId, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
         };
         var appearance = new PlayerAppearance(
             DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,

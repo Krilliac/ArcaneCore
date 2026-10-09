@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
@@ -11,13 +12,19 @@ namespace ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 /// Ten save slots include the unused reference slot 9. GPL reference was used for facts only.
 /// </summary>
 [InstanceScript(531)]
-public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10)
+public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10), IInstanceConditionFacts
 {
     public const uint Skeram = 0, Sartura = 1, Fankriss = 2, Huhuran = 3,
         Twins = 4, CThun = 5, BugTrio = 6, Viscidus = 7, Ouro = 8;
     private readonly HashSet<ObjectGuid> _deadBugs = [];
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
+    public bool? HasCompletedEncounter(uint dbcEncounterId) => dbcEncounterId switch
+    {
+        715 => GetData(Twins) == EncounterState.Done,
+        716 => GetData(Ouro) == EncounterState.Done,
+        _ => null,
+    };
     public override bool IsEncounterInProgress => Encounters.Any(state => state is EncounterState.InProgress or EncounterState.Special);
     public override bool CheckConditionCriteriaMeet(Player player, uint conditionId)
         => conditionId < Encounters.Length && Encounters[conditionId] == EncounterState.Done;

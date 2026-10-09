@@ -167,8 +167,12 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             Quests = () => services.GetService<QuestNpcFeature>()?.Services,
             InstanceScript = (player, conditionId) => player.Map?.FindUpdater<InstanceData>() is { } script
                 ? script.CheckConditionCriteriaMeet(player, conditionId) : null,
+            // Raid scripts expose their saved encounter state directly; the mutable runtime facts remain
+            // available for scripts that publish an encounter without an instance-state mapping.
             CompletedEncounter = (player, first, second) => player.Map is { } map
-                ? runtimeConditions.HasCompletedEncounter(map, first, second) : null,
+                ? (map.FindUpdater<InstanceData>() is IInstanceConditionFacts facts
+                    && (facts.HasCompletedEncounter(first) == true || (second != 0 && facts.HasCompletedEncounter(second) == true)))
+                    || runtimeConditions.HasCompletedEncounter(map, first, second) : null,
             LastWaypoint = (player, npc) => player.Map?.FindUpdater<CreatureMapSystem>()
                 ?.FindCreature(npc.Guid)?.Motion.LastReachedWaypoint,
             CreatureInRange = (player, entry, range) => player.Map?.FindUpdater<CreatureMapSystem>() is { } creatures
@@ -180,7 +184,10 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
                     && c.Template.ExtraFlagsDialect == CreatureExtraFlagsDialect.CMangos
                     && (c.Template.ExtraFlags & 0x00200000u) != 0) : null,
             WorldScript = runtimeConditions.WorldScriptCondition,
-            WorldState = (player, id) => player.Map is { } map ? runtimeConditions.GetMapVariable(map, id) : null,
+            // AQ20 boss variables follow the saved encounter slots, including immediately after Load.
+            WorldState = (player, id) => player.Map is { } map
+                ? (map.FindUpdater<InstanceData>() as IInstanceConditionFacts)?.MapVariable(id)
+                    ?? runtimeConditions.GetMapVariable(map, id) : null,
 
             // GetHonorRankInfo().rank (the PvP_RANK condition, classic-db/mangos-classic type 11). Without honor the condition stays
             // undecidable and fails closed, as before.
