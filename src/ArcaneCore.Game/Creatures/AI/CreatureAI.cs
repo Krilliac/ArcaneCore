@@ -77,6 +77,16 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>
+    /// A script's own evade (an SD2 / vmangos <c>EnterEvadeMode() override</c> that does not call the base): asked first by
+    /// <see cref="CreatureMapSystem.EnterEvadeMode"/>. Return true when the script handled the evade itself; the engine's evade (interrupt,
+    /// aura reset, combat stop, <see cref="OnEvade"/>, the run home) is then skipped entirely. Return false (the default) for the engine's
+    /// evade - the source's <c>else Base::EnterEvadeMode()</c>. <see cref="CreatureMapSystem.StopCombatInPlace"/> is the source's
+    /// <c>SetLootRecipient(nullptr); CombatStop(false); MovementExpired(true)</c> without the cast interrupt and aura reset. A nested
+    /// <see cref="EnterEvadeMode"/> from inside this hook takes the engine's evade.
+    /// </summary>
+    public virtual bool OnEnterEvadeMode() => false;
+
     public virtual void OnReachedHome()
     {
     }

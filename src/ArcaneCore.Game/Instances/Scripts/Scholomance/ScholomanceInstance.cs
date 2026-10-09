@@ -39,6 +39,9 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
         (223.296f, 105.101f, 104.72f, 1.29154f), (209.233f, 73.2819f, 104.80f, 1.29154f),
     ];
 
+    /// <summary>mangos-classic SPELL_XMAS_GANDLING (scholomance.h:74) and HOLIDAY_FEAST_OF_WINTER_VEIL (Globals/SharedDefines.h:1239).</summary>
+    public const uint SpellXmasGandling = 26199, HolidayFeastOfWinterVeil = 141;
+
     private static readonly uint[] RoomDoors = [177375, 177377, 177376, 177372, 177373, 177371];
     private static readonly uint[] BossEntries = [10506, 11622, 10508, 10505, 11261, 10901, 10507, 10504, 10502, NpcGandling];
     private static readonly uint[] PortalEvents = [5620, 5619, 5618, 5623, 5622, 5621];
@@ -466,6 +469,13 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
             && !byPlayerEnter)
         {
             gandling.System?.SayText(gandling, -1289000);
+        }
+
+        // Christmas Gandling while the Feast of Winter Veil runs (instance_scholomance.cpp:254-256). The guard above returned when Gandling
+        // already existed, so a stored Gandling here is the one just summoned (OnCreatureCreate stores him).
+        if (IsHolidayActive(HolidayFeastOfWinterVeil) && GetSingleCreatureFromStorage(NpcGandling) is { IsAlive: true } summoned)
+        {
+            summoned.System?.CastSpell(summoned, SpellXmasGandling, summoned, triggered: false);
         }
     }
 }

@@ -33,7 +33,7 @@ public static class EncounterState
 /// </para>
 /// <para>Thread affinity: world thread (the map's).</para>
 /// </summary>
-public abstract class InstanceData : IMapUpdater
+public abstract partial class InstanceData : IMapUpdater
 {
     protected InstanceData(Map instance)
     {

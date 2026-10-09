@@ -97,6 +97,12 @@ a target not fighting it closes to melee. Nobody ranged otherwise runs in: an ou
 fights, drinks (the existing rest). Its victim is not `Combat.Victim` (no melee swing), so a living target that has the bot on its
 threat list keeps being its fight through the combat linger.
 
+"In melee" is the server's own swing reach (`MapCombat.CanReachWithMeleeAutoAttack`: 2D distance within the combat reach and
+less than 6 yards of height), or the 4-yard 3D distance. Judged by the 3D distance alone, a target up a slope (2 yards away, 3.9 up)
+stayed "out of melee" while the bot already stood at it: the chase had nowhere closer to go, no swing was sent, and the creature, which
+the same rule lets hit, wore the bot down (Dawnrover against Kobold Laborers in the 2026-10-08 replays, `ttk=860s reason=behind`, a
+retreat and once a death). The replay trace (`ARCANECORE_TEST_BOT_REPLAY_TRACE`) prints the melee geometry against the bot's target.
+
 ## Target etiquette (PlayerbotBrain.FindTarget)
 
 Idle grinding skips a creature that is someone else's (vmangos `IsValidHostileTarget` and the client's grey name): tapped by a

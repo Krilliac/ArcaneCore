@@ -82,6 +82,12 @@ public sealed partial class InstanceManager : IMapResolver
 
     /// <summary>Quest journal check for ScriptDev2's quest-only instance chests.</summary>
     public Func<Player, uint, bool> QuestCompleteUnrewarded { get; set; } = static (_, _) => false;
+
+    /// <summary>The live game-event state for the scripts (vmangos <c>sGameEventMgr.IsActiveEvent</c>); nothing runs until the world wires it.</summary>
+    public Func<ushort, bool> GameEventActive { get; set; } = static _ => false;
+
+    /// <summary>The live holiday state for the scripts (cmangos <c>IsHolidayActive</c>); nothing runs until the world wires it.</summary>
+    public Func<uint, bool> HolidayActive { get; set; } = static _ => false;
     /// <summary>World service callbacks passed to each ScriptDev2 instance at creation.</summary>
     public Action<Player, uint, ObjectGuid>? ScriptCreatureCredit { get; set; }
     public Action<Player, uint>? ScriptCastPlayerSpell { get; set; }
@@ -855,6 +861,8 @@ public sealed partial class InstanceManager : IMapResolver
 
         data.Logger = _logger;
         data.QuestCompleteUnrewarded = QuestCompleteUnrewarded;
+        data.GameEventActive = eventId => GameEventActive(eventId);
+        data.HolidayActive = holidayId => HolidayActive(holidayId);
         data.CreatureCredit = ScriptCreatureCredit;
         data.CastPlayerSpell = ScriptCastPlayerSpell;
         data.Saving = (_, text) =>
