@@ -104,15 +104,8 @@ public sealed class DataTestsSkipAttributionTests
 
     private static string ReadReport()
     {
-        for (string? dir = AppContext.BaseDirectory; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
-        {
-            string candidate = Path.Combine(dir, "docs", "integration", "wave4-integration.md");
-            if (File.Exists(candidate))
-            {
-                return File.ReadAllText(candidate);
-            }
-        }
-
-        throw new Xunit.Sdk.XunitException(ReportPath + " was not found above " + AppContext.BaseDirectory);
+        string path = RepositorySource.FindFile("docs", "integration", "wave4-integration.md")
+            ?? throw new Xunit.Sdk.XunitException(ReportPath + " was not found in the ArcaneCore checkout");
+        return File.ReadAllText(path);
     }
 }

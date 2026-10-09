@@ -61,17 +61,10 @@ public sealed class TestDatabasesIsolationTests
     [Fact]
     public void NoGlobalSqlitePoolClearing()
     {
-        string? root = null;
-        for (string? dir = AppContext.BaseDirectory; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
-        {
-            if (File.Exists(Path.Combine(dir, "ArcaneCore.Data.Tests.csproj")))
-            {
-                root = dir;
-                break;
-            }
-        }
-
-        Assert.True(root is not null, "the ArcaneCore.Data.Tests sources were not found above " + AppContext.BaseDirectory);
+        string? checkout = RepositorySource.FindRoot();
+        string? root = checkout is null ? null : Path.Combine(checkout, "tests", "ArcaneCore.Data.Tests");
+        Assert.True(root is not null && File.Exists(Path.Combine(root, "ArcaneCore.Data.Tests.csproj")),
+            "the ArcaneCore.Data.Tests sources were not found in the ArcaneCore checkout");
         var call = new System.Text.RegularExpressions.Regex(@"\.ClearAllPools\s*\(");
         string separator = Path.DirectorySeparatorChar.ToString();
         string[] sources = [.. Directory.EnumerateFiles(root!, "*.cs", SearchOption.AllDirectories)
