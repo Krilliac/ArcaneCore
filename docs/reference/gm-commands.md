@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 178 |
-| `Administrator` | 6 | 256 |
+| `GameMaster` | 3 | 180 |
+| `Administrator` | 6 | 259 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -51,6 +51,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis kit` | 3 | GameMaster | declared retail level | Syntax: .debug vis kit #kitid Play a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked). |
 | `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
 | `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
+| `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
 | `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |
@@ -302,8 +303,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot list List managed bots. |
 | `.playerbot inspect` | 3 | GameMaster | stored level through the map | Syntax: .playerbot inspect $id\|$name Read actual target, victim, cast and nearby trainer facts. |
 | `.playerbot invite` | 3 | GameMaster | stored level through the map | Syntax: .playerbot invite $id\|$name Put a running bot into your group; it follows you and takes your commands. |
-| `.playerbot chat` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat status The bots' chat replies. |
+| `.playerbot chat` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat &lt;status\|flags\|pardon&gt; The bots' chat replies and their safety screening. |
 | `.playerbot chat status` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat status Show bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error. |
+| `.playerbot chat flags` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat flags [$player] Show the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice). |
+| `.playerbot chat pardon` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat pardon $player Clear a player's bot chat strikes and cut-off (an automatic mute is lifted with .unmute). |
 | `.playerbot groups` | 3 | GameMaster | stored level through the map | Syntax: .playerbot groups List the bot-led groups (goal, members and roles, state) and the bots waiting for partners. |
 | `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
 | `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
