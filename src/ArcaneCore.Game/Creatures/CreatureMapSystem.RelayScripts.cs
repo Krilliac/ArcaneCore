@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Conditions;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -565,6 +567,18 @@ public sealed partial class CreatureMapSystem
 
             case 35: // SCRIPT_COMMAND_SEND_AI_EVENT (:2759-2775)
                 RelaySendAiEvent(step, source, target);
+                return false;
+
+            case 53: // SCRIPT_COMMAND_SET_WORLDSTATE (ScriptMgr.cpp:3287-3290): dataint id, dataint2 signed value
+                if (step.DataInt <= 0)
+                {
+                    ReportRelay(step, "SET_WORLDSTATE without a positive map variable id");
+                    return false;
+                }
+
+                uint variableId = (uint)step.DataInt;
+                ConditionRuntimeState.For(Map.World).SetMapVariable(Map, variableId, step.DataInt2);
+                Map.FindUpdater<InstanceData>()?.SetVariable(variableId, step.DataInt2);
                 return false;
 
             case 15: // SCRIPT_COMMAND_CAST_SPELL (:2155-2202): datalong, or one of dataint..4; datalong2 cast flags (TRIGGERED_OLD_TRIGGERED 0x01)

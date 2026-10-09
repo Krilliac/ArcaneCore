@@ -1,12 +1,14 @@
 using ArcaneCore.Data;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
@@ -60,7 +62,16 @@ public sealed class Aq40ImportedRuntimeTests
             });
             await using WorldTestClient client = await host.EnterWorldAsync("aq40smoke", "Aqsmoke", AccountSecurity.Administrator);
             TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-            await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Flags |= PlayerFlags.Gm);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                player.Flags |= PlayerFlags.Gm;
+                Map map = player.Map!;
+                // Imported Barrens relay 4072 is a single SET_WORLDSTATE 19020=1 step.
+                Assert.True(Assert.IsType<CreatureMapSystem>(map.FindUpdater<CreatureMapSystem>())
+                    .StartRelayScript(4072, player, null));
+                Assert.Equal(1, ConditionRuntimeState.For(host.World).GetMapVariable(map, 19020));
+            });
             Assert.True(await host.OnWorldAsync(() => teleports.TeleportTo(host.World.FindOnlinePlayer("Aqsmoke")!,
                 531, -8085.39f, 1196.72f, -91.97f, 0)));
             await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);

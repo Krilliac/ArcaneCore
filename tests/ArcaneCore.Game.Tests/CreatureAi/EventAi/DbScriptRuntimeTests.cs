@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Instances.Scripts.Uldaman;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -24,6 +26,44 @@ public sealed class DbScriptRuntimeTests
     private sealed class Conditions(bool result) : IConditionEvaluator
     {
         public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source) => result;
+    }
+
+    [Fact]
+    public void SetWorldstateCommand_WritesTheMapVariableAcrossDbScriptKinds()
+    {
+        RelayScriptStep onQuest = Emote(0, 0) with { Command = 53, DataInt = 19020, DataInt2 = 1 };
+        RelayScriptStep onMovement = Emote(0, 0) with { Command = 53, DataInt = 19020, DataInt2 = -2 };
+        var ai = new CreatureAiContent([], [])
+        {
+            DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, onQuest), (DbScriptKind.CreatureMovement, onMovement)]),
+        };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, player, null));
+            Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, 19020));
+            Assert.True(system.StartDbScript(DbScriptKind.CreatureMovement, ScriptId, player, null));
+            Assert.Equal(-2, ConditionRuntimeState.For(world).GetMapVariable(map, 19020));
+        }
+    }
+
+    [Fact]
+    public void SetWorldstateCommand_UpdatesTheInstanceVariableThatConditionsRead()
+    {
+        RelayScriptStep step = Emote(0, 0) with { Command = 53, DataInt = (int)UldamanInstance.VariableSpawnAnnora, DataInt2 = 1 };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, step)]) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            var uldaman = new UldamanInstance(map);
+            map.AddUpdater(uldaman);
+            uldaman.Initialize();
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, player, null));
+            Assert.True(uldaman.TryGetVariable(UldamanInstance.VariableSpawnAnnora, out int value));
+            Assert.Equal(1, value);
+        }
     }
 
     [Fact]
