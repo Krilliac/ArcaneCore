@@ -68,10 +68,10 @@ public sealed class TicketCommandTests
 
         Assert.Equal(
             ["Open tickets: 2", $"ID 1 from {Link("Playerone")} (online), changed 1 Minute 30 Seconds ago", $"ID 2 from {Link("Sleepyhead")} (offline), changed 1 Minute 30 Seconds ago"],
-            await LinesAsync(gm, ".ticket list"));
+            await LinesAsync(gm, ".ticket list", lines: 3));
         Assert.Equal(
             ["Open tickets: 1", $"ID 1 from {Link("Playerone")} (online), changed 1 Minute 30 Seconds ago"],
-            await LinesAsync(gm, ".ticket onlinelist"));
+            await LinesAsync(gm, ".ticket onlinelist", lines: 2));
         Assert.Equal("Open tickets: 2", await ReplyAsync(gm, ".ticket"));
     }
 
@@ -86,7 +86,7 @@ public sealed class TicketCommandTests
             audit.CreateTicket(1000 + i, "t", 1, 0, 0, 0, 0);
         }
 
-        string[] lines = await LinesAsync(gm, ".ticket list");
+        string[] lines = await LinesAsync(gm, ".ticket list", lines: 1 + TicketCommands.MaxListed + 1);
 
         Assert.Equal(1 + TicketCommands.MaxListed + 1, lines.Length);
         Assert.Equal($"Open tickets: {TicketCommands.MaxListed + 5}", lines[0]);
@@ -106,7 +106,7 @@ public sealed class TicketCommandTests
 
         Assert.Equal(first, await ReplyAsync(gm, ".ticket show 1"));
         AuditOf(host).RespondToTicket(1, "try /unstuck");
-        Assert.Equal([first, "Response: try /unstuck"], await LinesAsync(gm, ".ticket show 1"));
+        Assert.Equal([first, "Response: try /unstuck"], await LinesAsync(gm, ".ticket show 1", lines: 2));
 
         Assert.Equal("Ticket 99 doesn't exist", await ReplyAsync(gm, ".ticket show 99"));
         foreach (string bad in new[] { ".ticket show", ".ticket show abc", ".ticket show 0", ".ticket show -1" })

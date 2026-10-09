@@ -72,11 +72,12 @@ public sealed class TicketTests
         return (await client.ReadChatAsync()).Text;
     }
 
-    internal static async Task<string[]> LinesAsync(WorldTestClient client, string command)
+    /// <summary>Send a command and return its chat lines, waiting for at least <paramref name="lines"/> of them.</summary>
+    internal static async Task<string[]> LinesAsync(WorldTestClient client, string command, int lines = 1)
     {
         await client.CollectAsync();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return await client.CollectChatLinesAsync();
+        return await client.CollectChatLinesAsync(lines);
     }
 
     internal static InMemoryGmAuditStore StoreOf(WorldTestHost host) => host.WorldServices.GetRequiredService<InMemoryGmAuditStore>();
