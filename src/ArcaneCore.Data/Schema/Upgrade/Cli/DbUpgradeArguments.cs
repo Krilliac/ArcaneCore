@@ -34,6 +34,8 @@ internal sealed class DbUpgradeArguments
 
     public string Command { get; }
 
+    public string? DbcDumpFile { get; private set; }
+
     public string? Value(string option) => _values.GetValueOrDefault(option);
 
     public bool Flag(string option) => _flags.Contains(option);
@@ -75,7 +77,21 @@ internal sealed class DbUpgradeArguments
         }
 
         var result = new DbUpgradeArguments(command);
-        for (int i = 1; i < args.Count; i++)
+        int firstOption = 1;
+        if (command == "dbc" && args.Count > 1 && args[1] == "dump")
+        {
+            if (args.Count < 3 || args[2].StartsWith("--", StringComparison.Ordinal)
+                || !args[2].EndsWith(".dbc", StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(args[2]) != args[2])
+            {
+                throw new UsageException("dbc dump needs a DBC file name, such as Map.dbc");
+            }
+
+            result.DbcDumpFile = args[2];
+            firstOption = 3;
+        }
+
+        for (int i = firstOption; i < args.Count; i++)
         {
             string arg = args[i];
             if (!arg.StartsWith("--", StringComparison.Ordinal))

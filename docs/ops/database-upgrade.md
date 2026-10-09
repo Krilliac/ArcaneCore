@@ -99,6 +99,7 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `migrate-codex` | find databases the Codex line created and report their one-shot migration to this build's numbering (read-only); `--apply` runs only that migration, behind the same backup gate (see "Databases created by the Codex line") |
 | `backup-info` | print how to back each database up |
 | `dbc` | read-only client data check: every file of the DBC directory against its vmangos, ArcaneCore or WoWDBDefs layout, then the world database's spell, map, area, faction, display ... ids that no DBC row has, then the client DBCs' own references into each other (a diagnostic that never sets exit 5; `clientReferences` in `--json`) (docs/areas/client-data.md); `--json` |
+| `dbc dump <file.dbc>` | read-only named record dump of one build-5875 DBC; uses generated signedness, needs `--dbc-dir` or `ClientData:DbcDirectory`, and does not open a database |
 
 | Option | Applies to | Meaning |
 |---|---|---|

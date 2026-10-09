@@ -41,6 +41,7 @@ public static class DbUpgradeCli
           backup-info   print how to back each database up
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
+          dbc dump <file.dbc>  print named fields in record order; signed integers use the WoWDBDefs layout
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -496,6 +497,20 @@ public static class DbUpgradeCli
             if (!Directory.Exists(directory))
             {
                 throw new UsageException($"the DBC directory '{directory}' does not exist");
+            }
+
+            if (a.DbcDumpFile is { } dumpFile)
+            {
+                string path = Path.Combine(directory, dumpFile);
+                ClientDbcFileCheck check = ClientDbcInspector.Check(path);
+                if (!check.IsUsable)
+                {
+                    await _err.WriteLineAsync($"{dumpFile}: {check.Describe()}").ConfigureAwait(false);
+                    return DbUpgradeExitCodes.Drift;
+                }
+
+                DbcRecordDumper.Dump(path, _out);
+                return DbUpgradeExitCodes.Ok;
             }
 
             IReadOnlyList<ClientDbcFileCheck> files = ClientDbcInspector.CheckDirectory(directory);

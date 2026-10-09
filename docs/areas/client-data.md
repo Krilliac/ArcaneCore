@@ -12,6 +12,12 @@ strings stay authoritative for their files: generation fails if field counts or 
 adds field names, types, lengths, offsets and COLUMNS foreign keys for all 154 extracted client files. No `.dbd` files ship
 in this repository; see `THIRD_PARTY_NOTICES.md`.
 
+The generated integer metadata also preserves `<32>` versus `<u32>` (and packed widths).
+`arcane-db dbc dump Map.dbc --dbc-dir <directory>` prints named records without opening the
+world database; signed fields such as `ParentMapID` print `-1` for all-one bits, while
+unsigned fields retain the unsigned value. The ordinary `arcane-db dbc` validation still
+uses the world database for cross references.
+
 ## Delivered
 
 | Behaviour | ArcaneCore owner | Reference |
