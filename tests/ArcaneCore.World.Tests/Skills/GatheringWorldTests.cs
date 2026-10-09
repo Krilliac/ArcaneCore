@@ -223,6 +223,49 @@ public sealed class GatheringWorldTests
         Assert.Contains(player.Guid, await host.OnWorldAsync(() => door.SkillupSet.ToList()));
     }
 
+    /// <summary>A node script that takes every use over (vmangos GameObjectAI::OnUse returning true).</summary>
+    private sealed class TakeOverAi : IGameObjectAi
+    {
+        public int Uses;
+
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs)
+        {
+        }
+
+        public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
+        {
+            Uses++;
+            return true;
+        }
+    }
+
+    [Fact]
+    public async Task AChestWhoseScriptTakesTheOpenOver_StillRaisesTheSkillOnce()
+    {
+        // vmangos Spell::EffectOpenLock rolls UpdateGatherSkill after SendLoot for any object target (SpellEffects.cpp:2163-2207), so a
+        // node whose script handles the open (no loot window) still gives its one skill-up.
+        await using WorldTestHost host = Start(out GameObjectTestContext context, VeinLock);
+        await using WorldTestClient client = await host.EnterWorldAsync("MINESCRIPT", "Minescript");
+        Player player = await host.PlayerAsync("Minescript");
+        Spells(host).Random = new FixedRandom(int.MaxValue);
+        var ai = new TakeOverAi();
+        await host.OnWorldAsync(() =>
+        {
+            player.Skills!.Set(SkillIds.Mining, 1, 75, 1);
+            context.Feature!.FindSystem(0)!.RegisterAi(VeinEntry, ai);
+        });
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAtVein(MiningCast));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await host.WaitForWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Mining) == 2, "the scripted open raises the skill");
+        GameObject vein = (await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(VeinGuid()))))!;
+        Assert.Equal(1, await host.OnWorldAsync(() => ai.Uses));
+        Assert.Null(await host.OnWorldAsync(() => vein.Loot));
+        Assert.Contains(player.Guid, await host.OnWorldAsync(() => vein.SkillupSet.ToList()));
+    }
+
     private static ulong VeinGuid() =>ObjectGuid.WithEntry(HighGuid.GameObject, VeinEntry, VeinSpawn).Value;
 
     private static Game.Spells.SpellSystem Spells(WorldTestHost host) => host.WorldServices.GetRequiredService<global::ArcaneCore.World.Spells.SpellFeature>().System;

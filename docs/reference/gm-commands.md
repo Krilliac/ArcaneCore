@@ -178,9 +178,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
 | `.bg` ... | 3 | GameMaster | declared retail level | Syntax: .bg status\|start\|stop |
-| `.bg status` | 3 | GameMaster | declared retail level | Show running battlegrounds and queue counts for your bracket. |
+| `.bg status` | 3 | GameMaster | declared retail level | Show running battlegrounds and the queued players of each battleground. |
 | `.bg start` | 3 | GameMaster | declared retail level | Start the battleground you are in now. |
-| `.bg stop` | 3 | GameMaster | declared retail level | Stop the battleground you are in after a short countdown. |
+| `.bg stop` | 3 | GameMaster | declared retail level | End the battleground you are in at once when a team is below its minimum. |
 | `.aura` | 4 | Administrator | declared retail level | Syntax: .aura #spell Apply a spell's auras to the selected unit or yourself. |
 | `.unaura` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unaura #spell\|all — remove auras from the selected player or yourself. |
 | `.announce` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .announce $MessageToBroadcast Send a global message to all players online in chat log. |

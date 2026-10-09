@@ -331,7 +331,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// the casting item. On success a chest opens its loot and a door/button activates. The cast
     /// time and skill-ups belong to the spell (not done here): <paramref name="onChestOpened"/> runs
     /// with the chest once its loot window really opened, which for a dungeon chest is only after
-    /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>).
+    /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>),
+    /// and at once when the chest's script takes the open over (vmangos Spell::EffectOpenLock rolls the
+    /// gathering skill after SendLoot whatever the object did with it, SpellEffects.cpp:2163-2207).
     /// </summary>
     public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
         Action<GameObject>? onChestOpened = null)
@@ -376,14 +378,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
         if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
@@ -622,6 +624,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     /// <summary>vmangos CannotBeUsedUnderImmunity (GameObjectDefines.h:602-619) against UNIT_FLAG_IMMUNE.</summary>
+    /// <summary>A script took the open over: a chest never reaches its loot window, so its open callback runs now.</summary>
+    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened)
+    {
+        if (go.Type == GameObjectType.Chest)
+        {
+            onChestOpened?.Invoke(go);
+        }
+
+        return GameObjectUseResult.Ok;
+    }
+
     private static bool IsRefusedForImmunity(Player player, GameObject go)
         => go.Template.CannotBeUsedUnderImmunity() && (player.UnitFlags & UnitFlags.Immune) != 0;
 

@@ -145,6 +145,65 @@ public sealed class SpellVariantCommandTests
         Assert.True(await Knows(TaughtSpell));
     }
 
+    private const uint TalentRank2 = 990107;
+    private const uint BrokenCraft = 990108;
+    private const uint TeachRank2 = 990109;
+    private const uint TeachBroken = 990110;
+    private const uint MissingItem = 990111;
+
+    [Fact]
+    public async Task LearnAll_AndMySpells_SkipHigherRanksOfTalentChains_AndBrokenSpells()
+    {
+        // vmangos HandleLearnAllCommand / HandleLearnAllMySpellsCommand skip a spell whose first rank is a talent
+        // (GetTalentSpellCost(GetFirstSpellInChain(id))) and a spell SpellMgr::IsSpellValid rejects (CharacterCommands.cpp:2572-2747).
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton(new SkillCatalog(
+                [new SkillLineRecord(43, SkillCategories.Class, "Warrior", 0)],
+                [], [],
+                [new SkillLineAbilityRecord(3, 43, ClassSpell, 0, 1, 0, 0, 0, 0, 0),
+                    new SkillLineAbilityRecord(5, 43, TalentSpell, 0, 1, 0, TalentRank2, 0, 0, 0), // rank 1 forwards to rank 2
+                    new SkillLineAbilityRecord(6, 43, TalentRank2, 0, 1, 0, 0, 0, 0, 0),
+                    new SkillLineAbilityRecord(7, 43, BrokenCraft, 0, 1, 0, 0, 0, 0, 0)]));
+            services.AddSingleton(Talents());
+        });
+        await using WorldTestClient gm = await host.EnterWorldAsync("VARRANK", "Varrank", AccountSecurity.Administrator);
+        var player = await host.PlayerAsync("Varrank");
+        Assert.Equal(1, (int)player.Class);
+        await host.OnWorldAsync(() =>
+        {
+            player.Skills?.LearnLanguage((uint)Language.Common);
+            host.WorldServices.GetRequiredService<ItemsFeature>().ReplaceTemplates(new ItemTemplateStore([
+                new ItemTemplate { Entry = 8003, Name = "Some Item" },
+            ]));
+            host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Store = new SpellStore([
+                new SpellInfo { Id = ClassSpell, SpellFamilyName = 4, SpellLevel = 1 },
+                new SpellInfo { Id = TalentSpell, SpellFamilyName = 4, SpellLevel = 1 },
+                new SpellInfo { Id = TalentRank2, SpellFamilyName = 4, SpellLevel = 1 },
+                new SpellInfo { Id = BrokenCraft, SpellFamilyName = 4, SpellLevel = 1,
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = MissingItem }] },
+                new SpellInfo { Id = TeachingSpell, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = TaughtSpell }] },
+                new SpellInfo { Id = TaughtSpell, SpellFamilyName = 4, SpellLevel = 1 },
+                new SpellInfo { Id = TeachRank2, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = TalentRank2 }] },
+                new SpellInfo { Id = TeachBroken, Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = BrokenCraft }] },
+            ], [], []);
+        });
+
+        async Task<bool> Knows(uint id) => await host.OnWorldAsync(() =>
+            host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().Spellbook.HasSpell(player, id));
+
+        Assert.Contains("Class spells learned", await Run(gm, ".learn all_myspells"));
+        Assert.True(await Knows(ClassSpell));
+        Assert.False(await Knows(TalentSpell));
+        Assert.False(await Knows(TalentRank2));
+        Assert.False(await Knows(BrokenCraft));
+
+        Assert.Contains("Eligible class spells", await Run(gm, ".learn all"));
+        Assert.True(await Knows(TaughtSpell));
+        Assert.False(await Knows(TalentRank2));
+        Assert.False(await Knows(BrokenCraft));
+    }
+
     [Fact]
     public async Task TaxiTrainerAndItemVariants_UseLoadedContent()
     {
@@ -165,7 +224,12 @@ public sealed class SpellVariantCommandTests
             host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.ReplaceNpcs(new NpcStore(NpcContent.Empty with
             {
                 TrainerSpells = [new TrainerSpell { Entry = 8001, Spell = TeachingSpell }],
-                TaxiNodes = [new TaxiNode { Id = 200, MapId = 0, X = -8947, Y = -132, Z = 83, MountAlliance = 1, MountHorde = 1 }],
+                // Node 199 sits on the flightmaster but has no path: it is outside the taxi network (vmangos sTaxiNodesMask), so
+                // GetNearestTaxiNode passes over it to node 200.
+                TaxiNodes = [new TaxiNode { Id = 199, MapId = 0, X = -8948, Y = -132, Z = 83, MountAlliance = 1, MountHorde = 1 },
+                    new TaxiNode { Id = 200, MapId = 0, X = -8947, Y = -132, Z = 83, MountAlliance = 1, MountHorde = 1 },
+                    new TaxiNode { Id = 201, MapId = 0, X = -9000, Y = -132, Z = 83, MountAlliance = 1, MountHorde = 1 }],
+                TaxiPaths = [new TaxiPath { Id = 1, FromNode = 200, ToNode = 201 }],
             }));
             host.WorldServices.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent([
                 new CreatureTemplate { Entry = 8001, Name = "Trainer", NpcFlags = (uint)NpcFlags.Trainer, TrainerType = 0, TrainerClass = (byte)player.Class },
@@ -177,9 +241,11 @@ public sealed class SpellVariantCommandTests
         });
 
         Assert.Contains("taxi nodes", await Run(gm, ".learn all_mytaxis"));
-        Assert.True(await host.OnWorldAsync(() =>
-            (host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.TaxiMask[(200 - 1) / 32]
-                & (1u << ((200 - 1) % 32))) != 0));
+        Task<bool> KnowsNode(uint node) => host.OnWorldAsync(() =>
+            (host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.TaxiMask[(node - 1) / 32]
+                & (1u << (int)((node - 1) % 32))) != 0);
+        Assert.True(await KnowsNode(200));
+        Assert.False(await KnowsNode(199));
         Assert.Contains("trainers", await Run(gm, ".learn all_trainer"));
         Assert.True(await host.OnWorldAsync(() =>
             host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().Spellbook.HasSpell(player, TaughtSpell)));

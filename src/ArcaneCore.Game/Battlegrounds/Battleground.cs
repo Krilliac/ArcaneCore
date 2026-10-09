@@ -28,7 +28,6 @@ public abstract partial class Battleground
     private BattlegroundStartEvents _events;
     private bool _prematureCountDown;
     private bool _forceStartRequested;
-    private uint? _forceStopTimerMs;
     private uint _prematureCountDownTimer;
     private uint _ageMs;
 
@@ -179,7 +178,11 @@ public abstract partial class Battleground
         AddToFreeSlotQueue();
     }
 
-    /// <summary>vmangos .bg start sets the start delay to zero (MiscCommands.cpp:1805-1820). The normal start events still run in order.</summary>
+    /// <summary>
+    /// vmangos .bg start sets the start delay to zero (MiscCommands.cpp:1805-1820); the normal start events still run in order.
+    /// Deliberate deviation: when the first start event has not fired yet, vmangos' Update then resets the delay to two minutes
+    /// (BattleGround.cpp:367-379) and the command does nothing; here the request is remembered so the delay stays at zero.
+    /// </summary>
     public void ForceStart()
     {
         if (Status == BattlegroundStatus.WaitJoin)
@@ -189,14 +192,24 @@ public abstract partial class Battleground
         }
     }
 
-    /// <summary>vmangos BattleGround::StopBattleGround schedules the premature finish after 100 ms (BattleGround.cpp:1857-1861).</summary>
-    public void ForceStop()
+    /// <summary>
+    /// vmangos BattleGround::StopBattleGround (BattleGround.cpp:1857-1861): arm the premature-finish countdown with 100 ms left.
+    /// Nothing else: the next <see cref="Update"/> acts on it only as the premature finish does (BattleGround.cpp:317-357), for a
+    /// battleground that uses it (not Alterac Valley), in progress, with the premature finish enabled and a team below its
+    /// minimum; the team that still meets the minimum wins. In every other case the countdown is cancelled and the match goes on.
+    /// Returns whether the match would end now (the command tells the GM; the match can still change before the next update).
+    /// </summary>
+    public bool ForceStop()
     {
-        if (Status is BattlegroundStatus.WaitJoin or BattlegroundStatus.InProgress)
-        {
-            _forceStopTimerMs = 100;
-        }
+        _prematureCountDown = true;
+        _prematureCountDownTimer = 100;
+        return PrematureFinishApplies;
     }
+
+    /// <summary>The condition of the premature-finish countdown (BattleGround.cpp:317).</summary>
+    private bool PrematureFinishApplies
+        => UsesPrematureFinish && Status == BattlegroundStatus.InProgress && Options.PrematureFinishTimerMs != 0
+            && (PlayersCountByTeam(Team.Alliance) < MinPlayersPerTeam || PlayersCountByTeam(Team.Horde) < MinPlayersPerTeam);
 
     /// <summary>vmangos <c>AddToBGFreeSlotQueue</c>: once.</summary>
     public void AddToFreeSlotQueue()
@@ -240,18 +253,6 @@ public abstract partial class Battleground
             return true;
         }
 
-        if (_forceStopTimerMs is { } stopAfter)
-        {
-            if (diffMs >= stopAfter)
-            {
-                _forceStopTimerMs = null;
-                EndBattleground(null);
-                return true;
-            }
-
-            _forceStopTimerMs = stopAfter - diffMs;
-        }
-
         UpdatePrematureFinish(diffMs);
 
         if (Status == BattlegroundStatus.WaitJoin)
@@ -289,8 +290,7 @@ public abstract partial class Battleground
 
     private void UpdatePrematureFinish(uint diffMs)
     {
-        if (UsesPrematureFinish && Status == BattlegroundStatus.InProgress && Options.PrematureFinishTimerMs != 0
-            && (PlayersCountByTeam(Team.Alliance) < MinPlayersPerTeam || PlayersCountByTeam(Team.Horde) < MinPlayersPerTeam))
+        if (PrematureFinishApplies)
         {
             if (!_prematureCountDown)
             {

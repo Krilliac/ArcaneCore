@@ -12,9 +12,9 @@ public sealed class BattlegroundCommands : ICommandGroup
     [
         new ChatCommand("bg", AccountSecurity.GameMaster, "Syntax: .bg status|start|stop", Children:
         [
-            new ChatCommand("status", AccountSecurity.GameMaster, "Show running battlegrounds and queue counts for your bracket.", Status, RetailLevel: 3),
+            new ChatCommand("status", AccountSecurity.GameMaster, "Show running battlegrounds and the queued players of each battleground.", Status, RetailLevel: 3),
             new ChatCommand("start", AccountSecurity.GameMaster, "Start the battleground you are in now.", Start, RetailLevel: 3),
-            new ChatCommand("stop", AccountSecurity.GameMaster, "Stop the battleground you are in after a short countdown.", Stop, RetailLevel: 3),
+            new ChatCommand("stop", AccountSecurity.GameMaster, "End the battleground you are in at once when a team is below its minimum.", Stop, RetailLevel: 3),
         ], RetailLevel: 3),
     ];
 
@@ -37,11 +37,13 @@ public sealed class BattlegroundCommands : ICommandGroup
                 + $"Horde {bg.PlayersCountByTeam(ArcaneCore.Game.Entities.Team.Horde)}");
         }
 
+        // vmangos counts every queued player of the queue type, whatever the bracket, despite its "your bracket" header
+        // (MiscCommands.cpp:1777-1797).
         foreach (BattlegroundType type in new[] { BattlegroundType.AlteracValley, BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin })
         {
             if (manager.TemplateOf(type) is { } template)
             {
-                (int alliance, int horde) = manager.QueuedTeamCounts(type, context.Player.Level);
+                (int alliance, int horde) = manager.QueuedTeamCounts(type);
                 context.Reply($"{template.Name} queue: Alliance {alliance}, Horde {horde}");
             }
         }
@@ -67,16 +69,22 @@ public sealed class BattlegroundCommands : ICommandGroup
             return true;
         }
 
-        if (stop)
+        if (!stop)
         {
-            bg.ForceStop();
+            bg.ForceStart();
+            context.Reply($"Battleground starting [{bg.Name}][{bg.InstanceId}].");
+        }
+        else if (bg.ForceStop())
+        {
+            context.Reply($"Battleground stopping [{bg.Name}][{bg.InstanceId}]: the team still at its minimum wins.");
         }
         else
         {
-            bg.ForceStart();
+            // vmangos StopBattleGround only shortens the premature finish, which ignores a full match, one not in progress and
+            // Alterac Valley (BattleGround.cpp:317-357, 1857-1861).
+            context.Reply($"Battleground [{bg.Name}][{bg.InstanceId}] goes on: a stop only ends a match in progress with a team below its minimum (never Alterac Valley).");
         }
 
-        context.Reply($"Battleground {(stop ? "stopping" : "starting")} [{bg.Name}][{bg.InstanceId}].");
         return true;
     }
 }

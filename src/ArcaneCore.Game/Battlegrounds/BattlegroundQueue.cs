@@ -165,10 +165,16 @@ internal sealed class BattlegroundQueue
 
     public int PlayersQueued => _players.Count;
 
-    /// <summary>Players waiting in each team's lists of a level bracket (vmangos HandleBGStatusCommand, MiscCommands.cpp:1767-1797).</summary>
-    public (int Alliance, int Horde) TeamCounts(int bracket)
-        => (_groups[bracket, QueueLists.PremadeAlliance].Sum(g => g.Size) + _groups[bracket, QueueLists.NormalAlliance].Sum(g => g.Size),
-            _groups[bracket, QueueLists.PremadeHorde].Sum(g => g.Size) + _groups[bracket, QueueLists.NormalHorde].Sum(g => g.Size));
+    /// <summary>
+    /// Every queued player of this queue by the team of their group, all brackets, invited ones included (vmangos
+    /// HandleBGStatusCommand walks m_queuedPlayers, MiscCommands.cpp:1777-1797: a Horde group counts for the Horde, anything else
+    /// for the Alliance).
+    /// </summary>
+    public (int Alliance, int Horde) TeamCounts()
+    {
+        int horde = _players.Values.Count(p => p.Group.Team == Team.Horde);
+        return (_players.Count - horde, horde);
+    }
 
     public bool Contains(ObjectGuid guid) => _players.ContainsKey(guid);
 

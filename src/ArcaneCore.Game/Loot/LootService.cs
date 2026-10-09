@@ -709,17 +709,30 @@ public sealed partial class LootService : IViewerFieldFilter
 
         CommitLooter(group, plan);
 
-        // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile).
+        // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile). Every way out without a loot window
+        // answers the waiting client with a release, as a refused open does.
         if (Objects?.FindBySpawn(key.SpawnGuid) is not { IsSpawned: true } go || LiveBagOf(go) is not null)
         {
+            if (opener.IsInWorld)
+            {
+                Refuse(opener, fresh.Source);
+            }
+
             return;
         }
 
         go.Loot = fresh;
         _bags[go.Guid] = (go, fresh);
-        if (opener.IsInWorld && CheckLooter(opener, go) == LootResult.Ok)
+        if (opener.IsInWorld)
         {
-            ShowChest(opener, go, fresh, onOpened);
+            if (CheckLooter(opener, go) == LootResult.Ok)
+            {
+                ShowChest(opener, go, fresh, onOpened); // refuses itself when it shows nothing
+            }
+            else
+            {
+                Refuse(opener, fresh.Source); // died or moved away while the generation committed
+            }
         }
 
         if (fresh.Viewers.Count == 0)

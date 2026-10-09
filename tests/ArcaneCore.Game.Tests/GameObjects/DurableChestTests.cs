@@ -213,6 +213,24 @@ public sealed class DurableChestTests
     }
 
     [Fact]
+    public void CommittedGeneration_ForAnOpenerWhoDiedMeanwhile_ReleasesTheClient_AndKeepsTheLoot()
+    {
+        Rig rig = CreateRig();
+        rig.Durable.Manual = true;
+        (Player alice, FakeSession session) = rig.Join(1);
+        int opened = 0;
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(alice, rig.Chest.Guid, LockType.Open, onChestOpened: _ => opened++));
+        alice.Health = 0; // CheckLooter now refuses her
+        rig.Durable.Complete(LootOutcome.After);
+
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Equal(0, opened);
+        Assert.NotNull(rig.Chest.Loot); // the committed generation stays for the next opener
+    }
+
+    [Fact]
     public void ChestWithoutGroupLootRules_LeavesTheRoundRobinPointerAndOwnerAlone()
     {
         // vmangos Player.cpp:7680-7698: only a chest with chest.groupLootRules calls Group::UpdateLooterGuid.

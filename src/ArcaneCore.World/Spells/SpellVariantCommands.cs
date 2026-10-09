@@ -315,17 +315,70 @@ internal static class SpellVariants
         1 => 4, 2 => 10, 3 => 9, 4 => 8, 5 => 6, 7 => 11, 8 => 3, 9 => 5, 11 => 7, _ => 0,
     };
 
+    /// <summary>
+    /// vmangos <c>GetTalentSpellCost(GetFirstSpellInChain(id)) &gt; 0</c> (CharacterCommands.cpp:2598-2601, 2733-2736): the spell's
+    /// chain starts with a talent, so a higher rank of a talent-learned spell (Mortal Strike rank 2) is skipped as the talent is.
+    /// </summary>
+    private static bool FirstRankIsTalent(TalentCatalog? talents, SpellRankChains ranks, uint id)
+    {
+        uint first = ranks.First(id);
+        return talents is not null && talents.TryGetRankPosition(first != 0 ? first : id, out _);
+    }
+
+    /// <summary>
+    /// vmangos SpellMgr::IsSpellValid (SpellMgr.cpp:2298-2370) without its messages: a spell that creates an item missing from
+    /// item_template, needs such a reagent, or teaches such a spell (recursively) is broken and not taught.
+    /// </summary>
+    internal static bool IsSpellValid(SpellSystem system, IItemTemplateStore? items, uint id, int depth = 0)
+    {
+        if (system.Store.Get(id) is not { } spell)
+        {
+            return false;
+        }
+
+        if (items is null || depth > 30)
+        {
+            return true; // no item data to judge by; a learn cycle is not a broken item
+        }
+
+        bool checkReagents = false;
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect == SpellEffectName.CreateItem)
+            {
+                if (items.Find(effect.ItemType) is null)
+                {
+                    return false;
+                }
+
+                checkReagents = true;
+            }
+            else if (effect.Effect == SpellEffectName.LearnSpell && !IsSpellValid(system, items, effect.TriggerSpell, depth + 1))
+            {
+                return false;
+            }
+        }
+
+        return !checkReagents || spell.Reagents.All(r => !r.IsPresent || items.Find(r.ItemId) is not null);
+    }
+
+    private static IItemTemplateStore? LoadedItems(CommandContext context)
+        => context.Session.Services.GetService<ItemsFeature>()?.LoadedStore is { Count: > 0 } store ? store : null;
+
     private static void LearnMySpells(CommandContext context, Player player)
     {
         SpellSystem system = Spells(context).System;
         SkillCatalog catalog = Skills(context);
         TalentCatalog? talents = context.Session.Services.GetService<TalentFeature>()?.Catalog;
+        IItemTemplateStore? items = LoadedItems(context);
         uint family = ClassFamily(player);
         ISpellLearner? learner = context.Session.Services.GetRequiredService<QuestNpcFeature>().Services.Deps.Spells;
         Learn(system, player, catalog.Lines.SelectMany(line => catalog.AbilitiesOfSkill(line.Id))
             .Select(a => a.SpellId).Where(id => system.Store.Get(id) is { } spell && spell.SpellLevel != 0
-                && spell.SpellFamilyName == family && (learner?.IsSpellFitByClassAndRace(player, id) ?? false)
-                && (talents is null || !talents.TryGetRankPosition(id, out _))));
+                && (learner?.IsSpellFitByClassAndRace(player, id) ?? false)
+                && spell.SpellFamilyName == family
+                && !FirstRankIsTalent(talents, catalog.Ranks, id)
+                && IsSpellValid(system, items, id)));
     }
 
     private static void LearnMyTalents(CommandContext context, Player player)
@@ -373,10 +426,12 @@ internal static class SpellVariants
         if (target is null || !Ready(context, target)) return true;
         SpellSystem system = Spells(context).System;
         TalentCatalog? talents = context.Session.Services.GetService<TalentFeature>()?.Catalog;
+        SpellRankChains ranks = Skills(context).Ranks;
+        IItemTemplateStore? items = LoadedItems(context);
         Learn(system, target, system.Store.All.SelectMany(source => source.Effects
             .Where(e => e.Effect == SpellEffectName.LearnSpell && e.TargetA == SpellImplicitTarget.None)
             .Select(e => e.TriggerSpell))
-            .Where(id => system.Store.Get(id) is { } spell && (talents is null || !talents.TryGetRankPosition(id, out _))
+            .Where(id => system.Store.Get(id) is { } spell && IsSpellValid(system, items, id) && !FirstRankIsTalent(talents, ranks, id)
                 && (spell.HasEffect(SpellEffectName.Proficiency) || spell.SpellFamilyName != 0
                     && !spell.IsPassive && !spell.HasAttribute(SpellAttributes.DoNotDisplay)
                     && (spell.AttributesEx2 & (SpellAttributesEx2)0x10) == 0)));
@@ -398,6 +453,7 @@ internal static class SpellVariants
 
         CreatureContent creatures = context.Session.Services.GetRequiredService<CreatureWorldFeature>().Content;
         NpcStore npcs = feature.Services.Npcs;
+        HashSet<uint> network = TaxiNetwork(npcs, Spells(context).System);
         int learned = 0;
         foreach (CreatureTemplate template in creatures.Templates.Where(t => (t.NpcFlags & (uint)NpcFlags.FlightMaster) != 0))
         {
@@ -407,9 +463,12 @@ internal static class SpellVariants
                 .OrderBy(s => MathF.Pow(s.X - player.X, 2) + MathF.Pow(s.Y - player.Y, 2)).FirstOrDefault()
                 ?? spawns.OrderBy(s => s.Guid).FirstOrDefault();
             if (spawn is null) continue;
-            TaxiNode? node = npcs.Nodes.Where(n => n.MapId == spawn.MapId
+            // ObjectMgr::GetNearestTaxiNode (ObjectMgr.cpp:7352-7389): a node of the taxi network on the map with a mount for the
+            // team; the lowest id wins a tie.
+            TaxiNode? node = npcs.Nodes.Where(n => n.MapId == spawn.MapId && network.Contains(n.Id)
                     && (player.Team == Team.Alliance ? n.MountAlliance : n.MountHorde) != 0)
                 .OrderBy(n => MathF.Pow(n.X - spawn.X, 2) + MathF.Pow(n.Y - spawn.Y, 2) + MathF.Pow(n.Z - spawn.Z, 2))
+                .ThenBy(n => n.Id)
                 .FirstOrDefault();
             if (node is null) continue;
             int word = (int)((node.Id - 1) / 32);
@@ -423,6 +482,17 @@ internal static class SpellVariants
         if (learned > 0) feature.Persistence.SaveTaxiMask((int)player.Guid.Low, state.TaxiMask);
         context.Reply($"Discovered {learned} taxi nodes.");
         return true;
+    }
+
+    /// <summary>
+    /// vmangos sTaxiNodesMask (DBCStores.cpp:366-405): the nodes with at least one outgoing path that no SPELL_EFFECT_SEND_TAXI spell
+    /// flies (a scripted-only node is not part of the network). <see cref="NpcStore.TaxiNodesMask"/> holds every node instead.
+    /// </summary>
+    private static HashSet<uint> TaxiNetwork(NpcStore npcs, SpellSystem system)
+    {
+        HashSet<uint> spellPaths = [.. system.Store.All.SelectMany(s => s.Effects)
+            .Where(e => e.Effect == SpellEffectName.SendTaxi).Select(e => (uint)e.MiscValue)];
+        return [.. npcs.Content.TaxiPaths.Where(p => !spellPaths.Contains(p.Id)).Select(p => p.FromNode)];
     }
 
     public static bool LearnAllTrainer(CommandContext context, string args)

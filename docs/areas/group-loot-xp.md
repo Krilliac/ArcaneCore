@@ -22,7 +22,8 @@ the first group kill goes to the leader (it used to go to the member after him),
 afterwards advances; `GameObjectTestKit.FakeGroups.Create` now sets `LooterGuid` to the first member
 exactly like `GroupManager`.
 
-A durable dungeon chest whose initial generation is refused sends `SMSG_LOOT_RELEASE_RESPONSE` and stays ready;
+A durable dungeon chest whose initial generation is refused, or whose committed generation finds its opener dead, out of
+range or the chest gone, sends `SMSG_LOOT_RELEASE_RESPONSE` (a committed generation's loot stays on the chest);
 the capacity/refusal regression is in `DurableChestTests` ([GM and loot gap lane](../integration/gm-and-loot-gaps-20261008.md)).
 
 Tests: `tests/ArcaneCore.Game.Tests/Social/GroupLooterSelectionTests.cs` (pure rule, hand-simulated),
