@@ -24,6 +24,9 @@ public sealed class WorldClient : IAsyncDisposable
     private int _reading;
     private int _state; // 0 connected, 1 authenticating, 2 authenticated, 3 closed
 
+    /// <summary>The deadline of each bounded operation of this client (<see cref="ProtocolIO.OperationTimeout"/> when it was created).</summary>
+    internal TimeSpan OperationTimeout { get; set; } = ProtocolIO.OperationTimeout;
+
     private WorldClient(TcpClient client)
     {
         _client = client;
@@ -67,7 +70,7 @@ public sealed class WorldClient : IAsyncDisposable
 
         try
         {
-            return await ProtocolIO.BoundedAsync("World authentication", ct, async token =>
+            return await ProtocolIO.BoundedAsync("World authentication", OperationTimeout, ct, async token =>
             {
                 await _sendLock.WaitAsync(token).ConfigureAwait(false);
                 try
@@ -147,7 +150,7 @@ public sealed class WorldClient : IAsyncDisposable
         RequireUsable();
         try
         {
-            await ProtocolIO.BoundedAsync("World packet send", ct, async token =>
+            await ProtocolIO.BoundedAsync("World packet send", OperationTimeout, ct, async token =>
             {
                 await _sendLock.WaitAsync(token).ConfigureAwait(false);
                 try
@@ -238,7 +241,7 @@ public sealed class WorldClient : IAsyncDisposable
         EnterReader();
         try
         {
-            return await ProtocolIO.BoundedAsync(operation, ct, action).ConfigureAwait(false);
+            return await ProtocolIO.BoundedAsync(operation, OperationTimeout, ct, action).ConfigureAwait(false);
         }
         catch
         {

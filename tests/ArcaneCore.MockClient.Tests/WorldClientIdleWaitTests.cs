@@ -25,6 +25,7 @@ public sealed class WorldClientIdleWaitTests
 
         Task<TcpClient> acceptedBounded = listener.AcceptTcpClientAsync();
         await using WorldClient bounded = await WorldClient.ConnectAsync(endpoint);
+        bounded.OperationTimeout = ProtocolIO.DefaultOperationTimeout; // the tool's deadline (this suite raises the shared one)
         using TcpClient serverOfBounded = await acceptedBounded;
 
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -32,7 +33,7 @@ public sealed class WorldClientIdleWaitTests
         Task<WorldFrame> boundedRead = bounded.ReadAsync(guard.Token);
 
         // Longer than one bounded read survives: the plain read has timed out, the wait has not.
-        await Task.Delay(ProtocolIO.OperationTimeout + TimeSpan.FromSeconds(1), guard.Token);
+        await Task.Delay(bounded.OperationTimeout + TimeSpan.FromSeconds(1), guard.Token);
         await Assert.ThrowsAsync<TimeoutException>(() => boundedRead);
         Assert.False(wait.IsCompleted, "the idle wait must not be bound by the per-read deadline");
 

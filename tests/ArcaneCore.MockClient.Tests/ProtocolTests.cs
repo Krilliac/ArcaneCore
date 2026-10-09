@@ -441,7 +441,8 @@ public sealed class ProtocolTests
     [Fact]
     public async Task DefaultDeadline_ReportsUsefulTimeout()
     {
-        TimeoutException exception = await Assert.ThrowsAsync<TimeoutException>(() => ProtocolIO.BoundedAsync("fixture stall", CancellationToken.None, async token =>
+        Assert.Equal(TimeSpan.FromSeconds(5), ProtocolIO.DefaultOperationTimeout);
+        TimeoutException exception = await Assert.ThrowsAsync<TimeoutException>(() => ProtocolIO.BoundedAsync("fixture stall", ProtocolIO.DefaultOperationTimeout, CancellationToken.None, async token =>
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, token);
             return true;
