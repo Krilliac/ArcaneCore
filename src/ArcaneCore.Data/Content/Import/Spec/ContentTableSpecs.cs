@@ -210,6 +210,13 @@ public static class ContentTableSpecs
         new("spawn_group_entry", [new KeyColumn("Id"), new KeyColumn("Entry")], ["MinCount", "MaxCount", "Chance"], []),
         new("spawn_group_formation", [new KeyColumn("Id")], ["FormationType", "FormationSpread", "FormationOptions", "PathId", "MovementType", "Comment"], []),
         new("spawn_group_linked_group", [new KeyColumn("Id"), new KeyColumn("LinkedId")], [], []),
+        // The cmangos pool tables (world 45, PoolDumpImporter; a vmangos dump adds patch_min/patch_max, read to keep patch 10).
+        new("pool_template", [new KeyColumn("entry")], ["max_limit", "description", "patch_min", "patch_max"], []),
+        new("pool_creature", [new KeyColumn("guid")], ["pool_entry", "chance", "description", "patch_min", "patch_max"], []),
+        new("pool_creature_template", [new KeyColumn("id")], ["pool_entry", "chance", "description", "patch_min", "patch_max"], []),
+        new("pool_gameobject", [new KeyColumn("guid")], ["pool_entry", "chance", "description", "patch_min", "patch_max"], []),
+        new("pool_gameobject_template", [new KeyColumn("id")], ["pool_entry", "chance", "description", "patch_min", "patch_max"], []),
+        new("pool_pool", [new KeyColumn("pool_id")], ["mother_pool", "chance", "description", "patch_min", "patch_max"], []),
         new("gameobject_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], []),
         new("gameobject_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], []),
         new("creature_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),

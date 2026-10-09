@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 180 |
-| `Administrator` | 6 | 259 |
+| `GameMaster` | 3 | 183 |
+| `Administrator` | 6 | 262 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -292,6 +292,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
+| `.spawngroup` ... | 3 | GameMaster | declared retail level | Syntax: .spawngroup $subcommand Type .spawngroup to see the list of possible subcommands or .help spawngroup $subcommand to see info on subcommands. |
+| `.spawngroup list` | 3 | GameMaster | declared retail level | Syntax: .spawngroup list [creature\|gameobject] List the spawn groups of your map: id, type, members in the world / maximum, name. |
+| `.spawngroup info` | 3 | GameMaster | declared retail level | Syntax: .spawngroup info [#group] Show a spawn group of your map (the selected creature's without an id): flags, condition, formation and what each member is doing. |
+| `.spawngroup spawn` | 3 | GameMaster | declared retail level | Syntax: .spawngroup spawn #guid [creature\|gameobject] Show the spawn group and the pool a database spawn of your map belongs to. |
 | `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
 | `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
 | `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |

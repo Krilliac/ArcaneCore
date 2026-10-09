@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.Pools;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Microsoft.EntityFrameworkCore;
@@ -35,6 +36,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
         List<CreatureLinkRow> links = await db.Set<CreatureLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureTemplateLinkRow> templateLinks = await db.Set<CreatureTemplateLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
+            db, PoolSpawnKind.Creature, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -75,6 +78,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             templateLinks.Select(r => new CreatureTemplateLink(r.SlaveEntry, r.MapId, r.MasterEntry, r.Flags, r.SearchRange)))
         {
             SpawnGroups = spawnGroups,
+            Pools = pools,
         };
     }
 

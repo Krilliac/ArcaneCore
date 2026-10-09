@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.Pools;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 
 namespace ArcaneCore.Kernel.WorldData.GameObjects;
@@ -187,6 +188,9 @@ public sealed class GameObjectContent
 
     /// <summary>The cmangos spawn groups of game object spawns (<c>spawn_group</c> rows of type 1).</summary>
     public SpawnGroupCatalog SpawnGroups { get; init; } = SpawnGroupCatalog.Empty;
+
+    /// <summary>The cmangos pools of these spawns (<c>pool_template</c>, <c>pool_pool</c> and this kind's member rows): which members of a pool exist at once (docs/areas/content-import.md, pools).</summary>
+    public PoolCatalog Pools { get; init; } = PoolCatalog.Empty;
 
     /// <summary>Quests a quest-giver object starts (<c>gameobject_questrelation</c>).</summary>
     public IReadOnlyList<uint> QuestStartersOf(uint entry) => _starters.GetValueOrDefault(entry) ?? [];

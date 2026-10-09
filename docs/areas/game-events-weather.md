@@ -190,10 +190,10 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
 - Shared-file edits (record them for the integrator): `CreatureMapSystem.Lifecycle.cs` (`LoadGrid` split so the creating loop is
   `LoadSpawns`, plus the gate check), `GameObjectMapSystem.cs` (`partial`, the same split and check). Both new members live in new
   partial files (`*.EventSpawns.cs`).
-- **Limit: pools.** classic-db puts 410 event gameobject rows into `pool_gameobject` (one of N spawns at a time). This tree has no
-  pool primitive and does not import `pool_*`, so those objects spawn together instead of one per pool while their event runs
-  (retail: one). When the creature-movement-spawns lane lands a pool primitive, the gate must also exclude pooled guids that are
-  not the pool's pick.
+- **Pools** (2026-10-09, [content import](content-import.md), "Pools"). classic-db puts 410 event gameobject rows into `pool_gameobject`
+  (Noblegarden eggs, Harvest Festival food). A pooled spawn's event change goes to its pool: a refused member is replaced from the allowed
+  ones or leaves (the event's stop empties its pools), an allowed one refills its pool at once (the start), so `max_limit` of them exist
+  while the event runs, none outside it.
 
 ### Consumers: conditions and commands (`game-event-consumers`)
 
@@ -337,7 +337,6 @@ unchecked: any field may be set, the HUD shows only the ones a WorldStateUI row 
   only the seam exists (`IWorldEventHandler`, with `hardcoded` / `disabled` handling in the service); the handlers are bespoke C++ and are another lane's.
 - **Weekly recompute**: mangos-classic recomputes computed schedules at the weekly reset (World.cpp:2337); ArcaneCore has no weekly reset, so they are
   recomputed when the local calendar day changes. There is no `ScheduleRecompute` option because `WeeklyReset` could not work.
-- **Pooled event gameobjects** (410 rows in classic-db): no pool primitive; they spawn together instead of one per pool (see "Event spawns").
 - **Event creature spells and equipment**, **event mails**, **`.npc info` / `.gobject info` event lines**: see above.
 - **A second quest-template reload** and **a manual `.event start/stop` surviving `.reload game_event`**: see above.
 - **Provider coverage**: the new world and characters stores were only exercised on SQLite on this machine (no MariaDB or PostgreSQL server). The provider

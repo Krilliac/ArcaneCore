@@ -49,6 +49,12 @@ public sealed partial class GameObjectMapSystem
                 continue;
             }
 
+            if (_poolSpawns.ContainsKey(guid))
+            {
+                RefreshPoolMember(guid, _spawnGate?.AllowsGameObject(guid) ?? true); // its pool decides (cmangos GameEventMgr pool handling)
+                continue;
+            }
+
             ObjectGuid objectGuid = SpawnObjectGuid(_spawnEntries.GetValueOrDefault(guid, spawn.Entry), spawn.Guid); // the entry it was created as
             _objects.TryGetValue(objectGuid, out GameObject? live);
             if (!(_spawnGate?.AllowsGameObject(guid) ?? true))

@@ -91,6 +91,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _nextTemporaryCounter = maxGuid + 1;
+        InitializePools();
         InitializeSpawnGroups();
         if (loot is not null)
         {
@@ -1033,6 +1034,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         _questFlagsSent.Remove(go.Guid);
         go.LootState = GameObjectLootState.JustDeactivated;
         go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + RespawnDelayMs(go) : 0;
+        OnPoolMemberDespawned(go); // cmangos GameObject.cpp GO_JUST_DEACTIVATED: a pooled object lets its pool choose what comes back
     }
 
     /// <summary>Respawn a despawned object now (GM command, script, event spawn of a negative spawntimesecs object).</summary>
@@ -1112,6 +1114,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             if ((spawn.SpawnFlags & 0x02) != 0)
             {
                 continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)
+            }
+
+            if (PoolRefusesAtLoad(spawn))
+            {
+                continue; // a pooled spawn exists only while its pool has it out (cmangos ObjectMgr::LoadGameObjects, IsNotPartOfPoolOrEvent)
             }
 
             if (_groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group))

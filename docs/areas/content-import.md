@@ -8,6 +8,73 @@ database or report inside a git work tree unless git ignores the path.
 
 ## Delivered
 
+### Pools (2026-10-09; world 46, `PoolDataModule`)
+
+**Schema.** `PoolDataModule` (`src/ArcaneCore.Data/World/Pools/`, `Version = 46` as the wave-10 plan assigns it; world 45 is the
+movement-scripts lane's; the pools branch held it with a fail-closed placeholder, deleted when that lane
+merged in wave 10) creates the six cmangos pool tables as classic-db z2815 has them: `pool_template` (`Entry`, `MaxLimit`, `Description`),
+`pool_creature` and `pool_gameobject` (`Guid`, `PoolEntry`, `Chance`, `Description`), `pool_creature_template` and
+`pool_gameobject_template` (`Id` = an entry whose every spawn joins the pool) and `pool_pool` (`PoolId` child, `MotherPool`). z2815 has no
+`game_event_pool`: cmangos ties a pool to an event through its members' `game_event_*` rows.
+
+**Import.** `PoolDumpImporter` reads them by column name in `import` (`--replace` empties them first; a vmangos layout's `patch_min`/`patch_max`
+keep only patch 10). `refresh` fills the six tables only when the world has no `pool_template` row; `pool_creature`/`pool_gameobject` rows are
+written only for the world's own spawns that carry the dump's entry (as the spawn groups). `verify` prints the counts and notes the members
+of pools without a template. z2815: 4,290 templates, 168 + 208 creature rows, 20,853 + 42 game object rows, 2,986 pool links; 821 game
+objects and 830 creatures join through the entry rows. A `refresh` of a copy of the world with the six tables emptied wrote exactly the rows
+of a fresh `import`, and a second `refresh` changed nothing (2026-10-09).
+
+**Load** (`Kernel/WorldData/Pools/PoolCatalog.cs`, cmangos PoolManager::LoadFromDB). One catalog per kind (`CreatureContent.Pools`,
+`GameObjectContent.Pools`). Rows are dropped, with an issue line, for a missing spawn, a pool id above the largest template entry, a chance
+outside 0..100, an entry row naming an already pooled spawn, a member on another map than its pool's first, and a pool link out of range,
+to itself, across maps or closing a cycle. A non-zero chance is explicit only in a pool whose `max_limit` is 1 (AddEntry). A pool spawns by
+itself (AutoSpawn) when it has a template, is no child, and its chances can pick (CheckPool: with no equally chanced member the explicit
+chances add up to 100 or 0). `IsPooled` is cmangos' `pool_*` join in LoadCreatures/LoadGameObjects: any row keeps the spawn out of its
+grid, even one the pool load drops; so the 198 z2815 objects in pools without a template (191 Eastern Plaguelands Plaguebloom, seven ore
+nodes) never spawn, as in cmangos.
+
+**Runtime** (`Game/Maps/Pools/PoolSpawnState.cs`, `GameObjectMapSystem.Pools.cs`, `CreatureMapSystem.Pools.cs`; PoolGroup::SpawnObject,
+RollOne, DespawnObject; no code copied). Per map and kind, a pool keeps `max_limit` members out, spawns and child pools counted together.
+Each free place: one roll of 0..100 for the shuffled explicitly chanced list (the first member whose chance is above the roll wins: two
+members at 20 each win 10 % of the time, not 20 % as in vmangos' subtracting walk), then an equally chanced member at random, else the first
+explicit member that could have been taken; members already out or refused by the event gate are passed over. The map's auto-spawn pools
+spawn instantly when the map system is created; a pooled spawn's grid creates it only while its pool has it out.
+* A pooled game object that despawns (a node gathered, a chest looted: GO_JUST_DEACTIVATED) makes its pool roll at once with it as the
+  trigger: it may come back in place after its respawn time, or another member is created with a fresh respawn time and the gathered one
+  leaves the world. A member of a child pool asks the mother, which rolls its children: the multinode ore pools move a node to another spot
+  (four times in five for a five-spot mother) and pick its ore there.
+* A pooled creature rolls when its respawn time comes; a replacement in a loaded grid is created alive (cmangos Creature::LoadFromDB; the
+  SetRespawnTime there only matters for its next death), in a grid that is not loaded it waits a fresh respawn time.
+* Spawn groups leave pooled spawns to their pool (LoadSpawnGroups: "incompatible").
+* Game events: the gate refuses a pooled spawn outside its event (or while a negative event runs); a refused member that is out is replaced
+  from the allowed members, or leaves when there is none (an event's stop empties its pools), and a member allowed again refills its pool
+  tree at once (an event's start). z2815's 410 pooled event objects (Noblegarden eggs, event 9; Harvest Festival food, event 33) are all
+  listed under their pool's event, so this matches cmangos' event pools exactly.
+
+**z2815 world, measured** (2026-10-09; scratch SQLite world from the dump: `import --dbc-dir`, then `refresh --dbc-dir`; "before" is that
+world with the six pool tables emptied, "after" a `refresh` of it; every grid of maps 0 and 1 holding a spawn loaded, seed 20261008, no
+event gate installed, so the 21 event pools spawn too; `tests/ArcaneCore.World.Tests/Pools/PoolScratchWorldProbeTests.cs` with
+`ARCANECORE_TEST_POOLS_WORLD_DB` and `ARCANECORE_TEST_TERRAIN_DIR`). Mining and herb nodes are chests whose lock needs Mining or
+Herbalism (Lock.dbc), chests are the other chests named "Chest". No pool had more members out than its `max_limit`.
+
+| zone | mining before | after | herbs before | after | chests before | after |
+|---|---|---|---|---|---|---|
+| Elwynn Forest | 107 | 25 | 166 | 27 | 53 | 9 |
+| Dun Morogh | 90 | 28 | 157 | 22 | 43 | 10 |
+| Durotar | 171 | 40 | 294 | 42 | 56 | 12 |
+| Mulgore | 65 | 25 | 179 | 27 | 34 | 6 |
+| Westfall | 199 | 41 | 317 | 47 | 44 | 15 |
+| The Barrens | 83 | 34 | 1,026 | 295 | 56 | 19 |
+| Stranglethorn Vale | 413 | 43 | 738 | 111 | 59 | 22 |
+| Eastern Kingdoms (map 0) | 5,793 | 568 | 5,906 | 921 | 687 | 212 |
+| Kalimdor (map 1) | 1,558 | 537 | 4,841 | 1,024 | 410 | 141 |
+
+Live database game objects on maps 0 and 1: 39,973 before, 23,020 after (3,521 of them pooled, in 2,041 pools).
+
+**Limits.** A pool tree that mixed creatures and game objects would count each kind against the shared `max_limit` separately (z2815 has
+none). Which members are out is held in memory per map and rolled again at every start (cmangos also re-rolls at start; respawn times stay
+with the spawn ids). `.pool` commands are not added (`.spawngroup spawn` shows a spawn's pool).
+
 ### Spawn groups and `gameobject_spawn_entry` (2026-10-08; world 44, `SpawnGroupDataModule`)
 
 **Schema.** `SpawnGroupDataModule` (`src/ArcaneCore.Data/World/SpawnGroups/`, one `IDataModule`, `Version = 44`; the script-engine lane
@@ -48,10 +115,26 @@ resolved.
   cannot be decided, so it fails closed and its group does not spawn. 35 groups have a condition: 14 depend only on game events (13 directly, one through an OR), the other 21 on world
   states set by scripts. `WorldStateExpression` is not implemented (z2815 never uses it).
 
-**Not implemented.** Formations (164 rows; the members stand at their own spawn points with their own movement), linked groups (none in
-z2815), squads and respawn overrides (not in z2815), `StringId` lookups (all 0), and the `.spawngroup` GM commands. Pooled and event-listed
-spawns are not excluded from groups as cmangos does (z2815 has no such overlap). Pools are not implemented at all, so the 1,215 pooled
-entry-0 objects with `gameobject_spawn_entry` rows now all appear, like every other pooled object. Differences from cmangos: a member for
+**Formations** (2026-10-09, `FormationState.cs`, `CreatureMapSystem.Formations.cs`, `FormationMovementGenerator.cs`; cmangos FormationData,
+no code copied). A member of a group with a `spawn_group_formation` row takes its slot (`spawn_group_spawn.SlotId`) when it enters the world.
+Slot 0 leads: it walks the formation's `waypoint_path` (`MovementType` 2 loops, 4 goes back and forth), wanders (1) or stands, whatever its
+own spawn row says (152 of the 164 leaders have MovementType 0 there). The other slots are placed around the leader's heading as
+FixSlotsPositions places them, for all seven shapes (z2815: 17 random, 24 single file, 54 side by side, 24 like geese, 25 fanned out
+behind, 1 fanned out in front, 19 circle), `FormationSpread` apart. A follower is sent to its slot around the end of the leader's current
+leg, walking or running as the leader does (running when it lags), and into its slot around the standing leader, facing as the leader faces;
+one that a fight took away evades back to where it was. When the leader dies the first living slot takes over at once, or when the group
+is home after its fight, and resumes the path at the node after the last one the leader reached. Simplified: the follower's leg is one
+straight path to the slot (cmangos builds it point by point along the leader's spline with a matched speed), no teleport to a far leader,
+the random shape keeps the variation drawn when the slots are placed, and KEEP_COMPACT / mirroring are not modelled (z2815 never uses them).
+
+**`.spawngroup`** (GameMaster, retail level 3; `World/Gm/Objects/GmSpawnGroupCommands.cs`): `list [creature|gameobject]` (id, type, members in
+the world / maximum, name), `info [#group]` (the selected creature's group without an id: flags, condition and whether it holds, entries,
+formation and leader, each member's slot, entry and state with its respawn time) and `spawn #guid [creature|gameobject]` (its group and its
+pool, with the pool's members out of its `max_limit`). cmangos-classic has no such root; the wording is ArcaneCore's.
+
+**Not implemented.** Linked groups (none in z2815), squads and respawn overrides (not in z2815) and `StringId` lookups (all 0). A pooled
+spawn is left to its pool, as cmangos does (59 pooled game objects and 2 creatures are also group members in z2815); event-listed spawns
+are not excluded from groups (no overlap in z2815). Differences from cmangos: a member for
 which no entry can be found is not spawned (cmangos keeps it in the group with entry 0 and its creation fails, which blocks the slot).
 Group aggro is immediate (cmangos waits CREATURE_CHECK_FOR_HELP_AGGRO_DELAY).
 
@@ -364,7 +447,7 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
   NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, equipment
-  and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates, pools and
+  and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates and
   game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), `playercreateinfo_action` (215 rows, needs
   the action-button seam wired at character creation) and `playercreateinfo_skills` (77; no skills consumer), `race_info`/`class_info`
   (still dev seeds; their retail source is ChrRaces.dbc), graveyards. The unmapped columns of every read table are printed by `plan`.

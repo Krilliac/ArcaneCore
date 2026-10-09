@@ -242,8 +242,9 @@ loses that one write (same window as vmangos' asynchronous character-database qu
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
   the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by default in vmangos): no column carries them yet.
 * **Formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): cmangos spawn groups are imported
-  and run (member count, entry choice, aggro and respawn together; [content import](content-import.md), "Spawn groups"). Their 164
-  formations, creature linking and pools are not implemented.
+  and run (member count, entry choice, aggro and respawn together, and since 2026-10-09 their 164 formations: the leader walks the
+  formation's `waypoint_path`, linear or looping, and the others hold their slot; [content import](content-import.md), "Spawn groups"),
+  and so are the pools ("Pools": max_limit members, rolled again when one despawns, nested pools). Creature linking is not implemented.
 * **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.

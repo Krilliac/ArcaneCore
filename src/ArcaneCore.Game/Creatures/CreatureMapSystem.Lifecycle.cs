@@ -47,6 +47,7 @@ public sealed partial class CreatureMapSystem
             _groupRespawnCleared.Remove(diedSpawn.Guid);
         }
 
+        OnFormationMemberDied(creature); // cmangos Unit::Kill → FormationData::OnDeath
         OnAiDeath(creature, killer); // ends with InstanceData.OnCreatureDeath (sd2-low and sd2-mid both added the call; once is right)
         NotifySummonerOfDeath(creature);
         DespawnCorpseOfSummon(creature);
@@ -209,6 +210,11 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
+            if (PoolRefusesAtLoad(spawn))
+            {
+                continue; // a pooled spawn exists only while its pool has it out (cmangos ObjectMgr::LoadCreatures, IsNotPartOfPoolOrEvent)
+            }
+
             if (_groupOfSpawn.TryGetValue(spawn.Guid, out Maps.SpawnGroups.SpawnGroupState? group))
             {
                 LoadGroupMember(group, spawn, grid); // its spawn group decides whether and as what it exists
@@ -322,6 +328,7 @@ public sealed partial class CreatureMapSystem
         if (creature.DeathState == CreatureDeathState.Alive)
         {
             creature.AI?.OnRespawn();
+            JoinFormation(creature); // cmangos Creature::AddToWorld → FormationData::SetFormationSlot
         }
     }
 
@@ -342,6 +349,7 @@ public sealed partial class CreatureMapSystem
         Map.RemoveObject(creature);
         creature.System = null;
         ForgetObservers(creature);
+        OnFormationMemberRemoved(creature);
         OnGroupMemberRemoved(creature);
     }
 
@@ -474,6 +482,7 @@ public sealed partial class CreatureMapSystem
         creature.FollowMovementDisabled = false;
         creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
+        JoinFormation(creature);
         if (Map.FindUpdater<Instances.Scripts.InstanceData>() is { } respawnData)
         {
             respawnData.OnCreatureRespawn(creature);

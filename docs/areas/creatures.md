@@ -113,7 +113,7 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
   - Creature groups / formations
   - Linked spawns
   - Game-event spawns
-  - `id2..id5` alternatives: done in the wave-4 movement lane (`creature-movement-spawns.md`); cmangos spawn groups: done 2026-10-08 (`content-import.md`, "Spawn groups"), formations not
+  - `id2..id5` alternatives: done in the wave-4 movement lane (`creature-movement-spawns.md`); cmangos spawn groups: done 2026-10-08, formations and pools 2026-10-09 (`content-import.md`, "Spawn groups", "Pools")
 - Flying and swimming random movement, run speed on waypoints (vmangos `UNIT_STATE_RUNNING`), CREATURE_FLAG_EXTRA_INVISIBLE, and GM visibility of dead creatures.
 - An importer CLI (`tools/ArcaneCore.ContentImporter creatures <dump.sql…> [--replace]`). The library API is ready; the tool needs a slnx line, so it was left for the lead.
 - Visibility is evaluated every tick for every player against the creatures of nearby grids. Fine at current scales; a cell-indexed visit (grid/map area) will replace it.

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.Pools;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -20,6 +21,8 @@ public sealed class EfGameObjectDataStore(WorldDbContext db) : IGameObjectDataSt
         List<GameObjectQuestEnderRow> enders = await db.Set<GameObjectQuestEnderRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<GameObjectSpawnEntryRow> spawnEntries = await db.Set<GameObjectSpawnEntryRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         SpawnGroupCatalog groups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.GameObject, cancellationToken).ConfigureAwait(false);
+        Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
+            db, PoolSpawnKind.GameObject, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
 
         return new GameObjectContent(
             templates.Select(t => new GameObjectTemplate
@@ -64,6 +67,7 @@ public sealed class EfGameObjectDataStore(WorldDbContext db) : IGameObjectDataSt
             spawnEntries.Select(r => (r.SpawnGuid, r.Entry)))
         {
             SpawnGroups = groups,
+            Pools = pools,
         };
     }
 }
