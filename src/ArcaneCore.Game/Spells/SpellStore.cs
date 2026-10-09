@@ -8,16 +8,19 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class SpellStore
 {
+    public sealed record ScriptTarget(uint SpellId, uint Type, uint TargetEntry, uint InverseEffectMask);
     public static readonly SpellStore Empty = new([], [], []);
 
     private readonly FrozenDictionary<uint, SpellInfo> _spells;
     private readonly FrozenDictionary<(byte Race, byte Class), uint[]> _createSpells;
     private readonly FrozenDictionary<uint, SpellTargetPosition> _targetPositions;
+    private readonly FrozenDictionary<uint, ScriptTarget[]> _scriptTargets;
 
     public SpellStore(
         IEnumerable<SpellInfo> spells,
         IEnumerable<(byte Race, byte Class, uint SpellId)> createSpells,
-        IEnumerable<(uint SpellId, SpellTargetPosition Position)> targetPositions)
+        IEnumerable<(uint SpellId, SpellTargetPosition Position)> targetPositions,
+        IEnumerable<ScriptTarget>? scriptTargets = null)
     {
         ArgumentNullException.ThrowIfNull(spells);
         ArgumentNullException.ThrowIfNull(createSpells);
@@ -27,6 +30,8 @@ public sealed class SpellStore
             .GroupBy(c => (c.Race, c.Class))
             .ToFrozenDictionary(g => g.Key, g => g.Select(c => c.SpellId).Distinct().ToArray());
         _targetPositions = targetPositions.ToFrozenDictionary(t => t.SpellId, t => t.Position);
+        _scriptTargets = (scriptTargets ?? []).GroupBy(t => t.SpellId)
+            .ToFrozenDictionary(g => g.Key, g => g.ToArray());
     }
 
     public int Count => _spells.Count;
@@ -45,4 +50,7 @@ public sealed class SpellStore
     /// <summary>The fixed destination of a TARGET_LOCATION_DATABASE teleport, if any.</summary>
     public SpellTargetPosition? GetTargetPosition(uint spellId)
         => _targetPositions.TryGetValue(spellId, out SpellTargetPosition position) ? position : null;
+
+    public IReadOnlyList<ScriptTarget> GetScriptTargets(uint spellId)
+        => _scriptTargets.TryGetValue(spellId, out ScriptTarget[]? targets) ? targets : [];
 }

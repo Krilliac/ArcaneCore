@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -56,6 +57,9 @@ internal interface ICreatureMover
 
     /// <summary>A generator that ends by itself finished (home reached, point reached).</summary>
     void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId);
+
+    /// <summary>Run a DB script attached to a reached waypoint.</summary>
+    void OnWaypointScript(Creature creature, uint scriptId, ObjectGuid targetGuid) { }
 
     /// <summary>
     /// Turn the creature to <paramref name="angle"/> where it stands (vmangos Unit::SetFacingTo, Objects/Unit.cpp:2785-2794: a facing spline

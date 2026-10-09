@@ -43,6 +43,8 @@ public sealed class SnufflenoseGopherProductionTests
             [GameObjectTestKit.GoSpawn(1, SnufflenoseGopherAi.BlueleafTubber, 12, 0)], [], [], []));
         kit.Map.AddUpdater(objects);
         SpellScriptDispatcher.Install(kit.Spells.System, SpellScriptRegistry.Discover(typeof(SnufflenoseCommandSpell).Assembly));
+        kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [],
+            [new SpellStore.ScriptTarget(SnufflenoseGopherAi.CommandSpell, 1, SnufflenoseGopherAi.Entry, 0)]);
         (Player player, _) = kit.AddPlayer(1);
         kit.Run(200);
         GameObject tubber = Assert.Single(objects.GameObjects, go => go.Entry == SnufflenoseGopherAi.BlueleafTubber);
@@ -82,6 +84,8 @@ public sealed class SnufflenoseGopherProductionTests
                 },
             ]);
         SpellScriptDispatcher.Install(kit.Spells.System, SpellScriptRegistry.Discover(typeof(SnufflenoseCommandSpell).Assembly));
+        kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [],
+            [new SpellStore.ScriptTarget(SnufflenoseGopherAi.CommandSpell, 1, SnufflenoseGopherAi.Entry, 0)]);
         (Player player, _) = kit.AddPlayer(1);
         Assert.Equal(SpellCastResult.CastOk, kit.Cast(player, SnufflenoseGopherAi.CommandSpell));
     }

@@ -130,8 +130,8 @@ Data (World schema version **23**, `CreatureMovementTemplateDataModule.Version`;
   entry's default path (PathId 0). Other path ids (51 entries use them) are stored and readable (`GetEntryWaypoints`) but only a
   script could select them. A summoned creature whose template has `MovementType 2` takes the entry path (case 2a of the header comment).
 * Nodes are ordered by point id and never renumbered (ten classic-db paths have gaps).
-* `ScriptId` and `Comment` are not stored: no creature-movement script engine exists. The importer reports "N waypoint node(s) carry
-  a ScriptId" (668 nodes of 182 scripts in classic-db) instead of dropping them silently.
+* World schema 43 stores `ScriptId` on spawn and entry path nodes; reaching one starts its `dbscripts_on_creature_movement` steps
+  with the map's DB-script scheduler. `Comment` is not stored. The importer counts scripted nodes and requires matching script rows.
 * `ContentTableSpecs`/the content importer CLI count and report the new table.
 
 Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMovement.cs`):
@@ -248,7 +248,7 @@ loses that one write (same window as vmangos' asynchronous character-database qu
   `NO_LEASH_EVADE` already exist on the base.
 * **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
   addon reload on arrival.
-* **Node scripts, wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`), navmesh random wander points and flying
+* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 43), navmesh random wander points and flying
   wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
 * **Real-client verification** of the destination-relative spline offsets and the walk/run toggle packets. Both references agree, so the retail layout is the
   default, but the only oracle in the tests is bytes derived by hand from the references.

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
@@ -17,6 +18,26 @@ namespace ArcaneCore.Game.Tests.CreatureMovement;
 /// </summary>
 public sealed class WaypointGeneratorTests
 {
+    [Fact]
+    public void NaralexWaypointId_StartsItsCreatureMovementScriptOnceOnArrival()
+    {
+        const uint scriptId = 367802; // ClassicDB z2815 Disciple of Naralex, point and speech.
+        var ai = new CreatureAiContent([], [], new BroadcastTextCatalog([]))
+        {
+            DbScripts = new DbScriptCatalog([(DbScriptKind.CreatureMovement,
+                new RelayScriptStep(scriptId, 0, 0, 1, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))]),
+        };
+        CreatureContent content = new([Template() with { Civilian = true }],
+            [Spawn(1, WolfEntry, 0, 0, movementType: 2)],
+            [(1u, Node(1, 6, 0, waitMs: 60_000) with { ScriptId = scriptId })], [], [], ai); // a long wait: the node is reached once
+        (WorldRuntime runtime, _, CreatureMapSystem system, _, Player player) = Start(content);
+        using WorldRuntime world = runtime;
+
+        Run(world, 5000);
+        Assert.Equal(0, system.PendingDbScriptSteps);
+        Assert.Single(Packets((FakeSession)player.Session, WorldOpcode.SmsgEmote), p => BitConverter.ToUInt32(p, 0) == 25);
+    }
+
     private static CreatureWaypoint Node(uint point, float x, float y, uint waitMs = 0, float orientation = 100f)
         => new(point, x, y, 83.5f, orientation, waitMs);
 

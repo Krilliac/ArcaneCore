@@ -142,21 +142,14 @@ public sealed class SnufflenoseGopherAi : CreatureAI, IScriptedPetAi
 
 /// <summary>
 /// ScriptDev2 SnufflenoseCommand (razorfen_kraul.cpp, spell 8283's OnEffectExecute calls DoFindNewTubber on its target). ClassicDB z2815 gives
-/// 8283 one DUMMY effect at TARGET_SCRIPT (38) with spell_script_target 4781, which this spell system does not select (it has no
-/// spell_script_target); the cast therefore finds its gopher itself as TARGET_SCRIPT would, the nearest living 4781 within the spell's range
-/// (SpellRange 4: 30 yd), and sends it digging.
+/// 8283 one DUMMY effect at TARGET_SCRIPT (38) with spell_script_target 4781. The core selector resolves the gopher.
 /// </summary>
 [SpellScript(SnufflenoseGopherAi.CommandSpell)]
 public sealed class SnufflenoseCommandSpell : ISpellScript
 {
-    public const float DefaultRange = 30f;
-
-    public void OnCast(SpellCast cast)
+    public void OnEffectExecute(SpellEffectContext context)
     {
-        float range = cast.Spell.Range.Max > 0 ? cast.Spell.Range.Max : DefaultRange;
-        if (cast.Caster.Map?.FindUpdater<CreatureMapSystem>() is not { } creatures) return;
-        if (creatures.CreaturesOfEntryInRange(cast.Caster, SnufflenoseGopherAi.Entry, range)
-                .FirstOrDefault(c => c.IsAlive) is { AI: SnufflenoseGopherAi gopher })
+        if (context.Target is Creature { AI: SnufflenoseGopherAi gopher })
             gopher.FindNewTubber();
     }
 }

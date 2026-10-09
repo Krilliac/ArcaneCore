@@ -50,9 +50,11 @@ public sealed partial class SpellSystem
     public bool IsRegisteredLocationTarget(SpellImplicitTarget target)
         => _targetSelectors.TryGetValue(target, out TargetSelectorEntry entry) && entry.LocationOnly;
 
-    private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector, Unit? unitTarget)
+    private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector, Unit? unitTarget)
         => _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
             ? handler(this, cast, effect, unitTarget)
+            : selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster
+                ? SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget)
             : _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()

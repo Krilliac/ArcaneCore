@@ -312,6 +312,10 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 
 ## What's left
 
+`spell_script_target` rows now drive implicit unit targets 38 (nearest listed living creature/player or corpse) and 7 (source-area
+units filtered by entry and effect mask), following vmangos `Spell::CheckScriptTargeting` and `Spell::SetTargetMap`. World schema 43
+stores the rows. Game object script targets and the other script target modes remain outside this slice.
+
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
 - Spell focus, non-warrior shapeshift forms, remaining facing and area restrictions.
   Eight-slot reagent costs and the build-5875 item-use path are now implemented

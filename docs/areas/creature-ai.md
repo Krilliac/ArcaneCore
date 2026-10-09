@@ -336,9 +336,11 @@ The escort points come from one of two origins, as in mangos-classic `npc_escort
 import put into `creature_movement_template` under path `0x80000000 | PathId`, else the entry's own `creature_movement_template` path 0
 (`EscortAI.EscortPathId`), where the battleground escorts keep their points. `EscortAI.Start(waypointPath: id)` walks cmangos
 `waypoint_path` path `id` (PATH_FROM_WAYPOINT_PATH, keyed by path id alone) and nothing else: those rows import into
-`creature_movement_template` under entry 0 and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`); the world schema has no
-`waypoint_path` table, so a `refresh` does not add them. An escort without points does not start, and the map logs it once per entry.
-The `ScriptId` of a point is not run (ArcaneCore runs no creature-movement scripts; the importer counts such nodes).
+`creature_movement_template` under entry 0 and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`); `refresh` replaces
+those namespaced copies. An escort without points does not start, and the map logs it once per entry.
+The `ScriptId` of a reached point starts its `dbscripts_on_creature_movement` row set on the map clock, with the escort as source and
+its linked player (or itself) as target. The world-43 import keeps the point id on both spawn and entry paths; `refresh` updates ids
+on existing paths without replacing their geometry (mangos-classic `WaypointMovementGenerator<Creature>::OnArrived`).
 `Start(..., player, questId)` links the escort to a player and quest (vmangos npc_escortAI::Start): every second it checks that the player
 or an online member of its group is within `MaxPlayerDistance` (100, IsWithinDistInMap), and when nobody is it fails the quest and
 disappears (JustDied then ResetEscort, ScriptedEscortAI.cpp:265-300); its death fails the quest too, for every group member who still has
@@ -443,7 +445,7 @@ code was copied.
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only). The Alterac
+- No totem AI or formation movement beyond `creature_linking` FOLLOW (0x200); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only). The Alterac
   Valley scripts keep their own small creature groups (a follow at the member's distance and angle, fighting and returning together).
   - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.

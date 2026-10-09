@@ -40,6 +40,7 @@ public sealed partial class CreatureMapSystem
         [DbScriptKind.QuestEnd] = new(),
         [DbScriptKind.Gossip] = new(),
         [DbScriptKind.Event] = new(),
+        [DbScriptKind.CreatureMovement] = new(),
     };
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
     private readonly List<(Creature Creature, long AtMs)> _scriptDespawns = [];

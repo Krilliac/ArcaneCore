@@ -135,7 +135,7 @@ inert default.
   the spell system's wild summon, and AVCreateShredderScript (battleground_alterac.cpp:4877-4891, `AlteracValleyCreateShredderScript`, the
   spell scripts' new OnSummon hook) marks it as created by Control Shredder (21556/21566, the spell the second effect triggers) with the
   caster as its creator. The possession by Control Shredder itself reaches the shredder through a script target (TARGET 38 and
-  `spell_script_target`), which this server does not resolve and classic-db has no rows for: a live summoner does not take control of its
+  `spell_script_target`), which classic-db has no rows for (the core resolves TARGET 38 from those rows since world 43): a live summoner does not take control of its
   shredder, so the one-shredder rule only holds against a summoner who controls it some other way. Snivvle yells 70 s in and the captains
   yell with their buffs (mangos_string 791-793; these rows are not in the string table here, so those yells are logged once and not sent).
   classic-db z2815 has row 790 but not 791-793; vmangos' Language.h:831 marks 791-799 as unused, and vmangos' own sql (D:/refs/vmangos/sql,
