@@ -142,4 +142,24 @@ public sealed class ServerInfoDiagnosticsTests
         Assert.Contains("p50=unavailable p90=unavailable", lines[1]);
         Assert.Contains("mean=unavailable p50=unavailable", lines[2]);
     }
+
+    /// <summary>
+    /// `.server info` runs on the world thread. Its working set came from Process.WorkingSet64, which on Windows snapshots every
+    /// process on the machine (8 ms a call on an idle desktop); under the live stress test (2026-10-08) each `.server info` of the
+    /// operator and the observer was logged as a slow CMSG_MESSAGECHAT, 20 to 112 ms. The capture now costs well under a
+    /// millisecond (the bound leaves room for a loaded test machine).
+    /// </summary>
+    [Fact]
+    public async Task CapturingTheDiagnostics_DoesNotHoldTheWorldThread()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        double meanMs = await host.OnWorldAsync(() =>
+        {
+            ServerInfoDiagnostics.Capture(host.World, host.WorldServices); // warm
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 20; i++) Assert.True(ServerInfoDiagnostics.Capture(host.World, host.WorldServices).WorkingSetBytes > 0);
+            return watch.Elapsed.TotalMilliseconds / 20;
+        });
+        Assert.True(meanMs < 3, $"one capture took {meanMs:F2} ms on the world thread");
+    }
 }
