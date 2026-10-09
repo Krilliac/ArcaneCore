@@ -96,6 +96,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Transports.TransportWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportWorldDataModule.Version),
             (typeof(DbScriptDataModule), DatabaseComponent.World, DbScriptDataModule.Version),
             (typeof(CreatureScriptNameDataModule), DatabaseComponent.World, CreatureScriptNameDataModule.Version),
+            (typeof(ArcaneCore.Data.World.SpawnGroups.SpawnGroupDataModule), DatabaseComponent.World, ArcaneCore.Data.World.SpawnGroups.SpawnGroupDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -157,11 +158,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
         // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40. The wave-6 anticheat lane
         // is characters 41 and the wave-7 instance-persist lane characters 42 (its v41 placeholder was removed at integration).
-        // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule).
+        // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule); world 43 the script-engine lane's
+        // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule (allocated as 43, renumbered in wave 10).
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(43, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43)
+        Assert.Equal(44, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44)
         Assert.Equal(42, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 

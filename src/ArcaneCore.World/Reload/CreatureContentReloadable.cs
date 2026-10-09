@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -80,11 +81,14 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
             }
         }
 
-        // A spawn with creature_spawn_entry rows is orphaned only when none of its entries has a template any more.
+        // A spawn with creature_spawn_entry rows is orphaned only when none of its entries has a template any more; an entry-0 member of a
+        // spawn group only when none of the group's spawn_group_entry rows has one.
         private bool IsOrphaned(CreatureContent current, CreatureSpawn spawn)
             => current.GetSpawnEntries(spawn.Guid) is { Count: > 0 } entries
                 ? entries.All(entry => fresh.FindTemplate(entry) is null)
-                : fresh.FindTemplate(spawn.Entry) is null;
+                : spawn.Entry == 0 && current.SpawnGroups.GroupOf(SpawnGroupType.Creature, spawn.Guid) is { RandomEntries.Count: > 0 } group
+                    ? group.RandomEntries.All(entry => fresh.FindTemplate(entry.Entry) is null)
+                    : fresh.FindTemplate(spawn.Entry) is null;
 
         private (int Spawns, string Entries) OrphanedSpawns(CreatureContent current)
         {

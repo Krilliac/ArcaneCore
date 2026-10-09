@@ -1,5 +1,7 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.SpawnGroups;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.World.Creatures;
@@ -29,6 +31,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         dbScripts.AddRange(await db.Set<GossipScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         dbScripts.AddRange(await db.Set<EventScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -64,7 +67,10 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
-            scriptWaypoints.Select(DbScriptDataModule.ToWaypoint));
+            scriptWaypoints.Select(DbScriptDataModule.ToWaypoint))
+        {
+            SpawnGroups = spawnGroups,
+        };
     }
 
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(

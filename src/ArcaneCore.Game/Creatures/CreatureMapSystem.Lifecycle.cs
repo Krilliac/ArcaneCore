@@ -42,6 +42,11 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        if (creature.Spawn is { } diedSpawn)
+        {
+            _groupRespawnCleared.Remove(diedSpawn.Guid);
+        }
+
         OnAiDeath(creature, killer); // ends with InstanceData.OnCreatureDeath (sd2-low and sd2-mid both added the call; once is right)
         NotifySummonerOfDeath(creature);
         DespawnCorpseOfSummon(creature);
@@ -81,6 +86,12 @@ public sealed partial class CreatureMapSystem
         if (creature.DeathState == CreatureDeathState.Corpse)
         {
             RemoveCorpse(creature);
+        }
+
+        if (creature.Spawn is { } spawn && _groupOfSpawn.ContainsKey(spawn.Guid))
+        {
+            ForgetGroupRespawn(spawn.Guid); // its group brings it back at the next update
+            return;
         }
 
         Respawn(creature);
@@ -195,6 +206,12 @@ public sealed partial class CreatureMapSystem
             {
                 // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load), or an
                 // instance spawn gated on a map variable (cmangos spawn_group WorldState)
+                continue;
+            }
+
+            if (_groupOfSpawn.TryGetValue(spawn.Guid, out Maps.SpawnGroups.SpawnGroupState? group))
+            {
+                LoadGroupMember(group, spawn, grid); // its spawn group decides whether and as what it exists
                 continue;
             }
 
@@ -325,6 +342,7 @@ public sealed partial class CreatureMapSystem
         Map.RemoveObject(creature);
         creature.System = null;
         ForgetObservers(creature);
+        OnGroupMemberRemoved(creature);
     }
 
     private ICreatureMovementGenerator CreateMovementGenerator(Creature creature)
@@ -383,6 +401,10 @@ public sealed partial class CreatureMapSystem
             }
 
             RemoveFromWorld(creature);
+        }
+        else if (_groupOfSpawn.ContainsKey(creature.Spawn.Guid))
+        {
+            RemoveGroupMemberCorpse(creature, creature.Spawn);
         }
         else if (!_grids.ContainsKey(ComputeGrid(creature.Home.X, creature.Home.Y)))
         {

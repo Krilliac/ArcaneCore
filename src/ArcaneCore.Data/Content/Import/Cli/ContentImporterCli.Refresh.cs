@@ -11,6 +11,7 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
+using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.Npc;
@@ -102,6 +103,7 @@ public static partial class ContentImporterCli
         var instances = new InstanceTemplateDumpImporter();
         var dbScripts = new DbScriptDumpImporter();
         var gossip = new NpcDumpImporter();
+        var spawnGroups = new SpawnGroupDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -126,6 +128,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             relays.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            spawnGroups.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -335,6 +342,18 @@ public static partial class ContentImporterCli
         IReadOnlyCollection<CreatureSpawnEntryRow> spawnEntries = relays.SpawnEntrySnapshot();
         Count(CreatureSpawnEntryTable, spawnEntries.Count, spawnEntries.Count > 0);
 
+        // gameobject_spawn_entry and the spawn group tables (world 44): filled the same way, each part only when the world has none of its
+        // rows, and only for the world's own spawns (SpawnGroupDumpImporter.FillAsync). Without them classic-db's 3614 game objects and 568
+        // creatures with id 0 never appear, and every member of a one-of-N group stands in the world at once.
+        SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
+        Count(SpawnGroupDataModule.GameObjectSpawnEntryTable, spawnGroupReport.GameObjectSpawnEntries, spawnGroupReport.GameObjectSpawnEntries > 0);
+        bool anyGroups = spawnGroupReport.Groups > 0;
+        Count(SpawnGroupDataModule.GroupTable, spawnGroupReport.Groups, anyGroups);
+        Count(SpawnGroupDataModule.SpawnTable, spawnGroupReport.Spawns, anyGroups);
+        Count(SpawnGroupDataModule.EntryTable, spawnGroupReport.Entries, anyGroups);
+        Count(SpawnGroupDataModule.FormationTable, spawnGroupReport.Formations, anyGroups);
+        Count(SpawnGroupDataModule.LinkedGroupTable, spawnGroupReport.LinkedGroups, anyGroups);
+
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -413,6 +432,44 @@ public static partial class ContentImporterCli
                         {
                             counts.Remove(CreatureSpawnEntryTable);
                             o.WriteLine($"  {CreatureSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+                    }
+
+                    if (spawnGroups.HasRows)
+                    {
+                        SpawnGroupFillReport filled = await spawnGroups.FillAsync(db, token).ConfigureAwait(false);
+                        if (filled.GameObjectSpawnEntries is { } objectEntries)
+                        {
+                            counts[SpawnGroupDataModule.GameObjectSpawnEntryTable] = objectEntries;
+                        }
+                        else if (counts.Remove(SpawnGroupDataModule.GameObjectSpawnEntryTable))
+                        {
+                            o.WriteLine($"  {SpawnGroupDataModule.GameObjectSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+
+                        string[] groupTables = [SpawnGroupDataModule.GroupTable, SpawnGroupDataModule.SpawnTable, SpawnGroupDataModule.EntryTable,
+                            SpawnGroupDataModule.FormationTable, SpawnGroupDataModule.LinkedGroupTable];
+                        if (filled.Groups is { } groupRows)
+                        {
+                            int[] rows = [groupRows, filled.Spawns, filled.Entries, filled.Formations, filled.LinkedGroups];
+                            for (int i = 0; i < groupTables.Length; i++)
+                            {
+                                counts[groupTables[i]] = rows[i];
+                            }
+
+                            if (filled.SkippedMembers > 0)
+                            {
+                                warnings.Add($"{SpawnGroupDataModule.SpawnTable}: {filled.SkippedMembers} member(s) left out (the world has no such spawn, or one with another entry)");
+                            }
+                        }
+                        else if (anyGroups)
+                        {
+                            foreach (string table in groupTables)
+                            {
+                                counts.Remove(table);
+                            }
+
+                            o.WriteLine($"  {SpawnGroupDataModule.GroupTable}: the world has spawn groups already; the five spawn group tables are left as they are");
                         }
                     }
 
