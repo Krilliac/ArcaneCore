@@ -53,6 +53,7 @@ public sealed class GameObjectContentReloadable(IServiceProvider services) : ICo
         var next = new GameObjectContent([.. rows, .. kept], live.Spawns, live.Locks, live.QuestStarters, live.QuestEnders, live.SpawnEntries)
         {
             SpawnGroups = live.SpawnGroups,
+            Pools = live.Pools,
         };
         return new Candidate(feature, next, rows.Length, [.. kept.Select(t => t.Entry)]);
     }

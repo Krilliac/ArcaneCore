@@ -11,6 +11,7 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
+using ArcaneCore.Data.World.Pools;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
@@ -104,6 +105,7 @@ public static partial class ContentImporterCli
         var dbScripts = new DbScriptDumpImporter();
         var gossip = new NpcDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
+        var pools = new PoolDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -133,6 +135,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             spawnGroups.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pools.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -354,6 +361,18 @@ public static partial class ContentImporterCli
         Count(SpawnGroupDataModule.FormationTable, spawnGroupReport.Formations, anyGroups);
         Count(SpawnGroupDataModule.LinkedGroupTable, spawnGroupReport.LinkedGroups, anyGroups);
 
+        // The pool tables (world 45): filled the same way, only when the world has no pool_template row, and pool_creature /
+        // pool_gameobject only for the world's own spawns with the dump's entry (PoolDumpImporter.FillAsync). Without them every pooled
+        // spawn stands in the world at once: all five ore nodes of a one-node spot, every chest of a one-chest camp.
+        PoolImportReport poolReport = pools.BuildReport();
+        bool anyPools = poolReport.Templates > 0;
+        string[] poolTables = [.. PoolDataModule.Tables];
+        int[] poolRows = [poolReport.Templates, poolReport.Creatures, poolReport.CreatureTemplates, poolReport.GameObjects, poolReport.GameObjectTemplates, poolReport.PoolPools];
+        for (int i = 0; i < poolTables.Length; i++)
+        {
+            Count(poolTables[i], poolRows[i], anyPools);
+        }
+
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -470,6 +489,33 @@ public static partial class ContentImporterCli
                             }
 
                             o.WriteLine($"  {SpawnGroupDataModule.GroupTable}: the world has spawn groups already; the five spawn group tables are left as they are");
+                        }
+                    }
+
+                    if (anyPools)
+                    {
+                        PoolFillReport filledPools = await pools.FillAsync(db, token).ConfigureAwait(false);
+                        if (filledPools.Templates is { } templateRows)
+                        {
+                            int[] rows = [templateRows, filledPools.Creatures, filledPools.CreatureTemplates, filledPools.GameObjects, filledPools.GameObjectTemplates, filledPools.PoolPools];
+                            for (int i = 0; i < poolTables.Length; i++)
+                            {
+                                counts[poolTables[i]] = rows[i];
+                            }
+
+                            if (filledPools.SkippedMembers > 0)
+                            {
+                                warnings.Add($"pool_creature/pool_gameobject: {filledPools.SkippedMembers} row(s) left out (the world has no such spawn, or one with another entry)");
+                            }
+                        }
+                        else
+                        {
+                            foreach (string table in poolTables)
+                            {
+                                counts.Remove(table);
+                            }
+
+                            o.WriteLine($"  {PoolDataModule.TemplateTable}: the world has pools already; the six pool tables are left as they are");
                         }
                     }
 

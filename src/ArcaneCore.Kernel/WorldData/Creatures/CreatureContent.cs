@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.Pools;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 
 namespace ArcaneCore.Kernel.WorldData.Creatures;
@@ -457,6 +458,9 @@ public sealed class CreatureContent
     /// exist at once and which entry an entry-0 member becomes (docs/areas/content-import.md, spawn groups).
     /// </summary>
     public SpawnGroupCatalog SpawnGroups { get; init; } = SpawnGroupCatalog.Empty;
+
+    /// <summary>The cmangos pools of these spawns (<c>pool_template</c>, <c>pool_pool</c> and this kind's member rows): which members of a pool exist at once (docs/areas/content-import.md, pools).</summary>
+    public PoolCatalog Pools { get; init; } = PoolCatalog.Empty;
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
 

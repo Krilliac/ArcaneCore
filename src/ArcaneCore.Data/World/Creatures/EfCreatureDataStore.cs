@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.Pools;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         dbScripts.AddRange(await db.Set<EventScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
+        Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
+            db, PoolSpawnKind.Creature, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -70,6 +73,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             scriptWaypoints.Select(DbScriptDataModule.ToWaypoint))
         {
             SpawnGroups = spawnGroups,
+            Pools = pools,
         };
     }
 
