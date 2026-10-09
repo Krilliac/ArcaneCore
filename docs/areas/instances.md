@@ -8,6 +8,10 @@ Raid-script extension (2026-10-08): Broodlord, Firemaw, Flamegor, Kurinnaxx and 
 documented in [the raid lane report](../integration/raid-bwl-zg-aq20-20261008.md). This is a bounded boss delivery, not complete
 BWL/ZG/AQ20 progression; the report lists the remaining encounters, content requirements and verification boundaries.
 
+The later Blackwing Lair encounter extension is documented in [its lane record](../integration/raid-bwl-completion-20261008.md):
+Razorgore's orb/eggs/waves, Vaelastrasz, Ebonroc, Chromaggus, Victor Nefarius/Nefarian and their gates. Synthetic phase tests do not
+replace imported-world, multiplayer or real-client acceptance.
+
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
 Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, phase transitions, summons and gossip scripts.
