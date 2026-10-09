@@ -8,6 +8,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Quests.Adapters;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
@@ -98,7 +99,11 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                     ? FactionTemplateCatalog.Empty
                     : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath));
             FactionTemplates = factions;
-            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions,
+            // SEND_TAXI spell paths are scripted travel, not taxi-network routes (vmangos DBCStores.cpp:366-405). The spell
+            // feature usually attaches later and then calls RefreshTaxiNetwork.
+            HashSet<uint> scriptedTaxiPaths = _services.GetService<SpellFeature>() is { } spellFeature
+                ? SendTaxiPaths(spellFeature.System.Store) : [];
+            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs, scriptedTaxiPaths), factions,
                 _services.GetService<Reputation.ReputationFeature>()?.Service, progression: true);
             var sfkPrisoners = new ShadowfangPrisonerGossip();
             Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAda, sfkPrisoners);
@@ -210,6 +215,15 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
 
     private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)
         => _services.GetService<NpcServicesFeature>() is { } npcServices ? npcServices.Extend(dependencies, npcs) : dependencies;
+
+    /// <summary>SpellFeature attaches after this feature; rebuild the taxi network once its spell rows have loaded.</summary>
+    public void RefreshTaxiNetwork(SpellStore spells)
+        => Services.ReplaceNpcs(new NpcStore(Services.Npcs.Content, SendTaxiPaths(spells)));
+
+    /// <summary>vmangos DBCStores.cpp taxi mask: the EffectMiscValue of every SPELL_EFFECT_SEND_TAXI (123) effect.</summary>
+    private static HashSet<uint> SendTaxiPaths(SpellStore spells) => spells.All.SelectMany(spell => spell.Effects)
+        .Where(effect => effect.Effect == SpellEffectName.SendTaxi && effect.MiscValue > 0)
+        .Select(effect => (uint)effect.MiscValue).ToHashSet();
 
     public void OnAreaTrigger(Player player, uint triggerId) => Services.AreaTriggerReached(player, triggerId);
 

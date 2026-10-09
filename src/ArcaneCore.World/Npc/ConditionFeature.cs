@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
@@ -7,6 +8,7 @@ using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Skills;
@@ -139,6 +141,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         HashSet<uint> holidays = [.. Options.ActiveHolidays];
         ReputationService? reputation = services.GetService<ReputationFeature>()?.Service;
         ReputationService? ranked = reputation is { Factions.Count: > 0 } ? reputation : null;
+        ConditionRuntimeState runtimeConditions = ConditionRuntimeState.For(world);
         return new ConditionContext
         {
             ItemCount = (player, item, bank) => player.Inventory.GetItemCount(item, bank),
@@ -164,6 +167,20 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             Quests = () => services.GetService<QuestNpcFeature>()?.Services,
             InstanceScript = (player, conditionId) => player.Map?.FindUpdater<InstanceData>() is { } script
                 ? script.CheckConditionCriteriaMeet(player, conditionId) : null,
+            CompletedEncounter = (player, first, second) => player.Map is { } map
+                ? runtimeConditions.HasCompletedEncounter(map, first, second) : null,
+            LastWaypoint = (player, npc) => player.Map?.FindUpdater<CreatureMapSystem>()
+                ?.FindCreature(npc.Guid)?.Motion.LastReachedWaypoint,
+            CreatureInRange = (player, entry, range) => player.Map?.FindUpdater<CreatureMapSystem>() is { } creatures
+                ? creatures.CreaturesOfEntryInRange(player, entry, range).Any(c => c.IsAlive) : null,
+            SpawnCount = (player, entry) => player.Map?.FindUpdater<CreatureMapSystem>() is { } spawned
+                // mangos-classic Creature::AddToWorld/RemoveFromWorld count only
+                // CREATURE_EXTRA_FLAG_COUNT_SPAWNS (0x00200000), while the creature is in the world.
+                ? (uint)spawned.Creatures.Count(c => c.Template.Entry == entry && c.IsInWorld
+                    && c.Template.ExtraFlagsDialect == CreatureExtraFlagsDialect.CMangos
+                    && (c.Template.ExtraFlags & 0x00200000u) != 0) : null,
+            WorldScript = runtimeConditions.WorldScriptCondition,
+            WorldState = (player, id) => player.Map is { } map ? runtimeConditions.GetMapVariable(map, id) : null,
 
             // GetHonorRankInfo().rank (the PvP_RANK condition, classic-db/mangos-classic type 11). Without honor the condition stays
             // undecidable and fails closed, as before.

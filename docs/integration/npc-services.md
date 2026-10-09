@@ -31,6 +31,13 @@ linear form.
 | Spirit healer | CMSG_SPIRIT_HEALER_ACTIVATE | Ghosts only. Uses the combat death/corpse flow: `MapCombat.ResurrectAtSpiritHealer` restores 50% health and mana and removes the corpse. Then resurrection sickness (15007) from level 11, shortened to (level − 10) minutes below level 20 and sent as SMSG_UPDATE_AURA_DURATION; 25% durability loss on equipment and bags; and a save. Ghosts can use only spirit healers and guides; the living can't use those. |
 | Flight masters | CMSG_TAXINODE_STATUS_QUERY, CMSG_TAXIQUERYAVAILABLENODES, CMSG_ACTIVATETAXI, CMSG_ACTIVATETAXIEXPRESS, CMSG_MOVE_SPLINE_DONE (ignored) | Node discovery (SMSG_NEW_TAXI_PATH and SMSG_TAXINODE_STATUS, stored in the characters v5 taxi mask) and SMSG_SHOWTAXINODES. Activation checks run in vmangos order: busy, already flying, every node known, mounted, too far, a path per hop, a team mount, and money (`ceil(total × discount)`). **Real flight:** `TaxiFlightSystem` sets the mount display and RemoveClientControl plus TaxiFlight, sends SMSG_ACTIVATETAXIREPLY OK and a flying SMSG_MONSTER_MOVE through the TaxiPathNode waypoints (a straight line when the DBC isn't supplied), moves the player at 32 yd/s on every map update, chains the hops of multi-hop routes (express), then dismounts and sends a stop spline at the destination. Money is charged only after the flight starts. Client movement packets are ignored during a flight. A teleport (position drift), a map change or leaving the map aborts the flight; logging out lands the player at the destination first. |
 
+The discovery mask and nearest-node lookup use the vmangos taxi network: every node
+except one whose outgoing TaxiPaths are all named by a `SEND_TAXI` spell effect (123),
+which is scripted travel. A node with no outgoing path stays in the network, as in vmangos. `SpellFeature` supplies the path IDs after its
+spell store loads; NPC table reloads retain the same exclusion set. Reference:
+vmangos `src/game/Database/DBCStores.cpp`, global taxi mask initialization (366–405),
+and `src/game/ObjectMgr.cpp::GetNearestTaxiNode`.
+
 Reputation: when an `IPlayerReputation` is registered in DI, its `GetPriceDiscount` and ranks
 are used. Otherwise prices are undiscounted. Nothing depends on a reputation service.
 

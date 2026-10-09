@@ -27,6 +27,12 @@ public sealed class MotionMaster
     /// <summary>The default (bottom) generator's type.</summary>
     public MovementGeneratorType DefaultType => _default.Type;
 
+    /// <summary>
+    /// mangos-classic MotionMaster::getLastReachedWaypoint (CONDITION_LAST_WAYPOINT), 0 without a waypoint generator. mangos
+    /// searches the whole stack; here a waypoint generator is only ever the default (spawn path, EventAI or relay start).
+    /// </summary>
+    public uint LastReachedWaypoint => _default is WaypointMovementGenerator waypoints ? waypoints.LastReachedPoint : 0;
+
     /// <summary>Generators above the default, bottom first.</summary>
     public IReadOnlyList<MovementGeneratorType> ActiveTypes => [.. _stack.Select(g => g.Type)];
 

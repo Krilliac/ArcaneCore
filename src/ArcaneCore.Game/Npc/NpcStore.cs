@@ -25,9 +25,10 @@ public sealed class NpcStore
     private readonly FrozenDictionary<uint, PointOfInterest> _pois;
     private readonly uint[] _taxiNodesMask = new uint[TaxiMaskSize];
 
-    public NpcStore(NpcContent content)
+    public NpcStore(NpcContent content, IReadOnlySet<uint>? scriptedTaxiPathIds = null)
     {
         Content = content;
+        ScriptedTaxiPathIds = (scriptedTaxiPathIds ?? new HashSet<uint>()).ToFrozenSet();
         _npcGossip = content.NpcGossips.GroupBy(g => g.NpcGuid).ToFrozenDictionary(g => g.Key, g => g.First().TextId);
 
         // vmangos GetGossipTextId walks a menu's texts by rising condition_id.
@@ -50,9 +51,16 @@ public sealed class NpcStore
         _raceTaxi = content.RaceTaxiStarts.GroupBy(r => r.Race).ToFrozenDictionary(g => g.Key, g => g.First().Mask);
         _pois = content.PointsOfInterest.GroupBy(p => p.Entry).ToFrozenDictionary(g => g.Key, g => g.First());
 
-        // vmangos sTaxiNodesMask: every node of the taxi network (bit id-1).
+        // vmangos DBCStores.cpp, "Initialize global taxinodes mask": every existing node joins the network unless all of
+        // its outgoing paths are SEND_TAXI spell (scripted) paths. A node with no outgoing path at all is kept.
+        ILookup<uint, TaxiPath> outgoing = _paths.Values.ToLookup(p => p.FromNode);
         foreach (uint id in _nodes.Keys)
         {
+            if (outgoing.Contains(id) && outgoing[id].All(p => ScriptedTaxiPathIds.Contains(p.Id)))
+            {
+                continue;
+            }
+
             _taxiNodesMask[(id - 1) / 32] |= 1u << (int)((id - 1) % 32);
         }
     }
@@ -65,8 +73,15 @@ public sealed class NpcStore
     /// </summary>
     public NpcContent Content { get; }
 
-    /// <summary>All existing taxi nodes (vmangos sTaxiNodesMask).</summary>
+    /// <summary>The taxi network (vmangos sTaxiNodesMask): every node except those whose outgoing paths are all SEND_TAXI paths.</summary>
     public IReadOnlyList<uint> TaxiNodesMask => _taxiNodesMask;
+
+    /// <summary>SEND_TAXI (effect 123) path ids this store's network excludes; kept across NPC table reloads.</summary>
+    public IReadOnlySet<uint> ScriptedTaxiPathIds { get; }
+
+    /// <summary>Whether the node is in <see cref="TaxiNodesMask"/> (vmangos GetNearestTaxiNode's "skip not taxi network nodes").</summary>
+    public bool IsNetworkNode(uint id) => id is > 0 and <= TaxiMaskSize * 32
+        && (_taxiNodesMask[(id - 1) / 32] & (1u << (int)((id - 1) % 32))) != 0;
 
     /// <summary>npc_gossip text for a spawn id, 0 when none (vmangos ObjectMgr::GetNpcGossip).</summary>
     public uint NpcGossipText(uint spawnId) => _npcGossip.GetValueOrDefault(spawnId);
