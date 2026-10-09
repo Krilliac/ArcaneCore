@@ -8,6 +8,7 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
@@ -275,6 +276,82 @@ public sealed class Aq40ImportedRuntimeTests
                 var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
                 Assert.Equal(EncounterState.Done, raid.GetData(TempleOfAhnQirajInstance.Ouro));
                 Assert.True(raid.HasCompletedEncounter(716));
+            });
+
+            await MoveNearAsync(host, client, teleports, -8578.65f, 1985.85f, 100.30f);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15727)
+                && host.World.FindOnlinePlayer("Aqsmoke")!.Map!
+                    .FindUpdater<CreatureMapSystem>()!.Creatures.Any(c => c.Entry == 15589), "C'Thun Eye and body grid load");
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var map = player.Map!;
+                var creatures = map.FindUpdater<CreatureMapSystem>()!;
+                Creature body = Assert.Single(creatures.Creatures, c => c.Entry == 15727);
+                Creature eye = Assert.Single(creatures.Creatures, c => c.Entry == 15589);
+                var bodyAi = Assert.IsType<CthunBodyAI>(body.AI);
+                var eyeAi = Assert.IsType<CthunEyeAI>(eye.AI);
+                var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.True((body.UnitFlags & UnitFlags.NotSelectable) != 0);
+                Assert.Equal(body.MaxHealth, body.InvincibilityHpThreshold);
+                bodyAi.AttackStart(player);
+                Assert.Equal(EncounterState.InProgress, raid.GetData(TempleOfAhnQirajInstance.CThun));
+                eyeAi.OnUpdate(45_001);
+                Assert.True(spells.HasAura(eye, 26009) || spells.HasAura(eye, 26136));
+                eyeAi.OnUpdate(3000);
+                eyeAi.OnUpdate(1000);
+                map.Combat.Kill(player, eye);
+                bodyAi.OnUpdate(4000);
+                Assert.Equal(2, creatures.Creatures.Count(c => c.Entry == 15802 && c.IsAlive));
+                Assert.True(spells.HasAura(body, 26156));
+                bodyAi.OnUpdate(8000);
+                Assert.True((body.UnitFlags & UnitFlags.Spawning) == 0);
+                foreach (Creature flesh in creatures.Creatures.Where(c => c.Entry == 15802 && c.IsAlive).ToArray())
+                    map.Combat.Kill(player, flesh);
+                Assert.Equal(0u, body.InvincibilityHpThreshold);
+                Assert.True(spells.HasAura(body, 26235));
+                bodyAi.OnUpdate(45_001);
+                Assert.Equal(2, creatures.Creatures.Count(c => c.Entry == 15802 && c.IsAlive));
+                Assert.True(spells.HasAura(body, 26156));
+                player.InvincibilityHpThreshold = 1; // keep this single-client smoke alive while the raid is in the stomach
+                bodyAi.OnUpdate(14_751);
+                bodyAi.OnUpdate(3251);
+                Assert.True(raid.IsInCthunStomach(player));
+                Assert.Equal(TeleportStage.Near, teleports.StageOf(player));
+            });
+            await AcknowledgeNearAsync(host, client, teleports);
+            await host.WaitForWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                return player.Z < 0 && host.WorldServices.GetRequiredService<SpellFeature>().System.HasAura(player, 26476);
+            }, "C'Thun stomach Digestive Acid after near teleport");
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var raid = Assert.IsType<TempleOfAhnQirajInstance>(player.Map!.FindUpdater<InstanceData>());
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.InRange(player.Z, -97f, -95f);
+                Assert.True(raid.IsInCthunStomach(player));
+                Assert.True(spells.HasAura(player, 26476));
+                raid.OnAreaTrigger(player, 4034);
+                Assert.Equal(TeleportStage.Near, teleports.StageOf(player));
+            });
+            await AcknowledgeNearAsync(host, client, teleports);
+            await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Aqsmoke")!;
+                var map = player.Map!;
+                var raid = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.InRange(player.Z, 99f, 101f);
+                Assert.False(raid.IsInCthunStomach(player));
+                Assert.False(spells.HasAura(player, 26476));
+                player.InvincibilityHpThreshold = 0;
+                Creature body = Assert.Single(map.FindUpdater<CreatureMapSystem>()!.Creatures, c => c.Entry == 15727);
+                map.Combat.Kill(player, body);
+                Assert.Equal(EncounterState.Done, raid.GetData(TempleOfAhnQirajInstance.CThun));
             });
         }
         finally

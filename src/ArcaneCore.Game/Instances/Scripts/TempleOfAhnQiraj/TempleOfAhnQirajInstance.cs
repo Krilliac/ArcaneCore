@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 /// Ten save slots include the unused reference slot 9. GPL reference was used for facts only.
 /// </summary>
 [InstanceScript(531)]
-public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10), IInstanceConditionFacts
+public sealed partial class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10), IInstanceConditionFacts
 {
     public const uint Skeram = 0, Sartura = 1, Fankriss = 2, Huhuran = 3,
         Twins = 4, CThun = 5, BugTrio = 6, Viscidus = 7, Ouro = 8;
@@ -79,7 +79,7 @@ public sealed class TempleOfAhnQirajInstance(Map map) : ScriptedInstance(map, 10
     {
         if (creature.Entry is 15511 or 15543 or 15544
             || creature.Entry == 15263 && creature.System?.SummonerOf(creature) is null
-            || creature.Entry is 15275 or 15276)
+            || creature.Entry is 15275 or 15276 or 15589 or 15727)
             StoreCreature(creature);
         if (creature.Entry is 15275 or 15276 && !_twinsDamageSubscribed)
         {

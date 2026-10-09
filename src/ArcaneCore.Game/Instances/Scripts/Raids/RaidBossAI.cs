@@ -82,6 +82,8 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15962) => new FankrissHatchlingAI(creature),
             (TempleOfAhnQirajInstance, 15299) => new ViscidusAI(creature),
             (TempleOfAhnQirajInstance, 15667) => new ViscidusGlobAI(creature),
+            (TempleOfAhnQirajInstance, 15922) when creature.System?.SummonerOf(creature)?.Entry == 15727
+                => new CthunPuntAI(creature),
             (TempleOfAhnQirajInstance, 15922) => new ViscidusToxinTriggerAI(creature),
             (TempleOfAhnQirajInstance, 15275) => new VeknilashAI(creature),
             (TempleOfAhnQirajInstance, 15276) => new VeklorAI(creature),
@@ -90,6 +92,9 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15517) => new OuroAI(creature),
             (TempleOfAhnQirajInstance, 15712) => new OuroMoundAI(creature),
             (TempleOfAhnQirajInstance, 15718) => new OuroScarabAI(creature),
+            (TempleOfAhnQirajInstance, 15727) => new CthunBodyAI(creature),
+            (TempleOfAhnQirajInstance, 15589) => new CthunEyeAI(creature),
+            (TempleOfAhnQirajInstance, 15725 or 15726 or 15728 or 15334 or 15802) => new CthunTentacleAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),
