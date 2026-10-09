@@ -193,6 +193,22 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
+    public void APacketAfterTheBaselineGap_IsANewBaseline_SoTheSameBlinkIsNotScored()
+    {
+        // The default 3 s gap (AFK, a loading screen): the packet after it is trusted.
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        Assert.Empty(client.Step(500, 80, receivedMs: 3001));
+
+        // The same pause under a larger gap is an ordinary step, and the blink is scored.
+        var patient = new Client(new AntiCheatOptions { BaselineGapMs = 600_000 });
+        patient.Send(WorldOpcode.MsgMoveStartForward);
+        patient.RunFor(4, Run);
+        Assert.True(Has(patient.Step(500, 80, receivedMs: 3001), AntiCheatViolation.Teleport));
+    }
+
+    [Fact]
     public void AServerRelocation_TrustsTheNextPacket_WhetherNotifiedOrSeenInThePosition()
     {
         var client = new Client();
