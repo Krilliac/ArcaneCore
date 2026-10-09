@@ -5,6 +5,8 @@ using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.GameObjects;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -98,8 +100,13 @@ public sealed class GameEventSpawnFeature(IServiceProvider services, ILogger<Gam
     }
 
     /// <summary>
-    /// Event rows whose spawn is not in the creature or gameobject content (classic-db has 33 and 1126 of them) cannot do anything: say
-    /// so once, with the counts, instead of per row (vmangos logs each one at load).
+    /// Event rows whose spawn is not in the creature or gameobject content (classic-db z2815 has 33 and 1126 of them: the guids are in
+    /// no spawn table of the dump) cannot do anything: say so once, with the counts, instead of per row (vmangos logs each one at load).
+    /// <para>
+    /// The audit waits until both contents are installed. The gameobject feature has its content at attach, but the creature feature
+    /// installs its content from the world thread, so the first gate install (at attach) used to see the gameobjects and an empty creature
+    /// content and counted every creature event guid as missing (the wave-9 "3148 creature guid(s)", which were all in the world).
+    /// </para>
     /// </summary>
     private void AuditOrphans(GameEventSpawns spawns)
     {
@@ -110,23 +117,36 @@ public sealed class GameEventSpawnFeature(IServiceProvider services, ILogger<Gam
             return;
         }
 
+        if (!creatureFeature.ContentInstalled || !objectFeature.ContentInstalled)
+        {
+            return; // a content is not installed yet; the next world tick asks again
+        }
+
         var creatureContent = creatureFeature.Content;
         var objectContent = objectFeature.Content;
         if (creatureContent.SpawnCount == 0 && objectContent.SpawnCount == 0)
         {
-            return; // the content is not installed yet
+            return; // no world content at all (a bare test world): nothing to compare the rows with
         }
 
         _audited = true;
-        HashSet<uint> creatureGuids = [.. creatureContent.MapsWithSpawns.SelectMany(creatureContent.GetSpawns).Select(s => s.Guid)];
-        HashSet<uint> objectGuids = [.. objectContent.MapsWithSpawns.SelectMany(objectContent.GetSpawns).Select(s => s.Guid)];
-        int missingCreatures = spawns.GatedCreatures.Count(g => !creatureGuids.Contains(g));
-        int missingObjects = spawns.GatedGameObjects.Count(g => !objectGuids.Contains(g));
+        (int missingCreatures, int missingObjects) = CountOrphans(spawns, creatureContent, objectContent);
         if (missingCreatures > 0 || missingObjects > 0)
         {
             logger.LogWarning(
                 "game event rows without a spawn are ignored: {Creatures} creature guid(s) not in the creature spawns, {GameObjects} gameobject guid(s) not in the gameobject spawns",
                 missingCreatures, missingObjects);
         }
+    }
+
+    /// <summary>The gated creature and gameobject guids that are not spawns of the given contents.</summary>
+    internal static (int Creatures, int GameObjects) CountOrphans(ISpawnGate gate, CreatureContent creatures, GameObjectContent objects)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        ArgumentNullException.ThrowIfNull(creatures);
+        ArgumentNullException.ThrowIfNull(objects);
+        HashSet<uint> creatureGuids = [.. creatures.MapsWithSpawns.SelectMany(creatures.GetSpawns).Select(s => s.Guid)];
+        HashSet<uint> objectGuids = [.. objects.MapsWithSpawns.SelectMany(objects.GetSpawns).Select(s => s.Guid)];
+        return (gate.GatedCreatures.Count(g => !creatureGuids.Contains(g)), gate.GatedGameObjects.Count(g => !objectGuids.Contains(g)));
     }
 }

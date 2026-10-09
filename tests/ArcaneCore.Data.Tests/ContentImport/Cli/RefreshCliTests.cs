@@ -303,6 +303,77 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Equal(0, await db.Set<GameEventCreatureRow>().CountAsync());
     }
 
+    /// <summary>
+    /// Real classic-db z2815 <c>creature_spawn_entry</c> rows: spawn 804 (creature.id 0, Stranglethorn: entries 684 and 772), 8308 (id 4463,
+    /// alternatives 435, 615 and 4463), 15138 (id 3236, alternatives 3235 to 3237) and 93766, which is in no <c>creature</c> row of the dump.
+    /// </summary>
+    private const string SpawnEntryDump = """
+        INSERT INTO `creature_spawn_entry` (`guid`,`entry`) VALUES (804,684),(804,772),(8308,435),(8308,615),(8308,4463),(15138,3235),(15138,3236),(15138,3237),(93766,15246),(93766,15250);
+        """;
+
+    private async Task SeedSpawnsAsync(string world, params (uint Guid, uint Entry)[] spawns)
+    {
+        await using WorldDbContext seed = Open(world);
+        foreach ((uint guid, uint entry) in spawns)
+        {
+            seed.Set<CreatureSpawnRow>().Add(new CreatureSpawnRow { Guid = guid, Entry = entry, MapId = 0, X = 1, Y = 2, Z = 3 });
+        }
+
+        await seed.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// A Codex-line world has <c>creature_spawn_entry</c> empty, so its 2802 spawns with entry 0 never appear. Refresh fills it for the
+    /// world's own spawns: 804 (entry 0) and 8308 (its entry is one of the dump's), not 15138 (the world's spawn is another creature) or
+    /// 93766 (not a spawn of this world).
+    /// </summary>
+    [Fact]
+    public async Task Refresh_FillsAnEmptySpawnEntryTable_ForTheWorldsOwnSpawnsOnly()
+    {
+        string world = await OldWorldAsync();
+        await SeedSpawnsAsync(world, (804, 0), (8308, 4463), (15138, 9999));
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + SpawnEntryDump);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("  creature_spawn_entry  5", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        Assert.Equal([(804u, 684u), (804u, 772u), (8308u, 435u), (8308u, 615u), (8308u, 4463u)],
+            (await db.Set<CreatureSpawnEntryRow>().ToListAsync()).Select(r => (r.SpawnGuid, r.Entry)).Order().ToList());
+
+        // a second run finds rows and leaves them
+        (code, output, error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("creature_spawn_entry: the world has rows already; left as it is", output, StringComparison.Ordinal);
+        await using WorldDbContext again = Open(world);
+        Assert.Equal(5, await again.Set<CreatureSpawnEntryRow>().CountAsync());
+    }
+
+    /// <summary>A world with its own spawn entries keeps them (a GM or another importer chose them).</summary>
+    [Fact]
+    public async Task Refresh_LeavesAWorldsOwnSpawnEntries()
+    {
+        string world = await OldWorldAsync();
+        await SeedSpawnsAsync(world, (804, 0));
+        await using (WorldDbContext seed = Open(world))
+        {
+            seed.Set<CreatureSpawnEntryRow>().Add(new CreatureSpawnEntryRow { SpawnGuid = 804, Entry = 684 });
+            await seed.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + SpawnEntryDump);
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.DoesNotContain("  creature_spawn_entry  ", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        CreatureSpawnEntryRow kept = await db.Set<CreatureSpawnEntryRow>().SingleAsync();
+        Assert.Equal((804u, 684u), (kept.SpawnGuid, kept.Entry));
+    }
+
     [Fact]
     public async Task Refresh_RunTwice_LeavesTheSameRows()
     {

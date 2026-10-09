@@ -43,7 +43,9 @@ public static partial class ContentImporterCli
     /// the dump's <c>instance_template</c> or <c>map_template</c>) and <c>area_template</c> (every area); one without the other is refused.
     /// Afterwards it checks the references the world logs at start (teleports and taverns without a trigger, battleground start locations
     /// without a safe location, transports without a type-15 object, portals to a map with no map_template row, graveyard links to a zone
-    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). The world's schema
+    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). Two groups are filled
+    /// only when the world has none of their rows: the seven game-event tables, and <c>creature_spawn_entry</c> (for the world's own spawns
+    /// only; see <see cref="FillSpawnEntriesAsync"/>). The world's schema
     /// must already be this importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live
     /// world as a side effect.
     /// </summary>
@@ -326,6 +328,13 @@ public static partial class ContentImporterCli
             warnings.AddRange(eventReport.Warnings);
         }
 
+        // creature_spawn_entry: the entries a spawn whose creature.id is 0 becomes (cmangos; vmangos id2..id5). Worlds built by the Codex-line
+        // importer have the table empty, so those spawns (2802 of classic-db z2815, 2234 of them with rows here) never appear. Filled only
+        // when the world has no row at all, and only for the world's own spawns whose entry is 0 or one of the dump's entries for that guid,
+        // so a world built from other data never gets a creature it did not have.
+        IReadOnlyCollection<CreatureSpawnEntryRow> spawnEntries = relays.SpawnEntrySnapshot();
+        Count(CreatureSpawnEntryTable, spawnEntries.Count, spawnEntries.Count > 0);
+
         if (procs is not null && procs.RowsFilteredByBuild > 0)
         {
             warnings.Add($"spell_proc_event: {procs.RowsFilteredByBuild} row(s) outside build {SpellProcEventDumpImporter.SupportedBuild} dropped");
@@ -393,6 +402,20 @@ public static partial class ContentImporterCli
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
                     }
 
+                    if (spawnEntries.Count > 0)
+                    {
+                        int? written = await FillSpawnEntriesAsync(db, spawnEntries, token).ConfigureAwait(false);
+                        if (written is { } rows)
+                        {
+                            counts[CreatureSpawnEntryTable] = rows;
+                        }
+                        else
+                        {
+                            counts.Remove(CreatureSpawnEntryTable);
+                            o.WriteLine($"  {CreatureSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+                    }
+
                     if (anyEvents)
                     {
                         int existing = await db.Set<GameEventRow>().CountAsync(token).ConfigureAwait(false);
@@ -440,6 +463,32 @@ public static partial class ContentImporterCli
         PrintWarnings(o, warnings);
         WriteReport(reportPath, ContentImportReport.Create("refresh", files, scan, warnings, dryRun) with { Imported = counts });
         return ExitCodes.Ok;
+    }
+
+    private const string CreatureSpawnEntryTable = "creature_spawn_entry";
+
+    /// <summary>
+    /// Fill an empty <c>creature_spawn_entry</c> from the dump's rows: only for spawns the world has, and only when the world's spawn has entry
+    /// 0 (it needs the rows to appear at all) or an entry among the dump's for that guid (the same spawn). Returns the rows written, or null
+    /// when the world already has rows (nothing is touched).
+    /// </summary>
+    internal static async Task<int?> FillSpawnEntriesAsync(WorldDbContext db, IReadOnlyCollection<CreatureSpawnEntryRow> dumpRows, CancellationToken ct)
+    {
+        if (await db.Set<CreatureSpawnEntryRow>().AnyAsync(ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        Dictionary<uint, uint> worldEntries = await db.Set<CreatureSpawnRow>().AsNoTracking()
+            .ToDictionaryAsync(r => r.Guid, r => r.Entry, ct).ConfigureAwait(false);
+        CreatureSpawnEntryRow[] rows = [.. dumpRows
+            .GroupBy(r => r.SpawnGuid)
+            .Where(g => worldEntries.TryGetValue(g.Key, out uint entry) && (entry == 0 || g.Any(r => r.Entry == entry)))
+            .SelectMany(g => g)
+            .OrderBy(r => r.SpawnGuid).ThenBy(r => r.Entry)
+            .Select(r => new CreatureSpawnEntryRow { SpawnGuid = r.SpawnGuid, Entry = r.Entry })];
+        await ImportBatch.InsertAsync(db, rows, ct).ConfigureAwait(false);
+        return rows.Length;
     }
 
     /// <summary>
