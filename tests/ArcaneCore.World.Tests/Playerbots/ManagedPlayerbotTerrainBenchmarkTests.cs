@@ -165,6 +165,8 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         }
 
         Progress($"created {max}");
+        // Liveness while the run goes on: ticks so far and the slowest tick since the last line (a stalled ramp shows here).
+        using var heartbeat = new Timer(_ => Progress(recorder.Liveness()), null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
         int running = 0;
         try
         {
@@ -394,6 +396,22 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             }
         }
 
+        private long _totalTicks;
+        private long _slowestSinceReport;
+        private string _slowestDescription = "";
+
+        /// <summary>A progress line: ticks so far and the slowest tick since the previous line (any thread).</summary>
+        public string Liveness()
+        {
+            lock (_gate)
+            {
+                string line = string.Create(CultureInfo.InvariantCulture, $"alive: {_totalTicks} ticks; slowest since last {_slowestSinceReport / 1000.0:F1} ms {_slowestDescription}");
+                _slowestSinceReport = 0;
+                _slowestDescription = "";
+                return line;
+            }
+        }
+
         public void Tick(long micros, long bytes, TickPhases phases)
         {
             _current.Micros = micros;
@@ -403,6 +421,13 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _current.Features = phases.FeaturesMicros;
             lock (_gate)
             {
+                _totalTicks++;
+                if (micros > _slowestSinceReport)
+                {
+                    _slowestSinceReport = micros;
+                    _slowestDescription = micros >= 200_000 ? _current.Describe() : "";
+                }
+
                 _ticks.Add(micros);
                 _maps.Add(phases.MapsMicros);
                 _bot.Add(_current.BotFeature);
