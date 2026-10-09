@@ -41,7 +41,7 @@ public abstract class NpcTableReloadable(
         }
 
         NpcContent next = takeFrom(feature.Services.Npcs.Content, fresh);
-        return new Candidate(this, feature, new NpcStore(next), rows(next), ReloadPolicy.KeepsEmptyTables(services));
+        return new Candidate(this, feature, new NpcStore(next, feature.Services.Npcs.ScriptedTaxiPathIds), rows(next), ReloadPolicy.KeepsEmptyTables(services));
     }
 
     private sealed class Candidate(NpcTableReloadable owner, QuestNpcFeature feature, NpcStore store, int rows, bool keepEmpty) : ContentCandidate
