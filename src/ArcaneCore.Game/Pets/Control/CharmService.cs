@@ -50,10 +50,15 @@ public sealed partial class CharmService
 
     /// <summary>
     /// vmangos <c>Creature::m_spells</c>: the creature's own spell slots, which a charm or possession puts on the controller's bar
-    /// (<c>CharmInfo::InitCharmCreateSpells</c>, <c>InitPossessCreateSpells</c>). The repository has no creature spell lists (vmangos
-    /// <c>creature_spells</c> / <c>creature_template.spell_list_id</c>), so the default is none: the bar then holds the commands only.
+    /// (<c>CharmInfo::InitCharmCreateSpells</c>, <c>InitPossessCreateSpells</c>). The repository has no general creature spell lists
+    /// (vmangos <c>creature_spells</c> / <c>creature_template.spell_list_id</c>); the default only supplies Naxxramas
+    /// understudies' two verified charm spells. Other bars hold the commands only.
     /// </summary>
-    public Func<Creature, IReadOnlyList<uint>> CreatureSpells { get; set; } = static _ => [];
+    // vmangos sql/migrations/20260607172947_world.sql creature_charm_spells:
+    // Razuvious' possessed understudy has Taunt (29060) and Shield Wall (29061).
+    public Func<Creature, IReadOnlyList<uint>> CreatureSpells { get; set; } = static creature =>
+        creature.Map?.MapId == 533 && creature.Entry == DeathKnightUnderstudyEntry
+            ? [29060u, 29061u] : [];
 
     /// <summary>The summon service that owns this one (dismisses a pet before a charm with SPELL_ATTR_EX_DISMISS_PET_FIRST).</summary>
     public SummonService? Summons { get; internal set; }
