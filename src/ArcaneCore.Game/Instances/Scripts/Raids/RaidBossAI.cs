@@ -4,6 +4,7 @@ using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
+using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Instances.Scripts.Raids;
@@ -41,6 +42,9 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
+            (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
+                => new NaxxramasBossAI(creature, raid),
+            (NaxxramasInstance raid, 16573) => new NaxxramasCryptGuardAI(creature, raid),
             _ => null,
         };
     }
