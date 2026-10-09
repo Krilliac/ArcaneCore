@@ -139,6 +139,7 @@ public sealed partial class CreatureMapSystem
         }
 
         combat.UnitKilled += OnUnitKilled;
+        combat.MeleeSwingResolved += OnMeleeSwingResolved;
         _combatSubscribed = true;
     }
 
@@ -312,6 +313,14 @@ public sealed partial class CreatureMapSystem
         }
 
         NotifySpellHitTarget(caster, target, spell);
+    }
+
+    private void OnMeleeSwingResolved(MeleeDamageInfo hit)
+    {
+        if (hit.Target is Creature creature && ReferenceEquals(creature.System, this) && creature.IsAlive
+            && hit.Outcome is not (MeleeHitOutcome.Evade or MeleeHitOutcome.Miss or MeleeHitOutcome.Dodge
+                or MeleeHitOutcome.Parry or MeleeHitOutcome.Resist))
+            creature.AI?.OnMeleeHitReceived(hit);
     }
 
     /// <summary>vmangos IsWithinLOSInMap through the map's <see cref="ILineOfSight"/> (<c>map.Collision</c>, eye height; open without vmaps).</summary>

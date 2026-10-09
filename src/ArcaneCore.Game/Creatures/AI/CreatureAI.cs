@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 
@@ -12,6 +13,7 @@ namespace ArcaneCore.Game.Creatures;
 /// <item><see cref="OnUpdate"/> every tick while alive (vmangos UpdateAI).</item>
 /// <item><see cref="OnDeath"/> when it dies (JustDied), <see cref="OnKilledUnit"/> when it kills (KilledUnit).</item>
 /// <item><see cref="OnSpellHit"/> when a spell lands on it (SpellHit).</item>
+/// <item><see cref="OnMeleeHitReceived"/> before a landed white swing's damage reaches it (Viscidus' freeze/shatter counter).</item>
 /// <item><see cref="OnEvade"/> when it leaves combat to go home (EnterEvadeMode), <see cref="OnReachedHome"/> on arrival.</item>
 /// </list>
 /// The protected helpers start attacks, choose victims (threat list), evade, move and cast
@@ -70,6 +72,11 @@ public abstract class CreatureAI
     }
 
     public virtual void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+    }
+
+    /// <summary>A landed base or off-hand white hit, after the hit table but before damage and aura procs.</summary>
+    public virtual void OnMeleeHitReceived(MeleeDamageInfo hit)
     {
     }
 
