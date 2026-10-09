@@ -493,6 +493,7 @@ public sealed partial class SpellSystem
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
                 if ((entry.EffectMask & (1 << i)) != 0
+                    && spell.Effects[i].Effect != SpellEffectName.ActivateObject
                     && ImmunityRules.IsImmuneToSpellEffect(this, target, spell, i, ReferenceEquals(target, caster)))
                 {
                     entry.EffectMask &= ~(1 << i);
@@ -502,18 +503,31 @@ public sealed partial class SpellSystem
             // vmangos Spell::AddUnitTarget → Unit::SpellHitResult, once per target.
             // A self cast skips the roll but not the immunity test: vmangos SpellHitResult asks IsImmuneToSpell(spell, victim == this) before the
             // "victim == this" return (SpellCaster.cpp:175-180), so a self bandage on a Recently Bandaged player lands immune (crafting lane).
-            entry.Miss = entry.EffectMask == 0 ? SpellMissInfo.Immune2
+            bool objectOnly = entry.EffectMask != 0;
+            for (int i = 0; i < SpellConstants.MaxEffects && objectOnly; i++)
+            {
+                if ((entry.EffectMask & (1 << i)) != 0 && spell.Effects[i].Effect != SpellEffectName.ActivateObject)
+                    objectOnly = false;
+            }
+            entry.Miss = objectOnly ? SpellMissInfo.None
+                : entry.EffectMask == 0 ? SpellMissInfo.Immune2
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
             if (entry.Miss == SpellMissInfo.None)
             {
-                hits.Add(target.Guid);
+                if (!objectOnly) hits.Add(target.Guid); // a carrier for GO effects is not itself a hit
             }
             else
             {
                 misses.Add((target.Guid, entry.Miss));
             }
+        }
+
+        // Spell::WriteSpellGoTargets includes selected game objects alongside unit hits.
+        foreach (ObjectGuid guid in cast.ObjectTargetsByEffect.Values.SelectMany(guids => guids).Distinct())
+        {
+            if (!hits.Contains(guid)) hits.Add(guid);
         }
 
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(

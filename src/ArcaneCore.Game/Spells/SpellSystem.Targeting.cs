@@ -148,7 +148,24 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.GameObjectItem:
                 // The effect reads the explicit object or item of the target block itself (vmangos m_targets.getGOTarget /
                 // getItemTarget); the caster carries the effect.
+                if (effect.Effect == SpellEffectName.ActivateObject && !cast.Targets.GameObject.IsEmpty)
+                    cast.ObjectTargetsByEffect[effectIndex] = [cast.Targets.GameObject];
                 return [(caster, 1.0f)];
+            case (SpellImplicitTarget)40: // TARGET_GAMEOBJECT_SCRIPT_NEAR_CASTER
+            case (SpellImplicitTarget)51: // TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_SRC_LOC
+            case (SpellImplicitTarget)52: // TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_DEST_LOC
+            {
+                List<(Unit Unit, float Multiplier)>? registered = TrySelectRegistered(cast, effect, effectIndex, selector, unitTarget);
+                if (registered is not null)
+                {
+                    if (effect.Effect == SpellEffectName.ActivateObject && !cast.Targets.GameObject.IsEmpty
+                        && caster.Map?.FindUpdater<GameObjects.GameObjectMapSystem>()?.Find(cast.Targets.GameObject) is { IsSpawned: true })
+                        cast.ObjectTargetsByEffect[effectIndex] = [cast.Targets.GameObject];
+                    return registered;
+                }
+
+                return SelectScriptGameObjects(cast, effect, effectIndex, selector, unitTarget);
+            }
             case SpellImplicitTarget.UnitEnemy:
                 if (explicitOrSelf is null)
                 {
