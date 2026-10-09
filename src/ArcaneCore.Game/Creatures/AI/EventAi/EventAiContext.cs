@@ -109,6 +109,22 @@ public sealed class EventAiContext
             case (int)EventAiTarget.RandomNotTop:
                 result = threat.Count > 1 ? threat[Random(1, threat.Count - 1)].Target : null;
                 break;
+            case (int)EventAiTarget.RandomPlayer:
+            case (int)EventAiTarget.RandomNotTopPlayer:
+            {
+                int first = target == (int)EventAiTarget.RandomPlayer ? 0 : 1;
+                List<Player> players = [];
+                for (int i = first; i < threat.Count; i++)
+                {
+                    if (threat[i].Target is Player player)
+                    {
+                        players.Add(player);
+                    }
+                }
+
+                result = players.Count > 0 ? players[Random(0, players.Count - 1)] : null;
+                break;
+            }
             case (int)EventAiTarget.Invoker:
                 result = invocation.Invoker;
                 break;
