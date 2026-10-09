@@ -460,8 +460,20 @@ public sealed partial class CreatureMapSystem
                 GameObjects.GameObjectMapSystem? objects = Map.FindUpdater<GameObjects.GameObjectMapSystem>();
                 GameObjects.GameObject? go = step.DataLong == 0 ? source as GameObjects.GameObject
                     : objects?.GameObjects.FirstOrDefault(candidate => candidate.Spawn?.Guid == step.DataLong);
-                if (go is not null && go.Type is not (GameObjects.GameObjectType.Door or GameObjects.GameObjectType.FishingNode))
-                    objects?.RespawnPending(go);
+                if (objects is null || go is null || go.IsSpawned
+                    || go.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.FishingNode)
+                    return false;
+                if (go.Spawn is not { SpawnTimeSeconds: < 0 })
+                {
+                    objects.RespawnPending(go); // IsSpawnedByDefault: a static spawn can only respawn
+                    return false;
+                }
+
+                // Not spawned by default (negative spawntimesecs): spawned for datalong2 seconds, then gone again
+                // (SetLootState(GO_READY), SetRespawnTime(despawnDelay), Refresh).
+                objects.ForceRespawn(go);
+                if (go.IsSpawned)
+                    _scriptObjectDespawns.Add((go, _clockMs + (step.DataLong2 * 1000L)));
                 return false;
             }
 

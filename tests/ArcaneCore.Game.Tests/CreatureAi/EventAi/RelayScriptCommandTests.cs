@@ -78,6 +78,23 @@ public sealed class RelayScriptCommandTests
     }
 
     [Fact]
+    public void RespawnGameObject_ShowsAHiddenSpawnForItsDespawnDelay()
+    {
+        // cmangos SCRIPT_COMMAND_RESPAWN_GAMEOBJECT (ScriptMgr.cpp:2001-2046): a spawn that is not spawned by default
+        // (negative spawntimesecs) appears for datalong2 seconds and then leaves again.
+        using Town t = Start([Step(0, 9, dataLong: DoorGuid, dataLong2: 2)],
+            objects: [GameObjectTestKit.GoSpawn(DoorGuid, DoorEntry, 0, 10, spawnTimeSeconds: -60)], objectType: GameObjectType.Chest);
+        GameObject chest = Assert.Single(t.Objects.GameObjects);
+        Assert.False(chest.IsSpawned);
+        t.Wave();
+        Assert.True(chest.IsSpawned);
+        Run(t.World, 1_999);
+        Assert.True(chest.IsSpawned);
+        Run(t.World, 1);
+        Assert.False(chest.IsSpawned);
+    }
+
+    [Fact]
     public void DistanceSound_UsesTheSourceGuidInItsPacket()
     {
         using Town t = Start([Step(0, 16, dataLong: 6209, dataLong2: 2, flags: FlagReverse)]);
