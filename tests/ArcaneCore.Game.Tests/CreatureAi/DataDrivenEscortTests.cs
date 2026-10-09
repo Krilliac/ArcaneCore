@@ -58,7 +58,7 @@ public sealed class DataDrivenEscortTests
             Assert.Equal(UnitFlags.None, rig.Escort.UnitFlags & UnitFlags.ImmuneToNpc);
         }
         Assert.Equal(RealPath(entry).Count, ai.WaypointCount);
-        if (spec.StartStandState is { } startStand)
+        if ((spec.StartStandState ?? spec.AcceptStandState) is { } startStand)
         {
             Assert.Equal((StandState)startStand, rig.Escort.StandState);
         }
@@ -220,6 +220,79 @@ public sealed class DataDrivenEscortTests
         Assert.True(ai.CurrentWaypointIndex >= ai.WaypointCount - 1, $"stopped at index {ai.CurrentWaypointIndex}");
         Assert.Empty(Packets(watcher, WorldOpcode.SmsgMessagechat));
         Assert.Empty(rig.Quests.Completed);
+    }
+
+    [Fact]
+    public void Erland_SayNearby_IsNotAnsweredByADeadRaneOrQuinnWhoseCorpseIsStillThere()
+    {
+        // silverpine_forest.cpp:80/:93 use GetClosestCreatureWithEntry(m_creature, NPC_RANE/NPC_QUINN, 45.0f), whose onlyAlive defaults
+        // to true (sc_grid_searchers.h:37): a corpse in range is passed over and nobody answers.
+        using Rig rig = Setup(1978);
+        EscortSpec spec = EscortSpecCatalog.Find(1978)!;
+        EscortActionSpec[] nearby = [.. spec.Waypoints.SelectMany(p => p.Actions).Where(a => a.Type == "say_nearby")];
+        Assert.Equal([1950u, 1951u], nearby.Select(a => a.SpeakerEntry).Order());
+        Creature[] speakers = [.. nearby.Select(a => Assert.Single(rig.System.Creatures, c => c.Entry == a.SpeakerEntry))];
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.OnQuestAccept(rig.Player, spec.QuestId);
+
+        var corpseThereOnArrival = new HashSet<uint>();
+        for (int elapsed = 0; elapsed < 900_000 && ai.CurrentWaypointIndex < ai.WaypointCount - 1; elapsed += 100)
+        {
+            rig.Player.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0);
+            foreach (Creature speaker in speakers)
+            {
+                float dx = speaker.X - rig.Escort.X, dy = speaker.Y - rig.Escort.Y;
+                float distSq = (dx * dx) + (dy * dy);
+                if (speaker.IsAlive && distSq < 15f * 15f)
+                {
+                    rig.Map.Combat.Kill(null, speaker); // shortly before Erland reaches the point the speaker stands on
+                }
+                else if (!speaker.IsAlive && distSq < 2f * 2f && rig.System.Creatures.Contains(speaker))
+                {
+                    corpseThereOnArrival.Add(speaker.Entry);
+                }
+            }
+
+            rig.World.RunTick(100);
+        }
+
+        Assert.True(ai.CurrentWaypointIndex >= ai.WaypointCount - 1, $"stopped at index {ai.CurrentWaypointIndex}");
+        // Without the corpses in range this would pass whatever the speaker filter did.
+        Assert.Equal([1950u, 1951u], corpseThereOnArrival.Order());
+        var spokenIds = Packets(rig.Session, WorldOpcode.SmsgMessagechat).Select(chat => ParseMonsterChat(chat).Message).ToHashSet();
+        Assert.Contains(spec.Waypoints.Single(w => w.Point == 16).Actions.Single().Id.ToString(CultureInfo.InvariantCulture), spokenIds);
+        foreach (EscortActionSpec action in nearby)
+        {
+            Assert.DoesNotContain(action.Id.ToString(CultureInfo.InvariantCulture), spokenIds);
+        }
+    }
+
+    [Fact]
+    public void Gilthares_StandsUpOnQuestAccept_EvenWhenTheEscortDoesNotStart()
+    {
+        // the_barrens.cpp:132-138: SetStandState(UNIT_STAND_STATE_STAND) sits in QuestAccept before Start, not in JustStartedEscort.
+        using Rig rig = Setup(3465);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        rig.Escort.StandState = StandState.Sit;
+        rig.Map.Combat.SetInCombatState(rig.Escort, 60_000); // npc_escortAI::Start refuses an escort in combat
+        Assert.True(rig.Escort.Combat.IsInCombat);
+
+        ai.OnQuestAccept(rig.Player, 898);
+
+        Assert.False(ai.HasEscortState(EscortAI.EscortState.Escorting));
+        Assert.Equal(StandState.Stand, rig.Escort.StandState);
+        Assert.Equal(232u, rig.Escort.FactionTemplate);
+    }
+
+    [Fact]
+    public void TheCatalog_RefusesAStartTextBeforeAFactionThatComesAfterStart()
+    {
+        const string Json = """
+            [{ "entry": 1, "questId": 2, "source": "x", "faction": 10, "startText": -1, "factionAfterStart": true, "startTextBeforeFaction": true,
+               "waypoints": [{ "point": 1, "actions": [{ "type": "quest_complete", "id": 2 }] }] }]
+            """;
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(Json));
+        Assert.Throws<InvalidOperationException>(() => EscortSpecCatalog.Parse(stream));
     }
 
     [Fact]

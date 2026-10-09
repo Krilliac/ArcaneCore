@@ -34,8 +34,9 @@ public sealed partial class CreatureMapSystem
         OutOfCombatUncharmed,
 
         /// <summary>
-        /// cmangos TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN (Entities/TemporarySpawn.cpp:107-127): combat restarts the whole lifetime; out of
-        /// combat, alive or a corpse, it counts down, and a corpse that decays first goes with it.
+        /// cmangos TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN (Entities/TemporarySpawn.cpp:107-127): combat restarts the whole lifetime and an
+        /// alive creature out of combat counts it down; a dead one goes on the first update after it dies (the case opens with
+        /// <c>if (IsDead()) UnSummon()</c>, and Unit::IsDead, Unit.h:1817, is true for both CORPSE and DEAD), so it leaves no corpse.
         /// </summary>
         OutOfCombatOrCorpse,
 
@@ -108,7 +109,9 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            if (summon.DespawnAtMs <= _clockMs)
+            // TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN unsummons a dead creature at once, whatever is left of its lifetime.
+            bool goneAtDeath = summon.Timer == SummonTimer.OutOfCombatOrCorpse && !creature.IsAlive;
+            if (goneAtDeath || summon.DespawnAtMs <= _clockMs)
             {
                 _summons.RemoveAt(i);
                 (expired ??= []).Add(creature);

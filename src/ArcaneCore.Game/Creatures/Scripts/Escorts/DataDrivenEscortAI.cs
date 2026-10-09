@@ -13,12 +13,21 @@ public sealed class EscortSpec
     public bool ClearImmuneToNpc { get; init; }
     public bool ImmuneOnRespawn { get; init; }
     public bool FactionAfterStart { get; init; }
+
+    /// <summary>QuestAccept says the start text before SetFactionTemporary (Lakota and Paoka); otherwise after it.</summary>
+    public bool StartTextBeforeFaction { get; init; }
     public bool RequirePlayerAtWaypoint { get; init; }
     public bool InstantRespawn { get; init; }
     public int StartText { get; init; }
     public bool StartTextToPlayer { get; init; }
     public byte? SpawnStandState { get; init; }
     public byte? StartStandState { get; init; }
+
+    /// <summary>
+    /// QuestAccept's own SetStandState, after the faction change and before the start text, whether or not Start then succeeds
+    /// (Gilthares, the_barrens.cpp:133); <see cref="StartStandState"/> is the AI's JustStartedEscort one instead (Dalinda).
+    /// </summary>
+    public byte? AcceptStandState { get; init; }
     public byte? HomeStandState { get; init; }
 
     /// <summary>The script constructor's SetReactState (cmangos UnitAI::m_reactState, kept by the AI across respawns); null keeps the template's.</summary>
@@ -104,6 +113,11 @@ public static class EscortSpecCatalog
                 throw new InvalidOperationException($"invalid escort aggro for entry {spec.Entry}");
             }
 
+            if (spec.StartTextBeforeFaction && (spec.StartText == 0 || spec.FactionAfterStart))
+            {
+                throw new InvalidOperationException($"invalid escort start text order for entry {spec.Entry}");
+            }
+
             if (spec.ReactState is { } react && !Enum.IsDefined((CreatureReactState)react))
             {
                 throw new InvalidOperationException($"invalid escort react state {react} for entry {spec.Entry}");
@@ -159,9 +173,16 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
             return;
         }
 
+        // The source handlers' orders: Start, faction, text (Therylune); text, faction, Start (Lakota, Paoka); faction, [stand], text,
+        // Start (Phizzlethorpe, Dalinda, Gilthares, Kaya; Erland, with no faction change, is text then Start).
         if (Spec.FactionAfterStart)
         {
             Start(player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
+        }
+
+        if (Spec.StartTextBeforeFaction)
+        {
+            SayStartText(player);
         }
 
         if (Spec.Faction != 0)
@@ -173,14 +194,27 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
             Me.UnitFlags &= ~UnitFlags.ImmuneToNpc;
         }
 
-        if (Spec.StartText != 0)
+        if (Spec.AcceptStandState is { } acceptStand)
         {
-            System?.SayText(Me, Spec.StartText, Spec.StartTextToPlayer ? player : null);
+            Me.StandState = (StandState)acceptStand;
+        }
+
+        if (!Spec.StartTextBeforeFaction)
+        {
+            SayStartText(player);
         }
 
         if (!Spec.FactionAfterStart)
         {
             Start(player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
+        }
+    }
+
+    private void SayStartText(Player player)
+    {
+        if (Spec.StartText != 0)
+        {
+            System?.SayText(Me, Spec.StartText, Spec.StartTextToPlayer ? player : null);
         }
     }
 
@@ -274,7 +308,9 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
 
                     break;
                 case "say_nearby":
-                    if (System is { } voiceSystem && voiceSystem.CreaturesOfEntryInRange(Me, action.SpeakerEntry, action.Radius).FirstOrDefault() is { } speaker)
+                    // ScriptDev GetClosestCreatureWithEntry defaults to onlyAlive (sc_grid_searchers.h:37): a corpse does not answer.
+                    if (System is { } voiceSystem
+                        && voiceSystem.CreaturesOfEntryInRange(Me, action.SpeakerEntry, action.Radius).FirstOrDefault(c => c.IsAlive) is { } speaker)
                     {
                         voiceSystem.SayText(speaker, action.Id, Me);
                     }
