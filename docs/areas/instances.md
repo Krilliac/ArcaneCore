@@ -8,6 +8,9 @@ Raid-script extension (2026-10-08): Broodlord, Firemaw, Flamegor, Kurinnaxx and 
 documented in [the raid lane report](../integration/raid-bwl-zg-aq20-20261008.md). This is a bounded boss delivery, not complete
 BWL/ZG/AQ20 progression; the report lists the remaining encounters, content requirements and verification boundaries.
 
+The additional Zul'Gurub and Ruins of Ahn'Qiraj boss scripts and their remaining event, content and client limits are recorded in
+[the ZG/AQ20 continuation](../integration/raid-zg-aq20-remaining-20261008.md).
+
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
 Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, phase transitions, summons and gossip scripts.
