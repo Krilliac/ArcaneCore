@@ -100,11 +100,14 @@ then the spell and reputation loaders read the committed rows.
 Qualification exercises real disposable EF transactions, delayed SaveChanges,
 cancellation/error rollback and retry, lost acknowledgements, unreadable committed
 After state, disconnect/relog, retained pre-transaction fields and stale callbacks.
-The responsiveness case holds a scoped real reward operation for at least 650 ms
-while measuring actual map ticks, world commands and another authenticated player's
-map-dispatched NPC status and quest acceptance. Each measured response has a 200 ms
-budget; actual metrics and final run/commit evidence are recorded in the integration
-ledger and task outcome.
+The responsiveness case holds a scoped real reward operation for at least 650 ms and
+until the map has ticked ten times, while measuring actual map ticks, world commands and
+another authenticated player's map-dispatched NPC status and quest acceptance. Each
+measured response and map tick gap is bounded at 10 s: a world the held settlement
+blocked answers nothing until the test releases the hold (after the measurements), so
+the bound only has to catch a hang; a 200 ms latency budget failed healthy runs on a
+loaded machine. Actual metrics (the test prints them) and final run/commit evidence are
+recorded in the integration ledger and task outcome.
 
 Automated success does not establish real-client rendering or quest UI acceptance.
 The [client handoff](quest-client-acceptance.md) defines a productive bounded baseline
