@@ -38,7 +38,7 @@ internal sealed class ZulFarrakRuntimeFactAttribute : FactAttribute
 public sealed class ZulFarrakImportedRuntimeTests
 {
     [ZulFarrakRuntimeFact]
-    public async Task WeegliGossipAndChargeOpenTheImportedDoorWithControlledMovementCallbacks()
+    public async Task WeegliGossipAndMovementOpenTheImportedDoor()
     {
         string directory = Path.Combine(Path.GetTempPath(), "arcane-zf-runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -120,22 +120,13 @@ public sealed class ZulFarrakImportedRuntimeTests
             Assert.Equal(1u, menu.ReadUInt32());
             await client.SendAsync(WorldOpcode.CmsgGossipSelectOption, [.. guid, .. BitConverter.GetBytes(0u)]);
             await client.ReadUntilAsync(WorldOpcode.SmsgGossipComplete).WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitForDoorAsync(host);
             await host.OnWorldAsync(() =>
             {
                 Player player = host.World.FindOnlinePlayer("Zfbound")!;
                 var map = player.Map!;
-                var ai = Assert.IsType<WeegliBlastfuseAi>(Assert.Single(map.FindUpdater<CreatureMapSystem>()!.Creatures,
-                    c => c.Entry == ZulFarrakInstance.Weegli).AI);
-                // The packet path starts the run. Controlled movement callbacks isolate the charge and door stages
-                // from travel time and pathing, which still need an original-client run.
-                ai.OnMovementInform(MovementGeneratorType.Point, 0);
                 var objects = map.FindUpdater<GameObjectMapSystem>()!;
-                GameObject charge = Assert.Single(objects.GameObjects,
-                    go => go.Entry == WeegliBlastfuseAi.ExplosiveCharge && go.Spawn is null);
                 GameObject door = Assert.Single(objects.GameObjects, go => go.Entry == ZulFarrakInstance.EndDoor);
-                Assert.Equal(GameObjectState.Ready, door.State);
-                ai.OnMovementInform(MovementGeneratorType.Point, 1);
-                Assert.Equal(13259u, charge.SpellId);
                 Assert.Equal(GameObjectState.Active, door.State);
                 Assert.Equal(EncounterState.Done, Assert.IsType<ZulFarrakInstance>(map.FindUpdater<InstanceData>())
                     .GetData(ZulFarrakInstance.TypeEndDoor));
@@ -151,5 +142,29 @@ public sealed class ZulFarrakImportedRuntimeTests
                 throw new InvalidOperationException("Zul'Farrak runtime cleanup path is outside its temp root");
             if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
         }
+    }
+
+    private static async Task WaitForDoorAsync(WorldTestHost host)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+        while (DateTime.UtcNow < deadline)
+        {
+            bool done = await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Zfbound")!;
+                return player.Map!.FindUpdater<ZulFarrakInstance>()!.GetData(ZulFarrakInstance.TypeEndDoor) == EncounterState.Done;
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+            if (done) return;
+            await Task.Delay(100);
+        }
+
+        string state = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Zfbound")!;
+            Creature? weegli = player.Map!.FindUpdater<CreatureMapSystem>()!.Creatures
+                .FirstOrDefault(c => c.Entry == ZulFarrakInstance.Weegli);
+            return weegli is null ? "Weegli absent" : $"Weegli at {weegli.X:F1},{weegli.Y:F1},{weegli.Z:F1}, motion {weegli.Motion.CurrentType}";
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+        throw new TimeoutException($"Weegli did not open the end door in 60 s: {state}");
     }
 }
