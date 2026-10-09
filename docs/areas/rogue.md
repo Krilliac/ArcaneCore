@@ -56,10 +56,12 @@ Stealth rank, `ClassScripts/Rogue.cpp:103-110`). By default one roll decides, wh
 
 Effect 79 now follows the imported vmangos paths: Vanish ends combat and drops ordinary hostile threat references while retaining contested guards, and gives a guard-free rogue one second of creature detection protection. Other Sanctuary spells stop incoming auto-attacks and reset their own threat values. Delayed in-flight spells are not modelled.
 
+The Vanish script for 1856, 1857 and 27617 runs before the second triggered-spell effect in the imported 1.12.1 rows. It removes roots, movement slows, and MOD_STALKED auras (Hunter's Mark and Mind Vision), then casts the highest known Stealth rank using SkillLineAbility.dbc rank links. Preparation's cooldown reset is implemented in `ClassScripts/CooldownResetScripts.cs`.
+
 ## Limits (not stubs: absent, documented)
 
 - Shapeshift form 30 and the movement slow of Stealth (aura 36 misc 30, aura 33): need the stance and speed-aura lanes. A stealthed unit is not in form 30 until then.
-- The Vanish script (remove roots/snares/Hunter's Mark, recast highest Stealth rank), Preparation, Pick Pocket, poisons, and rogue talent
+- Pick Pocket, poisons, and rogue talent
   consumers, combo points, finisher scaling, energy modifiers (Adrenaline Rush, Vigor, Rate.Energy) and the 82 percent energy refund on a miss remain absent. Each is in the lane's
   `slices_not_done` with its blocker.
 - No COOLDOWN_ON_EVENT start for Stealth (10 s cooldown after the aura fades) and no cancel-removes-Vanish: both need the fade hook that spell-breadth owns.

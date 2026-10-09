@@ -135,6 +135,9 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             System.Store = content is null
                 ? SpellStore.Empty
                 : SpellStoreFactory.Build(content.LoadAsync().GetAwaiter().GetResult(), _logger);
+            System.RankChains = scope.ServiceProvider.GetService<SkillCatalog>()?.Ranks
+                ?? scope.ServiceProvider.GetService<ArcaneCore.World.Skills.SkillsFeature>()?.Catalog.Ranks
+                ?? SpellRankChains.Empty;
             // QuestNpcFeature attaches earlier; its taxi network needs SEND_TAXI path IDs
             // from the now-loaded spell table (vmangos DBCStores.cpp:366-405).
             scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.RefreshTaxiNetwork(System.Store);
