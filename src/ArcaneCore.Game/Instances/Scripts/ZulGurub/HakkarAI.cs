@@ -16,7 +16,7 @@ public sealed class HakkarAI : RaidBossAI
     private float _insaneThreat;
     private uint _insanityCheck;
 
-    public HakkarAI(Creature creature) : base(creature, uint.MaxValue)
+    public HakkarAI(Creature creature) : base(creature, null)
     {
         AddAction(90000, () => Cast(24324), () => 90000);
         AddAction(15000, CorruptedBlood, () => RandomDelay(14000, 16000));

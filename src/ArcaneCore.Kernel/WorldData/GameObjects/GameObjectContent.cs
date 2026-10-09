@@ -1,3 +1,6 @@
+using ArcaneCore.Kernel.WorldData.Pools;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
+
 namespace ArcaneCore.Kernel.WorldData.GameObjects;
 
 /// <summary>
@@ -123,13 +126,15 @@ public sealed class GameObjectContent
     private readonly Dictionary<uint, IReadOnlyList<GameObjectSpawn>> _spawnsByMap;
     private readonly Dictionary<uint, IReadOnlyList<uint>> _starters;
     private readonly Dictionary<uint, IReadOnlyList<uint>> _enders;
+    private readonly Dictionary<uint, IReadOnlyList<uint>> _spawnEntries;
 
     public GameObjectContent(
         IEnumerable<GameObjectTemplate> templates,
         IEnumerable<GameObjectSpawn> spawns,
         IEnumerable<LockEntry> locks,
         IEnumerable<(uint Entry, uint Quest)> questStarters,
-        IEnumerable<(uint Entry, uint Quest)> questEnders)
+        IEnumerable<(uint Entry, uint Quest)> questEnders,
+        IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null)
     {
         _templates = templates.ToDictionary(t => t.Entry);
         _locks = locks.ToDictionary(l => l.Id);
@@ -141,6 +146,8 @@ public sealed class GameObjectContent
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(r => r.Quest).Distinct().Order()]);
         _enders = questEnders.GroupBy(r => r.Entry)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(r => r.Quest).Distinct().Order()]);
+        _spawnEntries = (spawnEntries ?? []).GroupBy(e => e.SpawnGuid)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
     }
 
     /// <summary>Every spawn, the locks and the quest relations as the constructor took them (the live reload rebuilds the content with the templates replaced).</summary>
@@ -169,6 +176,21 @@ public sealed class GameObjectContent
     public LockEntry? FindLock(uint lockId) => lockId == 0 ? null : _locks.GetValueOrDefault(lockId);
 
     public IReadOnlyList<GameObjectSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
+
+    /// <summary>
+    /// The entries a spawn can become (cmangos <c>gameobject_spawn_entry</c>, ObjectMgr::LoadGameObjectSpawnEntry): one is chosen when the
+    /// object is created (GameObject::LoadFromDB, GameObject.cpp:907). Empty for a spawn with a fixed entry.
+    /// </summary>
+    public IReadOnlyList<uint> GetSpawnEntries(uint spawnGuid) => _spawnEntries.GetValueOrDefault(spawnGuid) ?? [];
+
+    /// <summary>Every (spawn, entry) pair of <see cref="GetSpawnEntries"/> (the live reload carries them into the rebuilt content).</summary>
+    public IEnumerable<(uint SpawnGuid, uint Entry)> SpawnEntries => _spawnEntries.SelectMany(p => p.Value.Select(e => (p.Key, e)));
+
+    /// <summary>The cmangos spawn groups of game object spawns (<c>spawn_group</c> rows of type 1).</summary>
+    public SpawnGroupCatalog SpawnGroups { get; init; } = SpawnGroupCatalog.Empty;
+
+    /// <summary>The cmangos pools of these spawns (<c>pool_template</c>, <c>pool_pool</c> and this kind's member rows): which members of a pool exist at once (docs/areas/content-import.md, pools).</summary>
+    public PoolCatalog Pools { get; init; } = PoolCatalog.Empty;
 
     /// <summary>Quests a quest-giver object starts (<c>gameobject_questrelation</c>).</summary>
     public IReadOnlyList<uint> QuestStartersOf(uint entry) => _starters.GetValueOrDefault(entry) ?? [];

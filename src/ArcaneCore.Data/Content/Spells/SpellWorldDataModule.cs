@@ -116,7 +116,11 @@ public sealed class EfSpellContentStore(WorldDbContext db) : ISpellContentStore
         await db.Set<SpellRangeRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false),
         await db.Set<SpellRadiusRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false),
         await db.Set<PlayerCreateSpellRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false),
-        await db.Set<SpellTargetPositionRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        await db.Set<SpellTargetPositionRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
+    {
+        ScriptTargets = await db.Set<ArcaneCore.Data.World.Creatures.SpellScriptTargetRow>().AsNoTracking()
+            .ToListAsync(cancellationToken).ConfigureAwait(false),
+    };
 
     public async Task ReplaceDbcTablesAsync(SpellDbcContent content, CancellationToken cancellationToken = default)
     {

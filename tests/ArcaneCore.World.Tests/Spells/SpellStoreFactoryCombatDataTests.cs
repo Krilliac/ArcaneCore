@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Spells;
 using Xunit;
@@ -13,6 +14,18 @@ namespace ArcaneCore.World.Tests.Spells;
 /// </summary>
 public sealed class SpellStoreFactoryCombatDataTests
 {
+    [Fact]
+    public void ScriptTargetRows_ReachTheSpellStore()
+    {
+        var content = new SpellContent([new SpellTemplateRow { Id = 8283 }], [], [], [], [], [], [])
+        {
+            ScriptTargets = [new SpellScriptTargetRow { SpellId = 8283, Type = 1, TargetEntry = 4781 }],
+        };
+        SpellStore store = SpellStoreFactory.Build(content);
+        Assert.Equal((8283u, 1u, 4781u), store.GetScriptTargets(8283)
+            .Select(t => (t.SpellId, t.Type, t.TargetEntry)).Single());
+    }
+
     private static SpellInfo Convert(SpellTemplateRow row) => SpellStoreFactory.ToSpellInfo(
         row,
         new Dictionary<uint, SpellCastTimeRow>(),

@@ -66,15 +66,15 @@ daemon then reads those tables, not the files.
 
 `D:\ArcaneCore-data\client-dbc-5875` (154 files): all 154 have reference layouts and match their field count and record size.
 The 59 primary layouts still match (every vmangos format string of build 5875, ItemDisplayInfo's commented-out one, and four ArcaneCore layouts).
-The DBC-to-DBC scan of this extraction checks 174 columns: 151 clean, 23 with 152 distinct dangling ids in 341 rows, none skipped.
+The reviewed DBC-to-DBC scan of this extraction checks 173 columns: 151 clean, 22 known client-data-gap groups with 147 distinct absent ids in 291 rows, no unexpected dangling ids and none skipped. The [build-5875 review](../integration/dbc-content-review-20261008.md) records the verdict for every former dangling group and the world-DB rows below.
 Examples include AreaTable.ContinentID -> Map (17, 150), AreaTrigger.ContinentID -> Map (24, 28), and
 Spell.SpellVisualID -> SpellVisual (clean). These counts are diagnostic: a WoWDBDefs foreign-key annotation can describe
-a bitmask or optional link, and some client tables contain ids for content absent from this particular extraction. Two
+a bitmask or optional link, and some client tables contain ids for content absent from this particular extraction. Three
 annotations do not hold for this build and are overridden in the generator (`FOREIGN_OVERRIDES` in
-`tools/codegen/gen_dbc_layouts.py`; the key is dropped, respectively pointed at AreaTable): FactionTemplate.FactionGroup is a mask (5 and 8; vmangos `FactionTemplateEntry`
+`tools/codegen/gen_dbc_layouts.py`): FactionTemplate.FactionGroup is a mask (5 and 8; vmangos `FactionTemplateEntry`
 names the masks `ourMask`, `friendlyMask`, `hostileMask`), and Map.ParentMapID (field 19) holds AreaTable ids (all 23 values,
-717 The Stockade, 718, 719, 721, 1337 ..., are AreaTable rows and none is a Map row; the column is now checked against AreaTable and is clean).
-Before the overrides the scan reported 175 columns, 25 dangling.
+717 The Stockade, 718, 719, 721, 1337 ..., are AreaTable rows and none is a Map row; the column is now checked against AreaTable and is clean). FootstepTerrainLookup.CreatureFootstepID is a footstep-group key shared with CreatureSoundData.SoundFootstepID, not a SpellVisualEffectName ID.
+Before these overrides the scan reported 175 columns, 25 dangling.
 With only `ClientData:DbcDirectory` set, all 32 per-file keys and the one directory key are filled and nothing is reported. The cross-reference of the live
 world (snapshot `live-w5-r1/after-stop-world.db`, `arcane-db dbc`, exit 5) checked 84 columns: 76 clean, 8 with 15 dangling ids in 67
 rows. Three columns are the client's own data: `area_template.MapId` 17 and 150 and `areatrigger_template.MapId` 24 and 28 (imported from the

@@ -5,6 +5,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Loot;
@@ -90,6 +91,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _nextTemporaryCounter = maxGuid + 1;
+        InitializePools();
+        InitializeSpawnGroups();
         if (loot is not null)
         {
             loot.Objects = this;
@@ -212,6 +215,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             UpdateTypeBehaviour(go);
         }
 
+        UpdateSpawnGroups();
         foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
         {
             if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
@@ -329,9 +333,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// The spells area's open-lock effect (herb gathering, mining, lockpicking, opening with a
     /// key): <paramref name="lockType"/> is the effect's misc value, <paramref name="keyItemId"/>
     /// the casting item. On success a chest opens its loot and a door/button activates. The cast
-    /// time and skill-ups belong to the spell (not done here).
+    /// time and skill-ups belong to the spell (not done here): <paramref name="onChestOpened"/> runs
+    /// with the chest once its loot window really opened, which for a dungeon chest is only after
+    /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>),
+    /// and at once when the chest's script takes the open over (vmangos Spell::EffectOpenLock rolls the
+    /// gathering skill after SendLoot whatever the object did with it, SpellEffects.cpp:2163-2207).
     /// </summary>
-    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0)
+    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
+        Action<GameObject>? onChestOpened = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
@@ -373,14 +382,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
         if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
         {
-            return GameObjectUseResult.Ok;
+            return ScriptTookOpen(go, onChestOpened);
         }
 
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
@@ -397,7 +406,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
-            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
+            // Spell::SendLoot hands the chest to GameObject::Use too, so a key or lockpick opening starts the chest event as the click does.
+            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go, onChestOpened) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
@@ -598,10 +608,29 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return locked;
         }
 
-        GameObjectUseResult opened = OpenChest(player, go);
+        GameObjectUseResult opened = OpenChestStartingEvent(player, go);
         if (opened == GameObjectUseResult.Ok && key is not null)
         {
             UseUpKey(player, key);
+        }
+
+        return opened;
+    }
+
+    /// <summary>
+    /// Opens the chest and, once it opened, starts its event (chest.eventId, data6). mangos-classic GameObject::Use, GAMEOBJECT_TYPE_CHEST
+    /// (GameObject.cpp:1548-1560) starts the event, and both chest paths reach that Use: the direct use and the spell path (Spell::SendLoot,
+    /// SpellEffects.cpp:2142-2145, which shows the loot after it). ArcaneCore starts it only for a use that passed the quest gate, the lock
+    /// and the open itself, so a refused use (or a crafted CMSG_GAMEOBJ_USE on a locked chest) cannot spring the ambush; cmangos has no
+    /// server-side quest gate or direct-use lock check to refuse it. Limit: a restocking chest (GO_NOT_READY) refuses the open here and so
+    /// starts no event, where cmangos would start it with the empty loot window.
+    /// </summary>
+    private GameObjectUseResult OpenChestStartingEvent(Player player, GameObject go, Action<GameObject>? onOpened = null)
+    {
+        GameObjectUseResult opened = OpenChest(player, go, onOpened);
+        if (opened == GameObjectUseResult.Ok)
+        {
+            StartDbEvent(go.Template.GetData(6), player, go);
         }
 
         return opened;
@@ -618,11 +647,22 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return questId == 0 || Quests?.IsQuestIncomplete(player, questId) == true;
     }
 
+    /// <summary>A script took the open over: a chest never reaches its loot window, so its open callback runs now.</summary>
+    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened)
+    {
+        if (go.Type == GameObjectType.Chest)
+        {
+            onChestOpened?.Invoke(go);
+        }
+
+        return GameObjectUseResult.Ok;
+    }
+
     /// <summary>vmangos CannotBeUsedUnderImmunity (GameObjectDefines.h:602-619) against UNIT_FLAG_IMMUNE.</summary>
     private static bool IsRefusedForImmunity(Player player, GameObject go)
         => go.Template.CannotBeUsedUnderImmunity() && (player.UnitFlags & UnitFlags.Immune) != 0;
 
-    private GameObjectUseResult OpenChest(Player player, GameObject go)
+    private GameObjectUseResult OpenChest(Player player, GameObject go, Action<GameObject>? onOpened = null)
     {
         if (Loot is null)
         {
@@ -657,8 +697,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         LootResult opened = key is { } durable
-            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable)
-            : Loot.OpenGameObject(player, go, go.Template.GetData(1));
+            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable, onOpened)
+            : Loot.OpenGameObject(player, go, go.Template.GetData(1), onOpened);
         return opened switch
         {
             LootResult.Ok => GameObjectUseResult.Ok,
@@ -773,18 +813,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.OnCooldown;
         }
 
-        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
-        ShowGooberPageOrGossip(player, go);
-        int questId = GooberQuestId(go);
-        if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
-        {
-            return GameObjectUseResult.NeedsQuest;
-        }
-
+        // An object still in use (activated until its auto-close time) refuses the use before anything else, so a repeated or crafted
+        // CMSG_GAMEOBJ_USE in that window neither shows the page again nor re-fires the goober event. The client offers no use of a
+        // GO_FLAG_IN_USE object and cmangos has no server-side refusal; ArcaneCore's InUse check stands for it, as the chest path does.
         uint autoCloseSeconds = go.Template.AutoCloseSeconds();
         if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
         {
             return GameObjectUseResult.InUse;
+        }
+
+        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
+        ShowGooberPageOrGossip(player, go);
+        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1688): goober.eventId (data2) starts before the
+        // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
+        StartDbEvent(go.Template.GetData(2), player, go);
+        int questId = GooberQuestId(go);
+        if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
+        {
+            return GameObjectUseResult.NeedsQuest;
         }
 
         Quests?.GameObjectUsed(player, go.Entry, go.Guid);
@@ -933,6 +979,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         go.System = null;
+        OnGroupMemberUntracked(go);
         return true;
     }
 
@@ -963,6 +1010,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
+        if (_groupOfSpawn.ContainsKey(go.Spawn.Guid))
+        {
+            DespawnGroupMember(go, go.Spawn);
+            return;
+        }
+
         if (go.IsSpawned)
         {
             // GameObject.cpp:654-657: despawn-at-action objects and anything with animprogress > 0 play the despawn animation first.
@@ -981,6 +1034,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         _questFlagsSent.Remove(go.Guid);
         go.LootState = GameObjectLootState.JustDeactivated;
         go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + RespawnDelayMs(go) : 0;
+        OnPoolMemberDespawned(go); // cmangos GameObject.cpp GO_JUST_DEACTIVATED: a pooled object lets its pool choose what comes back
     }
 
     /// <summary>Respawn a despawned object now (GM command, script, event spawn of a negative spawntimesecs object).</summary>
@@ -1062,77 +1116,103 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)
             }
 
-            GameObjectTemplate? template = _content.FindTemplate(spawn.Entry);
+            if (PoolRefusesAtLoad(spawn))
+            {
+                continue; // a pooled spawn exists only while its pool has it out (cmangos ObjectMgr::LoadGameObjects, IsNotPartOfPoolOrEvent)
+            }
+
+            if (_groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? group))
+            {
+                LoadGroupMember(list, group, spawn); // its spawn group decides whether and as what it exists
+                continue;
+            }
+
+            // cmangos GameObject::LoadFromDB (GameObject.cpp:907): a spawn with gameobject_spawn_entry rows becomes one of them, chosen
+            // uniformly each time the object is created; an in-place respawn keeps it (none of classic-db's entries is a dynamic-guid one).
+            IReadOnlyList<uint> alternatives = _content.GetSpawnEntries(spawn.Guid);
+            GameObjectTemplate? template = alternatives.Count > 0 ? ChooseSpawnEntry(alternatives) : _content.FindTemplate(spawn.Entry);
             if (template is null)
             {
-                if (_warnedMissingTemplates.Add(spawn.Entry))
+                uint warnKey = alternatives.Count > 0 ? spawn.Guid | 0x8000_0000u : spawn.Entry;
+                if (_warnedMissingTemplates.Add(warnKey))
                 {
-                    _logger.LogWarning("gameobject spawn {Guid} on map {MapId} uses missing gameobject_template {Entry}; skipped", spawn.Guid, Map.MapId, spawn.Entry);
+                    _logger.LogWarning(
+                        alternatives.Count > 0
+                            ? "gameobject spawn {Guid} on map {MapId} has no gameobject_template for any of its gameobject_spawn_entry rows; skipped"
+                            : "gameobject spawn {Guid} on map {MapId} uses missing gameobject_template {Entry}; skipped",
+                        spawn.Guid, Map.MapId, spawn.Entry);
                 }
 
                 continue;
             }
 
-            var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
-            go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
-            go.System = this;
-            _objects[go.Guid] = go;
-            IndexRitual(go, tracked: true);
-            list.Add(go);
-            ConfigureQuestFlags(go);
-            NotifyInstanceScript(go);
-            if (DurableKeyOf(go) is { } durableKey)
-            {
-                // The stored chest decides: a consumed one stays despawned until its stored respawn
-                // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
-                _unloadedLoot.Remove(spawn.Guid);
-                _respawnAt.Remove(spawn.Guid);
-                if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
-                {
-                    go.LootState = GameObjectLootState.JustDeactivated;
-                    go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
-                        ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
-                    continue;
-                }
+            LoadSpawn(list, spawn, template);
+        }
+    }
 
-                if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
-                {
-                    go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
-                    continue;
-                }
-
-                go.ClearChangedFields();
-                Map.AddObject(go);
-                continue;
-            }
-
-            if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
-            {
-                // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
-                Loot!.RestoreGameObjectLoot(go, remaining);
-                if (go.Loot is not null)
-                {
-                    ActivateWithLeftovers(go);
-                }
-            }
-
-            bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
-            if (pending && respawnAt > _clockMs)
+    /// <summary>Create the object of one database spawn as <paramref name="template"/> (its own entry, or the one chosen for it).</summary>
+    private void LoadSpawn(List<GameObject> list, GameObjectSpawn spawn, GameObjectTemplate template)
+    {
+        _spawnEntries[spawn.Guid] = template.Entry;
+        var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
+        go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
+        go.System = this;
+        _objects[go.Guid] = go;
+        IndexRitual(go, tracked: true);
+        list.Add(go);
+        ConfigureQuestFlags(go);
+        NotifyInstanceScript(go);
+        if (DurableKeyOf(go) is { } durableKey)
+        {
+            // The stored chest decides: a consumed one stays despawned until its stored respawn
+            // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
+            _unloadedLoot.Remove(spawn.Guid);
+            _respawnAt.Remove(spawn.Guid);
+            if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
             {
                 go.LootState = GameObjectLootState.JustDeactivated;
-                go.RespawnAtMs = respawnAt;
-                continue;
+                go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
+                    ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
+                return;
             }
 
-            if (!pending && spawn.SpawnTimeSeconds < 0)
+            if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
             {
                 go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
-                continue;
+                return;
             }
 
             go.ClearChangedFields();
             Map.AddObject(go);
+            return;
         }
+
+        if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
+        {
+            // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
+            Loot!.RestoreGameObjectLoot(go, remaining);
+            if (go.Loot is not null)
+            {
+                ActivateWithLeftovers(go);
+            }
+        }
+
+        bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
+        if (pending && respawnAt > _clockMs)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated;
+            go.RespawnAtMs = respawnAt;
+            return;
+        }
+
+        if (!pending && spawn.SpawnTimeSeconds < 0)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
+            return;
+        }
+
+        go.ClearChangedFields();
+        Map.AddObject(go);
     }
 
     private void UnloadGrid(GridCoord coord)
@@ -1166,6 +1246,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             go.System = null;
+            OnGroupMemberUntracked(go);
         }
     }
 

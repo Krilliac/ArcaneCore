@@ -103,6 +103,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         // Runtime spawns (GM .npc add, summons) take counters above the database spawns.
         _nextTemporaryCounter = maxGuid + 1;
         LoadPersistedRespawns();
+        InitializePools();
+        InitializeSpawnGroups();
 
         Map.Grids.GridLoaded += grid => LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         Map.Grids.GridUnloading += OnMapGridUnloading;
@@ -159,7 +161,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         _clockMs += diffMs;
         SendCatchUpMoves();
+        UpdateLinkedFollowers();
         UpdateCreatures(diffMs);
+        UpdateSpawnGroups();
         UpdatePendingAi();
         UpdateRelayScripts();
         UpdateForcedDespawns();
@@ -188,6 +192,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     void ICreatureMover.OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
         => OnMovementFinished(creature, type, pointId);
+
+    void ICreatureMover.OnWaypointScript(Creature creature, uint scriptId, ObjectGuid targetGuid)
+        => StartDbScript(DbScriptKind.CreatureMovement, scriptId, creature,
+            targetGuid.IsEmpty ? creature : Map.FindObject(targetGuid));
 
     double ICreatureMover.NextDouble() => _random.NextDouble();
 
@@ -370,7 +378,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     break;
 
                 case CreatureDeathState.Dead:
-                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs)
+                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature))
                     {
                         Respawn(creature);
                     }

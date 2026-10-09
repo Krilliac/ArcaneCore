@@ -49,7 +49,12 @@ public sealed class GameObjectContentReloadable(IServiceProvider services) : ICo
         GameObjectContent live = feature.Content;
         HashSet<uint> listed = [.. rows.Select(t => t.Entry)];
         GameObjectTemplate[] kept = [.. live.Templates.Where(t => !listed.Contains(t.Entry)).OrderBy(t => t.Entry)];
-        var next = new GameObjectContent([.. rows, .. kept], live.Spawns, live.Locks, live.QuestStarters, live.QuestEnders);
+        // The spawns, their alternative entries and their spawn groups are not reloaded (as the spawns of the creature reload).
+        var next = new GameObjectContent([.. rows, .. kept], live.Spawns, live.Locks, live.QuestStarters, live.QuestEnders, live.SpawnEntries)
+        {
+            SpawnGroups = live.SpawnGroups,
+            Pools = live.Pools,
+        };
         return new Candidate(feature, next, rows.Length, [.. kept.Select(t => t.Entry)]);
     }
 

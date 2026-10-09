@@ -43,11 +43,12 @@ public sealed class ConditionOptions
 /// rebuild by another feature never holds a stale one.
 /// </summary>
 public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
-    : IWorldFeature, IConditionEvaluator
+    : IWorldFeature, IConditionEvaluator, IConditionTableEvaluator
 {
     private ConditionEvaluator _current = new(ConditionTable.Empty, new ConditionContext());
     private WorldRuntime? _world;
     private ConditionTable? _table;
+    private Func<Kernel.WorldData.SpawnGroups.SpawnGroupDefinition, bool?>? _spawnGroupCondition;
 
     public ConditionOptions Options { get; } = new();
 
@@ -78,6 +79,29 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
 
         LogSummary(table);
+        _spawnGroupCondition = group => Current.EvaluateWithoutSubjects(group.WorldStateCondition);
+        world.WorldTick += _ => InstallSpawnGroupConditions(world);
+    }
+
+    /// <summary>
+    /// cmangos spawn groups ask their <c>spawn_group.WorldState</c> condition with no player (SpawnGroup::IsWorldstateConditionSatisfied):
+    /// every creature and game object map system gets <see cref="ConditionEvaluator.EvaluateWithoutSubjects"/> over the current table
+    /// (systems attach at different times, so it is installed from the world tick). Undecidable conditions keep their group out.
+    /// </summary>
+    private void InstallSpawnGroupConditions(WorldRuntime world)
+    {
+        foreach (Map map in world.Maps)
+        {
+            if (map.FindUpdater<Game.Creatures.CreatureMapSystem>() is { SpawnGroupCondition: null } creatures)
+            {
+                creatures.SpawnGroupCondition = _spawnGroupCondition;
+            }
+
+            if (map.FindUpdater<Game.GameObjects.GameObjectMapSystem>() is { SpawnGroupCondition: null } objects)
+            {
+                objects.SpawnGroupCondition = _spawnGroupCondition;
+            }
+        }
     }
 
     /// <summary>

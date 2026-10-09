@@ -149,6 +149,21 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         }
     }
 
+    /// <summary>mangos-classic SPELL_FINKLE_IS_EINHORN: summons Finkle Einhorn out of The Beast's corpse.</summary>
+    public const uint SpellFinkleIsEinhorn = 16710;
+
+    /// <summary>
+    /// instance_blackrock_spire::OnCreatureDespawn (mangos-classic instance_blackrock_spire.cpp:488-492): when The Beast's corpse is removed
+    /// it casts Finkle is Einhorn on itself (TRIGGERED_OLD_TRIGGERED), which brings out Finkle Einhorn.
+    /// </summary>
+    public override void OnCreatureDespawn(Creature creature)
+    {
+        if (creature.Template.Entry == NpcBeast)
+        {
+            creature.System?.CastSpell(creature, SpellFinkleIsEinhorn, creature, triggered: true);
+        }
+    }
+
     /// <summary>
     /// GOUse_go_father_flame: StartflamewreathEventIfCan, and the script takes the use (returns true). StartflamewreathEventIfCan only arms
     /// the wave timer; it does not set TYPE_FLAMEWREATH.

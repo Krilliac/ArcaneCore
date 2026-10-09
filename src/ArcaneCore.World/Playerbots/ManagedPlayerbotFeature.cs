@@ -172,9 +172,16 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 var packet = new PacketWriter();
                 packet.WriteCString(name); packet.WriteByte(race); packet.WriteByte(characterClass);
                 for (int i = 0; i < 8; i++) packet.WriteByte(0);
+                // The character handler answers with SMSG_CHAR_CREATE: keep its result so a refusal can say why (name rule, limit, ...).
+                int createResult = -1;
+                session.ManagedPacketObserver = (opcode, payload) =>
+                {
+                    if (opcode == WorldOpcode.SmsgCharCreate && payload.Length > 0) Volatile.Write(ref createResult, payload[0]);
+                };
                 await session.DispatchManagedSessionAsync(WorldOpcode.CmsgCharCreate, packet.ToArray()).ConfigureAwait(false);
+                session.ManagedPacketObserver = null;
                 CharacterRecord? character = (await characters.GetByAccountAsync(owner.Id, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
-                if (character is null) throw new InvalidOperationException("character-create-refused");
+                if (character is null) throw new PlayerbotCreateRefusedException(DescribeCreateRefusal(Volatile.Read(ref createResult)));
                 long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var bot = new ManagedPlayerbot(botId, owner.Id, character.Id, owner.Username, false,
                     ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, now, now);
@@ -194,15 +201,54 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogWarning("Managed playerbot creation failed ({Type})", ex.GetType().Name);
+            // A refusal of the character handler names its reason; any other failure names the exception and its message (the reason
+            // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
+            string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
+            logger.LogWarning("Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
-            { logger.LogError("Playerbot provisioning retained for reconciliation ({Type})", failure.GetType().Name); }
+            { logger.LogError("Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
             if (ex is OperationCanceledException) throw;
-            return new(false, "create-failed");
+            return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
         finally { _operations.Release(); }
+    }
+
+    /// <summary>The character handler refused the bot's character; <see cref="Reason"/> says why.</summary>
+    private sealed class PlayerbotCreateRefusedException(string reason) : InvalidOperationException(reason)
+    {
+        public string Reason { get; } = reason;
+    }
+
+    /// <summary>Why <c>CMSG_CHAR_CREATE</c> was refused, from its <c>SMSG_CHAR_CREATE</c> result (-1: no answer came).</summary>
+    internal static string DescribeCreateRefusal(int result)
+    {
+        if (result < 0) return "no SMSG_CHAR_CREATE answer";
+        var code = (CharResult)result;
+        string text = code switch
+        {
+            CharResult.CharNameNoName => "no name, or a name longer than the limit",
+            CharResult.CharNameTooShort => "the name is too short",
+            CharResult.CharNameTooLong => "the name is too long",
+            CharResult.CharNameInvalidCharacter => "the name is not well-formed text",
+            CharResult.CharNameMixedLanguages => "the name may contain only letters of the realm's alphabet (no digits, symbols or mixed alphabets)",
+            CharResult.CharNameProfane => "the name is profane",
+            CharResult.CharNameReserved => "the name is reserved",
+            CharResult.CharNameInvalidApostrophe => "the name has an apostrophe where none is allowed",
+            CharResult.CharNameMultipleApostrophes => "the name has more than one apostrophe",
+            CharResult.CharNameThreeConsecutive => "the name has three identical letters in a row",
+            CharResult.CharNameInvalidSpace => "the name has a space",
+            CharResult.CharNameFailure => "the name is not allowed",
+            CharResult.CharCreateNameInUse => "the name is in use",
+            CharResult.CharCreateDisabled => "character creation is disabled",
+            CharResult.CharCreatePvpTeamsViolation => "the race's faction is not allowed (PvP realm team rule)",
+            CharResult.CharCreateServerLimit => "the server's character limit is reached",
+            CharResult.CharCreateAccountLimit => "the account's character limit is reached",
+            CharResult.CharCreateSuccess => "the handler reported success but stored no character",
+            _ => "character creation failed",
+        };
+        return Enum.IsDefined(code) ? $"{text} ({code})" : $"{text} (result 0x{result:X2})";
     }
 
     /// <summary>Start a bot; an operator start also clears the bot's quarantine and fault history.</summary>

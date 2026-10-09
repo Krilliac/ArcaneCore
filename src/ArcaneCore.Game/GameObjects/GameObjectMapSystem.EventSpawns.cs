@@ -49,7 +49,13 @@ public sealed partial class GameObjectMapSystem
                 continue;
             }
 
-            ObjectGuid objectGuid = SpawnObjectGuid(spawn.Entry, spawn.Guid);
+            if (_poolSpawns.ContainsKey(guid))
+            {
+                RefreshPoolMember(guid, _spawnGate?.AllowsGameObject(guid) ?? true); // its pool decides (cmangos GameEventMgr pool handling)
+                continue;
+            }
+
+            ObjectGuid objectGuid = SpawnObjectGuid(_spawnEntries.GetValueOrDefault(guid, spawn.Entry), spawn.Guid); // the entry it was created as
             _objects.TryGetValue(objectGuid, out GameObject? live);
             if (!(_spawnGate?.AllowsGameObject(guid) ?? true))
             {
@@ -67,7 +73,7 @@ public sealed partial class GameObjectMapSystem
             {
                 _respawnAt.Remove(guid);
                 LoadSpawns(list, [spawn]);
-                if (_objects.TryGetValue(objectGuid, out GameObject? added) && !added.IsSpawned && spawn.SpawnTimeSeconds < 0)
+                if (FindBySpawn(guid) is { } added && !added.IsSpawned && spawn.SpawnTimeSeconds < 0)
                 {
                     ForceRespawn(added); // an event spawn of a negative spawntimesecs object
                 }

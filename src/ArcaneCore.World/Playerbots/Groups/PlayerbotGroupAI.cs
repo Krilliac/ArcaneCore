@@ -472,7 +472,8 @@ internal sealed class PlayerbotGroupAI
         if (_spells.Update(player, target, interval)) return;
         float distance = Distance(player, target);
         PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
-            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player), idleTooLong: false);
+            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player), idleTooLong: false,
+            inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
         switch (position)
         {
             case PlayerbotFightPosition.Hold:

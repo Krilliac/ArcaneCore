@@ -76,10 +76,6 @@ public sealed class ArchaedasAi(Creature creature, UldamanInstance instance) : S
             if (DoCast(Me, spell) == CreatureCastResult.Ok)
             {
                 System?.SayText(Me, _healthPhase == 1 ? -1070002 : -1070003);
-                // The spell system has no TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC (spell_script_target), so the targets the spell would
-                // take are woken here (AwakenEarthenArchaedas / AwakenVaultWarder spell scripts).
-                if (_healthPhase == 1) AwakenGroup(UldamanInstance.Guardian, maxTargets: 0);
-                else AwakenGroup(UldamanInstance.VaultWarder, WardersAwakened);
                 _healthPhase++;
             }
         }
@@ -103,15 +99,7 @@ public sealed class ArchaedasAi(Creature creature, UldamanInstance instance) : S
             _tremorMs = (uint)Random.Shared.Next(8000, 17001);
     }
 
-    private void AwakenGroup(uint entry, int maxTargets)
-    {
-        if (System is not { } system) return;
-        List<Creature> targets = [.. system.CreaturesOfEntryInRange(Me, entry, AwakenRadius).Where(c => c.IsAlive)];
-        while (maxTargets > 0 && targets.Count > maxTargets) targets.RemoveAt(Random.Shared.Next(targets.Count));
-        foreach (Creature dwarf in targets) Awaken(dwarf);
-    }
-
-    private void Awaken(Creature dwarf)
+    internal void Awaken(Creature dwarf)
     {
         System?.RemoveAuras(dwarf, UldamanInstance.SpellStoned);
         if (Victim is { } victim) dwarf.AI?.AttackStart(victim);

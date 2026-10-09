@@ -33,6 +33,23 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        // A script's EnterEvadeMode override (CreatureAI.OnEnterEvadeMode) replaces the whole evade; a nested evade from inside it is the
+        // engine's (the source's Base::EnterEvadeMode()).
+        if (creature.AI is { } scripted && _customEvades.Add(creature))
+        {
+            try
+            {
+                if (scripted.OnEnterEvadeMode())
+                {
+                    return;
+                }
+            }
+            finally
+            {
+                _customEvades.Remove(creature);
+            }
+        }
+
         // The default generator's reset position (the last reached waypoint, where a wanderer stands inside its disc), else the spawn
         // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.
         CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;
@@ -51,10 +68,7 @@ public sealed partial class CreatureMapSystem
         }
 
         ResetAiState(creature);
-        creature.LootTapPlayerGuid = default;
-        creature.LootTapGroup = null;
-        creature.SetUInt32(UpdateFields.UnitDynamicFlags,
-            creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
+        ClearLootTap(creature);
         // vmangos Creature::IsInEvadeMode (Creature.cpp:3239-3260) is the home generator on top: a charmed creature is sent nowhere, so it
         // is not in evade mode (and nothing but reaching home would clear the flag).
         creature.IsEvading = !charmed;
@@ -81,10 +95,50 @@ public sealed partial class CreatureMapSystem
         }
 
         Evaded?.Invoke(creature);
+        OnGroupMemberEvaded(creature); // cmangos Unit::TriggerEvadeEvents → CREATURE_GROUP_EVENT_EVADE
     }
 
     /// <summary>Raised after a creature entered evade mode (once per evade; not for a dead creature).</summary>
     public event Action<Creature>? Evaded;
+
+    private readonly HashSet<Creature> _customEvades = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Leave combat where the creature stands, for a script's own evade (<see cref="AI.CreatureAI.OnEnterEvadeMode"/>): the source's
+    /// <c>SetLootRecipient(nullptr); CombatStop(false); MovementExpired(true)</c> (mangos-classic wailing_cavernsScripts.cpp:174-191). The loot
+    /// tap goes, every fight stops and the threat list is cleared, the per-fight AI state is reset and the chase is dropped. Unlike
+    /// <see cref="EnterEvadeMode"/> the cast or channel in progress and the auras stay, the creature is not sent home and is not left in
+    /// evade mode, and neither the AI's <c>OnEvade</c> nor the instance script's evade hook runs.
+    /// </summary>
+    public void StopCombatInPlace(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (!_creatures.ContainsKey(creature.Guid))
+        {
+            return;
+        }
+
+        ClearLootTap(creature);
+        Map.Combat.CombatStop(creature);
+        if (creature.Combat.HasThreatList)
+        {
+            creature.Combat.Threat.Clear();
+        }
+
+        ResetAiState(creature);
+        if (creature.IsAlive)
+        {
+            creature.Motion.Remove(MovementGeneratorType.Chase);
+        }
+    }
+
+    private static void ClearLootTap(Creature creature)
+    {
+        creature.LootTapPlayerGuid = default;
+        creature.LootTapGroup = null;
+        creature.SetUInt32(UpdateFields.UnitDynamicFlags,
+            creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
+    }
 
     private void ResetAiState(Creature creature)
     {
@@ -115,6 +169,10 @@ public sealed partial class CreatureMapSystem
         _ai.Spells?.Interrupt(creature);
         ResetAiState(creature);
         creature.AI?.OnDeath(killer);
-        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDeath(creature);
+        if (Map.FindUpdater<Instances.Scripts.InstanceData>() is { } instanceData)
+        {
+            instanceData.OnCreatureDeath(creature);
+            instanceData.NotifyCreatureGone(creature); // cmangos SetDeathState(JUST_DIED) -> ClearCreatureGroup
+        }
     }
 }

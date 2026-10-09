@@ -22,9 +22,9 @@ public sealed class CreatureDataTests : IAsyncLifetime
           PRIMARY KEY (`Entry`)
         ) ENGINE=MyISAM;
         /*!40000 ALTER TABLE `creature_template` DISABLE KEYS */;
-        INSERT INTO `creature_template` (`Entry`,`Name`,`SubName`,`MinLevel`,`MaxLevel`,`DisplayId1`,`DisplayId2`,`DisplayIdProbability1`,`DisplayIdProbability2`,`Scale`,`Faction`,`NpcFlags`,`UnitFlags`,`CreatureTypeFlags`,`CreatureType`,`Family`,`Rank`,`UnitClass`,`Civilian`,`RacialLeader`,`SpeedWalk`,`SpeedRun`,`MinLevelHealth`,`MaxLevelHealth`,`MinLevelMana`,`MaxLevelMana`,`Armor`,`MinMeleeDmg`,`MaxMeleeDmg`,`MeleeBaseAttackTime`,`PetSpellDataId`,`MovementType`,`CorpseDecay`,`ExtraFlags`) VALUES
-        (900001,'Test Wolf','',2,3,903,904,50,50,0,32,0,0,1,1,1,0,1,0,0,1,1.14286,55,71,0,0,20,1.5,2.5,2000,0,1,0,0),
-        (900002,'Guard O\'Brien','Town \"Watch\"',55,55,3167,0,0,0,1.1,11,3,4096,0,7,0,1,1,1,0,1,1.14286,3052,3052,0,0,3000,80,100,2000,0,0,600,64);
+        INSERT INTO `creature_template` (`Entry`,`Name`,`SubName`,`MinLevel`,`MaxLevel`,`DisplayId1`,`DisplayId2`,`DisplayIdProbability1`,`DisplayIdProbability2`,`Scale`,`Faction`,`NpcFlags`,`UnitFlags`,`CreatureTypeFlags`,`CreatureType`,`Family`,`Rank`,`UnitClass`,`Civilian`,`RacialLeader`,`SpeedWalk`,`SpeedRun`,`MinLevelHealth`,`MaxLevelHealth`,`MinLevelMana`,`MaxLevelMana`,`Armor`,`MinMeleeDmg`,`MaxMeleeDmg`,`MeleeBaseAttackTime`,`PetSpellDataId`,`MovementType`,`CorpseDecay`,`ExtraFlags`,`ScriptName`) VALUES
+        (900001,'Test Wolf','',2,3,903,904,50,50,0,32,0,0,1,1,1,0,1,0,0,1,1.14286,55,71,0,0,20,1.5,2.5,2000,0,1,0,0,'npc_test_wolf'),
+        (900002,'Guard O\'Brien','Town \"Watch\"',55,55,3167,0,0,0,1.1,11,3,4096,0,7,0,1,1,1,0,1,1.14286,3052,3052,0,0,3000,80,100,2000,0,0,600,64,'');
         INSERT INTO `creature` VALUES (1,900001,0,1,-8900.5,-110.25,83.75,1.5,300,420,5,1),(2,900002,0,1,-8910,-120,84,0,120,120,0,2);
         INSERT INTO `creature_movement` (`Id`,`Point`,`PositionX`,`PositionY`,`PositionZ`,`Orientation`,`WaitTime`,`ScriptId`,`Comment`) VALUES (2,1,-8911,-121,84,100,0,0,NULL),(2,2,-8920,-130,84,3.1,5000,0,'look around');
         INSERT INTO `creature_model_info` (`modelid`,`bounding_radius`,`combat_reach`,`gender`,`modelid_other_gender`) VALUES (3167,0.306,1.5,0,0);
@@ -79,6 +79,26 @@ public sealed class CreatureDataTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task RefreshScriptNames_ChangesOnlyThatColumn_AndIsIdempotent(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("INSERT INTO `creature_template` (`Entry`,`Name`,`ScriptName`) VALUES (900001,'Dump Name','npc_script');"));
+        await using WorldDbContext db = TestContexts.Create<WorldDbContext>(cs);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        db.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow { Entry = 900001, Name = "Kept Name", AIName = "EventAI" });
+        await db.SaveChangesAsync();
+
+        Assert.Equal(1, await importer.RefreshScriptNamesAsync(db));
+        Assert.Equal(0, await importer.RefreshScriptNamesAsync(db));
+        CreatureTemplateRow row = await db.Set<CreatureTemplateRow>().SingleAsync();
+        Assert.Equal("npc_script", row.ScriptName);
+        Assert.Equal("Kept Name", row.Name);
+        Assert.Equal("EventAI", row.AIName);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task FreshWorldDatabase_ImportAndLoad_RoundTrip(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
@@ -98,6 +118,7 @@ public sealed class CreatureDataTests : IAsyncLifetime
             Assert.Equal((2, 2), (content.TemplateCount, content.SpawnCount));
 
             CreatureTemplate wolf = content.FindTemplate(900001)!;
+            Assert.Equal("npc_test_wolf", wolf.ScriptName);
             Assert.Equal(("Test Wolf", (byte)2, (byte)3), (wolf.Name, wolf.MinLevel, wolf.MaxLevel));
             Assert.Equal([903u, 904u, 0u, 0u], wolf.DisplayIds);
             Assert.Equal([50u, 50u, 0u, 0u], wolf.DisplayProbabilities);

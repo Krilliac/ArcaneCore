@@ -34,11 +34,24 @@ public sealed partial class CreatureMapSystem
         OutOfCombatUncharmed,
 
         /// <summary>
+        /// cmangos TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN (Entities/TemporarySpawn.cpp:107-127): combat restarts the whole lifetime and an
+        /// alive creature out of combat counts it down; a dead one goes on the first update after it dies (the case opens with
+        /// <c>if (IsDead()) UnSummon()</c>, and Unit::IsDead, Unit.h:1817, is true for both CORPSE and DEAD), so it leaves no corpse.
+        /// </summary>
+        OutOfCombatOrCorpse,
+
+        /// <summary>
         /// cmangos TEMPSPAWN_TIMED_OOC_DESPAWN (Entities/TemporarySpawn.cpp:45-58): the lifetime counts down only while the creature is alive
         /// and out of combat and starts again while it fights; a dead one is left to its corpse decay. EventAI uses it with 0 ms for a
         /// summon with no lifetime, which then goes as soon as it is alive and out of combat.
         /// </summary>
         AliveOutOfCombat,
+
+        /// <summary>
+        /// cmangos TEMPSPAWN_CORPSE_TIMED_DESPAWN (Entities/TemporarySpawn.cpp:67-83, :281-282): no timer while alive; the lifetime starts at
+        /// death and the corpse goes when it runs out.
+        /// </summary>
+        CorpseTimed,
     }
 
     /// <summary>A temporary creature with a lifetime; <see cref="DespawnAtMs"/> moves forward while an out-of-combat timer is held.</summary>
@@ -94,6 +107,8 @@ public sealed partial class CreatureMapSystem
             {
                 SummonTimer.OutOfCombat or SummonTimer.AliveOutOfCombat => creature.Combat.IsInCombat || !creature.IsAlive,
                 SummonTimer.OutOfCombatUncharmed => creature.Combat.IsInCombat || !creature.IsAlive || !creature.CharmerGuid.IsEmpty,
+                SummonTimer.OutOfCombatOrCorpse => creature.IsAlive && creature.Combat.IsInCombat,
+                SummonTimer.CorpseTimed => creature.IsAlive,
                 _ => false,
             };
             if (held)
@@ -102,7 +117,9 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            if (summon.DespawnAtMs <= _clockMs)
+            // TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN unsummons a dead creature at once, whatever is left of its lifetime.
+            bool goneAtDeath = summon.Timer == SummonTimer.OutOfCombatOrCorpse && !creature.IsAlive;
+            if (goneAtDeath || summon.DespawnAtMs <= _clockMs)
             {
                 _summons.RemoveAt(i);
                 (expired ??= []).Add(creature);
@@ -133,9 +150,11 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// <see cref="Summon"/> at a given position (cmangos EventAI SUMMON_ID: the creature_ai_summons row's position and lifetime,
-    /// CreatureEventAI.cpp:1003-1029).
+    /// CreatureEventAI.cpp:1003-1029). <paramref name="oocOrCorpse"/> is a ScriptDev2 TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN summon instead
+    /// (<see cref="SummonTimer.OutOfCombatOrCorpse"/>).
     /// </summary>
-    public Creature? SummonAt(Creature summoner, uint entry, float x, float y, float z, float orientation, Unit? target, uint despawnMs)
+    public Creature? SummonAt(Creature summoner, uint entry, float x, float y, float z, float orientation, Unit? target, uint despawnMs,
+        bool oocOrCorpse = false)
     {
         ArgumentNullException.ThrowIfNull(summoner);
         if (_content.FindTemplate(entry) is not { } template)
@@ -149,8 +168,38 @@ public sealed partial class CreatureMapSystem
         }
 
         Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner); // cmangos SummonCreature → JustSummoned
-        AddTimedSummon(summoned, despawnMs, despawnMs > 0 ? SummonTimer.OutOfCombatUncharmed : SummonTimer.AliveOutOfCombat);
+        AddTimedSummon(summoned, despawnMs, oocOrCorpse ? SummonTimer.OutOfCombatOrCorpse
+            : despawnMs > 0 ? SummonTimer.OutOfCombatUncharmed : SummonTimer.AliveOutOfCombat);
+        AttackOnSummon(summoned, target);
+        return summoned;
+    }
 
+    /// <summary>
+    /// ScriptDev2 SummonCreature(..., TEMPSPAWN_CORPSE_TIMED_DESPAWN, <paramref name="corpseMs"/>): alive until killed, then a corpse for
+    /// <paramref name="corpseMs"/> (<see cref="SummonTimer.CorpseTimed"/>); it attacks <paramref name="target"/> as a JustSummoned
+    /// AttackStart would. Null for a missing template.
+    /// </summary>
+    public Creature? SummonCorpseTimedDespawn(Creature summoner, uint entry, float x, float y, float z, float orientation, Unit? target, uint corpseMs)
+    {
+        ArgumentNullException.ThrowIfNull(summoner);
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            if (_reportedAi.Add($"summon:{entry}"))
+            {
+                _logger.LogWarning("{Creature} script summons missing creature_template {Entry}; skipped", summoner.Guid, entry);
+            }
+
+            return null;
+        }
+
+        Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner);
+        AddTimedSummon(summoned, corpseMs, SummonTimer.CorpseTimed);
+        AttackOnSummon(summoned, target);
+        return summoned;
+    }
+
+    private void AttackOnSummon(Creature summoned, Unit? target)
+    {
         if (target is not null && target.IsAlive)
         {
             if (summoned.AI is { } ai)
@@ -162,8 +211,6 @@ public sealed partial class CreatureMapSystem
                 AttackStart(summoned, target);
             }
         }
-
-        return summoned;
     }
 
     /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer.</summary>

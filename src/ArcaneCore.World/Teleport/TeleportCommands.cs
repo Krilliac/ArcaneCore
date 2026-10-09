@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Teleport;
 
@@ -28,7 +29,11 @@ public sealed class TeleportCommands : ICommandGroup
 
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
-        new ChatCommand("tele", AccountSecurity.Moderator, "Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id).", Tele),
+        new ChatCommand("tele", AccountSecurity.Moderator, "Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id).", Tele, Children:
+        [
+            new ChatCommand("add", AccountSecurity.Administrator, "Syntax: .tele add $name — save your current location.", Add, RetailLevel: 5),
+            new ChatCommand("del", AccountSecurity.Administrator, "Syntax: .tele del $name — delete an exact named location.", Delete, RetailLevel: 5),
+        ]),
         new ChatCommand("go", AccountSecurity.Moderator, "Teleport to a position.", Children:
         [
             new ChatCommand("xyz", AccountSecurity.Moderator, "Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there.", GoXyz),
@@ -55,6 +60,98 @@ public sealed class TeleportCommands : ICommandGroup
         }
 
         return GoHelper(context, tele.MapId, tele.X, tele.Y, tele.Z, tele.Orientation);
+    }
+
+    // vmangos HandleTeleAddCommand / ObjectMgr::AddGameTele (TeleportCommands.cpp:48-84,
+    // ObjectMgr.cpp:10555-10575): persist the caller's current position.
+    private static bool Add(CommandContext context, string args)
+    {
+        string name = args.Trim();
+        if (name.Length is 0 or > 100 || name.Any(char.IsControl))
+        {
+            return false;
+        }
+
+        WorldMaps maps = Feature(context).Maps;
+        if (maps.FindGameTele(name) is not null)
+        {
+            context.Reply("Teleport location already exists!");
+            return true;
+        }
+
+        Player player = context.Player;
+        GameTele proposed = new(0, player.X, player.Y, player.Z, player.Orientation, player.MapId, name);
+        Persist(context, async store =>
+        {
+            GameTele? added = await store.AddAsync(proposed).ConfigureAwait(false);
+            context.World.Post(() =>
+            {
+                if (added is not null && maps.GameTeles.All(t => t.Id != added.Id))
+                {
+                    maps.ReplaceGameTeles([.. maps.GameTeles, added]);
+                }
+
+                if (player.IsInWorld)
+                {
+                    context.Reply(added is null ? "Teleport location already exists!" : "Teleport location added.");
+                }
+            });
+        });
+        return true;
+    }
+
+    // vmangos HandleTeleDelCommand / ObjectMgr::DeleteGameTele (TeleportCommands.cpp:86-106,
+    // ObjectMgr.cpp:10577-10604): unlike lookup, deletion requires the exact name.
+    private static bool Delete(CommandContext context, string args)
+    {
+        string name = args.Trim();
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        WorldMaps maps = Feature(context).Maps;
+        Persist(context, async store =>
+        {
+            GameTele? deleted = await store.DeleteAsync(name).ConfigureAwait(false);
+            context.World.Post(() =>
+            {
+                if (deleted is not null)
+                {
+                    maps.ReplaceGameTeles(maps.GameTeles.Where(t => t.Id != deleted.Id));
+                }
+
+                if (context.Player.IsInWorld)
+                {
+                    context.Reply(deleted is null ? TeleNotFoundText : "Teleport location deleted.");
+                }
+            });
+        });
+        return true;
+    }
+
+    private static void Persist(CommandContext context, Func<IGameTeleStore, Task> work)
+    {
+        IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using IServiceScope scope = scopes.CreateScope();
+                await work(scope.ServiceProvider.GetRequiredService<IGameTeleStore>()).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                context.Session.Logger.LogError(ex, "game_tele edit failed");
+                context.World.Post(() =>
+                {
+                    if (context.Player.IsInWorld)
+                    {
+                        context.Reply("The teleport location could not be saved.");
+                    }
+                });
+            }
+        });
     }
 
     // .go xyz x y [z [mapid]]. vmangos HandleGoXYZCommand requires z; cmangos-classic makes it

@@ -73,6 +73,9 @@ public sealed class GossipScriptRow : DbScriptRow;
 /// <summary><c>dbscripts_on_event</c>: run by a spell or game object event id (z2815: 453 rows).</summary>
 public sealed class EventScriptRow : DbScriptRow;
 
+/// <summary><c>dbscripts_on_creature_movement</c>: run when a scripted waypoint is reached.</summary>
+public sealed class CreatureMovementScriptRow : DbScriptRow;
+
 /// <summary>
 /// One <c>script_waypoint</c> row (ScriptDev2's escort paths; mangos-classic <c>Entry, PathId, Point, PositionX/Y/Z, Orientation, WaitTime,
 /// ScriptId, Comment</c>; SystemMgr::LoadScriptWaypoints, AI/ScriptDevAI/system/system.cpp:63-121). The comment is not kept.
@@ -122,6 +125,7 @@ public sealed class DbScriptDataModule : IDataModule
     public const string EventTable = "dbscripts_on_event";
 
     public const string WaypointTable = "script_waypoint";
+    public const string CreatureMovementTable = "dbscripts_on_creature_movement";
 
     public DatabaseComponent Component => DatabaseComponent.World;
 
@@ -178,6 +182,7 @@ public sealed class DbScriptDataModule : IDataModule
         QuestEndScriptRow => DbScriptKind.QuestEnd,
         GossipScriptRow => DbScriptKind.Gossip,
         EventScriptRow => DbScriptKind.Event,
+        CreatureMovementScriptRow => DbScriptKind.CreatureMovement,
         _ => throw new ArgumentOutOfRangeException(nameof(row), row.GetType().Name, "not a DB script table row"),
     };
 
@@ -188,6 +193,7 @@ public sealed class DbScriptDataModule : IDataModule
         DbScriptKind.QuestEnd => new QuestEndScriptRow(),
         DbScriptKind.Gossip => new GossipScriptRow(),
         DbScriptKind.Event => new EventScriptRow(),
+        DbScriptKind.CreatureMovement => new CreatureMovementScriptRow(),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "the relay scripts have their own table (RelayScriptDataModule)"),
     };
 

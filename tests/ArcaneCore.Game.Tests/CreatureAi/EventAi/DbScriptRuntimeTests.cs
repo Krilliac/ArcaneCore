@@ -1,11 +1,15 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
 using static ArcaneCore.Game.Tests.CreatureTestSupport;
+using GameObjectTestKit = ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi.EventAi;
 
@@ -17,16 +21,104 @@ public sealed class DbScriptRuntimeTests
     private static RelayScriptStep Emote(uint delay, uint emote) => new(
         ScriptId, delay, 0, 1, emote, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
+    private sealed class Conditions(bool result) : IConditionEvaluator
+    {
+        public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source) => result;
+    }
+
+    [Fact]
+    public void GooberEventId_StartsTheEventNamespaceWithThePlayerAsSource()
+    {
+        const uint eventId = 9042;
+        RelayScriptStep credit = Emote(0, 0) with { Id = eventId, Command = 8, DataLong = 2044 };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.Event, credit)]) };
+        CreatureContent content = new([Template()], [], [], [], [], ai);
+        var objectives = new ObjectiveRecorder();
+        (WorldRuntime world, Map map, _) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = objectives });
+        using (world)
+        {
+            var objects = new GameObjectMapSystem(map, new GameObjectContent(
+                [GameObjectTestKit.GoTemplate(50000, GameObjectType.Goober, (2, eventId))],
+                [GameObjectTestKit.GoSpawn(50001, 50000, 0, 10)], [], [], []));
+            map.AddUpdater(objects);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
+            Assert.Equal([2044u], objectives.KillCredit);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, 0u, 0u)]
+    [InlineData(false, 0u, 10u)]
+    [InlineData(true, 8u, 10u)]
+    public void TerminateCond_StopsOnlyWhenTheConditionMatches(bool condition, uint flags, uint finalEmote)
+    {
+        RelayScriptStep gate = Emote(0, 0) with { Command = 34, DataLong = 901, DataFlags = flags };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([
+            (DbScriptKind.QuestStart, gate), (DbScriptKind.QuestStart, Emote(100, 10))]) };
+        CreatureContent content = new([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { Conditions = new Conditions(condition) });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Creature giver = Assert.Single(system.Creatures);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, player));
+            Run(world, 100);
+            Assert.Equal(finalEmote, giver.GetUInt32(UpdateFields.UnitNpcEmotestate));
+        }
+    }
+
+    [Fact]
+    public void TerminateCond_FailsTheQuestForThePlayersGroup()
+    {
+        RelayScriptStep gate = Emote(0, 0) with { Command = 34, DataLong = 901, DataLong2 = 667 };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, gate)]) };
+        CreatureContent content = new([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai);
+        var objectives = new ObjectiveRecorder();
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { Conditions = new Conditions(true), ScriptQuests = objectives });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, Assert.Single(system.Creatures), player));
+            Assert.Equal([667u], objectives.GroupFailed);
+        }
+    }
+
+    [Fact]
+    public void ScriptWithoutAWorldSource_RunsOnlyTheStepsWhoseBuddyIsTheSource()
+    {
+        // An item-started quest (cmangos ScriptAction::HandleScriptStep, ScriptMgr.cpp:1720-1760: an item is no world object): the kill
+        // credit without a buddy has no source and is skipped; the emote with a buddy entry finds the wolf near the player and runs on it.
+        RelayScriptStep plain = Emote(0, 0) with { Command = 8, DataLong = 2044 };
+        RelayScriptStep buddied = Emote(0, 26) with { BuddyEntry = WolfEntry, SearchRadius = 30 };
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, plain), (DbScriptKind.QuestStart, buddied)]) };
+        var objectives = new ObjectiveRecorder();
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(
+            new CreatureContent([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai), new CreatureAiServices { ScriptQuests = objectives });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, source: null, player));
+            Assert.Empty(objectives.KillCredit);
+            Assert.Equal(26u, Assert.Single(system.Creatures).GetUInt32(UpdateFields.UnitNpcEmotestate));
+        }
+    }
+
     private sealed class ObjectiveRecorder : IScriptQuestEvents
     {
         public List<uint> Explored { get; } = [];
         public List<uint> Failed { get; } = [];
+        public List<uint> GroupFailed { get; } = [];
         public List<uint> KillCredit { get; } = [];
 
         public void AreaExploredOrEventHappens(Player player, uint questId) => Explored.Add(questId);
         public void FailQuest(Player player, uint questId) => Failed.Add(questId);
         public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) => KillCredit.Add(creatureEntry);
-        public void GroupEventFailHappens(Player player, uint questId) => Failed.Add(questId);
+        public void GroupEventFailHappens(Player player, uint questId) => GroupFailed.Add(questId);
         public IReadOnlyList<Player> GroupMembersOf(Player player) => [];
     }
 

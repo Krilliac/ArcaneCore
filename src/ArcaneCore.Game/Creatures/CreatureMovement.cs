@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -22,6 +23,9 @@ public enum MovementGeneratorType : byte
     /// <summary>vmangos DISTRACT_MOTION_TYPE (MotionMaster.h:50): stand facing a spot for a while.</summary>
     Distract = 11,
     Follow = 15,
+
+    /// <summary>cmangos FORMATION_MOTION_TYPE (MotionGenerators/MotionMaster.h:78): a spawn group formation follower holding its slot.</summary>
+    Formation = 21,
 }
 
 /// <summary>What a movement generator may ask of its owner (implemented by <see cref="CreatureMapSystem"/>).</summary>
@@ -56,6 +60,9 @@ internal interface ICreatureMover
 
     /// <summary>A generator that ends by itself finished (home reached, point reached).</summary>
     void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId);
+
+    /// <summary>Run a DB script attached to a reached waypoint.</summary>
+    void OnWaypointScript(Creature creature, uint scriptId, ObjectGuid targetGuid) { }
 
     /// <summary>
     /// Turn the creature to <paramref name="angle"/> where it stands (vmangos Unit::SetFacingTo, Objects/Unit.cpp:2785-2794: a facing spline

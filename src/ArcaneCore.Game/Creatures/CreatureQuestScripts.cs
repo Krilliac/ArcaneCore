@@ -23,8 +23,11 @@ public interface IQuestScriptAI
 /// Map::ScriptsStart): <c>quest_template.StartScript</c> when a quest is taken from a creature or game object (Player::AddQuest,
 /// Player.cpp:12517-12535, after the giver's <see cref="IQuestScriptAI"/>), <c>quest_template.CompleteScript</c> when one is rewarded
 /// (Player::RewardQuest, :12695-12713), and the gossip scripts (<see cref="QuestNpcServices.GossipScriptStarted"/>). The giver is the
-/// script's source and the player its target; the gossip scripts say which is which. A quest taken from an item, or shared by another
-/// player, has no giver on the map and runs no script.
+/// script's source and the player its target; the gossip scripts say which is which. A quest shared by another player has that player as
+/// its source (WorldSession::HandleQuestgiverAcceptQuestOpcode passes the sharer to AddQuest). A quest started from an item has no world
+/// source: as in cmangos ScriptAction::HandleScriptStep (DBScripts/ScriptMgr.cpp:1720-1760), where an item is no world object, only the
+/// steps whose buddy search finds a source run, with the player as target. vmangos runs no start script for an item at all
+/// (Player::AddQuest, Objects/Player.cpp:12889-12891).
 /// </summary>
 public static class CreatureQuestScripts
 {
@@ -62,6 +65,16 @@ public static class CreatureQuestScripts
 
     private static void OnQuestAccepted(Func<Map, CreatureMapSystem?> systemOf, Player player, ObjectGuid giverGuid, Quest quest)
     {
+        if (giverGuid.High == HighGuid.Item)
+        {
+            if (quest.Template.StartScript != 0 && player.Map is { } itemMap && systemOf(itemMap) is { } itemSystem)
+            {
+                itemSystem.StartDbScript(DbScriptKind.QuestStart, quest.Template.StartScript, source: null, player);
+            }
+
+            return;
+        }
+
         if (Giver(player, giverGuid) is not { } giver)
         {
             return;
@@ -121,9 +134,9 @@ public static class CreatureQuestScripts
         return factory is null ? [.. explored] : [.. explored.Union(factory.ScriptedEventQuests)];
     }
 
-    /// <summary>The creature or game object on the player's map; anything else (an item, a player) gives no script.</summary>
+    /// <summary>The creature, game object or sharing player on the player's map; anything else (an item) is no world giver.</summary>
     private static WorldObject? Giver(Player player, ObjectGuid guid)
-        => player.Map?.FindObject(guid) is { } found && found is Creature or GameObject ? found : null;
+        => player.Map?.FindObject(guid) is { } found && found is Creature or GameObject or Player ? found : null;
 
     private sealed class Subscription(Action dispose) : IDisposable
     {

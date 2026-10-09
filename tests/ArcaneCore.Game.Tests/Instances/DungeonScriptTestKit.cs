@@ -24,10 +24,12 @@ internal sealed class DungeonScriptTestKit : IDisposable
         (uint Entry, GameObjectType Type)[] gameObjects, CreatureAiContent? ai = null,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
         CreatureAiServices? aiServices = null, IEnumerable<CreatureSpawn>? extraSpawns = null,
-        IReadOnlyDictionary<uint, int>? objectSpawnTimes = null, Func<Player, uint, bool>? questReady = null)
+        IReadOnlyDictionary<uint, int>? objectSpawnTimes = null, Func<Player, uint, bool>? questReady = null,
+        Func<uint, bool>? holidayActive = null)
     {
         _fixture.Manager.Scripts = new InstanceScriptRegistry().Register(InstanceFixture.Dungeon, script);
         if (questReady is not null) _fixture.Manager.QuestCompleteUnrewarded = questReady;
+        if (holidayActive is not null) _fixture.Manager.HolidayActive = holidayActive;
         CreatureContent content = new(
             [.. creatureEntries.Select(e => Template(e, t => t.Civilian = e is 3678 or 3679 or 3849 or 3850 or 4444 or 10000 or 4627))],
             [.. spawnEntries.Select((e, i) => Spawn((uint)i + 1, e, X + i + 2, Y, Z, mapId: InstanceFixture.Dungeon)), .. extraSpawns ?? []],

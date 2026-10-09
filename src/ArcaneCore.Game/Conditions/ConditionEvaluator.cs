@@ -29,7 +29,7 @@ public sealed record ConditionSummary(int Total, int Evaluable, IReadOnlyDiction
 /// </para>
 /// World thread only.
 /// </summary>
-public sealed class ConditionEvaluator(ConditionTable table, ConditionContext context) : IConditionEvaluator
+public sealed class ConditionEvaluator(ConditionTable table, ConditionContext context) : IConditionEvaluator, IConditionTableEvaluator
 {
     /// <summary>Alliance team id (SharedDefines.h:338).</summary>
     private const uint Alliance = 469;
@@ -43,6 +43,9 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
 
     public ConditionContext Context { get; } = context ?? throw new ArgumentNullException(nameof(context));
 
+    /// <summary>This evaluator (<see cref="IConditionTableEvaluator"/>).</summary>
+    ConditionEvaluator IConditionTableEvaluator.Current => this;
+
     /// <summary>Evaluations that hit an undecidable leaf, by condition type id.</summary>
     public IReadOnlyDictionary<int, long> Unavailable => _unavailable;
 
@@ -53,6 +56,15 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         return Table.Find(conditionId) is { } condition
             && Meets(condition, new Subject(player, null), source is null ? default : new Subject(null, source)) == true;
     }
+
+    /// <summary>
+    /// cmangos IsConditionSatisfied(conditionId, nullptr, map, nullptr, CONDITION_FROM_WORLDSTATE) as a spawn group asks it
+    /// (SpawnGroup::IsWorldstateConditionSatisfied): no player and no NPC, so only the types that need neither can be decided (game events,
+    /// holidays, and the AND/OR/NOT built from them). Null when it cannot be decided (a world-state or other subject type), false for a
+    /// missing condition.
+    /// </summary>
+    public bool? EvaluateWithoutSubjects(uint conditionId)
+        => Table.Find(conditionId) is { } condition ? Meets(condition, default, default) : false;
 
     /// <summary>
     /// Count the rows that can and cannot be decided with the collaborators this evaluator has, so a

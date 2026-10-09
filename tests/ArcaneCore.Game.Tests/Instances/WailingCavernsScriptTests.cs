@@ -12,6 +12,25 @@ namespace ArcaneCore.Game.Tests.Instances;
 
 public sealed class WailingCavernsScriptTests
 {
+    [Fact]
+    public void NaralexEscortWaypoint_RunsItsMovementScriptEmote()
+    {
+        const uint scriptId = 367802; // ClassicDB z2815: EMOTE_POINT (25), then text template 1257.
+        var ai = new CreatureAiContent([], [])
+        {
+            DbScripts = new DbScriptCatalog([(DbScriptKind.CreatureMovement,
+                new RelayScriptStep(scriptId, 0, 0, 1, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))]),
+        };
+        using var run = new DungeonScriptTestKit(map => new WailingCavernsInstance(map), [3678], [3678], [],
+            ai: ai, entryWaypoints: [(0u, CreatureContent.WaypointPathBit | DiscipleOfNaralexAi.PathId,
+                new CreatureWaypoint(1, -13.4f, -383.07f, 61.78f, 100, 5000) { ScriptId = scriptId })]);
+        var escort = Assert.IsType<DiscipleOfNaralexAi>(run.Creature(3678).AI);
+        Assert.True(escort.Start(waypointPath: DiscipleOfNaralexAi.PathId));
+        for (int i = 0; i < 100 && run.Sent(WorldOpcode.SmsgEmote).Count == 0; i++) run.Tick(100);
+
+        Assert.True(run.Sent(WorldOpcode.SmsgEmote).Any(packet => BitConverter.ToUInt32(packet, 0) == 25),
+            $"escort index {escort.CurrentWaypointIndex}, point count {escort.WaypointCount}, location {run.Creature(3678).X}, moving {run.Creature(3678).IsMoving}");
+    }
     /// <summary>The disciple's path: cmangos <c>waypoint_path</c> 3678, stored under entry 0 (CreatureContent.WaypointPathBit).</summary>
     private const uint NaralexPathKey = CreatureContent.WaypointPathBit | DiscipleOfNaralexAi.PathId;
 

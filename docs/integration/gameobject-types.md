@@ -49,7 +49,7 @@ Tests: `SpellFocusCastCheckTests` (Game.Tests), `SpellFocusWorldTests` (World.Te
 Verified against the real classic-db z2815 dump (opt-in test, `ARCANECORE_CLASSICDB_DUMP`): 47827 spawns, 6056 with min != max, all states within 0..2; the numbers were counted independently with a python scan.
 Provider coverage: the schema tests (`GameObjectSpawnDataTests`, `IntegratedSchemaTests`) are provider theories over `TestDatabases.AvailableProviders` written for MariaDB (non-transactional DDL: a partly applied step is completed by the rerun) and PostgreSQL
 (quoted identifiers through `ISqlGenerationHelper`), but **only SQLite was available on this machine**; the MariaDB and PostgreSQL runs happen on hosted CI.
-Not modelled: the `spawnMask` column, vmangos `visibility_mod` (cannot be verified, no vmangos world dump in the references), `gameobject_spawn_entry`/pools/game events (no lane owns them).
+Not modelled: the `spawnMask` column, vmangos `visibility_mod` (cannot be verified, no vmangos world dump in the references), pools (no lane owns them). `gameobject_spawn_entry` and game object spawn groups: done 2026-10-08 ([content import](../areas/content-import.md), "Spawn groups").
 
 ### GO5 chairs and cameras
 

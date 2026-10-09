@@ -201,7 +201,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         if (player.IsAlive && (player.Combat.IsInCombat || player.Health < player.MaxHealth || elapsed % 5_000 == 0) && string.Equals(Environment.GetEnvironmentVariable("ARCANECORE_TEST_BOT_REPLAY_TRACE"), name, StringComparison.OrdinalIgnoreCase)
                             && bots.FindBrain(watch.BotId) is { } traced)
                             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                                $"{elapsed / 1000,4}s {name} L{player.Level} hp {player.Health}/{player.MaxHealth} attackers {string.Join(",", player.Combat.Attackers.OfType<ArcaneCore.Game.Creatures.Creature>().Select(c => $"{c.Entry}/L{c.Level}/{c.Health}/{c.MaxHealth}/dmg{c.Template.MinMeleeDamage}-{c.Template.MaxMeleeDamage}"))} goal {traced.Goal} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) [{traced.RiskReport}]"));
+                                $"{elapsed / 1000,4}s {name} L{player.Level} hp {player.Health}/{player.MaxHealth} attackers {string.Join(",", player.Combat.Attackers.OfType<ArcaneCore.Game.Creatures.Creature>().Select(c => $"{c.Entry}/L{c.Level}/{c.Health}/{c.MaxHealth}/dmg{c.Template.MinMeleeDamage}-{c.Template.MaxMeleeDamage}"))} goal {traced.Goal} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) [{traced.RiskReport}]{Melee(player, traced.InspectionTarget)}"));
                         if (!player.IsAlive && !watch.Dead && bots.FindBrain(watch.BotId) is { } fallen)
                             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                                 $"{elapsed / 1000,4}s {name} died at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}): last enemies {string.Join(",", fallen.Risk.Tracker.LastEnemies.Select(c => $"{c.Entry}/L{c.Level}"))}; retreats {fallen.Risk.Retreat.Count} last {fallen.Risk.Retreat.Reason}/{fallen.Risk.Retreat.Outcome}; {fallen.Risk.LastEngagement}"));
@@ -251,6 +251,19 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
         finally { await bots.ShutdownBeforeWorldStopAsync(); }
+    }
+
+    /// <summary>The melee geometry against the bot's target: 2D distance, height difference, whether the server lets it swing, the facing,
+    /// its victim and the last swing error (the "behind" stalls of the 2026-10-08 rehearsal: no damage dealt while standing).</summary>
+    private static string Melee(ArcaneCore.Game.Entities.Player player, ArcaneCore.Game.Creatures.Creature? target)
+    {
+        if (target is null) return "";
+        float d2 = MathF.Sqrt(((target.X - player.X) * (target.X - player.X)) + ((target.Y - player.Y) * (target.Y - player.Y)));
+        float dz = target.Z - player.Z;
+        return string.Create(CultureInfo.InvariantCulture,
+            $" melee[{target.Entry} d2={d2:F1} dz={dz:F1} d3={MathF.Sqrt((d2 * d2) + (dz * dz)):F1} reach={ArcaneCore.Game.Combat.MapCombat.CanReachWithMeleeAutoAttack(player, target)} "
+            + $"arc={ArcaneCore.Game.Combat.MapCombat.HasInArc(player, target, ArcaneCore.Game.Combat.CombatConstants.AutoAttackArc)} victim={(player.Combat.Victim as ArcaneCore.Game.Creatures.Creature)?.Entry} "
+            + $"err={player.Combat.LastSwingError} moving={(player.Movement.Flags & ArcaneCore.Protocol.MovementFlags.MaskMoving) != 0}]");
     }
 
     private readonly record struct QuestRow(ArcaneCore.Game.Quests.QuestStatus Status, bool Rewarded);

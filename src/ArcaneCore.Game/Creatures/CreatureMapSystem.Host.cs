@@ -255,6 +255,7 @@ public sealed partial class CreatureMapSystem
                 creature.AI?.OnMovementInform(type, pointId);
                 creature.AI?.OnReachedHome();
                 Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureReachedHome(creature);
+                OnGroupMemberReachedHome(creature); // cmangos Unit::TriggerHomeEvents → CREATURE_GROUP_EVENT_HOME
                 break;
 
             case MovementGeneratorType.Waypoint:

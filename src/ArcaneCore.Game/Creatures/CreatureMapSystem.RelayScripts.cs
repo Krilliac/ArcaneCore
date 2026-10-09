@@ -40,9 +40,11 @@ public sealed partial class CreatureMapSystem
         [DbScriptKind.QuestEnd] = new(),
         [DbScriptKind.Gossip] = new(),
         [DbScriptKind.Event] = new(),
+        [DbScriptKind.CreatureMovement] = new(),
     };
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
     private readonly List<(Creature Creature, long AtMs)> _scriptDespawns = [];
+    private readonly List<(GameObjects.GameObject GameObject, long AtMs)> _scriptObjectDespawns = [];
 
     /// <summary>Relay steps waiting to run on this map.</summary>
     public int PendingRelaySteps => _relays.PendingCount;
@@ -52,14 +54,23 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// cmangos Map::ScriptsStart for the independent quest, gossip and event namespaces. Source and target must be live
-    /// world objects on this map; the executor resolves them again when a delayed command becomes due.
+    /// world objects on this map; the executor resolves them again when a delayed command becomes due. A null source stands for one that
+    /// is no world object (an item: cmangos ScriptAction::HandleScriptStep, ScriptMgr.cpp:1720-1760), so only the steps whose buddy search
+    /// finds a source run. A run already scheduled for the same source and target is not started again; an event script compares only its
+    /// unit (player included) or game-object source, else only its unit or game-object target (cmangos StartEvents_Event,
+    /// ScriptMgr.cpp:3476-3481), so a player runs one copy of an event at a time and two players can each run their own.
     /// </summary>
-    public bool StartDbScript(DbScriptKind kind, uint scriptId, WorldObject source, WorldObject? target)
+    public bool StartDbScript(DbScriptKind kind, uint scriptId, WorldObject? source, WorldObject? target)
     {
-        ArgumentNullException.ThrowIfNull(source);
         if (kind == DbScriptKind.Relay)
         {
+            ArgumentNullException.ThrowIfNull(source);
             return StartRelayScript(scriptId, source, target);
+        }
+
+        if (source is null && target is null)
+        {
+            throw new ArgumentNullException(nameof(source), "a DB script needs a source or a target");
         }
 
         if (!_dbScriptRunners.TryGetValue(kind, out RelayScriptRunner? runner))
@@ -73,8 +84,21 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        return runner.Start(steps, source.Guid, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
+        // TYPEMASK_CREATURE_OR_GAMEOBJECT is TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT (ObjectGuid.h:45-52), and a player carries
+        // TYPEMASK_UNIT too, so a player-started event is unique by its player, not by the object it used.
+        DbScriptUniqueness unique = kind != DbScriptKind.Event ? DbScriptUniqueness.SourceAndTarget
+            : source is Unit or GameObjects.GameObject ? DbScriptUniqueness.Source
+            : target is Unit or GameObjects.GameObject ? DbScriptUniqueness.Target
+            : DbScriptUniqueness.SourceAndTarget;
+        return runner.Start(steps, source?.Guid ?? default, target?.Guid ?? default, _clockMs, ExecuteRelayStep, unique);
     }
+
+    /// <summary>
+    /// Whether script <paramref name="scriptId"/> of <paramref name="kind"/> has steps. <see cref="StartDbScript"/> is also false for a
+    /// script that already runs for the same source and target, which is not missing content.
+    /// </summary>
+    public bool HasDbScript(DbScriptKind kind, uint scriptId)
+        => kind == DbScriptKind.Relay ? _content.Ai.RelayScripts.Get(scriptId).Count > 0 : _content.Ai.DbScripts.Get(kind, scriptId).Count > 0;
 
     /// <summary>
     /// cmangos Map::ScriptsStart(SCRIPT_TYPE_RELAY, id, source, target): run relay <paramref name="relayId"/> with
@@ -115,6 +139,15 @@ public sealed partial class CreatureMapSystem
                 Creature creature = _scriptDespawns[i].Creature;
                 _scriptDespawns.RemoveAt(i);
                 Despawn(creature);
+            }
+        }
+        for (int i = _scriptObjectDespawns.Count - 1; i >= 0; i--)
+        {
+            if (_scriptObjectDespawns[i].AtMs <= _clockMs)
+            {
+                GameObjects.GameObject go = _scriptObjectDespawns[i].GameObject;
+                _scriptObjectDespawns.RemoveAt(i);
+                Map.FindUpdater<GameObjects.GameObjectMapSystem>()?.Despawn(go);
             }
         }
     }
@@ -186,7 +219,7 @@ public sealed partial class CreatureMapSystem
         {
             foreach (WorldObject? acted in targets.Count == 0 ? [null] : targets.ToArray())
             {
-                if (step.ConditionId != 0 && !RelayConditionHolds(step.ConditionId, actor, acted))
+                if (step.ConditionId != 0 && !RelayConditionHolds(step.ConditionId, target: acted, source: actor))
                 {
                     continue;
                 }
@@ -314,26 +347,23 @@ public sealed partial class CreatureMapSystem
         return found;
     }
 
-    /// <summary>cmangos IsConditionSatisfied(condition, target, map, source): this server evaluates conditions for a player only.</summary>
-    private bool RelayConditionHolds(uint conditionId, WorldObject? source, WorldObject? target)
-    {
-        Player? player = target as Player ?? source as Player;
-        if (player is null || _ai.Conditions is not { } conditions)
-        {
-            return false;
-        }
-
-        Creature? npc = source as Creature ?? target as Creature;
-        NpcInfo? info = npc is null ? null : new NpcInfo(npc.Guid, npc.Entry, npc.Spawn?.Guid ?? npc.Guid.Low, (NpcFlags)npc.NpcFlags, npc.MapId,
-            npc.X, npc.Y, npc.Z, npc.BoundingRadius, npc.IsAlive, IsHostile: false, npc.Combat.IsInCombat,
-            (npc.UnitFlags & UnitFlags.NotSelectable) != 0, npc.Template.GossipMenuId);
-        return conditions.IsSatisfied(conditionId, player, info);
-    }
-
     private bool RunRelayCommand(RelayScriptStep step, WorldObject? source, WorldObject? target, bool buddyFound)
     {
         switch (step.Command)
         {
+            case 2: // SCRIPT_COMMAND_FIELD_SET (ScriptMgr.cpp:1829-1842)
+            case 4: // SCRIPT_COMMAND_FLAG_SET (ScriptMgr.cpp:1897-1910)
+            case 5: // SCRIPT_COMMAND_FLAG_REMOVE (ScriptMgr.cpp:1911-1924)
+                if (source is not null && step.DataLong > UpdateFields.ObjectFieldEntry && step.DataLong < source.ValuesCount
+                    && !source.GuidFieldStarts[(int)step.DataLong])
+                {
+                    int field = (int)step.DataLong;
+                    if (step.Command == 2) source.SetUInt32(field, step.DataLong2);
+                    else if (step.Command == 4) source.SetFlag(field, step.DataLong2);
+                    else source.RemoveFlag(field, step.DataLong2);
+                }
+                return false;
+
             case 0: // SCRIPT_COMMAND_TALK (:1774-1810): dataint (or one of dataint..4 at random), or a string template in datalong
             {
                 if (source is not Creature speaker)
@@ -432,22 +462,101 @@ public sealed partial class CreatureMapSystem
                 RelayTempSpawn(step, source);
                 return false;
 
-            case 11: // SCRIPT_COMMAND_OPEN_DOOR (ScriptMgr.cpp:2074-2111), used by Zul'Farrak's cage event 2609
+            case 9: // SCRIPT_COMMAND_RESPAWN_GAMEOBJECT (cmangos ScriptMgr.cpp:2001-2047)
             {
-                if (Map.FindUpdater<GameObjects.GameObjectMapSystem>() is { } objects
-                    && objects.GameObjects.FirstOrDefault(go => go.Spawn?.Guid == step.DataLong) is { } door
-                    && door.State == GameObjects.GameObjectState.Ready)
-                    objects.ToggleDoorOrButton(door, Math.Max(15u, step.DataLong2));
+                GameObjects.GameObjectMapSystem? objects = Map.FindUpdater<GameObjects.GameObjectMapSystem>();
+                GameObjects.GameObject? go = step.DataLong == 0 ? source as GameObjects.GameObject
+                    : objects?.GameObjects.FirstOrDefault(candidate => candidate.Spawn?.Guid == step.DataLong);
+                if (objects is null || go is null || go.IsSpawned
+                    || go.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.FishingNode)
+                    return false;
+                if (go.Spawn is not { SpawnTimeSeconds: < 0 })
+                {
+                    objects.RespawnPending(go); // IsSpawnedByDefault: a static spawn can only respawn
+                    return false;
+                }
+
+                // Not spawned by default (negative spawntimesecs): shown, then gone again after datalong2 seconds (SetLootState(GO_READY),
+                // SetRespawnTime(despawnDelay), Refresh). The latest SetRespawnTime replaces an earlier one, so a stale timer is dropped.
+                // datalong2 0 schedules nothing: SetRespawnTime(0) leaves m_respawnDelay 0, which IsSpawned() treats as spawned, so the
+                // object stays (cmangos GameObject.h:757-768). ClassicDB has three such rows: dbscripts_on_event 466-468, the Water Well
+                // Cleansing Aura (2904) of quests 754/758/760. vmangos (ScriptCommands.cpp:383) would clamp the delay to 5 s instead.
+                objects.ForceRespawn(go);
+                _scriptObjectDespawns.RemoveAll(pending => pending.GameObject == go);
+                if (go.IsSpawned && step.DataLong2 > 0)
+                    _scriptObjectDespawns.Add((go, _clockMs + (step.DataLong2 * 1000L)));
                 return false;
             }
 
-            case 22: // SCRIPT_COMMAND_SET_FACTION (ScriptMgr.cpp:2394-2409)
+            case 11: // SCRIPT_COMMAND_OPEN_DOOR (ScriptMgr.cpp:2074-2111)
+            case 12: // SCRIPT_COMMAND_CLOSE_DOOR (ScriptMgr.cpp:2074-2111)
+            {
+                GameObjects.GameObjectMapSystem? objects = Map.FindUpdater<GameObjects.GameObjectMapSystem>();
+                GameObjects.GameObject? door = step.DataLong == 0 ? source as GameObjects.GameObject
+                    : objects?.GameObjects.FirstOrDefault(go => go.Spawn?.Guid == step.DataLong);
+                if (door is not null && door.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.Button
+                    && (door.State == GameObjects.GameObjectState.Ready) == (step.Command == 11))
+                    objects?.ToggleDoorOrButton(door, Math.Max(15u, step.DataLong2));
+                return false;
+            }
+
+            case 22: // SCRIPT_COMMAND_SET_FACTION (ScriptMgr.cpp:2399-2410)
                 if (source is Creature factionTarget)
                     factionTarget.FactionTemplate = step.DataLong != 0 ? step.DataLong : factionTarget.Template.Faction;
                 return false;
 
+            case 23: // SCRIPT_COMMAND_MORPH_TO_ENTRY_OR_MODEL (ScriptMgr.cpp:2411-2429)
+                if (source is Creature morph)
+                {
+                    morph.DisplayId = step.DataLong == 0 ? morph.NativeDisplayId
+                        : (step.DataFlags & FlagCommandAdditional) != 0 ? step.DataLong
+                        : _content.FindTemplate(step.DataLong) is { } model
+                            ? Creature.ChooseDisplayId(model, _random) : morph.DisplayId;
+                }
+                return false;
+
+            case 24: // SCRIPT_COMMAND_MOUNT_TO_ENTRY_OR_MODEL (ScriptMgr.cpp:2430-2459)
+                if (source is Creature mount)
+                {
+                    uint model = step.DataLong == 0 ? 0 : (step.DataFlags & FlagCommandAdditional) != 0
+                        ? step.DataLong : _content.FindTemplate(step.DataLong) is { } template
+                            ? Creature.ChooseDisplayId(template, _random) : 0;
+                    mount.SetUInt32(UpdateFields.UnitFieldMountdisplayid, model);
+                }
+                return false;
+
             case 13: // SCRIPT_COMMAND_ACTIVATE_OBJECT (:2115-2128)
                 RelayActivateObject(step, source, target);
+                return false;
+
+            case 14: // SCRIPT_COMMAND_REMOVE_AURA (ScriptMgr.cpp:2130-2153), full spell on source
+                if (source is Unit auraTarget && step.DataLong2 == 0 && (step.DataFlags & FlagCommandAdditional) == 0)
+                    _ai.Spells?.RemoveAuras(auraTarget, step.DataLong);
+                return false;
+
+            case 17: // SCRIPT_COMMAND_CREATE_ITEM (ScriptMgr.cpp:2241-2256)
+                if ((target as Player ?? source as Player) is { } itemPlayer && step.DataLong2 > 0)
+                {
+                    if ((step.DataFlags & FlagCommandAdditional) != 0)
+                        itemPlayer.Inventory.DestroyItemCount(step.DataLong, step.DataLong2);
+                    else
+                        itemPlayer.Inventory.AddItem(step.DataLong, step.DataLong2, out _, received: true);
+                }
+                return false;
+
+            case 16: // SCRIPT_COMMAND_PLAY_SOUND (ScriptMgr.cpp:2203-2240): current z2815 rows use direct or distance sound
+                if (source is not null && step.DataLong2 is 0 or 2 && (step.DataFlags & FlagCommandAdditional) == 0)
+                {
+                    if (step.DataLong2 == 2)
+                        Map.BroadcastToObservers(source, WorldOpcode.SmsgPlayObjectSound,
+                            Fishing.FishingPackets.PlayObjectSound(step.DataLong, source.Guid));
+                    else
+                    {
+                        var sound = new PacketWriter(4);
+                        sound.WriteUInt32(step.DataLong);
+                        Map.BroadcastToObservers(source, WorldOpcode.SmsgPlaySound, sound.ToArray());
+                    }
+                }
                 return false;
 
             case 20: // SCRIPT_COMMAND_MOVEMENT (:2277-2385)
@@ -546,8 +655,45 @@ public sealed partial class CreatureMapSystem
 
                 return false;
 
+            case 27: // SCRIPT_COMMAND_GO_LOCK_STATE (ScriptMgr.cpp:2499-2524)
+                if (source is GameObjects.GameObject lockTarget)
+                {
+                    GameObjects.GameObjectFlags flags = lockTarget.Flags;
+                    if ((step.DataLong & 1) != 0) flags |= GameObjects.GameObjectFlags.Locked;
+                    else if ((step.DataLong & 2) != 0) flags &= ~GameObjects.GameObjectFlags.Locked;
+                    if ((step.DataLong & 4) != 0) flags |= GameObjects.GameObjectFlags.NoInteract;
+                    else if ((step.DataLong & 8) != 0) flags &= ~GameObjects.GameObjectFlags.NoInteract;
+                    lockTarget.Flags = flags;
+                }
+                return false;
+
+            case 48: // SCRIPT_COMMAND_MODIFY_UNIT_FLAGS (ScriptMgr.cpp:2993-3016)
+                if (source is Creature flagTarget && step.DataLong2 <= 2)
+                {
+                    UnitFlags mask = (UnitFlags)step.DataLong;
+                    // Toggle (2) is not a XOR: HasFlag is true when any bit of the mask is set (Object.h:476-480), and then the whole
+                    // mask is removed; otherwise the whole mask is set.
+                    bool remove = step.DataLong2 == 0 || (step.DataLong2 == 2 && (flagTarget.UnitFlags & mask) != 0);
+                    flagTarget.UnitFlags = remove ? flagTarget.UnitFlags & ~mask : flagTarget.UnitFlags | mask;
+                }
+                return false;
+
             case 31: // SCRIPT_COMMAND_TERMINATE_SCRIPT (:2569-2703)
                 return RelayTerminates(step, source, target, buddyFound);
+
+            case 34: // SCRIPT_COMMAND_TERMINATE_COND (ScriptMgr.cpp:2720-2758)
+            {
+                // The condition's target is the player (the target, else the source), its source the other object; with no player the
+                // target is null and the source stays the source, as cmangos passes them.
+                Player? player = target as Player ?? source as Player;
+                WorldObject? other = target is Player ? source : source is Player ? target : source;
+                bool? holds = RelayCondition(step.DataLong, player, other);
+                bool terminate = (step.DataFlags & FlagCommandAdditional) != 0 ? holds != true : holds == true;
+                // A condition this server cannot decide still stops a reversed one (fail safe), but never fails a quest.
+                if (terminate && holds is not null && step.DataLong2 != 0 && player is not null)
+                    _ai.ScriptQuests?.GroupEventFailHappens(player, step.DataLong2);
+                return terminate;
+            }
 
             case 32: // SCRIPT_COMMAND_PAUSE_WAYPOINTS (:2705-2713): datalong 1 pause, 0 unpause
                 if (source is Creature walker)
@@ -577,7 +723,27 @@ public sealed partial class CreatureMapSystem
                 return false;
             }
 
-            case 45: // SCRIPT_COMMAND_START_RELAY_SCRIPT (:2959-2972): datalong relay, or a relay from template datalong2
+            case 40: // SCRIPT_COMMAND_DESPAWN_GO (ScriptMgr.cpp:2887-2895)
+                if (target is GameObjects.GameObject gone)
+                {
+                    if (step.DataLong == 0) Map.FindUpdater<GameObjects.GameObjectMapSystem>()?.Despawn(gone);
+                    else _scriptObjectDespawns.Add((gone, _clockMs + step.DataLong));
+                }
+                return false;
+
+            case 43: // SCRIPT_COMMAND_RESET_GO (ScriptMgr.cpp:2930-2947)
+                if (target is GameObjects.GameObject resetObject
+                    && resetObject.Type is GameObjects.GameObjectType.Door or GameObjects.GameObjectType.Button
+                    && resetObject.LootState == GameObjects.GameObjectLootState.Activated)
+                    Map.FindUpdater<GameObjects.GameObjectMapSystem>()?.ToggleDoorOrButton(resetObject);
+                return false;
+
+            case 44: // SCRIPT_COMMAND_UPDATE_TEMPLATE (ScriptMgr.cpp:2948-2960)
+                if (source is Creature updated && updated.Entry != step.DataLong)
+                    UpdateEntry(updated, step.DataLong);
+                return false;
+
+            case 45: // SCRIPT_COMMAND_START_RELAY_SCRIPT (:2961-2972): datalong relay, or a relay from template datalong2
             {
                 uint chosen = step.DataLong2 != 0 ? SelectRelayFromTemplate(step.DataLong2) : step.DataLong;
                 if (chosen != 0 && source is not null)

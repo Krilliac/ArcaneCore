@@ -1,3 +1,6 @@
+using ArcaneCore.Kernel.WorldData.Pools;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
+
 namespace ArcaneCore.Kernel.WorldData.Creatures;
 
 /// <summary>
@@ -121,6 +124,9 @@ public sealed record CreatureTemplate
     /// empty picks the default (docs/areas/creature-ai.md).
     /// </summary>
     public string AIName { get; init; } = string.Empty;
+
+    /// <summary>ClassicDB creature_template.ScriptName: named script AI, selected before AIName.</summary>
+    public string ScriptName { get; init; } = string.Empty;
 
     /// <summary>vmangos <c>CreatureInfo::detection_range</c> default (Objects/CreatureDefines.h:250); classic-db <c>Detection</c> column default.</summary>
     public const float DefaultDetectionRange = 18.0f;
@@ -278,6 +284,9 @@ public sealed class CreatureContent
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private readonly Dictionary<uint, CreatureLink> _links;
+    private readonly Dictionary<(uint Entry, uint Map), CreatureTemplateLink> _templateLinks;
+    private readonly bool _hasFollowLinks;
     private readonly Dictionary<uint, IReadOnlyList<uint>> _spawnEntries;
     private readonly Dictionary<(uint MapId, uint Entry), IReadOnlyList<CreatureSpawn>> _spawnsByEntry;
     private volatile CreatureDefinitions _definitions;
@@ -292,7 +301,9 @@ public sealed class CreatureContent
         CreatureAiContent? ai = null,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
         IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null,
-        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null)
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null,
+        IEnumerable<CreatureLink>? links = null,
+        IEnumerable<CreatureTemplateLink>? templateLinks = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -311,6 +322,10 @@ public sealed class CreatureContent
         _spawnEntries = (spawnEntries ?? [])
             .GroupBy(e => e.SpawnGuid)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
+        _links = (links ?? []).ToDictionary(link => link.SlaveGuid);
+        _templateLinks = (templateLinks ?? []).ToDictionary(link => (link.SlaveEntry, link.MapId));
+        _hasFollowLinks = _links.Values.Any(l => (l.Flags & 0x200) != 0)
+            || _templateLinks.Values.Any(l => (l.Flags & 0x200) != 0);
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
@@ -325,6 +340,13 @@ public sealed class CreatureContent
     public CreatureAiContent Ai => _definitions.Ai;
 
     public int SpawnCount { get; }
+
+    public bool HasFollowLinks => _hasFollowLinks;
+
+    public CreatureLink? FindLink(uint spawnGuid) => _links.GetValueOrDefault(spawnGuid);
+
+    public CreatureTemplateLink? FindTemplateLink(uint entry, uint mapId)
+        => _templateLinks.GetValueOrDefault((entry, mapId));
 
     /// <summary>Changes every time the definitions are swapped; a holder that caches a lookup compares it to know when to look again.</summary>
     public int DefinitionsVersion => Volatile.Read(ref _version);
@@ -446,6 +468,15 @@ public sealed class CreatureContent
     /// ascending and distinct; empty for a spawn with one fixed entry. Part of the spawn data, so a definitions swap does not touch it.
     /// </summary>
     public IReadOnlyList<uint> GetSpawnEntries(uint spawnGuid) => _spawnEntries.GetValueOrDefault(spawnGuid) ?? [];
+
+    /// <summary>
+    /// The cmangos spawn groups of creature spawns (<c>spawn_group</c> rows of type 0 with their spawns and entries): which members of a group
+    /// exist at once and which entry an entry-0 member becomes (docs/areas/content-import.md, spawn groups).
+    /// </summary>
+    public SpawnGroupCatalog SpawnGroups { get; init; } = SpawnGroupCatalog.Empty;
+
+    /// <summary>The cmangos pools of these spawns (<c>pool_template</c>, <c>pool_pool</c> and this kind's member rows): which members of a pool exist at once (docs/areas/content-import.md, pools).</summary>
+    public PoolCatalog Pools { get; init; } = PoolCatalog.Empty;
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
 

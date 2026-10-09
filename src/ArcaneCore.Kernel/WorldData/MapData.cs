@@ -133,3 +133,13 @@ public interface IMapDataStore
     /// <summary>Load every map, area, area trigger and teleport location row.</summary>
     Task<MapContent> LoadAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>Persistent edits of the existing world <c>game_tele</c> table for GM commands.</summary>
+public interface IGameTeleStore
+{
+    /// <summary>Add a named location and assign the next id; null when its name already exists.</summary>
+    Task<GameTele?> AddAsync(GameTele location, CancellationToken cancellationToken = default);
+
+    /// <summary>Delete by exact case-insensitive name; return the deleted row, or null.</summary>
+    Task<GameTele?> DeleteAsync(string name, CancellationToken cancellationToken = default);
+}

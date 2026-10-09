@@ -12,6 +12,7 @@ unfinished parts documented as limits).
 | [Operating a realm](guide/operations.md) | Start, stop and restart, backups and upgrades, bans, monitoring, and the release caveats (which defaults are not retail, what is not delivered). |
 | [Configuration reference](reference/configuration.md) | Every configuration key with its type, default, `.reload config` behaviour and meaning. **Generated from the code**; a test fails when the page is stale. |
 | [GM command reference](reference/gm-commands.md) | Every chat command with the account level it needs and which stored account reaches it. **Generated.** |
+| [Opcode coverage](reference/opcodes.md) | Build-5875 CMSG handler status and SMSG emission observed by the wave 8 wire oracle. **Generated.** |
 | [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, rolling text file, JSON lines, what reloads live, and the fail-closed checks. |

@@ -132,6 +132,19 @@ public sealed class BattlegroundManagerTests
     }
 
     [Fact]
+    public void QueuedTeamCounts_CountEveryBracketOfTheQueue_LikeVmangosBgStatus()
+    {
+        // vmangos HandleBGStatusCommand walks every m_queuedPlayers entry of the queue type (MiscCommands.cpp:1777-1797), not one bracket.
+        var (mgr, _, _) = NewManager();
+        Assert.Equal(BattlegroundJoinOutcome.Queued, Solo(mgr, Alliance[0], Team.Alliance, level: 60).Outcome);
+        Assert.Equal(BattlegroundJoinOutcome.Queued, Solo(mgr, Alliance[1], Team.Alliance, level: 15).Outcome);
+        Assert.Equal(BattlegroundJoinOutcome.Queued, Solo(mgr, Horde[0], Team.Horde, level: 35).Outcome);
+
+        Assert.Equal((2, 1), mgr.QueuedTeamCounts(BattlegroundType.WarsongGulch));
+        Assert.Equal((0, 0), mgr.QueuedTeamCounts(BattlegroundType.ArathiBasin)); // no template registered
+    }
+
+    [Fact]
     public void AJoinThatIsInvalidIsIgnoredAndChangesNothing()
     {
         var (mgr, host, _) = NewManager();

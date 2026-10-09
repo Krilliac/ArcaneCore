@@ -33,12 +33,19 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
     private readonly Dictionary<Map, CreatureMapSystem> _instanceSystems = new(ReferenceEqualityComparer.Instance);
     private CreatureContent _content = CreatureContent.Empty;
+    private bool _contentInstalled;
     private WorldRuntime? _world;
     private ICreatureHeightProvider? _height;
     private CreatureAiServices _aiServices = CreatureAiServices.Default;
 
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
+
+    /// <summary>
+    /// True once <see cref="Install"/> has put the loaded content in place. The content is loaded at attach but installed from the world
+    /// thread (a posted call), so until then <see cref="Content"/> is still the empty content even when the world has spawns.
+    /// </summary>
+    public bool ContentInstalled => Volatile.Read(ref _contentInstalled);
 
     public CreatureOptions Options { get; } = new();
 
@@ -126,6 +133,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     {
         ArgumentNullException.ThrowIfNull(content);
         Volatile.Write(ref _content, content);
+        Volatile.Write(ref _contentInstalled, true);
         foreach (uint mapId in content.MapsWithSpawns)
         {
             GetOrCreateSystem(mapId);

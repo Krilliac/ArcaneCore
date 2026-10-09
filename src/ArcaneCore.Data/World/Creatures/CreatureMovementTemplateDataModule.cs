@@ -33,6 +33,9 @@ public sealed class CreatureMovementTemplateRow
     public float Orientation { get; set; }
 
     public uint WaitTimeMs { get; set; }
+
+    /// <summary>Creature movement DB script started on arrival.</summary>
+    public uint ScriptId { get; set; }
 }
 
 /// <summary>

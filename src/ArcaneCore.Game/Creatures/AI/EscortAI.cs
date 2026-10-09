@@ -503,6 +503,12 @@ public abstract class EscortAI : CreatureAI
             return; // "Waypoint out of order"
         }
 
+        if (point.ScriptId != 0)
+        {
+            // mangos-classic WaypointMovementGenerator<Creature>::OnArrived: source is the escort, target is its linked player or itself.
+            System?.StartDbScript(DbScriptKind.CreatureMovement, point.ScriptId, Me, GetPlayerForEscort() ?? (WorldObject)Me);
+        }
+        if (!Me.IsInWorld || !Me.IsAlive) return;
         WaypointReached(point.Point);
         _waypointWaitMs = point.WaitTimeMs + 1;
         CurrentWaypointIndex++;

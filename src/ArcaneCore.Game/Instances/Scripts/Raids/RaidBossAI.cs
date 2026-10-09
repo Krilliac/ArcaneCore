@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Raids;
 /// combat-only countdowns, reset on evade/respawn, and retry a ready action until its cast succeeds.
 /// Melee and victim selection remain with CreatureMapSystem.
 /// </summary>
-public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorAI(creature)
+public abstract class RaidBossAI(Creature creature, uint? encounter) : AggressorAI(creature)
 {
     private sealed class ActionTimer(Func<uint> initial, Func<bool> execute, Func<uint> repeat)
     {
@@ -39,7 +39,35 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
             (BlackwingLairInstance, 12017) => new BroodlordAI(creature),
             (BlackwingLairInstance, 11983) => new FiremawAI(creature),
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
+            (BlackwingLairInstance, 14601) => new EbonrocAI(creature),
+            (BlackwingLairInstance, 14020) => new ChromaggusAI(creature),
+            (BlackwingLairInstance, 13020) => new VaelastraszAI(creature),
+            (BlackwingLairInstance, 12435) => new RazorgoreAI(creature),
+            (BlackwingLairInstance, 10162) => new VictorNefariusAI(creature),
+            (BlackwingLairInstance, 11583) => new NefarianAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
+            (RuinsOfAhnQirajInstance, 15340) => new MoamAI(creature),
+            (RuinsOfAhnQirajInstance, 15370) => new BuruAI(creature),
+            (RuinsOfAhnQirajInstance, 15369) => new AyamissAI(creature),
+            (RuinsOfAhnQirajInstance, 15339) => new OssirianAI(creature),
+            (RuinsOfAhnQirajInstance, 15514) => new BuruEggAI(creature),
+            (RuinsOfAhnQirajInstance, 15471) => new AndorovAI(creature),
+            (RuinsOfAhnQirajInstance, 15473) => new KaldoreiEliteAI(creature),
+            (ZulGurubInstance, 14517) => new JeklikAI(creature),
+            (ZulGurubInstance, 14507) => new VenoxisAI(creature),
+            (ZulGurubInstance, 14510) => new MarliAI(creature),
+            (ZulGurubInstance, 14509) => new ThekalAI(creature),
+            (ZulGurubInstance, 11347) => new LorKhanAI(creature),
+            (ZulGurubInstance, 11348) => new ZathAI(creature),
+            (ZulGurubInstance, 14515) => new ArlokkAI(creature),
+            (ZulGurubInstance, 11380) => new JindoAI(creature),
+            (ZulGurubInstance, 11382) => new MandokirAI(creature),
+            (ZulGurubInstance, 15114) => new GahzrankaAI(creature),
+            // Gri'lek (15082) and Wushoolay (15085) have no entry here: classic-db z2815 gives both AIName 'EventAI' and no ScriptName
+            // (creature_ai_scripts 1508201-1508202, 1508501-1508502), and neither reference core scripts them, so the host's
+            // CreatureEventAI runs them. A factory entry would shadow that EventAI, because this lookup runs before AIName.
+            (ZulGurubInstance, 15083) => new HazzarahAI(creature),
+            (ZulGurubInstance, 15084) => new RenatakiAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
             _ => null,
         };
@@ -57,11 +85,39 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target, spell, triggered) == CreatureCastResult.Ok;
 
-    public override void OnAggro(Unit target) => Instance?.SetData(encounter, EncounterState.InProgress);
+    /// <summary>Health at or below <paramref name="percent"/> (ScriptDev2 <c>GetHealthPercent() &lt;= pct</c>).</summary>
+    protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
 
-    public override void OnDeath(Unit? killer) => Instance?.SetData(encounter, EncounterState.Done);
+    /// <summary>Health strictly below <paramref name="percent"/>: exactly ScriptDev2's <c>GetHealthPercent() &lt; pct</c>, in integers.</summary>
+    protected bool HealthBelowPct(uint percent) => (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * percent;
 
-    public override void OnReachedHome() => Instance?.SetData(encounter, EncounterState.Fail);
+    protected Unit? RandomTarget()
+    {
+        Unit[] targets = [.. Me.Combat.Threat.Entries.Select(e => e.Target)
+            .Where(t => t.IsAlive && t.IsInWorld && ReferenceEquals(t.Map, Me.Map))];
+        return targets.Length == 0 ? null : targets[System!.RandomInt(0, targets.Length - 1)];
+    }
+
+    protected void ResetThreat()
+    {
+        foreach (var entry in Me.Combat.Threat.Entries.ToArray())
+            Me.Combat.Threat.ModifyThreatPercent(entry.Target, -100);
+    }
+
+    public override void OnAggro(Unit target)
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.InProgress);
+    }
+
+    public override void OnDeath(Unit? killer)
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.Done);
+    }
+
+    public override void OnReachedHome()
+    {
+        if (encounter is { } slot) Instance?.SetData(slot, EncounterState.Fail);
+    }
 
     public override void OnEvade() => ResetActions();
 

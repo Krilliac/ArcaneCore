@@ -484,7 +484,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             bool fightingBot = player.Combat.ThreatenedBy.Contains(target) || ReferenceEquals(target.Combat.Victim, player);
             PlayerbotFightPosition position = DecidePosition(_combatSpells.PreferredRange(player), distance,
                 player.Class == Game.Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
-                _rangedIdleMs >= RangedIdleLimitMs && !fightingBot);
+                _rangedIdleMs >= RangedIdleLimitMs && !fightingBot, MapCombat.CanReachWithMeleeAutoAttack(player, target));
             if (position == PlayerbotFightPosition.Hold)
             {
                 // In range: stand and let the rotation cast (or wand) at the next decision.
@@ -759,16 +759,25 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// hunter closes only to its preferred range and holds there. A hunter inside its 8-yard Auto Shot dead zone, a ranged bot the
     /// enemy already reached in melee, and a ranged bot that found nothing to cast for a while at a target that is not fighting it
     /// fight in melee instead; nobody ranged otherwise runs into melee.
+    /// <para>
+    /// <paramref name="inMeleeReach"/> is the server's own swing reach (<see cref="MapCombat.CanReachWithMeleeAutoAttack"/>: the 2D
+    /// distance within the combat reach and less than 6 yards of height between them). A target that reach allows is in melee whatever
+    /// the 3D <paramref name="distance"/> says: on a slope the 3D distance stays above <see cref="MeleeRange"/> although the bot already
+    /// stands at the target (2 yards apart, 3.9 yards of height), the chase has nowhere closer to go, and the bot stood there without
+    /// swinging while the creature, which the same reach rule lets hit, wore it down (Dawnrover and the Kobold Laborers on the Elwynn
+    /// hillside, ttk=860s reason=behind in the 2026-10-08 replays).
+    /// </para>
     /// </summary>
     internal static PlayerbotFightPosition DecidePosition(float preferredRange, float distance, bool hunter, bool targetOnBot,
-        bool idleTooLong)
+        bool idleTooLong, bool inMeleeReach = false)
     {
+        bool closeEnough = distance <= MeleeRange || inMeleeReach;
         bool melee = preferredRange <= MeleeRange
             || (hunter && distance < PlayerbotClassRotation.HunterDeadZone)
-            || (distance <= MeleeRange && targetOnBot)
+            || (closeEnough && targetOnBot)
             || idleTooLong;
         if (!melee) return distance > preferredRange ? PlayerbotFightPosition.ChaseToRange : PlayerbotFightPosition.Hold;
-        return distance > MeleeRange ? PlayerbotFightPosition.ChaseToMelee : PlayerbotFightPosition.Melee;
+        return closeEnough ? PlayerbotFightPosition.Melee : PlayerbotFightPosition.ChaseToMelee;
     }
 
     /// <summary>

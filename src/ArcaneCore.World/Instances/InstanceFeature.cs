@@ -14,6 +14,7 @@ using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -112,9 +113,14 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         QuestNpcFeature? questFeature = services.GetService<QuestNpcFeature>();
         // cmangos Player::IsCurrentQuest mode 2: QUEST_STATUS_COMPLETE and not rewarded (the SD2 Fortune Awaits chest check).
         _manager.QuestCompleteUnrewarded = (player, questId) => questFeature?.Services.IsCurrent(player, questId, 2) == true;
+        // Read at every call: the game-event feature may attach after this one and a reload replaces its service.
+        _manager.GameEventActive = eventId => services.GetService<GameEventFeature>()?.IsActiveEvent(eventId) == true;
+        _manager.HolidayActive = holidayId => services.GetService<GameEventFeature>()?.IsActiveHoliday(holidayId) == true;
         _manager.ScriptCreatureCredit = (player, entry, guid) => services.GetService<QuestNpcFeature>()?.Services.KilledMonsterCredit(player, entry, guid);
         _manager.ScriptCastPlayerSpell = (player, spell) => services.GetService<SpellFeature>()?.System.CastSpell(player, spell,
             SpellCastTargets.ForSelf(), triggered: true);
+        _manager.ScriptCastPlayerTargetSpell = (player, spell, target) => services.GetService<SpellFeature>()?.System.CastSpell(
+            player, spell, SpellCastTargets.ForUnit(target), triggered: true);
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;

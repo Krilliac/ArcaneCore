@@ -24,9 +24,12 @@ PACKED = re.compile(r'\bA\("([^"]+\.dbc)",\s*\d+,[^\n]*?packedRecordSize:\s*(\d+
 # WoWDBDefs COLUMNS foreign keys that do not hold for build 5875, by (file, column): None drops the key, a 'Table::Column' replaces it.
 # FactionTemplate.FactionGroup is a mask of FactionGroup.MaskID bits (vmangos FactionTemplateEntry::ourMask), not a FactionGroup id;
 # Map.ParentMapID (field 19) holds AreaTable ids (717 The Stockade, 718, 719, ...), none of them a Map id.
+# FootstepTerrainLookup.CreatureFootstepID is a footstep-group key shared with CreatureSoundData.SoundFootstepID;
+# the build-5875 values 6, 7, 8, ... are not SpellVisualEffectName ids.
 FOREIGN_OVERRIDES = {
     ('FactionTemplate', 'FactionGroup'): None,
     ('Map', 'ParentMapID'): 'AreaTable::ID',
+    ('FootstepTerrainLookup', 'CreatureFootstepID'): None,
 }
 
 

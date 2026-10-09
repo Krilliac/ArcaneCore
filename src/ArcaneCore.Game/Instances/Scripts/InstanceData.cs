@@ -33,7 +33,7 @@ public static class EncounterState
 /// </para>
 /// <para>Thread affinity: world thread (the map's).</para>
 /// </summary>
-public abstract class InstanceData : IMapUpdater
+public abstract partial class InstanceData : IMapUpdater
 {
     protected InstanceData(Map instance)
     {
@@ -56,6 +56,9 @@ public abstract class InstanceData : IMapUpdater
     /// <summary>World services for ScriptDev2's player credit and player-cast effects; unset in a state-only fixture.</summary>
     public Action<Player, uint, ObjectGuid>? CreatureCredit { get; internal set; }
     public Action<Player, uint>? CastPlayerSpell { get; internal set; }
+
+    /// <summary>Scripted player spell with an explicit unit target (BWL Orb of Domination).</summary>
+    public Action<Player, uint, ObjectGuid>? CastPlayerTargetSpell { get; internal set; }
 
     /// <summary>vmangos <c>Initialize</c>: a fresh state (called for every creation, before <see cref="Load"/>).</summary>
     public virtual void Initialize()
@@ -142,9 +145,9 @@ public abstract class InstanceData : IMapUpdater
     }
 
     /// <summary>
-    /// cmangos ProcessEventId after SPELL_EFFECT_SEND_EVENT fires on this map (SpellEffects.cpp EffectSendEvent → StartEvents_Event).
-    /// True when this script handles <paramref name="eventId"/> (including any dbscripts_on_event content it stands in for); false
-    /// leaves the event unhandled, and the spell system reports it as not implemented.
+    /// cmangos ProcessEventId, asked first by StartEvents_Event (DBScripts/ScriptMgr.cpp:3445-3451) for a SEND_EVENT spell effect and for
+    /// a chest or goober event of this map (<see cref="ScriptedEvents.Start"/>). True when this script handles <paramref name="eventId"/>
+    /// and the event's dbscripts_on_event script must not run (the ScriptDev2 handler returned true); false lets the DB script start.
     /// </summary>
     public virtual bool OnSpellEvent(Unit caster, uint eventId) => false;
 

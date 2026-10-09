@@ -243,10 +243,11 @@ public sealed class PlayerbotGroupWorldTests
             ArcaneCore.Game.Npc.QuestNpcServices quests = world.World.Services.GetRequiredService<QuestNpcFeature>().Services;
             int slot = quests.StateOf(player)!.Quests.FindSlot(EliteQuest);
             Assert.True(quests.AbandonQuest(player, (byte)slot));
+            // Checked in the same world callback: the world thread handles the bots' packets between callbacks even on the manual clock,
+            // and a member standing by may already have pushed the quest again and the mage accepted it.
+            Assert.Equal(QuestStatus.None, quests.StateOf(player)!.Quests.GetStatus(EliteQuest));
             return true;
         });
-        Assert.False(world.HasQuest(mage.Id, EliteQuest) && await world.OnWorldAsync(() => world.World.Services.GetRequiredService<QuestNpcFeature>()
-            .Services.StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) != QuestStatus.None));
 
         Assert.True(await world.RunUntilAsync(60_000, () => world.World.Services.GetRequiredService<QuestNpcFeature>().Services
             .StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) == QuestStatus.Incomplete), world.Trace());

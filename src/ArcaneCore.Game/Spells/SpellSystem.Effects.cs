@@ -282,15 +282,27 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// mangos-classic Spell::EffectSendEvent (SpellEffects.cpp:1794-1799): the event id (misc value) goes to the instance script of the
-    /// caster's map (ScriptDev2 ProcessEventId). An event no instance script handles stands for dbscripts_on_event content this server does
-    /// not run, so it is reported as not implemented, as it was before the instance scripts could take events.
+    /// vmangos Spell::EffectSendEvent (SpellEffects.cpp:1761-1775) and cmangos StartEvents_Event (DBScripts/ScriptMgr.cpp:3445-3482),
+    /// through <see cref="Instances.Scripts.ScriptedEvents.Start"/>: the script handler of the event answers first, then the event DB
+    /// script starts with caster and effect target. Only an event no handler takes and with no dbscripts_on_event rows is unsupported; one
+    /// already running for the same object is skipped as a success, as cmangos Map::ScriptsStart does (Maps/Map.cpp:2181-2193).
     /// </summary>
     private void EffectSendEvent(SpellEffectContext context)
     {
+        if (!context.Cast.DispatchedEventEffects.Add(context.EffectIndex))
+        {
+            return;
+        }
+
         uint eventId = context.Effect.MiscValue > 0 ? (uint)context.Effect.MiscValue : 0;
-        if (eventId == 0
-            || context.Caster.Map?.FindUpdater<Instances.Scripts.InstanceData>()?.OnSpellEvent(context.Caster, eventId) != true)
+        if (eventId == 0 || context.Caster.Map is not { } map)
+        {
+            ReportUnsupported("send event", eventId, context.Spell.Id);
+            return;
+        }
+
+        WorldObject target = map.FindObject(context.Cast.Targets.GameObject) ?? context.Target;
+        if (Instances.Scripts.ScriptedEvents.Start(map, eventId, context.Caster, target) == Instances.Scripts.ScriptedEventResult.NoScript)
         {
             ReportUnsupported("send event", eventId, context.Spell.Id);
         }
