@@ -54,7 +54,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     private readonly Dictionary<GridCoord, LoadedGrid> _grids = [];
     private readonly Dictionary<uint, long> _respawnAt = [];
     private readonly Dictionary<ObjectGuid, Creature> _creatures = [];
-    private readonly Dictionary<Player, HashSet<Creature>> _seen = [];
+    private readonly Dictionary<Player, SeenCreatures> _seen = [];
+    private readonly List<Creature> _newCreatures = [];
+    private readonly List<Creature> _seenScratch = [];
+    private Action? _captureNewObservers; // one delegate for every tick's deferred capture
     private readonly List<(Player Viewer, Creature Creature, uint SplineId)> _catchUp = [];
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly List<Creature> _scratchCreatures = [];
@@ -160,7 +163,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         UpdatePendingAi();
         UpdateRelayScripts();
         UpdateForcedDespawns();
-        Map.RunAfterUpdate(CaptureNewObservers);
+        Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
     }
 
     public void OnPlayerRemoved(Map map, Player player)
@@ -418,35 +421,98 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// Snapshot the map's observer ownership after visibility and flush. A newly visible
     /// moving creature sends its remaining spline next tick, after its create block.
     /// </summary>
+    /// <summary>
+    /// After the visibility pass: every creature a player started to observe since the last call is remembered, and one that is
+    /// moving gets a catch-up SMSG_MONSTER_MOVE next tick (<see cref="SendCatchUpMoves"/>), because the create block does not
+    /// carry the spline. A player observes a creature exactly when the creature's GUID is in its visible set (the map keeps
+    /// <see cref="Map.ObserversOf"/> as the inverse of <see cref="Player.VisibleObjects"/>), so only the visible sets are walked,
+    /// and only for players whose set changed (<see cref="Player.VisibilityVersion"/>) or who forgot a creature
+    /// (<see cref="ForgetObservers"/>) since they were last looked at; a player with neither has nothing new to find. New catch-ups
+    /// of one player are queued in map-join order.
+    /// </summary>
     private void CaptureNewObservers()
     {
         foreach (Player player in Map.Players)
         {
-            if (!_seen.TryGetValue(player, out HashSet<Creature>? seen))
+            if (!_seen.TryGetValue(player, out SeenCreatures? seen))
             {
-                _seen[player] = seen = [];
+                _seen[player] = seen = new SeenCreatures();
+            }
+            else if (!seen.Dirty && seen.Version == player.VisibilityVersion)
+            {
+                continue;
             }
 
-            seen.RemoveWhere(creature => !ReferenceEquals(creature.Map, Map)
-                || !player.VisibleObjects.Contains(creature.Guid));
-            foreach (Creature creature in _creatures.Values)
+            seen.Dirty = false;
+            seen.Version = player.VisibilityVersion;
+            ObserverCaptureVisits += seen.Creatures.Count + player.VisibleObjects.Count;
+            foreach (Creature creature in seen.Creatures)
             {
-                if (!Map.ObserversOf(creature).Contains(player) || !seen.Add(creature))
+                if (!ReferenceEquals(creature.Map, Map) || !player.VisibleObjects.Contains(creature.Guid))
                 {
-                    continue;
-                }
-
-                if (creature.Spline is { } spline)
-                {
-                    _catchUp.Add((player, creature, spline.Id));
+                    _seenScratch.Add(creature);
                 }
             }
+
+            foreach (Creature gone in _seenScratch)
+            {
+                seen.Creatures.Remove(gone);
+            }
+
+            _seenScratch.Clear();
+            foreach (ObjectGuid guid in player.VisibleObjects)
+            {
+                if (_creatures.TryGetValue(guid, out Creature? creature) && seen.Creatures.Add(creature) && creature.Spline is not null)
+                {
+                    _seenScratch.Add(creature);
+                }
+            }
+
+            if (_seenScratch.Count > 1)
+            {
+                _seenScratch.Sort(static (a, b) => a.MapSequence.CompareTo(b.MapSequence));
+            }
+
+            foreach (Creature creature in _seenScratch)
+            {
+                _catchUp.Add((player, creature, creature.Spline!.Id));
+            }
+
+            _seenScratch.Clear();
         }
 
-        foreach (Creature creature in _creatures.Values)
+        // IsNewObject is only true from AddToWorld to here (creatures marked new are listed there).
+        foreach (Creature creature in _newCreatures)
         {
-            creature.IsNewObject = false;
+            if (_creatures.TryGetValue(creature.Guid, out Creature? current) && ReferenceEquals(current, creature))
+            {
+                creature.IsNewObject = false;
+            }
         }
+
+        _newCreatures.Clear();
+    }
+
+    /// <summary>The creatures <paramref name="player"/> was last seen observing (tests; world thread).</summary>
+    internal IReadOnlyCollection<Creature> SeenBy(Player player)
+        => _seen.TryGetValue(player, out SeenCreatures? seen) ? seen.Creatures : [];
+
+    /// <summary>The catch-up moves queued for the next tick (tests; world thread).</summary>
+    internal IReadOnlyList<(Player Viewer, Creature Creature, uint SplineId)> QueuedCatchUps => _catchUp;
+
+    /// <summary>Remembered creatures and visible GUIDs <see cref="CaptureNewObservers"/> looked at (world-thread work counter for tests).</summary>
+    internal long ObserverCaptureVisits { get; private set; }
+
+    /// <summary>The creatures a player was seen observing (<see cref="CaptureNewObservers"/>) and when it was last looked at.</summary>
+    private sealed class SeenCreatures
+    {
+        public HashSet<Creature> Creatures { get; } = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>The player's <see cref="Player.VisibilityVersion"/> when it was last looked at.</summary>
+        public int Version { get; set; }
+
+        /// <summary>A creature was forgotten since (<see cref="ForgetObservers"/>): look again even if the visible set is unchanged.</summary>
+        public bool Dirty { get; set; }
     }
 
 }

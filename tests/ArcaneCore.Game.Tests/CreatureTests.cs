@@ -598,6 +598,147 @@ public sealed class CreatureTests
     }
 
     [Fact]
+    public void ViewerLeavingAndReturningMidMove_GetsAnotherCatchUpMove()
+    {
+        // The observer bookkeeping forgets a creature once it is out of sight, so a return mid-move catches up again.
+        CreatureWaypoint[] path = [new(1, 80, 0, 83.5f, 100, 0), new(2, 30, 0, 83.5f, 100, 0)];
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 30, 0, movementType: 2)],
+            waypoints: path.Select(p => (1u, p)));
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(content);
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1)));
+        world.RunTick(50);
+        world.RunTick(500);
+        Creature wolf = Assert.Single(system.Creatures);
+
+        var b = new FakeSession(2);
+        Player bob = TestWorld.CreatePlayer(2, 0, 0, b);
+        world.AddPlayer(bob);
+        world.RunTick(50);
+        world.RunTick(50);
+        var others = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        DrainBlocks(b, others);
+        Assert.Single(others, p => p.Opcode == WorldOpcode.SmsgMonsterMove); // the first catch-up
+
+        bob.Relocate(-250, 0, 83.5f, 0, world.NowMs); // out of sight (the wolf is between 30 and 80 yards east)
+        world.RunTick(50);
+        world.RunTick(50);
+        Assert.Contains(DrainBlocks(b), blk => blk.Type == ObjectUpdateType.OutOfRangeObjects && blk.Guids.Contains(wolf.Guid.Value));
+
+        bob.Relocate(0, 0, 83.5f, 0, world.NowMs); // back while the wolf still walks
+        world.RunTick(50);
+        world.RunTick(50);
+        others.Clear();
+        Assert.Contains(DrainBlocks(b, others), blk => blk.Guids[0] == wolf.Guid.Value && blk.Type != ObjectUpdateType.OutOfRangeObjects);
+        Assert.True(wolf.IsMoving);
+        MonsterMove catchUp = ParseMonsterMove(Assert.Single(others, p => p.Opcode == WorldOpcode.SmsgMonsterMove).Payload);
+        Assert.Equal(wolf.Spline!.Id, catchUp.SplineId);
+    }
+
+    [Fact]
+    public void ViewerArrivingAmongSeveralMovers_GetsOneCatchUpEach()
+    {
+        CreatureWaypoint[] path = [new(1, 80, 0, 83.5f, 100, 0), new(2, 30, 0, 83.5f, 100, 0)];
+        CreatureContent content = Content([Template()],
+            [Spawn(1, WolfEntry, 30, 0, movementType: 2), Spawn(2, WolfEntry, 30, 5, movementType: 2), Spawn(3, WolfEntry, 30, -5, movementType: 2), Spawn(4, WolfEntry, 20, 0)],
+            waypoints: [(1u, path[0]), (1u, path[1]), (2u, path[0]), (2u, path[1]), (3u, path[0]), (3u, path[1])]);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(content);
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1)));
+        world.RunTick(50);
+        world.RunTick(500);
+        Assert.Equal(3, system.Creatures.Count(c => c.IsMoving));
+
+        var b = new FakeSession(2);
+        world.AddPlayer(TestWorld.CreatePlayer(2, 0, 0, b));
+        world.RunTick(50);
+        world.RunTick(50);
+        var others = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        DrainBlocks(b, others);
+        uint[] splines = [.. others.Where(p => p.Opcode == WorldOpcode.SmsgMonsterMove).Select(p => ParseMonsterMove(p.Payload).SplineId).Order()];
+        Assert.Equal(system.Creatures.Where(c => c.IsMoving).Select(c => c.Spline!.Id).Order(), splines);
+    }
+
+    [Fact]
+    public void ObserverCapture_DoesNotRescanAPlayerWhoseSightIsUnchanged()
+    {
+        // 300 idle creatures in the player's grid but beyond sight: capturing new observers used to walk every creature of the map
+        // for every player every tick; a player whose visible set did not change is not looked at again.
+        var spawns = new List<CreatureSpawn> { Spawn(1, WolfEntry, 20, 0) };
+        for (uint i = 0; i < 300; i++)
+        {
+            spawns.Add(Spawn(2 + i, WolfEntry, 150 + (i % 20) * 5, -50 + (i / 20) * 5));
+        }
+
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(Content([Template()], spawns));
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1)));
+        world.RunTick(50);
+        world.RunTick(50);
+        Assert.Equal(301, system.Creatures.Count);
+        long before = system.ObserverCaptureVisits;
+        for (int i = 0; i < 100; i++)
+        {
+            world.RunTick(50);
+        }
+
+        Assert.Equal(before, system.ObserverCaptureVisits);
+    }
+
+    [Fact]
+    public void ObserverCapture_MatchesAFullRescan_WithPlayersAndCreaturesMovingAtRandom()
+    {
+        // The reference behaviour (every player against every creature each tick): after the capture a player's remembered
+        // creatures are exactly the creatures its client has, and a creature new to it since the last tick is queued for a
+        // catch-up exactly when it is moving.
+        var rng = new Random(5875);
+        var spawns = new List<CreatureSpawn>();
+        var waypoints = new List<(uint, CreatureWaypoint)>();
+        for (uint i = 1; i <= 60; i++)
+        {
+            float x = rng.Next(-150, 150), y = rng.Next(-150, 150);
+            byte movement = (byte)(i % 3); // idle, random wander, waypoints
+            spawns.Add(Spawn(i, WolfEntry, x, y, movementType: movement, wander: movement == 1 ? 15 : 0));
+            if (movement == 2)
+            {
+                waypoints.Add((i, new CreatureWaypoint(1, x + rng.Next(-60, 60), y + rng.Next(-60, 60), 83.5f, 0f, (uint)rng.Next(0, 2000))));
+                waypoints.Add((i, new CreatureWaypoint(2, x, y, 83.5f, 0f, (uint)rng.Next(0, 2000))));
+            }
+        }
+
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(Content([Template()], spawns, waypoints: waypoints));
+        var players = new List<Player>();
+        for (int i = 0; i < 6; i++)
+        {
+            Player player = TestWorld.CreatePlayer((uint)(i + 1), rng.Next(-150, 150), rng.Next(-150, 150), new FakeSession(i + 1));
+            world.AddPlayer(player);
+            players.Add(player);
+        }
+
+        Dictionary<Player, HashSet<Creature>> before = players.ToDictionary(p => p, _ => new HashSet<Creature>());
+        int catchUps = 0;
+        for (int tick = 0; tick < 600; tick++)
+        {
+            foreach (Player mover in players.Where(_ => rng.Next(4) == 0))
+            {
+                mover.Relocate(Math.Clamp(mover.X + rng.Next(-60, 61), -200, 200), Math.Clamp(mover.Y + rng.Next(-60, 61), -200, 200), 83.5f, 0, world.NowMs);
+            }
+
+            world.RunTick(50);
+            foreach (Player player in players)
+            {
+                HashSet<Creature> visible = [.. system.Creatures.Where(c => player.VisibleObjects.Contains(c.Guid))];
+                HashSet<Creature> seen = [.. system.SeenBy(player)];
+                Assert.True(visible.SetEquals(seen), $"tick {tick}: player {player.Guid} remembers {seen.Count} creatures, sees {visible.Count}");
+                Creature[] expected = [.. visible.Where(c => !before[player].Contains(c) && c.Spline is not null).OrderBy(c => c.MapSequence)];
+                Creature[] queued = [.. system.QueuedCatchUps.Where(q => ReferenceEquals(q.Viewer, player)).Select(q => q.Creature)];
+                Assert.Equal(expected, queued);
+                catchUps += queued.Length;
+                before[player] = seen;
+            }
+        }
+
+        Assert.True(catchUps > 20, $"only {catchUps} catch-ups: the scenario did not exercise the capture");
+    }
+
+    [Fact]
     public void Kill_WhileMoving_SendsStop()
     {
         CreatureWaypoint[] path = [new(1, 80, 0, 83.5f, 100, 0)];

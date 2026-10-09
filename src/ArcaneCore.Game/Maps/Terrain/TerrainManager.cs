@@ -20,6 +20,7 @@ public sealed class TerrainManager
     private readonly Dictionary<uint, TerrainInfo> _maps = [];
     private readonly ILogger _logger;
     private readonly string? _mapsDirectory;
+    private readonly TilePrefetchCache<TerrainTile> _prefetch = new();
 
     public TerrainManager(string? dataDirectory, ILogger? logger = null)
     {
@@ -64,11 +65,35 @@ public sealed class TerrainManager
         return terrain;
     }
 
+    /// <summary>Prefetches the loader took instead of reading the file itself (diagnostics and tests).</summary>
+    internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>
+    /// Read and parse a tile's <c>.map</c> file on the thread pool so a later load only installs it (<see cref="TilePrefetchCache{T}"/>);
+    /// nothing happens without terrain data or when the tile is already in memory. World thread.
+    /// </summary>
+    public void Prefetch(uint mapId, int tileX, int tileY)
+    {
+        if (_mapsDirectory is null || (_maps.TryGetValue(mapId, out TerrainInfo? terrain) && terrain.IsTileLoaded(tileX, tileY)))
+        {
+            return;
+        }
+
+        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : null);
+    }
+
     internal TerrainTile LoadTile(uint mapId, int tileX, int tileY)
     {
         if (_mapsDirectory is null)
         {
             return TerrainTile.Empty;
+        }
+
+        if (_prefetch.TryTake(mapId, tileX, tileY, out TerrainTile prefetched))
+        {
+            FilesLoaded++;
+            return prefetched;
         }
 
         string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));

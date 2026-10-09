@@ -146,6 +146,12 @@ public sealed partial class Player : Unit
     public HashSet<ObjectGuid> VisibleObjects { get; } = [];
 
     /// <summary>
+    /// Advances whenever the map adds to, removes from or clears <see cref="VisibleObjects"/> (world thread): lets per-player
+    /// bookkeeping skip a player whose visible set did not change since it last looked.
+    /// </summary>
+    internal int VisibilityVersion { get; set; }
+
+    /// <summary>
     /// The unit this client has selected (CMSG_SET_SELECTION). As in vmangos
     /// Player::SetSelectionGuid, it is also published as UNIT_FIELD_TARGET.
     /// </summary>

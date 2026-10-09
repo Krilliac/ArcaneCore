@@ -31,6 +31,10 @@ public sealed class GridContainer
     private float _visibilityDistance;
     private GridLifecycleCounters _counters;
 
+    // Grids GridApproaching was raised for and when (the container's update clock), so a prefetch is asked for once per expiry.
+    private readonly Dictionary<int, long> _approached = [];
+    private long _clockMs;
+
     public GridContainer(MapOptions options, float visibilityDistance)
     {
         Options = options;
@@ -56,6 +60,13 @@ public sealed class GridContainer
     /// move their objects; whatever is still in the grid afterwards is removed by the map.
     /// </summary>
     public event Action<Grid>? GridUnloading;
+
+    /// <summary>
+    /// Raised when an object entered a cell from which a grid that does not exist yet is within reach
+    /// (<see cref="MapOptions.GridPrefetchDistance"/>): its tiles may be read ahead of <see cref="GridCreated"/>. At most once per grid
+    /// every two minutes; nothing else depends on it.
+    /// </summary>
+    public event Action<GridCoord>? GridApproaching;
 
     /// <summary>Raised after a grid was unloaded and dropped.</summary>
     public event Action<GridCoord>? GridUnloaded;
@@ -122,6 +133,8 @@ public sealed class GridContainer
             grid.ActiveObjectCount++;
             LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
         }
+
+        Approach(obj, active);
     }
 
     /// <summary>Remove an object from the index (vmangos <c>RemoveFromGrid</c>).</summary>
@@ -190,7 +203,36 @@ public sealed class GridContainer
             LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
         }
 
+        Approach(obj, active);
         return true;
+    }
+
+    /// <summary>Raise <see cref="GridApproaching"/> for the grids within reach of an object that do not exist yet.</summary>
+    private void Approach(WorldObject obj, bool active)
+    {
+        float prefetch = Options.GridPrefetchDistance;
+        if (GridApproaching is null || !(prefetch > 0) || !float.IsFinite(obj.X) || !float.IsFinite(obj.Y))
+        {
+            return;
+        }
+
+        float radius = active ? Options.GridActivationDistance + prefetch : prefetch / 2;
+        CellArea area = GridDefines.CalculateCellArea(obj.X, obj.Y, radius);
+        for (int gx = area.Low.Grid.X; gx <= area.High.Grid.X; gx++)
+        {
+            for (int gy = area.Low.Grid.Y; gy <= area.High.Grid.Y; gy++)
+            {
+                var coord = new GridCoord(gx, gy);
+                if (_grids[coord.Id] is not null
+                    || (_approached.TryGetValue(coord.Id, out long at) && _clockMs - at < TilePrefetchCache<object>.ExpiryMs))
+                {
+                    continue;
+                }
+
+                _approached[coord.Id] = _clockMs;
+                GridApproaching(coord);
+            }
+        }
     }
 
     /// <summary>
@@ -337,6 +379,7 @@ public sealed class GridContainer
     /// </summary>
     public void Update(long diffMs)
     {
+        _clockMs += diffMs;
         long expiry = Options.EffectiveCleanUpDelayMs;
         for (int i = _loaded.Count - 1; i >= 0; i--)
         {
@@ -459,6 +502,7 @@ public sealed class GridContainer
         if (grid is null)
         {
             long start = System.Diagnostics.Stopwatch.GetTimestamp();
+            _approached.Remove(coord.Id);
             grid = new Grid(coord, Options.EffectiveCleanUpDelayMs, Options.GridUnload) { State = GridState.Idle };
             _grids[coord.Id] = grid;
             _loaded.Add(grid);

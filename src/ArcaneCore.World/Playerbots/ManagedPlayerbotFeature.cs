@@ -729,7 +729,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>A running bot's current stall (<see cref="PlayerbotStallWatch"/>), shown where a fault would be.</summary>
     private static string? StallOf(ActiveBot active) => active.PartyDriven || active.GroupDriven || active.Controller is not null ? null
-        : active.Brain.StallReport is { } stall ? Code(stall) : null;
+        : active.Brain.StallReport is { } stall ? active.StallCode(stall) : null;
 
     private void ReplaceBrain(ActiveBot active)
     {
@@ -923,6 +923,20 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public string? FaultCode;
         public int StallsLogged;
         public PlayerbotStatus? Status; // world thread: the last status line (StatusOf)
+        private string? _stallSource;
+        private string? _stallCode;
+
+        /// <summary>The status code of a stall report (<see cref="Code"/>), computed once per report instead of every tick.</summary>
+        public string StallCode(string report)
+        {
+            if (!ReferenceEquals(report, _stallSource))
+            {
+                _stallSource = report;
+                _stallCode = Code(report);
+            }
+
+            return _stallCode!;
+        }
         public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
     }
 }

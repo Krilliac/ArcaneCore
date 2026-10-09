@@ -98,10 +98,36 @@ internal sealed class PlayerbotRisk
         {
             if (Retreat.Active)
                 return $"retreat reason={Retreat.Reason} escapes={(Retreat.UsedEscapes.Count == 0 ? "none" : string.Join('+', Retreat.UsedEscapes.Select(s => s.Replace(' ', '_'))))}";
-            if (Waiting) return "recover " + (LastEngagement?.ToString() ?? $"after retreat ({Retreat.Reason})");
-            if (Tracker.LastVerdict is { } fight) return fight.ToString();
-            return LastEngagement?.ToString() ?? "decision=none";
+            // The status snapshot reads this every tick for every bot: the same verdict gives back the same text instead of a new one
+            // (the verdicts are immutable record structs, compared by value).
+            if (Waiting)
+                return Memo(1, default, LastEngagement, Retreat.Reason,
+                    static (_, engagement, reason) => "recover " + (engagement?.ToString() ?? $"after retreat ({reason})"));
+            if (Tracker.LastVerdict is { } fight) return Memo(2, fight, null, null, static (verdict, _, _) => verdict.ToString());
+            return Memo(3, default, LastEngagement, null, static (_, engagement, _) => engagement?.ToString() ?? "decision=none");
         }
+    }
+
+    private int _reportKind;
+    private PlayerbotFightVerdict _reportVerdict;
+    private PlayerbotEngagement? _reportEngagement;
+    private string? _reportReason;
+    private string _reportText = string.Empty;
+
+    private string Memo(int kind, PlayerbotFightVerdict verdict, PlayerbotEngagement? engagement, string? reason,
+        Func<PlayerbotFightVerdict, PlayerbotEngagement?, string?, string> format)
+    {
+        if (kind != _reportKind || !verdict.Equals(_reportVerdict) || !Nullable.Equals(engagement, _reportEngagement)
+            || !string.Equals(reason, _reportReason, StringComparison.Ordinal))
+        {
+            _reportKind = kind;
+            _reportVerdict = verdict;
+            _reportEngagement = engagement;
+            _reportReason = reason;
+            _reportText = format(verdict, engagement, reason);
+        }
+
+        return _reportText;
     }
 
     /// <summary>Lay the trail a retreat runs back along; out of combat, close a finished fight.</summary>
