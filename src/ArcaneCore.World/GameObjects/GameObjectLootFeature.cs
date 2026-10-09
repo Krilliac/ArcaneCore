@@ -46,6 +46,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
     private readonly Dictionary<Map, GameObjectMapSystem> _systems = new(ReferenceEqualityComparer.Instance);
     private GameObjectContent _content = GameObjectContent.Empty;
+    private bool _contentInstalled;
     private LootContent _lootContent = LootContent.Empty;
     private WorldRuntime? _world;
     private LootSettlements? _settlements;
@@ -55,6 +56,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
+
+    /// <summary>True once the content was loaded (at attach); before that <see cref="Content"/> is the empty content.</summary>
+    public bool ContentInstalled => Volatile.Read(ref _contentInstalled);
 
     /// <summary>
     /// Replace the game object content (live reload, world thread): every map's object system looks up templates and locks in it from now
@@ -148,6 +152,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
 
         Volatile.Write(ref _content, content);
+        Volatile.Write(ref _contentInstalled, true);
         Quests = new QuestJournalAdapter(services, world);
         Volatile.Write(ref _lootContent, loot);
 

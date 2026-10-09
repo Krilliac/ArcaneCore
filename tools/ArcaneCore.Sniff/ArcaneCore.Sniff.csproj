@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>arcane-sniff</AssemblyName><RootNamespace>ArcaneCore.Sniff</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" /><ProjectReference Include="../../tests/ThirdParty/WowWorldMessages/WowWorldMessages.Vanilla.csproj" /></ItemGroup>
+</Project>

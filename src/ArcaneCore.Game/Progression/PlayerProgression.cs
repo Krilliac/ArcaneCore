@@ -167,6 +167,50 @@ public sealed class PlayerProgression : IQuestExperience
         }
     }
 
+    /// <summary>Reapply the current level's base values for .reset stats (vmangos Player::InitStatsForLevel(true), Player.cpp:3254-3411).</summary>
+    public bool ResetStatsForLevel(Player player, bool resetMaximums = true)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (Stats.Find((byte)player.Race, (byte)player.Class, player.Level) is not { } stats)
+        {
+            return false;
+        }
+
+        State state = _states.GetValue(player, _ => new State());
+        ApplyBase(player, state, stats, out _, out _, refill: true);
+        if (resetMaximums)
+        {
+            // Player::InitStatsForLevel removes and reapplies item bonuses. The simple item health/mana contributions are
+            // explicit in ArcaneCore; the stamina/intellect ledger was just refreshed by ApplyBase.
+            int itemHealth = 0;
+            int itemMana = 0;
+            foreach ((_, var item) in player.Inventory.Equipped)
+            {
+                if (item.MaxDurability != 0 && item.Durability == 0) continue;
+                foreach (var bonus in item.Template.Stats)
+                {
+                    if (bonus.Type == (uint)Items.ItemStatType.Health) itemHealth += bonus.Value;
+                    if (bonus.Type == (uint)Items.ItemStatType.Mana) itemMana += bonus.Value;
+                }
+            }
+
+            player.MaxHealth = (uint)Math.Clamp((long)stats.BaseHealth + itemHealth + player.StatState.HealthBonusIncluded, 1, uint.MaxValue);
+            if (player.PowerType == PowerType.Mana)
+            {
+                player.SetUInt32(UpdateFields.UnitFieldMaxpower1,
+                    (uint)Math.Clamp((long)stats.BaseMana + itemMana + player.StatState.ManaBonusIncluded, 0, uint.MaxValue));
+            }
+        }
+
+        player.SetUInt32(UpdateFields.PlayerNextLevelXp, PlayerXpTable.XpForLevel(player.Level, Options.MaxPlayerLevel));
+        player.FactionTemplate = player.RaceFactionTemplate;
+        player.Health = player.MaxHealth;
+        RefillPower(player, PowerType.Mana);
+        RefillPower(player, PowerType.Energy);
+        BaseValuesApplied?.Invoke(player);
+        return true;
+    }
+
     /// <summary>
     /// The body of <see cref="GiveLevel"/> without the event, so <see cref="GiveXp(Player, uint, ObjectGuid)"/> raises
     /// <see cref="LevelChanged"/> once for a gain of several levels. False: the level did not change.

@@ -40,6 +40,22 @@ public sealed class ScriptDev2DungeonContentTests
             importer.RelaySnapshot().Steps.Select(s => s.Id).Order());
     }
 
+    [Fact]
+    public void Importer_CarriesTheBlackwingLairGossipOptions_AndNoNeighbouringGossipText()
+    {
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `gossip_texts` (`entry`,`content_default`,`content_loc1`,`comment`) VALUES
+            (-3468999,'Before',NULL,'other'),(-3469000,'Victor one',NULL,'victor_nefarius GOSSIP_ITEM_NEFARIUS_1'),
+            (-3469001,'Victor two',NULL,'victor_nefarius GOSSIP_ITEM_NEFARIUS_2'),(-3469002,'Victor three',NULL,'victor_nefarius GOSSIP_ITEM_NEFARIUS_3'),
+            (-3469003,'Vael one',NULL,'vaelastrasz GOSSIP_ITEM_VAEL_1'),(-3469004,'Vael two',NULL,'vaelastrasz GOSSIP_ITEM_VAEL_2'),
+            (-3469005,'After',NULL,'other');
+            """));
+
+        Assert.Equal([-3469004, -3469003, -3469002, -3469001, -3469000], importer.AiSnapshot().Texts.Select(t => t.Entry).Order());
+        Assert.Equal("Vael two", Assert.Single(importer.AiSnapshot().Texts, t => t.Entry == -3469004).Content);
+    }
+
     [ClassicDbDumpFact]
     public void RealClassicDb_DungeonScriptRowsArePresentWhenTheDumpIsProvided()
     {
@@ -59,6 +75,8 @@ public sealed class ScriptDev2DungeonContentTests
         Assert.Equal(2, importer.RelaySnapshot().Steps.Count(row => row.Id == RelayScriptCatalog.EventRelayId(2488)));
         Assert.Equal(109, importer.RelaySnapshot().Steps.Count(row => row.Id == RelayScriptCatalog.EventRelayId(2609)));
         Assert.Contains(importer.AiSnapshot().Texts, row => row.Entry == -3090000 && row.Content == "I am ready to begin.");
+        Assert.Contains(importer.AiSnapshot().Texts, row => row.Entry == -3469004 && row.Content == "Vaelastrasz, no!!!");
+        Assert.Equal(5, importer.AiSnapshot().Texts.Count(row => row.Entry is >= -3469004 and <= -3469000));
         // No real relay reaches the block reserved for event scripts: every dbscripts_on_relay id kept is below it, none was refused.
         Assert.All(importer.RelaySnapshot().Steps.Where(row => row.Id != RelayScriptCatalog.EventRelayId(2488)
                 && row.Id != RelayScriptCatalog.EventRelayId(2609)),

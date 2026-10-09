@@ -24,6 +24,9 @@ public enum DbcReferenceStatus
 
     /// <summary>Not checked: the DBC is unusable or the table/column does not exist in this database.</summary>
     Skipped,
+
+    /// <summary>Every missing id is a documented gap in the build-5875 client DBC set.</summary>
+    KnownClientGap,
 }
 
 /// <summary>The result of one reference check.</summary>
@@ -44,6 +47,7 @@ public sealed record DbcReferenceResult(
         {
             DbcReferenceStatus.Skipped => $"{Reference.Name} -> {Reference.Dbc}: skipped ({Reason})",
             DbcReferenceStatus.Ok => string.Create(c, $"{Reference.Name} -> {Reference.Dbc}: ok ({ReferencedIds} ids)"),
+            DbcReferenceStatus.KnownClientGap => string.Create(c, $"{Reference.Name} -> {Reference.Dbc}: known client-data gap ({DanglingIds} of {ReferencedIds} ids in {DanglingRows} rows; e.g. {string.Join(", ", Samples)})"),
             _ => string.Create(c, $"{Reference.Name} -> {Reference.Dbc}: {DanglingIds} of {ReferencedIds} ids dangling in {DanglingRows} rows (e.g. {string.Join(", ", Samples)})"),
         };
     }
@@ -199,19 +203,24 @@ public static partial class DbcCrossReferences
     }
 
     /// <summary>
-    /// The report lines: a summary headed <paramref name="title"/>, then each dangling or skipped reference (ok ones only with
-    /// <paramref name="all"/>).
+    /// The report lines: a summary headed <paramref name="title"/>, then each dangling, known-gap or skipped reference (ok ones
+    /// only with <paramref name="all"/>). Known client-data gaps are counted apart from dangling ids and named only when present.
     /// </summary>
     public static IReadOnlyList<string> Lines(IReadOnlyList<DbcReferenceResult> results, bool all = false, string title = "DBC cross-references")
     {
         ArgumentNullException.ThrowIfNull(results);
         CultureInfo c = CultureInfo.InvariantCulture;
-        var lines = new List<string>
+        DbcReferenceResult[] dangling = [.. results.Where(r => r.Status == DbcReferenceStatus.Dangling)];
+        DbcReferenceResult[] known = [.. results.Where(r => r.Status == DbcReferenceStatus.KnownClientGap)];
+        string summary = string.Create(c, $"{title}: {results.Count} checked, {results.Count(r => r.Status == DbcReferenceStatus.Ok)} ok, "
+            + $"{dangling.Length} with dangling ids ({dangling.Sum(r => r.DanglingIds)} ids, {dangling.Sum(r => r.DanglingRows)} rows), "
+            + $"{results.Count(r => r.Status == DbcReferenceStatus.Skipped)} skipped");
+        if (known.Length > 0)
         {
-            string.Create(c, $"{title}: {results.Count} checked, {results.Count(r => r.Status == DbcReferenceStatus.Ok)} ok, "
-                + $"{results.Count(r => r.Status == DbcReferenceStatus.Dangling)} with dangling ids ({results.Sum(r => r.DanglingIds)} ids, {results.Sum(r => r.DanglingRows)} rows), "
-                + $"{results.Count(r => r.Status == DbcReferenceStatus.Skipped)} skipped"),
-        };
+            summary += string.Create(c, $", {known.Length} known client-data gaps ({known.Sum(r => r.DanglingIds)} ids, {known.Sum(r => r.DanglingRows)} rows)");
+        }
+
+        var lines = new List<string> { summary };
         lines.AddRange(results.Where(r => all || r.Status != DbcReferenceStatus.Ok).Select(r => r.Describe()));
         return lines;
     }

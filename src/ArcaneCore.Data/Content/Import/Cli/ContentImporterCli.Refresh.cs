@@ -11,6 +11,8 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
+using ArcaneCore.Data.World.Pools;
+using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.Npc;
@@ -43,7 +45,9 @@ public static partial class ContentImporterCli
     /// the dump's <c>instance_template</c> or <c>map_template</c>) and <c>area_template</c> (every area); one without the other is refused.
     /// Afterwards it checks the references the world logs at start (teleports and taverns without a trigger, battleground start locations
     /// without a safe location, transports without a type-15 object, portals to a map with no map_template row, graveyard links to a zone
-    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). The world's schema
+    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). Two groups are filled
+    /// only when the world has none of their rows: the seven game-event tables, and <c>creature_spawn_entry</c> (for the world's own spawns
+    /// only; see <see cref="FillSpawnEntriesAsync"/>). The world's schema
     /// must already be this importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live
     /// world as a side effect.
     /// </summary>
@@ -100,6 +104,8 @@ public static partial class ContentImporterCli
         var instances = new InstanceTemplateDumpImporter();
         var dbScripts = new DbScriptDumpImporter();
         var gossip = new NpcDumpImporter();
+        var spawnGroups = new SpawnGroupDumpImporter();
+        var pools = new PoolDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -124,6 +130,16 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             relays.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            spawnGroups.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pools.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -293,9 +309,13 @@ public static partial class ContentImporterCli
         Count(SpellProcEventDataModule.Table, procs?.Content.Count ?? 0, procs is not null);
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
+        Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
+        Count("spell_script_target", relays.SpellScriptTargets.Count, relays.SpellScriptTargets.Count > 0);
+        Count("creature_linking", relays.CreatureLinks.Count, relays.CreatureLinks.Count > 0);
+        Count("creature_linking_template", relays.CreatureTemplateLinks.Count, relays.CreatureTemplateLinks.Count > 0);
         foreach ((string table, int rows) in dbScripts.Counts)
         {
             Count(table, rows, dbScripts.HasRows);
@@ -323,6 +343,37 @@ public static partial class ContentImporterCli
         if (anyEvents)
         {
             warnings.AddRange(eventReport.Warnings);
+        }
+
+        // creature_spawn_entry: the entries a spawn whose creature.id is 0 becomes (cmangos; vmangos id2..id5). Worlds built by the Codex-line
+        // importer have the table empty, so those spawns (2802 of classic-db z2815, 2234 of them with rows here) never appear. Filled only
+        // when the world has no row at all, and only for the world's own spawns whose entry is 0 or one of the dump's entries for that guid,
+        // so a world built from other data never gets a creature it did not have.
+        IReadOnlyCollection<CreatureSpawnEntryRow> spawnEntries = relays.SpawnEntrySnapshot();
+        Count(CreatureSpawnEntryTable, spawnEntries.Count, spawnEntries.Count > 0);
+
+        // gameobject_spawn_entry and the spawn group tables (world 44): filled the same way, each part only when the world has none of its
+        // rows, and only for the world's own spawns (SpawnGroupDumpImporter.FillAsync). Without them classic-db's 3614 game objects and 568
+        // creatures with id 0 never appear, and every member of a one-of-N group stands in the world at once.
+        SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
+        Count(SpawnGroupDataModule.GameObjectSpawnEntryTable, spawnGroupReport.GameObjectSpawnEntries, spawnGroupReport.GameObjectSpawnEntries > 0);
+        bool anyGroups = spawnGroupReport.Groups > 0;
+        Count(SpawnGroupDataModule.GroupTable, spawnGroupReport.Groups, anyGroups);
+        Count(SpawnGroupDataModule.SpawnTable, spawnGroupReport.Spawns, anyGroups);
+        Count(SpawnGroupDataModule.EntryTable, spawnGroupReport.Entries, anyGroups);
+        Count(SpawnGroupDataModule.FormationTable, spawnGroupReport.Formations, anyGroups);
+        Count(SpawnGroupDataModule.LinkedGroupTable, spawnGroupReport.LinkedGroups, anyGroups);
+
+        // The pool tables (world 45): filled the same way, only when the world has no pool_template row, and pool_creature /
+        // pool_gameobject only for the world's own spawns with the dump's entry (PoolDumpImporter.FillAsync). Without them every pooled
+        // spawn stands in the world at once: all five ore nodes of a one-node spot, every chest of a one-chest camp.
+        PoolImportReport poolReport = pools.BuildReport();
+        bool anyPools = poolReport.Templates > 0;
+        string[] poolTables = [.. PoolDataModule.Tables];
+        int[] poolRows = [poolReport.Templates, poolReport.Creatures, poolReport.CreatureTemplates, poolReport.GameObjects, poolReport.GameObjectTemplates, poolReport.PoolPools];
+        for (int i = 0; i < poolTables.Length; i++)
+        {
+            Count(poolTables[i], poolRows[i], anyPools);
         }
 
         if (procs is not null && procs.RowsFilteredByBuild > 0)
@@ -359,7 +410,11 @@ public static partial class ContentImporterCli
                     await transports.ReplaceAsync(db, token).ConfigureAwait(false);
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshScriptNamesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     if (procs is not null)
@@ -389,6 +444,85 @@ public static partial class ContentImporterCli
                     {
                         await db.Set<TaxiPath>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                    }
+
+                    if (spawnEntries.Count > 0)
+                    {
+                        int? written = await FillSpawnEntriesAsync(db, spawnEntries, token).ConfigureAwait(false);
+                        if (written is { } rows)
+                        {
+                            counts[CreatureSpawnEntryTable] = rows;
+                        }
+                        else
+                        {
+                            counts.Remove(CreatureSpawnEntryTable);
+                            o.WriteLine($"  {CreatureSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+                    }
+
+                    if (spawnGroups.HasRows)
+                    {
+                        SpawnGroupFillReport filled = await spawnGroups.FillAsync(db, token).ConfigureAwait(false);
+                        if (filled.GameObjectSpawnEntries is { } objectEntries)
+                        {
+                            counts[SpawnGroupDataModule.GameObjectSpawnEntryTable] = objectEntries;
+                        }
+                        else if (counts.Remove(SpawnGroupDataModule.GameObjectSpawnEntryTable))
+                        {
+                            o.WriteLine($"  {SpawnGroupDataModule.GameObjectSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+
+                        string[] groupTables = [SpawnGroupDataModule.GroupTable, SpawnGroupDataModule.SpawnTable, SpawnGroupDataModule.EntryTable,
+                            SpawnGroupDataModule.FormationTable, SpawnGroupDataModule.LinkedGroupTable];
+                        if (filled.Groups is { } groupRows)
+                        {
+                            int[] rows = [groupRows, filled.Spawns, filled.Entries, filled.Formations, filled.LinkedGroups];
+                            for (int i = 0; i < groupTables.Length; i++)
+                            {
+                                counts[groupTables[i]] = rows[i];
+                            }
+
+                            if (filled.SkippedMembers > 0)
+                            {
+                                warnings.Add($"{SpawnGroupDataModule.SpawnTable}: {filled.SkippedMembers} member(s) left out (the world has no such spawn, or one with another entry)");
+                            }
+                        }
+                        else if (anyGroups)
+                        {
+                            foreach (string table in groupTables)
+                            {
+                                counts.Remove(table);
+                            }
+
+                            o.WriteLine($"  {SpawnGroupDataModule.GroupTable}: the world has spawn groups already; the five spawn group tables are left as they are");
+                        }
+                    }
+
+                    if (anyPools)
+                    {
+                        PoolFillReport filledPools = await pools.FillAsync(db, token).ConfigureAwait(false);
+                        if (filledPools.Templates is { } templateRows)
+                        {
+                            int[] rows = [templateRows, filledPools.Creatures, filledPools.CreatureTemplates, filledPools.GameObjects, filledPools.GameObjectTemplates, filledPools.PoolPools];
+                            for (int i = 0; i < poolTables.Length; i++)
+                            {
+                                counts[poolTables[i]] = rows[i];
+                            }
+
+                            if (filledPools.SkippedMembers > 0)
+                            {
+                                warnings.Add($"pool_creature/pool_gameobject: {filledPools.SkippedMembers} row(s) left out (the world has no such spawn, or one with another entry)");
+                            }
+                        }
+                        else
+                        {
+                            foreach (string table in poolTables)
+                            {
+                                counts.Remove(table);
+                            }
+
+                            o.WriteLine($"  {PoolDataModule.TemplateTable}: the world has pools already; the six pool tables are left as they are");
+                        }
                     }
 
                     if (anyEvents)
@@ -438,6 +572,32 @@ public static partial class ContentImporterCli
         PrintWarnings(o, warnings);
         WriteReport(reportPath, ContentImportReport.Create("refresh", files, scan, warnings, dryRun) with { Imported = counts });
         return ExitCodes.Ok;
+    }
+
+    private const string CreatureSpawnEntryTable = "creature_spawn_entry";
+
+    /// <summary>
+    /// Fill an empty <c>creature_spawn_entry</c> from the dump's rows: only for spawns the world has, and only when the world's spawn has entry
+    /// 0 (it needs the rows to appear at all) or an entry among the dump's for that guid (the same spawn). Returns the rows written, or null
+    /// when the world already has rows (nothing is touched).
+    /// </summary>
+    internal static async Task<int?> FillSpawnEntriesAsync(WorldDbContext db, IReadOnlyCollection<CreatureSpawnEntryRow> dumpRows, CancellationToken ct)
+    {
+        if (await db.Set<CreatureSpawnEntryRow>().AnyAsync(ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        Dictionary<uint, uint> worldEntries = await db.Set<CreatureSpawnRow>().AsNoTracking()
+            .ToDictionaryAsync(r => r.Guid, r => r.Entry, ct).ConfigureAwait(false);
+        CreatureSpawnEntryRow[] rows = [.. dumpRows
+            .GroupBy(r => r.SpawnGuid)
+            .Where(g => worldEntries.TryGetValue(g.Key, out uint entry) && (entry == 0 || g.Any(r => r.Entry == entry)))
+            .SelectMany(g => g)
+            .OrderBy(r => r.SpawnGuid).ThenBy(r => r.Entry)
+            .Select(r => new CreatureSpawnEntryRow { SpawnGuid = r.SpawnGuid, Entry = r.Entry })];
+        await ImportBatch.InsertAsync(db, rows, ct).ConfigureAwait(false);
+        return rows.Length;
     }
 
     /// <summary>

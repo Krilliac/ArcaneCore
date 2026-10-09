@@ -435,7 +435,7 @@ public static class ClientDbcDbdLayouts
         new("FootstepTerrainLookup.dbc", 5, 20, new DbdField[]
         {
             new("ID", "int", 1, 32, 0, null, null),
-            new("CreatureFootstepID", "int", 1, 32, 4, "SpellVisualEffectName", "ID"),
+            new("CreatureFootstepID", "int", 1, 32, 4, null, null),
             new("TerrainSoundID", "int", 1, 32, 8, "TerrainTypeSounds", "ID"),
             new("SoundID", "int", 1, 32, 12, "SoundEntries", "ID"),
             new("SoundIDSplash", "int", 1, 32, 16, "SoundEntries", "ID"),

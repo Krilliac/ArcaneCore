@@ -2,6 +2,10 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Uldaman;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Spells;
+using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Instances;
@@ -44,8 +48,19 @@ public sealed class UldamanEncounterTests
     [Fact]
     public void Archaedas_WakesTheGuardiansAndTwoVaultWardersWithin100Yards()
     {
-        // z2815 spell_template 10252 / 10258: script AoE at the caster, radius index 12 (100 yd); 10258 has MaxAffectedTargets 2.
-        var caster = new DungeonTestCaster();
+        // z2815 spell_template 10252 (APPLY_AURA dummy) / 10258 (DUMMY): targets 22 / 7 (script AoE at the caster), radius index 12 (100 yd);
+        // 10258 has MaxAffectedTargets 2; spell_script_target (10252,1,7076,0), (10258,1,10120,0).
+        using var spells = new SpellTestKit(
+            Spell(ArchaedasAi.AwakenGuardians, Effect(SpellEffectName.ApplyAura, 1, SpellImplicitTarget.LocationCasterSrc, AuraType.Dummy,
+                targetB: SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc) with { Radius = 100 })
+                with { StartRecoveryCategory = 0, StartRecoveryTime = 0, Duration = new SpellDuration(10_000, 0, 10_000) },
+            Spell(ArchaedasAi.AwakenWarders, Effect(SpellEffectName.Dummy, 1, SpellImplicitTarget.LocationCasterSrc,
+                targetB: SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc) with { Radius = 100 })
+                with { StartRecoveryCategory = 0, StartRecoveryTime = 0, MaxAffectedTargets = 2 });
+        spells.System.Store = new SpellStore(spells.Store.All, [], [],
+            [new SpellStore.ScriptTarget(ArchaedasAi.AwakenGuardians, 1, UldamanInstance.Guardian, 0),
+             new SpellStore.ScriptTarget(ArchaedasAi.AwakenWarders, 1, UldamanInstance.VaultWarder, 0)]);
+        SpellScriptDispatcher.Install(spells.System, SpellScriptRegistry.Discover(typeof(ArchaedasAwakenSpell).Assembly));
         uint[] spawns =
         [
             UldamanInstance.Archaedas, UldamanInstance.Guardian, UldamanInstance.Guardian,
@@ -53,7 +68,7 @@ public sealed class UldamanEncounterTests
         ];
         using DungeonScriptHarness run = new(map => new UldamanInstance(map),
             [UldamanInstance.Archaedas, UldamanInstance.Guardian, UldamanInstance.VaultWarder], spawns, null,
-            new CreatureAiServices { Spells = caster });
+            new CreatureAiServices { Spells = new SpellSystemCreatureCaster(spells.System) });
         Creature archaedas = run.Creature(UldamanInstance.Archaedas);
         Creature[] guardians = [.. run.Creatures.Creatures.Where(c => c.Template.Entry == UldamanInstance.Guardian)];
         Creature[] warders = [.. run.Creatures.Creatures.Where(c => c.Template.Entry == UldamanInstance.VaultWarder)];
@@ -66,8 +81,6 @@ public sealed class UldamanEncounterTests
         archaedas.Health = archaedas.MaxHealth * 3 / 10;
         Ticks(run, 100); // 30 % is below both 66.6 % and 33.2 %: guardians, then warders
 
-        Assert.Contains(caster.Casts, c => c.Spell == ArchaedasAi.AwakenGuardians);
-        Assert.Contains(caster.Casts, c => c.Spell == ArchaedasAi.AwakenWarders);
         Assert.All(guardians, g => Assert.Same(run.Player, g.Combat.Victim));
         Assert.Equal(2, warders.Count(w => w.Combat.Victim is not null));
         Assert.Null(far.Combat.Victim);

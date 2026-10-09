@@ -1,5 +1,8 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.Pools;
+using ArcaneCore.Data.World.SpawnGroups;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.World.Creatures;
@@ -28,7 +31,13 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         dbScripts.AddRange(await db.Set<QuestEndScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         dbScripts.AddRange(await db.Set<GossipScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         dbScripts.AddRange(await db.Set<EventScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<CreatureMovementScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
+        List<CreatureLinkRow> links = await db.Set<CreatureLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureTemplateLinkRow> templateLinks = await db.Set<CreatureTemplateLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
+            db, PoolSpawnKind.Creature, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -46,7 +55,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 WanderDistance = s.WanderDistance,
                 MovementType = s.MovementType,
             }),
-            movement.Select(m => (m.SpawnGuid, new CreatureWaypoint(m.Point, m.X, m.Y, m.Z, m.Orientation, m.WaitTimeMs) { Run = m.Run })),
+            movement.Select(m => (m.SpawnGuid, new CreatureWaypoint(m.Point, m.X, m.Y, m.Z, m.Orientation, m.WaitTimeMs) { Run = m.Run, ScriptId = m.ScriptId })),
             models.Select(m => new CreatureModelInfo(m.DisplayId, m.BoundingRadius, m.CombatReach, m.Gender, m.DisplayIdOtherGender)),
             addons.Select(a => new CreatureAddon(a.Guid, a.MountDisplayId, a.StandState, a.SheathState, a.EmoteState)),
             new CreatureAiContent(
@@ -62,9 +71,15 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                     relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
                 DbScripts = new DbScriptCatalog(dbScripts.Select(row => (DbScriptDataModule.KindOf(row), DbScriptDataModule.ToStep(row)))),
             },
-            entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))),
+            entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs) { ScriptId = p.ScriptId })),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
-            scriptWaypoints.Select(DbScriptDataModule.ToWaypoint));
+            scriptWaypoints.Select(DbScriptDataModule.ToWaypoint),
+            links.Select(r => new CreatureLink(r.SlaveGuid, r.MasterGuid, r.Flags)),
+            templateLinks.Select(r => new CreatureTemplateLink(r.SlaveEntry, r.MapId, r.MasterEntry, r.Flags, r.SearchRange)))
+        {
+            SpawnGroups = spawnGroups,
+            Pools = pools,
+        };
     }
 
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(
@@ -120,6 +135,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         CorpseDecaySeconds = r.CorpseDecaySeconds,
         ExtraFlags = r.ExtraFlags,
         AIName = r.AIName,
+        ScriptName = r.ScriptName,
         Detection = r.Detection ?? CreatureTemplate.DefaultDetectionRange,
         CallForHelp = r.CallForHelp,
         Pursuit = r.Pursuit,

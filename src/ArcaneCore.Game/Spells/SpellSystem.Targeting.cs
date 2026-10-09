@@ -78,12 +78,14 @@ public sealed partial class SpellSystem
                 unitTarget = magnet;
             }
 
-            List<(Unit Unit, float Multiplier)>? units = SelectEffectTargets(cast, effect, selector, unitTarget);
+            List<(Unit Unit, float Multiplier)>? units = SelectEffectTargets(cast, effect, i, selector, unitTarget);
             if (units is null)
             {
                 ReportUnsupported("implicit target", (uint)selector, cast.Spell.Id);
                 continue;
             }
+
+            units = FilterRegistered(cast, effect, units);
 
             foreach ((Unit unit, float multiplier) in units)
             {
@@ -110,7 +112,7 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>null = the target type is not implemented; an empty list = nothing qualified.</summary>
-    private List<(Unit Unit, float Multiplier)>? SelectEffectTargets(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector, Unit? unitTarget)
+    private List<(Unit Unit, float Multiplier)>? SelectEffectTargets(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector, Unit? unitTarget)
     {
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
@@ -226,7 +228,7 @@ public sealed partial class SpellSystem
                 return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: true);
             default:
                 // Class lanes register further targets (SpellSystem.TargetSelectors.cs); null = not implemented.
-                return TrySelectRegistered(cast, effect, selector, unitTarget);
+                return TrySelectRegistered(cast, effect, effectIndex, selector, unitTarget);
         }
     }
 

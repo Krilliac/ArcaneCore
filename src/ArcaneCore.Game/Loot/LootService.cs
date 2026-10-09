@@ -558,7 +558,7 @@ public sealed partial class LootService : IViewerFieldFilter
     /// for the opener and their group, with the template's mingold..maxgold as money
     /// (<see cref="LootMoneyRules.GenerateForGameObject"/>), and persists until the object despawns.
     /// </summary>
-    internal LootResult OpenGameObject(Player player, GameObject go, uint lootId)
+    internal LootResult OpenGameObject(Player player, GameObject go, uint lootId, Action<GameObject>? onOpened = null)
     {
         if (go.Loot is null || !_bags.ContainsKey(go.Guid))
         {
@@ -574,10 +574,10 @@ public sealed partial class LootService : IViewerFieldFilter
             _bags[go.Guid] = (go, fresh);
         }
 
-        return ShowChest(player, go, go.Loot);
+        return ShowChest(player, go, go.Loot, onOpened);
     }
 
-    private LootResult ShowChest(Player player, GameObject go, LootBag bag)
+    private LootResult ShowChest(Player player, GameObject go, LootBag bag, Action<GameObject>? onOpened = null)
     {
         if (!bag.IsRecipient(player) && bag.Owner.IsEmpty && bag.Permission == LootPermission.Open)
         {
@@ -589,6 +589,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (!bag.HasSomethingFor(player) && !bag.IsEmpty)
         {
+            Refuse(player, go.Guid);
             return LootResult.NotAllowed;
         }
 
@@ -598,7 +599,13 @@ public sealed partial class LootService : IViewerFieldFilter
             go.State = GameObjectState.Active; // Player::SendLoot (Player.cpp:7699-7701): the chest open animation
         }
 
-        return Show(player, bag);
+        LootResult result = Show(player, bag);
+        if (result == LootResult.Ok)
+        {
+            onOpened?.Invoke(go);
+        }
+
+        return result;
     }
 
     // --- durable chests (dungeon instances) ---------------------------------------------------
@@ -611,7 +618,7 @@ public sealed partial class LootService : IViewerFieldFilter
     /// the key, the stored chest does not match the object or an item template is missing;
     /// <see cref="LootResult.NotAllowed"/> while an operation for the chest is in flight.
     /// </summary>
-    internal LootResult OpenDurableGameObject(Player player, GameObject go, uint lootId, LootStateKey key)
+    internal LootResult OpenDurableGameObject(Player player, GameObject go, uint lootId, LootStateKey key, Action<GameObject>? onOpened = null)
     {
         if (Durable is not { } durable || go.Spawn is null || Items is null)
         {
@@ -620,13 +627,14 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (durable.IsBlocked(key))
         {
+            Refuse(player, go.Guid);
             return durable.IsPending(key) ? LootResult.NotAllowed : LootResult.Unsupported;
         }
 
         LootStateRecord? record = durable.Find(key);
         if (LiveBagOf(go) is { } live)
         {
-            return ShowChest(player, go, live);
+            return ShowChest(player, go, live, onOpened);
         }
 
         if (record is { Consumed: false })
@@ -642,7 +650,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
             go.Loot = restored;
             _bags[go.Guid] = (go, restored);
-            return ShowChest(player, go, restored);
+            return ShowChest(player, go, restored, onOpened);
         }
 
         // Nothing stored yet, or the chest was consumed and has respawned: a new generation. The
@@ -661,9 +669,15 @@ public sealed partial class LootService : IViewerFieldFilter
             Key = key,
             Expected = record,
             Updated = updated,
-            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, looterGroup, plan),
+            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, looterGroup, plan, onOpened),
         };
-        return durable.TryStart(operation) ? LootResult.Ok : LootResult.NotAllowed;
+        if (durable.TryStart(operation))
+        {
+            return LootResult.Ok;
+        }
+
+        Refuse(player, go.Guid);
+        return LootResult.NotAllowed;
     }
 
     /// <summary>The bag currently registered for the object (not a stale reference left on it), or null.</summary>
@@ -674,7 +688,8 @@ public sealed partial class LootService : IViewerFieldFilter
     private static long RespawnAtUnix(GameObject go, long now)
         => go.Spawn!.SpawnTimeSeconds >= 0 ? now + Math.Max(1L, go.Spawn.SpawnTimeSeconds) : long.MaxValue;
 
-    private void FinishGeneration(LootOutcome outcome, bool live, Player opener, LootStateKey key, LootBag fresh, Group? group, LooterPlan plan)
+    private void FinishGeneration(LootOutcome outcome, bool live, Player opener, LootStateKey key, LootBag fresh, Group? group, LooterPlan plan,
+        Action<GameObject>? onOpened)
     {
         if (!live)
         {
@@ -694,17 +709,30 @@ public sealed partial class LootService : IViewerFieldFilter
 
         CommitLooter(group, plan);
 
-        // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile).
+        // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile). Every way out without a loot window
+        // answers the waiting client with a release, as a refused open does.
         if (Objects?.FindBySpawn(key.SpawnGuid) is not { IsSpawned: true } go || LiveBagOf(go) is not null)
         {
+            if (opener.IsInWorld)
+            {
+                Refuse(opener, fresh.Source);
+            }
+
             return;
         }
 
         go.Loot = fresh;
         _bags[go.Guid] = (go, fresh);
-        if (opener.IsInWorld && CheckLooter(opener, go) == LootResult.Ok)
+        if (opener.IsInWorld)
         {
-            ShowChest(opener, go, fresh);
+            if (CheckLooter(opener, go) == LootResult.Ok)
+            {
+                ShowChest(opener, go, fresh, onOpened); // refuses itself when it shows nothing
+            }
+            else
+            {
+                Refuse(opener, fresh.Source); // died or moved away while the generation committed
+            }
         }
 
         if (fresh.Viewers.Count == 0)

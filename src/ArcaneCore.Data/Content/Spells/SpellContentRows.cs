@@ -104,6 +104,7 @@ public sealed record SpellContent(
     IReadOnlyList<PlayerCreateSpellRow> CreateSpells,
     IReadOnlyList<SpellTargetPositionRow> TargetPositions)
 {
+    public IReadOnlyList<ArcaneCore.Data.World.Creatures.SpellScriptTargetRow> ScriptTargets { get; init; } = [];
     public static SpellContent Empty { get; } = new([], [], [], [], [], [], []);
 }
 

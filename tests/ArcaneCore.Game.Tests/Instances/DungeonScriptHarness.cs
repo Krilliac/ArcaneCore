@@ -35,17 +35,38 @@ internal sealed class DungeonScriptHarness : IDisposable
     {
     }
 
+    /// <summary>With the relays and the quest, gossip and event DB scripts (<paramref name="dbScripts"/>) of the map.</summary>
+    public DungeonScriptHarness(Func<Map, InstanceData> script, uint[] templateEntries, uint[] spawnEntries,
+        RelayScriptCatalog relays, DbScriptCatalog dbScripts)
+        : this(script, templateEntries, spawnEntries, relays, null, null, null, dbScripts, [])
+    {
+    }
+
     /// <summary>The full form: <paramref name="entryWaypoints"/> are script_waypoint paths (escorts), <paramref name="texts"/> AI texts.</summary>
     public DungeonScriptHarness(Func<Map, InstanceData> script, uint[] templateEntries, uint[] spawnEntries,
         RelayScriptCatalog? relays, CreatureAiServices? aiServices,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints, IEnumerable<CreatureAiText>? texts,
         params (uint Entry, GameObjectType Type)[] gameObjects)
+        : this(script, templateEntries, spawnEntries, relays, aiServices, entryWaypoints, texts, (DbScriptCatalog?)null, gameObjects)
+    {
+    }
+
+    private DungeonScriptHarness(Func<Map, InstanceData> script, uint[] templateEntries, uint[] spawnEntries,
+        RelayScriptCatalog? relays, CreatureAiServices? aiServices,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints, IEnumerable<CreatureAiText>? texts,
+        DbScriptCatalog? dbScripts, (uint Entry, GameObjectType Type)[] gameObjects)
     {
         _fixture.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, script);
+        var ai = new CreatureAiContent([], texts ?? [])
+        {
+            RelayScripts = relays ?? RelayScriptCatalog.Empty,
+            DbScripts = dbScripts ?? DbScriptCatalog.Empty,
+        };
+
         var creatureContent = new CreatureContent(
             [.. templateEntries.Distinct().Select(e => Template(e))],
             [.. spawnEntries.Select((e, i) => Spawn(9000u + (uint)i, e, -16.4f + i * 2, -383.07f, 61.78f, mapId: Dungeon))],
-            [], [], [], new CreatureAiContent([], texts ?? []) { RelayScripts = relays ?? RelayScriptCatalog.Empty },
+            [], [], [], ai,
             entryWaypoints: entryWaypoints);
         var objectContent = new GameObjectContent(
             [.. gameObjects.Select(go => go.Type == GameObjectType.Chest

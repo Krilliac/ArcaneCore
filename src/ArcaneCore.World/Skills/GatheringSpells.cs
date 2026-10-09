@@ -165,40 +165,51 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             return;
         }
 
+        // SpellEffects.cpp:2191-2192: no skill-up for an open from an item (a key, a skeleton key).
+        bool rollsSkill = check.SkillId != 0 && key is null;
+
+        // vmangos Spell::EffectOpenLock (SpellEffects.cpp:2191-2207): one Player::UpdateGatherSkill per player and object until
+        // it respawns, when the skill is really known.
+        void RollFor(GameObject target)
+        {
+            uint pureSkill = playerSkills.GetValuePure(check.SkillId);
+            if (pureSkill != 0 && !target.SkillupSet.Contains(player.Guid)
+                && playerSkills.UpdateGather(check.SkillId, pureSkill, (uint)check.RequiredSkill))
+            {
+                target.SkillupSet.Add(player.Guid);
+            }
+        }
+
         if (go is not null)
         {
             // Only an object that really opened gives a skill-up: a refusal (an immune caster, the chest quest gate, a chest
             // being despawned) leaves the node closed and the skill as it was (vmangos returns before UpdateGatherSkill for an
-            // immune caster, SpellEffects.cpp:2117-2118).
-            GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0, (uint)Math.Max(0, SimpleValue(effect)))
+            // immune caster, SpellEffects.cpp:2117-2118). A chest rolls from its open: a dungeon chest accepts the open now
+            // and opens its window only once the generation committed, so a generation refused later raises nothing. A door
+            // or button rolls once it activated.
+            GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0,
+                (uint)Math.Max(0, SimpleValue(effect)), rollsSkill ? RollFor : null)
                 ?? GameObjectUseResult.Unsupported;
-            if (opened != GameObjectUseResult.Ok)
+            if (opened == GameObjectUseResult.Ok && rollsSkill && go.Type != GameObjectType.Chest)
             {
-                return;
+                RollFor(go);
             }
+
+            return;
         }
-        else if (item is not null)
+
+        if (item is not null)
         {
             // vmangos marks the item ITEM_DYNFLAG_UNLOCKED, then sends its loot.
             item.DynamicFlags |= ItemDynFlags.Unlocked;
             Objects?.FindSystem(player.Map!)?.Loot?.OpenItem(player, item);
         }
 
-        // SpellEffects.cpp:2191-2192: no skill-up for an open from an item (a key, a skeleton key).
-        uint pure = check.SkillId == 0 || key is not null ? 0u : playerSkills.GetValuePure(check.SkillId);
-        if (pure == 0)
-        {
-            return;
-        }
-
-        // One skill-up per player and node until the node respawns; an item always gets its roll.
-        if (go is null)
+        // An item gets one roll per open.
+        uint pure = rollsSkill ? playerSkills.GetValuePure(check.SkillId) : 0u;
+        if (pure != 0)
         {
             playerSkills.UpdateGather(check.SkillId, pure, (uint)check.RequiredSkill);
-        }
-        else if (!go.SkillupSet.Contains(player.Guid) && playerSkills.UpdateGather(check.SkillId, pure, (uint)check.RequiredSkill))
-        {
-            go.SkillupSet.Add(player.Guid);
         }
     }
 

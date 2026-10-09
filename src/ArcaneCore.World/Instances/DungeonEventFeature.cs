@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.BlackrockDepths;
+using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
@@ -42,7 +43,12 @@ public sealed class DungeonEventFeature(IServiceProvider services) : IWorldFeatu
         });
 
         // The quest feature rebuilds its services when it attaches, after this one (type-name order): install on the first world command.
-        world.Post(() => services.GetService<QuestNpcFeature>()?.Services.AddGossipScript(new DoomrelGossip()));
+        world.Post(() =>
+        {
+            QuestNpcFeature? quests = services.GetService<QuestNpcFeature>();
+            quests?.Services.AddGossipScript(new DoomrelGossip());
+            quests?.Services.AddGossipScript(new BlackwingLairGossip());
+        });
     }
 
     public void OnAreaTrigger(Player player, uint triggerId)

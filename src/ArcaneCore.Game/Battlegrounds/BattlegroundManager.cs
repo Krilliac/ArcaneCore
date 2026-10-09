@@ -306,6 +306,10 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
 
     public IEnumerable<Battleground> RunningBattlegrounds => _running.Values.SelectMany(s => s.Values);
 
+    /// <summary>The queued players of a type's queue by team, every bracket (vmangos .bg status, MiscCommands.cpp:1777-1797).</summary>
+    public (int Alliance, int Horde) QueuedTeamCounts(BattlegroundType type)
+        => TemplateOf(type) is { } template ? QueueOf(template.QueueType).TeamCounts() : (0, 0);
+
     /// <summary>The instance ids the client lists for a type and bracket, in order (vmangos <c>m_clientBattleGroundIds</c>).</summary>
     public IReadOnlyList<uint> ClientInstanceIds(BattlegroundType type, int bracket)
         => _clientIds.TryGetValue((type, bracket), out SortedSet<uint>? ids) ? [.. ids] : [];

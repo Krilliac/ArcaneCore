@@ -26,6 +26,7 @@ How to read the tables:
 - [`Creatures`](#creatures)
 - [`Database`](#database)
 - [`Diagnostics`](#diagnostics)
+- [`Diagnostics:PacketCapture`](#diagnosticspacketcapture)
 - [`Economy`](#economy)
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
@@ -322,6 +323,14 @@ How to read the tables:
 | `Diagnostics:OnInvariant` | `InvariantPolicy` | `Continue` | - | What a failed `Invariant.Check` (the release-mode check) does after it is logged and counted. `Continue` (default): the caller goes on with its own fail-closed handling (refuse the packet, drop the connection, throw). `FailFast`: the process aborts at once with the message, as the mangos `MANGOS_ASSERT` macro does in every build. Debug-build `Invariant.Assert` throws `InvariantViolationException` under `Continue` and aborts under `FailFast`. Values: `Continue`, `FailFast`. |
 | `Diagnostics:OnUnhandled` | `UnhandledExceptionPolicy` | `FailFast` | - | What ends the process after an unhandled exception (`AppDomain.UnhandledException`): the report is always written first. `FailFast` (default): `Environment.FailFast`, which is what the runtime does on its own; the process aborts (exit status 134, SIGABRT, on Linux; 0x80131623 / Watson on Windows) and a dump is written when `DOTNET_DbgEnableMiniDump=1`. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match; no dump. Values: `FailFast`, `Exit`. |
 | `Diagnostics:OnUnobservedTask` | `UnobservedTaskPolicy` | `Log` | - | What an exception a faulted `Task` nobody awaited does when the finalizer finds it (`TaskScheduler.UnobservedTaskException`). `Log` (default): the report is written and the exception marked observed, which is the .NET runtime's own behaviour (since .NET 4.5) made visible. `Exit` and `FailFast` end the process as `OnUnhandled` describes. Values: `Log`, `Exit`, `FailFast`. |
+
+## `Diagnostics:PacketCapture`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Diagnostics:PacketCapture:Directory` | `string` | `"packet-captures"` | - | Directory for new traces; generated filenames do not include player input. |
+| `Diagnostics:PacketCapture:Enabled` | `bool` | `false` | - | Permit an Administrator to start a session capture. Default false. |
+| `Diagnostics:PacketCapture:MaxBytes` | `long` | `67108864` | - | Maximum bytes in one trace, including its header; a full trace stops automatically. |
 
 ## `Economy`
 

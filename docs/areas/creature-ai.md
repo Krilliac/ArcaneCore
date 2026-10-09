@@ -307,9 +307,37 @@ the map clock with the relay runner and executor above (one runner per namespace
 - **Event credit**: an exploration/event quest is withheld unless something can complete it. `DbScriptQuestCredit` counts every quest a
   DB script's QUEST_EXPLORED names (relays included) and every escort quest of an entry script (`CreatureAiFactory.ScriptedEventQuests`),
   read through `QuestNpcServices.ScriptCreditedQuests`; classic-db quests such as 2843 are offered because of it.
-- **Not run**: `dbscripts_on_event` has no caller yet (the spell effect SEND_EVENT and the game object events that start it are not
-  ported), and the commands this executor does not know (for example 11 OPEN_DOOR in quest 6482's start script, 34 TERMINATE_COND) are
-  reported and skipped as for the relays. Quests started by an item run no script (cmangos uses the item as source).
+- **Event callers**: SEND_EVENT, chest data6 and goober data2 start an event through `ScriptedEvents.Start` (cmangos
+  StartEvents_Event, DBScripts/ScriptMgr.cpp:3445-3482). The event's ScriptDev2 handler answers first: the map's
+  `InstanceData.OnSpellEvent` (Zul'Farrak 2488/2609, Blackrock Spire 4884, Scholomance 5618-5623), else `ScriptedEvents.GatedOff`
+  for the ClassicDB handlers with rows but no instance-script port (3938 purify food: only a player at a game object; 8302 Razorgore
+  possess: never; 8420/8428 Dreadsteed: never, the ritual is not ported; 10495 Gluth's Decimate: only with Gluth on the map). Only
+  when it declines does the dbscripts_on_event script start; an event with no handler and no rows is logged as unsupported. A run is
+  unique by its unit (players included) or game-object source, else by such a target (SCRIPT_EXEC_PARAM_UNIQUE_BY_SOURCE/TARGET,
+  :3476-3481), and a duplicate start is skipped as cmangos Map::ScriptsStart does (Maps/Map.cpp:2181-2193): one player runs one copy
+  of an event, two players run two. Chest and goober events have the user as source and the object as target (vmangos
+  Spell::EffectSendEvent, SpellEffects.cpp:1761-1775; cmangos GameObject::Use, GameObject.cpp:1548-1560 and 1683-1688). The goober
+  event starts before the goober questId gate, as in cmangos (vmangos GameObject.cpp:1564-1580 gates it first), but after
+  ArcaneCore's own in-use refusal, so a repeated use while the goober is activated fires nothing. The chest event starts on the
+  direct use and on the spell path (key, lockpick: Spell::SendLoot passes a chest to GameObject::Use, SpellEffects.cpp:2142-2145),
+  but only once the chest passed the quest gate and the lock and actually opened, so a refused use springs no ambush; every ClassicDB
+  chest whose event has rows is locked. A button has a linked-trap field, not an event-id field. Spell effects carry an explicit
+  game-object target but not an implicitly selected spell-focus game object.
+- **Conditions**: a row's condition_id and TERMINATE_COND decide the map condition types 36 DEAD_OR_AWAY, 37 CREATURE_IN_RANGE and
+  39 SPAWN_COUNT (and AND/OR/NOT over them) in the script engine (`CreatureMapSystem.RelayConditions`, cmangos Conditions.cpp:299-308,
+  424-466, 484-489), with the script's own target and source; player conditions still go to the world's condition evaluator. 41 of
+  ClassicDB's 44 loaded TERMINATE_COND rows are of the map kind (escort quests stop and fail when the player dies or leaves or the
+  escort dies). An undecidable condition never fails a quest.
+- **Additional commands**: 2/4/5 field operations, 9 object respawn (a not-spawned-by-default object appears for datalong2 seconds, and stays with datalong2 0 as in cmangos), 12 close door, 14 remove a whole aura, 16 direct and distance
+  sound, 17 create or remove an item, 23 morph, 24 mount, 27 object lock flags, 34 conditional termination, 40 timed object despawn,
+  43 reset door or button, 44 update creature template, and 48 unit flags now dispatch through the relay runner
+  (cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:1829-1924, 2001-2047, 2074-2111, 2130-2154,
+  2203-2256, 2411-2459, 2499-2525, 2720-2758, 2887-3016). See the
+  [DB script engine report](../integration/db-script-engine-20261008.md) for the command coverage ceiling and remaining variants.
+- **Quest sources**: a sharing player now starts a quest script as its source. An item-started quest starts with no source and the
+  player as target: as in cmangos ScriptAction::HandleScriptStep (DBScripts/ScriptMgr.cpp:1720-1760), where an item is no world object,
+  only the steps whose buddy search finds a source run (vmangos Player::AddQuest, Player.cpp:12889-12891, runs none). Item field
+  commands (2/4/5 on the item itself) are not carried out.
 
 Proof over real rows: `ClassicDbScriptedQuestTests` (World.Tests) imports a z2815 excerpt into a schema-42 database, loads it through the
 stores and runs quests 2843 (QUEST_EXPLORED at 10 s), 2480 (MOVE_TO, then QUEST_EXPLORED at 30 s), 8984 (CompleteScript 9028: NPC flags,
@@ -336,9 +364,11 @@ The escort points come from one of two origins, as in mangos-classic `npc_escort
 import put into `creature_movement_template` under path `0x80000000 | PathId`, else the entry's own `creature_movement_template` path 0
 (`EscortAI.EscortPathId`), where the battleground escorts keep their points. `EscortAI.Start(waypointPath: id)` walks cmangos
 `waypoint_path` path `id` (PATH_FROM_WAYPOINT_PATH, keyed by path id alone) and nothing else: those rows import into
-`creature_movement_template` under entry 0 and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`); the world schema has no
-`waypoint_path` table, so a `refresh` does not add them. An escort without points does not start, and the map logs it once per entry.
-The `ScriptId` of a point is not run (ArcaneCore runs no creature-movement scripts; the importer counts such nodes).
+`creature_movement_template` under entry 0 and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`); `refresh` replaces
+those namespaced copies. An escort without points does not start, and the map logs it once per entry.
+The `ScriptId` of a reached point starts its `dbscripts_on_creature_movement` row set on the map clock, with the escort as source and
+its linked player (or itself) as target. The world-45 import keeps the point id on both spawn and entry paths; `refresh` updates ids
+on existing paths without replacing their geometry (mangos-classic `WaypointMovementGenerator<Creature>::OnArrived`).
 `Start(..., player, questId)` links the escort to a player and quest (vmangos npc_escortAI::Start): every second it checks that the player
 or an online member of its group is within `MaxPlayerDistance` (100, IsWithinDistInMap), and when nobody is it fails the quest and
 disappears (JustDied then ResetEscort, ScriptedEscortAI.cpp:265-300); its death fails the quest too, for every group member who still has
@@ -443,7 +473,7 @@ code was copied.
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only). The Alterac
+- No totem AI or formation movement beyond `creature_linking` FOLLOW (0x200); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only). The Alterac
   Valley scripts keep their own small creature groups (a follow at the member's distance and angle, fighting and returning together).
   - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.

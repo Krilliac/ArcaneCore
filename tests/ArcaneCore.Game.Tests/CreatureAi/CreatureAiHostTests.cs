@@ -454,6 +454,20 @@ public sealed class CreatureAiHostTests
     }
 
     [Fact]
+    public void Factory_RegisteredScriptName_PrecedesAiName()
+    {
+        CreatureContent content = Content([Template() with { ScriptName = "npc_named", AIName = CreatureAiFactory.EventAIName }],
+            [Spawn(1, WolfEntry, 5, 0)]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        AddPlayer(world, 1, 0, 0);
+        var factory = new CreatureAiFactory();
+        factory.Register("npc_named", c => new ReactorAI(c));
+        Assert.IsType<ReactorAI>(factory.Create(Assert.Single(system.Creatures), content, out bool unknown));
+        Assert.False(unknown);
+    }
+
+    [Fact]
     public void SpellHit_AndDespawn_GoThroughTheSpellSeam()
     {
         CreatureContent content = Content([Template(configure: t => t.AIName = RecorderName)], [Spawn(1, WolfEntry, 5, 0)]);

@@ -41,6 +41,7 @@ public static class DbUpgradeCli
           backup-info   print how to back each database up
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
+          dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC (no database connection)
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -93,6 +94,9 @@ public static class DbUpgradeCli
             await output.WriteLineAsync(Usage).ConfigureAwait(false);
             return DbUpgradeExitCodes.Ok;
         }
+
+        if (args.Length >= 2 && args[0] == "dbc" && args[1] == "dump")
+            return await DbcDump.RunAsync(args[2..], dbcDirectory, output, error).ConfigureAwait(false);
 
         var run = new Run(database, output, error) { DbcDirectory = dbcDirectory };
         try

@@ -56,6 +56,57 @@ public sealed class ScriptedAiSupportTests
     }
 
     [Fact]
+    public void ACorpseTimedEscortAmbusher_LivesUntilDeath_ThenKeepsItsCorpseForThirtySeconds()
+    {
+        (WorldRuntime world, Map map, CreatureMapSystem system, Creature summoner, _) = Setup();
+        using (world)
+        {
+            Creature ambusher = system.SummonCorpseTimedDespawn(summoner, SummonEntry, 8, 2, Z, 0,
+                target: null, corpseMs: 30_000)!;
+            Assert.NotNull(ambusher);
+            Run(world, 31_000);
+            Assert.True(ambusher.IsAlive);
+
+            map.Combat.Kill(null, ambusher);
+            Run(world, 29_000);
+            Assert.Contains(ambusher, system.Creatures);
+            Run(world, 1_000);
+            Assert.DoesNotContain(ambusher, system.Creatures);
+        }
+    }
+
+    [Fact]
+    public void AnOocOrCorpseSummon_GoesAtDeath_WhereATimedOocOrDeadOneWaitsForTheDecay()
+    {
+        (WorldRuntime world, Map map, CreatureMapSystem system, Creature summoner, _) = Setup();
+        using (world)
+        {
+            // cmangos TemporarySpawn.cpp:107-127 opens with `if (IsDead()) UnSummon()` (Unit::IsDead covers CORPSE, Unit.h:1817);
+            // :129-149 (OOC_OR_DEAD) unsummons only once the corpse is despawned.
+            Creature surge = system.SummonAt(summoner, SummonEntry, 8, 2, Z, 0, target: null, despawnMs: 10_000, oocOrCorpse: true)!;
+            Creature living = system.SummonAt(summoner, SummonEntry, 7, 2, Z, 0, target: null, despawnMs: 10_000, oocOrCorpse: true)!;
+            Creature bandit = system.SummonAt(summoner, SummonEntry, 9, 2, Z, 0, target: null, despawnMs: 10_000)!;
+            Run(world, 5_000);
+            map.Combat.Kill(null, surge);
+            map.Combat.Kill(null, bandit);
+            Run(world, 100);
+
+            // Half its lifetime is left, but the dead surge is already gone and leaves no corpse to loot.
+            Assert.DoesNotContain(surge, system.Creatures);
+            Assert.Null(map.FindObject(surge.Guid));
+            Assert.Contains(bandit, system.Creatures);
+            Assert.Contains(living, system.Creatures);
+
+            // The living one still counts its lifetime down out of combat; the OOC_OR_DEAD corpse keeps waiting for its decay.
+            Run(world, 4_800);
+            Assert.Contains(living, system.Creatures);
+            Run(world, 200);
+            Assert.DoesNotContain(living, system.Creatures);
+            Assert.Contains(bandit, system.Creatures);
+        }
+    }
+
+    [Fact]
     public void AnEntryScript_IsTheAiOfAWildSummonOfTheEntry_ButNotOfAControlledPet()
     {
         (WorldRuntime world, _, CreatureMapSystem system, Creature summoner, _) = Setup();

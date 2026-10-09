@@ -55,6 +55,7 @@ public sealed class DbScriptDumpImporter
         [DbScriptDataModule.QuestEndTable] = StepCount(DbScriptKind.QuestEnd),
         [DbScriptDataModule.GossipTable] = StepCount(DbScriptKind.Gossip),
         [DbScriptDataModule.EventTable] = StepCount(DbScriptKind.Event),
+        [DbScriptDataModule.CreatureMovementTable] = StepCount(DbScriptKind.CreatureMovement),
         [DbScriptDataModule.WaypointTable] = WaypointRows().Count(),
     };
 
@@ -145,6 +146,7 @@ public sealed class DbScriptDumpImporter
         await db.Set<QuestEndScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<GossipScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<EventScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CreatureMovementScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScriptWaypointRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -253,6 +255,7 @@ public sealed class DbScriptDumpImporter
             DbScriptDataModule.QuestEndTable => (true, DbScriptKind.QuestEnd),
             DbScriptDataModule.GossipTable => (true, DbScriptKind.Gossip),
             DbScriptDataModule.EventTable => (true, DbScriptKind.Event),
+            DbScriptDataModule.CreatureMovementTable => (true, DbScriptKind.CreatureMovement),
             _ => (false, default(DbScriptKind)),
         };
         return known;

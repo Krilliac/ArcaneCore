@@ -63,9 +63,9 @@ public static class DungeonScriptHooks
 
     /// <summary>
     /// The SEND_EVENT scripts (pProcessEventId) of a player's completed cast: Uldaman's altars (events 2228 and 2268 of spells 11568 and
-    /// 10340: instance_uldaman StartEvent) and Zul'Farrak's event_spell_unlocking (event 2609 of spell 10738: the pyramid starts once, then the
-    /// event's dbscripts_on_event script runs, stored as relay <see cref="RelayScriptCatalog.EventRelayId"/>(2609)). Returns whether a script
-    /// handled it.
+    /// 10340: instance_uldaman StartEvent). Returns whether a script handled it. Zul'Farrak's event_spell_unlocking (event 2609 of spell
+    /// 10738) is not here: it is <see cref="ZulFarrakInstance.OnSpellEvent"/>, which the SEND_EVENT effect asks before it would start the
+    /// event's DB script, so the pyramid wave has a single owner.
     /// </summary>
     public static bool OnSpellFinished(SpellCast cast, bool completed)
     {
@@ -78,10 +78,6 @@ public static class DungeonScriptHooks
                 return true;
             case UldamanInstance uldaman when cast.Spell.Id == AltarArchaedasSpell:
                 uldaman.StartEvent(UldamanInstance.AltarArchaedasEvent, player);
-                return true;
-            case ZulFarrakInstance zf when cast.Spell.Id == UnlockingSpell:
-                if (!zf.StartPyramid()) return false;
-                map.FindUpdater<CreatureMapSystem>()?.StartRelayScript(RelayScriptCatalog.EventRelayId(ZulFarrakInstance.PyramidEvent), player, null);
                 return true;
             default:
                 return false;

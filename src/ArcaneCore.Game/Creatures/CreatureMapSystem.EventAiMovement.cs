@@ -38,14 +38,11 @@ public sealed partial class CreatureMapSystem
                 return true;
             case 2:
             {
-                if ((flags & ChangeMovementFlagWaypointPath) != 0)
-                {
-                    return false;
-                }
-
-                IReadOnlyList<CreatureWaypoint> path = wanderOrPathId == 0
-                    ? _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry).Points
-                    : _content.GetEntryWaypoints(creature.Template.Entry, wanderOrPathId);
+                IReadOnlyList<CreatureWaypoint> path = (flags & ChangeMovementFlagWaypointPath) != 0
+                    ? _content.GetWaypointPath(wanderOrPathId)
+                    : wanderOrPathId == 0
+                        ? _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry).Points
+                        : _content.GetEntryWaypoints(creature.Template.Entry, wanderOrPathId);
                 StopMoving(creature);
                 creature.Motion.Initialize(path.Count > 0 ? new WaypointMovementGenerator(path) : IdleMovementGenerator.Instance, this, start: true);
                 return true;

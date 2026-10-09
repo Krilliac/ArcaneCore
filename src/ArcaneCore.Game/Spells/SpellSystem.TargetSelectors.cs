@@ -4,6 +4,12 @@ using ArcaneCore.Game.Spells.Targets;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
+/// A per-spell veto of one selected unit (mangos-classic Spell::OnCheckTarget, the spell-id exceptions such as Nefarian's class calls):
+/// false drops the unit from the effect's targets whatever selected it.
+/// </summary>
+public delegate bool SpellTargetFilter(SpellCast cast, SpellEffectInfo effect, Unit target);
+
+/// <summary>
 /// An implicit-target selector registered through <see cref="SpellSystem.RegisterTargetSelector"/>:
 /// the units one effect hits. Returns an empty list when nothing qualifies (never null).
 /// </summary>
@@ -46,14 +52,50 @@ public sealed partial class SpellSystem
         }
     }
 
+    private readonly Dictionary<uint, SpellTargetFilter> _spellTargetFilters = [];
+
+    /// <summary>
+    /// A filter over every unit any implicit target of <paramref name="spell"/> selects, built-in or registered (mangos-classic
+    /// Spell::OnCheckTarget). It runs after the selection, so an area capped at MaxAffectedTargets is capped first. Registering one
+    /// spell twice is an error.
+    /// </summary>
+    public void RegisterSpellTargetFilter(uint spell, SpellTargetFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (!_spellTargetFilters.TryAdd(spell, filter))
+        {
+            throw new InvalidOperationException($"Spell {spell} already has a target filter.");
+        }
+    }
+
+    private List<(Unit Unit, float Multiplier)> FilterRegistered(SpellCast cast, SpellEffectInfo effect, List<(Unit Unit, float Multiplier)> units)
+        => _spellTargetFilters.TryGetValue(cast.Spell.Id, out SpellTargetFilter? filter)
+            ? units.FindAll(entry => filter(cast, effect, entry.Unit))
+            : units;
+
     /// <summary>Whether <paramref name="target"/> has a registered selector flagged location-only.</summary>
     public bool IsRegisteredLocationTarget(SpellImplicitTarget target)
         => _targetSelectors.TryGetValue(target, out TargetSelectorEntry entry) && entry.LocationOnly;
 
-    private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector, Unit? unitTarget)
-        => _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
+    /// <summary>
+    /// The unit script targets (38, 7) follow the world's spell_script_target rows whenever the spell has any; a spell-specific
+    /// selector for them (the Blackwing Lair module's, written from the ClassicDB rows) is only the fallback for a world without
+    /// them. Every other implicit target asks the spell-specific selector first, then the general one.
+    /// </summary>
+    private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector, Unit? unitTarget)
+    {
+        bool unitScriptTarget = selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster;
+        if (unitScriptTarget && Store.GetScriptTargets(cast.Spell.Id).Count > 0)
+        {
+            return SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget);
+        }
+
+        return _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
             ? handler(this, cast, effect, unitTarget)
+            : unitScriptTarget
+                ? SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget)
             : _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
+    }
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {

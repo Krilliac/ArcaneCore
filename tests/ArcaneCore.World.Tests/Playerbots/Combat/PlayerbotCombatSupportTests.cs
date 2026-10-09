@@ -126,4 +126,18 @@ public sealed class PlayerbotCombatSupportTests
     [InlineData(30f, 3f, true, true, false, (int)PlayerbotFightPosition.Melee)]
     public void TheDistancingDecision(float preferred, float distance, bool hunter, bool targetOnBot, bool idleTooLong, int expected)
         => Assert.Equal((PlayerbotFightPosition)expected, PlayerbotBrain.DecidePosition(preferred, distance, hunter, targetOnBot, idleTooLong));
+
+    /// <summary>
+    /// The server's swing reach decides melee, not the 3D distance: on a slope (the replay's Kobold Laborer 2 yards away and 3.9 yards
+    /// up, 4.4 yards in 3D) the bot is in melee and swings; out of that reach it still closes in.
+    /// </summary>
+    [Theory]
+    [InlineData(4f, 4.4f, false, false, true, (int)PlayerbotFightPosition.Melee)]
+    [InlineData(4f, 4.4f, false, false, false, (int)PlayerbotFightPosition.ChaseToMelee)]
+    [InlineData(25f, 4.4f, false, true, true, (int)PlayerbotFightPosition.Melee)]   // a caster reached on a slope swings back
+    [InlineData(25f, 4.4f, false, false, true, (int)PlayerbotFightPosition.Hold)]   // ... but does not engage one not fighting it
+    [InlineData(4f, 3f, false, false, false, (int)PlayerbotFightPosition.Melee)]
+    public void TheDistancingDecision_UsesTheServersMeleeReach(float preferred, float distance, bool hunter, bool targetOnBot, bool inMeleeReach, int expected)
+        => Assert.Equal((PlayerbotFightPosition)expected,
+            PlayerbotBrain.DecidePosition(preferred, distance, hunter, targetOnBot, idleTooLong: false, inMeleeReach));
 }

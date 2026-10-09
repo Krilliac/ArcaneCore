@@ -130,8 +130,8 @@ Data (World schema version **23**, `CreatureMovementTemplateDataModule.Version`;
   entry's default path (PathId 0). Other path ids (51 entries use them) are stored and readable (`GetEntryWaypoints`) but only a
   script could select them. A summoned creature whose template has `MovementType 2` takes the entry path (case 2a of the header comment).
 * Nodes are ordered by point id and never renumbered (ten classic-db paths have gaps).
-* `ScriptId` and `Comment` are not stored: no creature-movement script engine exists. The importer reports "N waypoint node(s) carry
-  a ScriptId" (668 nodes of 182 scripts in classic-db) instead of dropping them silently.
+* World schema 45 stores `ScriptId` on spawn and entry path nodes; reaching one starts its `dbscripts_on_creature_movement` steps
+  with the map's DB-script scheduler. `Comment` is not stored. The importer counts scripted nodes and requires matching script rows.
 * `ContentTableSpecs`/the content importer CLI count and report the new table.
 
 Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMovement.cs`):
@@ -186,8 +186,9 @@ Behaviour (cmangos `Creature::LoadFromDB` / `ResetEntry`, `Entities/Creature.cpp
 * `Creatures:Respawn:AlternateEntries=false` ignores the rows (a spawn with `id = 0` then never spawns, as before).
 
 Scale: of classic-db's 66,310 spawns, **2,802 have `id = 0`**. 2,234 of them (3.4 percent: 1,121 on map 0, 309 on map 1, 147 in map 209,
-147 in map 90 ...) are resolved by `creature_spawn_entry` and spawn now; the other **568 are resolved by cmangos spawn groups
-(`spawn_group_entry`) and still do not spawn** (creature groups are not implemented). `RealClassicDbDump_...` pins these figures.
+147 in map 90 ...) are resolved by `creature_spawn_entry`. 566 of the other 568 are resolved by cmangos spawn groups (`spawn_group_entry`,
+world 44, 2026-10-08; [content import](content-import.md), "Spawn groups"). The last two have no entry in cmangos either.
+`RealClassicDbDump_...` and `SpawnGroupDataTests` pin these figures.
 
 Differences from the references, on purpose: cmangos uses `creature.id` when it is not 0 and rolls only at respawn; vmangos rolls at
 load as well. One rule serves both dialects: a spawn that has rows always chooses among them (the 46 classic-db spawns with both an `id`
@@ -240,15 +241,16 @@ loses that one write (same window as vmangos' asynchronous character-database qu
 
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
   the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by default in vmangos): no column carries them yet.
-* **Creature groups, formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): data is mostly cmangos-shaped
-  (`spawn_group*`, 568 entry-0 spawns resolve through `spawn_group_entry` and still do not spawn) and needs a translator. No importer, schema or
-  behaviour was started.
+* **Formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): cmangos spawn groups are imported
+  and run (member count, entry choice, aggro and respawn together, and since 2026-10-09 their 164 formations: the leader walks the
+  formation's `waypoint_path`, linear or looping, and the others hold their slot; [content import](content-import.md), "Spawn groups"),
+  and so are the pools ("Pools": max_limit members, rolled again when one despawns, nested pools). Creature linking is not implemented.
 * **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.
 * **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
   addon reload on arrival.
-* **Node scripts, wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`), navmesh random wander points and flying
+* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), navmesh random wander points and flying
   wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
 * **Real-client verification** of the destination-relative spline offsets and the walk/run toggle packets. Both references agree, so the retail layout is the
   default, but the only oracle in the tests is bytes derived by hand from the references.

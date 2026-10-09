@@ -10,8 +10,8 @@ public static partial class DbcCrossReferences
     /// <summary>
     /// Check build-5875 DBC foreign keys (WoWDBDefs COLUMNS, <see cref="ClientDbcDbdLayouts"/>) whose target is another extracted
     /// DBC with an ID column; zero and all-ones values are unset markers. These are the client's own data, and WoWDBDefs
-    /// annotations need not hold for this build (the generator overrides two: FactionTemplate.FactionGroup is a mask, Map.ParentMapID
-    /// holds AreaTable ids), so callers report the result as a diagnostic and never as world-database drift.
+    /// annotations need not hold for this build (the generator overrides FactionTemplate.FactionGroup, Map.ParentMapID and
+    /// FootstepTerrainLookup.CreatureFootstepID), so callers report the result as a diagnostic and never as world-database drift.
     /// </summary>
     public static IReadOnlyList<DbcReferenceResult> RunDbc(string directory, CancellationToken cancellationToken = default)
     {
@@ -87,7 +87,10 @@ public static partial class DbcCrossReferences
                     }
                 });
                 uint[] dangling = [.. counts.Keys.Where(value => !targetIds.Contains(value)).Order()];
-                results.Add(new DbcReferenceResult(reference, dangling.Length == 0 ? DbcReferenceStatus.Ok : DbcReferenceStatus.Dangling,
+                DbcReferenceStatus status = dangling.Length == 0 ? DbcReferenceStatus.Ok
+                    : dangling.All(value => DbcKnownClientGaps.Contains(reference.Name, value))
+                        ? DbcReferenceStatus.KnownClientGap : DbcReferenceStatus.Dangling;
+                results.Add(new DbcReferenceResult(reference, status,
                     counts.Count, dangling.Length, dangling.Sum(value => counts[value]), [.. dangling.Take(5).Select(value => (long)value)], null));
             }
         }

@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 /// The other encounters are intentionally not implemented. The 13-slot save layout matches blackwing_lair.h.
 /// </summary>
 [InstanceScript(469)]
-public sealed class BlackwingLairInstance(Map instance) : ScriptedInstance(instance, 13)
+public sealed partial class BlackwingLairInstance(Map instance) : ScriptedInstance(instance, 13)
 {
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
 
@@ -17,9 +17,8 @@ public sealed class BlackwingLairInstance(Map instance) : ScriptedInstance(insta
 
     public override void SetData(uint type, uint data)
     {
-        if (type is not (2 or 3 or 5))
+        if (type >= Encounters.Length)
         {
-            NotPorted(type, data, "(a Blackwing Lair encounter outside Lashlayer, Firemaw and Flamegor)");
             return;
         }
 
@@ -28,25 +27,66 @@ public sealed class BlackwingLairInstance(Map instance) : ScriptedInstance(insta
             return;
         }
 
+        uint previous = Encounters[type];
         Encounters[type] = data;
-        if (type == 2 && data == EncounterState.Done)
+        if (type < 8)
         {
-            DoUseDoorOrButton(179365);
+            UpdateMainGate();
         }
 
-        SaveIfDone(data);
+        if (type == 0 && data == EncounterState.Fail)
+        {
+            ResetRazorgore();
+        }
+        if (type == 7)
+        {
+            UpdateNefarian(data);
+        }
+
+        // MC SetData TYPE_VAELASTRASZ: "prevent the players from running back to the first room" - Razorgore's exit is shut while
+        // Vaelastrasz is fought and open again otherwise (MC toggles it on every change but SPECIAL; this sets the state it reaches).
+        if (type == 1 && data != EncounterState.Special && GetData(0) == EncounterState.Done
+            && GetSingleGameObjectFromStorage(176965) is { } razorgoreExit)
+        {
+            razorgoreExit.State = data == EncounterState.InProgress ? GameObjectState.Ready : GameObjectState.Active;
+        }
+
+        uint door = type switch
+        {
+            0 => 176965u, 1 => 179364u, 2 => 179365u, 6 => 179117u, _ => 0u,
+        };
+        if (door != 0 && data == EncounterState.Done && previous != EncounterState.Done)
+        {
+            DoUseDoorOrButton(door);
+            if (type == 6 && GetSingleGameObjectFromStorage(179116) is { } side)
+                side.State = GameObjectState.Active;
+        }
+
+        if (data == EncounterState.Done || type is >= 9 and <= 12)
+        {
+            SaveToDB();
+        }
     }
 
     public override void OnObjectCreate(GameObject go)
     {
-        if (go.Entry == 179365)
+        if (go.Entry is 176964 or 176965 or 176966 or 179115 or 179116 or 179117 or 179364 or 179365 or 177808)
         {
             StoreGameObject(go);
-            OpenIf(go, GetData(2) == EncounterState.Done);
+            uint gate = go.Entry switch
+            {
+                176965 => 0, 179364 => 1, 179365 => 2, 179116 or 179117 => 6, _ => uint.MaxValue,
+            };
+            OpenIf(go, gate != uint.MaxValue && GetData(gate) == EncounterState.Done);
         }
         else if (go.Entry == 179784 && GetData(2) == EncounterState.Done)
         {
             go.LootState = GameObjectLootState.JustDeactivated;
         }
+        TrackEncounterObject(go);
+        if (go.Entry == 177808 && GetData(0) != EncounterState.Done)
+            go.Flags |= GameObjectFlags.NoInteract;
+        if (go.Entry == 176964) UpdateMainGate();
+        if (go.Entry == 176966) UpdateNefarian(GetData(7));
     }
 }

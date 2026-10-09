@@ -80,7 +80,11 @@ public sealed class MapDataModule : IDataModule
         });
     }
 
-    public void AddServices(IServiceCollection services) => services.AddScoped<IMapDataStore, EfMapDataStore>();
+    public void AddServices(IServiceCollection services)
+    {
+        services.AddScoped<IMapDataStore, EfMapDataStore>();
+        services.AddScoped<IGameTeleStore, EfGameTeleStore>();
+    }
 }
 
 /// <summary>EF Core implementation of <see cref="IMapDataStore"/>.</summary>

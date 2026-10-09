@@ -31,6 +31,11 @@ public sealed partial class CreatureMapSystem
         }
     }
 
+    /// <summary>The game-event gate and the instance script's variable gate (<c>InstanceData.AllowsCreatureSpawn</c>) both allow the spawn.</summary>
+    private bool SpawnAllowed(uint spawnGuid)
+        => (_spawnGate?.AllowsCreature(spawnGuid) ?? true)
+            && (Map.FindUpdater<Instances.Scripts.InstanceData>()?.AllowsCreatureSpawn(spawnGuid) ?? true);
+
     /// <summary>
     /// Make the world agree with the gate for these database spawn guids: a spawn the gate now allows is created when its grid is
     /// loaded (a grid that is not loaded creates it at load), and one it refuses is destroyed for every client that sees it, its
@@ -47,8 +52,14 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
+            if (_poolSpawns.ContainsKey(guid))
+            {
+                RefreshPoolMember(guid, SpawnAllowed(guid)); // its pool decides (cmangos GameEventMgr pool handling)
+                continue;
+            }
+
             Creature? live = FindLive(spawn, _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : []);
-            bool allowed = _spawnGate?.AllowsCreature(guid) ?? true;
+            bool allowed = SpawnAllowed(guid);
             if (!allowed)
             {
                 _respawnAt.Remove(guid);

@@ -25,7 +25,7 @@ namespace ArcaneCore.World.Tests.Skills;
 /// </summary>
 public sealed class GatheringWorldTests
 {
-    private const uint MiningCast = 9200;
+    internal const uint MiningCast = 9200;
     private const uint HerbCast = 9201;
     private const uint SkinCast = 9202;
     private const uint SlowMiningCast = 9203;
@@ -33,7 +33,7 @@ public sealed class GatheringWorldTests
     private const uint VeinSpawn = 88001;
     private const uint VeinLoot = 1731;
     private const uint CopperOre = 2770;
-    private const uint VeinLock = 1;
+    internal const uint VeinLock = 1;
     private const uint HardVeinLock = 2;
 
     /// <summary>The skill-up roll: always 1, so a chance above zero always rises (and the float roll is always 0).</summary>
@@ -44,7 +44,7 @@ public sealed class GatheringWorldTests
         public float NextFloat(float min, float max) => min;
     }
 
-    private sealed class FixedRandom(int value) : Random
+    internal sealed class FixedRandom(int value) : Random
     {
         public override int Next(int minValue, int maxValue) => Math.Clamp(value, minValue, maxValue - 1);
     }
@@ -204,6 +204,68 @@ public sealed class GatheringWorldTests
         Assert.DoesNotContain(player.Guid, vein.SkillupSet);
     }
 
+    [Fact]
+    public async Task AnOpenLockOfADoor_RaisesTheSkillOnceItActivates()
+    {
+        // vmangos Spell::EffectOpenLock rolls UpdateGatherSkill for any object target (SpellEffects.cpp:2191-2207), a door
+        // included: only a chest waits for its loot window.
+        await using WorldTestHost host = Start(out GameObjectTestContext context, VeinLock, type: GameObjectType.Door);
+        await using WorldTestClient client = await host.EnterWorldAsync("DOORPICK", "Doorpick");
+        Player player = await host.PlayerAsync("Doorpick");
+        Spells(host).Random = new FixedRandom(int.MaxValue);
+        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Mining, 1, 75, 1));
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAtVein(MiningCast));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await host.WaitForWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Mining) == 2, "the door open raises the skill");
+        GameObject door = (await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(VeinGuid()))))!;
+        Assert.Equal(GameObjectLootState.Activated, await host.OnWorldAsync(() => door.LootState));
+        Assert.Contains(player.Guid, await host.OnWorldAsync(() => door.SkillupSet.ToList()));
+    }
+
+    /// <summary>A node script that takes every use over (vmangos GameObjectAI::OnUse returning true).</summary>
+    private sealed class TakeOverAi : IGameObjectAi
+    {
+        public int Uses;
+
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs)
+        {
+        }
+
+        public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
+        {
+            Uses++;
+            return true;
+        }
+    }
+
+    [Fact]
+    public async Task AChestWhoseScriptTakesTheOpenOver_StillRaisesTheSkillOnce()
+    {
+        // vmangos Spell::EffectOpenLock rolls UpdateGatherSkill after SendLoot for any object target (SpellEffects.cpp:2163-2207), so a
+        // node whose script handles the open (no loot window) still gives its one skill-up.
+        await using WorldTestHost host = Start(out GameObjectTestContext context, VeinLock);
+        await using WorldTestClient client = await host.EnterWorldAsync("MINESCRIPT", "Minescript");
+        Player player = await host.PlayerAsync("Minescript");
+        Spells(host).Random = new FixedRandom(int.MaxValue);
+        var ai = new TakeOverAi();
+        await host.OnWorldAsync(() =>
+        {
+            player.Skills!.Set(SkillIds.Mining, 1, 75, 1);
+            context.Feature!.FindSystem(0)!.RegisterAi(VeinEntry, ai);
+        });
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAtVein(MiningCast));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await host.WaitForWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Mining) == 2, "the scripted open raises the skill");
+        GameObject vein = (await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(VeinGuid()))))!;
+        Assert.Equal(1, await host.OnWorldAsync(() => ai.Uses));
+        Assert.Null(await host.OnWorldAsync(() => vein.Loot));
+        Assert.Contains(player.Guid, await host.OnWorldAsync(() => vein.SkillupSet.ToList()));
+    }
+
     private static ulong VeinGuid() =>ObjectGuid.WithEntry(HighGuid.GameObject, VeinEntry, VeinSpawn).Value;
 
     private static Game.Spells.SpellSystem Spells(WorldTestHost host) => host.WorldServices.GetRequiredService<global::ArcaneCore.World.Spells.SpellFeature>().System;
@@ -216,13 +278,21 @@ public sealed class GatheringWorldTests
         return w.ToArray();
     }
 
-    private static WorldTestHost Start(out GameObjectTestContext context, uint veinLock, uint questId = 0)
+    private static WorldTestHost Start(out GameObjectTestContext context, uint veinLock, uint questId = 0, GameObjectType type = GameObjectType.Chest)
     {
         uint[] data = new uint[GameObjectTemplate.DataCount];
-        data[0] = veinLock;
-        data[1] = VeinLoot;
-        data[8] = questId;
-        var vein = new GameObjectTemplate { Entry = VeinEntry, Type = (uint)GameObjectType.Chest, DisplayId = 311, Name = "Copper Vein", Data = data };
+        if (type == GameObjectType.Door)
+        {
+            data[1] = veinLock; // door.lockId (GameObjectLocks.LockIdOf)
+        }
+        else
+        {
+            data[0] = veinLock;
+            data[1] = VeinLoot;
+            data[8] = questId;
+        }
+
+        var vein = new GameObjectTemplate { Entry = VeinEntry, Type = (uint)type, DisplayId = 311, Name = "Copper Vein", Data = data };
         // Human start is (-8949.95, -132.49, 83.53): the vein is 2 yd away.
         var spawn = new GameObjectSpawn { Guid = VeinSpawn, Entry = VeinEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };
         var goContent = new GameObjectContent([vein], [spawn], [Lock(VeinLock, LockTypeMining, 1), Lock(HardVeinLock, LockTypeMining, 50)], [], []);
@@ -245,9 +315,9 @@ public sealed class GatheringWorldTests
         }
     }
 
-    private const uint LockTypeMining = 3;
+    internal const uint LockTypeMining = 3;
 
-    private static LockEntry Lock(uint id, uint lockType, uint skill)
+    internal static LockEntry Lock(uint id, uint lockType, uint skill)
     {
         uint[] types = new uint[LockEntry.Cases];
         uint[] indexes = new uint[LockEntry.Cases];
@@ -256,7 +326,7 @@ public sealed class GatheringWorldTests
         return new LockEntry(id, types, indexes, skills);
     }
 
-    private static void Configure(IServiceCollection services)
+    internal static void Configure(IServiceCollection services)
     {
         services.AddSingleton(new SkillCatalog(
             [
