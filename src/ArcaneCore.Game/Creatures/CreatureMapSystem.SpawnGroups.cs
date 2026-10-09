@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Creatures;
 /// none back before its respawn time) and which entry each becomes; a grid creates the members the group chose when it loads. A member
 /// leaves the group when its corpse is removed (its respawn time is kept), when it is despawned or when its grid unloads, and the group
 /// may then bring another member. cmangos does the same with its dynamic-guid spawns. The aggro, evade and respawn-together flags link the
-/// members' fights and respawns. Formations, linked groups and world-state expressions are not implemented
+/// members' fights and respawns; a group with a formation moves in it (CreatureMapSystem.Formations.cs). Linked groups and world-state expressions are not implemented
 /// (docs/areas/content-import.md, spawn groups).
 /// </summary>
 public sealed partial class CreatureMapSystem : ISpawnGroupHost
@@ -67,6 +67,7 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
             SpawnGroupRandomEntry[] entries = [.. group.RandomEntries.Where(e => _content.FindTemplate(e.Entry) is not null)];
             var state = new SpawnGroupState(group, members, entries, dungeon);
             _spawnGroups[group.Id] = state;
+            CreateFormation(state);
             foreach (SpawnGroupMember member in members)
             {
                 _groupOfSpawn[member.Guid] = state;
@@ -217,6 +218,7 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
     {
         if (creature.Spawn is { } spawn && _groupOfSpawn.TryGetValue(spawn.Guid, out SpawnGroupState? state))
         {
+            OnFormationHome(creature);
             OnGroupMemberRespawned(state);
         }
     }

@@ -31,11 +31,16 @@ internal static class CreatureMovementGates
 /// when it is reached.
 /// <para>
 /// Limits (docs/areas/creature-movement-spawns.md): node scripts, wander at a node, sub-paths (<c>path_id</c>), non-repeating paths,
-/// <c>SetNextWaypoint</c>, interaction pauses and group formations are not driven.
+/// interaction pauses are not driven. A spawn group formation's leader walks its formation's path through this generator: a
+/// LINEAR_WP path (cmangos LinearWPMovementGenerator, MotionGenerators/WaypointMovementGenerator.cpp:617-647) turns back at either end
+/// instead of looping, and a new leader resumes at the node after the last one the old leader reached (FormationData::SetMasterMovement,
+/// <c>SetNextWaypoint(m_lastWP + 1)</c>).
 /// </para>
 /// </summary>
-internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> path) : ICreatureMovementGenerator
+internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> path, bool linear = false, int startIndex = 0) : ICreatureMovementGenerator
 {
+    private bool _backwards;
+
     /// <summary>vmangos: an orientation of 100 means "keep the travel direction".</summary>
     public const float NoOrientation = 100f;
 
@@ -53,9 +58,17 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
     /// <summary>The point id of the last node reached since the generator started, 0 when none.</summary>
     public uint LastReachedPoint => _lastReachedPoint;
 
+    /// <summary>Whether the path turns back at its ends (cmangos LINEAR_WP_MOTION_TYPE) instead of looping.</summary>
+    public bool IsLinear => linear;
+
+    /// <summary>The index of the last node reached since the generator started, -1 when none.</summary>
+    public int LastReachedIndex { get; private set; } = -1;
+
     public void Initialize(Creature creature, ICreatureMover mover)
     {
-        _current = 0;
+        _current = path.Count == 0 ? 0 : Math.Clamp(startIndex, 0, path.Count - 1);
+        _backwards = false;
+        LastReachedIndex = -1;
         _arrivalDone = false;
         _waitMs = 0;
         _lastReachedPoint = 0;
@@ -146,6 +159,7 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
         _arrivalDone = true;
         CreatureWaypoint node = path[_current];
         _lastReachedPoint = node.Point;
+        LastReachedIndex = _current;
         mover.OnMovementFinished(creature, MovementGeneratorType.Waypoint, node.Point);
         if (!creature.IsAlive)
         {
@@ -161,6 +175,26 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
         return true;
     }
 
+    /// <summary>cmangos LinearWPMovementGenerator::SwitchToNextNode: to the end, then back to the start, and again.</summary>
+    private int NextLinear()
+    {
+        if (path.Count < 2)
+        {
+            return 0;
+        }
+
+        if (!_backwards && _current + 1 >= path.Count)
+        {
+            _backwards = true;
+        }
+        else if (_backwards && _current == 0)
+        {
+            _backwards = false;
+        }
+
+        return _backwards ? _current - 1 : _current + 1;
+    }
+
     private void StartMove(Creature creature, ICreatureMover mover)
     {
         if (path.Count == 0 || _waitMs > 0)
@@ -170,7 +204,7 @@ internal sealed class WaypointMovementGenerator(IReadOnlyList<CreatureWaypoint> 
 
         if (_arrivalDone)
         {
-            _current = (_current + 1) % path.Count;
+            _current = linear ? NextLinear() : (_current + 1) % path.Count;
         }
 
         _arrivalDone = false;

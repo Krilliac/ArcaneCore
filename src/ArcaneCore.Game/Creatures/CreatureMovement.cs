@@ -22,6 +22,9 @@ public enum MovementGeneratorType : byte
     /// <summary>vmangos DISTRACT_MOTION_TYPE (MotionMaster.h:50): stand facing a spot for a while.</summary>
     Distract = 11,
     Follow = 15,
+
+    /// <summary>cmangos FORMATION_MOTION_TYPE (MotionGenerators/MotionMaster.h:78): a spawn group formation follower holding its slot.</summary>
+    Formation = 21,
 }
 
 /// <summary>What a movement generator may ask of its owner (implemented by <see cref="CreatureMapSystem"/>).</summary>

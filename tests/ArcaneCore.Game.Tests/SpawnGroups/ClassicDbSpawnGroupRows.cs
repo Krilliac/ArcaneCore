@@ -20,7 +20,7 @@ namespace ArcaneCore.Game.Tests.SpawnGroups;
 /// <item>Group 19995 "Barrens - 4 Random Kodos - Patrol - 1": creatures, Flags 1 (aggro together), four spawns (<c>id</c> 0, 275 s), each
 /// with <c>creature_spawn_entry</c> 3235, 3236, 3237.</item>
 /// <item>Group 2 "Kargath Expeditionary Force ...": creatures, Flags 3 (aggro and respawn together), five spawns with their own
-/// <c>id</c> (9082-9086, 300 s), a formation (not implemented).</item>
+/// <c>id</c> (9082-9086, 300 s), a formation (fanned out behind, spread 4, path 6883: FormationTests).</item>
 /// <item><c>gameobject_spawn_entry</c> of spawn 11427 (<c>id</c> 0): 126049 and 128293, both "Magenta Cap Clusters".</item>
 /// </list>
 /// </summary>

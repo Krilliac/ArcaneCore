@@ -64,7 +64,7 @@ public sealed class SpawnGroupEntryRow
     public uint Chance { get; set; }
 }
 
-/// <summary>A <c>spawn_group_formation</c> row (imported for completeness; formation movement is not implemented).</summary>
+/// <summary>A <c>spawn_group_formation</c> row (read by the creature map system's formations).</summary>
 public sealed class SpawnGroupFormationRow
 {
     public uint Id { get; set; }

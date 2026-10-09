@@ -28,7 +28,7 @@ public enum SpawnGroupFlags : uint
     /// <summary>SPAWN_GROUP_DESPAWN_ON_COND_FAIL: the group's live members leave when its condition stops holding.</summary>
     DespawnOnConditionFail = 0x08,
 
-    /// <summary>CREATURE_GROUP_FORMATION_MIRRORING (formation movement, not implemented).</summary>
+    /// <summary>CREATURE_GROUP_FORMATION_MIRRORING (path mirroring of a formation, not implemented; no z2815 group has it).</summary>
     FormationMirroring = 0x10,
 }
 
@@ -45,7 +45,7 @@ public sealed record SpawnGroupMember(uint Guid, int SlotId, uint Chance);
 /// <param name="Chance">Percent chance of this entry; 0 is "equally chanced" among the other 0 rows.</param>
 public sealed record SpawnGroupRandomEntry(uint Entry, uint MinCount, uint MaxCount, uint Chance);
 
-/// <summary>A <c>spawn_group_formation</c> row (imported; formation movement is not implemented).</summary>
+/// <summary>A <c>spawn_group_formation</c> row (the leader's path and the followers' shape: CreatureMapSystem.Formations.cs).</summary>
 public sealed record SpawnGroupFormation(byte FormationType, float Spread, uint Options, uint PathId, byte MovementType, string Comment);
 
 /// <summary>One <c>spawn_group</c> row with its spawns, entries, formation and linked groups.</summary>
