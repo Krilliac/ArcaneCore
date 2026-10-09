@@ -1,224 +1,244 @@
-using ArcaneCore.Game.Creatures;
-using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.Game.Instances.Scripts.Naxxramas;
 
 /// <summary>
-/// Naxxramas' 16-slot ScriptDev2 save layout (naxxramas.h MAX_ENCOUNTER and TYPE_*).
-/// Slots 0-5 belong to the Arachnid/Plague lane; this file owns slots 6-14.
-/// Source: mangos-classic AI/ScriptDevAI/scripts/eastern_kingdoms/naxxramas/naxxramas.cpp
-/// instance_naxxramas::{SetData,OnObjectCreate,OnCreatureCreate,Load}.
+/// Map 533 encounter state and the Arachnid/Plague wing doors. Behaviour and IDs:
+/// vmangos eastern_kingdoms/eastern_plaguelands/naxxramas/instance_naxxramas.cpp
+/// Initialize, OnObjectCreate, SetData, UpdateTeleporters and SetTeleporterState;
+/// naxxramas.h NAXX_ENCOUNTERS_TYPES/NaxxGOs. Reimplemented, no GPL source copied.
+/// The Military, Construct and Frostwyrm Lair slots (6-14) live in NaxxramasInstance.PartTwo.cs; this file calls its
+/// hooks from SetData, OnObjectCreate, OnCreatureDeath and Update.
 /// </summary>
 [InstanceScript(533)]
-public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 16)
+public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 15)
 {
-    public const uint Razuvious = 6, Gothik = 7, Horsemen = 8;
-    public const uint Patchwerk = 9, Grobbulus = 10, Gluth = 11, Thaddius = 12;
-    public const uint Sapphiron = 13, KelThuzad = 14;
+    private readonly HashSet<ObjectGuid> _alivePlayers = [];
+    private readonly HashSet<ObjectGuid>[] _heiganTraps = [[], [], [], []];
+    public const uint AnubRekhan = 0, Faerlina = 1, Maexxna = 2, Noth = 3, Heigan = 4, Loatheb = 5;
 
-    /// <summary>naxxramas.h NPC_BLAUMEUX, NPC_MOGRAINE, NPC_THANE, NPC_ZELIEK.</summary>
-    public static readonly uint[] HorsemenEntries = [16065, 16062, 16064, 16063];
+    // (gameobject entry, encounter slot, entrance door): gates stay open after the boss dies;
+    // an entrance door closes only while the encounter is in progress. Only the Arachnid and
+    // Plague doors are driven here: the other wings' gates (vmangos GO_MILI_*, GO_CONS_*,
+    // GO_KELTHUZAD_*) keep their database state until their encounters are scripted, so this
+    // part cannot shut a gate whose boss nothing would ever mark done. Heigan's exit door
+    // 181203 is left alone, as in both references ("not used").
+    private static readonly (uint Entry, uint Boss, bool Entrance)[] Doors =
+    [
+        (181126, AnubRekhan, true), (181195, AnubRekhan, false),
+        (181235, Faerlina, true), (181167, Faerlina, false), (181209, Faerlina, false),
+        (181197, Maexxna, true), (181200, Noth, true), (181201, Noth, false),
+        (181202, Heigan, true), (181496, Heigan, false), (181241, Heigan, false),
+    ];
 
-    private readonly HashSet<uint> _horsemenDead = [];
-    private readonly HashSet<uint> _constructAddsDead = [];
-    private uint _addReviveMs;
-    private uint _overloadMs;
-    private uint _sapphironSpawnMs;
-    private uint _guardianCheckMs;
-    private bool _respawnHorsemen;
+    private static readonly (uint Entry, uint Boss)[] Portals =
+    [
+        (181575, Maexxna), (181577, Loatheb),
+        (181576, 12), (181578, 8),
+        (181212, Maexxna), (181233, Maexxna),
+        (181211, Loatheb), (181231, Loatheb),
+        (181213, 12), (181232, 12),
+        (181210, 8), (181230, 8),
+    ];
+
+    public bool WingsCleared => GetData(Maexxna) == EncounterState.Done
+        && GetData(Loatheb) == EncounterState.Done
+        && GetData(8) == EncounterState.Done
+        && GetData(12) == EncounterState.Done;
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
+    // mangos-classic instance_naxxramas::IsEncounterInProgress: "Some Encounters use SPECIAL while in progress" (Gothik).
     public override bool IsEncounterInProgress => Encounters.Contains(EncounterState.InProgress)
         || GetData(Gothik) == EncounterState.Special;
 
-    public override void Initialize()
-    {
-        base.Initialize();
-        _horsemenDead.Clear();
-        _constructAddsDead.Clear();
-        _addReviveMs = _overloadMs = _sapphironSpawnMs = _guardianCheckMs = 0;
-        _respawnHorsemen = false;
-    }
-
     public override void SetData(uint type, uint data)
     {
-        if (type >= Encounters.Length) return;
-        if (type < Razuvious)
-        {
-            // Reserved for the separate Arachnid/Plague implementation.
-            Encounters[type] = data;
-            SaveIfDone(data);
-            return;
-        }
-        if (Encounters[type] == data) return;
+        if (type >= Encounters.Length || Encounters[type] == data) return;
         Encounters[type] = data;
-        if (type == Sapphiron && data == EncounterState.Special) _sapphironSpawnMs = 22000;
+        if (type == AnubRekhan)
+        {
+            _alivePlayers.Clear();
+            if (data == EncounterState.InProgress)
+                foreach (Player player in Instance.Players.Where(p => p.IsAlive)) _alivePlayers.Add(player.Guid);
+        }
+        foreach (var door in Doors.Where(d => d.Boss == type ||
+                     (d.Entry == 181241 && type == Loatheb) ||
+                     (d.Entry == 181202 && type == Noth)))
+            Refresh(door.Entry);
+        if (type is Maexxna or Loatheb or 8 or 12)
+        {
+            foreach (var portal in Portals.Where(p => p.Boss == type)) Refresh(portal.Entry);
+            Refresh(181229);
+        }
         OnPartTwoStateChanged(type, data);
         SaveIfDone(data);
     }
 
-    /// <summary>ScriptDev2 instance_naxxramas::SetData(TYPE_FOUR_HORSEMEN): one shared encounter, credited only on all four distinct deaths.</summary>
-    public void RecordHorsemanDeath(uint entry)
+    public override void OnObjectCreate(GameObject go)
     {
-        if (entry is not (16065 or 16062 or 16064 or 16063) || GetData(Horsemen) == EncounterState.Done) return;
-        _horsemenDead.Add(entry);
-        if (_horsemenDead.Count == 4) SetData(Horsemen, EncounterState.Done);
-    }
-
-    /// <summary>SD2 boss_thaddiusAddsAI: both adds must fall within ten seconds; fourteen seconds later their Teslas overload.</summary>
-    public void RecordConstructAddDeath(uint entry)
-    {
-        if (entry is not (15929 or 15930) || GetData(Thaddius) == EncounterState.Done) return;
-        _constructAddsDead.Add(entry);
-        if (_constructAddsDead.Count == 2) { _addReviveMs = 0; _overloadMs = 14000; }
-        else _addReviveMs = 10000;
-    }
-
-    public bool ConstructAddsDefeated => _constructAddsDead.Count == 2;
-
-    public void StartGuardianChecks() => _guardianCheckMs = 2000;
-
-    public override void Update(uint diffMs)
-    {
-        if (_respawnHorsemen)
+        OnPartTwoObjectCreate(go);
+        int section = HeiganTrapSection(go);
+        if (section >= 0) _heiganTraps[section].Add(go.Guid);
+        if (go.Entry == 181229 || Doors.Any(d => d.Entry == go.Entry) || Portals.Any(p => p.Entry == go.Entry))
         {
-            _respawnHorsemen = false;
-            RespawnDeadHorsemen();
-        }
-        if (_guardianCheckMs > 0)
-        {
-            if (_guardianCheckMs > diffMs) _guardianCheckMs -= diffMs;
-            else
-            {
-                _guardianCheckMs = 2000;
-                // mangos-classic naxxramas.cpp Update / EVENT_GUARDIAN_SHACKLE:
-                // more than three controlled guardians breaks the shackles.
-                if (Instance.FindUpdater<CreatureMapSystem>() is { } system
-                    && system.Creatures.Count(c => c.Entry == 16441 && c.IsAlive && (c.UnitFlags & UnitFlags.Stunned) != 0) > 3
-                    && GetSingleCreatureFromStorage(15990) is { IsAlive: true } kelthuzad)
-                    system.CastSpell(kelthuzad, 29910, kelthuzad, triggered: true);
-            }
-        }
-        if (_sapphironSpawnMs > 0)
-        {
-            if (_sapphironSpawnMs > diffMs) _sapphironSpawnMs -= diffMs;
-            else
-            {
-                _sapphironSpawnMs = 0;
-                SpawnSapphiron();
-            }
-        }
-        if (_addReviveMs > 0)
-        {
-            if (_addReviveMs > diffMs) _addReviveMs -= diffMs;
-            else
-            {
-                _addReviveMs = 0;
-                foreach (uint entry in _constructAddsDead)
-                    if (GetSingleCreatureFromStorage(entry) is { } add)
-                    {
-                        if (add.IsAlive && add.AI is ThaddiusAddAI addAi) addAi.Revive();
-                        else Instance.FindUpdater<CreatureMapSystem>()?.ForceRespawn(add);
-                    }
-                _constructAddsDead.Clear();
-            }
-        }
-        if (_overloadMs > 0)
-        {
-            if (_overloadMs > diffMs) _overloadMs -= diffMs;
-            else
-            {
-                _overloadMs = 0;
-                if (GetSingleCreatureFromStorage(15930) is { IsAlive: true } feugen)
-                    feugen.System?.CastSpell(feugen, 28359, feugen, triggered: true);
-                SetData(Thaddius, EncounterState.Special);
-                if (GetSingleCreatureFromStorage(15928) is { } thaddius)
-                    thaddius.UnitFlags &= ~(UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer);
-            }
+            StoreGameObject(go);
+            Apply(go);
         }
     }
 
-    public override void OnCreatureCreate(Creature creature)
+    private static int HeiganTrapSection(GameObject go)
     {
-        StoreCreature(creature);
-        // vmangos instance_naxxramas::OnCreatureCreate: a horseman created dead while the encounter is not done respawns, so the
-        // four distinct deaths (counted in memory only, like vmangos m_horsemenDeathCounter) stay reachable after a restart or a
-        // grid reload. Deferred to the next instance update: the creature is still being added to the map here.
-        if (creature.Entry is 16065 or 16062 or 16064 or 16063 && !creature.IsAlive && GetData(Horsemen) != EncounterState.Done)
-            _respawnHorsemen = true;
+        // vmangos instance_naxxramas::OnObjectCreate groups the 1.12 floor-trap entries,
+        // with a few duplicate/exception spawn GUIDs. Those GUIDs are vmangos' own spawn numbering
+        // and do not occur in ClassicDB z2815 (map 533 GUIDs are 533xxxx there); the entry ranges carry it.
+        if (go.Type != GameObjectType.Trap) return -1;
+        uint entry = go.Entry, guid = go.Spawn?.Guid ?? 0;
+        if (entry is >= 181517 and <= 181524 or 181678) return 0;
+        if (entry is >= 181510 and <= 181516 or >= 181525 and <= 181531 or 181533 or 181676) return 1;
+        if (entry is >= 181534 and <= 181544 or 181532 or 181677 || guid is 533185 or 533196 or 533198) return 2;
+        if (entry is >= 181545 and <= 181552 && guid is not (533119 or 533123)
+            || guid is 533181 or 533182 or 533183 or 533184 or 533187 or 533188
+                or 533189 or 533190 or 533191 or 533192 or 533193 or 533194
+                or 533195 or 533197 or 533199 or 533200) return 3;
+        return -1;
     }
 
-    /// <summary>vmangos instance_naxxramas::SetData(TYPE_FOUR_HORSEMEN, FAIL): every dead horseman comes back.</summary>
-    private void RespawnDeadHorsemen()
+    internal int ActivateHeiganTraps(int safeSection, Unit trigger)
     {
-        if (GetData(Horsemen) == EncounterState.Done || Instance.FindUpdater<CreatureMapSystem>() is not { } system) return;
-        foreach (uint entry in HorsemenEntries)
-            if (GetSingleCreatureFromStorage(entry) is { IsAlive: false } dead)
-                system.ForceRespawn(dead);
+        if (Instance.FindUpdater<GameObjectMapSystem>() is not { } objects) return 0;
+        int activated = 0;
+        for (int section = 0; section < _heiganTraps.Length; section++)
+        {
+            if (section == safeSection) continue;
+            foreach (ObjectGuid guid in _heiganTraps[section])
+                if (objects.Find(guid) is { } trap && objects.UseByUnit(trigger, trap) == GameObjectUseResult.Ok)
+                    activated++;
+        }
+        return activated;
     }
+
+    /// <summary>The hub's Frostwyrm Lair trigger (vmangos naxxramas.h AREATRIGGER_HUB_TO_FROSTWYRM).</summary>
+    public const uint FrostwyrmTrigger = 4156;
+
+    /// <summary>
+    /// mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger(AREATRIGGER_FROSTWYRM_TELE): "Area trigger handles teleport
+    /// in DB", the script only stops it until Maexxna, Loatheb, the Four Horsemen and Thaddius are done. ClassicDB z2815 has that row
+    /// (areatrigger_teleport 4156 "Naxxramas (Entrance)", map 533 at 3498.28,-5349.9,144.968), and TeleportHandlers runs it after the
+    /// trigger listeners whatever they did, so the requirement must be a veto, not a scripted teleport of its own (vmangos
+    /// onNaxxramasAreaTrigger teleports itself, for a database without the row). Every non-GM is held back, dead or alive (vmangos
+    /// ports only the living).
+    /// </summary>
+    public override bool BlocksAreaTriggerTeleport(Player player, uint triggerId)
+        => triggerId == FrostwyrmTrigger && !WingsCleared;
 
     public override void OnCreatureDeath(Creature creature)
     {
-        // mangos-classic boss_gothik.cpp SummonedCreatureJustDied and anchor-spell chain:
-        // a live-side trainee/knight/rider reappears as its spectral counterpart.
-        if (GetData(Gothik) is not (EncounterState.InProgress or EncounterState.Special)) return;
-        uint spectral = creature.Entry switch
+        OnPartTwoCreatureDeath(creature);
+        // vmangos boss_maexxna.cpp mob_webwrapAI::JustDied;
+        // boss_anubrekhanAI::ExplodeOneDeadCryptGuard.
+        if (creature.Entry == 16486)
         {
-            16124 => 16127u, 16125 => 16148u, 16126 => 16150u, _ => 0u,
-        };
-        if (spectral == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } system
-            || system.Content.FindTemplate(spectral) is not { } template
-            || GetSingleGameObjectFromStorage(181170) is not { } gate) return;
-        Creature? trigger = system.Creatures.Where(c => c.Entry == 16137 && c.Y > gate.Y)
-            .MinBy(c => Math.Abs(c.X - creature.X) + Math.Abs(c.Y - creature.Y));
-        if (trigger is null) return; // requires ClassicDB's spectral-side sub-boss trigger spawns
-        Creature add = system.SpawnTemporary(template, trigger.X, trigger.Y, trigger.Z, trigger.Orientation, creature);
-        if (Instance.Players.FirstOrDefault(p => p.IsAlive && p.Y > gate.Y) is { } player)
-            add.AI?.AttackStart(player);
-    }
-
-    public override void OnObjectCreate(GameObject go)
-    {
-        StoreGameObject(go);
-        RestorePartTwoDoor(go);
-    }
-
-    public override bool OnGameObjectUse(Player player, GameObject go)
-    {
-        if (go.Entry != 181356) return false;
-        // mangos-classic boss_sapphiron.cpp GOUse_go_sapphiron_birth.
-        if (GetData(Sapphiron) == EncounterState.NotStarted && GetSingleCreatureFromStorage(15989) is null)
-            SetData(Sapphiron, EncounterState.Special);
-        return false; // SD2 lets the object's normal activation/animation proceed.
-    }
-
-    public override void OnAreaTrigger(Player player, uint triggerId)
-    {
-        // mangos-classic naxxramas.cpp AreaTrigger_at_naxxramas: game masters and the dead trigger nothing.
-        if (player.IsGameMaster || !player.IsAlive) return;
-        // mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger: Kel'Thuzad's trigger only sets the encounter
-        // in progress; SetData starts the channel (KelThuzadAI.BeginPhaseOne). He enters combat in phase two, not here.
-        if (triggerId == 4112 && GetData(KelThuzad) is EncounterState.NotStarted or EncounterState.Fail)
-            SetData(KelThuzad, EncounterState.InProgress);
-        else if (triggerId == 4113 && GetData(Thaddius) == EncounterState.NotStarted
-            && GetSingleCreatureFromStorage(15928) is { } thaddius)
+            Player? wrapped = Instance.Players.Where(p => p.IsAlive &&
+                    (creature.System?.HasAura(p, 28622) ?? false))
+                .OrderBy(p => (p.X - creature.X) * (p.X - creature.X) +
+                              (p.Y - creature.Y) * (p.Y - creature.Y)).FirstOrDefault();
+            if (wrapped is not null) creature.System?.RemoveAuras(wrapped, 28622);
+        }
+        else if (creature.Entry == 16573 && GetData(AnubRekhan) == EncounterState.InProgress
+                 && creature.System is { } system)
         {
-            SetData(Thaddius, EncounterState.Special);
-            thaddius.System?.SayText(thaddius, -1533029);
+            Creature? anub = system.Creatures.FirstOrDefault(c => c.Entry == 15956 && c.IsAlive);
+            (anub?.AI as NaxxramasBossAI)?.CryptGuardDied(creature);
         }
     }
 
-    /// <summary>naxxramas.cpp DoHandleAreaTrigger(AREATRIGGER_FROSTWYRM_TELE): four wing end bosses must be defeated.</summary>
-    public bool FrostwyrmUnlocked => GetData(2) == EncounterState.Done
-        && GetData(5) == EncounterState.Done
-        && GetData(Horsemen) == EncounterState.Done
-        && GetData(Thaddius) == EncounterState.Done;
-
-    private void SetDoor(uint entry, bool open)
+    internal void ExplodeCryptGuard(Creature corpse)
     {
-        if (GetSingleGameObjectFromStorage(entry) is { } door)
-            door.State = open ? GameObjectState.Active : GameObjectState.Ready;
+        if (GetData(AnubRekhan) == EncounterState.InProgress && corpse.System is { } system)
+            SpawnScarabs(system, corpse.X, corpse.Y, corpse.Z, 10);
+    }
+
+    public override void OnPlayerEnter(Player player)
+    {
+        if (player.IsAlive) _alivePlayers.Add(player.Guid);
+    }
+
+    public override void OnPlayerLeave(Player player) => _alivePlayers.Remove(player.Guid);
+
+    public override void Update(uint diffMs)
+    {
+        UpdatePartTwo(diffMs);
+        if (GetData(AnubRekhan) != EncounterState.InProgress) return;
+        foreach (Player player in Instance.Players)
+        {
+            if (player.IsAlive) _alivePlayers.Add(player.Guid);
+            else if (_alivePlayers.Remove(player.Guid) && Instance.FindUpdater<CreatureMapSystem>() is { } system)
+                SpawnScarabs(system, player.X, player.Y, player.Z, 5);
+        }
+    }
+
+    private void SpawnScarabs(CreatureMapSystem system, float x, float y, float z, int count)
+    {
+        // vmangos instance_naxxramas::OnPlayerDeath and boss_anubrekhanAI::ExplodeOneDeadCryptGuard.
+        // The map tick detects player death from any source, including environmental damage.
+        if (system.Content.FindTemplate(16698) is not { } template) return;
+        Creature? anub = system.Creatures.FirstOrDefault(c => c.Entry == 15956 && c.IsAlive);
+        Player[] targets = Instance.Players.Where(p => p.IsAlive).ToArray();
+        for (int i = 0; i < count; i++)
+        {
+            Creature scarab = system.SpawnTemporary(template, x, y, z, 0, anub);
+            if (targets.Length == 0) continue;
+            Player target = targets[system.RandomInt(0, targets.Length - 1)];
+            scarab.AI?.AttackStart(target);
+            scarab.Combat.Threat.AddThreat(target, 5000);
+        }
+    }
+
+    private void Refresh(uint entry)
+    {
+        if (GetSingleGameObjectFromStorage(entry) is { } go) Apply(go);
+    }
+
+    private void Apply(GameObject go)
+    {
+        if (go.Entry == 181229)
+        {
+            go.State = WingsCleared ? GameObjectState.Active : GameObjectState.Ready;
+            return;
+        }
+        foreach (var door in Doors)
+        {
+            if (door.Entry != go.Entry) continue;
+            bool opened = door.Entrance ? GetData(door.Boss) != EncounterState.InProgress
+                : GetData(door.Boss) == EncounterState.Done;
+            if (go.Entry == 181126) opened = GetData(AnubRekhan) is EncounterState.Fail or EncounterState.Done;
+            if (go.Entry == 181202) opened = GetData(Noth) == EncounterState.Done
+                && GetData(Heigan) != EncounterState.InProgress;
+            // Loatheb's entrance must remain open after Heigan until Loatheb is pulled.
+            if (go.Entry == 181241) opened = GetData(Heigan) == EncounterState.Done
+                && GetData(Loatheb) != EncounterState.InProgress;
+            go.State = opened ? GameObjectState.Active : GameObjectState.Ready;
+            if (go.Entry is 181195 or 181167)
+            {
+                if (GetData(door.Boss) == EncounterState.Done) go.Flags &= ~(GameObjectFlags.Locked | GameObjectFlags.NoInteract);
+                else go.Flags |= GameObjectFlags.Locked;
+            }
+            return;
+        }
+        foreach (var portal in Portals)
+        {
+            if (portal.Entry != go.Entry) continue;
+            bool active = GetData(portal.Boss) == EncounterState.Done;
+            go.State = active ? GameObjectState.Active : GameObjectState.Ready;
+            if (portal.Entry is 181575 or 181576 or 181577 or 181578)
+            {
+                if (active) go.Flags &= ~GameObjectFlags.NoInteract;
+                else go.Flags |= GameObjectFlags.NoInteract;
+            }
+            return;
+        }
     }
 }

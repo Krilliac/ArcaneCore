@@ -42,6 +42,9 @@ public abstract class RaidBossAI(Creature creature, uint encounter) : AggressorA
             (BlackwingLairInstance, 11981) => new FlamegorAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
+            (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
+                => new NaxxramasBossAI(creature, raid),
+            (NaxxramasInstance raid, 16573) => new NaxxramasCryptGuardAI(creature, raid),
             (NaxxramasInstance, 16061) => new RazuviousAI(creature),
             (NaxxramasInstance, 16060) => new GothikAI(creature),
             (NaxxramasInstance, 16065 or 16062 or 16064 or 16063) => new HorsemanAI(creature),

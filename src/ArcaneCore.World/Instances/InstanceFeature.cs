@@ -1,7 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
-using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
@@ -43,11 +42,14 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     public void OnAreaTrigger(Player player, uint triggerId)
         => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.OnAreaTrigger(player, triggerId);
 
-    /// <summary>mangos-classic naxxramas.cpp DoHandleAreaTrigger(AREATRIGGER_FROSTWYRM_TELE): all four wing bosses gate trigger 4156.</summary>
+    /// <summary>
+    /// The player's instance script may stop a trigger's database teleport (ScriptDev2 AreaTrigger scripts returning true;
+    /// <see cref="Game.Instances.Scripts.InstanceData.BlocksAreaTriggerTeleport"/>). A silent refusal, as in the reference.
+    /// </summary>
     public AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport)
-        => teleport.Id == 4156 && player.MapId == 533
-            && player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>() is not NaxxramasInstance { FrostwyrmUnlocked: true }
-                ? AreaTriggerVerdict.Refuse(null) : AreaTriggerVerdict.Allow;
+        => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.BlocksAreaTriggerTeleport(player, teleport.Id) == true
+            ? AreaTriggerVerdict.Refuse(null)
+            : AreaTriggerVerdict.Allow;
 
     /// <summary>Upper bound for draining the write queue or one world-thread round trip during a character deletion.</summary>
     public static readonly TimeSpan DeleteTimeout = TimeSpan.FromSeconds(10);

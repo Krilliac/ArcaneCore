@@ -122,6 +122,13 @@ public interface ICreatureSpellCaster
     CreatureCastResult CastAtDestination(Creature caster, uint spellId, float x, float y, float z, bool triggered)
         => CreatureCastResult.NoSpellSystem;
 
+    /// <summary>
+    /// A script makes another unit the caster (ScriptDev2 <c>target->CastSpell(target, spell, true)</c>: mangos-classic boss_heigan.cpp
+    /// port, vmangos boss_maexxna.cpp UpdateWraps). Caster-relative implicit targets (UNIT_CASTER, the caster's spell_target_position)
+    /// then resolve to that unit, not to the scripted creature. <see cref="CreatureCastResult.NoSpellSystem"/> by default.
+    /// </summary>
+    CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.NoSpellSystem;
+
     bool IsCasting(Creature caster);
 
     bool HasAura(Unit unit, uint spellId);

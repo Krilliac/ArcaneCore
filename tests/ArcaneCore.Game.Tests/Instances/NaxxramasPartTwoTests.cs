@@ -158,12 +158,16 @@ public sealed class NaxxramasPartTwoTests
     public void FrostwyrmTeleport_RequiresAllFourWingEndBosses()
     {
         using var raid = new Raid(16028).Initialize();
-        foreach (uint type in new uint[] { 2, 5, 8 }) raid.Instance.SetData(type, EncounterState.Done);
-        Assert.False(raid.Instance.FrostwyrmUnlocked);
+        // Maexxna and Loatheb come from the Arachnid/Plague part; the Four Horsemen and Thaddius from this one's own paths.
+        foreach (uint type in new uint[] { 2, 5 }) raid.Instance.SetData(type, EncounterState.Done);
+        foreach (uint horseman in NaxxramasInstance.HorsemenEntries) raid.Instance.RecordHorsemanDeath(horseman);
+        Assert.False(raid.Instance.WingsCleared);
+        Assert.True(raid.Instance.BlocksAreaTriggerTeleport(raid.Tank, 4156));
         raid.Instance.SetData(12, EncounterState.Done);
-        Assert.True(raid.Instance.FrostwyrmUnlocked);
+        Assert.True(raid.Instance.WingsCleared);
+        Assert.False(raid.Instance.BlocksAreaTriggerTeleport(raid.Tank, 4156));
         raid.Instance.SetData(5, EncounterState.Fail);
-        Assert.False(raid.Instance.FrostwyrmUnlocked);
+        Assert.True(raid.Instance.BlocksAreaTriggerTeleport(raid.Tank, 4156));
     }
 
     [Fact]
