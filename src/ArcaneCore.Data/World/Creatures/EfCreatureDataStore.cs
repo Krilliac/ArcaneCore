@@ -120,6 +120,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         CorpseDecaySeconds = r.CorpseDecaySeconds,
         ExtraFlags = r.ExtraFlags,
         AIName = r.AIName,
+        ScriptName = r.ScriptName,
         Detection = r.Detection ?? CreatureTemplate.DefaultDetectionRange,
         CallForHelp = r.CallForHelp,
         Pursuit = r.Pursuit,

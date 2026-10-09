@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
 | `characters` | 42 | `characters` |
-| `world` | 42 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 43 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -113,5 +113,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 40 | `World.Battlegrounds.BattlegroundWorldDataModule` | creates `battleground_template`, `creature_battleground`, `gameobject_battleground`, `battlemaster_entry` |
 | 41 | `World.Transports.TransportWorldDataModule` | creates `transports` |
 | 42 | `World.Creatures.DbScriptDataModule` | creates `dbscripts_on_quest_start`, `dbscripts_on_quest_end`, `dbscripts_on_gossip`, `dbscripts_on_event`, `script_waypoint`; adds columns `quest_template.StartScript`, `quest_template.CompleteScript`, `gossip_menu.script_id`, `gossip_menu_option.action_script_id` |
+| 43 | `World.Creatures.CreatureScriptNameDataModule` | adds columns `creature_template.ScriptName` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

@@ -121,6 +121,9 @@ public sealed class CreatureTemplateRow
     /// <summary>cmangos-classic AIName (vmangos ai_name). Added by <see cref="CreatureAiDataModule"/>.</summary>
     public string AIName { get; set; } = string.Empty;
 
+    /// <summary>ScriptDev2 selector from creature_template.ScriptName (world 43).</summary>
+    public string ScriptName { get; set; } = string.Empty;
+
     /// <summary>Detection range in yards; <c>null</c> = the column was absent from the source (the content default, 18, applies). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
     public float? Detection { get; set; }
 
@@ -257,6 +260,7 @@ public sealed class CreatureDataModule : IDataModule
 
             // cmangos-classic: AIName char(64) NOT NULL DEFAULT ''.
             entity.Property(r => r.AIName).HasMaxLength(64).IsRequired();
+            entity.Property(r => r.ScriptName).HasMaxLength(64).IsRequired();
         });
 
         modelBuilder.Entity<CreatureSpawnRow>(entity =>

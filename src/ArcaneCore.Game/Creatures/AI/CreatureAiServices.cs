@@ -182,8 +182,8 @@ public sealed class CreatureAiFactory
     };
 
     /// <summary>
-    /// The creature scripts of this server's quests by creature entry (the ScriptDev2 <c>ScriptName</c> of their <c>creature_template</c> row,
-    /// which classic-db carries and this server does not import): selected before the AIName, as vmangos FactorySelector::selectAI asks the
+    /// The creature scripts of this server's quests by creature entry (the ScriptDev2 <c>ScriptName</c> of their <c>creature_template</c> row):
+    /// selected before the AIName, as vmangos FactorySelector::selectAI asks the
     /// script name first (AI/CreatureAISelector.cpp:37-50). Built in: <see cref="Scripts.RuulSnowhoofAI"/>.
     /// </summary>
     private readonly Dictionary<uint, Func<Creature, CreatureAI>> _entryScripts = new()
@@ -243,6 +243,14 @@ public sealed class CreatureAiFactory
     {
         ArgumentNullException.ThrowIfNull(creature);
         unknown = false;
+        // vmangos FactorySelector::selectAI (AI/CreatureAISelector.cpp:37-50): a named script registered by
+        // the host precedes AIName. A missing port falls through to the existing entry script or default AI.
+        if (creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
+            && !string.IsNullOrEmpty(creature.Template.ScriptName)
+            && _factories.TryGetValue(creature.Template.ScriptName, out Func<Creature, CreatureContent, CreatureAI>? namedScript))
+        {
+            return namedScript(creature, content);
+        }
         // The script name first (selectAI, AI/CreatureAISelector.cpp:39-46): not for a pet nor a charmed creature.
         if (_entryScripts.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
             && _entryScripts.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? script))
