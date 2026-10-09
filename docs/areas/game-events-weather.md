@@ -184,7 +184,9 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
 - Setting `SpawnGate` on a system that already loaded grids removes what the gate refuses (the systems attach at different times:
   the creature feature at start, the gameobject feature on map creation), so `GameEventSpawnFeature` installs the gate from the
   world tick as soon as a system exists. Event rows whose spawn is not in the content (classic-db: 33 creature and 1126
-  gameobject rows, 1095 of them Noblegarden) are ignored and reported once with their counts.
+  gameobject rows, 1095 of them Noblegarden; those guids are in no spawn table of the dump) are ignored and reported once with their
+  counts. The report waits until both contents are installed: the creature content is installed from the world thread after attach, and
+  an audit at attach counted all 3148 creature event guids as missing (the wave-9 rehearsal's warning; the world held 3115 of them).
 - Shared-file edits (record them for the integrator): `CreatureMapSystem.Lifecycle.cs` (`LoadGrid` split so the creating loop is
   `LoadSpawns`, plus the gate check), `GameObjectMapSystem.cs` (`partial`, the same split and check). Both new members live in new
   partial files (`*.EventSpawns.cs`).
