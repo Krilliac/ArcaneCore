@@ -204,6 +204,39 @@ public sealed class RemainingRaidBossTests
     }
 
     [Fact]
+    public void ThekalZealot_RisesAlone_ButStaysDownWhenThekalAndTheOtherZealotAreAlreadyDown()
+    {
+        // mob_zealot_lorkhanAI ACTION_RESSURECTION: he resurrects unless Thekal and Zath are both SPECIAL when his own timer runs.
+        using var raid = new Raid(309, 14509, 11347, 11348);
+        raid.Start();
+        Creature lorkhan = raid.Spawn(11347), zath = raid.Spawn(11348);
+        lorkhan.AI!.AttackStart(raid.Tank);
+        zath.AI!.AttackStart(raid.Tank);
+        var lorkhanAi = Assert.IsType<LorKhanAI>(lorkhan.AI);
+
+        // Alone on the floor, he gets back up after ten seconds with full health.
+        raid.Map.Combat.DealDamage(raid.Tank, lorkhan, lorkhan.Health + 100);
+        Assert.Equal(EncounterState.Special, raid.Data.GetData(6));
+        lorkhanAi.OnUpdate(10000);
+        Assert.False(lorkhanAi.FakeDeath);
+        Assert.Equal(lorkhan.MaxHealth, lorkhan.Health);
+        Assert.Equal(EncounterState.InProgress, raid.Data.GetData(6));
+
+        // Down first again, then Thekal (Zath still up, so no CanPreventAddsResurrect yet), then Zath: his timer finds both SPECIAL.
+        raid.Map.Combat.DealDamage(raid.Tank, lorkhan, lorkhan.Health + 100);
+        raid.Map.Combat.DealDamage(raid.Tank, raid.Boss, raid.Boss.Health + 100);
+        raid.Map.Combat.DealDamage(raid.Tank, zath, zath.Health + 100);
+        lorkhanAi.OnUpdate(10000);
+        Assert.True(lorkhanAi.FakeDeath);
+        Assert.Equal(EncounterState.Special, raid.Data.GetData(6));
+
+        // Thekal's own timer then finds both zealots down and goes on to the tiger phase.
+        raid.Boss.AI!.OnUpdate(10000);
+        Assert.Contains(raid.Caster.Casts, cast => cast.Spell == 24171);
+        Assert.True(lorkhanAi.FakeDeath);
+    }
+
+    [Fact]
     public void ThekalEvade_StandsUpAFakeDeadZealot()
     {
         using var raid = new Raid(309, 14509, 11347);

@@ -107,7 +107,7 @@ public sealed partial class RuinsOfAhnQirajInstance
         _waveMembers.Clear();
         if (_wave == ArmyCaptains.Length)
         {
-            // The last wave is General Rajaxx himself.
+            // After the seventh captain, Rajaxx joins the fight in person.
             if (GetSingleCreatureFromStorage(Rajaxx) is { IsAlive: true } boss)
             {
                 creatures.SayText(boss, -1509010);
@@ -127,7 +127,7 @@ public sealed partial class RuinsOfAhnQirajInstance
             creatures.SetInCombatWithZone(member);
             creatures.AttackClosestEnemy(member);
         }
-        // Yell on each wave (except the first two).
+        // Rajaxx announces waves three to seven; the first two have no text (WaveTexts 0).
         if (WaveTexts[_wave] != 0 && GetSingleCreatureFromStorage(Rajaxx) is { } rajaxx)
             creatures.SayText(rajaxx, WaveTexts[_wave]);
         _wave++;
