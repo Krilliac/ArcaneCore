@@ -1,5 +1,7 @@
 # Quest and NPC daemon adapters
 
+Eight source-checked ScriptDev2 escorts now use embedded waypoint action data (Erland, Phizzlethorpe, Dalinda, Gilthares, Therylune, Paoka, Lakota and Kaya). Their exact sources, ClassicDB path tests, and remaining limits are in [the escort integration record](../integration/escorts-data-20261008.md).
+
 M13a loads and persists journals, serves quest/text queries, and expires timed quests.
 [M13b](../../MILESTONE_M13B.md) adds the bounded live-creature status/details/accept/abandon
 surface. [Acceptance](../M13B_ACCEPTANCE.md) documents the mock and later client procedures.
