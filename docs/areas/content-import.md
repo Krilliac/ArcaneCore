@@ -190,6 +190,7 @@ feature reads:
   scripts, the quest, gossip and event DB scripts and `script_waypoint` (world 42, `DbScriptDumpImporter.ReplaceAsync`: it also sets
   `quest_template.StartScript`/`CompleteScript` and `gossip_menu.script_id` on the rows the world already has, and adds the
   `gossip_menu_option` rows that run a script, which importers before world 42 refused; [creature AI](creature-ai.md)),
+  movement scripts, waypoint `ScriptId`, `spell_script_target`, and `creature_linking`/`creature_linking_template` (world 43),
   `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
   holds 432 triggers, every `areatrigger_teleport` id of classic-db among them), and the flight masters' `taxi_nodes` and `taxi_path`
   from `TaxiNodes.dbc` and `TaxiPath.dbc` (`NpcServiceDbcReaders`, vmangos `nifffssssssssxii` and `niii`). The ships' own

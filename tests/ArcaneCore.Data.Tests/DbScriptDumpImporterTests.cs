@@ -12,6 +12,21 @@ public sealed class DbScriptDumpImporterTests
         + "`dataint`,`dataint2`,`dataint3`,`dataint4`,`datafloat`,`x`,`y`,`z`,`o`,`speed`,`condition_id`,`comments`";
 
     [Fact]
+    public void NaralexWaypointScript_IsImportedInItsOwnNamespace()
+    {
+        // ClassicDB z2815: 367802 points and speaks (text template 1257) on arrival.
+        string dump = $"INSERT INTO `dbscripts_on_creature_movement` ({ScriptColumns}) VALUES "
+            + "(367802,0,0,1,25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'point'),"
+            + "(367802,0,1,0,0,0,0,0,0,0,1257,0,0,0,0,0,0,0,0,0,0,'text');";
+        var importer = new DbScriptDumpImporter();
+        importer.Read(new StringReader(dump));
+
+        Assert.Equal(2, importer.Counts[DbScriptDataModule.CreatureMovementTable]);
+        Assert.Equal([1u, 0u], importer.Scripts.Where(s => s.Kind == DbScriptKind.CreatureMovement)
+            .Select(s => s.Step.Command).ToArray());
+    }
+
+    [Fact]
     public void ParsesFourIndependentNamespaces_AndKeepsScriptWaypointSeparateFromPatrols()
     {
         string dump = $"""

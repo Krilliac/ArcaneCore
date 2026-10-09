@@ -191,6 +191,9 @@ public sealed class CreatureMovementRow
 
     /// <summary>Run to this node. Added by <see cref="CreatureAiDataModule"/>.</summary>
     public bool Run { get; set; }
+
+    /// <summary>Creature movement DB script started on arrival.</summary>
+    public uint ScriptId { get; set; }
 }
 
 /// <summary><c>creature_model_info</c> (cmangos name; vmangos <c>creature_display_info_addon</c>).</summary>

@@ -69,6 +69,10 @@ public sealed record CreatureImportReport(
     /// <summary><c>script_waypoint</c> rows (ScriptDev2 escort paths; world schema 42).</summary>
     public int ScriptWaypoints { get; init; }
 
+    public int SpellScriptTargets { get; init; }
+    public int CreatureLinks { get; init; }
+    public int CreatureTemplateLinks { get; init; }
+
     /// <summary>Rows per world-schema-42 table (the four DB script tables and <c>script_waypoint</c>).</summary>
     public IReadOnlyDictionary<string, int> DbScriptTables { get; init; } = new Dictionary<string, int>();
 }
@@ -97,6 +101,9 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, (int Patch, CreatureTemplateRow Row, VMangosStats? Stats)> _templates = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
+    private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
+    private readonly Dictionary<uint, CreatureLinkRow> _links = [];
+    private readonly Dictionary<(uint Entry, uint Map), CreatureTemplateLinkRow> _templateLinks = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
     private readonly HashSet<(uint Entry, uint PathId, uint Point)> _scriptWaypointKeys = [];
     private readonly HashSet<(uint Entry, uint PathId, uint Point)> _waypointPathKeys = [];
@@ -156,6 +163,32 @@ public sealed class CreatureDumpImporter
                 case "creature_movement":
                     ReadMovement(row);
                     break;
+                case "spell_script_target":
+                {
+                    var target = new SpellScriptTargetRow
+                    {
+                        SpellId = U32(row, "entry"), Type = U32(row, "type"),
+                        TargetEntry = U32(row, "targetEntry"), InverseEffectMask = U32(row, "inverseEffectMask"),
+                    };
+                    _spellScriptTargets[(target.SpellId, target.Type, target.TargetEntry, target.InverseEffectMask)] = target;
+                    break;
+                }
+                case "creature_linking":
+                {
+                    var link = new CreatureLinkRow { SlaveGuid = U32(row, "guid"), MasterGuid = U32(row, "master_guid"), Flags = U32(row, "flag") };
+                    _links[link.SlaveGuid] = link;
+                    break;
+                }
+                case "creature_linking_template":
+                {
+                    var link = new CreatureTemplateLinkRow
+                    {
+                        SlaveEntry = U32(row, "entry"), MapId = U32(row, "map"), MasterEntry = U32(row, "master_entry"),
+                        Flags = U32(row, "flag"), SearchRange = U32(row, "search_range"),
+                    };
+                    _templateLinks[(link.SlaveEntry, link.MapId)] = link;
+                    break;
+                }
                 case "creature_movement_template":
                 case "waypoint_path":
                     ReadMovementTemplate(row);
@@ -212,6 +245,7 @@ public sealed class CreatureDumpImporter
                 case DbScriptDataModule.QuestStartTable:
                 case DbScriptDataModule.QuestEndTable:
                 case DbScriptDataModule.GossipTable:
+                case DbScriptDataModule.CreatureMovementTable:
                     _dbScripts.Accept(row);
                     break;
                 case DbScriptDataModule.WaypointTable:
@@ -300,6 +334,9 @@ public sealed class CreatureDumpImporter
                 await DbScriptDumpImporter.DeleteAllAsync(db, cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureTemplateLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnEntryRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -311,6 +348,9 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _spellScriptTargets.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _links.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _templateLinks.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movementTemplates.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawnEntries.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
@@ -381,7 +421,7 @@ public sealed class CreatureDumpImporter
             return _warnings;
         }
 
-        return [.. _warnings, $"{_scriptedNodes.Count} waypoint node(s) carry a ScriptId; creature movement scripts are not executed, the nodes are walked without them"];
+        return [.. _warnings, $"{_scriptedNodes.Count} waypoint node(s) carry a ScriptId; matching dbscripts_on_creature_movement rows are required"];
     }
 
     public CreatureImportReport BuildReport() => new(
@@ -401,6 +441,9 @@ public sealed class CreatureDumpImporter
         RelayScriptTemplates = _relayTemplates.Count,
         DbScriptSteps = _dbScripts.ScriptRows.Count,
         ScriptWaypoints = _dbScripts.WaypointRowsToWrite.Count,
+        SpellScriptTargets = _spellScriptTargets.Count,
+        CreatureLinks = _links.Count,
+        CreatureTemplateLinks = _templateLinks.Count,
         DbScriptTables = _dbScripts.Counts,
     };
 
@@ -431,6 +474,58 @@ public sealed class CreatureDumpImporter
     /// <summary>The ScriptDev2 rows <see cref="ReplaceScriptDevContentAsync"/> would write: the texts, and the namespaced path points.</summary>
     public (int Texts, int PathPoints) ScriptDevContentCounts()
         => (_scriptDevTextEntries.Count, _movementTemplates.Keys.Count(k => (k.PathId & ScriptDevPathBits) != 0));
+
+    public IReadOnlyCollection<SpellScriptTargetRow> SpellScriptTargets => [.. _spellScriptTargets.Values];
+
+    public IReadOnlyCollection<CreatureLinkRow> CreatureLinks => [.. _links.Values];
+    public IReadOnlyCollection<CreatureTemplateLinkRow> CreatureTemplateLinks => [.. _templateLinks.Values];
+
+    public async Task RefreshSpellScriptTargetsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (_spellScriptTargets.Count == 0) return;
+        await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _spellScriptTargets.Values, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task RefreshCreatureLinksAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (_links.Count > 0)
+        {
+            await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _links.Values, cancellationToken).ConfigureAwait(false);
+        }
+        if (_templateLinks.Count > 0)
+        {
+            await db.Set<CreatureTemplateLinkRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _templateLinks.Values, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Refresh script ids on existing patrol paths without replacing their geometry.</summary>
+    public async Task RefreshMovementScriptIdsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (_movement.Count > 0)
+        {
+            await db.Set<CreatureMovementRow>().Where(p => p.ScriptId != 0)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.ScriptId, 0u), cancellationToken).ConfigureAwait(false);
+            foreach (CreatureMovementRow point in _movement.Values.Where(p => p.ScriptId != 0))
+            {
+                await db.Set<CreatureMovementRow>().Where(p => p.SpawnGuid == point.SpawnGuid && p.Point == point.Point)
+                    .ExecuteUpdateAsync(s => s.SetProperty(p => p.ScriptId, point.ScriptId), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        if (_movementTemplates.Count > 0)
+        {
+            await db.Set<CreatureMovementTemplateRow>().Where(p => p.ScriptId != 0)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.ScriptId, 0u), cancellationToken).ConfigureAwait(false);
+            foreach (CreatureMovementTemplateRow point in _movementTemplates.Values.Where(p => p.ScriptId != 0))
+            {
+                await db.Set<CreatureMovementTemplateRow>().Where(p => p.Entry == point.Entry && p.PathId == point.PathId && p.Point == point.Point)
+                    .ExecuteUpdateAsync(s => s.SetProperty(p => p.ScriptId, point.ScriptId), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
 
     private const uint ScriptDevPathBits = CreatureContent.ScriptWaypointPathBit | CreatureContent.WaypointPathBit;
 
@@ -809,6 +904,7 @@ public sealed class CreatureDumpImporter
             Orientation = F32(row, 0f, "Orientation"),
             WaitTimeMs = U32(row, "WaitTime"),
             Run = U32(row, "Run", "run") != 0,
+            ScriptId = U32(row, "ScriptId", "script_id"),
         };
         _movement[(point.SpawnGuid, point.Point)] = point;
         NoteScript(point.SpawnGuid, 0, point.Point, row);
@@ -847,6 +943,7 @@ public sealed class CreatureDumpImporter
             Z = F32(row, 0f, "PositionZ", "position_z"),
             Orientation = F32(row, 0f, "Orientation"),
             WaitTimeMs = U32(row, "WaitTime", "waittime"),
+            ScriptId = U32(row, "ScriptId", "script_id"),
         };
         _movementTemplates[(point.Entry, point.PathId, point.Point)] = point;
         if (scriptWaypoint)
@@ -861,8 +958,7 @@ public sealed class CreatureDumpImporter
         NoteScript(point.Entry, point.PathId + 1, point.Point, row);
     }
 
-    // creature_movement scripts (dbscripts_on_creature_movement) are not run by ArcaneCore; count the nodes that carried one so the
-    // loss is reported, not silent. The owner/path pair keeps a node of creature_movement apart from one of creature_movement_template.
+    // Count scripted nodes for import diagnostics. The owner/path pair keeps a spawn path apart from an entry path.
     private void NoteScript(uint owner, uint path, uint point, DumpRow row)
     {
         if (U32(row, "ScriptId", "script_id") != 0)

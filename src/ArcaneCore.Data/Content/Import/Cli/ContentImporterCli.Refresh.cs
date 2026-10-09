@@ -286,6 +286,9 @@ public static partial class ContentImporterCli
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
+        Count("spell_script_target", relays.SpellScriptTargets.Count, relays.SpellScriptTargets.Count > 0);
+        Count("creature_linking", relays.CreatureLinks.Count, relays.CreatureLinks.Count > 0);
+        Count("creature_linking_template", relays.CreatureTemplateLinks.Count, relays.CreatureTemplateLinks.Count > 0);
         foreach ((string table, int rows) in dbScripts.Counts)
         {
             Count(table, rows, dbScripts.HasRows);
@@ -334,6 +337,9 @@ public static partial class ContentImporterCli
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     if (procs is not null)

@@ -278,6 +278,9 @@ public sealed class CreatureContent
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private readonly Dictionary<uint, CreatureLink> _links;
+    private readonly Dictionary<(uint Entry, uint Map), CreatureTemplateLink> _templateLinks;
+    private readonly bool _hasFollowLinks;
     private readonly Dictionary<uint, IReadOnlyList<uint>> _spawnEntries;
     private readonly Dictionary<(uint MapId, uint Entry), IReadOnlyList<CreatureSpawn>> _spawnsByEntry;
     private volatile CreatureDefinitions _definitions;
@@ -292,7 +295,9 @@ public sealed class CreatureContent
         CreatureAiContent? ai = null,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
         IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null,
-        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null)
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null,
+        IEnumerable<CreatureLink>? links = null,
+        IEnumerable<CreatureTemplateLink>? templateLinks = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -311,6 +316,10 @@ public sealed class CreatureContent
         _spawnEntries = (spawnEntries ?? [])
             .GroupBy(e => e.SpawnGuid)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
+        _links = (links ?? []).ToDictionary(link => link.SlaveGuid);
+        _templateLinks = (templateLinks ?? []).ToDictionary(link => (link.SlaveEntry, link.MapId));
+        _hasFollowLinks = _links.Values.Any(l => (l.Flags & 0x200) != 0)
+            || _templateLinks.Values.Any(l => (l.Flags & 0x200) != 0);
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
@@ -325,6 +334,13 @@ public sealed class CreatureContent
     public CreatureAiContent Ai => _definitions.Ai;
 
     public int SpawnCount { get; }
+
+    public bool HasFollowLinks => _hasFollowLinks;
+
+    public CreatureLink? FindLink(uint spawnGuid) => _links.GetValueOrDefault(spawnGuid);
+
+    public CreatureTemplateLink? FindTemplateLink(uint entry, uint mapId)
+        => _templateLinks.GetValueOrDefault((entry, mapId));
 
     /// <summary>Changes every time the definitions are swapped; a holder that caches a lookup compares it to know when to look again.</summary>
     public int DefinitionsVersion => Volatile.Read(ref _version);

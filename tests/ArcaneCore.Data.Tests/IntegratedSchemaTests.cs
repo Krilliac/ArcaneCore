@@ -95,6 +95,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule.Version),
             (typeof(ArcaneCore.Data.World.Transports.TransportWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportWorldDataModule.Version),
             (typeof(DbScriptDataModule), DatabaseComponent.World, DbScriptDataModule.Version),
+            (typeof(MovementScriptDataModule), DatabaseComponent.World, MovementScriptDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -160,7 +161,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(42, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(43, WorldDbContext.Schema.CurrentVersion);
         Assert.Equal(42, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
