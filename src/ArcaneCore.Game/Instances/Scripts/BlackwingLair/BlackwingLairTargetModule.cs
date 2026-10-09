@@ -9,7 +9,10 @@ namespace ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 /// <summary>
 /// The Blackwing Lair spells whose implicit targets the built-in switch does not handle (mangos-classic Spell::SetTargetMap and
 /// CheckScriptTargeting for the script targets, Spell::OnCheckTarget for Nefarian's class calls). Spell.dbc 5875 targets and the
-/// ClassicDB z2815 spell_script_target rows used:
+/// ClassicDB z2815 spell_script_target rows used. For the unit script targets (38 Possess, 7 Nefarius' Corruption) the selectors here
+/// are only the fallback for a world without spell_script_target rows for the spell: once the world has them (world 45, imported by
+/// the content refresh) <see cref="SpellSystem"/> selects from the table. The game object targets (40, 46, 51) and the class-call
+/// filter are always served here:
 /// <list type="bullet">
 /// <item>19832 Possess: effects 0 and 2 target A 38 (TARGET_UNIT_SCRIPT_NEAR_CASTER), range index 6 (100 yd); row (19832,1,12435).</item>
 /// <item>19873 Destroy Egg: effect 0 ACTIVATE_OBJECT target A 40 (TARGET_GAMEOBJECT_SCRIPT_NEAR_CASTER), effect 1 DUMMY target A 46

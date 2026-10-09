@@ -77,12 +77,25 @@ public sealed partial class SpellSystem
     public bool IsRegisteredLocationTarget(SpellImplicitTarget target)
         => _targetSelectors.TryGetValue(target, out TargetSelectorEntry entry) && entry.LocationOnly;
 
+    /// <summary>
+    /// The unit script targets (38, 7) follow the world's spell_script_target rows whenever the spell has any; a spell-specific
+    /// selector for them (the Blackwing Lair module's, written from the ClassicDB rows) is only the fallback for a world without
+    /// them. Every other implicit target asks the spell-specific selector first, then the general one.
+    /// </summary>
     private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector, Unit? unitTarget)
-        => _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
+    {
+        bool unitScriptTarget = selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster;
+        if (unitScriptTarget && Store.GetScriptTargets(cast.Spell.Id).Count > 0)
+        {
+            return SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget);
+        }
+
+        return _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
             ? handler(this, cast, effect, unitTarget)
-            : selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster
+            : unitScriptTarget
                 ? SelectScriptTargets(cast, effect, effectIndex, selector == SpellImplicitTarget.UnitScriptNearCaster, unitTarget)
             : _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
+    }
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {

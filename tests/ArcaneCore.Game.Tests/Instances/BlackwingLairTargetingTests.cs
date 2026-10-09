@@ -148,6 +148,29 @@ public sealed class BlackwingLairTargetingTests
     }
 
     [Fact]
+    public void NefariusCorruption_FollowsTheWorldsSpellScriptTargetRows_WhenTheSpellHasAny()
+    {
+        // With spell_script_target rows imported (world 45, movement-scripts), the table decides the script target, not the
+        // module's built-in copy of the ClassicDB row: a second listed entry is hit too, which the module alone would never pick.
+        SpellInfo corruption = SpellTestKit.Spell(23642,
+                SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.LocationCasterSrc, AuraType.Dummy,
+                    targetB: (SpellImplicitTarget)7) with { Radius = 100 })
+            with { RangeIndex = 13, Range = new SpellRange(0, 50000), Duration = new SpellDuration(-1, 0, -1) };
+        using var bwl = new Bwl([corruption], [10162, 13020, 12557], []);
+        bwl.Kit.System.Store = new SpellStore(bwl.Kit.Store.All, [], [],
+            [new SpellStore.ScriptTarget(23642, 1, 13020, 0), new SpellStore.ScriptTarget(23642, 1, 12557, 0)]);
+        Creature nefarius = bwl.Spawn(10162, 0);
+        Creature vael = bwl.Spawn(13020, 10);
+        Creature listed = bwl.Spawn(12557, 15);
+        Player player = bwl.AddPlayer(1, 5);
+        Assert.Equal(CreatureCastResult.Ok, bwl.Creatures.CastSpell(nefarius, 23642, vael, triggered: true));
+        Assert.True(bwl.Kit.System.HasAura(vael, 23642));
+        Assert.True(bwl.Kit.System.HasAura(listed, 23642));
+        Assert.False(bwl.Kit.System.HasAura(player, 23642));
+        Assert.False(bwl.Kit.System.HasAura(nefarius, 23642));
+    }
+
+    [Fact]
     public void ClassCall_AffectsOnlyTheCalledClass_FromOneCast()
     {
         // Spell.dbc 5875 23410 Wild Magic: APPLY_AURA target A 22 / B 15 (every enemy around the caster), radius index 12 (100 yd).
