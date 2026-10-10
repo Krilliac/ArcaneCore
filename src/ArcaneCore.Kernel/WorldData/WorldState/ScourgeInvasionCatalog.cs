@@ -18,6 +18,29 @@ public static class ScourgeInvasionCatalog
     public const uint BattlesWonField = 2219;
     public const uint NecropolisHealth = 16421;
     public const uint ZapNecropolis = 28386;
+
+    /// <summary>NPC_NECROPOLIS (scourge_invasion.h:192), the creature whose ScriptName is scourge_invasion_necropolis.</summary>
+    public const uint Necropolis = 16401;
+
+    /// <summary>The five necropolis object entries (scourge_invasion.h:273-277), ScriptName scourge_invasion_go_necropolis.</summary>
+    public static IReadOnlySet<uint> NecropolisObjects { get; } = new HashSet<uint> { 181154, 181215, 181223, 181373, 181374 };
+
+    // The communique spells (scourge_invasion.h:39-71; effects and targets read from Spell.dbc build 5875).
+    public const uint CommuniqueTimerNecropolis = 28395; // periodic 15 s, triggers 28373 on the necropolis
+    public const uint CommuniqueNecropolisToProxies = 28373;
+    public const uint CommuniqueProxyToNecropolis = 28367;
+    public const uint CommuniqueProxyToRelay = 28366;
+    public const uint CommuniqueRelayToProxy = 28365;
+    public const uint CommuniqueRelayToCamp = 28326;
+    public const uint CommuniqueTimerCamp = 28346; // periodic 35 s, triggers 28345 on the shard
+    public const uint CommuniqueTrigger = 28345;
+    public const uint CommuniqueCampToRelay = 28281;
+    public const uint CampReceivesCommunique = 28449;
+
+    // ScourgeMinion spells (scourge_invasion.h:100-115).
+    public const uint ScourgeStrike = 28265;
+    public const uint SpiritSpawnOut = 17680;
+    public const uint DespawnerSelf = 28091;
     public const uint CampDeathCommunique = 28351;
     public const uint NecroticShard = 16136;
     public const uint DamagedNecroticShard = 16172;
