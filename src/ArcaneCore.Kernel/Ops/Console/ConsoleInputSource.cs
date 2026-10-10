@@ -1,0 +1,21 @@
+namespace ArcaneCore.Kernel.Ops.ServerConsole;
+
+/// <summary>
+/// Where a daemon console reads commands from and writes replies to (docs/areas/server-console.md). The default is the
+/// process console; tests pass their own readers and writers. The folder is <c>Ops/Console</c> but the namespace is
+/// <c>ServerConsole</c>: a namespace named <c>Console</c> would hide <see cref="System.Console"/> from the rest of
+/// <c>ArcaneCore.*.Ops</c>.
+/// </summary>
+/// <param name="Input">The command source (read on a background thread only).</param>
+/// <param name="Output">The reply sink; must be safe to write from several threads.</param>
+/// <param name="IsInputRedirected">Whether standard input is a pipe or file (services, tests, the deploy scripts): no reader is started then.</param>
+/// <param name="IsUserInteractive">Whether the process runs in an interactive session (false for a Windows service).</param>
+public sealed record ConsoleInputSource(TextReader Input, TextWriter Output, bool IsInputRedirected, bool IsUserInteractive)
+{
+    /// <summary>Whether a reader may be started on this source.</summary>
+    public bool IsInteractive => !IsInputRedirected && IsUserInteractive;
+
+    /// <summary>The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>.</summary>
+    public static ConsoleInputSource Default()
+        => new(Console.In, TextWriter.Synchronized(Console.Out), Console.IsInputRedirected, Environment.UserInteractive);
+}
