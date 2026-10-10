@@ -133,6 +133,7 @@ public sealed partial class NaxxramasInstance
     public override void OnCreatureCreate(Creature creature)
     {
         StoreCreature(creature);
+        OnLivingPoisonTriggerCreated(creature);
         // vmangos instance_naxxramas::OnCreatureCreate: a horseman created dead while the encounter is not done respawns, so the
         // four distinct deaths (counted in memory only, like vmangos m_horsemenDeathCounter) stay reachable after a restart or a
         // grid reload. Deferred to the next instance update: the creature is still being added to the map here.
