@@ -39,6 +39,7 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
         Honor = this,
         Ranks = this,
         Reputation = this,
+        Scripts = World.Scripts,
     };
 
     // ------------------------------------------------------------------ IBattlegroundManagerHost

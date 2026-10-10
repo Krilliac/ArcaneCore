@@ -182,6 +182,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             }
         }
 
+        // AzerothCore PlayerScript::OnPlayerCanUseChat (docs/integration/script-hooks.md): after commands, before every feature and the core.
+        if (session.World.Scripts.Player.HasChat
+            && !session.World.Scripts.Player.OnChat(player, new Game.Scripting.ScriptChatMessage((uint)type, (uint)language, message, target.Length == 0 ? null : target)))
+        {
+            return;
+        }
+
         if (OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message)))
         {
             return;
