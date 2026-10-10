@@ -207,10 +207,17 @@ public sealed class TeleportService
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
         if (current.MapId == mapId && !staysAboard)
         {
+            bool leavesCombat = (options & TeleportOptions.NotLeaveCombat) == 0;
             _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default)
             {
-                HonorlessTarget = (options & TeleportOptions.NotLeaveCombat) == 0,
+                HonorlessTarget = leavesCombat,
             };
+            if (leavesCombat)
+            {
+                // vmangos Player::TeleportTo near branch (Player.cpp:1923-1927): CombatStop() unless TELE_TO_NOT_LEAVE_COMBAT.
+                current.Combat.CombatStop(player);
+            }
+
             NearTeleportStarting?.Invoke(player, destination);
             MovementInfo moved = player.Movement;
             moved.X = x;

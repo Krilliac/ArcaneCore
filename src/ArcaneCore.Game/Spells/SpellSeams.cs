@@ -98,6 +98,12 @@ public interface ITeleportSink
     bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation);
 
     /// <summary>
+    /// <see cref="Teleport(Unit, uint, float, float, float, float)"/>, saying whether a same-map move keeps combat (vmangos
+    /// TELE_TO_NOT_LEAVE_COMBAT): every spell teleport does except the bind-point one (Spell::EffectTeleportUnits, TeleportToHomebind).
+    /// </summary>
+    bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation, bool keepCombat) => Teleport(unit, mapId, x, y, z, orientation);
+
+    /// <summary>
     /// Whether <see cref="Teleport"/> would be accepted right now, without moving anything. Quest reward
     /// preflight asks this before a transient teleport reward may consume the quest; the answer can
     /// still change before publication, which asks again.
