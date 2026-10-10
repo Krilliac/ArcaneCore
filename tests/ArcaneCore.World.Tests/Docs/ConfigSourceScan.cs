@@ -39,6 +39,11 @@ internal static partial class ConfigSourceScan
                 CheckKey(path, m.Groups[1].Value, coverage, problems);
             }
 
+            foreach (Match m in KeyConstantRegex().Matches(text))
+            {
+                CheckKey(path, m.Groups[1].Value, coverage, problems);
+            }
+
             foreach (Match m in TypedBindingRegex().Matches(text))
             {
                 string type = m.Groups[1].Value.Split('.')[^1];
@@ -88,7 +93,7 @@ internal static partial class ConfigSourceScan
             return;
         }
 
-        // A lower-case identifier is a variable (a section chosen at run time); the scan cannot follow it.
+        // A lower-case identifier, or a member of one (key.Path), is a variable (a section chosen at run time); the scan cannot follow it.
         if (!VariableRegex().IsMatch(argument))
         {
             problems.Add($"{file}: GetSection({argument}) is a binding style the scan does not understand; add it to the scan or the exception table");
@@ -120,6 +125,10 @@ internal static partial class ConfigSourceScan
     [GeneratedRegex(@"\bConfigKey\s*=\s*""([^""]+)""")]
     private static partial Regex ConfigKeyRegex();
 
+    /// <summary>A <c>const string XxxKey = "Section:Name"</c> field: the name of a key a feature reads through <c>IConfiguration[...]</c> with the constant. Configuration sections are PascalCase, which excludes non-configuration constants such as a metric label like <c>mute:expired</c>.</summary>
+    [GeneratedRegex(@"\bconst\s+string\s+\w*Key\s*=\s*""([A-Z]\w*(?::\w+)+)""")]
+    private static partial Regex KeyConstantRegex();
+
     [GeneratedRegex(@"\b(?:Configure|PostConfigure|AddOptions)<([\w.]+)>")]
     private static partial Regex TypedBindingRegex();
 
@@ -132,7 +141,7 @@ internal static partial class ConfigSourceScan
     [GeneratedRegex(@"^SectionName$")]
     private static partial Regex BareRegex();
 
-    [GeneratedRegex(@"^[a-z_]\w*$")]
+    [GeneratedRegex(@"^[a-z_]\w*(?:\.[A-Za-z_]\w*)*$")]
     private static partial Regex VariableRegex();
 
     [GeneratedRegex(@"\bclass\s+(\w+)")]

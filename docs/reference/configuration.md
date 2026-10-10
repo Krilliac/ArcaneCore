@@ -1259,9 +1259,11 @@ These keys are read directly rather than through an options class.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `Crafting:Enabled` | `bool` | `true` | `false` leaves crafting (reagent check, tool check and the CREATE_ITEM effect) and profession-specialization gossip unregistered (read once by `CraftingFeature`); unset or unparsable keeps crafting enabled, the retail behaviour. |
+| `Forms:ResetFistAttackTimeOnFormLoss` | `bool` | `false` | `true` gives a weapon-less hand the 2.0 s base attack time when a shapeshift form ends (read once by `FormStatFeature`); `false` keeps the retail 1.0 / 2.5 s of an unarmed hand. |
 | `Items:CharStartOutfitDbcPath` | `string` | `null` | Build-5875 CharStartOutfit.dbc: a new character's starting items by race, class and gender, then the SQL starting items (read once by `ItemsFeature`). Unset keeps the SQL starting items only; a configured file that is unreadable or has another layout fails the item load (no silent fallback). |
 | `Spells:RequireSpellFocus` | `bool` | `true` | `false` stops enforcing `SpellInfo.RequiresSpellFocus` on casts (read once by `SpellFocusFeature`); `true` is the retail behaviour. |
-| `Startup:Strict` | `bool` | `false` | `true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigValidation.Run`. |
+| `Startup:Strict` | `bool` | `false` | `true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigReport.Run` in both daemons. |
 
 ## Aliases and framework sections
 
