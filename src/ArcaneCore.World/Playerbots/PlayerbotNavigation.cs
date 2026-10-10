@@ -119,8 +119,15 @@ internal static class PlayerbotNavigation
         // that leaves the loaded tiles is followed. The straight-line steps below are a greedy fallback that stops wherever the
         // mesh ends nearest a point on the line: on the edge of the Red Cloud Mesa above Bloodhoof Village (live stress test
         // 2026-10-08, quest 1656, 99 stalls), whose way down runs south through a tile no grid held.
-        if (distance <= options.MaxRouteYards && Plan(player, goal, goal, options, partial: true, out route, out _)) return true;
+        // Within the first step the loop below plans to the goal itself, so the goal-first query would only repeat it.
         float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
+        // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
+        // the refusal: one plan attempt costs one query, as before. Only an unloaded tile or no mesh (a refused straight line) goes on.
+        if (distance > chunk && distance <= options.MaxRouteYards)
+        {
+            if (Plan(player, goal, goal, options, partial: true, out route, out bool goalStraightRefused)) return true;
+            if (!goalStraightRefused) return false;
+        }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
         // the mesh then answers a straight line (vmangos PathFinder's HaveTiles shortcut), which the terrain stepper refuses across
         // any hill, and the bot stood at the tile's edge for good (Dawnrover on quest 35, 107 yards short of the Elwynn tile
@@ -248,6 +255,8 @@ internal static class PlayerbotNavigation
                 : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards)
             return false;
         if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route)) return true;
+        // A fragment answers a partial corridor that ends where it began; a no-path answer (the bot off the mesh) is not one.
+        if ((path.Type & PathType.NoPath) != 0) return false;
 
         // The polygon under the bot is a fragment the mesh does not join to its surroundings (the nearest polygon is chosen as
         // Detour does, and a sliver on a rock or a root can win over the ground beside it): every query from it ends where it
