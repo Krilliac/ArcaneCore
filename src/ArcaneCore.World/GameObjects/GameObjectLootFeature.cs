@@ -10,6 +10,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Kernel.WorldData.Transports;
@@ -239,6 +240,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Options = ObjectOptions,
             ElevatorAnimations = ElevatorAnimations,
             Random = new Random(),
+            // An object with source-type-1 smart_scripts rows runs them unless a C# AI is registered for its entry; the catalog is read at use time (the creature feature loads it).
+            FallbackAi = new SmartGameObjectAi(() => services.GetService<CreatureWorldFeature>()?.Content.Ai.SmartScripts ?? SmartScriptCatalog.Empty),
             // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
             Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
         };

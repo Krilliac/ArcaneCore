@@ -1,5 +1,8 @@
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Maps;
+using ArcaneCore.Data.Npc;
+using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Pools;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
@@ -36,6 +39,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
         List<CreatureLinkRow> links = await db.Set<CreatureLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<SmartScriptDbRow> smartScripts = await db.Set<SmartScriptDbRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        SmartScriptReferences? smartReferences = smartScripts.Count == 0 ? null : await LoadSmartReferencesAsync(templates, spawns, cancellationToken).ConfigureAwait(false);
         List<CreatureTemplateLinkRow> templateLinks = await db.Set<CreatureTemplateLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
             db, PoolSpawnKind.Creature, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
@@ -71,7 +75,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                     relaySteps.Select(RelayScriptDataModule.ToStep),
                     relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
                 DbScripts = new DbScriptCatalog(dbScripts.Select(row => (DbScriptDataModule.KindOf(row), DbScriptDataModule.ToStep(row)))),
-                SmartScripts = new SmartScriptCatalog(smartScripts.Select(SmartScriptDataModule.ToRow)),
+                SmartScripts = new SmartScriptCatalog(smartScripts.Select(SmartScriptDataModule.ToRow), smartReferences),
             },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs) { ScriptId = p.ScriptId })),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
@@ -84,6 +88,21 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         };
     }
 
+    /// <summary>
+    /// The ids <c>smart_scripts</c> rows are checked against (SmartScriptMgr.cpp:141-210): the creature and game object templates and spawns, the area
+    /// triggers and the condition entries. Read only when the table has rows; the creature sets reuse the rows the caller already loaded.
+    /// </summary>
+    private async Task<SmartScriptReferences> LoadSmartReferencesAsync(
+        List<CreatureTemplateRow> templates, List<CreatureSpawnRow> spawns, CancellationToken cancellationToken)
+    {
+        List<uint> goEntries = await db.Set<GameObjectTemplateRow>().AsNoTracking().Select(r => r.Entry).ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<uint> goGuids = await db.Set<GameObjectSpawnRow>().AsNoTracking().Select(r => r.Guid).ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<uint> triggers = await db.Set<AreaTriggerTemplateRow>().AsNoTracking().Select(r => r.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<uint> conditions = await db.Set<ConditionRow>().AsNoTracking().Select(r => r.ConditionEntry).ToListAsync(cancellationToken).ConfigureAwait(false);
+        return new SmartScriptReferences(
+            templates.Select(t => t.Entry).ToHashSet(), spawns.Select(s => s.Guid).ToHashSet(),
+            goEntries.ToHashSet(), goGuids.ToHashSet(), triggers.ToHashSet(), conditions.ToHashSet());
+    }
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(
         r.Id, r.Text, r.FemaleText, r.ChatType, r.Language, r.SoundId,
         [r.EmoteId1, r.EmoteId2, r.EmoteId3], [r.EmoteDelay1, r.EmoteDelay2, r.EmoteDelay3]);

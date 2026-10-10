@@ -30,7 +30,7 @@ public sealed class SmartAiTests
         };
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, FakeCaster Spells, Player Player, FakeSession Session,
-        Creature Wolf, CreatureSmartAI Ai) : IDisposable
+        Creature Wolf, CreatureSmartAI Ai, SmartScriptCatalog Catalog) : IDisposable
     {
         public SmartScript Script => Ai.Script;
         public void Dispose() => World.Dispose();
@@ -38,18 +38,19 @@ public sealed class SmartAiTests
 
     private static Fight Start(params SmartScriptRow[] rows)
     {
+        var catalog = new SmartScriptCatalog(rows);
         var content = new CreatureContent(
             [Template(configure: t => t.AIName = CreatureAiFactory.SmartAIName), Template(SummonEntry)],
             [Spawn(1, WolfEntry, 5, 0)], [], [], [],
             new CreatureAiContent([], [], new BroadcastTextCatalog([new BroadcastText(9001, "Grr, $N!", "", 0, 0, 0, [0, 0, 0], [0, 0, 0])]),
                 [], EventAiDialect.CMangos, [])
-            { SmartScripts = new SmartScriptCatalog(rows) });
+            { SmartScripts = catalog });
         var fake = new FakeCaster();
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = fake });
         (Player player, FakeSession session) = AddPlayer(world, 1, 0, 0);
         Creature wolf = system.Creatures.Single(c => c.Entry == WolfEntry);
         var ai = Assert.IsType<CreatureSmartAI>(wolf.AI);
-        return new Fight(world, map, system, fake, player, session, wolf, ai);
+        return new Fight(world, map, system, fake, player, session, wolf, ai, catalog);
     }
 
     private static void Pull(Fight f) => f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
@@ -78,8 +79,10 @@ public sealed class SmartAiTests
             Row(1, (SmartEvent)3, SmartAction.SetEventPhase, a1: 2),
             Row(2, SmartEvent.Aggro, (SmartAction)41),
             Row(3, SmartEvent.Aggro, SmartAction.Cast, (SmartTarget)13));
+        // The catalog refuses what the engine cannot run (slice 2); nothing reaches the script as unsupported.
         Assert.Single(f.Script.Events);
-        Assert.Equal(3, f.Script.Unsupported.Count);
+        Assert.Equal(3, f.Catalog.Rejected.Count);
+        Assert.Empty(f.Script.Unsupported);
     }
 
     [Fact]

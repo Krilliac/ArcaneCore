@@ -31,6 +31,27 @@ public interface IGameObjectAi
     /// is refused (<see cref="OnUse"/> true) but whose validated opening acts, such as a Molten Core rune, overrides both.
     /// </summary>
     bool OnUnlockedUse(GameObjectMapSystem objects, GameObject go, Player user) => false;
+
+    /// <summary>
+    /// The same object instance came back after a despawn (GameObject::Update respawn path, which calls AI()->Reset() "required for example in
+    /// SmartAI to clear one time events": AzerothCore GameObject.cpp:663-665). Defaults to nothing, so existing scripts keep their behaviour.
+    /// </summary>
+    void OnRespawn(GameObjectMapSystem objects, GameObject go)
+    {
+    }
+}
+
+/// <summary>
+/// An object script that is not registered by entry but decides per object whether it runs (the smart-script AI: an object runs it when
+/// <c>smart_scripts</c> has rows for it). A script registered with <see cref="GameObjectMapSystem.RegisterAi"/> always wins over it.
+/// </summary>
+public interface IGameObjectFallbackAi : IGameObjectAi
+{
+    /// <summary>Whether this script runs <paramref name="go"/>.</summary>
+    bool Handles(GameObject go);
+
+    /// <summary>Whether this script can run any object at all (false lets the map skip walking its objects every update).</summary>
+    bool HandlesAny { get; }
 }
 
 /// <summary>The object scripts by entry and the little a script may do to its object.</summary>
@@ -44,21 +65,29 @@ public sealed partial class GameObjectMapSystem
     /// <summary>Stop running the script of <paramref name="entry"/>.</summary>
     public void UnregisterAi(uint entry) => _ais.Remove(entry);
 
-    private IGameObjectAi? AiOf(GameObject go) => _ais.Count == 0 ? null : _ais.GetValueOrDefault(go.Entry);
+    /// <summary>The script that runs an object whose entry has none registered (see <see cref="IGameObjectFallbackAi"/>); null for none.</summary>
+    public IGameObjectFallbackAi? FallbackAi { get; set; }
+
+    private IGameObjectAi? AiOf(GameObject go)
+        => _ais.GetValueOrDefault(go.Entry) ?? (FallbackAi?.Handles(go) == true ? FallbackAi : null);
+
+    /// <summary>The script that runs <paramref name="go"/>: its registered one, else the fallback when it handles the object, else null.</summary>
+    public IGameObjectAi? AiFor(GameObject go)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        return AiOf(go);
+    }
 
     private void UpdateAis(uint diffMs)
     {
-        if (_ais.Count == 0)
+        if (_ais.Count == 0 && FallbackAi?.HandlesAny != true)
         {
             return;
         }
 
         foreach (GameObject go in _objects.Values.ToArray())
         {
-            if (_ais.TryGetValue(go.Entry, out IGameObjectAi? ai))
-            {
-                ai.Update(this, go, diffMs);
-            }
+            AiOf(go)?.Update(this, go, diffMs);
         }
     }
 

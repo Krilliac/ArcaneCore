@@ -1114,6 +1114,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
         Map.AddObject(go);
+        if (go.Spawn is { SpawnTimeSeconds: >= 0 })
+        {
+            // AzerothCore reaches AI()->Reset() only for m_spawnedByDefault objects (GameObject.cpp:656-665): a negative spawntimesecs object
+            // brought back by a script or event keeps its script state.
+            AiOf(go)?.OnRespawn(this, go);
+        }
+
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectSpawn(go);
         RespawnLinkedTrap(go); // GameObject::Update, GO_READY respawn (GameObject.cpp:427-437)
     }
