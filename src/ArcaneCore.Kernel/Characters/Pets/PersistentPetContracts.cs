@@ -17,7 +17,10 @@ public sealed record PersistentPetSnapshot(
     IReadOnlyList<PersistentPetCooldown>? Cooldowns = null,
     string Name = "",
     uint NameTimestamp = 0,
-    bool RenameAllowed = true)
+    bool RenameAllowed = true,
+    byte LoyaltyLevel = 1,
+    int LoyaltyPoints = 1000,
+    int TrainingPoints = 0)
 {
     public static PersistentPetSnapshot Empty(int characterId, uint petNumber, uint entry, byte level)
         => new(characterId, petNumber, entry, level, 0, 1, 0, 0, 1, [], []);
