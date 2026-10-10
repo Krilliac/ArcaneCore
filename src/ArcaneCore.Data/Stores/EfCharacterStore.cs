@@ -260,6 +260,8 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         character.Money = state.Money;
         character.ActionBarToggles = state.ActionBarToggles;
         character.BankBagSlotCount = state.BankBagSlotCount;
+        character.Drunk = state.Drunk;
+        character.LogoutTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         // vmangos SaveToDB (Player.cpp:16427-16434): the ship and the offset on it, zeros on land.
         TransportSeat seat = state.Transport ?? default;
         character.TransportGuid = seat.Guid;
