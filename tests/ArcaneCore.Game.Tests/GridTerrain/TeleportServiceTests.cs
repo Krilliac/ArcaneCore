@@ -70,6 +70,8 @@ public sealed class TeleportServiceTests
         Assert.True(f.Teleports.TeleportTo(a, 0, 500, 0, 90, 1.5f));
         Assert.True(f.Teleports.IsBeingTeleportedNear(a));
 
+        // vmangos TeleportTo leaves combat (SMSG_CANCEL_COMBAT) before it sends the ack (Player.cpp:1923-1927).
+        Assert.Equal(WorldOpcode.SmsgCancelCombat, sa.Next().Opcode);
         (WorldOpcode op, byte[] payload) = sa.Next();
         Assert.Equal(WorldOpcode.MsgMoveTeleportAck, op);
         var reader = new PacketReader(payload);
