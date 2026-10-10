@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Net;
+using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.Realm.Protocol;
@@ -41,9 +42,13 @@ public sealed class LogonSession(
     NetGuard? guard = null,
     RealmIpBanCache? ipBanCache = null,
     TimeProvider? timeProvider = null,
-    PatchCatalog? patches = null)
+    PatchCatalog? patches = null,
+    OpcodeTable? traffic = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
+
+    private readonly OpcodeTable _traffic = traffic ?? LogonPacketMetrics.Table; // injectable so tests count on a private meter
+    private byte _inboundCommand; // the command byte of the packet being read: the opcode its continuation bytes are counted under
 
     private readonly IBanStore? _banStore = banStore; // optional: null keeps every pre-ban call site unchanged
     private readonly RealmIpBanCache? _ipBanCache = ipBanCache; // optional: null reads the row on every challenge (vmangos realmd)
@@ -179,6 +184,12 @@ public sealed class LogonSession(
             {
                 break; // client closed the connection
             }
+
+            // The logon stream has no length framing, so the command byte is the packet; its parts are added as they
+            // are read (ReadPacketPartAsync). Counted before dispatch so an unsupported byte lands in the unknown bucket.
+            _inboundCommand = commandBuffer[0];
+            ArcaneMeters.PacketIn(1);
+            _traffic.RecordIn(_inboundCommand, 1);
 
             var command = (AuthCommand)commandBuffer[0];
             try
@@ -651,7 +662,7 @@ public sealed class LogonSession(
         writer.WriteByte((byte)AuthResult.Success);
         writer.WriteBytes(_reconnectChallenge);
         writer.WriteBytes(AuthConstants.VersionChallenge);
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task HandleReconnectProofAsync(CancellationToken cancellationToken)
@@ -695,7 +706,7 @@ public sealed class LogonSession(
             var failure = new PacketWriter(2);
             failure.WriteByte((byte)AuthCommand.ReconnectProof);
             failure.WriteByte((byte)AuthResult.VersionInvalid);
-            await stream.WriteAsync(failure.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await SendAsync(failure.AsMemory(), cancellationToken).ConfigureAwait(false);
             _closeRequested = true;
             return;
         }
@@ -704,7 +715,7 @@ public sealed class LogonSession(
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectProof);
         writer.WriteByte((byte)AuthResult.Success);
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Charge one failed attempt to this connection's address (Net:Protection:AuthFailureBurstPerIp).</summary>
@@ -813,12 +824,28 @@ public sealed class LogonSession(
         if (deadline is null || !deadline.Enabled)
         {
             await stream.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
+            CountPart(buffer.Length);
             return;
         }
 
         deadline.Arm();
         await stream.ReadExactlyAsync(buffer, deadline.Token).ConfigureAwait(false);
         deadline.Disarm();
+        CountPart(buffer.Length);
+    }
+
+    private void CountPart(int bytes)
+    {
+        ArcaneMeters.BytesReceived(bytes);
+        _traffic.RecordInBytes(_inboundCommand, bytes);
+    }
+
+    /// <summary>Write one logon packet and count it (<see cref="ArcaneMeters.PacketOut"/> and the per-command table) once the write completes.</summary>
+    private async Task SendAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken)
+    {
+        await stream.WriteAsync(packet, cancellationToken).ConfigureAwait(false);
+        ArcaneMeters.PacketOut(packet.Length);
+        _traffic.RecordOut(packet.Span[0], packet.Length);
     }
 
     /// <summary>The country field (body offset 17), reversed on the wire (AuthSocket.cpp:301-304).</summary>
@@ -870,6 +897,13 @@ public sealed class LogonSession(
         BinaryPrimitives.WriteUInt64LittleEndian(packet.AsSpan(9), (ulong)patch.Size);
         patch.Md5.CopyTo(packet.AsSpan(17));
         await stream.WriteAsync(packet, cancellationToken).ConfigureAwait(false);
+
+        // One socket write, two logon packets, as vmangos builds them (AuthSocket.cpp:642 packet 1, :646 packet 2 XFER_INIT).
+        const int proofPacketLength = 2;
+        ArcaneMeters.PacketOut(proofPacketLength);
+        _traffic.RecordOut((byte)AuthCommand.LogonProof, proofPacketLength);
+        ArcaneMeters.PacketOut(packet.Length - proofPacketLength);
+        _traffic.RecordOut((byte)AuthCommand.XferInitiate, packet.Length - proofPacketLength);
         _xferPatch = patch;
         // The download outlives the pre-proof lifetime; the session cap (Auth:MaxSessionDurationSeconds) still applies and the client resumes.
         _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan);
@@ -917,7 +951,7 @@ public sealed class LogonSession(
         {
             BinaryPrimitives.WriteUInt16LittleEndian(chunk.AsSpan(1, 2), (ushort)read);
             ExtendSessionCap(); // bytes are flowing: the cap counts from the last chunk, so a stalled download still closes
-            await stream.WriteAsync(chunk.AsMemory(0, 3 + read), cancellationToken).ConfigureAwait(false);
+            await SendAsync(chunk.AsMemory(0, 3 + read), cancellationToken).ConfigureAwait(false);
         }
 
         ExtendSessionCap(); // the idle cap runs again from the end of the transfer
@@ -974,7 +1008,7 @@ public sealed class LogonSession(
 
         IReadOnlyList<RealmEntry> realms = await realmStore.GetRealmsAsync(cancellationToken).ConfigureAwait(false);
         ReadOnlyMemory<byte> packet = RealmListWriter.Build(realms, charactersPerRealm: 0);
-        await stream.WriteAsync(packet, cancellationToken).ConfigureAwait(false);
+        await SendAsync(packet, cancellationToken).ConfigureAwait(false);
         logger.LogInformation("[{Endpoint}] sent realm list ({Count} realm(s))", remoteEndpoint, realms.Count);
     }
 
@@ -999,7 +1033,7 @@ public sealed class LogonSession(
             writer.WriteUInt32(_gridSeed);
             writer.WriteBytes(_pinSalt!);
         }
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendChallengeFailureAsync(AuthResult result, CancellationToken cancellationToken)
@@ -1008,7 +1042,7 @@ public sealed class LogonSession(
         writer.WriteByte((byte)AuthCommand.LogonChallenge);
         writer.WriteByte(0x00);
         writer.WriteByte((byte)result);
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendProofSuccessAsync(byte[] serverProof, CancellationToken cancellationToken)
@@ -1019,7 +1053,7 @@ public sealed class LogonSession(
         writer.WriteByte((byte)AuthResult.Success);
         writer.WriteBytes(serverProof);
         writer.WriteUInt32(0); // survey id
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendProofFailureAsync(AuthResult result, CancellationToken cancellationToken)
@@ -1029,7 +1063,7 @@ public sealed class LogonSession(
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.LogonProof);
         writer.WriteByte((byte)result);
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendReconnectFailureAsync(AuthResult result, CancellationToken cancellationToken)
@@ -1037,7 +1071,7 @@ public sealed class LogonSession(
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectChallenge);
         writer.WriteByte((byte)result);
-        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
         _closeRequested = true;
     }
 

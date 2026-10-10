@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Sockets;
 using System.Numerics;
@@ -6,7 +7,9 @@ using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -140,7 +143,116 @@ public sealed class AutoPatchTests : IDisposable
         Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
-    private static async Task<NetworkStream> StartAsync(IAccountStore accounts, PatchCatalog catalog, AuthOptions? options = null)
+    [Fact]
+    public async Task PatchOffer_CountsTwoLogonPackets_AndXferResumeAndDataPerCommand()
+    {
+        using var meter = new Meter("ArcaneCore.Test." + Guid.NewGuid().ToString("N"));
+        OpcodeTable table = new OpcodeTrafficMeter(meter).Register("logon", LogonPacketMetrics.Commands);
+        using MeterListener listener = Listen(meter);
+        byte[] data = RandomNumberGenerator.GetBytes(LogonSession.XferChunkSize + 100);
+        File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), data);
+        var catalog = new PatchCatalog(() => new AutoPatchOptions { Enabled = true, Directory = _dir });
+        var accounts = new InMemoryAccountStore();
+        await CreateAccountAsync(accounts);
+
+        await using NetworkStream client = await StartAsync(accounts, catalog, traffic: table);
+        await client.WriteAsync(Challenge(5464));
+        await Read(client, 3 + 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
+        byte[] proof = new byte[1 + 32 + 20 + 20 + 1 + 1];
+        proof[0] = (byte)AuthCommand.LogonProof;
+        await client.WriteAsync(proof);
+        byte[] offer = await Read(client, 2 + 1 + 1 + 5 + 8 + 16);
+
+        Assert.Equal(33, offer.Length);
+
+        const int resumeAt = 4000;
+        byte[] resume = new byte[9];
+        resume[0] = (byte)AuthCommand.XferResume;
+        BinaryPrimitives.WriteUInt64LittleEndian(resume.AsSpan(1), resumeAt);
+        await client.WriteAsync(resume);
+        int remaining = data.Length - resumeAt;
+        int received = 0;
+        int chunks = 0;
+        while (received < remaining)
+        {
+            byte[] chunkHead = await Read(client, 3);
+            received += (await Read(client, BinaryPrimitives.ReadUInt16LittleEndian(chunkHead.AsSpan(1)))).Length;
+            chunks++;
+        }
+
+        // The cancel closes the session, so every server-side count has been recorded once the connection reads EOF.
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.XferCancel });
+        Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(remaining, received);
+
+        // One 33-byte socket write is two logon packets: the 2-byte proof failure and the 31-byte XFER_INITIATE.
+        Assert.Equal(1, table.Read((uint)AuthCommand.LogonProof).PacketsOut);
+        Assert.Equal(2, table.Read((uint)AuthCommand.LogonProof).BytesOut);
+        Assert.Equal(new OpcodeCounts(0, 0, 1, 31), table.Read((uint)AuthCommand.XferInitiate));
+        Assert.Equal(new OpcodeCounts(1, 1 + 8, 0, 0), table.Read((uint)AuthCommand.XferResume));
+        Assert.Equal(new OpcodeCounts(0, 0, chunks, remaining + (3 * chunks)), table.Read((uint)AuthCommand.XferData));
+        Assert.Equal(new OpcodeCounts(1, 1, 0, 0), table.Read((uint)AuthCommand.XferCancel));
+        Assert.Equal(1, table.Read((uint)AuthCommand.LogonProof).PacketsIn);
+    }
+
+    [Fact]
+    public async Task XferAccept_CountsTheRequestAndEachDataChunk()
+    {
+        using var meter = new Meter("ArcaneCore.Test." + Guid.NewGuid().ToString("N"));
+        OpcodeTable table = new OpcodeTrafficMeter(meter).Register("logon", LogonPacketMetrics.Commands);
+        using MeterListener listener = Listen(meter);
+        byte[] data = RandomNumberGenerator.GetBytes(100);
+        File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), data);
+        var catalog = new PatchCatalog(() => new AutoPatchOptions { Enabled = true, Directory = _dir });
+        var accounts = new InMemoryAccountStore();
+        await CreateAccountAsync(accounts);
+
+        await using NetworkStream client = await StartAsync(accounts, catalog, traffic: table);
+        await client.WriteAsync(Challenge(5464));
+        await Read(client, 3 + 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
+        byte[] proof = new byte[1 + 32 + 20 + 20 + 1 + 1];
+        proof[0] = (byte)AuthCommand.LogonProof;
+        await client.WriteAsync(proof);
+        await Read(client, 2 + 1 + 1 + 5 + 8 + 16);
+
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.XferAccept });
+        byte[] chunkHead = await Read(client, 3);
+        Assert.Equal(data, await Read(client, BinaryPrimitives.ReadUInt16LittleEndian(chunkHead.AsSpan(1))));
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.XferCancel });
+        Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(new OpcodeCounts(1, 1, 0, 0), table.Read((uint)AuthCommand.XferAccept));
+        Assert.Equal(new OpcodeCounts(0, 0, 1, 103), table.Read((uint)AuthCommand.XferData));
+    }
+
+    private static MeterListener Listen(Meter meter)
+    {
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (ReferenceEquals(instrument.Meter, meter))
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.Start();
+        return listener;
+    }
+
+    private static async Task CreateAccountAsync(IAccountStore accounts)
+    {
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, "X"), WowSrp6.KeyLength),
+        });
+    }
+
+    private static async Task<NetworkStream> StartAsync(IAccountStore accounts, PatchCatalog catalog, AuthOptions? options = null, OpcodeTable? traffic = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -151,7 +263,7 @@ public sealed class AutoPatchTests : IDisposable
             listener.Stop();
             await using NetworkStream stream = server.GetStream();
             var session = new LogonSession(stream, accounts, new InMemoryRealmStore([]), options ?? new AuthOptions(),
-                NullLogger.Instance, "test", patches: catalog);
+                NullLogger.Instance, "test", patches: catalog, traffic: traffic);
             await session.RunAsync(CancellationToken.None);
         });
         var client = new TcpClient();

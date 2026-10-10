@@ -316,6 +316,7 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketOut(frame.Length);
+        ArcaneCore.World.Ops.Metrics.WorldPacketMetrics.Table.RecordOut((uint)opcode, frame.Length);
 
         if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)
         {
@@ -547,6 +548,7 @@ public sealed partial class WorldSession : IPlayerSession
             deadline.Disarm();
             WorldOpcode opcode = _protocol.Opcodes.FromWire(rawOpcode);
             ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(header.Length + payload.Length);
+            ArcaneCore.World.Ops.Metrics.WorldPacketMetrics.Table.RecordIn(rawOpcode, header.Length + payload.Length);
             CapturePacket(true, opcode, payload);
             if (!await DispatchAsync(opcode, payload).ConfigureAwait(false))
             {
