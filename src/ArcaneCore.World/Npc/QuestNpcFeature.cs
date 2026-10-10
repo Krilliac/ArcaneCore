@@ -109,6 +109,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAda, sfkPrisoners);
             Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAsh, sfkPrisoners);
             Services.RegisterGossipScript(WailingCavernsInstance.NpcDisciple, new DiscipleOfNaralexGossip());
+            QuestNpcServices services = Services;
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.SquireRoweAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.SquireRoweGossip(player => services.StateOf(player)?.Quests));
         }
 
         _world = world;

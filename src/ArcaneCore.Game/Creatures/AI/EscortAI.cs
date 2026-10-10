@@ -99,6 +99,12 @@ public abstract class EscortAI : CreatureAI
     /// <inheritdoc />
     public override bool AggroesOnSight => !Me.Template.Civilian;
 
+    /// <summary>
+    /// mangos-classic escort_ai (the waypoint-movement escort) does not end the path while the escort is paused at its last point; vmangos
+    /// does. A script that pauses at its last point for a closing scene (Squire Rowe, Ranshalla) holds there until it unpauses.
+    /// </summary>
+    protected virtual bool HoldAtEndWhilePaused => false;
+
     public bool HasEscortState(EscortState state) => (State & state) != 0;
 
     protected void AddEscortState(EscortState state) => State |= state;
@@ -350,11 +356,13 @@ public abstract class EscortAI : CreatureAI
             {
                 if (CurrentWaypointIndex >= _waypoints.Count)
                 {
-                    EndOfPath();
-                    return;
+                    if (!HoldAtEndWhilePaused || !HasEscortState(EscortState.Paused))
+                    {
+                        EndOfPath();
+                        return;
+                    }
                 }
-
-                if (!HasEscortState(EscortState.Paused))
+                else if (!HasEscortState(EscortState.Paused))
                 {
                     CreatureWaypoint point = _waypoints[CurrentWaypointIndex];
                     Me.Motion.MovePoint(point.Point, point.X, point.Y, point.Z, _running);
