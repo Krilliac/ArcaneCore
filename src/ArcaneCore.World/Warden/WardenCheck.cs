@@ -65,6 +65,29 @@ internal sealed class WardenCheck
             case WardenCheckKind.Timing:
                 bytes = [];
                 break;
+            case WardenCheckKind.ModuleByName:
+                bytes = [];
+                if (options.Module.Length == 0)
+                {
+                    return "Module is required.";
+                }
+
+                break;
+            case WardenCheckKind.Mpq:
+                if (options.Path.Length is 0 or > 255 || !TryHex(options.Expected, out bytes) || bytes.Length is not (0 or 20))
+                {
+                    return "Path (1-255 characters) is required and Expected must be empty or a 20-byte SHA-1 in hex.";
+                }
+
+                break;
+            case WardenCheckKind.Lua:
+                bytes = System.Text.Encoding.ASCII.GetBytes(options.Expected);
+                if (options.Path.Length is 0 or > 255 || bytes.Length > 255)
+                {
+                    return "Path (1-255 characters) is required and Expected is at most 255 characters.";
+                }
+
+                break;
             default:
                 return $"unknown Kind {options.Kind}.";
         }
@@ -101,6 +124,26 @@ internal sealed class WardenCheck
                 break;
             }
 
+            case WardenCheckKind.ModuleByName:
+            {
+                // vmangos WindowsModuleScan: seed, HMAC-SHA1(seed, upper-case name); the client depends on the upper case.
+                uint seed = seeds();
+                scans.WriteByte((byte)(WardenModuleProfile.OpModule ^ xor));
+                scans.WriteUInt32(seed);
+                scans.WriteBytes(Hmac(seed, Encoding.ASCII.GetBytes(Source.Module.ToUpperInvariant())));
+                break;
+            }
+
+            case WardenCheckKind.Mpq:
+                // vmangos WindowsFileHashScan; MaNGOS Zero EncodeCheckRequest (0x98, string index).
+                scans.WriteByte((byte)(WardenModuleProfile.OpMpq ^ xor));
+                scans.WriteByte(StringIndex(strings, Source.Path));
+                break;
+            case WardenCheckKind.Lua:
+                // vmangos WindowsLuaScan; MaNGOS Zero EncodeCheckRequest (0x8B, string index).
+                scans.WriteByte((byte)(WardenModuleProfile.OpLua ^ xor));
+                scans.WriteByte(StringIndex(strings, Source.Path));
+                break;
             case WardenCheckKind.Driver:
             {
                 uint seed = seeds();
@@ -137,6 +180,33 @@ internal sealed class WardenCheck
                 return !actual.SequenceEqual(Bytes);
             }
 
+            case WardenCheckKind.Mpq:
+            {
+                // vmangos WindowsFileHashScan checker: status 0 is found, then the SHA-1.
+                bool found = reply.ReadByte() == 0;
+                bool wanted = Bytes.Length != 0;
+                if (!found)
+                {
+                    return wanted;
+                }
+
+                ReadOnlySpan<byte> hash = reply.ReadBytes(20);
+                return !wanted || !hash.SequenceEqual(Bytes);
+            }
+
+            case WardenCheckKind.Lua:
+            {
+                // vmangos WindowsLuaScan checkers: status 0 is found, then u8 length and the value.
+                bool found = reply.ReadByte() == 0;
+                ReadOnlySpan<byte> value = found ? reply.ReadBytes(reply.ReadByte()) : default;
+                if (Bytes.Length == 0)
+                {
+                    return found != Source.Wanted;
+                }
+
+                return !found || !value.SequenceEqual(Bytes);
+            }
+
             default:
                 return (reply.ReadByte() == WardenModuleProfile.Found) != Source.Wanted;
         }
@@ -147,6 +217,8 @@ internal sealed class WardenCheck
     {
         WardenCheckKind.Timing => 5,
         WardenCheckKind.Memory => 1 + Bytes.Length,
+        WardenCheckKind.Mpq => 21,
+        WardenCheckKind.Lua => 2 + 255,
         _ => 1,
     };
 

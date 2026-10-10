@@ -6,8 +6,8 @@ namespace ArcaneCore.World.Warden;
 /// The delivered Windows Warden module for build 5875 and its challenge values (MaNGOS Zero src/game/Warden/WardenModuleCatalog.cpp
 /// ModuleWin5875 and WardenModuleWin5875Data.cpp). The 18 756 encrypted, compressed module bytes ship as an embedded base64 resource and are
 /// revalidated against both pinned digests before any session uses them (WardenModuleCatalog::Validate). The scan opcodes are the ones
-/// this module decodes (MaNGOS Zero WardenPacketCodec.cpp EncodeCheckRequest: timing 0x57, memory 0xF3, MPQ 0x98, Lua 0x8B; the page
-/// and driver opcodes 0xB2 / 0xBF / 0x71 are the same module's, TrinityCore Warden.h enum WardenCheckType for module 79C0768D...).
+/// this module decodes (MaNGOS Zero WardenPacketCodec.cpp EncodeCheckRequest: timing 0x57, memory 0xF3, MPQ 0x98, Lua 0x8B; the page,
+/// driver and module opcodes 0xB2 / 0xBF / 0x71 / 0xD9 are the same module's, TrinityCore Warden.h enum WardenCheckType for module 79C0768D...).
 /// </summary>
 internal sealed class WardenModuleProfile
 {
@@ -37,7 +37,7 @@ internal sealed class WardenModuleProfile
     public const byte TimingInstall = 0x01;
 
     /// <summary>The scan opcodes before the per-session xor (the first byte of <see cref="ClientKeySeed"/>).</summary>
-    public const byte OpTiming = 0x57, OpMemory = 0xF3, OpPageA = 0xB2, OpPageB = 0xBF, OpDriver = 0x71;
+    public const byte OpTiming = 0x57, OpMemory = 0xF3, OpPageA = 0xB2, OpPageB = 0xBF, OpDriver = 0x71, OpMpq = 0x98, OpLua = 0x8B, OpModule = 0xD9;
 
     /// <summary>The byte the module answers for "found" in page and driver scans (vmangos WardenScan.hpp PatternFound / Found = 0x4A).</summary>
     public const byte Found = 0x4A;
