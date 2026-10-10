@@ -95,5 +95,45 @@
       ] },
       { "point": 19, "actions": [{ "type": "say", "id": -1000359 }, { "type": "quest_complete", "id": 6523 }] }
     ]
+  },
+  {
+    "entry": 7784, "questId": 648, "despawnSummonsOnDeath": true, "faction": 495, "startText": -1000287, "startTextBeforeFaction": true,
+    "requirePlayerAtWaypoint": true, "clearImmuneToNpc": true, "spawnStandState": 7, "acceptStandState": 0,
+    "aggro": { "chanceDenominator": 5, "textIds": [-1000288, -1000289] },
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/tanaris.cpp:npc_oox17tnAI,QuestAccept_npc_oox17tn",
+    "waypoints": [
+      { "point": 23, "actions": [{ "type": "say", "id": -1000290 }, { "type": "summon", "id": 7803, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "positions": [[-8340.7, -4448.17, 9.17, 3.1], [-8343.18, -4444.35, 9.44, 2.35], [-8348.7, -4457.8, 9.58, 2.02]] }] },
+      { "point": 29, "actions": [{ "type": "say", "id": -1000290 }, { "type": "summon", "id": 7805, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-7488.02, -4786.56, 10.67, 3.74]] }, { "type": "summon", "id": 5617, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "positions": [[-7486.41, -4791.55, 10.54, 3.26]] }, { "type": "summon", "id": 7805, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "summonSay": -1000291, "positions": [[-7488.47, -4800.77, 9.77, 2.5]] }] },
+      { "point": 35, "actions": [{ "type": "say", "id": -1000292 }, { "type": "quest_complete", "id": 648 }] }
+    ]
+  },
+  {
+    "entry": 7807, "questId": 2767, "despawnSummonsOnDeath": true, "faction": 495, "startText": -1000287, "startTextBeforeFaction": true,
+    "clearImmuneToNpc": true, "spawnStandState": 7, "acceptStandState": 0,
+    "aggro": { "chanceDenominator": 5, "textIds": [-1000288, -1000289] },
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/feralas.cpp:npc_oox22feAI,QuestAccept_npc_oox22fe",
+    "waypoints": [
+      { "point": 12, "actions": [{ "type": "say", "id": -1000290 }, { "type": "summon", "id": 7848, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4841.01, 1593.91, 73.42, 3.98], [-4837.61, 1568.58, 78.21, 3.13], [-4841.89, 1569.95, 76.53, 0.68]] }] },
+      { "point": 22, "actions": [{ "type": "say", "id": -1000290 }, { "type": "summon", "id": 5260, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4595.81, 2005.99, 53.08, 3.74], [-4597.53, 2008.31, 52.7, 3.78], [-4599.37, 2010.59, 52.77, 3.84]] }] },
+      { "point": 31, "actions": [{ "type": "say", "id": -1000290 }, { "type": "summon", "id": 5255, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4425.14, 2075.87, 47.77, 3.77]] }, { "type": "summon", "id": 5253, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4426.68, 2077.98, 47.57, 3.77]] }, { "type": "summon", "id": 5254, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4428.33, 2080.24, 47.43, 3.87]] }, { "type": "summon", "id": 5258, "despawnMs": 10000, "corpseTimed": true, "attackEscort": true, "positions": [[-4430.04, 2075.54, 46.83, 3.81]] }] },
+      { "point": 38, "actions": [{ "type": "say", "id": -1000292 }, { "type": "quest_complete", "id": 2767 }] }
+    ]
+  },
+  {
+    "entry": 12858, "questId": 6544, "faction": 0, "startText": -1000106, "startTextToPlayer": true, "startRun": true,
+    "requirePlayerAtWaypoint": true,
+    "combatSpells": [{ "spell": 11977, "initialMs": 5000, "repeatMs": 20000 }, { "spell": 8078, "self": true, "initialMs": 8000, "repeatMs": 30000 }],
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/ashenvale.cpp:npc_torekAI,QuestAccept_npc_torek",
+    "waypoints": [
+      { "point": 2, "actions": [{ "type": "say", "id": -1000107, "toPlayer": true }] },
+      { "point": 9, "actions": [{ "type": "say", "id": -1000108, "toPlayer": true }] },
+      { "point": 20, "actions": [
+        { "type": "summon", "id": 12860, "despawnMs": 25000, "attackEscort": true, "positions": [[1776.73, -2049.06, 109.83, 1.54]] },
+        { "type": "summon", "id": 12896, "despawnMs": 25000, "attackEscort": true, "positions": [[1774.64, -2049.41, 109.83, 1.40]] },
+        { "type": "summon", "id": 12897, "despawnMs": 25000, "attackEscort": true, "positions": [[1778.73, -2049.50, 109.83, 1.67]] }
+      ] },
+      { "point": 21, "actions": [{ "type": "say", "id": -1000109, "toPlayer": true }, { "type": "quest_complete", "id": 6544 }] },
+      { "point": 22, "actions": [{ "type": "say", "id": -1000110, "toPlayer": true }] }
+    ]
   }
 ]
