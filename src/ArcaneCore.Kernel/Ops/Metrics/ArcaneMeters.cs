@@ -18,7 +18,7 @@ public static class ArcaneMeters
     /// <summary>Client packets read (world and realm sockets).</summary>
     public static Counter<long> PacketsIn { get; } = Net.CreateCounter<long>("arcanecore.net.packets_in", "{packet}", "Client packets received.");
 
-    /// <summary>Server packets queued for clients.</summary>
+    /// <summary>Server packets queued (world) or written (logon) for clients.</summary>
     public static Counter<long> PacketsOut { get; } = Net.CreateCounter<long>("arcanecore.net.packets_out", "{packet}", "Server packets sent.");
 
     /// <summary>Client bytes read, headers included.</summary>
@@ -27,12 +27,27 @@ public static class ArcaneMeters
     /// <summary>Server bytes queued, headers included.</summary>
     public static Counter<long> BytesOut { get; } = Net.CreateCounter<long>("arcanecore.net.bytes_out", "By", "Server bytes sent.");
 
+    /// <summary>
+    /// Per-opcode packet and byte counters on <see cref="Net"/>; each protocol registers a table (world, logon) and records
+    /// into it next to the untagged totals above (docs/ops/metrics.md).
+    /// </summary>
+    public static OpcodeTrafficMeter Opcodes { get; } = new(Net);
+
     /// <summary>Record one inbound packet of <paramref name="bytes"/> bytes.</summary>
     public static void PacketIn(int bytes)
     {
         if (PacketsIn.Enabled)
         {
             PacketsIn.Add(1);
+            BytesIn.Add(bytes);
+        }
+    }
+
+    /// <summary>Record <paramref name="bytes"/> more inbound bytes of a packet already counted by <see cref="PacketIn"/> (the logon stream reads a packet in parts).</summary>
+    public static void BytesReceived(int bytes)
+    {
+        if (BytesIn.Enabled)
+        {
             BytesIn.Add(bytes);
         }
     }
