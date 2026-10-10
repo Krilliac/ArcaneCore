@@ -23,7 +23,10 @@ internal sealed class PlayerbotFightTracker
     private readonly Dictionary<ObjectGuid, Vector3> _anchors = [];
     private float _priorIn, _priorOut;
 
-    /// <summary>The bot's damage per second as observed in its fights (an average), or null before its first one.</summary>
+    /// <summary>
+    /// The bot's damage per second as observed in its fights, or null before its first one: a moving average that starts from the
+    /// level estimate (<see cref="End"/>), not from the first fight alone.
+    /// </summary>
     internal float? ObservedDps { get; private set; }
 
     /// <summary>Whether a fight is being tracked.</summary>
@@ -46,10 +49,15 @@ internal sealed class PlayerbotFightTracker
     }
 
     /// <summary>A fight ended (won, fled or the bot died): fold its observed damage into the average and forget it.</summary>
-    internal void End()
+    /// <param name="priorDps">
+    /// The level estimate (<see cref="PlayerbotRiskModel.PriorBotDps"/>) the average starts from. A fight's window is a few swings
+    /// (8 seconds at most), whose misses and dodges move it by a third either way; taken alone as the estimate, one unlucky window
+    /// put same-level creatures out of reach for good, since only fights refresh it and the bot no longer took one.
+    /// </param>
+    internal void End(float priorDps)
     {
         if (_samples.Count >= 2 && Rate(out _, out float dpsOut, out bool measured) && measured && dpsOut > 0)
-            ObservedDps = ObservedDps is { } average ? (average * 0.7f) + (dpsOut * 0.3f) : dpsOut;
+            ObservedDps = ((ObservedDps ?? priorDps) * 0.7f) + (dpsOut * 0.3f);
         _samples.Clear();
         _anchors.Clear();
         LastVerdict = null;

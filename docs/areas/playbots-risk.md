@@ -49,7 +49,10 @@ For each candidate the predicted fight is the target plus:
 template melee damage per second, or level x 1, x 2.5 for an elite, when the template has none, plus its spells: each EventAI
 CAST action (cmangos `creature_ai_scripts` action 11) deals its `spell_template` damage (school, weapon, health leech, every tick
 of a periodic damage aura, dice at their top) every `(Param3 + Param4) / 2` ms of its event, 10 s when the row gives none), as a share of the bot's current
-health. The bot's damage per second is what it dealt in its recent fights (an average), or `2 + 1.8 x level` before its first. A
+health. The bot's damage per second is `2 + 1.8 x level` before its first fight, and after each fight 70% of the estimate so far
+plus 30% of what it dealt in that fight's last 8 seconds (a moving average that starts from the level estimate: a window of a few
+swings moves by a third with misses and dodges, and one unlucky one taken alone put same-level creatures out of reach for good,
+since only fights refresh the estimate; claude/w19-risk-flake). A
 mage, priest or warlock deals less as its mana runs out (to 35% of its damage at none: the wand); a hybrid less so. Remembered
 danger near the target or against its kind multiplies the risk by `1 + 0.5 x hits`; a ready class escape takes 10% off. A lone
 same-level creature is about 0.4 to 0.5; three of them about 2.5.
