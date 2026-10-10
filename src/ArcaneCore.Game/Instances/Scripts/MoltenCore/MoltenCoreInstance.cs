@@ -44,6 +44,8 @@ public sealed class MoltenCoreInstance(Map map) : ScriptedInstance(map, 10)
     }
     public override uint GetData(uint type) => type < 10 ? Encounters[type] : 0;
     public override bool IsEncounterInProgress => Encounters.Contains(EncounterState.InProgress);
+    /// <summary>All eight map-409 link rows: MoltenCoreBossAI/MajordomoAI.OnAggro and OnCreatureEnterCombat carry them.</summary>
+    public override bool CarriesAggroLinking(uint masterEntry) => true;
     public bool RunesDoused => Enumerable.Range(1, 7).All(i => Encounters[i] == EncounterState.Special);
 
     public override void SetData(uint type, uint data)
