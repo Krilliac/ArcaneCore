@@ -906,6 +906,95 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Kerlonian_FollowsTheLeader_FallsAsleep_TheHornWakesHim_AndLiladrisEndsIt()
+    {
+        // npc_kerlonianAI (darkshore.cpp at 3e8597afe7) on FollowerAI (follower_ai.cpp).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.KerlonianAI.Entry;
+        int[] texts = [.. Enumerable.Range(434, 12).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(11219)],
+            [Spawn(1, entry, 0, 0), Spawn(2, 11219, 80, 0)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, 2, 0);
+            Creature kerlonian = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.KerlonianAI>(kerlonian.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.KerlonianAI.QuestSleeperAwakened);
+            Assert.True(ai.HasFollowState(FollowerAI.FollowState.InProgress));
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.KerlonianAI.FactionEscortNeutralFriendPassive, kerlonian.FactionTemplate);
+            Assert.Equal(0u, kerlonian.NpcFlags);
+            Assert.Equal(MovementGeneratorType.Follow, kerlonian.Motion.CurrentType);
+
+            // He falls asleep within 45 s and holds while the player walks on.
+            for (int elapsed = 0; elapsed < 60_000 && !ai.Sleeping; elapsed += 100)
+            {
+                world.RunTick(100);
+            }
+
+            Assert.True(ai.Sleeping);
+            // (he lies down only when the sleep visual casts, as there; the test map has no spell system)
+            player.Relocate(30, 0, kerlonian.Z, 0, 0);
+            Run(world, 5_000);
+            Assert.True(Math.Abs(kerlonian.X) < 5f, $"x {kerlonian.X}");
+
+            // The horn wakes him and he catches up; next to Liladris the quest is done and he goes.
+            player.Relocate(10, 0, kerlonian.Z, 0, 0); // back in earshot to blow the horn
+            ai.ClearSleeping();
+            Assert.False(ai.Sleeping);
+            Assert.Equal(MovementGeneratorType.Follow, kerlonian.Motion.CurrentType);
+            for (int elapsed = 0; elapsed < 120_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                if (ai.Sleeping)
+                {
+                    ai.ClearSleeping();
+                }
+
+                player.Relocate(Math.Min(70f, player.X + 0.3f), 0, kerlonian.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.KerlonianAI.QuestSleeperAwakened), Assert.Single(quests.Completed));
+            Assert.True(ai.HasFollowState(FollowerAI.FollowState.Complete));
+            Run(world, 2_000);
+            Assert.DoesNotContain(kerlonian, system.Creatures.Where(c => c.IsAlive && c.IsInWorld));
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains("-1000434", said);
+            Assert.Contains("-1000445", said);
+            Assert.Contains("-1000444", said);
+        }
+    }
+
+    [Fact]
+    public void Follower_DiesAndFailsTheQuest_OrDespawnsWhenTheLeaderIsTooFar()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.KerlonianAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0), Spawn(2, entry, 10, 0)], [], [], [],
+            new CreatureAiContent([], []));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature[] both = [.. system.Creatures];
+            foreach (Creature c in both)
+            {
+                ((ArcaneCore.Game.Creatures.Scripts.KerlonianAI)c.AI!).OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.KerlonianAI.QuestSleeperAwakened);
+            }
+
+            map.Combat.Kill(null, both[0]);
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.KerlonianAI.QuestSleeperAwakened), Assert.Single(quests.Failed));
+
+            player.Relocate(500, 0, both[1].Z, 0, 0);
+            Run(world, 3_000);
+            Assert.False(both[1].IsInWorld && both[1].IsAlive && system.Creatures.Contains(both[1]));
+        }
+    }
+
+    [Fact]
     public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
     {
         // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
