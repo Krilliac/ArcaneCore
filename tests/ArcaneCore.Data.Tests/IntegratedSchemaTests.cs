@@ -142,6 +142,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortGongDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortGongDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -171,7 +172,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(46, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46)
-        Assert.Equal(46, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46)
+        Assert.Equal(47, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
