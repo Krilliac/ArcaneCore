@@ -12,11 +12,25 @@ branch per packet), and the world loop pays one null check per tick and per map.
 
 ```json
 "Ops": { "Metrics": { "Enabled": true, "Exporter": "Both", "PrometheusPrefix": "http://+:9464/metrics/",
+                      "RealmPrometheusPrefix": "http://+:9465/metrics/",
                       "OtlpEndpoint": "http://otel-collector:4318/v1/metrics", "Realm": "ArcaneCore" } }
 ```
 
-- `Prometheus`: an `HttpListener` serves the text format at `PrometheusPrefix` (world default port 9464, realm 9465).
-  Use `http://+:PORT/metrics/` in a container; on Windows a non-localhost prefix needs a `netsh http add urlacl`.
+`Realm` is the `realm` label value, unrelated to the Realm daemon's endpoint (`RealmPrometheusPrefix`).
+
+- `Prometheus`: an `HttpListener` serves the text format. Each daemon has its own key, so a Realm and a World started
+  from one profile directory (one shared `appsettings.json`) both serve metrics out of the box:
+
+  | Daemon | Key | Default |
+  | --- | --- | --- |
+  | ArcaneCore.World | `Ops:Metrics:PrometheusPrefix` | `http://localhost:9464/metrics/` |
+  | ArcaneCore.Realm | `Ops:Metrics:RealmPrometheusPrefix` | `http://localhost:9465/metrics/` |
+
+  The Realm never reads `PrometheusPrefix` (and never falls back to it); the World never reads `RealmPrometheusPrefix`.
+  Setting both keys to the same prefix is allowed, but then the daemon that starts second logs
+  `metrics: the Prometheus endpoint ... could not start; metrics are not served`, naming the other daemon and the key
+  to change, and serves no metrics. Use `http://+:PORT/metrics/` in a container; on Windows a non-localhost prefix needs
+  a `netsh http add urlacl`.
 - `Otlp`: OTLP/HTTP JSON (`ExportMetricsServiceRequest`, cumulative temporality) is posted every `OtlpIntervalSeconds`.
   A failing collector logs one warning until it recovers; metrics never stop the daemon.
 - Both exporters read the same in-process aggregation (`MetricsStore`), off the world thread.
@@ -63,6 +77,23 @@ The four `arcanecore_net_opcode_*` series split the network totals by `protocol`
   off, and an `Interlocked.Add` on a preallocated slot (no allocation, no tag lookup) when on.
 - The logon daemon sets no `Ops:Metrics:Realm` in the docker compose file, so its series carry no `realm` label; panels
   that read `protocol="logon"` must not filter on it.
+
+## Scraping both daemons
+
+Prometheus scrapes two targets, one per daemon. [`apps/docker/prometheus.yml`](../../apps/docker/prometheus.yml) does
+this for the docker compose stack; for a Realm and a World on one host with the default prefixes:
+
+```yaml
+scrape_configs:
+  - job_name: arcanecore-world
+    metrics_path: /metrics/
+    static_configs: [{ targets: ["localhost:9464"] }]
+  - job_name: arcanecore-realm
+    metrics_path: /metrics/
+    static_configs: [{ targets: ["localhost:9465"] }]
+```
+
+The dashboard's job-split panels (packets and bytes by job, logon commands) expect both jobs.
 
 ## Grafana
 

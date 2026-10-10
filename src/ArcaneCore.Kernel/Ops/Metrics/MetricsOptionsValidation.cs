@@ -37,11 +37,10 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
             return issues;
         }
 
-        if (o.Exporter is MetricsExporter.Prometheus or MetricsExporter.Both
-            && (string.IsNullOrWhiteSpace(o.PrometheusPrefix) || !o.PrometheusPrefix.EndsWith('/')
-                || !(o.PrometheusPrefix.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || o.PrometheusPrefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase))))
+        if (o.Exporter is MetricsExporter.Prometheus or MetricsExporter.Both)
         {
-            issues.Add(Error($"{Root}:PrometheusPrefix", $"'{o.PrometheusPrefix}' is not a listener prefix.", "use an http:// prefix ending in /, for example http://+:9464/metrics/"));
+            Prefix(issues, MetricsOptions.PrometheusPrefixKey(MetricsRole.World), o.PrometheusPrefix, "http://+:9464/metrics/");
+            Prefix(issues, MetricsOptions.PrometheusPrefixKey(MetricsRole.Realm), o.RealmPrometheusPrefix, "http://+:9465/metrics/");
         }
 
         if (o.Exporter is MetricsExporter.Otlp or MetricsExporter.Both
@@ -69,6 +68,7 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
         o.OtlpIntervalSeconds = Int(issues, section, "OtlpIntervalSeconds", o.OtlpIntervalSeconds);
         o.MapSampleIntervalSeconds = Int(issues, section, "MapSampleIntervalSeconds", o.MapSampleIntervalSeconds);
         o.PrometheusPrefix = section["PrometheusPrefix"] ?? o.PrometheusPrefix;
+        o.RealmPrometheusPrefix = section["RealmPrometheusPrefix"] ?? o.RealmPrometheusPrefix;
         o.OtlpEndpoint = section["OtlpEndpoint"] ?? o.OtlpEndpoint;
         o.Realm = section["Realm"] ?? o.Realm;
         string? exporter = section["Exporter"];
@@ -124,6 +124,15 @@ public sealed class MetricsOptionsValidation : IValidateOptions<MetricsOptions>,
 
         issues.Add(Error($"{Root}:{key}", $"'{text}' is not true or false.", "use true or false"));
         return fallback;
+    }
+
+    private static void Prefix(List<ConfigIssue> issues, string key, string value, string example)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !value.EndsWith('/')
+            || !(value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+        {
+            issues.Add(Error(key, $"'{value}' is not a listener prefix.", $"use an http:// prefix ending in /, for example {example}"));
+        }
     }
 
     private static void Range(List<ConfigIssue> issues, string key, int value, int min, int max)

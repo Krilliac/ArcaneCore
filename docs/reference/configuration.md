@@ -616,8 +616,9 @@ How to read the tables:
 | `Ops:Metrics:OtlpEndpoint` | `string` | `"http://localhost:4318/v1/metrics"` | - | The OTLP/HTTP metrics endpoint the push exporter posts JSON to. Default `http://localhost:4318/v1/metrics`. |
 | `Ops:Metrics:OtlpIntervalSeconds` | `int` | `15` | - | Seconds between OTLP pushes. 1-3600. Default 15 (TrinityCore `Metric.Interval = 1` pushes every second to InfluxDB; a collector batches, so a longer period suffices). |
 | `Ops:Metrics:PerMapMetrics` | `bool` | `true` | - | `false`: no per-map series, only the world totals (bounds the label cardinality on a server with many instances). Default true. |
-| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). Default `http://localhost:9464/metrics/`. |
+| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The World daemon's Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). The Realm daemon does not read this key: it reads `RealmPrometheusPrefix`. Default `http://localhost:9464/metrics/`. |
 | `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
+| `Ops:Metrics:RealmPrometheusPrefix` | `string` | `"http://localhost:9465/metrics/"` | - | The Realm daemon's Prometheus scrape listener prefix, so a Realm and a World started from one shared appsettings.json do not both bind the same port. It never falls back to `PrometheusPrefix`; setting both to the same prefix makes the second daemon to start log an error and serve no metrics. Default `http://localhost:9465/metrics/`. |
 
 ## `Ops:Watchdog`
 
