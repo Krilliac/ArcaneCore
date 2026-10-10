@@ -24,6 +24,9 @@ public sealed class WorldClient : IAsyncDisposable
     private int _reading;
     private int _state; // 0 connected, 1 authenticating, 2 authenticated, 3 closed
 
+    /// <summary>Test tap: sees every plaintext frame (outbound = client to server) after header decryption, including the auth handshake. Used by the replay transcript tests.</summary>
+    internal Action<bool, ushort, byte[]>? Tap { get; set; }
+
     /// <summary>The deadline of each bounded operation of this client (<see cref="ProtocolIO.OperationTimeout"/> when it was created).</summary>
     internal TimeSpan OperationTimeout { get; set; } = ProtocolIO.OperationTimeout;
 
@@ -269,11 +272,13 @@ public sealed class WorldClient : IAsyncDisposable
         }
 
         byte[] body = await ProtocolIO.ReadExactAsync(_stream, bodyLength, $"world packet 0x{opcode:X4} body", token).ConfigureAwait(false);
+        Tap?.Invoke(false, opcode, body);
         return new WorldFrame(opcode, body);
     }
 
     private async Task SendFrameAsync(ushort opcode, ReadOnlyMemory<byte> payload, CancellationToken token)
     {
+        Tap?.Invoke(true, opcode, payload.ToArray());
         byte[] header = ProtocolPackets.ClientHeader(opcode, payload.Length);
         _cipher?.Encrypt(header);
         await _stream.WriteAsync(header, token).ConfigureAwait(false);

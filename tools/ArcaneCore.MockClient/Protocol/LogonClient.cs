@@ -12,12 +12,12 @@ public static class LogonClient
 
     public static async Task<LogonResult> AuthenticateAsync(
         IPEndPoint endpoint, string account, string password, CancellationToken ct = default, ushort build = 5875,
-        string? pin = null, byte[]? integrityHash = null)
+        string? pin = null, byte[]? integrityHash = null, Action<bool, byte[]>? tap = null)
     {
         string username = ProtocolPackets.NormalizeAccount(account);
         string normalizedPassword = ProtocolPackets.NormalizePassword(password);
         using TcpClient client = await ProtocolIO.ConnectAsync(endpoint, ct).ConfigureAwait(false);
-        await using NetworkStream stream = client.GetStream();
+        await using Stream stream = tap is null ? client.GetStream() : new TappedStream(client.GetStream(), tap);
 
         (byte[] serverKey, byte[] salt, uint gridSeed, byte[] pinSalt) =
             await ProtocolIO.BoundedAsync("Logon challenge", ct, async token =>
@@ -127,6 +127,61 @@ public static class LogonClient
         if (actual != expected)
         {
             throw new MockProtocolException($"Expected logon {stage} command 0x{expected:X2}, received 0x{actual:X2}.");
+        }
+    }
+
+    /// <summary>Test tap over the logon stream: reports every chunk read (false) and written (true). Used by the replay transcript tests.</summary>
+    private sealed class TappedStream(Stream inner, Action<bool, byte[]> tap) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int read = inner.Read(buffer, offset, count);
+            tap(false, buffer.AsSpan(offset, read).ToArray());
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            int read = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            tap(false, buffer[..read].ToArray());
+            return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            tap(true, buffer.AsSpan(offset, count).ToArray());
+            inner.Write(buffer, offset, count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            tap(true, buffer.ToArray());
+            return inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 }

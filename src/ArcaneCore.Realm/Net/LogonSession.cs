@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.Realm.Protocol.Versioning;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Realm.Net;
@@ -48,6 +49,10 @@ public sealed class LogonSession(
     private readonly RealmIpBanCache? _ipBanCache = ipBanCache; // optional: null reads the row on every challenge (vmangos realmd)
     private readonly NetProtectionOptions _protection = guard?.Options ?? DefaultProtection;
     private readonly IpKey? _address = IpKey.TryParse(remoteEndpoint, out IpKey parsedAddress) ? parsedAddress : null;
+
+    // The client build's logon protocol (multi-version design S0), bound by the logon or reconnect challenge.
+    // Only build 5875 is registered, so this is the 5875 protocol on every path that reaches the proof.
+    private IAuthProtocol _authProtocol = Build5875AuthProtocol.Instance;
     private string _username = string.Empty;
     private Srp6Server? _srp;
     private Account? _pendingAccount;
@@ -306,7 +311,7 @@ public sealed class LogonSession(
         }
 
         ClientPatch? offeredPatch = null;
-        if (request.Build != ClientBuild.Vanilla1121)
+        if (!AuthProtocols.TryGet(request.Build, out IAuthProtocol authProtocol))
         {
             // Auth:AutoPatch (off by default): vmangos lets a wrong build finish the challenge and answers its proof with the patch
             // (AuthSocket.cpp:665-676, _HandleLogonProof__PostRecv_HandleInvalidVersion).
@@ -321,7 +326,13 @@ public sealed class LogonSession(
 
             logger.LogInformation("[{Endpoint}] build {Build} will be offered patch {Patch}",
                 remoteEndpoint, request.Build, Path.GetFileName(offeredPatch.Path));
+
+            // A patched build is answered with the transfer at its proof and never reaches the integrity check or the realm list,
+            // so it keeps the default protocol.
+            authProtocol = Build5875AuthProtocol.Instance;
         }
+
+        _authProtocol = authProtocol;
 
         string username = request.Username.ToUpperInvariant();
         if (options.StrictUsernameCharset && !IsPrintableAscii(username))
@@ -592,12 +603,14 @@ public sealed class LogonSession(
 
         if (body[29] > MaxUsernameLength || !AllowedLocales.Contains(ReadLocale(body))
             || !LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request) || request is null
-            || request.Build != ClientBuild.Vanilla1121)
+            || !AuthProtocols.TryGet(request.Build, out IAuthProtocol reconnectProtocol))
         {
             RecordFailure();
             await SendReconnectFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
+
+        _authProtocol = reconnectProtocol;
 
         string username = request.Username.ToUpperInvariant();
         if (options.StrictUsernameCharset && !IsPrintableAscii(username))
@@ -740,7 +753,7 @@ public sealed class LogonSession(
 
         foreach (ClientIntegrityHashOptions entry in options.IntegrityHashes)
         {
-            if (entry.Build != ClientBuild.Vanilla1121
+            if (entry.Build != _authProtocol.Build
                 || !string.Equals(entry.Os, os, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(entry.Platform, platform, StringComparison.OrdinalIgnoreCase)) continue;
             if (entry.Hash.Length != 40) continue;
