@@ -76,7 +76,8 @@ public static class NpcServiceDbcReaders
 
     public static SkillLineAbilityCatalog LoadSkillLineAbilities(string path) => ReadSkillLineAbilities(DbcFile.Load(path));
 
-    public static SkillLineAbilityCatalog ReadSkillLineAbilities(DbcFile file) => new(ReadSkillLineAbilityRecords(file));
+    public static SkillLineAbilityCatalog ReadSkillLineAbilities(DbcFile file)
+        => new(ReadSkillLineAbilityRecords(file), hasTrainingPoints: file.FieldCount == SkillLineAbilityFields);
 
     /// <summary>The raw SkillLineAbility.dbc rows in file order (the skill catalog needs them by skill as well as by spell).</summary>
     public static IReadOnlyList<SkillLineAbilityRecord> ReadSkillLineAbilityRecords(DbcFile file)
@@ -87,7 +88,8 @@ public static class NpcServiceDbcReaders
         {
             rows.Add(new SkillLineAbilityRecord(
                 file.GetUInt32(row, 0), file.GetUInt32(row, 1), file.GetUInt32(row, 2), file.GetUInt32(row, 3), file.GetUInt32(row, 4),
-                file.GetUInt32(row, 7), file.GetUInt32(row, 8), file.GetUInt32(row, 9), file.GetUInt32(row, 10), file.GetUInt32(row, 11)));
+                file.GetUInt32(row, 7), file.GetUInt32(row, 8), file.GetUInt32(row, 9), file.GetUInt32(row, 10), file.GetUInt32(row, 11),
+                file.FieldCount == SkillLineAbilityFields ? file.GetUInt32(row, 14) : 0));
         }
 
         return rows;

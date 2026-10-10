@@ -671,7 +671,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Pets:CreatureFamilyDbcPath` | `string` | `null` | - | Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food. |
+| `Pets:CreatureFamilyDbcPath` | `string` | `null` | - | Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food. Its first skill line (skillLine[0]) is the family's beast-training line (Pet::CanLearnPetSpell); with a 15-field SkillLineAbility.dbc (NpcServices:SkillLineAbilityDbcPath) it turns on training-point costs, the family check and the four-active-spell limit, unset they are off. |
 | `Pets:DefaultLoyalty` | `byte` | `1` | - | vmangos CONFIG_UINT32_PET_DEFAULT_LOYALTY (mangosd.conf `PetDefaultLoyalty`, 1 = Rebellious … 6 = Best Friend): the loyalty a newly tamed pet is raised to (Spell::EffectTameCreature, SpellEffects.cpp:3151-3154). |
 | `Pets:MaxNpcGuardiansPerEntry` | `int` | `15` | - | vmangos Spell::EffectSummonGuardian: a non-player caster stops summoning an entry once it already has more than this many guardians of it (SpellEffects.cpp:2806). Retail 15. |
 | `Pets:PetLeashDistance` | `float` | `120` | - | vmangos Pet::Update: a pet farther than this from its owner is unsummoned (`IsWithinDistInMap(owner, 120.0f)`, Pet.cpp:662-690). |
