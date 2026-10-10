@@ -111,6 +111,70 @@ public sealed class AuctionBotOptions
     /// <summary>Custody limit: most copper the buyer may pay out per UTC day, all houses together (MaNGOS Zero custody; 0 = the buyer never buys).</summary>
     public uint DailyBuyBudgetCopper { get; set; } = 10_000_000;
 
+    /// <summary>
+    /// Whether the buyer also bids (cMaNGOS AuctionBotBuyer: an auction whose buyout is above the bot's value, but whose next bid is
+    /// below it, gets that next bid). Default true. A bot bid stands with no bidding character; if it wins, the item leaves the economy
+    /// and the seller is paid as for any sale.
+    /// </summary>
+    public bool Bidding { get; set; } = true;
+
+    /// <summary>Roll random properties ("of the Bear") for minted items whose template has them (cMaNGOS Item::CreateItem). Default true.</summary>
+    public bool RandomProperties { get; set; } = true;
+
+    /// <summary>
+    /// Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between
+    /// min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times;
+    /// every item that drops is added to the listing pool. "0,0,0,0" turns a source off.
+    /// </summary>
+    public string LootCreatureNormal { get; set; } = "30,35,8,12";
+
+    /// <summary>Loot of rank 4 (rare) creatures; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureRare { get; set; } = "0,10,1,1";
+
+    /// <summary>Loot of rank 1 (elite) creatures; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureElite { get; set; } = "30,34,1,2";
+
+    /// <summary>Loot of rank 2 (rare elite) creatures; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureRareElite { get; set; } = "-10,2,1,1";
+
+    /// <summary>Loot of rank 3 (world boss) creatures; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureWorldBoss { get; set; } = "-20,1,1,1";
+
+    /// <summary>disenchant_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootDisenchant { get; set; } = "10,12,1,1";
+
+    /// <summary>fishing_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootFishing { get; set; } = "3,5,30,40";
+
+    /// <summary>gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootGameobject { get; set; } = "13,16,7,11";
+
+    /// <summary>skinning_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootSkinning { get; set; } = "3,5,50,50";
+
+    /// <summary>
+    /// One loot source setting, parsed as cMaNGOS ParseLootConfig: four integers (missing ones 0, extra ignored), values 2-4 not
+    /// negative, then min ≤ max for both pairs (the min falls to the max).
+    /// </summary>
+    public static int[] ParseLootConfig(string? text)
+    {
+        var values = new int[4];
+        string[] parts = (text ?? string.Empty).Split(',');
+        for (int i = 0; i < parts.Length && i < 4; i++)
+        {
+            values[i] = int.TryParse(parts[i].Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int v) ? v : 0;
+        }
+
+        for (int i = 1; i < 4; i++)
+        {
+            values[i] = Math.Max(values[i], 0);
+        }
+
+        values[0] = Math.Min(values[0], values[1]);
+        values[2] = Math.Min(values[2], values[3]);
+        return values;
+    }
+
     /// <summary>The value lists by quality, parsed (missing values are 0, extra values ignored, as cMaNGOS ParseItemValueConfig).</summary>
     public uint[][] ParseValues() =>
     [
