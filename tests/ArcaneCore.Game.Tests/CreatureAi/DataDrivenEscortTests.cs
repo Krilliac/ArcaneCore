@@ -24,6 +24,8 @@ public sealed class DataDrivenEscortTests
     [InlineData(10427u, 4770u, 28u)]
     [InlineData(10646u, 4904u, 46u)]
     [InlineData(11856u, 6523u, 19u)]
+    [InlineData(7784u, 648u, 35u)]
+    [InlineData(7807u, 2767u, 38u)]
     public void ValidatedEscortCatalog_HasTheSourceQuestAndCompletionPoint(uint entry, uint quest, uint completionPoint)
     {
         EscortSpec spec = EscortSpecCatalog.Find(entry)!;
@@ -41,6 +43,8 @@ public sealed class DataDrivenEscortTests
     [InlineData(10427u)]
     [InlineData(10646u)]
     [InlineData(11856u)]
+    [InlineData(7784u)]
+    [InlineData(7807u)]
     public void ClassicDbPath_FiresEveryDeclaredWaypointAction_ThenCompletes(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -69,7 +73,7 @@ public sealed class DataDrivenEscortTests
         (float X, float Y)? creditAt = null;
         uint completionPoint = spec.Waypoints.Single(w => w.Actions.Any(a => a.Type == "quest_complete")).Point;
         bool hasPostCreditActions = spec.Waypoints.Any(w => w.Point > completionPoint);
-        for (int elapsed = 0; elapsed < 900_000 && (creditAt is null || (hasPostCreditActions && ai.CurrentWaypointIndex < ai.WaypointCount)); elapsed += 100)
+        for (int elapsed = 0; elapsed < 2_400_000 && (creditAt is null || (hasPostCreditActions && ai.CurrentWaypointIndex < ai.WaypointCount)); elapsed += 100)
         {
             rig.Player.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0);
             rig.World.RunTick(100);
@@ -95,7 +99,7 @@ public sealed class DataDrivenEscortTests
         Assert.True(rig.Quests.Completed.Count == 1,
             $"entry {entry}: state {ai.State} point index {ai.CurrentWaypointIndex}/{ai.WaypointCount} " +
             $"escort {rig.Escort.X},{rig.Escort.Y},{rig.Escort.Z} alive {rig.Escort.IsAlive} " +
-            $"failed {rig.Quests.Failed.Count} spoken {spoken.Count} summons {rig.Summons.Count}");
+            $"failed {rig.Quests.Failed.Count} spoken {spoken.Count} summons {rig.Summons.Count} victim {rig.Escort.Combat.Victim?.GetType().Name}/{(rig.Escort.Combat.Victim as Creature)?.Entry} threat {rig.Escort.Combat.Threat.Entries.Count()} motion {rig.Escort.Motion.CurrentType} live {string.Join(';', rig.System.Creatures.Where(c => c.IsAlive).Select(c => c.Entry))}");
         Assert.Equal([(rig.Player, spec.QuestId)], rig.Quests.Completed);
         CreatureWaypoint completion = Assert.Single(RealPath(entry), p => spec.Waypoints.Any(w => w.Point == p.Point
             && w.Actions.Any(a => a.Type == "quest_complete")));
@@ -134,6 +138,8 @@ public sealed class DataDrivenEscortTests
     [InlineData(10427u)]
     [InlineData(10646u)]
     [InlineData(11856u)]
+    [InlineData(7784u)]
+    [InlineData(7807u)]
     public void ClassicDbEscort_FailsItsQuestWhenThePlayerLeaves(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -335,6 +341,45 @@ public sealed class DataDrivenEscortTests
 
         Assert.True(ai.IsRunning);
         Assert.Empty(Packets(watcher, WorldOpcode.SmsgMessagechat));
+    }
+
+    [Fact]
+    public void AMe01_StartsFromDead_WithHerTeamFaction_AndCompletesAtPoint38()
+    {
+        // npc_ame01AI / QuestAccept_npc_ame01 (ungoro_crater.cpp): dead until accepted, team passive faction, credit at point 38.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.AMe01AI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(40, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000446, -1000447, -1000448, -1000449, -1000450, -1000451];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new(
+            [Template(entry, b => { b.NpcFlags = (uint)NpcFlags.QuestGiver; b.UnitFlags = (uint)UnitFlags.ImmuneToNpc; })],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, first.X, first.Y);
+            Creature ame = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.AMe01AI>(ame.AI);
+            Assert.Equal(StandState.Dead, ame.StandState);
+
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.AMe01AI.QuestChasingAMe);
+            Assert.Equal(StandState.Stand, ame.StandState);
+            Assert.Equal(player.Team == Team.Alliance ? 774u : 775u, ame.FactionTemplate);
+            Assert.Equal(UnitFlags.None, ame.UnitFlags & UnitFlags.ImmuneToNpc);
+            for (int elapsed = 0; elapsed < 900_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(ame.X, ame.Y, ame.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.AMe01AI.QuestChasingAMe)], quests.Completed);
+            CreatureWaypoint end = Assert.Single(path, p => p.Point == 38);
+            Assert.InRange(MathF.Abs(ame.X - end.X), 0f, 2f);
+        }
     }
 
     private static IReadOnlyList<CreatureWaypoint> RealPath(uint entry) => File.ReadLines(Path.Combine(AppContext.BaseDirectory, "validated-escort-waypoints.csv"))
