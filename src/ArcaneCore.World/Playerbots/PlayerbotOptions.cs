@@ -108,6 +108,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
+    public PlayerbotEconomyOptions Economy { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -157,6 +160,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
+        Economy.Validate();
     }
 }
 

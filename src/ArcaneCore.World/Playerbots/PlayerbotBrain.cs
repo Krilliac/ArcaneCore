@@ -38,6 +38,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool _lootResponseReceived;
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
+    private readonly PlayerbotEconomy _economy = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
@@ -394,6 +395,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             QuestId = _quests.QuestId;
             if (_town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            if (_economy.Update(player, interval))
+            { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
             if (_quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player))
             {
                 // An abandoned idle-grind target must not keep reopening combat instead
