@@ -96,15 +96,18 @@ internal sealed class PlayerbotChatSafety
         PlayerbotChatSafetyOptions options = Options;
         string file = options.TermsFile?.Trim() ?? string.Empty;
         bool replace = options.ReplaceDefaultTerms;
+        TimeSpan timeout = options.PatternTimeout;
         DateTimeOffset now = _time.GetUtcNow();
         lock (_filterGate)
         {
-            bool sameKeys = _filterSource.File == file && _filterSource.Replace == replace;
+            bool sameKeys = _filterSource.File == file && _filterSource.Replace == replace && _filter.MatchTimeout == timeout;
             if (sameKeys && (file.Length == 0 || now - _filterCheckedAt < TermsFileCheck)) return _filter;
             _filterCheckedAt = now;
             DateTime written = file.Length == 0 ? default : WrittenAt(file);
             if (sameKeys && written == _filterSource.Written) return _filter;
-            PlayerbotChatSafetyFilter filter = file.Length == 0 ? PlayerbotChatSafetyFilter.Default : PlayerbotChatSafetyFilter.Load(file, replace);
+            PlayerbotChatSafetyFilter filter = file.Length == 0 && timeout == PlayerbotChatSafetyFilter.PatternTimeout
+                ? PlayerbotChatSafetyFilter.Default
+                : PlayerbotChatSafetyFilter.Load(file.Length == 0 ? null : file, replace, timeout);
             foreach (string problem in filter.Problems) _logger.LogWarning("Bot chat safety: {Problem}", problem);
             if (file.Length > 0)
                 _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
@@ -273,9 +276,9 @@ internal sealed class PlayerbotChatSafety
     };
 
     /// <summary>At most <see cref="ExcerptLength"/> characters of <paramref name="text"/>, one line, emails and phone numbers removed.</summary>
-    internal static string Excerpt(string text)
+    internal string Excerpt(string text)
     {
-        string clean = PlayerbotChatSafetyFilter.StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
+        string clean = Filter().StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
         return clean.Length <= ExcerptLength ? clean : clean[..(ExcerptLength - 3)] + "...";
     }
 

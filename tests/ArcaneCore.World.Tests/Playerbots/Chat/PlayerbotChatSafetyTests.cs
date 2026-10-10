@@ -34,6 +34,7 @@ public sealed class PlayerbotChatSafetyTests
         public Rig(Action<PlayerbotChatOptions>? configure = null, bool model = true)
         {
             Options.Chat.PerPlayerCooldownSeconds = 0;
+            ChatSamples.NoScreeningDeadline(Options.Chat);
             if (model) Options.Chat.Providers = [Model()];
             configure?.Invoke(Options.Chat);
             Options.Validate();
@@ -517,6 +518,31 @@ public sealed class PlayerbotChatSafetyTests
 
         // Generous for a loaded machine; a backtracking blow-up on any of these takes minutes, not seconds.
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"screening took {clock.Elapsed}");
+    }
+
+    [Fact]
+    public async Task ThePatternTimeout_ReachesEveryPatternOfTheFilterInUse_ThePersonalDataOnesToo()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(100), new PlayerbotChatSafetyOptions().PatternTimeout);
+        Assert.Equal(PlayerbotChatSafetyFilter.PatternTimeout, PlayerbotChatSafetyFilter.Default.MatchTimeout);
+
+        await using var rig = new Rig(chat => chat.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250));
+        PlayerbotChatSafetyFilter custom = rig.Chat.Safety.Filter();
+        Assert.Equal(TimeSpan.FromMilliseconds(250), custom.MatchTimeout);
+        Assert.True(custom.AllPatterns.Count() > 3); // the shipped patterns and the three personal-data ones
+        Assert.All(custom.AllPatterns, pattern => Assert.Equal(TimeSpan.FromMilliseconds(250), pattern.MatchTimeout));
+        Assert.Same(custom, rig.Chat.Safety.Filter());
+
+        // Live: the filter follows the option, and the default is the shared filter again.
+        rig.Safety.PatternTimeout = System.Text.RegularExpressions.Regex.InfiniteMatchTimeout;
+        Assert.All(rig.Chat.Safety.Filter().AllPatterns, pattern => Assert.Equal(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout, pattern.MatchTimeout));
+        rig.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout;
+        Assert.Same(PlayerbotChatSafetyFilter.Default, rig.Chat.Safety.Filter());
+
+        // Personal data is still screened and stripped through the filter in use.
+        rig.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
+        Assert.Equal("mail me at [email]", rig.Chat.Safety.Filter().StripPersonalData("mail me at someone@example.com"));
+        Assert.Equal(PlayerbotChatSafetyCategories.PersonalData, rig.Chat.Safety.ScreenInput("call 555-123-4567").Category);
     }
 
     /// <summary>The same pattern without its match timeout, so the test measures the engine, not the guard.</summary>

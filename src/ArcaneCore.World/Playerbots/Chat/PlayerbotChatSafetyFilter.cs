@@ -33,7 +33,11 @@ internal sealed class PlayerbotChatSafetyFilter
     /// <summary>The shipped data file (an embedded resource of this assembly).</summary>
     internal const string ResourceName = "ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyTerms.json";
 
-    /// <summary>A pattern's time limit per match.</summary>
+    /// <summary>
+    /// A pattern's time limit per match (the default of <see cref="PlayerbotChatSafetyOptions.PatternTimeout"/>). It is wall-clock
+    /// time: a pause of the whole process (a garbage collection, a starved CPU) during a match counts against it, so it can trip on a
+    /// harmless line, most likely on a pattern's first, slower match after start.
+    /// </summary>
     internal static readonly TimeSpan PatternTimeout = TimeSpan.FromMilliseconds(100);
 
     /// <summary>The longest text screened (longer text is screened in full by the fixed-cost term pass, and its first part by the patterns).</summary>
@@ -49,17 +53,28 @@ internal sealed class PlayerbotChatSafetyFilter
 
     private readonly Dictionary<PlayerbotChatSafetyCategories, CategoryRules> _rules;
 
-    private PlayerbotChatSafetyFilter(Dictionary<PlayerbotChatSafetyCategories, CategoryRules> rules, IReadOnlyList<string> problems)
+    private readonly Regex _email;
+    private readonly Regex _phone;
+    private readonly Regex _streetAddress;
+
+    private PlayerbotChatSafetyFilter(Dictionary<PlayerbotChatSafetyCategories, CategoryRules> rules, IReadOnlyList<string> problems, TimeSpan matchTimeout)
     {
         _rules = rules;
         Problems = problems;
+        MatchTimeout = matchTimeout;
+        _email = new Regex(EmailPattern, Linear, matchTimeout);
+        _phone = new Regex(PhonePattern, Linear, matchTimeout);
+        _streetAddress = new Regex(StreetAddressPattern, Linear, matchTimeout);
     }
 
     /// <summary>What could not be loaded (unknown categories, patterns that cannot run, an unreadable file): logged by the caller.</summary>
     internal IReadOnlyList<string> Problems { get; }
 
+    /// <summary>The time limit of every pattern of this filter, the personal-data ones included.</summary>
+    internal TimeSpan MatchTimeout { get; }
+
     /// <summary>Every compiled pattern, the personal-data ones included (the ReDoS test).</summary>
-    internal IEnumerable<Regex> AllPatterns => _rules.Values.SelectMany(rule => rule.Patterns).Concat([Email, Phone, StreetAddress]);
+    internal IEnumerable<Regex> AllPatterns => _rules.Values.SelectMany(rule => rule.Patterns).Concat([_email, _phone, _streetAddress]);
 
     /// <summary>The terms and patterns loaded (status and logs).</summary>
     internal (int Terms, int Patterns) Size => (_rules.Values.Sum(r => r.Terms.Count + r.Prefixes.Count), _rules.Values.Sum(r => r.Patterns.Count));
@@ -71,10 +86,12 @@ internal sealed class PlayerbotChatSafetyFilter
 
     /// <summary>
     /// The shipped list plus <paramref name="operatorFile"/>'s (or that file's alone with <paramref name="replaceDefaults"/>). A file
-    /// that cannot be read is a problem, and the shipped list stays.
+    /// that cannot be read is a problem, and the shipped list stays. Every pattern gets <paramref name="matchTimeout"/> (default
+    /// <see cref="PatternTimeout"/>).
     /// </summary>
-    internal static PlayerbotChatSafetyFilter Load(string? operatorFile, bool replaceDefaults)
+    internal static PlayerbotChatSafetyFilter Load(string? operatorFile, bool replaceDefaults, TimeSpan? matchTimeout = null)
     {
+        TimeSpan timeout = matchTimeout ?? PatternTimeout;
         var problems = new List<string>();
         var rules = new Dictionary<PlayerbotChatSafetyCategories, CategoryRules>();
         string? operatorJson = null;
@@ -93,9 +110,9 @@ internal sealed class PlayerbotChatSafetyFilter
             }
         }
 
-        if (operatorJson is null || !replaceDefaults) Add(rules, ReadResource(), "shipped list", problems);
-        if (operatorJson is not null) Add(rules, operatorJson, "terms file " + operatorFile, problems);
-        return new PlayerbotChatSafetyFilter(rules, problems);
+        if (operatorJson is null || !replaceDefaults) Add(rules, ReadResource(), "shipped list", problems, timeout);
+        if (operatorJson is not null) Add(rules, operatorJson, "terms file " + operatorFile, problems, timeout);
+        return new PlayerbotChatSafetyFilter(rules, problems, timeout);
     }
 
     private static string ReadResource()
@@ -107,7 +124,8 @@ internal sealed class PlayerbotChatSafetyFilter
     }
 
     /// <summary>Read one data file (<c>{"categories": {"Hate": {"terms": [...], "patterns": [...]}, ...}}</c>) into <paramref name="rules"/>.</summary>
-    private static void Add(Dictionary<PlayerbotChatSafetyCategories, CategoryRules> rules, string json, string source, List<string> problems)
+    private static void Add(Dictionary<PlayerbotChatSafetyCategories, CategoryRules> rules, string json, string source, List<string> problems,
+        TimeSpan matchTimeout)
     {
         try
         {
@@ -140,7 +158,7 @@ internal sealed class PlayerbotChatSafetyFilter
                 {
                     try
                     {
-                        rule.Patterns.Add(new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, PatternTimeout));
+                        rule.Patterns.Add(new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, matchTimeout));
                     }
                     catch (Exception error) when (error is ArgumentException or NotSupportedException)
                     {
@@ -281,11 +299,11 @@ internal sealed class PlayerbotChatSafetyFilter
     // --- personal data ----------------------------------------------------------------------------------------------------
 
     /// <summary>Whether <paramref name="text"/> holds an email address, a phone number or a street address.</summary>
-    internal static bool HasPersonalData(string text)
+    internal bool HasPersonalData(string text)
     {
         try
         {
-            return Email.IsMatch(text) || Phone.IsMatch(text) || StreetAddress.IsMatch(text);
+            return _email.IsMatch(text) || _phone.IsMatch(text) || _streetAddress.IsMatch(text);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -294,14 +312,14 @@ internal sealed class PlayerbotChatSafetyFilter
     }
 
     /// <summary>Emails and phone numbers replaced by placeholders (<c>[email]</c>, <c>[phone]</c>), street addresses by <c>[address]</c>.</summary>
-    internal static string StripPersonalData(string text)
+    internal string StripPersonalData(string text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
         try
         {
-            string result = Email.Replace(text, "[email]");
-            result = Phone.Replace(result, "[phone]");
-            return StreetAddress.Replace(result, "[address]");
+            string result = _email.Replace(text, "[email]");
+            result = _phone.Replace(result, "[phone]");
+            return _streetAddress.Replace(result, "[address]");
         }
         catch (RegexMatchTimeoutException)
         {
@@ -311,18 +329,15 @@ internal sealed class PlayerbotChatSafetyFilter
 
     private const RegexOptions Linear = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
 
-    private static readonly Regex Email = new(@"[A-Za-z0-9._%+\-]+\s*(@|\(at\)|\[at\])\s*[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\s*(\.|\(dot\)|\[dot\])\s*[A-Za-z]{2,}",
-        Linear, PatternTimeout);
+    private const string EmailPattern = @"[A-Za-z0-9._%+\-]+\s*(@|\(at\)|\[at\])\s*[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\s*(\.|\(dot\)|\[dot\])\s*[A-Za-z]{2,}";
 
     /// <summary>
     /// A North American number (with or without +1, brackets, dots, dashes or spaces) or an international one (+ and 8 to 15 digits).
     /// </summary>
-    private static readonly Regex Phone = new(@"(\+?1[\s.\-]?)?(\(\d{3}\)|\b\d{3})[\s.\-]?\d{3}[\s.\-]?\d{4}\b|\+\d{1,3}([\s.\-]?\d){7,14}\b",
-        Linear, PatternTimeout);
+    private const string PhonePattern = @"(\+?1[\s.\-]?)?(\(\d{3}\)|\b\d{3})[\s.\-]?\d{3}[\s.\-]?\d{4}\b|\+\d{1,3}([\s.\-]?\d){7,14}\b";
 
     /// <summary>A house number, one or two capitalised words and a street suffix ("221 Baker Street", "12 Elm St").</summary>
-    private static readonly Regex StreetAddress = new(@"\b\d{1,5}\s+([A-Z][a-z]+\s+){1,2}(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b",
-        Linear, PatternTimeout);
+    private const string StreetAddressPattern = @"\b\d{1,5}\s+([A-Z][a-z]+\s+){1,2}(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b";
 
     private sealed class CategoryRules
     {

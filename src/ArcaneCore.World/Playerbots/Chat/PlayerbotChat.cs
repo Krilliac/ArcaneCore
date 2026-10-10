@@ -410,11 +410,15 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     }
 
     /// <summary>The line as sent to a model provider: emails and phone numbers replaced when <see cref="PlayerbotChatSafetyOptions.StripPersonalData"/>.</summary>
-    private static BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
-        => options.Safety.StripPersonalData ? ask with { Text = PlayerbotChatSafetyFilter.StripPersonalData(ask.Text) } : ask;
+    private BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
+        => options.Safety.StripPersonalData ? ask with { Text = _safety.Filter().StripPersonalData(ask.Text) } : ask;
 
-    private static List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
-        => options.Safety.StripPersonalData ? [.. memory.Select(turn => turn with { Text = PlayerbotChatSafetyFilter.StripPersonalData(turn.Text) })] : memory;
+    private List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
+    {
+        if (!options.Safety.StripPersonalData) return memory;
+        PlayerbotChatSafetyFilter filter = _safety.Filter();
+        return [.. memory.Select(turn => turn with { Text = filter.StripPersonalData(turn.Text) })];
+    }
 
     /// <summary>A provider's moderation step for <paramref name="ask"/>'s line (as it would be sent); any error fails the step.</summary>
     private async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? key, BotChatAsk ask, PlayerbotChatOptions options)

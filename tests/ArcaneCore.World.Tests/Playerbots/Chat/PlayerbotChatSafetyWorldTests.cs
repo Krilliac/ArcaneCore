@@ -21,6 +21,7 @@ public sealed class PlayerbotChatSafetyWorldTests
         options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
         options.Chat.Enabled = true;
         options.Chat.PerPlayerCooldownSeconds = 0;
+        ChatSamples.NoScreeningDeadline(options.Chat);
         options.Chat.Providers = [new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.Anthropic, ApiKeyEnvironmentVariable = "TEST_CHAT_KEY" }];
         configure?.Invoke(options);
     }, services =>

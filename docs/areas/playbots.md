@@ -335,7 +335,9 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
      spaced-out letters (`k y s`) and repeated letters (`kiiill`); terms match whole words, and a trailing `*` matches longer words.
      Patterns are compiled with `RegexOptions.NonBacktracking` (matching time linear in the line, whatever the pattern: an
      operator's pattern with a back-reference or lookaround is skipped with a warning) and a 100 ms timeout; a line the filter
-     cannot judge in time goes to no model (the built-in provider answers) but costs no strike.
+     cannot judge in time goes to no model (the built-in provider answers) but costs no strike. The timeout is wall-clock time, so a
+     process pause during a match (a garbage collection, a starved CPU), most likely on a pattern's first match after start, can
+     trip it on a harmless line; that line gets a built-in reply.
   2. each provider's optional **moderation step** (`Moderation` on the provider entry, `None` by default): `Endpoint` posts the
      line to an OpenAI-compatible `/moderations` endpoint (`ModerationBaseUrl`, default the provider's own `BaseUrl`;
      `ModerationModel`, default `omni-moderation-latest`; `ModerationApiKeyEnvironmentVariable`, default the provider's key), so an
