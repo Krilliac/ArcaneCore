@@ -42,7 +42,8 @@ public sealed class ScourgeInvasionImportedRuntimeTests
         {
             if (!_dead.Add(spawnGuid)) return Task.FromResult(false);
             _state = _state with { Zones = _state.Zones.Select(z => z.ZoneId == zoneId
-                ? z with { Remaining = z.Remaining - 1 } : z).ToArray() };
+                ? z with { Remaining = z.Remaining - 1 } : z).ToArray(),
+                DestroyedSpawnGuids = new HashSet<uint>(_dead) };
             return Task.FromResult(true);
         }
         public Task<bool> RestartZoneAsync(uint zoneId, long nowUnix, CancellationToken cancellationToken = default)
@@ -207,6 +208,20 @@ public sealed class ScourgeInvasionImportedRuntimeTests
                 "imported summon circle").WaitAsync(TimeSpan.FromSeconds(15));
             await host.OnWorldAsync(() =>
             {
+                Player player = host.World.FindOnlinePlayer("Scochain")!;
+                GameObject circle = Assert.Single(player.Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects,
+                    go => go.Spawn?.Guid == 67776);
+                var creatures = player.Map.FindUpdater<CreatureMapSystem>()!;
+                int count = creatures.Content.GetSpawns(1, ScourgeInvasionCatalog.NecropolisHealth).Count;
+                var feature = host.WorldServices.GetRequiredService<ScourgeInvasionFeature>();
+                Assert.True(feature.HasLivingCircleOwner(circle, 16, creatures), $"owner false; health spawns={count}; map={circle.Map?.MapId}");
+                return true;
+            });
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<GameObjectMapSystem>()?.GameObjects.Any(go => go.Spawn?.Guid == 67776 && go.IsSpawned) == true,
+                "active imported summon circle").WaitAsync(TimeSpan.FromSeconds(15));
+            await host.OnWorldAsync(() =>
+            {
                 GameObject circle = Assert.Single(host.World.FindOnlinePlayer("Scochain")!.Map!
                     .FindUpdater<GameObjectMapSystem>()!.GameObjects, go => go.Spawn?.Guid == 67776);
                 Assert.True(circle.IsSpawned, $"circle {circle.Entry} loaded but not spawned");
@@ -219,6 +234,28 @@ public sealed class ScourgeInvasionImportedRuntimeTests
                 .FindUpdater<CreatureMapSystem>()?.Creatures.Any(c => c.Entry == ScourgeInvasionCatalog.NecroticShard
                     && MathF.Abs(c.X - 3337.51f) < 3f && MathF.Abs(c.Y + 4516.62f) < 3f) == true,
                 "summoned original shard").WaitAsync(TimeSpan.FromSeconds(15));
+            await host.OnWorldAsync(() =>
+            {
+                var objects = host.World.FindOnlinePlayer("Scochain")!.Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects;
+                Assert.True(Assert.Single(objects, go => go.Spawn?.Guid == 67804).IsSpawned,
+                    "imported camp fire must activate with its shard");
+                Assert.True(Assert.Single(objects, go => go.Spawn?.Guid == 67843).IsSpawned,
+                    "imported skull pile must activate with its shard");
+                return true;
+            });
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<CreatureMapSystem>()?.Creatures.Any(c => c.IsAlive
+                    && ScourgeInvasionCatalog.CampMinions.Contains(c.Entry)
+                    && MathF.Abs(c.X - 3337.51f) < 60f && MathF.Abs(c.Y + 4516.62f) < 60f) == true,
+                "camp finder summoned an imported minion").WaitAsync(TimeSpan.FromSeconds(20));
+            await host.OnWorldAsync(() =>
+            {
+                var creatures = host.World.FindOnlinePlayer("Scochain")!.Map!.FindUpdater<CreatureMapSystem>()!;
+                Assert.Contains(creatures.Creatures, c => c.Entry == ScourgeInvasionCatalog.MinionFinder
+                    && c.DeathState == CreatureDeathState.Dead
+                    && MathF.Abs(c.X - 3337.51f) < 60f && MathF.Abs(c.Y + 4516.62f) < 60f);
+                return true;
+            });
 
             await host.OnWorldAsync(() =>
             {
@@ -243,6 +280,31 @@ public sealed class ScourgeInvasionImportedRuntimeTests
                 .FindUpdater<CreatureMapSystem>()?.Creatures.Any(c => c.Spawn?.Guid == 97592 && c.Health < c.MaxHealth) == true,
                 "relay zap reached Necropolis Health").WaitAsync(TimeSpan.FromSeconds(15));
             Assert.Equal(2, (await state.LoadAsync()).Remaining(16)); // one of three circles; the Necropolis still stands
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Scochain")!;
+                Creature health = Assert.Single(player.Map!.FindUpdater<CreatureMapSystem>()!.Creatures,
+                    c => c.Spawn?.Guid == 97592);
+                SpellInfo zap = Assert.IsType<SpellInfo>(host.WorldServices.GetRequiredService<SpellFeature>()
+                    .System.Store.Get(ScourgeInvasionCatalog.ZapNecropolis));
+                health.AI!.OnSpellHit(player, zap);
+                health.AI.OnSpellHit(player, zap);
+                return true;
+            });
+            await host.WaitForWorldAsync(() => host.WorldServices.GetRequiredService<ScourgeInvasionFeature>()
+                .Snapshot.DestroyedSpawnGuids.Contains(97592), "persisted first Azshara Necropolis death")
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<GameObjectMapSystem>()?.GameObjects.Any(go => go.Spawn?.Guid == 67776 && !go.IsSpawned) == true,
+                "dead Necropolis camp closes").WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(events.IsActiveEvent(92)); // the other Azshara Necropolis still attacks
+            await host.OnWorldAsync(() =>
+            {
+                var objects = host.World.FindOnlinePlayer("Scochain")!.Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects;
+                Assert.False(Assert.Single(objects, go => go.Spawn?.Guid == 67804).IsSpawned);
+                Assert.False(Assert.Single(objects, go => go.Spawn?.Guid == 67843).IsSpawned);
+                return true;
+            });
         }
         finally
         {

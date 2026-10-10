@@ -24,6 +24,7 @@ public sealed class ScourgeInvasionStoreTests : IAsyncLifetime
         Assert.Equal(ScourgeInvasionState.Enabled, state.State);
         Assert.Equal(6, state.Zones.Count);
         Assert.Equal(14, state.Zones.Sum(z => z.Remaining));
+        Assert.Empty(state.DestroyedSpawnGuids);
         Assert.Equal(true, state.WorldScriptCondition(2260));
 
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -35,6 +36,8 @@ public sealed class ScourgeInvasionStoreTests : IAsyncLifetime
         Assert.Equal(false, state.WorldScriptCondition(2260));
         Assert.Equal(1, state.BattlesWon);
         Assert.Equal(16u, state.LastAttackZone);
+        Assert.Contains(97592u, state.DestroyedSpawnGuids);
+        Assert.Contains(97593u, state.DestroyedSpawnGuids);
         Assert.InRange(Assert.Single(state.Zones, z => z.ZoneId == 16).NextAttackUnix, now + 2700, now + 3600);
         Assert.False(await Restart(connection, 16, now + 3601)); // five zones are still under attack
 
@@ -44,7 +47,9 @@ public sealed class ScourgeInvasionStoreTests : IAsyncLifetime
                 Assert.True(await Kill(connection, zone.ZoneId, guid++, now));
         Assert.Equal(6, (await Load(connection)).BattlesWon);
         Assert.True(await Restart(connection, 16, now + 3601));
-        Assert.Equal(2, (await Load(connection)).Remaining(16));
+        state = await Load(connection);
+        Assert.Equal(2, state.Remaining(16));
+        Assert.DoesNotContain(97592u, state.DestroyedSpawnGuids);
         Assert.True(await Kill(connection, 16, 97592, now + 3601)); // this zone's old death ledger was cleared
 
         await Stop(connection);
@@ -52,6 +57,7 @@ public sealed class ScourgeInvasionStoreTests : IAsyncLifetime
         Assert.Equal(ScourgeInvasionState.Disabled, state.State);
         Assert.Equal(0, state.BattlesWon);
         Assert.All(state.Zones, zone => Assert.Equal(0, zone.Remaining));
+        Assert.Empty(state.DestroyedSpawnGuids);
         Assert.True(await Start(connection));
         Assert.Equal(14, (await Load(connection)).Zones.Sum(z => z.Remaining));
     }

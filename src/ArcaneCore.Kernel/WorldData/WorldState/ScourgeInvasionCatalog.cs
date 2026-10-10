@@ -19,6 +19,20 @@ public static class ScourgeInvasionCatalog
     public const uint NecropolisRelay = 16386;
     public const uint NecropolisProxy = 16398;
     public const uint SummonCircle = 181136;
+    public const uint MinionFinder = 16356;
+    public const uint GhostGhoulSpawner = 16306;
+    public const uint GhostSkeletonSpawner = 16336;
+    public const uint GhoulSkeletonSpawner = 16338;
+    public static IReadOnlySet<uint> CampMinions { get; } = new HashSet<uint>
+    {
+        16141, 16299, 16298, // common ghoul, skeleton, ghost
+        14697, 16380, 16379, // rare horror, witch, spirit
+    };
+    public static IReadOnlySet<uint> CampDoodads { get; } = new HashSet<uint>
+    {
+        181173, 181174, // undead fire and its aura
+        181191, 181192, 181193, 181194, // skull piles
+    };
 
     public static IReadOnlyList<ScourgeInvasionZone> Zones { get; } =
     [
@@ -46,6 +60,7 @@ public sealed record ScourgeInvasionZoneProgress(uint ZoneId, int Remaining, lon
 public sealed record ScourgeInvasionSnapshot(ScourgeInvasionState State, int BattlesWon, uint LastAttackZone,
     IReadOnlyList<ScourgeInvasionZoneProgress> Zones)
 {
+    public IReadOnlySet<uint> DestroyedSpawnGuids { get; init; } = new HashSet<uint>();
     public static ScourgeInvasionSnapshot Disabled { get; } = new(ScourgeInvasionState.Disabled, 0, 0,
         ScourgeInvasionCatalog.Zones.Select(z => new ScourgeInvasionZoneProgress(z.ZoneId, 0, 0)).ToArray());
 

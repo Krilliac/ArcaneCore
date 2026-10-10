@@ -7,6 +7,7 @@ using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -144,6 +145,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                     creature => new NecroticShardAi(creature));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.DamagedNecroticShard,
                     creature => new NecroticShardAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.GhostGhoulSpawner,
+                    creature => new ScourgeCampSpawnerAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.GhostSkeletonSpawner,
+                    creature => new ScourgeCampSpawnerAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.GhoulSkeletonSpawner,
+                    creature => new ScourgeCampSpawnerAi(creature));
             }
             if (map.FindUpdater<GameObjectMapSystem>() is { } objects && !_circleAis.ContainsKey(objects))
             {
@@ -157,6 +164,22 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     internal uint? CircleZone(GameObject go)
         => go.Spawn is { } spawn && _circleZoneByGuid.TryGetValue(spawn.Guid, out uint zone)
             ? zone : null;
+
+    internal bool IsZoneEventObject(GameObject go, uint zoneId)
+        => go.Spawn is { } spawn && _circleZoneByGuid.TryGetValue(spawn.Guid, out uint mapped)
+            && mapped == zoneId;
+
+    internal bool HasLivingCircleOwner(GameObject circle, uint zoneId, CreatureMapSystem creatures)
+    {
+        CreatureSpawn? nearest = creatures.Content.GetSpawns(creatures.Map.MapId, ScourgeInvasionCatalog.NecropolisHealth)
+            .Where(spawn => _spawnZoneByGuid.TryGetValue(spawn.Guid, out uint mapped) && mapped == zoneId)
+            .Where(spawn => DistanceSquared(circle.X, circle.Y, circle.Z, spawn.X, spawn.Y, spawn.Z) <= 350f * 350f)
+            .MinBy(spawn => DistanceSquared(circle.X, circle.Y, circle.Z, spawn.X, spawn.Y, spawn.Z));
+        return nearest is not null && !Snapshot.DestroyedSpawnGuids.Contains(nearest.Guid);
+    }
+
+    private static float DistanceSquared(float ax, float ay, float az, float bx, float by, float bz)
+        => (ax - bx) * (ax - bx) + (ay - by) * (ay - by) + (az - bz) * (az - bz);
 
     internal bool IsCircleAttackActive(uint zoneId)
         => ScourgeInvasionCatalog.ForZone(zoneId) is { } zone

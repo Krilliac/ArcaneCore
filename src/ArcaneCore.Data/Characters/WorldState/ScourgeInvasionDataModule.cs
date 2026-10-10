@@ -82,6 +82,8 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
             .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
         var stored = await db.Set<ScourgeInvasionZoneRow>().AsNoTracking()
             .ToDictionaryAsync(r => r.ZoneId, cancellationToken).ConfigureAwait(false);
+        uint[] destroyed = await db.Set<ScourgeInvasionKillRow>().AsNoTracking()
+            .Select(r => r.SpawnGuid).ToArrayAsync(cancellationToken).ConfigureAwait(false);
         if (state is not null && !Enum.IsDefined((ScourgeInvasionState)state.State))
             throw new InvalidOperationException($"invalid Scourge invasion state {state.State}");
         foreach (ScourgeInvasionZoneRow row in stored.Values)
@@ -94,7 +96,10 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
             state?.BattlesWon ?? 0, state?.LastAttackZone ?? 0,
             ScourgeInvasionCatalog.Zones.Select(z => stored.TryGetValue(z.ZoneId, out ScourgeInvasionZoneRow? row)
                 ? new ScourgeInvasionZoneProgress(z.ZoneId, row.Remaining, row.NextAttackUnix)
-                : new ScourgeInvasionZoneProgress(z.ZoneId, 0, 0)).ToArray());
+                : new ScourgeInvasionZoneProgress(z.ZoneId, 0, 0)).ToArray())
+        {
+            DestroyedSpawnGuids = new HashSet<uint>(destroyed),
+        };
     }
 
     public async Task<bool> StartAsync(CancellationToken cancellationToken = default)

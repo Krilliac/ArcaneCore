@@ -34,5 +34,20 @@ public sealed class ScourgeInvasionImportedContentTests
         using SqliteCommand main = db.CreateCommand();
         main.CommandText = "SELECT COUNT(*) FROM game_event WHERE entry=17 AND schedule_type=0";
         Assert.Equal(1L, (long)main.ExecuteScalar()!);
+
+        main.CommandText = "SELECT c.Guid, COUNT(he.guid) FROM gameobject_spawn c "
+            + "JOIN game_event_gameobject ce ON ce.guid=c.Guid "
+            + "LEFT JOIN creature_spawn h ON h.Entry=16421 AND h.MapId=c.MapId "
+            + "AND (h.X-c.X)*(h.X-c.X)+(h.Y-c.Y)*(h.Y-c.Y)+(h.Z-c.Z)*(h.Z-c.Z)<=122500 "
+            + "LEFT JOIN game_event_creature he ON he.guid=h.Guid AND he.event=ce.event "
+            + "WHERE c.Entry=181136 AND ce.event BETWEEN 90 AND 95 GROUP BY c.Guid";
+        using SqliteDataReader circles = main.ExecuteReader();
+        int circleCount = 0;
+        while (circles.Read())
+        {
+            Assert.Equal(1L, circles.GetInt64(1));
+            circleCount++;
+        }
+        Assert.Equal(42, circleCount);
     }
 }
