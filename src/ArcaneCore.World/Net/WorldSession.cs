@@ -15,6 +15,8 @@ using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Net.Versioning;
+using ArcaneCore.Protocol.Versioning;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -122,7 +124,10 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly NetGuard? _guard;
     private readonly NetProtectionOptions _protection;
     private readonly IpKey? _address;
-    private readonly WorldHeaderCrypt _crypt = new();
+    // The client build's wire protocol (multi-version design S0). Pre-auth framing uses ClientProtocols.PreAuth;
+    // CMSG_AUTH_SESSION binds the build's protocol once. Only build 5875 exists, so the cipher instance never changes.
+    private IClientProtocol _protocol = ClientProtocols.PreAuth;
+    private readonly IWorldHeaderCrypt _crypt = ClientProtocols.PreAuth.CreateHeaderCrypt();
     private readonly object _sendLock = new();
     private readonly Channel<byte[]> _outbound = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -287,10 +292,11 @@ public sealed partial class WorldSession : IPlayerSession
             return;
         }
 
-        byte[] frame = new byte[WorldHeaderCrypt.OutgoingHeaderLength + payload.Length];
+        int headerLength = _crypt.OutgoingHeaderLength;
+        byte[] frame = new byte[headerLength + payload.Length];
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), (ushort)opcode);
-        payload.CopyTo(frame.AsSpan(WorldHeaderCrypt.OutgoingHeaderLength));
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), _protocol.Opcodes.ToWire(opcode));
+        payload.CopyTo(frame.AsSpan(headerLength));
 
         lock (_sendLock)
         {
@@ -299,7 +305,7 @@ public sealed partial class WorldSession : IPlayerSession
                 return;
             }
 
-            _crypt.EncryptHeader(frame.AsSpan(0, WorldHeaderCrypt.OutgoingHeaderLength));
+            _crypt.EncryptHeader(frame.AsSpan(0, headerLength));
             if (!_outbound.Writer.TryWrite(frame))
             {
                 return;
@@ -481,7 +487,7 @@ public sealed partial class WorldSession : IPlayerSession
 
     private async Task ReadLoopAsync(CancellationToken token)
     {
-        byte[] header = new byte[WorldHeaderCrypt.IncomingHeaderLength];
+        byte[] header = new byte[_crypt.IncomingHeaderLength];
 
         // Net:Protection:FrameReadTimeout: once the first byte of a header is in, the rest of the
         // header and the payload must follow within the budget (slowloris). One deadline per
@@ -537,8 +543,9 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             deadline.Disarm();
-            CapturePacket(true, (WorldOpcode)rawOpcode, payload);
-            if (!await DispatchAsync((WorldOpcode)rawOpcode, payload).ConfigureAwait(false))
+            WorldOpcode opcode = _protocol.Opcodes.FromWire(rawOpcode);
+            CapturePacket(true, opcode, payload);
+            if (!await DispatchAsync(opcode, payload).ConfigureAwait(false))
             {
                 return;
             }
@@ -707,7 +714,7 @@ public sealed partial class WorldSession : IPlayerSession
         // CMSG_AUTH_SESSION (vmangos WorldSocket::HandleAuthSession, build 5875 layout):
         // u32 build, u32 server id, CString account, u32 client seed, u8[20] digest, addon block.
         // Parsed without throwing or copying; a packet that does not fit is malformed and charged.
-        if (!AuthSessionRequest.TryParse(payload, out AuthSessionRequest request))
+        if (!_protocol.Auth.TryParseAuthSession(payload, out AuthSessionRequest request))
         {
             _logger.LogWarning("[{Endpoint}] malformed CMSG_AUTH_SESSION; disconnecting", RemoteEndpoint);
             _guard?.RecordAuthFailure(_address);
@@ -726,7 +733,7 @@ public sealed partial class WorldSession : IPlayerSession
         string account = request.Account;
         uint clientSeed = request.ClientSeed;
 
-        if (build != ClientBuild.Vanilla1121)
+        if (!ClientProtocols.TryGet(build, out IClientProtocol protocol))
         {
             SendAuthResponse(AuthResponseCode.VersionMismatch); // a wrong client, not a guess: not charged
             return false;
@@ -819,6 +826,7 @@ public sealed partial class WorldSession : IPlayerSession
                 return false;
             }
 
+            _protocol = protocol;
             _crypt.Initialize(stored.SessionKey);
             _state = SessionState.CharacterSelect;
         }
@@ -848,7 +856,7 @@ public sealed partial class WorldSession : IPlayerSession
     /// zero here; every failure code is the bare result byte.
     /// </summary>
     private void SendAuthResponse(AuthResponseCode code) =>
-        Send(WorldOpcode.SmsgAuthResponse, code == AuthResponseCode.Ok ? new byte[10] { (byte)code, 0, 0, 0, 0, 0, 0, 0, 0, 0 } : [(byte)code]);
+        Send(WorldOpcode.SmsgAuthResponse, _protocol.Auth.AuthResponse(code));
 
     // --- teardown ------------------------------------------------------------------
 
