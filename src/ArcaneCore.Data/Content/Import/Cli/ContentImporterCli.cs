@@ -191,6 +191,17 @@ public static partial class ContentImporterCli
 
     // --- plan --------------------------------------------------------------------------------
 
+    /// <summary>One line for the event rows dropped because their spawn is not in the dump (cmangos GameEventMgr skips them at load).</summary>
+    internal static void AddEventOrphanWarning(List<string> warnings, GameEventImportReport report)
+    {
+        if (report.OrphanCreatureRows > 0 || report.OrphanGameObjectRows > 0)
+        {
+            warnings.Add(
+                $"game event rows without a spawn in the dump were dropped: {report.OrphanCreatureRows} game_event_creature, " +
+                $"{report.OrphanGameObjectRows} game_event_gameobject (classic-db Updates/4498 deletes the same rows)");
+        }
+    }
+
     private static Task<int> PlanAsync(CliArguments a, TextWriter o, CancellationToken ct)
     {
         string dialect = ParseDialect(a);
@@ -609,6 +620,9 @@ public static partial class ContentImporterCli
         imported["game_event_quest"] = gameEventReport.Quests;
         imported["game_event_mail"] = gameEventReport.Mails;
         skipped["game_event_rows"] = gameEventReport.SkippedRows;
+        skipped["game_event_creature_orphans"] = gameEventReport.OrphanCreatureRows;
+        skipped["game_event_gameobject_orphans"] = gameEventReport.OrphanGameObjectRows;
+        AddEventOrphanWarning(warnings, gameEventReport);
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
         imported["world_safe_locs"] = graveyardReport.SafeLocs;

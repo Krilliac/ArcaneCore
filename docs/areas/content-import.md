@@ -8,6 +8,43 @@ database or report inside a git work tree unless git ignores the path.
 
 ## Delivered
 
+### Content gaps: game-event orphans and four relay commands (2026-10-10; wave 17, branch `grok/content-gaps`; no schema change)
+
+**Game-event game objects "without a spawn" (wave 10: 1126).** Cause, measured on z2815: neither a missing import table nor a mapping
+gap. The 1126 `game_event_gameobject` guids (1095 Noblegarden event 9, 30 AQ War Effort events 120/131-135, 1 Midsummer) are in **no**
+`gameobject` row of the snapshot: 969 exist in no table at all, and 157 are *creature* guids (137 event 9, 19 war effort, Midsummer
+51297) that are already listed in `game_event_creature` and spawn as creatures. classic-db's own `Updates/4498_backport_errors.sql` deletes exactly these 1126 rows (and the 33 creature ones),
+and cmangos `GameEventMgr::LoadFromDB` skips such rows at load; ArcaneCore imported only the Full_DB snapshot and never replays
+`Updates/`, so they stayed. There is no position data for them anywhere, so they cannot be made to spawn: Noblegarden's real eggs come
+from the 410 pooled event objects (see Pools). `GameEventDumpImporter` now reads the guid column of `creature` and `gameobject` when the
+same dump carries them and drops event rows whose guid is not a spawn, reporting `skipped.game_event_creature_orphans` /
+`game_event_gameobject_orphans` and one warning line (`import` and `refresh`). An events-only dump (no spawn table read) keeps every row.
+
+| z2815 | before | after |
+|---|---|---|
+| `game_event_gameobject` rows written | 12,274 | 11,148 |
+| `game_event_creature` rows written | 3,219 | 3,186 |
+| world audit "gameobject guid(s) not in the gameobject spawns" | 1,126 | 0 |
+| world audit "creature guid(s) not in the creature spawns" | 33 | 0 |
+
+An existing world needs `refresh` (or `import --replace`) to lose the rows. Not done: 4498 also adds the AQ War Effort resource piles as
+new `gameobject` rows 155000-155054 with their event links; those are war-effort content for that area, not a replay of updates here.
+
+**Relay commands (`dbscripts_on_relay`, z2815 828 steps).** Implemented in `CreatureMapSystem.RelayCommandsExtra.cs` from cmangos
+`ScriptAction::ExecuteDbscriptCommand` and the `ScriptMgr.h` field layout:
+
+| command | z2815 steps | before | after | notes |
+|---|---|---|---|---|
+| 37 MOVE_DYNAMIC | 2 (relays 19, 9996) | skipped | runs | contact point (datalong 0; fixedDist datalong3, COMMAND_ADDITIONAL without radii) or random point minDist..maxDist; dataint walk/run, dataint2 arrival relay, dataint3&1 clear; skipped in combat. No terrain/LoS height adjust. |
+| 39 SET_HOVER | 2 (30601, 30611) | skipped | runs | MOVEFLAG_HOVER + SMSG_SPLINE_MOVE_(UN)SET_HOVER; the fly-anim byte flag (COMMAND_ADDITIONAL, unused) is reported. |
+| 42 SET_EQUIPMENT_SLOTS | 2 (25, 20603) | skipped | runs | dataint..3 item entries (-1 keep, 0 empty) via the world item store; "reset default" restores the slots as they were before the first scripted change (ArcaneCore has no `creature_equip_template`). |
+| 52 SET_GOSSIP_MENU | 4 (33, 84) | skipped | runs | target creature's default menu (`Creature.DefaultGossipMenuId`, used by gossip, conditions and EventAI); not reset by respawn, as cmangos. |
+| 51 FORMATION | 1 (1162501) | skipped | skipped | dynamic formations (Cork Gizelton caravan) are not modelled. |
+| 20 MOVEMENT random with expiry | 4 | skipped | (other worker, `grok/relay-random-movement`) | |
+
+Unsupported relay steps by command: 11 before (5 commands, plus the 4 random-with-expiry MOVEMENT rows), 1 after in this branch
+(FORMATION), plus the 4 MOVEMENT rows the other branch removes.
+
 ### Pools (2026-10-09; world 46, `PoolDataModule`)
 
 **Schema.** `PoolDataModule` (`src/ArcaneCore.Data/World/Pools/`, `Version = 46` as the wave-10 plan assigns it; world 45 is the

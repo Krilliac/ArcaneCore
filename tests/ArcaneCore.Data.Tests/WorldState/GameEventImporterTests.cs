@@ -191,7 +191,7 @@ public sealed class GameEventImporterTests : IDisposable
     }
 
     [ClassicDbDumpFact]
-    public void RealDump_HasTheRowCountsTheDesignRestsOn_AndTheOrphansAreCountedNotFatal()
+    public void RealDump_HasTheRowCountsTheDesignRestsOn_AndTheOrphansAreDroppedAndCounted()
     {
         using FileStream file = File.OpenRead(ClassicDbDumpFactAttribute.DumpPath);
         using var gzip = new GZipStream(file, CompressionMode.Decompress);
@@ -228,8 +228,10 @@ public sealed class GameEventImporterTests : IDisposable
 
         Assert.Equal(67, content.Events.Count);
         Assert.Equal(38, content.Times.Count);
-        Assert.Equal(3219, content.Creatures.Count);
-        Assert.Equal(12274, content.GameObjects.Count);
+        // 3219 and 12274 rows in the dump; the 33 and 1126 whose guid is in no spawn table are dropped (classic-db Updates/4498)
+        Assert.Equal(3186, content.Creatures.Count);
+        Assert.Equal(11148, content.GameObjects.Count);
+        Assert.Equal((33, 1126), (importer.BuildReport().OrphanCreatureRows, importer.BuildReport().OrphanGameObjectRows));
         Assert.Equal(977, content.CreatureData.Count);
         Assert.Equal(61, content.Quests.Count);
         Assert.Single(content.Mails);
@@ -241,8 +243,8 @@ public sealed class GameEventImporterTests : IDisposable
         Assert.Equal((26, 36, 3, 1, 1), (types[0], types[1], types[11], types[12], types[13]));
         Assert.Equal(2, content.Events.Count(e => e.LinkedTo == 12));
 
-        // orphans: event rows whose creature or gameobject is not in the dump are counted here, the world's loader skips and logs them
-        Assert.Equal(33, content.Creatures.Count(c => !creatureGuids.Contains(c.Guid)));
-        Assert.Equal(1126, content.GameObjects.Count(g => !gameObjectGuids.Contains(g.Guid)));
+        // orphans: none is left for the world's loader to skip
+        Assert.Equal(0, content.Creatures.Count(c => !creatureGuids.Contains(c.Guid)));
+        Assert.Equal(0, content.GameObjects.Count(g => !gameObjectGuids.Contains(g.Guid)));
     }
 }

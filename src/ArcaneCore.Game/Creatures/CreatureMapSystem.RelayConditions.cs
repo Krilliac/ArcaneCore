@@ -199,7 +199,7 @@ public sealed partial class CreatureMapSystem
         Creature? npc = source as Creature ?? target as Creature;
         NpcInfo? info = npc is null ? null : new NpcInfo(npc.Guid, npc.Entry, npc.Spawn?.Guid ?? npc.Guid.Low, (NpcFlags)npc.NpcFlags, npc.MapId,
             npc.X, npc.Y, npc.Z, npc.BoundingRadius, npc.IsAlive, IsHostile: false, npc.Combat.IsInCombat,
-            (npc.UnitFlags & UnitFlags.NotSelectable) != 0, npc.Template.GossipMenuId);
+            (npc.UnitFlags & UnitFlags.NotSelectable) != 0, npc.DefaultGossipMenuId);
         return conditions.IsSatisfied(conditionId, player, info);
     }
 

@@ -35,7 +35,7 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
         return new NpcInfo(creature.Guid, creature.Entry, creature.Spawn?.Guid ?? creature.Guid.Low,
             (NpcFlags)creature.NpcFlags, creature.MapId, creature.X, creature.Y, creature.Z,
             creature.BoundingRadius, creature.IsAlive, hostile, creature.Combat.IsInCombat,
-            (creature.UnitFlags & UnitFlags.NotSelectable) != 0, creature.Template.GossipMenuId,
+            (creature.UnitFlags & UnitFlags.NotSelectable) != 0, creature.DefaultGossipMenuId,
             TrainerType: (TrainerType)creature.Template.TrainerType,
             TrainerClass: creature.Template.TrainerClass,
             TrainerRace: creature.Template.TrainerRace,

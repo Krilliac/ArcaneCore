@@ -87,11 +87,11 @@ public sealed class GameEventSpawnAuditTests
     }
 
     /// <summary>
-    /// The whole classic-db z2815 dump: the event guids missing from its own <c>creature</c> and <c>gameobject</c> tables are the 33 and 1126
-    /// the audit should report, and the wave-9 "3148" is the audit against an empty creature content.
+    /// The whole classic-db z2815 dump: the event guids missing from its own <c>creature</c> and <c>gameobject</c> tables (33 and 1126) are
+    /// dropped by the importer, so the audit has nothing to report; the wave-9 "3148" (now 3115) is the audit against an empty creature content.
     /// </summary>
     [ClassicDbEventsFact]
-    public void RealDump_EventGuidsMissingFromItsOwnSpawnTables_Are33CreaturesAnd1126GameObjects()
+    public void RealDump_AfterTheImporterDropsTheOrphans_NoEventGuidIsMissingFromTheSpawnTables()
     {
         GameEventContent events;
         var creatures = new List<CreatureSpawn>();
@@ -129,8 +129,10 @@ public sealed class GameEventSpawnAuditTests
         Assert.Equal(47827, objects.Count);
         GameEventSpawns gate = Gate(events);
         var objectContent = new GameObjectContent([], objects, [], [], []);
-        Assert.Equal((33, 1126), GameEventSpawnFeature.CountOrphans(gate, new CreatureContent([], creatures, [], [], []), objectContent));
-        Assert.Equal((3148, 1126), GameEventSpawnFeature.CountOrphans(gate, CreatureContent.Empty, objectContent));
+        // the importer now drops the 33 and 1126 rows whose guid is in no spawn table (classic-db Updates/4498), so nothing is left over;
+        // against an empty creature content every kept creature guid (3148 - 33) would still count
+        Assert.Equal((0, 0), GameEventSpawnFeature.CountOrphans(gate, new CreatureContent([], creatures, [], [], []), objectContent));
+        Assert.Equal((3115, 0), GameEventSpawnFeature.CountOrphans(gate, CreatureContent.Empty, objectContent));
     }
 
     private static StreamReader OpenDump()

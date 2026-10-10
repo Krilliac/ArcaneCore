@@ -343,6 +343,7 @@ public static partial class ContentImporterCli
         if (anyEvents)
         {
             warnings.AddRange(eventReport.Warnings);
+            AddEventOrphanWarning(warnings, eventReport);
         }
 
         // creature_spawn_entry: the entries a spawn whose creature.id is 0 becomes (cmangos; vmangos id2..id5). Worlds built by the Codex-line

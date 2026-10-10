@@ -336,7 +336,7 @@ internal static class EventAiSearch
         Creature me = context.Me;
         var source = new NpcInfo(me.Guid, me.Entry, me.Spawn?.Guid ?? me.Guid.Low, (NpcFlags)me.NpcFlags, me.MapId, me.X, me.Y, me.Z,
             me.BoundingRadius, me.IsAlive, IsHostile: false, me.Combat.IsInCombat, (me.UnitFlags & UnitFlags.NotSelectable) != 0,
-            me.Template.GossipMenuId);
+            me.DefaultGossipMenuId);
         return conditions.IsSatisfied(conditionId, player, source);
     }
 }
