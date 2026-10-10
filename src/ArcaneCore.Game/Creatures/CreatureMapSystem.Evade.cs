@@ -22,8 +22,11 @@ public sealed partial class CreatureMapSystem
     /// third of its maximum per 5 s tick once out of combat (<c>Creatures:Movement:EvadeRestoresFullHealth</c> restores the old instant snap).
     /// The loot tap is cleared (the tapper, the group of the tap and the tapped dynamic flags; vmangos CreatureAI::EnterEvadeMode →
     /// SetLootRecipient(nullptr)). Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches
-    /// the combo service), a creature's pets and totems are not sent home (creatures have no controlled-unit links).
-    /// <see cref="Evaded"/> is raised once per evade.
+    /// the combo service), a creature's pets and totems are not sent home (creatures have no controlled-unit links), and when the AI's
+    /// evade hook takes the movement over (an escort or follower running back to the combat start) the linked-creature and spawn-group evade
+    /// events (cMaNGOS LINKING_EVENT_EVADE, CREATURE_GROUP_EVENT_EVADE) are not raised.
+    /// <see cref="Evaded"/> is raised once per evade, the escort's and the follower's included. A script's own evade that replaces this
+    /// one (<see cref="AI.CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises it only through a nested call.
     /// </summary>
     public void EnterEvadeMode(Creature creature)
     {
@@ -85,8 +88,19 @@ public sealed partial class CreatureMapSystem
 
         creature.AI?.OnEvade();
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEvade(creature);
-        if (!creature.IsAlive || (!charmed && !creature.IsEvading))
+        if (!creature.IsAlive)
         {
+            return;
+        }
+
+        // An AI hook that cleared the evade flag took over the movement itself: an escort or a follower runs back to where the fight began
+        // instead of going home (vmangos npc_escortAI::ReturnToCombatStartPosition, mangos-classic FollowerAI::EnterEvadeMode). It is still
+        // an evade: cMaNGOS npc_escortAI has no EnterEvadeMode of its own and ends in Unit::TriggerEvadeEvents (AI/BaseAI/UnitAI.cpp:113-130)
+        // as any creature, so Evaded is raised for it here. The linked and spawn-group evade events are not (see the summary).
+        bool aiTookOverMovement = !charmed && !creature.IsEvading;
+        if (aiTookOverMovement)
+        {
+            Evaded?.Invoke(creature);
             return;
         }
 
