@@ -8,9 +8,16 @@ namespace ArcaneCore.Game.Pets;
 /// <summary>vmangos PetTameFailureReason (SharedDefines.h:1707-1721).</summary>
 public enum PetTameFailureReason : byte
 {
+    InvalidCreature = 1,
+    TooMany = 2,
+    CreatureAlreadyOwned = 3,
+    NotTameable = 4,
+    AnotherSummonActive = 5,
+    UnitsCantTame = 6,
     NoPetAvailable = 7,
     Dead = 10,
     NotDead = 11, // vmangos SharedDefines.h:1720, PETTAME_NOTDEAD.
+    TooHighLevel = 9,
 }
 
 /// <summary>SMSG_PET_ACTION_FEEDBACK message (wow_messages PetFeedback; vmangos FEEDBACK_*).</summary>
