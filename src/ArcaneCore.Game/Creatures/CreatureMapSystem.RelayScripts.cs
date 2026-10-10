@@ -127,12 +127,15 @@ public sealed partial class CreatureMapSystem
     public uint SelectRelayFromTemplate(uint templateId)
         => _content.Ai.RelayScripts.SelectFromTemplate(templateId, _random.Next(0, 1_000_001) / 10_000f, count => _random.Next(0, count));
 
+    private Func<RelayScriptPendingStep, bool>? _executeRelayStep;
+
     private void UpdateRelayScripts()
     {
-        _relays.Update(_clockMs, ExecuteRelayStep);
+        Func<RelayScriptPendingStep, bool> execute = _executeRelayStep ??= ExecuteRelayStep; // one delegate, not one per tick
+        _relays.Update(_clockMs, execute);
         foreach (RelayScriptRunner runner in _dbScriptRunners.Values)
         {
-            runner.Update(_clockMs, ExecuteRelayStep);
+            runner.Update(_clockMs, execute);
         }
         for (int i = _scriptDespawns.Count - 1; i >= 0; i--)
         {
