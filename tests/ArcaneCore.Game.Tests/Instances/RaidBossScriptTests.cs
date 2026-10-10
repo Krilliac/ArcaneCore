@@ -4,6 +4,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
+using ArcaneCore.Game.Instances.Scripts.Naxxramas;
+using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
@@ -730,4 +732,103 @@ public sealed class RaidBossScriptTests
         Assert.True(kit.System.HasAura(player, expected));
         Assert.False(kit.System.HasAura(player, poisoned ? 24322u : 24323u));
     }
+
+    // mangos-classic boss_razorgore.cpp npc_blackwing_orbAI.
+    [Fact]
+    public void BlackwingOrb_ResetFireballExplodesTheOrb_AndTheIntroVisualWaitsForGrethok()
+    {
+        using var raid = new Raid(469, BlackwingOrbAI.Entry, engage: false, BlackwingOrbAI.OrbOfDomination, BlackwingOrbAI.Grethok);
+        var orb = Assert.IsType<BlackwingOrbAI>(raid.Boss.AI);
+        orb.OnUpdate(BlackwingOrbAI.IntroVisualMs); // no Grethok yet: retry in 2 s
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == BlackwingOrbAI.PossessVisual);
+        Assert.Equal(BlackwingOrbAI.RetryMs, orb.IntroTimerMs);
+        Creature grethok = raid.Creatures.SpawnTemporary(Template(BlackwingOrbAI.Grethok), raid.Boss.X + 1, raid.Boss.Y, raid.Boss.Z, 0);
+        orb.OnUpdate(BlackwingOrbAI.RetryMs - 1);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == BlackwingOrbAI.PossessVisual);
+        orb.OnUpdate(1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == BlackwingOrbAI.PossessVisual && ReferenceEquals(c.Target, raid.Boss));
+        Assert.Contains(raid.Caster.UnitCasts, c => ReferenceEquals(c.Caster, grethok) && c.Spell == BlackwingOrbAI.ControlOrb);
+        Assert.Equal(0u, orb.IntroTimerMs);
+
+        orb.OnSpellHit(raid.Tank, SpellTestKit.Spell(BlackwingOrbAI.ResetFireball, SpellTestKit.Effect(SpellEffectName.SchoolDamage, 1)));
+        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == BlackwingOrbAI.OrbOfDomination);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == BlackwingOrbAI.ExplodeOrb && c.Triggered);
+    }
+
+    // mangos-classic blackwing_lair.cpp event_weekly_chromatic_selection / InitiateBreath / InitiateDrakonid.
+    [Fact]
+    public void WeeklyChromaticSelection_EventsFixTheBreathsAndTunnelsOnce()
+    {
+        using var raid = new Raid(469, 12017, engage: false); // not Chromaggus: his constructor rolls the breaths itself
+        Assert.Equal(0u, raid.Data.GetData(9));
+        Assert.True(raid.Data.OnSpellEvent(raid.Boss, 8447));
+        Assert.True(raid.Data.OnSpellEvent(raid.Boss, 8455));
+        Assert.True(raid.Data.OnSpellEvent(raid.Boss, 8446)); // a second left roll keeps the first
+        Assert.True(raid.Data.OnSpellEvent(raid.Boss, 8522));
+        Assert.True(raid.Data.OnSpellEvent(raid.Boss, 8525));
+        Assert.Equal(23308u, raid.Data.GetData(9));
+        Assert.Equal(23316u, raid.Data.GetData(10));
+        Assert.Equal(14310u, raid.Data.GetData(11));
+        Assert.Equal(14307u, raid.Data.GetData(12));
+        Assert.False(raid.Data.OnSpellEvent(raid.Boss, 8456));
+    }
+
+    // mangos-classic ruins_of_ahnqirajScripts.cpp mob_anubisath_guardianAI.
+    [Fact]
+    public void AnubisathGuardian_ReflectsOnAggro_FollowsReferenceTimers_CapsSummons_AndActsBelowTenPercent()
+    {
+        using var raid = new Raid(509, AnubisathGuardianAI.Entry, engage: false);
+        var ai = Assert.IsType<AnubisathGuardianAI>(raid.Boss.AI);
+        ai.OnRespawn();
+        raid.Boss.AI!.AttackStart(raid.Tank);
+        ai.OnAggro(raid.Tank);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell3 && ReferenceEquals(c.Target, raid.Boss));
+        Assert.Contains(ai.Spell1, new[] { AnubisathGuardianAI.Meteor, AnubisathGuardianAI.Plague });
+        Assert.Contains(ai.Spell2, new[] { AnubisathGuardianAI.ShadowStorm, AnubisathGuardianAI.ThunderClap });
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(9999);
+        Assert.Empty(raid.Caster.Casts);
+        ai.OnUpdate(1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell5);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == ai.Spell2);
+        ai.OnUpdate(10000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell2);
+        for (int i = 0; i < 4; i++) ai.OnJustSummoned(raid.Boss);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(5000); // spell 1 and the summon are due at 25 s; four summons are up
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell1);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == ai.Spell5);
+
+        raid.Caster.Casts.Clear();
+        raid.Boss.Health = raid.Boss.MaxHealth / 20;
+        ai.OnUpdate(1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.Spell4);
+    }
+
+    // mangos-classic naxxramas.cpp npc_living_poisonAI and instance_naxxramas::Update.
+    [Fact]
+    public void LivingPoison_StreamSpawnsThreeEveryFiveSeconds_AndExplodesWithinFourYards()
+    {
+        using var raid = new Raid(533, NaxxramasInstance.NaxxramasTrigger, engage: false, LivingPoisonAI.Entry);
+        var naxx = Assert.IsType<NaxxramasInstance>(raid.Data);
+        Assert.Equal(NaxxramasInstance.LivingPoisonIntervalMs, naxx.LivingPoisonTimerMs);
+        naxx.Update(NaxxramasInstance.LivingPoisonIntervalMs - 1);
+        Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == LivingPoisonAI.Entry);
+        naxx.Update(1);
+        Creature[] poisons = [.. raid.Creatures.Creatures.Where(c => c.Entry == LivingPoisonAI.Entry)];
+        Assert.Equal(3, poisons.Length);
+        naxx.Update(NaxxramasInstance.LivingPoisonIntervalMs);
+        Assert.Equal(6, raid.Creatures.Creatures.Count(c => c.Entry == LivingPoisonAI.Entry));
+
+        var ai = Assert.IsType<LivingPoisonAI>(poisons[0].AI);
+        Assert.False(ai.AttackStart(raid.Tank));
+        raid.Tank.Relocate(poisons[0].X + 20, poisons[0].Y, poisons[0].Z, 0, 0);
+        ai.MoveInLineOfSight(raid.Tank);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == LivingPoisonAI.ExplodeSpell);
+        raid.Tank.Relocate(poisons[0].X + 3, poisons[0].Y, poisons[0].Z, 0, 0);
+        ai.MoveInLineOfSight(raid.Tank);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == LivingPoisonAI.ExplodeSpell && c.Triggered);
+    }
 }
+
