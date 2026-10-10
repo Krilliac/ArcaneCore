@@ -205,15 +205,162 @@ public sealed class AuctionBotTests
         IReadOnlyList<AuctionBotBuyIntent> buys = planner.PlanBuy(
         [
             A(1, 1, 1500),            // below 2000: bought
-            A(2, 1, 2500),            // above: left
+            A(2, 1, 2500),            // above: bid at the start bid instead
             A(3, 1, 3000, count: 2),  // 2 × 2000 = 4000 > 3000: bought
             A(4, 1, 1, seller: 0),    // the bot's own
-            A(5, 1, 0),               // no buyout: cMaNGOS would bid; ArcaneCore's buyer does not
+            A(5, 1, 0),               // no buyout: bid
             A(6, 2, 1),               // not valued
             A(7, 3, 1),               // blacklisted
             A(8, 99, 1),              // unknown item
         ], e => templates.GetValueOrDefault(e));
-        Assert.Equal([(1u, 1500u), (3u, 3000u)], buys.Select(b => (b.AuctionId, b.Price)).ToArray());
+        Assert.Equal([(1u, 1500u), (3u, 3000u)], buys.Where(b => !b.Bid).Select(b => (b.AuctionId, b.Price)).ToArray());
+        Assert.Equal([(2u, 1u), (5u, 1u)], buys.Where(b => b.Bid).Select(b => (b.AuctionId, b.Price)).ToArray());
+
+        var noBids = new AuctionBotPlanner(Options(o => { o.ValueVariance = 0; o.BuyValuePercent = 100; o.Bidding = false; }), pricing,
+            new AuctionBotItemPool(templates.Values, options, pricing), new Random(2));
+        Assert.DoesNotContain(noBids.PlanBuy([A(2, 1, 2500), A(5, 1, 0)], e => templates.GetValueOrDefault(e)), b => b.Bid);
+    }
+
+    [Fact]
+    public void PlanBuy_bids_the_next_outbid_step_and_never_over_its_own_bid()
+    {
+        var options = Options(o => { o.ValueVariance = 0; o.BuyValuePercent = 100; });
+        var pricing = new AuctionBotPricing(options);
+        ItemTemplate item = Item(1, itemClass: 0, buy: 1000); // value 2000
+        var planner = new AuctionBotPlanner(options, pricing, new AuctionBotItemPool([item], options, pricing), new Random(3));
+        AuctionRecord A(uint id, uint bid, int bidder, uint buyout = 5000, uint start = 100) => new()
+        {
+            Id = id, ItemEntry = 1, ItemCount = 1, SellerId = 5, StartBid = start, Buyout = buyout, Bid = bid, BidderId = bidder,
+        };
+        IReadOnlyList<AuctionBotBuyIntent> intents = planner.PlanBuy(
+        [
+            A(1, 1000, 9),            // a player's 1000: next is 1000 + 50
+            A(2, 1000, 0),            // the bot's own standing bid: skipped
+            A(3, 1950, 9),            // next 2045 is above the value: left
+            A(4, 0, 0, buyout: 1500), // buyout below the value: bought out, not bid
+            A(5, 0, 0, buyout: 2100, start: 2050), // the next bid is the 2050 start bid, above the value: left
+        ], _ => item);
+        Assert.Equal([(1u, 1050u, true), (4u, 1500u, false)], intents.Select(i => (i.AuctionId, i.Price, i.Bid)).ToArray());
+    }
+
+    [Fact]
+    public void Item_overrides_block_reprice_and_add_items_whatever_the_filters()
+    {
+        var options = Options(o => { o.ValueVariance = 0; o.TemplatesPerSellMin = 0; o.TemplatesPerSellMax = 0; });
+        var pricing = new AuctionBotPricing(options);
+        ItemTemplate normal = Item(1, itemClass: 0, buy: 1000, stack: 20);
+        ItemTemplate bop = Item(2, itemClass: 0, buy: 1000, bonding: 1); // filtered out of the pool
+        ItemTemplate blocked = Item(3, itemClass: 0, buy: 1000);
+        var templates = new Dictionary<uint, ItemTemplate> { [1] = normal, [2] = bop, [3] = blocked };
+        var planner = new AuctionBotPlanner(options, pricing, new AuctionBotItemPool(templates.Values, options, pricing), new Random(4))
+        {
+            Overrides = new Dictionary<uint, AuctionBotItemOverride>
+            {
+                [1] = new(1, 7, 0, 1, 1),        // value 7 per item, normal sources
+                [2] = new(2, 500, 100, 3, 3),    // always added, 3 of them, despite BoP
+                [3] = new(3, 0, 0, 1, 1),        // never
+            },
+        };
+        Assert.False(planner.Pool.Contains(2));
+        IReadOnlyList<AuctionBotSellIntent> sell = planner.PlanSell(100, e => templates.GetValueOrDefault(e), [(1u, 25u), (3u, 1u)]);
+        Assert.Equal([(1u, 20u, 140u), (1u, 5u, 35u), (2u, 1u, 500u), (2u, 1u, 500u), (2u, 1u, 500u)],
+            sell.Select(s => (s.Entry, s.Count, s.Buyout)).ToArray());
+        Assert.Equal(7u, planner.ValuePerItem(normal));
+        Assert.Equal(0u, planner.ValuePerItem(blocked));
+
+        AuctionRecord auction = new() { Id = 1, ItemEntry = 3, ItemCount = 1, SellerId = 5, StartBid = 1, Buyout = 1 };
+        Assert.Empty(planner.PlanBuy([auction], e => templates.GetValueOrDefault(e)));
+    }
+
+    [Fact]
+    public void Loot_config_parses_like_ParseLootConfig()
+    {
+        Assert.Equal([30, 35, 8, 12], AuctionBotOptions.ParseLootConfig(" 30, 35,  8, 12"));
+        Assert.Equal([-10, 2, 1, 1], AuctionBotOptions.ParseLootConfig("-10,2,1,1"));
+        Assert.Equal([5, 5, 0, 0], AuctionBotOptions.ParseLootConfig("9,5"));
+        Assert.Equal([0, 0, 2, 2], AuctionBotOptions.ParseLootConfig("0,-3,4,2,99"));
+        Assert.Equal([0, 0, 0, 0], AuctionBotOptions.ParseLootConfig(null));
+    }
+
+    [Fact]
+    public void Loot_sources_split_creatures_by_rank_and_skip_quest_and_conditional_drops()
+    {
+        var rows = new List<(ArcaneCore.Kernel.WorldData.Loot.LootTableKind, ArcaneCore.Kernel.WorldData.Loot.LootStoreRow)>
+        {
+            (ArcaneCore.Kernel.WorldData.Loot.LootTableKind.Creature, new(100, 1, 100, 0, 2, 2)),
+            (ArcaneCore.Kernel.WorldData.Loot.LootTableKind.Creature, new(100, 2, -100, 0, 1, 1)),     // quest drop
+            (ArcaneCore.Kernel.WorldData.Loot.LootTableKind.Creature, new(100, 3, 100, 0, 1, 1, 7)),   // behind a condition
+            (ArcaneCore.Kernel.WorldData.Loot.LootTableKind.Creature, new(200, 4, 100, 0, 1, 1)),
+            (ArcaneCore.Kernel.WorldData.Loot.LootTableKind.Skinning, new(300, 5, 100, 0, 1, 1)),
+        };
+        var content = new ArcaneCore.Kernel.WorldData.Loot.LootContent(rows,
+            [new(10, 100, 0, 0, 0), new(11, 200, 0, 0, 0)]);
+        var options = Options(o =>
+        {
+            o.LootCreatureNormal = "1,1,1,1"; o.LootCreatureElite = "1,1,2,2"; o.LootSkinning = "0,0,0,0"; o.LootCreatureRare = "0,0,0,0";
+            o.LootCreatureRareElite = "0,0,0,0"; o.LootCreatureWorldBoss = "0,0,0,0"; o.LootDisenchant = "0,0,0,0"; o.LootFishing = "0,0,0,0"; o.LootGameobject = "0,0,0,0";
+        });
+        var sources = new AuctionBotLootSources(content, e => e == 10 ? 0u : 1u, options, new Random(5));
+        Assert.Equal([100u], sources.Sources.Single(s => s.Name == "creature normal").Tables);
+        Assert.Equal([200u], sources.Sources.Single(s => s.Name == "creature elite").Tables);
+        Assert.Equal([300u], sources.Sources.Single(s => s.Name == "skinning").Tables);
+        Assert.Equal([(1u, 2u), (4u, 1u), (4u, 1u)], sources.Roll().ToArray());
+    }
+
+    [Fact]
+    public void Ledger_round_trips_through_records_and_resumes_attempts_above_the_loaded_keys()
+    {
+        var options = Options(o => { o.DailyItemBudget = 10; o.DailyBuyBudgetCopper = 100_000; });
+        var ledger = new AuctionBotCustodyLedger(options);
+        const long now = 1_000_000;
+        ledger.TryReserveListing(2, 40, 900, 1, 1, now);
+        AuctionBotCustodyRow buy = ledger.TryReserveBuyout(2, 41, 901, 1, 1, 500, now)!;
+        ledger.Resolve(buy.IdemKey, committed: false, now);
+        (IReadOnlyList<AuctionBotCustodyRecord> rows, IReadOnlyList<string> deleted) = ledger.TakeChanges();
+        Assert.Equal(2, rows.Count);
+        Assert.Empty(deleted);
+        Assert.False(ledger.HasChanges);
+
+        var restarted = new AuctionBotCustodyLedger(options);
+        Assert.Equal(1, restarted.Load([.. rows, new AuctionBotCustodyRecord("bad", 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)]));
+        Assert.Equal(41u, restarted.MaxAuctionId);
+        Assert.Equal(AuctionBotCustodyState.Reserved, restarted.Find(AuctionBotCustodyLedger.ListingKey(40))!.State);
+        Assert.Single(restarted.Pending);
+        Assert.False(restarted.HasChanges);
+        Assert.Null(restarted.TryReserveListing(2, 40, 902, 1, 1, now)); // the key survives the restart
+        Assert.Equal(AuctionBotCustodyLedger.BuyoutKey(41, 2), restarted.TryReserveBuyout(2, 41, 901, 1, 1, 500, now)!.IdemKey);
+        Assert.Equal(restarted.Find(AuctionBotCustodyLedger.BuyoutKey(41, 1))!.OperationId, buy.OperationId);
+    }
+
+    [Fact]
+    public void Ledger_bid_rows_hold_budget_while_standing_and_free_it_when_outbid()
+    {
+        var ledger = new AuctionBotCustodyLedger(Options(o => o.DailyBuyBudgetCopper = 1000));
+        const long now = 2_000_000;
+        AuctionBotCustodyRow bid = ledger.TryReserveBid(2, 50, 900, 1, 1, 600, now)!;
+        Assert.Null(ledger.TryReserveBid(2, 50, 900, 1, 1, 700, now));      // one live bid per auction
+        Assert.Null(ledger.TryReserveBuyout(2, 50, 900, 1, 1, 300, now));   // nor a buyout over it
+        Assert.Null(ledger.TryReserveBid(2, 51, 901, 1, 1, 500, now));      // 600 + 500 > 1000
+        Assert.False(ledger.ReleaseBid(bid.IdemKey, now));                   // not committed yet
+        Assert.True(ledger.Resolve(bid.IdemKey, committed: true, now));
+        Assert.Equal(bid.IdemKey, ledger.StandingBid(50)!.IdemKey);
+        Assert.Equal(600ul, ledger.Totals(now).CopperToday);
+        Assert.True(ledger.ReleaseBid(bid.IdemKey, now));
+        Assert.False(ledger.ReleaseBid(bid.IdemKey, now));
+        Assert.Equal(0ul, ledger.Totals(now).CopperToday);
+        AuctionBotCustodyRow again = ledger.TryReserveBid(2, 50, 900, 1, 1, 700, now)!;
+        Assert.Equal(AuctionBotCustodyLedger.BidKey(50, 2), again.IdemKey);
+        ledger.Resolve(again.IdemKey, committed: true, now);
+        Assert.Empty(ledger.Audit());
+
+        // A standing bid is never pruned; a settled (won) one is, once old.
+        long later = now + (5 * AuctionBotCustodyLedger.SecondsPerDay);
+        ledger.PruneTerminal(later);
+        Assert.NotNull(ledger.Find(again.IdemKey));
+        Assert.True(ledger.SettleBid(again.IdemKey));
+        ledger.PruneTerminal(later);
+        Assert.Null(ledger.Find(again.IdemKey));
+        Assert.Contains(again.IdemKey, ledger.TakeChanges().Deleted);
     }
 
     [Fact]

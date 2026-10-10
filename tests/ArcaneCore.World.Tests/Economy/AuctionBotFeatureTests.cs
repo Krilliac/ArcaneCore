@@ -161,6 +161,130 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task Reserved_rows_from_before_a_restart_are_rechecked_against_the_operation_ledger()
+    {
+        var item = new ItemInstanceData { Guid = 7000, Entry = Fixture.Entry, Count = 1, Charges = [0, 0, 0, 0, 0], Enchantments = new uint[21] };
+        long created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using var fixture = await Fixture.CreateAsync(persist: true, extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" },
+            seed: async db =>
+            {
+                // Listing 77 committed but its row was never resolved (the process died); listing 78 never ran.
+                var auction = new AuctionRecord
+                {
+                    Id = 77, HouseId = House, ItemGuid = 7000, ItemEntry = Fixture.Entry, ItemCount = 1, SellerId = 0, StartBid = 75, Buyout = 100,
+                    ExpireTime = created + 3600,
+                };
+                Assert.Equal(EconomyCommitResult.Committed, await new EfEconomyStore(db).CommitAsync(new EconomyCommitRequest(
+                    AuctionBotCustodyLedger.OperationIdFor(AuctionBotCustodyLedger.ListingKey(77)), [], [new MintEscrowItem(item), new InsertAuction(auction)])));
+                await new EfAuctionBotCustodyStore(db).SaveAsync(
+                [
+                    new AuctionBotCustodyRecord(AuctionBotCustodyLedger.ListingKey(77), 1, 0, 0, House, 77, 7000, Fixture.Entry, 1, 0, created, 0),
+                    new AuctionBotCustodyRecord(AuctionBotCustodyLedger.ListingKey(78), 1, 0, 0, House, 78, 7001, Fixture.Entry, 1, 0, created, 0),
+                ], []);
+            });
+        Assert.True(fixture.Bot.Persistent);
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Ledger.Pending.Count()));
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Tick();
+            return true;
+        });
+        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, fixture.Bot.Ledger.Find(AuctionBotCustodyLedger.ListingKey(77))!.State);
+        Assert.Equal(AuctionBotCustodyState.TerminalBack, fixture.Bot.Ledger.Find(AuctionBotCustodyLedger.ListingKey(78))!.State);
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            Dictionary<string, byte> states = await db.Set<AhBotCustodyRow>().AsNoTracking().ToDictionaryAsync(r => r.IdemKey, r => r.State);
+            Assert.Equal((byte)1, states[AuctionBotCustodyLedger.ListingKey(77)]);
+            Assert.Equal((byte)2, states[AuctionBotCustodyLedger.ListingKey(78)]);
+        }
+
+        // New listings are durable before they start, and never reuse an auction id a row names.
+        // The day's item budget is 3: committed 77 counts, rolled-back 78 does not, so two more fit.
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
+        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+        List<AuctionBotCustodyRow> fresh = [.. fixture.Bot.Ledger.Rows.Where(r => r.AuctionId > 78)];
+        Assert.Equal(2, fresh.Count);
+        Assert.All(fresh, r => Assert.Equal(AuctionBotCustodyState.TerminalOk, r.State));
+        foreach (AuctionBotCustodyRow row in fresh)
+        {
+            Assert.Equal(1, await fixture.CountAsync<AhBotCustodyRow>(r => r.IdemKey == row.IdemKey && r.State == 1));
+            Assert.Equal(1, await fixture.CountAsync<AuctionRow>(a => a.Id == row.AuctionId && a.SellerId == 0));
+        }
+    }
+
+    [Fact]
+    public async Task Bot_bid_stands_without_a_bidder_and_wins_at_expiry_destroying_the_item_and_paying_the_seller()
+    {
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        // Buy.Value 40 %: the bot values the greaves at 720-880, under the 1000 buyout but over the 500 start bid.
+        await using var fixture = await Fixture.CreateAsync(clock: clock, extra: new() { ["AuctionHouseBot:BuyValuePercent"] = "40" });
+        Assert.Equal(1, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
+        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any());
+        AuctionBotCustodyRow bid = Assert.Single(fixture.Bot.Ledger.Rows);
+        Assert.Equal((AuctionBotCustodyRole.Bid, AuctionBotCustodyState.TerminalOk, 500u), (bid.Role, bid.State, bid.Amount));
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            AuctionRow row = await db.Set<AuctionRow>().AsNoTracking().SingleAsync(a => a.Id == 1);
+            Assert.Equal((0, 500u), (row.BidderId, row.Bid));
+        }
+
+        Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Buy(House))); // never over its own bid
+        clock.Advance(TimeSpan.FromHours(49));
+        await fixture.OnWorld(() =>
+        {
+            fixture.Economy.RunExpirySweep();
+            return true;
+        });
+        await fixture.WaitUntilAsync(() => fixture.Economy.Auctions.All(v => v.Auction.Id != 1));
+        Assert.Equal(0, await fixture.CountAsync<ItemInstanceRow>(i => i.Guid == Fixture.PlayerItemGuid));
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            MailRow letter = await db.Set<MailRow>().AsNoTracking().SingleAsync();
+            Assert.Equal(fixture.SellerId, letter.ReceiverId);
+            uint cut = AuctionHouseRules.Cut(new AuctionHouseEntry(House, 25, 15), 500);
+            Assert.Equal(AuctionHouseRules.Proceeds(500, Fixture.PlayerDeposit, cut), letter.Money);
+            Assert.Equal(MailRules.AuctionSubject(Fixture.Entry, AuctionMailAction.Successful), letter.Subject);
+        }
+
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, fixture.Bot.Ledger.Find(bid.IdemKey)!.State);
+        Assert.Empty(fixture.Bot.Ledger.Audit());
+    }
+
+    [Fact]
+    public async Task Item_overrides_round_trip_through_the_world_table()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-world-{Guid.NewGuid():N}.db");
+        var options = new DbContextOptionsBuilder<ArcaneCore.Data.Content.WorldDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
+        try
+        {
+            await using (var db = new ArcaneCore.Data.Content.WorldDbContext(options))
+            {
+                await db.Database.EnsureCreatedAsync();
+            }
+
+            var store = new EfAuctionBotItemStore(new Factory(options));
+            await store.SaveAsync(new AuctionBotItemOverride(10, 500, 30, 1, 5));
+            await store.SaveAsync(new AuctionBotItemOverride(10, 600, 0, 2, 2));
+            await store.SaveAsync(new AuctionBotItemOverride(11, 0, 0, 1, 1));
+            Assert.Equal([new AuctionBotItemOverride(10, 600, 0, 2, 2), new AuctionBotItemOverride(11, 0, 0, 1, 1)], await store.LoadAsync());
+            Assert.True(await store.DeleteAsync(10));
+            Assert.False(await store.DeleteAsync(10));
+            Assert.Equal([new AuctionBotItemOverride(11, 0, 0, 1, 1)], await store.LoadAsync());
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            File.Delete(path);
+        }
+    }
+
+    private sealed class Factory(DbContextOptions<ArcaneCore.Data.Content.WorldDbContext> options) : IDbContextFactory<ArcaneCore.Data.Content.WorldDbContext>
+    {
+        public ArcaneCore.Data.Content.WorldDbContext CreateDbContext() => new(options);
+    }
+
+    [Fact]
     public void Config_check_is_registered_and_reports_out_of_range_values()
     {
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -260,7 +384,8 @@ public sealed class AuctionBotFeatureTests
             return await result.Task.WaitAsync(Budget);
         }
 
-        public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null)
+        public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
+            Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -281,6 +406,10 @@ public sealed class AuctionBotFeatureTests
                 });
                 db.Add(auction);
                 await db.SaveChangesAsync();
+                if (seed is not null)
+                {
+                    await seed(db);
+                }
             }
 
             // Green armor with a vendor price of 1000: the bot values it at 2000 ± 10 %, above the player's 1000 buyout.
@@ -289,7 +418,7 @@ public sealed class AuctionBotFeatureTests
                 Entry = Entry, Name = "Bot test greaves", Quality = 2, Class = 4, BuyPrice = 1000, SellPrice = 250, Stackable = 1,
                 RequiredLevel = 10, ItemLevel = 15, MaxDurability = 30,
             };
-            IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            var settings = new Dictionary<string, string?>
             {
                 ["AuctionHouseBot:Enabled"] = enabled ? "true" : "false",
                 ["AuctionHouseBot:UpdateIntervalSeconds"] = "3600",
@@ -297,13 +426,24 @@ public sealed class AuctionBotFeatureTests
                 ["AuctionHouseBot:TemplatesPerSellMin"] = "40",
                 ["AuctionHouseBot:TemplatesPerSellMax"] = "40",
                 ["AuctionHouseBot:DailyItemBudget"] = "3",
-            }).Build();
+            };
+            foreach ((string key, string? value) in extra ?? [])
+            {
+                settings[key] = value;
+            }
+
+            IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
             var services = new ServiceCollection();
             services.AddSingleton(configuration);
             services.AddLogging();
             services.AddScoped(_ => new CharacterDbContext(options));
             services.AddScoped<IEconomyStore>(provider => new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()));
             services.AddScoped<IItemStore>(provider => new EfItemStore(provider.GetRequiredService<CharacterDbContext>()));
+            if (persist)
+            {
+                services.AddScoped<IAuctionBotCustodyStore>(provider => new EfAuctionBotCustodyStore(provider.GetRequiredService<CharacterDbContext>()));
+            }
+
             services.AddSingleton<IItemTemplateSource>(new Templates([template]));
             services.AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(),
                 NullLogger<CharacterSaveQueue>.Instance));
