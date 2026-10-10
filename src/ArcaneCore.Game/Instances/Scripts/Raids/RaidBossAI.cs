@@ -46,6 +46,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (BlackwingLairInstance, 13020) => new VaelastraszAI(creature),
             (BlackwingLairInstance, 12435) => new RazorgoreAI(creature),
             (BlackwingLairInstance, 10162) => new VictorNefariusAI(creature),
+            (BlackwingLairInstance, BlackwingOrbAI.Entry) => new BlackwingOrbAI(creature),
             (BlackwingLairInstance, 11583) => new NefarianAI(creature),
             (RuinsOfAhnQirajInstance, 15348) => new KurinnaxxAI(creature),
             (RuinsOfAhnQirajInstance, 15340) => new MoamAI(creature),
@@ -55,6 +56,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (RuinsOfAhnQirajInstance, 15514) => new BuruEggAI(creature),
             (RuinsOfAhnQirajInstance, 15471) => new AndorovAI(creature),
             (RuinsOfAhnQirajInstance, 15473) => new KaldoreiEliteAI(creature),
+            (RuinsOfAhnQirajInstance, AnubisathGuardianAI.Entry) => new AnubisathGuardianAI(creature),
             (ZulGurubInstance, 14517) => new JeklikAI(creature),
             (ZulGurubInstance, 14507) => new VenoxisAI(creature),
             (ZulGurubInstance, 14510) => new MarliAI(creature),
@@ -109,6 +111,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (NaxxramasInstance, 15928) => new ThaddiusAI(creature),
             (NaxxramasInstance, 15989) => new SapphironAI(creature),
             (NaxxramasInstance, 15990) => new KelThuzadAI(creature),
+            (NaxxramasInstance, LivingPoisonAI.Entry) => new LivingPoisonAI(creature),
             _ => null,
         };
     }
