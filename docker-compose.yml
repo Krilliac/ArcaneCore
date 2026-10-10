@@ -1,0 +1,144 @@
+# docker-compose.yml for ArcaneCore (docs/guide/docker.md), modelled on AzerothCore's docker-compose.yml.
+#
+#   docker compose up -d --build
+#
+# Don't edit this file for local changes: put them in docker-compose.override.yml or .env (see apps/docker/.env.example).
+# Every ArcaneCore key can be set as an environment variable with ':' written as '__' (docs/reference/configuration.md).
+
+x-arcane-db: &arcane-db
+  Database__Provider: MariaDb
+
+services:
+  arcane-database:
+    container_name: arcane-database
+    image: mariadb:11.4
+    networks: [arcane-network]
+    ports:
+      - ${DOCKER_DB_EXTERNAL_PORT:-3306}:3306
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DOCKER_DB_ROOT_PASSWORD:-password}
+      MARIADB_USER: ${DOCKER_DB_USER:-arcane}
+      MARIADB_PASSWORD: ${DOCKER_DB_PASSWORD:-arcane}
+    volumes:
+      - ${DOCKER_VOL_DB:-arcane-database}:/var/lib/mysql
+      - ./apps/docker/db-init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+
+  arcane-realm:
+    container_name: arcane-realm
+    image: arcanecore/realm:${DOCKER_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/docker/Dockerfile
+      target: realm
+      args:
+        USER_ID: ${DOCKER_USER_ID:-1000}
+        GROUP_ID: ${DOCKER_GROUP_ID:-1000}
+    networks: [arcane-network]
+    restart: unless-stopped
+    environment:
+      <<: *arcane-db
+      Database__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      # The address the client is sent to for the world: must be reachable from the player's machine.
+      Realms__Seed__0__Name: ${ARCANE_REALM_NAME:-ArcaneCore}
+      Realms__Seed__0__Address: ${ARCANE_REALM_ADDRESS:-127.0.0.1:8085}
+      Ops__Watchdog__Heartbeat__Mode: Stdout
+      Ops__Metrics__Enabled: ${ARCANE_METRICS_ENABLED:-false}
+      Ops__Metrics__PrometheusPrefix: "http://+:9465/metrics/"
+    ports:
+      - ${DOCKER_REALM_EXTERNAL_PORT:-3724}:3724
+    volumes:
+      - ${DOCKER_VOL_LOGS:-./env/logs}:/arcanecore/logs
+    depends_on:
+      arcane-database:
+        condition: service_healthy
+
+  arcane-world:
+    container_name: arcane-world
+    image: arcanecore/world:${DOCKER_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/docker/Dockerfile
+      target: world
+      args:
+        USER_ID: ${DOCKER_USER_ID:-1000}
+        GROUP_ID: ${DOCKER_GROUP_ID:-1000}
+    networks: [arcane-network]
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    stop_grace_period: 90s # the save drain (HostOptions:ShutdownTimeout is 60 s)
+    environment:
+      <<: *arcane-db
+      Database__Auth__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      Database__Characters__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_characters;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      # Client data extracted by you (nothing ships): dbc/, maps/, vmaps/, mmaps/ under ./env/data.
+      ClientData__DbcDirectory: /arcanecore/data/dbc
+      World__Maps__DataDirectory: /arcanecore/data
+      Ops__Watchdog__Heartbeat__Mode: Stdout
+      Ops__Metrics__Enabled: ${ARCANE_METRICS_ENABLED:-false}
+      Ops__Metrics__PrometheusPrefix: "http://+:9464/metrics/"
+      Ops__Metrics__Realm: ${ARCANE_REALM_NAME:-ArcaneCore}
+    ports:
+      - ${DOCKER_WORLD_EXTERNAL_PORT:-8085}:8085
+    volumes:
+      - ${DOCKER_VOL_DATA:-./env/data}:/arcanecore/data:ro
+      - ${DOCKER_VOL_LOGS:-./env/logs}:/arcanecore/logs
+    depends_on:
+      arcane-database:
+        condition: service_healthy
+      arcane-realm:
+        condition: service_started
+
+  # One-shot tools (AzerothCore ac-db-import / ac-tools): docker compose --profile tools run --rm arcane-tools --help
+  arcane-tools:
+    container_name: arcane-tools
+    image: arcanecore/tools:${DOCKER_IMAGE_TAG:-latest}
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: apps/docker/Dockerfile
+      target: tools
+    networks: [arcane-network]
+    environment:
+      <<: *arcane-db
+      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+    volumes:
+      - ${DOCKER_VOL_IMPORT:-./env/import}:/arcanecore/import
+    depends_on:
+      arcane-database:
+        condition: service_healthy
+
+  # Optional monitoring (docs/ops/metrics.md): docker compose --profile monitoring up -d, with ARCANE_METRICS_ENABLED=true.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: [monitoring]
+    networks: [arcane-network]
+    volumes:
+      - ./apps/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - ${DOCKER_PROMETHEUS_EXTERNAL_PORT:-9090}:9090
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: [monitoring]
+    networks: [arcane-network]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./apps/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/ops/grafana:/var/lib/grafana/dashboards:ro
+    ports:
+      - ${DOCKER_GRAFANA_EXTERNAL_PORT:-3000}:3000
+
+volumes:
+  arcane-database:
+
+networks:
+  arcane-network:
