@@ -25,6 +25,15 @@ public sealed class ScriptHookRegistryTests
 
         public bool OnChat(Player player, ScriptChatMessage message) => AllowChat;
 
+        public List<ScriptAddonMessage> Addon = [];
+        public bool AllowAddon = true;
+
+        public bool OnAddonMessage(Player player, ScriptAddonMessage message)
+        {
+            Addon.Add(message);
+            return AllowAddon;
+        }
+
         public void OnDuelStart(Player first, Player second) => Starts.Add((first, second));
 
         public void OnDuelEnd(Player winner, Player loser, DuelCompleteType type) => Ends.Add((winner, loser, type));
@@ -35,6 +44,17 @@ public sealed class ScriptHookRegistryTests
     private sealed class Throwing : IWorldHooks
     {
         public void OnUpdate(uint diffMs) => throw new InvalidOperationException("boom");
+    }
+
+    private sealed class ThrowingAddon : IPlayerHooks
+    {
+        public int Calls;
+
+        public bool OnAddonMessage(Player player, ScriptAddonMessage message)
+        {
+            Calls++;
+            throw new InvalidOperationException("boom");
+        }
     }
 
     [Fact]
@@ -96,11 +116,30 @@ public sealed class ScriptHookRegistryTests
     }
 
     [Fact]
+    public void AddonMessage_AnyFalseDropsTheLine_AndAThrowingHookIsLogged()
+    {
+        var registry = new ScriptHookRegistry();
+        var throwing = new ThrowingAddon();
+        var dropping = new Counting { AllowAddon = false };
+        registry.Register(throwing);
+        registry.Register(dropping);
+        using var rig = new DuelRig();
+        var message = ScriptAddonMessage.Parse(1, "PFX\tbody", null);
+
+        Assert.True(registry.Player.HasAddonMessage);
+        Assert.False(registry.Player.OnAddonMessage(rig.A, message));
+
+        Assert.Equal(1, throwing.Calls);
+        Assert.Equal(message, Assert.Single(dropping.Addon));
+    }
+
+    [Fact]
     public void EmptyDispatch_AllocatesNothing()
     {
         var registry = new ScriptHookRegistry();
         using var rig = new DuelRig();
         var message = new ScriptChatMessage(0, 0, "hi", null);
+        var addonMessage = new ScriptAddonMessage(1, "PFX", "body", null);
         for (int warm = 0; warm < 2; warm++) Run();
 
         long before = GC.GetAllocatedBytesForCurrentThread();
@@ -115,6 +154,7 @@ public sealed class ScriptHookRegistryTests
                 registry.Player.OnLogin(rig.A);
                 registry.Player.OnKill(rig.A, rig.B);
                 _ = registry.Player.OnChat(rig.A, message);
+                _ = registry.Player.OnAddonMessage(rig.A, addonMessage);
                 _ = registry.Unit.OnDamage(rig.A, rig.B, 10);
                 registry.Unit.OnDeath(rig.B, rig.A);
                 registry.Player.OnDuelEnd(rig.A, rig.B, DuelCompleteType.Won);

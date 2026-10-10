@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
@@ -43,8 +44,9 @@ public sealed class DuelResetSettings
 /// duel restores nothing, as in the module. World thread.
 /// <para>
 /// Deviations: the cooldown limits use the spell's own and category recovery times without spell mods (ArcaneCore has no per-player
-/// cooldown-mod lookup here); pets are not reset (the module clears pet cooldowns); the saved state is dropped at the end of every duel,
-/// where the module keeps it after a fled duel until the next one overwrites it.
+/// cooldown-mod lookup here); the saved state is dropped at the end of every duel, where the module keeps it after a fled duel until the
+/// next one overwrites it. Pet cooldowns are cleared outright (no age or ten-minute filter) at the start and again when a won duel ends;
+/// they are not saved or restored, as in the module (TrinityCore duel_reset.cpp:124-126).
 /// </para>
 /// </summary>
 public sealed class DuelResetScript : IPlayerHooks
@@ -171,7 +173,7 @@ public sealed class DuelResetScript : IPlayerHooks
     /// <summary>
     /// DuelReset::ResetSpellCooldowns: clear every running cooldown under ten minutes (own, category and remaining time); at the start
     /// only those that have run at least <see cref="DuelResetSettings.CooldownAge"/> seconds. A spell without its own (or category)
-    /// recovery passes that check, as the module's unsigned arithmetic does.
+    /// recovery passes that check, as the module's unsigned arithmetic does. The owner's pet is then reset too (<see cref="ResetPetCooldowns"/>).
     /// </summary>
     private void ResetSpellCooldowns(SpellSystem spells, Player player, bool onStart)
     {
@@ -197,6 +199,28 @@ public sealed class DuelResetScript : IPlayerHooks
             }
 
             spells.ClearCooldown(player, cooldown.SpellId);
+        }
+
+        ResetPetCooldowns(spells, player);
+    }
+
+    /// <summary>
+    /// duel_reset ResetSpellCooldowns "pet cooldowns" (TrinityCore duel_reset.cpp:124-126): every running cooldown of the pet is cleared, at the start
+    /// and again when a won duel ends; nothing is saved for the pet. The owner is told per spell with SMSG_CLEAR_COOLDOWN and the pet's GUID
+    /// (vmangos PetHandler.cpp:534; layout vmangos Spell.cpp:278-282, gtker smsg_clear_cooldown.wowm). SpellSystem.ClearCooldown notifies only
+    /// for a Player, so it sends nothing for the pet and there is no duplicate packet.
+    /// </summary>
+    private static void ResetPetCooldowns(SpellSystem spells, Player owner)
+    {
+        if (owner.GetPet() is not { } pet)
+        {
+            return;
+        }
+
+        foreach (InitialSpellCooldown cooldown in spells.GetActiveCooldowns(pet).ToArray())
+        {
+            spells.ClearCooldown(pet, cooldown.SpellId);
+            owner.Session.Send(WorldOpcode.SmsgClearCooldown, SpellPackets.BuildClearCooldown(cooldown.SpellId, pet.Guid));
         }
     }
 
