@@ -20,6 +20,8 @@ builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
 builder.Services.AddHostedService<LogonServer>();
 builder.Services.AddRealmWatchdog(builder.Configuration);
+builder.Services.Configure<ArcaneCore.Kernel.Configuration.MetricsOptions>(builder.Configuration.GetSection(ArcaneCore.Kernel.Configuration.MetricsOptions.SectionName));
+ArcaneCore.Kernel.Ops.Metrics.MetricsServiceCollectionExtensions.AddOpsMetrics(builder.Services, "arcanecore-realm"); // Ops:Metrics, off by default (docs/ops/metrics.md)
 
 IHost host = builder.Build();
 

@@ -151,6 +151,22 @@ public sealed class Map
     /// <summary>Every object in the map, players included.</summary>
     public int ObjectCount => _objects.Count;
 
+    /// <summary>The number of objects of type <typeparamref name="T"/> in the map (world thread; walks every object, so callers sample it, they do not call it per tick).</summary>
+    public int CountObjectsOf<T>()
+        where T : WorldObject
+    {
+        int count = 0;
+        foreach (WorldObject obj in _objects.Values)
+        {
+            if (obj is T)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     /// <summary>The map's grids: the spatial index and the grid load/unload lifecycle.</summary>
     public GridContainer Grids => _grid;
 
