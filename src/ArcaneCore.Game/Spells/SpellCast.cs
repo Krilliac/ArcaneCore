@@ -58,6 +58,9 @@ public sealed class SpellCast
     /// <summary>SEND_EVENT is once per effect even when target selection supplies several units.</summary>
     internal HashSet<int> DispatchedEventEffects { get; } = [];
 
+    /// <summary>Game objects selected for each ACTIVATE_OBJECT effect, including script-target area selections.</summary>
+    internal Dictionary<int, ObjectGuid[]> ObjectTargetsByEffect { get; } = [];
+
     // A redirected cast keeps the chosen unit for all its explicit enemy effects, even after
     // selection consumed the last magnet charge and removed the protection aura.
     internal Unit? MagnetTarget { get; set; }

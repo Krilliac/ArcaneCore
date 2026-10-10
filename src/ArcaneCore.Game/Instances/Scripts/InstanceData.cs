@@ -145,6 +145,14 @@ public abstract partial class InstanceData : IMapUpdater
     }
 
     /// <summary>
+    /// A ScriptDev2 AreaTrigger script that returns true and so stops the trigger's <c>areatrigger_teleport</c> row (mangos-classic
+    /// naxxramas.cpp <c>instance_naxxramas::DoHandleAreaTrigger</c>, "Area trigger handles teleport in DB"). Consulted as an
+    /// area-trigger gate after the built-in level/item requirements, only for the instance the player stands in; a game master is
+    /// never asked (AreaTriggerRequirements lets one through first). False lets the database teleport run.
+    /// </summary>
+    public virtual bool BlocksAreaTriggerTeleport(Player player, uint triggerId) => false;
+
+    /// <summary>
     /// cmangos ProcessEventId, asked first by StartEvents_Event (DBScripts/ScriptMgr.cpp:3445-3451) for a SEND_EVENT spell effect and for
     /// a chest or goober event of this map (<see cref="ScriptedEvents.Start"/>). True when this script handles <paramref name="eventId"/>
     /// and the event's dbscripts_on_event script must not run (the ScriptDev2 handler returned true); false lets the DB script start.

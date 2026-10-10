@@ -64,6 +64,40 @@ public sealed class EngineSemanticsTests
 
     private static void Pull(Fight f, uint damage = 1) => f.Map.Combat.DealDamage(f.Player, f.Wolf, damage, direct: false);
 
+    [Fact]
+    public void RandomPlayerTargets_UseOnlyPlayers_AndExcludeTheTopThreatEntry()
+    {
+        using Fight f = Start([]);
+        (Player second, _) = AddPlayer(f.World, 2, 1, 0);
+        var other = new Creature(300, Template(300), null, CreatureContent.Empty, new Random(1));
+        other.Relocate(2, 0, 83.5f, 0, 0);
+        other.MapId = 0;
+        f.Map.AddObject(other);
+        f.Map.Combat.Track(other);
+
+        // The top entry is a player, and a non-player sits between the two players.
+        f.Wolf.Combat.Threat.AddThreat(f.Player, 30);
+        f.Wolf.Combat.Threat.AddThreat(other, 20);
+        f.Wolf.Combat.Threat.AddThreat(second, 10);
+        EventAiContext context = f.Ai.Engine.Context;
+        var invocation = new EventAiInvocation(0, 0, null, null, null);
+        HashSet<Player> picked = [];
+
+        for (int i = 0; i < 20; i++)
+        {
+            picked.Add(Assert.IsType<Player>(context.SelectTarget(8, invocation, out bool anyError)));
+            Assert.False(anyError);
+            Assert.Same(second, context.SelectTarget(9, invocation, out bool notTopError));
+            Assert.False(notTopError);
+        }
+        Assert.Equal(2, picked.Count);
+
+        f.Wolf.Combat.Threat.Remove(second);
+        // With only the top player left, neither the creature nor an excluded top entry qualifies.
+        Assert.Null(context.SelectTarget(9, invocation, out bool missingError));
+        Assert.True(missingError);
+    }
+
     // --- flags ------------------------------------------------------------------------------------
 
     [Theory]

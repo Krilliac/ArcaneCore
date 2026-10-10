@@ -89,6 +89,10 @@ public sealed partial class CreatureMapSystem
             RemoveCorpse(creature);
         }
 
+        // A scripted wipe can restore a boss before its delayed ForcedDespawn fires.
+        // That old corpse timer must not remove the newly respawned creature.
+        _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
+
         if (creature.Spawn is { } spawn && _groupOfSpawn.ContainsKey(spawn.Guid))
         {
             ForgetGroupRespawn(spawn.Guid); // its group brings it back at the next update

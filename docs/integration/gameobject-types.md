@@ -106,7 +106,9 @@ refuses the open (vmangos shows an empty window and restarts the timer on releas
 helper's animation spell keeps no channel and its end is not seen; a wild grouped ritual finds its first user only in the same map;
 an owned trap with charges that is not a hunter trap (a linked trap of a spell object) is not scanned; battleground buff traps (radius 0,
 cooldown 3) are left to the battleground area; the flag stand's battleground side is a seam until the battleground area is wired into the
-world; LFG talent-based roles (`LFG.Matchmaking`) are not modelled (class roles only); `SPELL_EFFECT_ACTIVATE_OBJECT` does not exist yet.
+world; LFG talent-based roles (`LFG.Matchmaking`) are not modelled (class roles only). Spell effect 86 now dispatches the imported
+`ACTIVATE_OBJECT` action to the target game object's state machine; the remaining script limits are recorded in
+[the effect-86 follow-up](activate-object-effect-20261009.md).
 
 Data needed for the real content: the spells the objects cast come from Spell.dbc through `tools/spell-import` (Ritual of Summoning 698 and
 its effect 7720, Ritual of Doom 18540/18541/20625, mage portals 10059/11416-11420 and their effects 17334/17607-17611, Lightwell 724/27870/27871

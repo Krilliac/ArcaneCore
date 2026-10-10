@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 
@@ -10,11 +11,19 @@ namespace ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 /// Andorov's spawn, the Rajaxx army waves and Ossirian's crystals are in RuinsOfAhnQirajEvents.cs.
 /// </summary>
 [InstanceScript(509)]
-public sealed partial class RuinsOfAhnQirajInstance(Map instance) : ScriptedInstance(instance, 6)
+public sealed partial class RuinsOfAhnQirajInstance(Map instance) : ScriptedInstance(instance, 6), IInstanceConditionFacts
 {
+    // ClassicDB z2815 conditions 6500-6505: zero before the boss is done, one after.
+    private static readonly uint[] BossCompletionVariables = [4811, 2174, 4812, 4813, 4814, 4815];
     private readonly KurinnaxxSandTrapAI _sandTraps = new();
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
+
+    public int? MapVariable(uint id)
+    {
+        int index = Array.IndexOf(BossCompletionVariables, id);
+        return index < 0 ? null : GetData((uint)index) == EncounterState.Done ? 1 : 0;
+    }
 
     public override bool IsEncounterInProgress => Encounters.Contains(EncounterState.InProgress);
 

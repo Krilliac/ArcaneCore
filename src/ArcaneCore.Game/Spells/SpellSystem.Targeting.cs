@@ -148,7 +148,24 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.GameObjectItem:
                 // The effect reads the explicit object or item of the target block itself (vmangos m_targets.getGOTarget /
                 // getItemTarget); the caster carries the effect.
+                if (effect.Effect == SpellEffectName.ActivateObject && !cast.Targets.GameObject.IsEmpty)
+                    cast.ObjectTargetsByEffect[effectIndex] = [cast.Targets.GameObject];
                 return [(caster, 1.0f)];
+            case (SpellImplicitTarget)40: // TARGET_GAMEOBJECT_SCRIPT_NEAR_CASTER
+            case (SpellImplicitTarget)51: // TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_SRC_LOC
+            case (SpellImplicitTarget)52: // TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_DEST_LOC
+            {
+                List<(Unit Unit, float Multiplier)>? registered = TrySelectRegistered(cast, effect, effectIndex, selector, unitTarget);
+                if (registered is not null)
+                {
+                    if (effect.Effect == SpellEffectName.ActivateObject && !cast.Targets.GameObject.IsEmpty
+                        && caster.Map?.FindUpdater<GameObjects.GameObjectMapSystem>()?.Find(cast.Targets.GameObject) is { IsSpawned: true })
+                        cast.ObjectTargetsByEffect[effectIndex] = [cast.Targets.GameObject];
+                    return registered;
+                }
+
+                return SelectScriptGameObjects(cast, effect, effectIndex, selector, unitTarget);
+            }
             case SpellImplicitTarget.UnitEnemy:
                 if (explicitOrSelf is null)
                 {
@@ -178,20 +195,20 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.UnitEnemyNearCaster:
             case SpellImplicitTarget.UnitFriendNearCaster:
             case SpellImplicitTarget.UnitNearCaster:
-                return RandomNearCaster(cast, effect, selector);
+                return RandomNearCaster(cast, effect, effectIndex, selector);
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc:
             {
                 (float x, float y, float z) = SourceCentre(cast, effect);
-                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: false);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange:
                 // vmangos PUSH_SELF_CENTER (Spell.cpp:2557-2558): the caster, whatever the source.
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: false);
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: false);
             case SpellImplicitTarget.EnumUnitsFriendAoeAtSrcLoc:
             {
                 (float x, float y, float z) = SourceCentre(cast, effect);
-                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), u => IsFriend(cast, u), cone: false);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), u => IsFriend(cast, u), cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc:
@@ -205,27 +222,27 @@ public sealed partial class SpellSystem
                     SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc => u => IsFriend(cast, u),
                     _ => u => IsAliveGroupMember(cast, caster, u, raid: false),
                 };
-                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), filter, cone: false);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), filter, cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsPartyAoeAtSrcLoc:
             case SpellImplicitTarget.EnumUnitsPartyWithinCasterRange:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector),
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector),
                     u => IsAliveGroupMember(cast, caster, u, raid: false), cone: false);
             case SpellImplicitTarget.EnumUnitsRaidWithinCasterRange:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector),
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector),
                     u => IsAliveGroupMember(cast, caster, u, raid: true), cone: false);
             case SpellImplicitTarget.UnitFriendAndParty:
             {
                 // vmangos TARGET_AREAEFFECT_PARTY: the explicit (or self) target's party around it.
                 Unit centre = explicitOrSelf ?? caster;
-                return Area(cast, effect, centre.X, centre.Y, centre.Z, AreaRadius(cast, effect, selector),
+                return Area(cast, effect, centre.X, centre.Y, centre.Z, AreaRadius(cast, effect, effectIndex, selector),
                     u => IsAliveGroupMember(cast, centre, u, raid: false), cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsEnemyInCone24:
             case SpellImplicitTarget.EnumUnitsEnemyInCone54:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: true);
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: true);
             default:
                 // Class lanes register further targets (SpellSystem.TargetSelectors.cs); null = not implemented.
                 return TrySelectRegistered(cast, effect, effectIndex, selector, unitTarget);
@@ -242,11 +259,12 @@ public sealed partial class SpellSystem
     /// EffectRadius, or for "within caster range" targets without a radius the spell's maximum range, with the caster's
     /// SPELLMOD_RADIUS (vmangos Spell::SetTargetMap, Spell.cpp:2050-2062: the mod applies to either source).
     /// </summary>
-    private float AreaRadius(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector)
+    private float AreaRadius(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector)
     {
         SpellInfo spell = cast.Spell;
-        float radius = effect.Radius > 0
-            ? effect.Radius
+        float baseRadius = TargetMapRadius(spell, effect, effectIndex);
+        float radius = baseRadius > 0
+            ? baseRadius
             : selector is SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange or SpellImplicitTarget.EnumUnitsPartyWithinCasterRange
                 or SpellImplicitTarget.EnumUnitsRaidWithinCasterRange
                 ? spell.Range.Max
@@ -380,7 +398,22 @@ public sealed partial class SpellSystem
             found.Add(unit);
         }
 
-        CapTargets(found, cast.Spell.MaxAffectedTargets);
+        if (_closestAreaTargetSpells.Contains(cast.Spell.Id))
+        {
+            found.Sort((a, b) =>
+            {
+                float ad = ((a.X - x) * (a.X - x)) + ((a.Y - y) * (a.Y - y)) + ((a.Z - z) * (a.Z - z));
+                float bd = ((b.X - x) * (b.X - x)) + ((b.Y - y) * (b.Y - y)) + ((b.Z - z) * (b.Z - z));
+                int order = ad.CompareTo(bd);
+                return order != 0 ? order : a.Guid.Value.CompareTo(b.Guid.Value);
+            });
+            if (cast.Spell.MaxAffectedTargets > 0 && found.Count > cast.Spell.MaxAffectedTargets)
+                found.RemoveRange((int)cast.Spell.MaxAffectedTargets, found.Count - (int)cast.Spell.MaxAffectedTargets);
+        }
+        else
+        {
+            CapTargets(found, cast.Spell.MaxAffectedTargets);
+        }
         return [.. found.Select(u => (u, 1.0f))];
     }
 
@@ -402,10 +435,11 @@ public sealed partial class SpellSystem
     /// TARGET_UNIT_*_NEAR_CASTER (vmangos TARGET_RANDOM_*_CHAIN_IN_AREA): up to EffectChainTarget
     /// (at least one) random qualifying units within the effect radius (or spell range) of the caster.
     /// </summary>
-    private List<(Unit Unit, float Multiplier)> RandomNearCaster(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector)
+    private List<(Unit Unit, float Multiplier)> RandomNearCaster(SpellCast cast, SpellEffectInfo effect, int effectIndex, SpellImplicitTarget selector)
     {
         Unit caster = cast.Caster;
-        float radius = effect.Radius > 0 ? effect.Radius : cast.Spell.Range.Max;
+        float baseRadius = TargetMapRadius(cast.Spell, effect, effectIndex);
+        float radius = baseRadius > 0 ? baseRadius : cast.Spell.Range.Max;
         radius = radius > 0 ? ModFloat(caster, cast.Spell, SpellModOp.Radius, radius) : radius;
         if (caster.Map is not { } map || radius <= 0)
         {

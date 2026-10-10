@@ -8,5 +8,6 @@ public sealed class RaidRegistrationTests
     [Theory]
     [InlineData(409u)]
     [InlineData(249u)]
+    [InlineData(531u)]
     public void RaidHasAnInstanceScript(uint map) => Assert.True(InstanceScriptRegistry.Default.HasScript(map));
 }

@@ -41,7 +41,7 @@ public static class DbUpgradeCli
           backup-info   print how to back each database up
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
-          dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC (no database connection)
+          dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC with WoWDBDefs signedness (no database connection)
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)

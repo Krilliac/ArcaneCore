@@ -313,14 +313,22 @@ public sealed partial class SpellSystem
     /// </summary>
     private static SpellInfo WithWandSchool(SpellInfo spell, Unit caster, WeaponAttackType attack)
     {
-        if (attack != WeaponAttackType.RangedAttack || caster is not Player player || !RangedSpellFacts.IsWandUser(player.Class)
-            || PlayerAmmo.RangedWeapon(player, nonBroken: true) is not { } weapon || weapon.Template.Damages.Count == 0)
+        if (attack != WeaponAttackType.RangedAttack || EquippedWandDamageSchool(caster) is not { } school)
         {
             return spell;
         }
 
-        var school = (SpellSchool)weapon.Template.Damages[0].School;
         return school == spell.School ? spell : spell with { School = school };
+    }
+
+    /// <summary>The item school used for wand Shoot damage and Viscidus frost-hit counting.</summary>
+    internal static SpellSchool? EquippedWandDamageSchool(Unit caster)
+    {
+        if (caster is not Player player || !RangedSpellFacts.IsWandUser(player.Class)
+            || PlayerAmmo.RangedWeapon(player, nonBroken: true) is not { } weapon || weapon.Template.Damages.Count == 0)
+            return null;
+
+        return (SpellSchool)weapon.Template.Damages[0].School;
     }
 
     /// <summary>

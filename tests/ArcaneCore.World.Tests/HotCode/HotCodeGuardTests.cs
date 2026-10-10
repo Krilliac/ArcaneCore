@@ -166,15 +166,8 @@ public sealed class HotCodeGuardTests : IDisposable
 
     private static string FindUp(string relative)
     {
-        for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            string candidate = Path.Combine(dir.FullName, relative);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException($"{relative} not found above {AppContext.BaseDirectory}");
+        string candidate = Path.Combine(RepositorySource.RequireRoot(), relative);
+        if (File.Exists(candidate)) return candidate;
+        throw new FileNotFoundException($"{relative} not found in compiling checkout", candidate);
     }
 }

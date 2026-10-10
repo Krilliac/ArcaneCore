@@ -255,7 +255,7 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
-    /// vmangos ObjectMgr::GetNearestTaxiNode: the closest node on the creature's map that has a
+    /// vmangos ObjectMgr::GetNearestTaxiNode: the closest taxi-network node (sTaxiNodesMask) on the creature's map that has a
     /// mount for the player's team.
     /// </summary>
     private uint NearestTaxiNode(NpcInfo npc, Player player)
@@ -265,7 +265,7 @@ public sealed partial class QuestNpcServices
         float bestDist = 0;
         foreach (TaxiNode node in Npcs.Nodes)
         {
-            if (node.MapId != npc.MapId || (alliance ? node.MountAlliance : node.MountHorde) == 0)
+            if (!Npcs.IsNetworkNode(node.Id) || node.MapId != npc.MapId || (alliance ? node.MountAlliance : node.MountHorde) == 0)
             {
                 continue;
             }

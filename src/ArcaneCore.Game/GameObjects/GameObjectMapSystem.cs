@@ -545,14 +545,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// with GO_FLAG_IN_USE set, and it returns after <paramref name="autoCloseSeconds"/> whole seconds (none: stays).
     /// The template column holds seconds * 0x10000 and is converted by <see cref="GameObjectInfoView.AutoCloseSeconds"/>.
     /// </summary>
-    private GameObjectUseResult ActivateDoorOrButton(GameObject go, uint autoCloseSeconds)
+    private GameObjectUseResult ActivateDoorOrButton(GameObject go, uint autoCloseSeconds, bool alternative = false)
     {
         if (go.LootState != GameObjectLootState.Ready)
         {
             return GameObjectUseResult.InUse;
         }
 
-        go.State = go.State == GameObjectState.Ready ? GameObjectState.Active : GameObjectState.Ready;
+        go.State = go.State == GameObjectState.Ready
+            ? alternative ? GameObjectState.ActiveAlternative : GameObjectState.Active
+            : GameObjectState.Ready;
         go.Flags |= GameObjectFlags.InUse;
         go.LootState = GameObjectLootState.Activated;
         go.ResetAfterSecond = autoCloseSeconds > 0 ? ClockSeconds + autoCloseSeconds : null;

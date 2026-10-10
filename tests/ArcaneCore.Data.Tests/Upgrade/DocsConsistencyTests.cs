@@ -14,16 +14,9 @@ public sealed class DocsConsistencyTests
 {
     private static string ReadRunbook()
     {
-        for (string? dir = AppContext.BaseDirectory; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
-        {
-            string candidate = Path.Combine(dir, "docs", "ops", "database-upgrade.md");
-            if (File.Exists(candidate))
-            {
-                return File.ReadAllText(candidate);
-            }
-        }
-
-        throw new Xunit.Sdk.XunitException("docs/ops/database-upgrade.md was not found above " + AppContext.BaseDirectory);
+        string path = RepositorySource.FindFile("docs", "ops", "database-upgrade.md")
+            ?? throw new Xunit.Sdk.XunitException("docs/ops/database-upgrade.md was not found in the ArcaneCore checkout");
+        return File.ReadAllText(path);
     }
 
     [Fact]

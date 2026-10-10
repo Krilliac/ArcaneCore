@@ -138,6 +138,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule.Version),
             (typeof(InstanceScriptDataModule), DatabaseComponent.Characters, InstanceScriptDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.WarEffortBossDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -160,13 +163,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
         // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40. The wave-6 anticheat lane
         // is characters 41 and the wave-7 instance-persist lane characters 42 (its v41 placeholder was removed at integration).
+        // Realm-wide AQ war-effort state is characters 43.
         // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule); world 43 the script-engine lane's
         // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule and world 45 the movement-scripts lane's MovementScriptDataModule (both allocated as 43, renumbered in wave 10); world 46 the pools lane's PoolDataModule (its v45 placeholder was removed at integration).
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(46, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46)
-        Assert.Equal(42, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42)
+        Assert.Equal(45, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

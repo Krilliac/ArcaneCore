@@ -1,9 +1,12 @@
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.ZulFarrak;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -15,7 +18,7 @@ namespace ArcaneCore.Game.Tests.Instances;
 public sealed class ZulFarrakScriptTests
 {
     [Fact]
-    public void NekrumAndSezzzizDeaths_CompletePyramid_AndOpenEndDoor()
+    public void NekrumAndSezzzizDeaths_CompletePyramid_ButLeaveEndDoorForWeegli()
     {
         using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map),
             [7271, 7796, 7275], [7271, 7796, 7275], (ZulFarrakInstance.EndDoor, GameObjectType.Door));
@@ -28,7 +31,97 @@ public sealed class ZulFarrakScriptTests
         run.Kill(7275);
         Assert.Equal(EncounterState.Done, data.GetData(ZulFarrakInstance.TypePyramid));
         Assert.Equal(0u, data.PyramidTimerMs);
-        Assert.Equal(GameObjectState.Active, run.Object(ZulFarrakInstance.EndDoor).State);
+        Assert.Equal(GameObjectState.Ready, run.Object(ZulFarrakInstance.EndDoor).State);
+    }
+
+    [Fact]
+    public void WeegliGossip_PlantsCharge_OpensDoorAfterRetreat_AndSavesThatEvent()
+    {
+        using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map),
+            [ZulFarrakInstance.Weegli], [ZulFarrakInstance.Weegli],
+            (ZulFarrakInstance.EndDoor, GameObjectType.Door), (WeegliBlastfuseAi.ExplosiveCharge, GameObjectType.Goober));
+        var data = Assert.IsType<ZulFarrakInstance>(run.Data);
+        Creature weegli = run.Creature(ZulFarrakInstance.Weegli);
+        var ai = Assert.IsType<WeegliBlastfuseAi>(weegli.AI);
+        var npc = new NpcInfo(weegli.Guid, weegli.Entry, weegli.Spawn!.Guid, NpcFlags.Gossip,
+            run.Map.MapId, weegli.X, weegli.Y, weegli.Z, weegli.BoundingRadius, true, false, false, false, 0);
+        var spellCasts = new FakeObjectSpells();
+        run.Objects.Spells = spellCasts;
+        GameObject door = run.Object(ZulFarrakInstance.EndDoor);
+
+        Assert.Empty(Assert.IsType<ScriptedGossipMenu>(ai.Hello(run.Player, npc)).Items);
+        data.SetData(ZulFarrakInstance.TypePyramid, EncounterState.Done);
+        Assert.Equal(GameObjectState.Ready, door.State);
+        string oldNineSlotSave = string.Join(' ', data.GetSaveData()!.Split(' ').Take(9));
+        var oldSaveLoaded = new ZulFarrakInstance(run.Map);
+        oldSaveLoaded.Load(oldNineSlotSave);
+        oldSaveLoaded.OnObjectCreate(door);
+        Assert.Equal(EncounterState.NotStarted, oldSaveLoaded.GetData(ZulFarrakInstance.TypeEndDoor));
+        Assert.Equal(GameObjectState.Ready, door.State);
+        Assert.Equal("Will you blow up that door now?", Assert.Single(ai.Hello(run.Player, npc)!.Items).Text);
+        Assert.True(ai.SelectReply(run.Player, npc, 1, 1001).Close);
+        Assert.Equal(GameObjectState.Ready, door.State);
+        ai.OnMovementInform(MovementGeneratorType.Point, 1); // an out-of-order callback cannot open it
+        Assert.Equal(GameObjectState.Ready, door.State);
+
+        ai.OnMovementInform(MovementGeneratorType.Point, 0);
+        GameObject charge = Assert.Single(run.Objects.GameObjects, go => go.Entry == WeegliBlastfuseAi.ExplosiveCharge && go.Spawn is null);
+        Assert.Equal(GameObjectState.Ready, door.State);
+        Assert.True(ai.OnEnterEvadeMode());
+        Assert.Equal(1u, Assert.IsType<PointMovementGenerator>(weegli.Motion.Top).Id);
+        ai.OnMovementInform(MovementGeneratorType.Point, 1);
+        Assert.Contains(spellCasts.Casts, cast => cast.Source == charge && cast.Spell == 13259);
+        Assert.Equal(GameObjectState.Active, door.State);
+        Assert.Equal(EncounterState.Done, data.GetData(ZulFarrakInstance.TypeEndDoor));
+        Assert.Empty(ai.Hello(run.Player, npc)!.Items);
+
+        string saved = data.GetSaveData()!;
+        var reloaded = new ZulFarrakInstance(run.Map);
+        reloaded.Load(saved);
+        door.State = GameObjectState.Ready;
+        reloaded.OnObjectCreate(door);
+        Assert.Equal(GameObjectState.Active, door.State);
+    }
+
+    [Fact]
+    public void WeegliDoesNotOpenTheDoorWithoutAnExplosiveChargeTemplate()
+    {
+        using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map),
+            [ZulFarrakInstance.Weegli], [ZulFarrakInstance.Weegli], (ZulFarrakInstance.EndDoor, GameObjectType.Door));
+        var data = Assert.IsType<ZulFarrakInstance>(run.Data);
+        data.SetData(ZulFarrakInstance.TypePyramid, EncounterState.Done);
+        var ai = Assert.IsType<WeegliBlastfuseAi>(run.Creature(ZulFarrakInstance.Weegli).AI);
+        Creature weegli = run.Creature(ZulFarrakInstance.Weegli);
+        var npc = new NpcInfo(weegli.Guid, weegli.Entry, weegli.Spawn!.Guid, NpcFlags.Gossip,
+            run.Map.MapId, weegli.X, weegli.Y, weegli.Z, weegli.BoundingRadius, true, false, false, false, 0);
+
+        Assert.True(ai.SelectReply(run.Player, npc, 1, 1001).Close);
+        ai.OnMovementInform(MovementGeneratorType.Point, 0);
+        ai.OnMovementInform(MovementGeneratorType.Point, 1);
+        Assert.Equal(GameObjectState.Ready, run.Object(ZulFarrakInstance.EndDoor).State);
+        Assert.Equal(EncounterState.NotStarted, data.GetData(ZulFarrakInstance.TypeEndDoor));
+    }
+
+    [Fact]
+    public void WeegliKilledBeforeTheBlast_LeavesTheDoorClosed()
+    {
+        using DungeonScriptHarness run = new(map => new ZulFarrakInstance(map),
+            [ZulFarrakInstance.Weegli], [ZulFarrakInstance.Weegli],
+            (ZulFarrakInstance.EndDoor, GameObjectType.Door), (WeegliBlastfuseAi.ExplosiveCharge, GameObjectType.Goober));
+        var data = Assert.IsType<ZulFarrakInstance>(run.Data);
+        data.SetData(ZulFarrakInstance.TypePyramid, EncounterState.Done);
+        Creature weegli = run.Creature(ZulFarrakInstance.Weegli);
+        var ai = Assert.IsType<WeegliBlastfuseAi>(weegli.AI);
+        var npc = new NpcInfo(weegli.Guid, weegli.Entry, weegli.Spawn!.Guid, NpcFlags.Gossip,
+            run.Map.MapId, weegli.X, weegli.Y, weegli.Z, weegli.BoundingRadius, true, false, false, false, 0);
+        Assert.True(ai.SelectReply(run.Player, npc, 1, 1001).Close);
+        ai.OnMovementInform(MovementGeneratorType.Point, 0);
+        run.Map.Combat.Kill(run.Player, weegli);
+        ai.OnMovementInform(MovementGeneratorType.Point, 1);
+
+        Assert.Equal(EncounterState.NotStarted, data.GetData(ZulFarrakInstance.TypeEndDoor));
+        Assert.Equal(GameObjectState.Ready, run.Object(ZulFarrakInstance.EndDoor).State);
+        Assert.DoesNotContain(run.Objects.GameObjects, go => go.Entry == WeegliBlastfuseAi.ExplosiveCharge && go.Spawn is null);
     }
 
     [Fact]

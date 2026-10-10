@@ -63,7 +63,7 @@ dead with the pet out of combat, or when the spell duration ends.
 * **SUMMON_WILD (41)**, vmangos `EffectSummonWild` (`2685-2772`) through `SummonCreature`
   (`Object.cpp:2547-2610`): HIGHGUID_UNIT temporary summons without owner or creator fields (`2761`),
   template faction and level, `UNIT_CREATED_BY_SPELL`; `damage` of them (at least 1), the first at the
-  destination, the others at random points in the radius; no destination: `radius` in front of the
+  destination (including a `TARGET_LOCATION_DATABASE` spell position), the others at random points in the radius; no destination: `radius` in front of the
   caster (the caster's own radius is added by `GetNearPoint`), or the caster's position at radius 0.
   Lifetime is TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (`TemporarySummon.cpp:201-218`) when the spell
   has a duration (killed at the timer unless in combat, retried every tick, the corpse then decays

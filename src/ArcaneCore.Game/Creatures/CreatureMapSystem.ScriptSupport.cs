@@ -14,6 +14,14 @@ namespace ArcaneCore.Game.Creatures;
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
+    /// <summary>Use a script's one-shot respawn delay for the next despawn of a database creature.</summary>
+    public void SetNextRespawnDelay(Creature creature, uint seconds)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Spawn is not null && ReferenceEquals(FindCreature(creature.Guid), creature))
+            creature.RespawnDelayOnceSeconds = seconds;
+    }
+
     /// <summary>The creature that summoned a creature of this map (cmangos GetSpawnerGuid), by the summoned creature's GUID.</summary>
     private readonly Dictionary<ObjectGuid, ObjectGuid> _summoners = [];
 

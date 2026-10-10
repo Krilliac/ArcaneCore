@@ -253,6 +253,15 @@ internal sealed class FakeCaster : ICreatureSpellCaster
         return CreatureCastResult.Ok;
     }
 
+    /// <summary>Casts a script made another unit perform (<see cref="ICreatureSpellCaster.CastByUnit"/>).</summary>
+    public List<(Unit Caster, uint Spell, Unit? Target, bool Triggered)> UnitCasts { get; } = [];
+
+    public CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered)
+    {
+        UnitCasts.Add((caster, spellId, target, triggered));
+        return CreatureCastResult.Ok;
+    }
+
     public bool IsCasting(Creature caster) => Casting;
 
     public bool HasAura(Unit unit, uint spellId) => Auras.Contains((unit, spellId));

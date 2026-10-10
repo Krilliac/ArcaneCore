@@ -59,6 +59,8 @@ public enum EventAiTarget
     RandomOnThreat = 4,
     RandomNotTop = 5,
     Invoker = 6,
+    RandomPlayer = 8,
+    RandomNotTopPlayer = 9,
 
     /// <summary>The default spell target (TARGET_T_NONE = 15): no unit target is passed to the cast.</summary>
     None = 15,
