@@ -765,6 +765,45 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Plucky_TurnsHumanOnChicken_ForTwoMinutes()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature plucky = Assert.Single(system.Creatures);
+            world.RunTick(100);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI>(plucky.AI);
+            uint home = plucky.FactionTemplate;
+            Assert.False(ai.Human);
+            ai.OnReceiveEmote(player, ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.TextEmoteChicken);
+            Assert.True(ai.Human);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.FactionFriendly, plucky.FactionTemplate);
+            Run(world, 121_000);
+            Assert.False(ai.Human);
+            Assert.Equal(home, plucky.FactionTemplate);
+        }
+    }
+
+    [Fact]
+    public void MagramiSpectre_TurnsHostileWhenItsWalkEnds()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.MagramiSpectreAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            AddPlayer(world, 1, 30, 0);
+            Creature spectre = Assert.Single(system.Creatures);
+            spectre.AI!.OnMovementInform(MovementGeneratorType.Point, 1);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.MagramiSpectreAI.FactionHostile, spectre.FactionTemplate);
+            Assert.Equal(MovementGeneratorType.Random, spectre.Motion.CurrentType);
+        }
+    }
+
+    [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {
         // npc_muglashAI + GOUse_go_naga_brazier (ashenvale.cpp at e27966cec7): pause at 25, waves 10 s apart once the brazier is out.

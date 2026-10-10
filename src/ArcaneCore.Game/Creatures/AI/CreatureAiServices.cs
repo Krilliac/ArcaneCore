@@ -221,6 +221,8 @@ public sealed class CreatureAiFactory
         [Scripts.MikhailAI.Entry] = static c => new Scripts.MikhailAI(c),
         [Scripts.PrivateHendelAI.Entry] = static c => new Scripts.PrivateHendelAI(c),
         [Scripts.StinkyIgnatzAI.Entry] = static c => new Scripts.StinkyIgnatzAI(c),
+        [Scripts.MagramiSpectreAI.Entry] = static c => new Scripts.MagramiSpectreAI(c),
+        [Scripts.PluckyJohnsonAI.Entry] = static c => new Scripts.PluckyJohnsonAI(c),
         [Scripts.TriageDoctorAI.DoctorAlliance] = static c => new Scripts.TriageDoctorAI(c),
         [Scripts.TriageDoctorAI.DoctorHorde] = static c => new Scripts.TriageDoctorAI(c),
         [12923] = static c => new Scripts.InjuredPatientAI(c),
