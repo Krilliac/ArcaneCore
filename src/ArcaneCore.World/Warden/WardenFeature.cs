@@ -25,6 +25,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
 
     private readonly ConcurrentDictionary<WorldSession, WardenSession> _sessions = new(ReferenceEqualityComparer.Instance);
     private WardenOptions _options = new();
+    private volatile IReadOnlyList<WardenCheckOptions> _checks = [];
     private bool _usable;
 
     public WardenOptions Options => _options;
@@ -49,12 +50,52 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             logger.LogError("Warden is enabled but the build 5875 module resource is missing or fails its digest check; Warden stays off");
         }
 
+        _checks = [.. _options.Checks];
+        if (_usable && _options.LoadFromDatabase)
+        {
+            _ = LoadChecksAsync();
+        }
+
         world.WorldTick += OnWorldTick;
         logger.LogInformation("Warden {State} (scan action {Action}, protocol action {ProtocolAction}, {Checks} configured scan(s))",
             _usable ? "enabled" : "disabled", _options.Action, _options.ProtocolAction, _options.Checks.Count);
     }
 
     public Task StopAsync() => Task.CompletedTask;
+
+    /// <summary>The scans new sessions run: the table's for build 5875 merged with <c>Warden:Checks</c>.</summary>
+    public IReadOnlyList<WardenCheckOptions> Checks => _checks;
+
+    /// <summary>Replace the scans from table rows (the database load, tests).</summary>
+    public void ApplyRows(IEnumerable<Data.World.Warden.WardenCheckRow> rows)
+    {
+        int skipped = 0;
+        _checks = WardenCheckRows.Merge(rows, _options.Checks, WardenModuleProfile.Build, (row, problem) =>
+        {
+            skipped++;
+            logger.LogDebug("Warden: warden_checks row {Id} skipped: {Problem}", row.Id, problem);
+        });
+        logger.LogInformation("Warden: {Count} scan(s) for build {Build} ({Skipped} table row(s) skipped)", _checks.Count, WardenModuleProfile.Build, skipped);
+    }
+
+    private async Task LoadChecksAsync()
+    {
+        try
+        {
+            if (services.GetService<Microsoft.EntityFrameworkCore.IDbContextFactory<Data.Content.WorldDbContext>>() is not { } factory)
+            {
+                logger.LogInformation("Warden: no world database; running the configured scans only");
+                return;
+            }
+
+            await using Data.Content.WorldDbContext db = await factory.CreateDbContextAsync().ConfigureAwait(false);
+            ApplyRows(await Data.World.Warden.WardenCheckStore.LoadAsync(db).ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Warden: loading warden_checks failed; running the configured scans only");
+        }
+    }
 
     /// <summary>The Warden of <paramref name="session"/>, if it has one.</summary>
     public WardenSession? Find(WorldSession session) => _sessions.GetValueOrDefault(session);
@@ -67,7 +108,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             return;
         }
 
-        var warden = new WardenSession(sessionKey, _options, body => session.Send(WorldOpcode.SmsgWardenData, body), verdict => OnVerdict(session, verdict));
+        var warden = new WardenSession(sessionKey, _options, body => session.Send(WorldOpcode.SmsgWardenData, body), verdict => OnVerdict(session, verdict), checks: _checks);
         if (_sessions.TryAdd(session, warden))
         {
             warden.Start();
