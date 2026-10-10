@@ -15,6 +15,7 @@ How to read the tables:
 ## Sections
 
 - [`AntiCheat`](#anticheat)
+- [`AuctionHouseBot`](#auctionhousebot)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
 - [`Bans`](#bans)
@@ -133,6 +134,39 @@ How to read the tables:
 | `AntiCheat:SpeedTolerancePercent` | `float` | `10` | - | Tolerance above the allowed speed, in percent, before the speed check scores. Default 10. |
 | `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
 | `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
+
+## `AuctionHouseBot`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AuctionHouseBot:BidMaxPercent` | `uint` | `90` | - | Highest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Max, 0-100, default 90). |
+| `AuctionHouseBot:BidMinPercent` | `uint` | `75` | - | Lowest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Min, 0-100, default 75). |
+| `AuctionHouseBot:Blacklist` | `string` | `""` | - | Item entries the bot never lists or buys, comma-separated (cMaNGOS ahbot_items rows with value 0). |
+| `AuctionHouseBot:BuyChance` | `uint` | `10` | - | Percent chance a buy action buys anything (cMaNGOS AuctionHouseBot.Chance.Buy, 0-100, default 10). |
+| `AuctionHouseBot:BuyValuePercent` | `uint` | `80` | - | The most the buyer pays, as a percent of the bot's own value of the item (cMaNGOS AuctionHouseBot.Buy.Value, 0-200, default 80). |
+| `AuctionHouseBot:DailyBuyBudgetCopper` | `uint` | `10000000` | - | Custody limit: most copper the buyer may pay out per UTC day, all houses together (MaNGOS Zero custody; 0 = the buyer never buys). |
+| `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
+| `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
+| `AuctionHouseBot:Houses` | `string` | `"2,6,7"` | - | The auction houses the bot serves, comma-separated AuctionHouse.dbc ids (2 Alliance, 6 Horde, 7 neutral; cMaNGOS serves all three). |
+| `AuctionHouseBot:MaxAuctionsPerHouse` | `uint` | `2000` | - | Most bot auctions open in one house at once; a sell action never lists past it (ArcaneCore guard, 0 = no listing). |
+| `AuctionHouseBot:MaxRequiredLevel` | `uint` | `60` | - | Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5. |
+| `AuctionHouseBot:SellChance` | `uint` | `10` | - | Percent chance a sell action lists anything (cMaNGOS AuctionHouseBot.Chance.Sell, 0-100, default 10). |
+| `AuctionHouseBot:StackPercentMax` | `uint` | `50` | - | Largest stack as a percent of the item's stack size (cMaNGOS Items.Profession fourth value: 50). |
+| `AuctionHouseBot:StackPercentMin` | `uint` | `0` | - | Smallest stack as a percent of the item's stack size (cMaNGOS Items.Profession third value: 0; at least one item). |
+| `AuctionHouseBot:TemplatesPerSellMax` | `int` | `90` | - | Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90). |
+| `AuctionHouseBot:TemplatesPerSellMin` | `int` | `80` | - | Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80). |
+| `AuctionHouseBot:TimeMaxHours` | `uint` | `24` | - | Longest listing in hours (cMaNGOS AuctionHouseBot.Time.Max, 1-72, default 24). |
+| `AuctionHouseBot:TimeMinHours` | `uint` | `2` | - | Shortest listing in hours (cMaNGOS AuctionHouseBot.Time.Min, 1-72, default 2). |
+| `AuctionHouseBot:UpdateIntervalSeconds` | `uint` | `20` | - | Seconds between bot actions. Each action handles one house, alternating the sell then the buy pass over the houses (cMaNGOS AuctionHouseBot::Update m_houseAction). |
+| `AuctionHouseBot:ValueArtifact` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of artifact items per item class (cMaNGOS AuctionHouseBot.Value.Artifact; all 0 by default). |
+| `AuctionHouseBot:ValueEpic` | `string` | `"800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"` | - | Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic). |
+| `AuctionHouseBot:ValueLegendary` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of legendary items per item class (cMaNGOS AuctionHouseBot.Value.Legendary; all 0 by default). |
+| `AuctionHouseBot:ValueNormal` | `string` | `"100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"` | - | Price of common (white) items per item class (cMaNGOS AuctionHouseBot.Value.Normal). |
+| `AuctionHouseBot:ValuePoor` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). |
+| `AuctionHouseBot:ValueRare` | `string` | `"400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"` | - | Price of rare (blue) items per item class (cMaNGOS AuctionHouseBot.Value.Rare). |
+| `AuctionHouseBot:ValueUncommon` | `string` | `"200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"` | - | Price of uncommon (green) items per item class (cMaNGOS AuctionHouseBot.Value.Uncommon). |
+| `AuctionHouseBot:ValueVariance` | `uint` | `10` | - | Random price spread in percent (cMaNGOS AuctionHouseBot.Value.Variance, 0-100, default 10). |
+| `AuctionHouseBot:VendorValue` | `bool` | `true` | - | Price an item that a vendor sells at 100 % of the vendor price, so it cannot be bought and resold for profit (cMaNGOS AuctionHouseBot.Value.Vendor, default true). |
 
 ## `Auras`
 

@@ -58,5 +58,6 @@ public static class OpsCli
             new ArcaneCore.Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
             new GmFirstLoginToolsConfigChecks(),
             new ClientData.ClientDataConfigChecks(),
+            new Economy.AuctionBotConfigChecks(),
         ]);
 }
