@@ -86,6 +86,16 @@ public sealed class WorldConfigChecks : IConfigCheck
         // A component without its own sub-section falls back to the Database section (DatabaseOptions.Resolve).
         string section = $"Database:{component}";
         bool own = configuration.GetSection(section).Exists();
+        if (component == DatabaseComponent.Auth)
+        {
+            Range(issues, configuration, "Database:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
+        }
+
+        if (own)
+        {
+            Range(issues, configuration, $"{section}:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
+        }
+
         string prefix = own ? section : "Database";
         string connectionKey = $"{prefix}:ConnectionString";
 
