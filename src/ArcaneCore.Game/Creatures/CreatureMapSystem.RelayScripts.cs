@@ -768,6 +768,10 @@ public sealed partial class CreatureMapSystem
                 return false;
             }
 
+            case 51: // SCRIPT_COMMAND_SPAWN_GROUP (the formation subcommands; CreatureMapSystem.RelayFormation.cs). Overlap note: PR #36
+                     // (grok/content-gaps, unmerged when this was written) adds cases 37/39/42/52 just above; keep both on merge.
+                return RelaySpawnGroup(step, source, target);
+
             default:
                 ReportRelay(step, $"command {step.Command}");
                 return false;

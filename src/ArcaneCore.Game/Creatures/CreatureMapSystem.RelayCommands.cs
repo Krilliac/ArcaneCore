@@ -145,6 +145,19 @@ public sealed partial class CreatureMapSystem
             return; // "source is in combat and may lead to wrong behaviour: skipping"
         }
 
+        if (FormationOfMember(mover) is { } formation && formation.SlotOf(mover) is { } slot)
+        {
+            if (slot.SlotId != 0)
+            {
+                return; // "call for creature in formation, skipping": a follower's movement is the formation's
+            }
+
+            // FormationData::SetMovementInfo: a new leader later resumes this movement, not the formation's old one.
+            formation.MovementType = (byte)Math.Min(step.DataLong, byte.MaxValue);
+            formation.PathId = step.DataLong2;
+            formation.LastWaypointIndex = -1;
+        }
+
         switch (step.DataLong)
         {
             case 0:
