@@ -5,6 +5,23 @@ using ArcaneCore.Kernel.WorldData.WorldState;
 
 namespace ArcaneCore.World.WorldState;
 
+/// <summary>
+/// PallidHorrorAI / ScourgeMinion MoveInLineOfSight: a capital defender (IsGuardOrBoss) within VISIBILITY_DISTANCE_TINY (25 yd) with no
+/// victim of its own is told to attack the Scourge creature that saw it.
+/// </summary>
+internal static class ScourgeDefenders
+{
+    public const float Range = 25f;
+
+    public static bool Call(Creature scourge, Unit who)
+    {
+        if (who is not Creature guard || !guard.IsAlive || guard.Combat.Victim is not null
+            || !ScourgeInvasionCatalog.CityDefenders.Contains(guard.Entry) || guard.AI is null
+            || InvasionCircleAi.DistanceSquared(scourge, guard) > Range * Range) return false;
+        return guard.AI.AttackStart(scourge);
+    }
+}
+
 internal static class ScourgeWeather
 {
     /// <summary>vmangos Map::SetWeather, skipped where the map carries no weather updater.</summary>
@@ -85,6 +102,12 @@ internal sealed class PallidHorrorAi(Creature creature, ScourgeInvasionFeature f
     private Random Random => feature.Random;
 
     public override bool AggroesOnSight => true;
+
+    public override void MoveInLineOfSight(Unit who)
+    {
+        ScourgeDefenders.Call(Me, who);
+        base.MoveInLineOfSight(who);
+    }
 
     public override void OnUpdate(uint diffMs)
     {
@@ -190,6 +213,12 @@ internal sealed class FlameshockerAi(Creature creature, Random random) : Creatur
     private uint _touchMs = 2_000;
 
     public override bool AggroesOnSight => true;
+
+    public override void MoveInLineOfSight(Unit who)
+    {
+        ScourgeDefenders.Call(Me, who);
+        base.MoveInLineOfSight(who);
+    }
 
     public override void OnUpdate(uint diffMs)
     {

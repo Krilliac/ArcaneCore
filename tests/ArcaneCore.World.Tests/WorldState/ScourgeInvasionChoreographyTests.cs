@@ -1,3 +1,8 @@
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -109,6 +114,10 @@ public sealed class ScourgeInvasionChoreographyTests
                     Template(ScourgeInvasionCatalog.PallidHorror, "Pallid Horror"),
                     Template(ScourgeInvasionCatalog.PatchworkTerror, "Patchwork Terror"),
                     Template(ScourgeInvasionCatalog.Flameshocker, "Flameshocker"),
+                    Template(ScourgeInvasionCatalog.CultistEngineer, "Cultist Engineer"),
+                    Template(ScourgeInvasionCatalog.ShadowOfDoom, "Shadow of Doom"),
+                    Template(ScourgeInvasionCatalog.DamagedNecroticShard, "Damaged Necrotic Shard"),
+                    Template(68, "Stormwind City Guard") with { Faction = 11 },
                 ];
                 int[] textIds = [.. ScourgeInvasionCatalog.PallidYells, .. ScourgeInvasionCatalog.MouthZoneStartYells,
                     .. ScourgeInvasionCatalog.MouthZoneEndYells, .. ScourgeInvasionCatalog.MouthRandomYells,
@@ -125,6 +134,11 @@ public sealed class ScourgeInvasionChoreographyTests
                 {
                     Map map = World.GetMap(mapId);
                     map.AddUpdater(new CreatureMapSystem(map, new CreatureContent(templates, [], [], [], [], ai, paths)));
+                    map.AddUpdater(new GameObjectMapSystem(map, new GameObjectContent(
+                    [
+                        new GameObjectTemplate { Entry = ScourgeInvasionCatalog.SummonCircle, Type = 5, DisplayId = 1, Name = "Circle", Size = 1f, Data = new uint[GameObjectTemplate.DataCount] },
+                        new GameObjectTemplate { Entry = ScourgeInvasionCatalog.SummonerShield, Type = 5, DisplayId = 2, Name = "Summoner Shield", Size = 1f, Data = new uint[GameObjectTemplate.DataCount] },
+                    ], [], [], [], [])));
                 }
             }
             _provider.GetRequiredService<GameEventFeature>().Attach(World);
@@ -143,8 +157,11 @@ public sealed class ScourgeInvasionChoreographyTests
                 Gender = (byte)Gender.Male, Level = 60, MapId = mapId, X = x, Y = y, Z = z,
             }, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), session);
             World.AddPlayer(player);
+            LastPlayer = player;
             return session;
         }
+
+        public Player? LastPlayer { get; private set; }
 
         public GameEventFeature Events => _provider.GetRequiredService<GameEventFeature>();
 
@@ -344,4 +361,104 @@ public sealed class ScourgeInvasionChoreographyTests
         Assert.Empty(rig.Invasion.Mouths);
         Assert.Equal(2, rig.Invasion.CityAttackers.Count); // mangos-classic city attacks run while the state is enabled
     }
+
+    private static (Creature Shard, CreatureMapSystem Creatures, GameObjectMapSystem Objects) Camp(Rig rig)
+    {
+        rig.World.RunTick(0); // the feature installs its AIs on the first world command
+        Map map = rig.World.GetMap(0);
+        CreatureMapSystem creatures = map.FindUpdater<CreatureMapSystem>()!;
+        GameObjectMapSystem objects = map.FindUpdater<GameObjectMapSystem>()!;
+        Assert.NotNull(objects.Summon(ScourgeInvasionCatalog.SummonCircle, -8000f, 500f, 100f, 0f));
+        Creature shard = creatures.SummonForInstance(ScourgeInvasionCatalog.DamagedNecroticShard, -8000f, 500f, 100f, 0f)!;
+        return (shard, creatures, objects);
+    }
+
+    [Fact]
+    public void DamagedShardButtressPlacesFourShieldedChannellingCultistsAndADeadCultistDropsItsShield()
+    {
+        using var rig = new Rig(new StateStore());
+        (Creature shard, CreatureMapSystem creatures, GameObjectMapSystem objects) = Camp(rig);
+        Assert.IsType<NecroticShardAi>(shard.AI);
+        shard.Health = shard.MaxHealth / 2;
+        rig.World.RunTick(5_000);
+        Assert.Equal(shard.MaxHealth, shard.Health);
+        Creature[] cultists = [.. rig.Living(ScourgeInvasionCatalog.CultistEngineer)];
+        Assert.Equal(4, cultists.Length);
+        Assert.All(cultists, c => Assert.InRange(MathF.Sqrt((c.X + 8000f) * (c.X + 8000f) + (c.Y - 500f) * (c.Y - 500f)), 6.7f, 7.0f));
+        Assert.Equal(4, objects.GameObjects.Count(g => g.Entry == ScourgeInvasionCatalog.SummonerShield));
+        rig.World.RunTick(1_000);
+        Assert.All(cultists, c => Assert.True(Assert.IsType<CultistEngineerAi>(c.AI).Channelling));
+
+        creatures.KillCreature(cultists[0]);
+        Assert.Equal(3, objects.GameObjects.Count(g => g.Entry == ScourgeInvasionCatalog.SummonerShield));
+
+        // The next hourly buttress replaces the cultists and shields instead of stacking them.
+        Assert.Equal(4, ScourgeButtress.Run(shard, creatures));
+        Assert.Equal(4, rig.Living(ScourgeInvasionCatalog.CultistEngineer).Count());
+        Assert.Equal(4, objects.GameObjects.Count(g => g.Entry == ScourgeInvasionCatalog.SummonerShield));
+    }
+
+    [Fact]
+    public void EightNecroticRunesDisruptACultistIntoAShadowOfDoomThatAttacksItsSummoner()
+    {
+        using var rig = new Rig(new StateStore());
+        (Creature shard, _, GameObjectMapSystem objects) = Camp(rig);
+        rig.World.RunTick(5_000);
+        Creature cultist = rig.Living(ScourgeInvasionCatalog.CultistEngineer).First();
+        rig.AddPlayer(0, cultist.X + 3f, cultist.Y, cultist.Z);
+        Player player = rig.LastPlayer!;
+        player.Inventory.GuidAllocator = new ItemGuidAllocator();
+        player.Inventory.Templates = new ItemTemplateStore(
+            [new ItemTemplate { Entry = ScourgeInvasionCatalog.NecroticRune, Class = 12, Name = "Necrotic Rune", DisplayId = 1, Stackable = 250 }], []);
+
+        var gossip = new CultistEngineerGossip(_ => null, new Random(1));
+        Assert.Null(CultistEngineerGossip.Disrupt(player, cultist, new Random(1))); // no runes
+        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(ScourgeInvasionCatalog.NecroticRune, 7, out _));
+        Assert.Null(CultistEngineerGossip.Disrupt(player, cultist, new Random(1))); // seven are not enough
+        Assert.True(cultist.IsAlive);
+        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(ScourgeInvasionCatalog.NecroticRune, 3, out _));
+
+        Assert.Equal(ScourgeInvasionCatalog.CultistGossipText, (int)gossip.Hello(player, NpcOf(cultist))!.NpcTextId);
+        Assert.True(gossip.SelectReply(player, NpcOf(cultist), 1, CultistEngineerGossip.DisruptAction).Close);
+        Creature shadow = Assert.Single(rig.Living(ScourgeInvasionCatalog.ShadowOfDoom));
+        Assert.Equal(2u, player.Inventory.GetItemCount(ScourgeInvasionCatalog.NecroticRune));
+        Assert.False(cultist.IsAlive);
+        Assert.Equal(3, objects.GameObjects.Count(g => g.Entry == ScourgeInvasionCatalog.SummonerShield));
+        var ai = Assert.IsType<ShadowOfDoomAi>(shadow.AI);
+        Assert.Same(player, ai.Summoner);
+        Assert.True(shadow.UnitFlags.HasFlag(UnitFlags.ImmuneToPlayer));
+        rig.World.RunTick(5_100);
+        Assert.False(shadow.UnitFlags.HasFlag(UnitFlags.ImmuneToPlayer));
+        Assert.Same(player, shadow.Combat.Victim);
+
+        _ = shard;
+    }
+
+    [Fact]
+    public void CityGuardsJoinTheFightAgainstACityAttacker()
+    {
+        var store = new StateStore();
+        using var rig = new Rig(store);
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        rig.World.RunTick(5_000);
+        Creature attacker = rig.Invasion.CityAttackers[1519];
+        CreatureMapSystem creatures = attacker.Map!.FindUpdater<CreatureMapSystem>()!;
+        Creature near = creatures.SummonForInstance(68, attacker.X + 10f, attacker.Y, attacker.Z, 0f)!;
+        Creature far = creatures.SummonForInstance(68, attacker.X + 60f, attacker.Y, attacker.Z, 0f)!;
+        Creature bystander = creatures.SummonForInstance(ScourgeInvasionCatalog.ShadowOfDoom, attacker.X + 5f, attacker.Y, attacker.Z, 0f)!;
+        attacker.AI!.MoveInLineOfSight(near);
+        attacker.AI.MoveInLineOfSight(far);
+        attacker.AI.MoveInLineOfSight(bystander);
+        Assert.Same(attacker, near.Combat.Victim);
+        Assert.Null(far.Combat.Victim);
+        Assert.Null(bystander.Combat.Victim);
+
+        var shocker = Assert.IsType<PallidHorrorAi>(attacker.AI).Flameshockers.First();
+        Creature second = creatures.SummonForInstance(68, shocker.X + 3f, shocker.Y, shocker.Z, 0f)!;
+        shocker.AI!.MoveInLineOfSight(second);
+        Assert.Same(shocker, second.Combat.Victim);
+    }
+
+    private static NpcInfo NpcOf(Creature c)
+        => new(c.Guid, c.Entry, 0, default, c.MapId, c.X, c.Y, c.Z, 0f, c.IsAlive, false, false, false, 0);
 }
