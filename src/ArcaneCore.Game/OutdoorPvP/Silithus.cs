@@ -106,6 +106,12 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
 
     public uint MaxResources { get; } = maxResources == 0 ? SilithusCatalog.DefaultMaxResources : maxResources;
 
+    /// <summary>
+    /// vmangos <c>sObjectMgr.SetSavedVariable</c> of the three Silithyst states at every <c>UpdateWorldState</c>: called with
+    /// (gathered Alliance, gathered Horde, maximum). The world feature writes them to the characters database (schema 52).
+    /// </summary>
+    public Action<uint, uint, uint>? Saved { get; init; }
+
     public uint GatheredAlliance { get; private set; }
 
     public uint GatheredHorde { get; private set; }
@@ -152,6 +158,7 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
         SendUpdateWorldState(SilithusCatalog.WorldStateGatheredAlliance, GatheredAlliance);
         SendUpdateWorldState(SilithusCatalog.WorldStateGatheredHorde, GatheredHorde);
         SendUpdateWorldState(SilithusCatalog.WorldStateSilithystMax, MaxResources);
+        Saved?.Invoke(GatheredAlliance, GatheredHorde, MaxResources);
     }
 
     /// <summary>vmangos <c>OutdoorPvPSI::HandleAreaTrigger</c> (OutdoorPvPSI.cpp:160-261).</summary>
