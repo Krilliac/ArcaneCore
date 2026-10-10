@@ -262,6 +262,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// <summary>vmangos Creature::UpdateLeashExtensionTime: a crowd-controlled creature cannot leash.</summary>
     private void RefreshLeashExtension(Creature creature) => (creature.LeashClock ??= new LeashExtensionClock()).Seconds = _clockMs / 1000;
 
+    /// <summary>vmangos Creature::UpdateLeashExtensionTime for scripts (boss_taerar.cpp while banished): the creature cannot leash for now.</summary>
+    public void ExtendLeash(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        RefreshLeashExtension(creature);
+    }
+
     /// <summary>
     /// The creature's periodic combat checks (vmangos Creature::Update, Objects/Creature.cpp:976-993): every
     /// <see cref="CreatureOptions.LeashCheckIntervalMs"/> of world time, a crowd-controlled creature refreshes its leash extension

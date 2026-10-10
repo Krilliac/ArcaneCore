@@ -119,7 +119,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (NaxxramasInstance, StoneskinGargoyleAI.Entry) => new StoneskinGargoyleAI(creature),
             (NaxxramasInstance, DiseasedMaggotAI.Diseased or DiseasedMaggotAI.Rotting) => new DiseasedMaggotAI(creature),
             (NaxxramasInstance, IcecrownGuardianAI.Entry) => new IcecrownGuardianAI(creature),
-            _ => null,
+            _ => Creatures.Scripts.WorldBosses.WorldBossScripts.Create(creature),
         };
     }
 
