@@ -27,6 +27,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u, 648u, 35u)]
     [InlineData(7807u, 2767u, 38u)]
     [InlineData(12858u, 6544u, 21u)]
+    [InlineData(8284u, 3367u, 34u)]
     public void ValidatedEscortCatalog_HasTheSourceQuestAndCompletionPoint(uint entry, uint quest, uint completionPoint)
     {
         EscortSpec spec = EscortSpecCatalog.Find(entry)!;
@@ -47,6 +48,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u)]
     [InlineData(7807u)]
     [InlineData(12858u)]
+    [InlineData(8284u)]
     public void ClassicDbPath_FiresEveryDeclaredWaypointAction_ThenCompletes(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -143,6 +145,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u)]
     [InlineData(7807u)]
     [InlineData(12858u)]
+    [InlineData(8284u)]
     public void ClassicDbEscort_FailsItsQuestWhenThePlayerLeaves(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -475,6 +478,204 @@ public sealed class DataDrivenEscortTests
             Assert.Contains("-1000407", said);
             Assert.Contains("-1000408", said);
             Assert.Contains("-1000409", said);
+        }
+    }
+
+    [Fact]
+    public void Daphne_HoldsAtSevenThroughThreeRaiderWaves_ThenCreditsAt16()
+    {
+        // npc_daphne_stilwellAI (westfall.cpp at 8ec338a): waves of 3, 4 and 5 raiders 50 s apart from point 4, paused at 7 until all are dead.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000412, -1000413, -1000293, -1000294, -1000295, -1000414, -1000296, -1000297];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(6180)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            world.RunTick(100);
+            Creature daphne = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI>(daphne.AI);
+            player.Relocate(daphne.X, daphne.Y, daphne.Z, 0, 0); // her hut is 50 yards up
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.QuestTomeOfValor);
+            var seen = new HashSet<Creature>();
+            int maxWave = 0;
+            for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(daphne.X, daphne.Y, daphne.Z, 0, 0);
+                world.RunTick(100);
+                maxWave = Math.Max(maxWave, ai.Wave);
+                foreach (Creature raider in system.Creatures.Where(c => c.Entry == 6180 && c.IsAlive).ToList())
+                {
+                    if (seen.Add(raider))
+                    {
+                        continue; // let it live a tick
+                    }
+
+                    map.Combat.Kill(null, raider);
+                }
+            }
+
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.QuestTomeOfValor)], quests.Completed);
+            Assert.Equal(12, seen.Count);
+            Assert.Equal(3, maxWave);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains("-1000293", said);
+            Assert.Contains("-1000413", said);
+            Assert.Contains("-1000296", said);
+            Assert.Contains("-1000297", said);
+        }
+    }
+
+    [Fact]
+    public void Grark_ThreeAmbushes_ThenTheExecutionScene_CreditsAndDies()
+    {
+        // npc_grark_lorkrubAI (burning_steppes.cpp at 3e8597afe7): pauses at 12/24/30 until 4/8/11 summons die; at 45 the outro dialogue.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(873, 18).Select(i => -1000000 - i)];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new(
+            [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(9522), Template(9605), Template(7042), Template(7046), Template(9538), Template(9539)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature grark = Assert.Single(system.Creatures, c => c.Entry == entry);
+            player.Relocate(grark.X, grark.Y, grark.Z, 0, 0);
+            world.RunTick(100);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI>(grark.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.QuestPrecariousPredicament);
+            uint[] hostile = [9522, 9605, 7042, 7046];
+            for (int elapsed = 0; elapsed < 2_400_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(grark.X, grark.Y, grark.Z, 0, 0);
+                world.RunTick(100);
+                foreach (Creature add in system.Creatures.Where(c => c.IsAlive && hostile.Contains(c.Entry)).ToList())
+                {
+                    map.Combat.Kill(null, add);
+                }
+            }
+
+            Assert.True(quests.Completed.Count == 1, $"killed {ai.Killed} alive {grark.IsAlive} esc {ai.HasEscortState(EscortAI.EscortState.Escorting)} done {quests.Completed.Count} failed {quests.Failed.Count} at {grark.X},{grark.Y} paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
+            Assert.Equal(11, ai.Killed);
+            Assert.False(grark.IsAlive);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            foreach (int id in new[] { -1000873, -1000876, -1000878, -1000880, -1000882 }) // Lexlort speaks from 25 yards up the hill, past say range
+            {
+                Assert.Contains(id.ToString(CultureInfo.InvariantCulture), said);
+            }
+        }
+    }
+
+    [Fact]
+    public void Grark_CaptureOnlyWorksAtAQuarterHealth()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000889, "submit", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            AddPlayer(world, 1, 2, 0);
+            Creature grark = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI>(grark.AI);
+            Assert.False(ai.Capture());
+            grark.Health = grark.MaxHealth / 4;
+            Assert.True(ai.Capture());
+            Assert.True(ai.Submitted);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Slim_TurnsHostileAtThree_GivesUpBelowTwentyPercentForCredit_OrEscapesAndFails(bool beaten)
+    {
+        // npc_tapoke_slim_jahnAI + QuestAccept_npc_mikhail (wetlands.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000977, -1000978, -1000979, -1000980];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new([Template(entry), Template(4963, b => b.NpcFlags = (uint)NpcFlags.QuestGiver)],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 4963, first.X + 3, first.Y, first.Z)], [], [], [], aiContent,
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature slim = Assert.Single(system.Creatures, c => c.Entry == entry);
+            player.Relocate(slim.X, slim.Y, slim.Z, 0, 0);
+            world.RunTick(100);
+            var mikhail = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.MikhailAI>(Assert.Single(system.Creatures, c => c.Entry == 4963).AI);
+            mikhail.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI>(slim.AI);
+            Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+            for (int elapsed = 0; elapsed < 300_000 && quests.Completed.Count == 0 && quests.Failed.Count == 0; elapsed += 100)
+            {
+                if (slim.IsInWorld)
+                {
+                    player.Relocate(slim.X, slim.Y, slim.Z, 0, 0);
+                }
+
+                if (beaten && slim.FactionTemplate == ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.FactionEnemy && !ai.EventComplete)
+                {
+                    slim.Health = slim.MaxHealth / 10;
+                }
+
+                world.RunTick(100);
+            }
+
+            if (beaten)
+            {
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat)], quests.Completed);
+                string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+                Assert.Contains("-1000978", said);
+                Assert.Contains("-1000980", said);
+            }
+            else
+            {
+                Assert.Empty(quests.Completed);
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat)], quests.Failed);
+            }
+        }
+    }
+
+    [Fact]
+    public void Hendel_AndHisSentriesAttack_BelowTwentyPercentHeSurrenders_AndJainasPartyArrives()
+    {
+        // npc_private_hendelAI + QuestAccept_npc_private_hendel (dustwallow_marsh.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        CreatureContent content = new([Template(entry), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346), Spawn(3, 5184, -2882, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Creature[] sentries = [.. system.Creatures.Where(c => c.Entry == 5184)];
+            Assert.All(sentries.Append(hendel), c => Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, c.FactionTemplate));
+            hendel.Health = hendel.MaxHealth / 10;
+            world.RunTick(100);
+            Assert.True(ai.Surrendered);
+            Assert.Equal(3, system.Creatures.Count(c => c.Entry is 4967 or 4968 or 4965));
+            Run(world, 5_000);
+            Assert.All(sentries, s => Assert.DoesNotContain(s, system.Creatures.Where(c => c.IsInWorld && c.IsAlive)));
         }
     }
 
@@ -964,6 +1165,100 @@ public sealed class DataDrivenEscortTests
             Assert.Contains("-1000434", said);
             Assert.Contains("-1000445", said);
             Assert.Contains("-1000444", said);
+        }
+    }
+
+    [Theory]
+    [InlineData(3568u, 3519u, 938u)]  // Mist, Sentinel Arynia
+    [InlineData(7774u, 7765u, 2845u)] // Shay Leafrunner, Rockbiter
+    public void ArrivalFollower_FollowsThePlayer_AndCreditsNextToTheirTarget(uint entry, uint target, uint quest)
+    {
+        // npc_mist (teldrassil.cpp) and npc_shay_leafrunner (feralas.cpp) at 8ec338a.
+        int[] texts = [-1000323, -1000324, .. Enumerable.Range(1106, 11).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(target)],
+            [Spawn(1, entry, 0, 0), Spawn(2, target, 60, 0)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, 2, 0);
+            world.RunTick(100);
+            Creature follower = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsAssignableFrom<IQuestScriptAI>(follower.AI);
+            ai.OnQuestAccept(player, quest);
+            var fai = Assert.IsAssignableFrom<FollowerAI>(follower.AI);
+            Assert.True(fai.HasFollowState(FollowerAI.FollowState.InProgress));
+            Assert.Equal(MovementGeneratorType.Follow, follower.Motion.CurrentType);
+            for (int elapsed = 0; elapsed < 120_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                if (follower.AI is ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI { Wandering: true } shay)
+                {
+                    shay.Recall(); // Shay's Bell
+                }
+
+                player.Relocate(Math.Min(56f, player.X + 0.3f), 0, follower.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.True(quests.Completed.Count == 1, $"x {follower.X} faction {follower.FactionTemplate} victim {follower.Combat.Victim?.Guid} motion {follower.Motion.CurrentType} state {fai.HasFollowState(FollowerAI.FollowState.InProgress)}");
+            Assert.Equal((player, quest), Assert.Single(quests.Completed));
+            Assert.True(fai.HasFollowState(FollowerAI.FollowState.Complete));
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains(entry == 3568 ? "-1000324" : "-1001115", said);
+        }
+    }
+
+    [Fact]
+    public void Shay_WandersOffAfterThirtySeconds_AndTheBellCallsHerBack()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI.Entry;
+        int[] texts = [.. Enumerable.Range(1106, 11).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature shay = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI>(shay.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI.QuestWanderingShay);
+            Run(world, 29_000);
+            Assert.False(ai.Wandering);
+            Run(world, 2_000);
+            Assert.True(ai.Wandering);
+            Assert.NotEqual(MovementGeneratorType.Follow, shay.Motion.CurrentType);
+            ai.Recall();
+            Assert.False(ai.Wandering);
+            Assert.Equal(MovementGeneratorType.Follow, shay.Motion.CurrentType);
+        }
+    }
+
+    [Fact]
+    public void Threshwackonator_FollowsOnceTheKeyTurns_AndAttacksItsHolderAtGelkak()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.Entry;
+        CreatureContent content = new([Template(entry), Template(6667)], [Spawn(1, entry, 0, 0), Spawn(2, 6667, 40, 0)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000325, "start", 0, 0, 0), new CreatureAiText(-1000326, "close", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature machine = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI>(machine.AI);
+            ai.TurnKey(player);
+            Assert.Equal(MovementGeneratorType.Follow, machine.Motion.CurrentType);
+            for (int elapsed = 0; elapsed < 60_000 && !ai.HasFollowState(FollowerAI.FollowState.Complete); elapsed += 100)
+            {
+                player.Relocate(Math.Min(32f, player.X + 0.3f), 0, machine.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.True(ai.HasFollowState(FollowerAI.FollowState.Complete));
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.FactionHostile, machine.FactionTemplate);
         }
     }
 

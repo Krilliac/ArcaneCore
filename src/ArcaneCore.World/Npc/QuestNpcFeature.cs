@@ -114,6 +114,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 new ArcaneCore.Game.Creatures.Scripts.SquireRoweGossip(player => services.StateOf(player)?.Quests));
             Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry,
                 new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(player => services.StateOf(player)?.Quests));
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorGossip(player => services.StateOf(player)?.Quests));
         }
 
         _world = world;
