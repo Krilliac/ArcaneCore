@@ -343,6 +343,12 @@ public sealed class CreatureContent
 
     public bool HasFollowLinks => _hasFollowLinks;
 
+    /// <summary>Every <c>creature_linking</c> row (spawn to master spawn).</summary>
+    public IEnumerable<CreatureLink> Links => _links.Values;
+
+    /// <summary>Every <c>creature_linking_template</c> row (entry to master entry on one map).</summary>
+    public IEnumerable<CreatureTemplateLink> TemplateLinks => _templateLinks.Values;
+
     public CreatureLink? FindLink(uint spawnGuid) => _links.GetValueOrDefault(spawnGuid);
 
     public CreatureTemplateLink? FindTemplateLink(uint entry, uint mapId)
