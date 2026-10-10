@@ -167,6 +167,19 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             {
                 return;
             }
+
+            // chat_word_filter (World:Chat:WordFilter, off by default; AscEmu WordFilter.cpp): censor or drop after commands, so command
+            // lines are never rewritten.
+            if (chat.Options.WordFilter && session.Services.GetService<ChatWordFilterFeature>()?.Filter is { ChatRuleCount: > 0 } filter)
+            {
+                if (filter.Apply(message) is not { } filtered)
+                {
+                    session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification("Your message was blocked by the chat filter."));
+                    return;
+                }
+
+                message = filtered;
+            }
         }
 
         if (OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message)))
