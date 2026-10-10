@@ -220,6 +220,23 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     public void RefreshTaxiNetwork(SpellStore spells)
         => Services.ReplaceNpcs(new NpcStore(Services.Npcs.Content, SendTaxiPaths(spells)));
 
+    /// <summary>
+    /// The spell effects served by the NPC services: SPELL_EFFECT_BIND (11) moves the target player's home bind here with the caster as the
+    /// binder (<see cref="QuestNpcServices.BindHome"/>). SPELL_EFFECT_SEND_TAXI is registered by SpellFeature
+    /// (<see cref="QuestNpcServices.ActivateTaxiBySpell"/>).
+    /// </summary>
+    public void InstallSpellEffects(SpellSystem spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        spells.RegisterEffect(SpellEffectName.Bind, context =>
+        {
+            if (context.Target is Player player)
+            {
+                Services.BindHome(player, context.Caster.Guid);
+            }
+        });
+    }
+
     /// <summary>vmangos DBCStores.cpp taxi mask: the EffectMiscValue of every SPELL_EFFECT_SEND_TAXI (123) effect.</summary>
     private static HashSet<uint> SendTaxiPaths(SpellStore spells) => spells.All.SelectMany(spell => spell.Effects)
         .Where(effect => effect.Effect == SpellEffectName.SendTaxi && effect.MiscValue > 0)
