@@ -399,6 +399,36 @@ public sealed class RelayScriptCommandTests
     }
 
     [Fact]
+    public void Movement_Random_WithAnExpiry_WandersThenTheDefaultPatrolResumes()
+    {
+        // cmangos MoveRandomAroundPoint(..., timer = datalong3): the wander's duration timer ends it and the patrol beneath resumes.
+        using Town t = Start([Step(0, 20, dataLong: 1, dataLong2: 20, dataLong3: 3000, flags: FlagReverse)], patrol: true);
+        t.Wave();
+        Assert.Equal(MovementGeneratorType.Random, t.Elly.Motion.CurrentType);
+
+        Run(t.World, 2000);
+        Assert.Equal(MovementGeneratorType.Random, t.Elly.Motion.CurrentType);
+
+        Run(t.World, 2000);
+        Assert.Equal(MovementGeneratorType.Waypoint, t.Elly.Motion.CurrentType);
+        Assert.Empty(t.Elly.Motion.ActiveTypes);
+    }
+
+    [Fact]
+    public void Movement_Random_WithAnExpiry_AsTheMainGenerator_EndsIdle()
+    {
+        // dataint2 & 0x1 clears the patrol; the timed wander sits over idle and the creature stands once it expires.
+        using Town t = Start([Step(0, 20, dataLong: 1, dataLong2: 20, dataLong3: 3000, flags: FlagReverse, dataInt2: 1)], patrol: true);
+        t.Wave();
+        Assert.Equal(MovementGeneratorType.Random, t.Elly.Motion.CurrentType);
+        Assert.Equal(MovementGeneratorType.Idle, t.Elly.Motion.DefaultType);
+
+        Run(t.World, 4000);
+        Assert.Equal(MovementGeneratorType.Idle, t.Elly.Motion.CurrentType);
+        Assert.Empty(t.Elly.Motion.ActiveTypes);
+    }
+
+    [Fact]
     public void Movement_Waypoint_WithThePassTargetFlag_RunsWithATarget_AndIsSkippedOnlyWithout()
     {
         // cmangos ScriptMgr.cpp:2318-2330: datalong3 & 0x1 hands the target to the path and skips the command only when there is no target.

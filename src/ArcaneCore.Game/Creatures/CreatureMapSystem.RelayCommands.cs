@@ -126,9 +126,10 @@ public sealed partial class CreatureMapSystem
     /// creature's default path, its spawn's <c>creature_movement</c> else the entry's path 0; otherwise path <c>datalong2</c> of the entry's
     /// <c>creature_movement_template</c>). Idle and waypoint replace the creature's default movement (Clear(false, true) then the new one); random
     /// does so only with <c>dataint2</c> bit 0x1 ("make it main movegen"), otherwise it is pushed over the default, which resumes when the stack
-    /// is cleared (cmangos ScriptMgr.cpp:2334-2350, MoveRandomAroundPoint mutates). A waypoint with <c>datalong3</c> bit 0x1 (pass the target) is
+    /// is cleared (cmangos ScriptMgr.cpp:2334-2350, MoveRandomAroundPoint mutates). A non-zero <c>datalong3</c> is the wander's expiry in ms: the
+    /// wander then ends by itself and the movement beneath resumes (the default, or idle for the main-movegen form). A waypoint with <c>datalong3</c> bit 0x1 (pass the target) is
     /// skipped only when there is no target (ScriptMgr.cpp:2318-2330); the target itself is not handed to the path (no waypoint scripts here).
-    /// Paths from <c>waypoint_path</c> (<c>datalong3</c> bit 0x2), the random expiry timer, forced movement, the formation update and the path,
+    /// Paths from <c>waypoint_path</c> (<c>datalong3</c> bit 0x2), forced movement, the formation update and the path,
     /// linear and fall movement types are not supported and are reported.
     /// </summary>
     private void RelayMovement(RelayScriptStep step, WorldObject? source, WorldObject? target)
@@ -152,16 +153,19 @@ public sealed partial class CreatureMapSystem
                 break;
             case 1:
             {
-                if (step.DataLong3 != 0)
-                {
-                    ReportRelay(step, "MOVEMENT random with an expiry timer");
-                }
-
                 bool around = (step.DataFlags & FlagCommandAdditional) != 0;
                 float? wander = step.DataLong2 != 0 ? step.DataLong2 : around ? 0f : null;
                 CreatureHome? center = around ? new CreatureHome(mover.X, mover.Y, mover.Z, mover.Orientation) : null;
-                var random = new RandomMovementGenerator(wander, center, run: step.DataInt != 0);
-                if ((step.DataInt2 & 0x1) != 0)
+                var random = new RandomMovementGenerator(wander, center, run: step.DataInt != 0, expiryMs: step.DataLong3);
+                if ((step.DataInt2 & 0x1) != 0 && step.DataLong3 != 0)
+                {
+                    // Main movegen with an expiry: cmangos Clear(false, true) leaves only the idle generator at the bottom, so the
+                    // timed wander goes over idle and the creature stands when it expires.
+                    StopMoving(mover);
+                    mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
+                    mover.Motion.MoveRandom(random);
+                }
+                else if ((step.DataInt2 & 0x1) != 0)
                 {
                     // "make it main movegen": StopMoving, Clear(false, true), then the wander is the only generator.
                     StopMoving(mover);

@@ -272,7 +272,7 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   movement, DESPAWN_SELF of a database spawn (no forced despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint
   pause adjustment, TEMP_SPAWN_CREATURE's spawn data template (dataint4), ACTIVATE_OBJECT of the player-only object types (chests,
   goobers, quest givers, chairs), MOVEMENT's `waypoint_path` origin (datalong3 bit 0x2) and the passed target itself (the path runs, but
-  no waypoint script sees the target), its random expiry timer,
+  no waypoint script sees the target),
   formations and the path, linear and fall types, and SEND_AI_EVENT's delayed form (relays have no delay argument). The commands the 109 relays reached
   from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
   ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.
