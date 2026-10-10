@@ -17,6 +17,7 @@ How to read the tables:
 - [`AntiCheat`](#anticheat)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
+- [`Auth:AutoPatch`](#authautopatch)
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
@@ -160,6 +161,15 @@ How to read the tables:
 | `Auth:ReadTimeoutSeconds` | `int` | `0` | - | Longest a client may take to deliver the rest of a packet once its command byte has arrived, in seconds; 0 disables. Hardening (no vmangos equivalent, default 0 = retail): a retail client sends each logon packet in one write. |
 | `Auth:StrictUsernameCharset` | `bool` | `false` | - | Reject account names containing anything but printable ASCII (0x21-0x7E). Hardening: vmangos only escapes the name for SQL. A 1.12 client cannot type other characters. Default off (retail). |
 | `Auth:StrictVersionCheck` | `bool` | `false` | - | vmangos StrictVersionCheck, default false. Enabled checks crc_hash against a configured 20-byte hash for the client build/OS/platform. |
+
+## `Auth:AutoPatch`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Auth:AutoPatch:Directory` | `string` | `"patches"` | - | The folder patches are read from (vmangos PatchesDir, default "./patches"); relative paths are from the working directory. |
+| `Auth:AutoPatch:Enabled` | `bool` | `false` | - | Offer patches at all. Default false: a non-5875 client gets WOW_FAIL_VERSION_INVALID as before. |
+| `Auth:AutoPatch:FileNamePattern` | `string` | `"{build}{locale}.mpq"` | - | The file looked up when no `Patches` entry matches: `{build}` and `{locale}` are replaced (vmangos "%d%s.mpq", e.g. 5464enUS.mpq). Empty disables the fallback so only listed patches are served. |
+| `Auth:AutoPatch:Patches` | `List<AutoPatchEntry>` | `[]` | - | Explicit patches, checked first: an exact build and locale, then the same build with an empty (any) locale. |
 
 ## `Bans`
 

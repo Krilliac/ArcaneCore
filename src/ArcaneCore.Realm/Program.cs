@@ -13,6 +13,7 @@ ArcaneCore.Kernel.Diagnostics.DiagnosticsHostingExtensions.UseArcaneDiagnostics(
 
 builder.Services.AddArcaneCoreLogging(builder.Configuration);
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+builder.Services.Configure<AutoPatchOptions>(builder.Configuration.GetSection(AutoPatchOptions.SectionName)); // logon auto-patcher, off by default
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
