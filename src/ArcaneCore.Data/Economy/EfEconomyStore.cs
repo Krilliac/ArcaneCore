@@ -656,11 +656,14 @@ public static class EconomyRequestValidation
             throw new ArgumentException("An economy operation must change something.", nameof(request));
         }
 
-        List<uint> minted = [.. request.Changes.OfType<MintEscrowItem>().Select(m => m.Item.Guid)];
+        // Both ways of creating an item straight into escrow (MintEscrowItem for the auction house bot, CreateEscrowItem for server
+        // mail) share one GUID space: a GUID created twice in one request would otherwise reach the store as two tracked rows.
+        List<uint> minted = [.. request.Changes.OfType<MintEscrowItem>().Select(m => m.Item.Guid)
+            .Concat(request.Changes.OfType<CreateEscrowItem>().Select(c => c.Item.Guid))];
         if (minted.Distinct().Count() != minted.Count
             || minted.Any(guid => request.Participants.Any(p => p.Before.Inventory!.Items.Concat(p.After.Inventory!.Items).Any(i => i.Item.Guid == guid))))
         {
-            throw new ArgumentException("A minted escrow item must be minted once and must not appear in any participant's inventory.", nameof(request));
+            throw new ArgumentException("An item created into escrow must be created once and must not appear in any participant's inventory.", nameof(request));
         }
 
         List<uint> held = [.. request.Participants.SelectMany(p => p.After.Inventory!.Items.Select(i => i.Item.Guid))];

@@ -89,6 +89,11 @@ public sealed class EconomyMintEscrowTests : IAsyncLifetime
         }
         Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(
             new EconomyCommitRequest(Guid.NewGuid(), [], [new MintEscrowItem(Item(903)), new MintEscrowItem(Item(903)), new InsertAuction(Auction(5, 903))])));
+        // Server mail's CreateEscrowItem shares the GUID space: twice, or once beside a mint, is refused before the store.
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(
+            new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(Item(904)), new CreateEscrowItem(Item(904))])));
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(
+            new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(Item(905)), new MintEscrowItem(Item(905)), new InsertAuction(Auction(6, 905))])));
 
         await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(connection);
         uint[] items = await check.Set<ItemInstanceRow>().AsNoTracking().Select(r => r.Guid).ToArrayAsync();
