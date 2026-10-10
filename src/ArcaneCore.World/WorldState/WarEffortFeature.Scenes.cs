@@ -44,7 +44,8 @@ public sealed partial class WarEffortFeature
 
         int days = TransportDaysActive(state, now);
         WarEffortScene scene = SceneAt(state, now);
-        SyncTroops(silithus, kalimdor.FindUpdater<GameObjectMapSystem>(), days, scene);
+        bool dbInfantry = days > 0 && AdoptClassicDbWarLayout(silithus);
+        SyncTroops(silithus, days, scene, dbInfantry);
 
         // The Silithus Saurfang (vmangos spawn 113001) stands from transport day 1 until the war is over.
         if (days > 0 && (_saurfang is null || !_saurfang.IsInWorld))
@@ -56,7 +57,7 @@ public sealed partial class WarEffortFeature
         }
         else if (days == 0 && _saurfang is not null)
         {
-            if (_saurfang.IsInWorld) silithus.Despawn(_saurfang);
+            if (_saurfang.IsInWorld && _saurfang.Spawn is null) silithus.Despawn(_saurfang); // a database spawn leaves with its event
             _saurfang = null;
         }
 
@@ -77,27 +78,73 @@ public sealed partial class WarEffortFeature
     private void RegisterSceneAis(CreatureMapSystem silithus)
     {
         if (!_sceneAiSystems.Add(silithus)) return;
-        // vmangos GetAI_npc_aqwar_saurfang: the war script only for the Silithus Saurfang; the Orgrimmar database spawn keeps its
-        // normal AI (null falls through to the template's AI). The troop scripts likewise only drive this feature's summons.
-        silithus.RegisterEntryAi(Saurfang, c => _summoningSaurfang ? new SaurfangWarAi(c, this) : null!, rebuildExisting: false);
+        RegisterSaurfangAi(silithus, rebuild: false);
+        RegisterTroopAis(silithus, rebuild: false);
+    }
+
+    /// <summary>A creature of the Cenarion Hold area (the ClassicDB war layout's spawns there take the war scripts too).</summary>
+    internal static bool InSilithus(Creature c) => c.Map?.MapId == 1 && c.X < -6000 && c.Y > 300;
+
+    // vmangos GetAI_npc_aqwar_saurfang: the war script only for the Silithus Saurfang; the Orgrimmar database spawn keeps its normal
+    // AI (null falls through to the template's AI). The ClassicDB war layout's Silithus Saurfang is adopted rather than doubled.
+    private void RegisterSaurfangAi(CreatureMapSystem silithus, bool rebuild)
+        => silithus.RegisterEntryAi(Saurfang, c => _summoningSaurfang || (c.Spawn is not null && InSilithus(c))
+            ? new SaurfangWarAi(c, this) : null!, rebuildExisting: rebuild);
+
+    // The troop scripts drive this feature's summons and the ClassicDB war layout's Cenarion Hold infantry.
+    private void RegisterTroopAis(CreatureMapSystem silithus, bool rebuild)
+    {
         foreach (uint entry in new[] { OrgrimmarInfantry, TaurenRifleman, IronforgeInfantry, Priestess })
-            silithus.RegisterEntryAi(entry, c => _summoningTroop is { } t ? new TroopAi(c, this, t) : null!, rebuildExisting: false);
+            silithus.RegisterEntryAi(entry, c => _summoningTroop is { } t ? new TroopAi(c, this, t)
+                : c.Spawn is not null && InSilithus(c) && c.Entry is OrgrimmarInfantry or IronforgeInfantry
+                    ? new TroopAi(c, this, new WarEffortTroop(0, c.Entry, (byte)ClassicDbWarEvent, c.X, c.Y, c.Z, c.Orientation))
+                    : null!, rebuildExisting: rebuild);
+    }
+
+    /// <summary>
+    /// ClassicDB event 123 (the ten-hour war) brings its own Silithus Saurfang and 55 Cenarion Hold infantry. While they are there the
+    /// scene uses them: their Saurfang becomes the scripted one (the summoned one leaves) and the vmangos Ironforge and Orgrimmar
+    /// infantry of days 1-5 step aside, so nothing is doubled.
+    /// </summary>
+    private bool AdoptClassicDbWarLayout(CreatureMapSystem silithus)
+    {
+        Creature? dbSaurfang = silithus.Creatures.FirstOrDefault(c => c.Entry == Saurfang && c.Spawn is not null && c.IsInWorld && InSilithus(c));
+        if (dbSaurfang is not null)
+        {
+            if (dbSaurfang.AI is not SaurfangWarAi) RegisterSaurfangAi(silithus, rebuild: true);
+            if (_saurfang is not null && !ReferenceEquals(_saurfang, dbSaurfang) && _saurfang.IsInWorld) silithus.Despawn(_saurfang);
+            _saurfang = dbSaurfang;
+        }
+
+        bool dbInfantry = false;
+        bool rebuild = false;
+        foreach (Creature c in silithus.Creatures)
+        {
+            if (c.Spawn is null || c.Entry is not (OrgrimmarInfantry or IronforgeInfantry) || !InSilithus(c)) continue;
+            dbInfantry = true;
+            rebuild |= c.AI is not TroopAi;
+        }
+
+        if (rebuild) RegisterTroopAis(silithus, rebuild: true);
+        return dbInfantry;
     }
 
     /// <summary>
     /// game_event_creature / _gameobject for events 54-58 (the first <paramref name="days"/>) and 61 (final battle). A troop that died
-    /// comes back once its corpse is gone (vmangos respawns them; the spawns carry a 25 s respawn).
+    /// comes back once its corpse is gone (vmangos respawns them; the spawns carry a 25 s respawn). With the ClassicDB war layout's
+    /// infantry present (<paramref name="dbInfantry"/>) the vmangos Ironforge and Orgrimmar infantry are left out.
     /// </summary>
-    private void SyncTroops(CreatureMapSystem silithus, GameObjectMapSystem? objects, int days, WarEffortScene scene)
+    private void SyncTroops(CreatureMapSystem silithus, int days, WarEffortScene scene, bool dbInfantry)
     {
         bool Wanted(WarEffortTroop t) => t.Event == WarEffortTroopCatalog.FinalBattleEvent
             ? scene == WarEffortScene.FinalBattle
             : t.Event - WarEffortTroopCatalog.FirstDayEvent < days;
+        bool WantedCreature(WarEffortTroop t) => Wanted(t) && !(dbInfantry && t.Entry is OrgrimmarInfantry or IronforgeInfantry);
 
         foreach (WarEffortTroop troop in WarEffortTroopCatalog.Creatures)
         {
             bool exists = _troops.TryGetValue(troop.Guid, out Creature? c) && c.IsInWorld;
-            if (Wanted(troop) && !exists)
+            if (WantedCreature(troop) && !exists)
             {
                 _summoningTroop = troop;
                 try
@@ -107,25 +154,30 @@ public sealed partial class WarEffortFeature
                 }
                 finally { _summoningTroop = null; }
             }
-            else if (!Wanted(troop) && c is not null)
+            else if (!WantedCreature(troop) && c is not null)
             {
                 if (c.IsInWorld) silithus.Despawn(c);
                 _troops.Remove(troop.Guid);
             }
         }
 
-        if (objects is null) return;
-        foreach (WarEffortTroop go in WarEffortTroopCatalog.GameObjects)
+        if (_world is null) return;
+        foreach (Map map in _world.Maps.Where(m => m.MapId is 0 or 1 && m.InstanceId == 0).ToArray())
         {
-            bool exists = _troopObjects.TryGetValue(go.Guid, out GameObject? o) && o.IsSpawned;
-            if (Wanted(go) && !exists)
+            if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) continue;
+            foreach (WarEffortTroop go in WarEffortTroopCatalog.GameObjects)
             {
-                if (objects.Summon(go.Entry, go.X, go.Y, go.Z, go.Orientation) is { } spawned) _troopObjects[go.Guid] = spawned;
-            }
-            else if (!Wanted(go) && o is not null)
-            {
-                objects.Remove(o);
-                _troopObjects.Remove(go.Guid);
+                if (go.MapId != map.MapId) continue;
+                bool exists = _troopObjects.TryGetValue(go.Guid, out GameObject? o) && o.IsSpawned;
+                if (Wanted(go) && !exists)
+                {
+                    if (objects.Summon(go.Entry, go.X, go.Y, go.Z, go.Orientation) is { } spawned) _troopObjects[go.Guid] = spawned;
+                }
+                else if (!Wanted(go) && o is not null)
+                {
+                    objects.Remove(o);
+                    _troopObjects.Remove(go.Guid);
+                }
             }
         }
     }
