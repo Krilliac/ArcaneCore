@@ -146,8 +146,6 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule.Version),
-            (typeof(ReservedCharacters50), DatabaseComponent.Characters, 50),
-            (typeof(ReservedCharacters51), DatabaseComponent.Characters, 51),
             (typeof(ArcaneCore.Data.Characters.WorldState.SilithystDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.SilithystDataModule.Version),
         ];
 
@@ -174,12 +172,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // Realm-wide AQ war-effort state is characters 43.
         // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule); world 43 the script-engine lane's
         // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule and world 45 the movement-scripts lane's MovementScriptDataModule (both allocated as 43, renumbered in wave 10); world 46 the pools lane's PoolDataModule (its v45 placeholder was removed at integration).
-        // Outdoor-pvp follow-up: characters 52 (Silithyst) holds 50 and 51 (other open PRs) with placeholders until those lanes merge.
-        Assert.Equal([50, 51], DataModules.All.OfType<IReservedSchemaGap>().Select(m => m.SchemaVersion).Order());
-        Assert.Equal([50, 51], CharacterDbContext.Schema.ReservedGapVersions.Order());
+        Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
+        Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(47, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47)
-        Assert.Equal(52, CharacterDbContext.Schema.CurrentVersion); // Silithyst (52, 50-51 reserved), anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
+        Assert.Equal(53, CharacterDbContext.Schema.CurrentVersion); // Silithyst (53; 50 is #74, 51-52 #73), anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

@@ -15,12 +15,11 @@ public sealed class SilithystRow
 }
 
 /// <summary>
-/// Characters schema 52 (claimed by the outdoor-pvp lane; 50 and 51 are claimed by other open PRs and held by placeholders for other lanes of the wave, and the
-/// lead renumbers at merge if needed): the Silithyst totals, so a restart keeps a GM-set maximum as vmangos' saved variables do.
+/// Characters schema 53 (outdoor-pvp lane; 50 is #74 and 51-52 are #73, which merge first): the Silithyst totals, so a restart keeps a GM-set maximum as vmangos' saved variables do.
 /// </summary>
 public sealed class SilithystDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 52;
+    public const int Version = 53;
     public const string Table = "world_silithyst";
     public DatabaseComponent Component => DatabaseComponent.Characters;
     public int SchemaVersion => Version;

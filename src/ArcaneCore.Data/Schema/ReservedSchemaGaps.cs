@@ -75,17 +75,3 @@ public abstract class ReservedSchemaGap : IReservedSchemaGap
     {
     }
 }
-
-/// <summary>Characters 50, claimed by another open PR of wave 18. Delete once that lane is merged.</summary>
-public sealed class ReservedCharacters50 : ReservedSchemaGap
-{
-    public override DatabaseComponent Component => DatabaseComponent.Characters;
-    public override int SchemaVersion => 50;
-}
-
-/// <summary>Characters 51, claimed by another open PR of wave 18. Delete once that lane is merged.</summary>
-public sealed class ReservedCharacters51 : ReservedSchemaGap
-{
-    public override DatabaseComponent Component => DatabaseComponent.Characters;
-    public override int SchemaVersion => 51;
-}
