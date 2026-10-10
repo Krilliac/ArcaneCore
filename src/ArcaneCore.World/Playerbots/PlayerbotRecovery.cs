@@ -90,7 +90,7 @@ internal enum PlayerbotSpiritHealerStep
 /// through the dungeon's entrance: the ghost walks into the area trigger whose <c>areatrigger_teleport</c> leads to the body's
 /// map (or to a dungeon it is nested in), <see cref="PlayerbotAreaTriggers"/> reports it, and the server revives a ghost that
 /// enters the map its body is in (vmangos Player.cpp:1953-1966, MiscHandler.cpp:712-756).</description></item>
-/// <item><description>The bound is progress, not a count of thinks. When nothing moved the recovery on for <see cref="NoProgressMs"/>,
+/// <item><description>The bound is progress, not a count of thinks, judged only after more than <see cref="MinBoundThinks"/> thinks that acted (a think gap under load is no stall). When nothing moved the recovery on for <see cref="NoProgressMs"/>,
 /// or a walk stopped closing on its goal (or could not be planned) for <see cref="StuckMs"/>, or there is no way back to the body,
 /// the ghost takes the spirit healer instead (CMSG_SPIRIT_HEALER_ACTIVATE, vmangos NPCHandler.cpp:416): the nearest healer it can
 /// see, else it walks to the graveyard of its position, where one stands. Only when that fallback stalls the same way does the
@@ -111,6 +111,17 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     internal const long NoProgressMs = 60_000;
     internal const long StuckMs = 10_000;
+
+    /// <summary>
+    /// A bound (<see cref="NoProgressMs"/>, <see cref="StuckMs"/>) is judged only after the recovery has acted in more than this many
+    /// thinks since the progress or closing it measures from. World time alone is not enough: a bot is thought for only when the
+    /// shared action budget and the per-tick time cap reach it (<see cref="PlayerbotThinkRotation"/>), and under load a gap between
+    /// two thinks can outlast a bound while the motion carries the ghost on (live 2026-10-10: world updates of up to 8.7 s during a
+    /// boost storm; Graveweaver's ghost faulted with <see cref="SpiritHealerFailed"/> at its first think after each gap, three times
+    /// in 3.5 minutes, and was disabled). At the ordinary think interval (500 ms) a bound spans 20 thinks or more, so this changes
+    /// nothing there.
+    /// </summary>
+    internal const int MinBoundThinks = 4;
 
     /// <summary>
     /// The aggro radius assumed for a hostile creature when the map has no creature system to ask (vmangos' 20 yards for a
@@ -156,6 +167,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private object? _goal;
     private long _progressMs = -1;
     private long _closingMs = -1;
+    private int _thinksSinceProgress;
+    private int _thinksSinceClosing;
     private float _bestDistance = float.PositiveInfinity;
     private float _bestRouteLeft = float.PositiveInfinity;
     private bool _spiritHealer;
@@ -231,15 +244,18 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         long now = (long)session.World.Uptime.TotalMilliseconds;
-        if (_progressMs < 0) _progressMs = now;
+        if (_progressMs < 0) MarkProgress(now);
+        // A think without budget does nothing, and is no attempt the bounds may count (MinBoundThinks).
+        if (session.ManagedBudget is { Remaining: <= 0 }) return false;
+        _thinksSinceProgress++;
+        if (_closingMs >= 0) _thinksSinceClosing++;
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
-        if (!ghost && now - _progressMs > NoProgressMs)
+        if (!ghost && NoProgress(now))
         {
             LastStep = PlayerbotRecoveryStep.Fault;
             throw new InvalidOperationException(Stalled);
         }
 
-        if (session.ManagedBudget is { Remaining: <= 0 }) return false;
         if (_spiritHealer) return SpiritHealer(player, elapsedMs, now);
 
         bool stalled = Stuck(now);
@@ -261,14 +277,14 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             {
                 if (!PlayerbotMovementControl.Stop(session, player)) return false;
                 bool released = session.TryManagedAction(WorldOpcode.CmsgRepopRequest, []);
-                if (released) _progressMs = now;
+                if (released) MarkProgress(now);
                 return released;
             }
 
             case PlayerbotRecoveryStep.WaitForReclaimDelay:
                 // The client's Resurrect button stays disabled until SMSG_CORPSE_RECLAIM_DELAY runs out; wait like it does.
                 StandStill(player);
-                _progressMs = now;
+                MarkProgress(now);
                 return false;
 
             case PlayerbotRecoveryStep.Fault:
@@ -298,7 +314,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 // The way back to the body is lost (stalled, stuck, no body, no entrance): take the spirit healer, with a fresh bound.
                 _spiritHealer = true;
                 ClearWalk();
-                _progressMs = now;
+                MarkProgress(now);
                 return SpiritHealer(player, elapsedMs, now);
         }
     }
@@ -309,13 +325,34 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _spot = null;
         _spotKey = null;
         _progressMs = -1;
+        _thinksSinceProgress = 0;
         _spiritHealer = false;
         _preferSpiritHealer = false;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
     }
 
-    private bool Stuck(long now) => now - _progressMs > NoProgressMs || (_closingMs >= 0 && now - _closingMs > StuckMs);
+    /// <summary>No progress for <see cref="NoProgressMs"/> of world time and more than <see cref="MinBoundThinks"/> thinks.</summary>
+    private bool NoProgress(long now) => now - _progressMs > NoProgressMs && _thinksSinceProgress > MinBoundThinks;
+
+    /// <summary>
+    /// No progress (<see cref="NoProgress"/>), or a walk that stopped closing for <see cref="StuckMs"/> of world time and more than
+    /// <see cref="MinBoundThinks"/> thinks.
+    /// </summary>
+    private bool Stuck(long now)
+        => NoProgress(now) || (_closingMs >= 0 && now - _closingMs > StuckMs && _thinksSinceClosing > MinBoundThinks);
+
+    private void MarkProgress(long now)
+    {
+        _progressMs = now;
+        _thinksSinceProgress = 0;
+    }
+
+    private void MarkClosing(long now)
+    {
+        _closingMs = now;
+        _thinksSinceClosing = 0;
+    }
 
     private bool SpiritHealer(Player player, uint elapsedMs, long now)
     {
@@ -355,7 +392,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         {
             ClearWalk();
             _goal = key;
-            _closingMs = now; // a goal the bot cannot even plan a route to counts as stuck after StuckMs
+            MarkClosing(now); // a goal the bot cannot even plan a route to counts as stuck after StuckMs
         }
 
         if (_route is null || _route.Complete)
@@ -375,7 +412,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         float left = RouteLeft(player, route, goal);
         if (float.IsFinite(left))
         {
-            if (float.IsFinite(_bestRouteLeft) && left < _bestRouteLeft - RouteClosingYards) _closingMs = now;
+            if (float.IsFinite(_bestRouteLeft) && left < _bestRouteLeft - RouteClosingYards) MarkClosing(now);
             if (left < _bestRouteLeft - RouteClosingYards || !float.IsFinite(_bestRouteLeft)) _bestRouteLeft = left;
         }
 
@@ -384,8 +421,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (float.IsFinite(after) && after < _bestDistance - 0.01f)
         {
             _bestDistance = after;
-            _closingMs = now;
-            if (countsAsProgress) _progressMs = now;
+            MarkClosing(now);
+            if (countsAsProgress) MarkProgress(now);
         }
 
         return advanced;
@@ -403,6 +440,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _route = null;
         _goal = null;
         _closingMs = -1;
+        _thinksSinceClosing = 0;
         _bestDistance = float.PositiveInfinity;
         _bestRouteLeft = float.PositiveInfinity;
     }

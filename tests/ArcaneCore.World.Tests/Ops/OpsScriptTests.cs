@@ -72,6 +72,25 @@ public sealed class OpsScriptTests
     }
 
     [PwshFact]
+    public void OperatorPassword_FitsTheLogonLimit()
+    {
+        // The 1.12.1 logon takes 1-16 printable ASCII characters (MockClient ProtocolPackets.NormalizePassword); a longer random
+        // password made arcane-mock throw before the operator reached the world (live-w19 provisioning, 2026-10-10).
+        JsonElement r = Eval("""
+            $p = New-OpsPassword
+            $all = @(1..50 | ForEach-Object { New-OpsPassword })
+            [ordered]@{ length = $p.Length; maxLength = [int]($all | Measure-Object -Property Length -Maximum).Maximum;
+                        distinct = @($all | Sort-Object -Unique).Count; ascii = [bool]($all -join '' -match '^[\x21-\x7E]+$') }
+            """);
+        Assert.Equal(16, r.GetProperty("length").GetInt32());
+        Assert.Equal(16, r.GetProperty("maxLength").GetInt32());
+        Assert.Equal(50, r.GetProperty("distinct").GetInt32());
+        Assert.True(r.GetProperty("ascii").GetBoolean());
+        Assert.Contains("16", EvalError("New-OpsPassword -Length 17"));
+        Assert.Contains("12", EvalError("New-OpsPassword -Length 11"));
+    }
+
+    [PwshFact]
     public void BotNames_AreDistinctLettersOnly_WithinTheNameLimit()
     {
         // 200 bots need a 2-letter suffix (26 < 200 <= 676): Wfbotaa, Wfbotab, ... index 26 is Wfbotba, index 199 is 7*26+17 = 'h','r'.

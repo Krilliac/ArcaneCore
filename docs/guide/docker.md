@@ -26,4 +26,7 @@ docker compose up -d --build
 - **Client data**: nothing ships. `env/data` is mounted read-only at `/arcanecore/data`.
 - **Accounts**: `ArcaneCore.AccountTool` is not in an image yet; create accounts from a host build or a GM command.
 - **Monitoring**: `ARCANE_METRICS_ENABLED=true docker compose --profile monitoring up -d` starts Prometheus (:9090)
-  and Grafana (:3000) with the sample dashboard (docs/ops/metrics.md) provisioned.
+  and Grafana (:3000) with the sample dashboard (docs/ops/metrics.md) provisioned. Prometheus scrapes two targets
+  (`apps/docker/prometheus.yml`): `arcane-world:9464` (`Ops__Metrics__PrometheusPrefix`) and `arcane-realm:9465`
+  (`Ops__Metrics__RealmPrometheusPrefix`; the Realm daemon reads only its own key). These ports stay on the compose
+  network and are not published.

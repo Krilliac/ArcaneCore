@@ -85,6 +85,27 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
 and logged once.
 
+**Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit
+healer when the walk stopped closing for `StuckMs` (10 s), faults a fallback that stalls the same way
+(`playerbot-recovery-spirit-healer-failed`), and faults a body never released for `NoProgressMs` (60 s)
+(`playerbot-recovery-stalled`). A bound now trips only once the recovery has also acted in more than `MinBoundThinks` (4) thinks
+since the progress it measures from; a think refused for lack of action budget is no attempt. A bot is thought for only when the
+shared budget and the 8 ms per-tick cap reach it (`PlayerbotThinkRotation`), while `PlayerbotMotion` carries the ghost on every tick,
+so a think gap longer than a bound used to be judged a stall at the first think after it. Live 2026-10-10 (200+ bots, a boost storm
+with world updates of up to 8.7 s): Graveweaver's ghost faulted with `playerbot-recovery-spirit-healer-failed` three times in 3.5
+minutes, each time at its first think after a gap, and was disabled. At the ordinary 500 ms think interval a bound spans 20 or more
+thinks, so nothing changes there (`PlayerbotRecoveryThinkGapTests`).
+
+**Waiting to recover without food.** After a retreat, or before a pull it is too hurt for, the bot waits for
+`World:Playerbots:Risk:RecoverHealthPct` (goal `Rest`, `PlayerbotRisk.KeepWaiting`, at most `MaxWaitMs` 90 s). With food or drink it
+eats or drinks; without, it now sits (`CMSG_STANDSTATECHANGE`; vmangos `Player::RegenerateHealth` gives half as much again per tick
+when not standing) and stands up when the wait ends. Health or mana rising during a rest is progress for the stall watch
+(`Fingerprint.RestMark`). A wait in which neither rose for `FruitlessWaitMs` (20 s, ten regeneration ticks) ends, and no new wait
+begins for `MaxWaitMs` unless health or mana rises meanwhile: under resurrection sickness (spell 15007, every stat -75%) a warrior,
+rogue, hunter or shaman regenerates no health out of combat at all, and the wait could only run out and be begun again by the next
+pull verdict. Live 2026-10-10: Wfbotcx (level 14), revived by the Darkshire spirit healer after a death loop, stood there with
+`stalled 120s: goal=Rest` (`PlayerbotRestStallTests`).
+
 `World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
 those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
 through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the
@@ -190,9 +211,72 @@ where the master goes.
 `.playerbot inspect` prints `BOTINSPECT party=master:<name> mode:<follow|stay|passive>` (or `party=none`); while the party AI
 drives a bot its goal is `Follow` or `Assist` (appended to the persisted `PlayerbotGoalKind`). A controller that takes over a
 grouped bot (scripted mode) makes the party AI let go: no party goal, master or mode is reported while it drives, and when it
-detaches a bot still grouped is engaged afresh. Brain bots do not acknowledge a
-far teleport (the brain returns while the player is in no map, before `PlayerbotMovementControl`); the party AI does, so it can
-follow its master into an instance.
+detaches a bot still grouped is engaged afresh. Brain bots acknowledge a
+far teleport through `PlayerbotMovementControl.AcknowledgeTransfer`, pumped every tick from `PlayerbotMotion.Pump` (commit `c5c66cd9`),
+so a cross-map summon or an instance entry no longer strands them; the party AI does the same when it follows its master into an instance.
+The fleet commands are in [Bot commands](#bot-commands).
+
+### Bot commands
+
+`Playerbots/PlayerbotFleetCommands.cs` (selection and ring placement in `PlayerbotFleetSelection.cs` and
+`PlayerbotFleetPlacement.cs`). Fleet control of the registered managed bots, under `.playerbot`. Every command works on the
+bots in the service snapshot only, never on a real player.
+
+| Command | Level | Effect |
+|---|---|---|
+| `.playerbot summon <sel> [#count] [force] [to $player]` | Administrator | Teleport running bots to you (or the named online player), in rings around the spot. With a count, the nearest bots on that player's map go first. |
+| `.playerbot send <sel> <$tele\|here> [force] [to $player]` | Administrator | Teleport running bots to a `game_tele` place, or to your position (`here`, or the named player's), in rings. |
+| `.playerbot follow <sel> [to $player]` | Administrator | The bots follow you (or the named player) without a party and fight back. |
+| `.playerbot stay <sel> [to $player]` | Administrator | The bots hold position (they fight only what attacks them) and obey the player's whispered orders. |
+| `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
+| `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
+| `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
+| `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
+
+**Selector `<sel>`.** `all`, a name **prefix** with one trailing star (`Wfbot*`; letters only, a bare star or a star inside a
+word is refused), a bot id or one character name. Matching is case-insensitive and by registered name; a selector that
+matches nothing answers `No playerbot matches '<sel>'`. Any other argument shape shows the command's help.
+
+**Bulk cap.** `World:Playerbots:MaxBulkCommand` (default 50, live; see [configuration](../reference/configuration.md)) is the
+most bots one command moves or starts. A selection larger than the cap, with no smaller `#count`, is refused with
+`give a count <= N or add 'force'`; `force` lifts the cap. `all` plus `force` is the explicit "everyone" form.
+
+**Console.** The interactive server console ([server-console](server-console.md)) has no invoking player. `summon`, `send ...
+here`, `follow`, `stay` and `near` mean "to me", so from the console they refuse unless `to $player` names an online player
+(`near` takes no target and always refuses). `send $tele`, `dismiss`, `revive`, `start` and `stop` need no player.
+
+**Instances.** A bot is moved into an instanceable map only when it is in the target player's group or already in that very
+instance (vmangos `HandleGroupgoCommand`, `TeleportCommands.cpp:181-266`); otherwise it is skipped as `instance`. A bot
+already on the same map id but in a different instance than the target is skipped as `other-instance` (a near teleport would
+keep its own instance). Into a non-instance map the destination must pass `World:Playerbots:AllowedMaps`, else
+`map-not-allowed`. Battlegrounds are refused for `send`.
+
+**Far teleports.** A summon or send may cross maps (map 1 to map 0). An autonomous bot answers it through
+`PlayerbotMovementControl.AcknowledgeTransfer`, pumped every tick from `PlayerbotMotion.Pump` (commit `c5c66cd9`): it sends the
+MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resumes on the new map.
+
+**Reply and skip reasons.** `Playerbot <verb>: matched=N <done>=M skipped=K (reason=count ...)`, then up to 15 lines
+`<name>: <reason>` and `... and N more.`. Reasons:
+
+| Reason | Meaning |
+|---|---|
+| `is-target` | The bot is the player the command is relative to. |
+| `dead` | The bot is dead or a ghost (`revive` it first). |
+| `scripted` | A scenario or controller drives the bot. |
+| `teleporting` | The bot is already mid-teleport. |
+| `instance` | Instance target, bot neither grouped with the target nor inside it. |
+| `other-instance` | Same map id, a different instance than the target's. |
+| `map-not-allowed` | The destination map is not in `AllowedMaps`. |
+| `security` | The bot's account outranks the invoker (never from the console). |
+| `not-running` | The registered bot has no live in-world session. |
+| `not-managed` | The session is not a managed bot. |
+| `no-free-spot` | No ring slot with ground and line of sight was left for it. |
+| `teleport-refused` | The teleport service refused the move. |
+| `in-player-group` | `follow` or `stay`: a real player's group already leads the bot. |
+| `alive` | `revive`: nothing to do. |
+| `not-leashed` | `dismiss`: the bot was not following or staying. |
+
+`start` and `stop` list the operation's own failure code instead (for example `playerbot-capacity`) under `failed=`.
 
 #### Following and catch-up
 

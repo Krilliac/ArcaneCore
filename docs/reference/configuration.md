@@ -616,8 +616,9 @@ How to read the tables:
 | `Ops:Metrics:OtlpEndpoint` | `string` | `"http://localhost:4318/v1/metrics"` | - | The OTLP/HTTP metrics endpoint the push exporter posts JSON to. Default `http://localhost:4318/v1/metrics`. |
 | `Ops:Metrics:OtlpIntervalSeconds` | `int` | `15` | - | Seconds between OTLP pushes. 1-3600. Default 15 (TrinityCore `Metric.Interval = 1` pushes every second to InfluxDB; a collector batches, so a longer period suffices). |
 | `Ops:Metrics:PerMapMetrics` | `bool` | `true` | - | `false`: no per-map series, only the world totals (bounds the label cardinality on a server with many instances). Default true. |
-| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). Default `http://localhost:9464/metrics/`. |
+| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The World daemon's Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). The Realm daemon does not read this key: it reads `RealmPrometheusPrefix`. Default `http://localhost:9464/metrics/`. |
 | `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
+| `Ops:Metrics:RealmPrometheusPrefix` | `string` | `"http://localhost:9465/metrics/"` | - | The Realm daemon's Prometheus scrape listener prefix, so a Realm and a World started from one shared appsettings.json do not both bind the same port. It never falls back to `PrometheusPrefix`; setting both to the same prefix makes the second daemon to start log an error and serve no metrics. Default `http://localhost:9465/metrics/`. |
 
 ## `Ops:Watchdog`
 
@@ -1170,6 +1171,7 @@ How to read the tables:
 | `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |
 | `World:Playerbots:MaxActionsPerTick` | `int` | `4` | - | The most managed client actions all bots may send in one world tick (1..64). |
 | `World:Playerbots:MaxBots` | `int` | `8` | live | The most managed bots running at once (0..1000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped. |
+| `World:Playerbots:MaxBulkCommand` | `int` | `50` | live | The most bots one bulk command (`.playerbot summon\|send\|start\|stop ... all` or a prefix) moves or starts without `force` (1..`MaxBotsCeiling`). A selection larger than this, with no smaller count, is refused. Live through `.reload config`. |
 | `World:Playerbots:MaxFaults` | `int` | `3` | - | The faults within `FaultWindowSeconds` that disable a bot for good (DesiredEnabled off; 1..100). |
 | `World:Playerbots:MaxPathPoints` | `int` | `128` | - | The most points of one bot route (1..4096). |
 | `World:Playerbots:MaxRegisteredBots` | `int` | `1000` | live | The most managed bots registered (running or not; 0..10000, `MaxRegisteredBotsCeiling`): `.playerbot create` is refused with "playerbot-registry-full" beyond it. Each one is a real account and character. Live through `.reload config`. |

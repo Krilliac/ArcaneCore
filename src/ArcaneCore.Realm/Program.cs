@@ -28,8 +28,9 @@ builder.Services.TryAddSingleton(_ => ConsoleInputSource.Default());
 builder.Services.TryAddSingleton(TimeProvider.System);
 builder.Services.AddHostedService<RealmConsole>(); // typed commands at the console window, off when stdin is redirected (docs/areas/server-console.md)
 builder.Services.AddRealmWatchdog(builder.Configuration);
-builder.Services.Configure<ArcaneCore.Kernel.Configuration.MetricsOptions>(builder.Configuration.GetSection(ArcaneCore.Kernel.Configuration.MetricsOptions.SectionName));
-ArcaneCore.Kernel.Ops.Metrics.MetricsServiceCollectionExtensions.AddOpsMetrics(builder.Services, "arcanecore-realm"); // Ops:Metrics, off by default (docs/ops/metrics.md)
+// Ops:Metrics, off by default (docs/ops/metrics.md). The Realm role binds Ops:Metrics:RealmPrometheusPrefix (default port 9465),
+// so a profile shared with the World (which keeps 9464) runs both endpoints.
+ArcaneCore.Kernel.Ops.Metrics.MetricsServiceCollectionExtensions.AddOpsMetrics(builder.Services, builder.Configuration, "arcanecore-realm", MetricsRole.Realm);
 
 IHost host = builder.Build();
 

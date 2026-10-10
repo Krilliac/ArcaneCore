@@ -81,6 +81,7 @@ internal sealed class PlayerbotPartyAI
     private readonly PlayerbotReplyLimiter _replies = new();
     private readonly Random _random;
     private ObjectGuid _master;
+    private ObjectGuid _leash;
     private string _masterName = string.Empty;
     private bool _engaged;
     private long _masterLostMs = -1;
@@ -148,6 +149,38 @@ internal sealed class PlayerbotPartyAI
     internal string MasterName => _masterName;
 
     internal PlayerbotPartyMode Mode => _mode;
+
+    /// <summary>Whether an operator leashed the bot to a player (<see cref="Leash"/>): it follows or holds without a party.</summary>
+    internal bool IsLeashed => !_leash.IsEmpty;
+
+    /// <summary>
+    /// <c>.playerbot follow|stay</c>: make <paramref name="master"/> the bot's master without a group. The party AI then drives the
+    /// bot exactly as in a group (follow at 2-5 yards, catch up through <see cref="PlayerbotFollower"/> under its map policy, fight back and, in Stay, only
+    /// its own attackers), and the master's whispered orders are obeyed. The leash ends with <see cref="Unleash"/>, when the master
+    /// goes offline (<see cref="Drives"/> releases a bot that has no master and no group) or when the master whispers 'leave'.
+    /// World thread.
+    /// </summary>
+    internal void Leash(Player player, Player master, bool stay)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(master);
+        _leash = master.Guid;
+        Engage(player, master.Guid);
+        if (stay)
+        {
+            _mode = PlayerbotPartyMode.Stay;
+            _stayPoint = null; // taken where the bot comes to a stop
+            PlayerbotMovementControl.Stop(_session, player);
+        }
+    }
+
+    /// <summary>Drop the leash (<c>.playerbot dismiss</c>); false when the bot was not leashed. The next think hands it back to its brain.</summary>
+    internal bool Unleash(Player player)
+    {
+        if (_leash.IsEmpty) return false;
+        Release(player);
+        return true;
+    }
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Follow;
 
@@ -446,6 +479,13 @@ internal sealed class PlayerbotPartyAI
                 Tell(player, master.Name, StatusLine(player));
                 break;
             case PlayerbotPartyCommand.Leave:
+                if (!_leash.IsEmpty)
+                {
+                    Tell(player, master.Name, "Going my own way.");
+                    Release(player); // a leashed bot has no group to leave: the brain takes over at its next think
+                    break;
+                }
+
                 Tell(player, master.Name, "Leaving the group.");
                 Act(WorldOpcode.CmsgGroupDisband, [], budgeted: false);
                 break;
@@ -516,6 +556,7 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The bot's master now (<see cref="PlayerbotParty.ResolveMaster"/>), or empty when it has none.</summary>
     internal ObjectGuid ResolveMaster(Player player)
     {
+        if (!_leash.IsEmpty) return IsRealPlayerOnline(_leash) ? _leash : ObjectGuid.Empty;
         if (Services.Social?.Groups.GetGroup(player.Guid) is not { } group) return ObjectGuid.Empty;
         ObjectGuid[] members = new ObjectGuid[group.Members.Count];
         for (int i = 0; i < members.Length; i++) members[i] = group.Members[i].Guid;
@@ -591,6 +632,7 @@ internal sealed class PlayerbotPartyAI
     private void Release(Player player)
     {
         _follower.Reset(player); // first: a fall under way lands before anything stops the bot
+        _leash = ObjectGuid.Empty;
         if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
         PlayerbotMovementControl.Stop(_session, player);
         _engaged = false;

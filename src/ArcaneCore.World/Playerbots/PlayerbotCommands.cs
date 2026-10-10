@@ -12,15 +12,15 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|groups|scenario>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|groups|scenario|summon|send|follow|stay|dismiss|near|revive>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
                     "Syntax: .playerbot create $name [#race #class]\nCreate a persistent bot character.", Create),
                 new ChatCommand("start", AccountSecurity.Administrator,
-                    "Syntax: .playerbot start $id|$name\nStart a persistent bot.", Start),
+                    "Syntax: .playerbot start $id|$name|$prefix*|all [force]\nStart a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force).", Start),
                 new ChatCommand("stop", AccountSecurity.Administrator,
-                    "Syntax: .playerbot stop $id|$name\nStop a persistent bot.", Stop),
+                    "Syntax: .playerbot stop $id|$name|$prefix*|all [force]\nStop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force).", Stop),
                 new ChatCommand("status", AccountSecurity.GameMaster,
                     "Syntax: .playerbot status [$id|$name]\nShow bot lifecycle status.", Status),
                 new ChatCommand("list", AccountSecurity.GameMaster,
@@ -163,12 +163,14 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     private static bool Start(CommandContext context, string text)
     {
+        if (PlayerbotFleetSelection.IsMulti(text)) return PlayerbotFleetCommands.StartStopMany(context, text, start: true);
         if (!TryRequiredId(text, out string id)) return false;
         return StartOperation(context, service => service.StartAsync(id), "start");
     }
 
     private static bool Stop(CommandContext context, string text)
     {
+        if (PlayerbotFleetSelection.IsMulti(text)) return PlayerbotFleetCommands.StartStopMany(context, text, start: false);
         if (!TryRequiredId(text, out string id)) return false;
         return StartOperation(context, service => service.StopAsync(id), "stop");
     }
