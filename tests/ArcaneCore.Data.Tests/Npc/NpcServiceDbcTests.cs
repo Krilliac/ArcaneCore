@@ -74,9 +74,23 @@ public sealed class NpcServiceDbcTests
             [1, 26, 100, 0, 1, 99, 99, 0, 102, 0, 0, 0, 99, 99, 0],
             [2, 26, 102, 0, 1, 0, 0, 5, 0, 1, 300, 150, 0, 0, 7])));
         Assert.Equal(2, catalog.Count);
-        Assert.Equal(new SkillLineAbilityRecord(2, 26, 102, 0, 1, 5, 0, 1, 300, 150), Assert.Single(catalog.Abilities(102)));
+        Assert.Equal(new SkillLineAbilityRecord(2, 26, 102, 0, 1, 5, 0, 1, 300, 150, 7), Assert.Single(catalog.Abilities(102)));
         Assert.Equal(100u, catalog.PreviousRank(102));
+        Assert.True(catalog.HasTrainingPoints);
+        Assert.Equal(7u, catalog.TrainingPoints(102));
+        Assert.Equal(0u, catalog.TrainingPoints(100));
+        Assert.Equal(0u, catalog.TrainingPoints(999));
         Assert.Throws<InvalidDataException>(() => NpcServiceDbcReaders.ReadSkillLineAbilities(DbcFile.Parse(Image(16, new uint[16]))));
+    }
+
+    [Fact]
+    public void SkillLineAbility_FourteenFieldImage_HasNoTrainingPoints()
+    {
+        SkillLineAbilityCatalog catalog = NpcServiceDbcReaders.ReadSkillLineAbilities(DbcFile.Parse(Image(14,
+            [2, 26, 102, 0, 1, 0, 0, 5, 0, 1, 300, 150, 0, 7])));
+        Assert.False(catalog.HasTrainingPoints);
+        Assert.Equal(0u, catalog.TrainingPoints(102));
+        Assert.Equal(102u, catalog.FirstInChain(102));
     }
 
     [Fact]
