@@ -179,6 +179,63 @@ public sealed class EvadeFidelityTests
     }
 
     [Fact]
+    public void APolymorphedCreatureAPlayerOwns_RegeneratesATenth()
+    {
+        // vmangos Creature::RegenerateHealth (Creature.cpp:1141-1146): GetCharmerOrOwnerGuid().IsPlayer() and polymorphed -> max / 10.
+        using ThreatArena a = Arena();
+        CombatEnvironment.Register(a.Kit.World, new CombatEnvironment(new CombatOptions(), new SpellSystemPowerAuras(a.Kit.System)));
+        Creature wolf = Hurt(a, 90);
+        wolf.SetUInt64(UpdateFields.UnitFieldSummonedby, a.Healer.Guid.Value);
+        a.Cast(a.Tank, wolf, Sheep);
+        uint start = wolf.Health;
+
+        Run(a.Kit.World, 5000);
+
+        Assert.Equal(start + (wolf.MaxHealth / 10), wolf.Health);
+    }
+
+    private static void ManaCaster(Creature wolf)
+    {
+        wolf.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Mage);
+        wolf.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+        wolf.SetUInt32(UpdateFields.UnitFieldMaxpower1, 5000);
+        wolf.SetUInt32(UpdateFields.UnitFieldPower1, 0);
+        wolf.SetUInt32(UpdateFields.UnitFieldStat0 + 3, 100); // intellect
+        wolf.SetUInt32(UpdateFields.UnitFieldStat0 + 4, 100); // spirit
+    }
+
+    [Fact]
+    public void InCombat_ACreatureRegainsItsManaRegenRate_NotAThird()
+    {
+        // vmangos Creature::RegenerateMana (Creature.cpp:1116-1120) with UpdateManaRegen (StatSystem.cpp:808-818): a mage with 100 spirit
+        // and 100 intellect gains ((100 / 4 + 12.5) / 2 + 0.6 x 10 / 5) x 5 = 99.75 per tick, rounded by chance.
+        using ThreatArena a = Arena();
+        CombatEnvironment.Register(a.Kit.World, new CombatEnvironment(new CombatOptions(), new SpellSystemPowerAuras(a.Kit.System)));
+        Creature wolf = Hurt(a, 90);
+        ManaCaster(wolf);
+        a.Map.Combat.DealDamage(a.Tank, wolf, 1, direct: false);
+
+        Run(a.Kit.World, 5000);
+
+        Assert.True(wolf.Combat.IsInCombat);
+        Assert.InRange(SpellSystem.GetPower(wolf, PowerType.Mana), 99u, 100u);
+    }
+
+    [Fact]
+    public void OutOfCombat_ACreatureRegainsAThirdOfItsMana()
+    {
+        using ThreatArena a = Arena();
+        CombatEnvironment.Register(a.Kit.World, new CombatEnvironment(new CombatOptions(), new SpellSystemPowerAuras(a.Kit.System)));
+        Creature wolf = Hurt(a, 90);
+        ManaCaster(wolf);
+
+        Run(a.Kit.World, 5000);
+
+        Assert.False(wolf.Combat.IsInCombat);
+        Assert.Equal(5000u / 3, SpellSystem.GetPower(wolf, PowerType.Mana));
+    }
+
+    [Fact]
     public void KeepPositiveAurasOnEvade_RemovesOnlyTheNegativeAuras()
     {
         using ThreatArena a = Arena();
