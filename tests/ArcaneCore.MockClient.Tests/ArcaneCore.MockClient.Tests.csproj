@@ -16,6 +16,7 @@
   <ItemGroup>
     <!-- Each collection owns real SQLite databases and realm/world hosts. Bound
          simultaneous fixture startup; test-internal concurrency is unchanged. -->
+    <None Update="Replay/*.transcript" CopyToOutputDirectory="PreserveNewest" />
     <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

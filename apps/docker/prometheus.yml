@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: arcanecore-world
+    metrics_path: /metrics/
+    static_configs: [{ targets: ["arcane-world:9464"] }]
+  - job_name: arcanecore-realm
+    metrics_path: /metrics/
+    static_configs: [{ targets: ["arcane-realm:9465"] }]

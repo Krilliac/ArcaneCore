@@ -9,6 +9,7 @@ using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Spells;
@@ -87,7 +88,7 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         OutdoorPvPZoneScript? script = map.MapId switch
         {
             EasternPlaguelandsCatalog.MapId => new EasternPlaguelandsZone(_host),
-            SilithusCatalog.MapId => new SilithusZone(_host) { AreaTriggerPosition = TriggerPosition },
+            SilithusCatalog.MapId => new SilithusZone(_host, LoadSilithystMax()) { AreaTriggerPosition = TriggerPosition, Saved = SaveSilithyst },
             _ => null,
         };
         if (script is null)
@@ -121,12 +122,46 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
 
     internal Map? MapOf(OutdoorPvPZoneScript script) => _scripts.FirstOrDefault(p => ReferenceEquals(p.Value, script)).Key;
 
+    /// <summary>vmangos SetupZoneScript: <c>GetSavedVariable(WS_OPVP_SI_SILITHYST_MAX, SI_MAX_RESOURCES_DEFAULT)</c>.</summary>
+    private uint LoadSilithystMax()
+    {
+        try
+        {
+            using IServiceScope scope = services.CreateScope();
+            if (scope.ServiceProvider.GetService<ISilithystStore>()?.LoadAsync().GetAwaiter().GetResult() is { MaxResources: > 0 } saved)
+            {
+                return saved.MaxResources;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not load the Silithyst state");
+        }
+
+        return SilithusCatalog.DefaultMaxResources;
+    }
+
+    private void SaveSilithyst(uint alliance, uint horde, uint max)
+    {
+        try
+        {
+            using IServiceScope scope = services.CreateScope();
+            scope.ServiceProvider.GetService<ISilithystStore>()?.SaveAsync(new SilithystState(alliance, horde, max)).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not save the Silithyst state");
+        }
+    }
+
     private void OnWorldTick(uint diffMs)
     {
         foreach (OutdoorPvPZoneScript script in _scripts.Values.ToArray())
         {
             script.Tick(diffMs);
         }
+
+        _host?.UpdateCreatureGroups();
     }
 
     // ------------------------------------------------------------------ zone presence

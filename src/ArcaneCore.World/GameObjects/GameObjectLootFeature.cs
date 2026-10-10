@@ -10,6 +10,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Kernel.WorldData.Transports;
@@ -57,6 +58,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
 
+    /// <summary>Built SMSG_GAMEOBJECT_QUERY_RESPONSE replies for content templates (cleared when the content is replaced).</summary>
+    public Packets.QueryResponseCache<GameObjectTemplate> QueryCache { get; } = new();
+
     /// <summary>True once the content was loaded (at attach); before that <see cref="Content"/> is the empty content.</summary>
     public bool ContentInstalled => Volatile.Read(ref _contentInstalled);
 
@@ -69,6 +73,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     {
         ArgumentNullException.ThrowIfNull(content);
         GameObjectContent previous = Interlocked.Exchange(ref _content, content);
+        QueryCache.Clear();
         foreach (GameObjectMapSystem system in _systems.Values)
         {
             system.ReplaceContent(content);
@@ -153,6 +158,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
+        QueryCache.Clear();
         Quests = new QuestJournalAdapter(services, world);
         Volatile.Write(ref _lootContent, loot);
 
@@ -234,6 +240,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Options = ObjectOptions,
             ElevatorAnimations = ElevatorAnimations,
             Random = new Random(),
+            // An object with source-type-1 smart_scripts rows runs them unless a C# AI is registered for its entry; the catalog is read at use time (the creature feature loads it).
+            FallbackAi = new SmartGameObjectAi(() => services.GetService<CreatureWorldFeature>()?.Content.Ai.SmartScripts ?? SmartScriptCatalog.Empty),
             // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
             Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
         };

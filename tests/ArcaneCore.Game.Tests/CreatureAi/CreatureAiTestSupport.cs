@@ -278,6 +278,16 @@ internal sealed class FakeCaster : ICreatureSpellCaster
         return CreatureCastResult.Ok;
     }
 
+    /// <summary>Auras put on with another unit as their caster (<see cref="ICreatureSpellCaster.AddAuraFrom"/>).</summary>
+    public List<(Unit Unit, uint Spell, Unit Caster)> AddedAurasFrom { get; } = [];
+
+    public CreatureCastResult AddAuraFrom(Unit unit, uint spellId, Unit caster)
+    {
+        AddedAurasFrom.Add((unit, spellId, caster));
+        Auras.Add((unit, spellId));
+        return CreatureCastResult.Ok;
+    }
+
     public void RemoveAuras(Unit unit, uint spellId)
     {
         RemovedAuras.Add((unit, spellId));

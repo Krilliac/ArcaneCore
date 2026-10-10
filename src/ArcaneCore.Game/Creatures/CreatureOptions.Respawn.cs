@@ -46,7 +46,7 @@ public sealed class CreatureRespawnOptions
     public bool SaveImmediately { get; set; } = true;
 
     /// <summary>
-    /// <c>Creatures:Respawn:Linked</c>: carry the creature_linking respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave,
+    /// <c>Creatures:Respawn:Linked</c>: carry the creature_linking aggro, respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave,
     /// Entities/CreatureLinkingMgr.cpp:555-612, and CanSpawn, :699-751): a boss's trash respawns, despawns or dies with it, and a slave with
     /// FLAG_CANT_SPAWN_IF_BOSS_DEAD / ALIVE waits on its master. Retail; false keeps only FLAG_FOLLOW and the instance scripts' own handling.
     /// </summary>

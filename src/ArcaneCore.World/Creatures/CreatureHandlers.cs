@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -23,8 +24,10 @@ public sealed class CreatureHandlers : IOpcodeHandlerGroup
         _ = reader.Remaining >= 8 ? reader.ReadUInt64() : 0; // guid, informational only
 
         CreatureWorldFeature? feature = session.Services.GetService<CreatureWorldFeature>();
-        session.Send(WorldOpcode.SmsgCreatureQueryResponse,
-            CreaturePackets.BuildCreatureQueryResponse(entry, feature?.Content.FindTemplate(entry)));
+        CreatureTemplate? template = feature?.Content.FindTemplate(entry);
+        session.Send(WorldOpcode.SmsgCreatureQueryResponse, feature is null
+            ? CreaturePackets.BuildCreatureQueryResponse(entry, template)
+            : feature.QueryCache.Get(entry, template, CreaturePackets.BuildCreatureQueryResponse));
         return Task.CompletedTask;
     }
 }

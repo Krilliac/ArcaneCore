@@ -144,6 +144,12 @@ public interface ICreatureSpellCaster
     /// </summary>
     CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent) => CreatureCastResult.NoSpellSystem;
 
+    /// <summary>
+    /// <see cref="AddAura(Unit, uint, bool)"/> with <paramref name="caster"/> as the aura's caster (vmangos Unit::AddAura's pCaster; the
+    /// cmangos <c>victim-&gt;CastSpell(victim, spell, TRIGGERED, nullptr, nullptr, originalCaster)</c> credit).
+    /// </summary>
+    CreatureCastResult AddAuraFrom(Unit unit, uint spellId, Unit caster) => CreatureCastResult.NoSpellSystem;
+
     /// <summary>Stop the cast or channel in progress (evade, death).</summary>
     void Interrupt(Creature caster);
 
@@ -167,6 +173,9 @@ public sealed class CreatureAiFactory
 
     public const string GuardAIName = "GuardAI";
 
+    /// <summary>AzerothCore SmartAI: the creature runs its <c>smart_scripts</c> rows (<see cref="CreatureSmartAI"/>).</summary>
+    public const string SmartAIName = "SmartAI";
+
     /// <summary>vmangos GuardEventAI: EventAI with the guard on-sight rules (AI/CreatureAIRegistry.cpp:50).</summary>
     public const string GuardEventAIName = "GuardEventAI";
 
@@ -186,6 +195,20 @@ public sealed class CreatureAiFactory
             UsesGuardSightRules = (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0, // vmangos GuardEventAI::Permissible
         },
         [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
+        [SmartAIName] = static (c, content) => new CreatureSmartAI(c, content.Ai),
+        ["guard_stormwind"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Alliance, stormwind: true),
+        ["guard_bluffwatcher"] = static (c, _) => new GuardAI(c),
+        ["guard_contested"] = static (c, _) => new GuardAI(c),
+        ["guard_darnassus"] = static (c, _) => new GuardAI(c),
+        ["guard_dunmorogh"] = static (c, _) => new GuardAI(c),
+        ["guard_durotar"] = static (c, _) => new GuardAI(c),
+        ["guard_elwynnforest"] = static (c, _) => new GuardAI(c),
+        ["guard_ironforge"] = static (c, _) => new GuardAI(c),
+        ["guard_mulgore"] = static (c, _) => new GuardAI(c),
+        ["guard_teldrassil"] = static (c, _) => new GuardAI(c),
+        ["guard_tirisfal"] = static (c, _) => new GuardAI(c),
+        ["guard_undercity"] = static (c, _) => new GuardAI(c),
+        ["guard_orgrimmar"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Horde, stormwind: false),
     };
 
     /// <summary>
@@ -198,10 +221,62 @@ public sealed class CreatureAiFactory
     {
         [Scripts.RuulSnowhoofAI.Entry] = static c => new Scripts.RuulSnowhoofAI(c),
         [Scripts.AMe01AI.Entry] = static c => new Scripts.AMe01AI(c),
+        [Scripts.RinjiAI.Entry] = static c => new Scripts.RinjiAI(c),
+        [Scripts.MuglashAI.Entry] = static c => new Scripts.MuglashAI(c),
+        [Scripts.VolcorAI.Entry] = static c => new Scripts.VolcorAI(c),
+        [Scripts.BartlebyAI.Entry] = static c => new Scripts.BartlebyAI(c),
+        [Scripts.DashelStonefistAI.Entry] = static c => new Scripts.DashelStonefistAI(c),
+        [Scripts.SquireRoweAI.Entry] = static c => new Scripts.SquireRoweAI(c),
+        [Scripts.MelizzaBrimbuzzleAI.Entry] = static c => new Scripts.MelizzaBrimbuzzleAI(c),
+        [Scripts.ErisHavenfireAI.Entry] = static c => new Scripts.ErisHavenfireAI(c),
+        [Scripts.RanshallaAI.Entry] = static c => new Scripts.RanshallaAI(c),
+        [Scripts.ReginaldWindsorAI.Entry] = static c => new Scripts.ReginaldWindsorAI(c),
+        [Scripts.TaelanFordringAI.Entry] = static c => new Scripts.TaelanFordringAI(c),
+        [Scripts.IsillienAI.Entry] = static c => new Scripts.IsillienAI(c),
+        [Scripts.TirionFordringAI.Entry] = static c => new Scripts.TirionFordringAI(c),
+        [Scripts.KeeperRemulosAI.Entry] = static c => new Scripts.KeeperRemulosAI(c),
+        [Scripts.EranikusAI.Entry] = static c => new Scripts.EranikusAI(c),
+        [Scripts.KerlonianAI.Entry] = static c => new Scripts.KerlonianAI(c),
+        [Scripts.MistAI.Entry] = static c => new Scripts.MistAI(c),
+        [Scripts.DaphneStilwellAI.Entry] = static c => new Scripts.DaphneStilwellAI(c),
+        [Scripts.GrarkLorkrubAI.Entry] = static c => new Scripts.GrarkLorkrubAI(c),
+        [Scripts.TapokeSlimJahnAI.Entry] = static c => new Scripts.TapokeSlimJahnAI(c),
+        [Scripts.MikhailAI.Entry] = static c => new Scripts.MikhailAI(c),
+        [Scripts.PrivateHendelAI.Entry] = static c => new Scripts.PrivateHendelAI(c),
+        [Scripts.StinkyIgnatzAI.Entry] = static c => new Scripts.StinkyIgnatzAI(c),
+        [Scripts.MagramiSpectreAI.Entry] = static c => new Scripts.MagramiSpectreAI(c),
+        [Scripts.PluckyJohnsonAI.Entry] = static c => new Scripts.PluckyJohnsonAI(c),
+        [Scripts.TriageDoctorAI.DoctorAlliance] = static c => new Scripts.TriageDoctorAI(c),
+        [Scripts.TriageDoctorAI.DoctorHorde] = static c => new Scripts.TriageDoctorAI(c),
+        [12923] = static c => new Scripts.InjuredPatientAI(c),
+        [12924] = static c => new Scripts.InjuredPatientAI(c),
+        [12925] = static c => new Scripts.InjuredPatientAI(c),
+        [12936] = static c => new Scripts.InjuredPatientAI(c),
+        [12937] = static c => new Scripts.InjuredPatientAI(c),
+        [12938] = static c => new Scripts.InjuredPatientAI(c),
+        [Scripts.ShayLeafrunnerAI.Entry] = static c => new Scripts.ShayLeafrunnerAI(c),
+        [Scripts.ThreshwackonatorAI.Entry] = static c => new Scripts.ThreshwackonatorAI(c),
     };
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
-    private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul, Scripts.AMe01AI.QuestChasingAMe];
+    private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul, Scripts.AMe01AI.QuestChasingAMe, Scripts.RinjiAI.QuestRinjiTrapped, Scripts.MuglashAI.QuestVorsha,
+        Scripts.VolcorAI.QuestEscapeThroughForce, Scripts.VolcorAI.QuestEscapeThroughStealth, Scripts.BartlebyAI.QuestBeat,
+        Scripts.DashelStonefistAI.QuestMissingDiploPt8, Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere,
+        Scripts.ErisHavenfireAI.QuestBalanceOfLightAndShadow, Scripts.RanshallaAI.QuestGuardiansAltar,
+        Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade,
+        Scripts.TaelanFordringAI.QuestInDreams,
+        Scripts.KeeperRemulosAI.QuestNightmareManifests,
+        Scripts.KerlonianAI.QuestSleeperAwakened,
+        Scripts.MistAI.QuestMist,
+        Scripts.DaphneStilwellAI.QuestTomeOfValor,
+        Scripts.GrarkLorkrubAI.QuestPrecariousPredicament,
+        Scripts.TapokeSlimJahnAI.QuestMissingDiplomat,
+        Scripts.PrivateHendelAI.QuestMissingDiplomat16,
+        Scripts.StinkyIgnatzAI.QuestAlliance,
+        Scripts.StinkyIgnatzAI.QuestHorde,
+        Scripts.TriageDoctorAI.QuestTriageA,
+        Scripts.TriageDoctorAI.QuestTriageH,
+        Scripts.ShayLeafrunnerAI.QuestWanderingShay];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
     public CreatureAiFactory()

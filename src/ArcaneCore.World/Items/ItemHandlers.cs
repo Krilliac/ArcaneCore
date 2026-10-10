@@ -256,8 +256,9 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         uint entry = reader.ReadUInt32();
         ItemsFeature items = session.Services.GetRequiredService<ItemsFeature>();
         var templates = await items.EnsureLoadedAsync().ConfigureAwait(false);
-        session.Send(WorldOpcode.SmsgItemQuerySingleResponse, templates.Find(entry) is { } template
-            ? ItemPackets.ItemQueryResponse(template)
-            : ItemPackets.ItemQueryUnknown(entry));
+        session.Send(WorldOpcode.SmsgItemQuerySingleResponse,
+            items.QueryCache.Get(entry, templates.Find(entry), static (id, template) => template is null
+                ? ItemPackets.ItemQueryUnknown(id)
+                : ItemPackets.ItemQueryResponse(template)));
     }
 }

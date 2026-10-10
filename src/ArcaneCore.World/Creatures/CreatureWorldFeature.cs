@@ -41,6 +41,9 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
 
+    /// <summary>Built SMSG_CREATURE_QUERY_RESPONSE replies (cleared when the content is installed or its definitions swapped).</summary>
+    public Packets.QueryResponseCache<CreatureTemplate> QueryCache { get; } = new();
+
     /// <summary>
     /// True once <see cref="Install"/> has put the loaded content in place. The content is loaded at attach but installed from the world
     /// thread (a posted call), so until then <see cref="Content"/> is still the empty content even when the world has spawns.
@@ -101,9 +104,30 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         logger.LogInformation("EventAI unsupported reference IDs unused by loaded scripts: events {Events}; actions {Actions}",
             string.Join(", ", aiCoverage.UnusedUnsupportedEventIds), string.Join(", ", aiCoverage.UnusedUnsupportedActionIds));
         ReportWaypointSpawnsWithoutPath(content);
+        ReportSmartScripts(content.Ai.SmartScripts);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         world.Post(() => Install(content));
+    }
+
+    /// <summary>
+    /// The smart-script load result: the accepted rows per source and the rows the loader refused (SmartScriptCatalog.Rejected), as the count and the
+    /// first 20 reasons (the ConditionFeature pattern). A refused row never runs, so this is where a mis-authored row shows up.
+    /// </summary>
+    private void ReportSmartScripts(SmartScriptCatalog smart)
+    {
+        if (smart.Count + smart.GameObjectRowCount + smart.AreaTriggerRowCount + smart.TimedActionListRowCount + smart.Rejected.Count == 0)
+        {
+            return;
+        }
+
+        logger.LogInformation("SmartAI: {Creature}/{GameObject}/{AreaTrigger}/{TimedList} rows loaded (creature/game object/area trigger/timed action list), {Rejected} rejected",
+            smart.Count, smart.GameObjectRowCount, smart.AreaTriggerRowCount, smart.TimedActionListRowCount, smart.Rejected.Count);
+        foreach (SmartScriptRejection rejection in smart.Rejected.Take(20))
+        {
+            logger.LogWarning("SmartAI row skipped (entryorguid {EntryOrGuid}, source {Source}, id {Id}): {Reason}",
+                rejection.EntryOrGuid, rejection.SourceType, rejection.Id, rejection.Reason);
+        }
     }
 
     /// <summary>
@@ -134,6 +158,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         ArgumentNullException.ThrowIfNull(content);
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
+        QueryCache.Clear();
         foreach (uint mapId in content.MapsWithSpawns)
         {
             GetOrCreateSystem(mapId);

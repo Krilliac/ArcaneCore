@@ -100,6 +100,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(MovementScriptDataModule), DatabaseComponent.World, MovementScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Pools.PoolDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Pools.PoolDataModule.Version),
             (typeof(ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule.Version),
+            (typeof(SmartScriptDataModule), DatabaseComponent.World, SmartScriptDataModule.Version),
+            (typeof(ArcaneCore.Data.World.Warden.WardenDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Warden.WardenDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule.Version),
+            (typeof(SmartScriptConditionDataModule), DatabaseComponent.World, SmartScriptConditionDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -146,6 +150,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.NightmareDragonsDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.NightmareDragonsDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.CharacterDrunkDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.CharacterDrunkDataModule.Version),
+            (typeof(PetLoyaltyDataModule), DatabaseComponent.Characters, PetLoyaltyDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.SilithystDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.SilithystDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.ServerMail.ServerMailDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.ServerMail.ServerMailDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotCustodyDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Economy.AuctionBotCustodyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -171,11 +181,13 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // Realm-wide AQ war-effort state is characters 43.
         // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule); world 43 the script-engine lane's
         // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule and world 45 the movement-scripts lane's MovementScriptDataModule (both allocated as 43, renumbered in wave 10); world 46 the pools lane's PoolDataModule (its v45 placeholder was removed at integration).
+        // World 48 is PR #72's SmartScriptDataModule and world 49 PR #84's WardenDataModule (its v48 placeholder was removed at integration).
+        // Characters 50 is PR #74's NightmareDragonsDataModule; PR #73's Reserved74SchemaGap hold was removed at integration.
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(47, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47)
-        Assert.Equal(49, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
+        Assert.Equal(51, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51)
+        Assert.Equal(55, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

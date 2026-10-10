@@ -172,6 +172,7 @@ public sealed partial class DuelService
         }
 
         duel.Finished = true;
+        (player.Map ?? opponent.Map)?.World.Scripts.Player.OnDuelEnd(opponent, player, type);
     }
 
     /// <summary>
@@ -276,6 +277,8 @@ public sealed partial class DuelService
             other.StartTimerSeconds = 0;
             other.StartTimeSeconds = now;
         }
+
+        player.Map?.World.Scripts.Player.OnDuelStart(player, opponent);
     }
 
     /// <summary>

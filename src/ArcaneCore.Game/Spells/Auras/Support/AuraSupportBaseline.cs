@@ -9,7 +9,7 @@ public static partial class AuraSupport
     private static readonly AuraSupportEntry[] s_baseline =
     [
         new(AuraType.None, AuraSupportLevel.NotAnAura, "HandleNULL", 65, "ImmunityRules.cs", ""),
-        new(AuraType.BindSight, AuraSupportLevel.Unsupported, "HandleBindSight", 66, "", ""),
+        new(AuraType.BindSight, AuraSupportLevel.Handler, "HandleBindSight", 66, "SpellSystem.Sight.cs", ""),
         new(AuraType.ModPossess, AuraSupportLevel.Handler, "HandleModPossess", 67, "CharmService.Possess.cs, CharmCastCheck.cs, SpellSystem.Dispel.cs", ""),
         new(AuraType.PeriodicDamage, AuraSupportLevel.Handler, "HandlePeriodicDamage", 68, "SpellCoefficients.cs, SpellInfoRuleExtensions.cs, SpellPackets.cs", ""),
         new(AuraType.Dummy, AuraSupportLevel.Handler, "HandleAuraDummy", 69, "SpellCoefficients.cs, SpellSystem.Auras.cs", ""),
@@ -101,7 +101,7 @@ public static partial class AuraSupport
         new(AuraType.ModResistChance, AuraSupportLevel.Unsupported, "HandleUnused", 155, "", ""),
         new(AuraType.ModDetectRange, AuraSupportLevel.Unsupported, "HandleNoImmediateEffect", 156, "", ""),
         new(AuraType.PreventsFleeing, AuraSupportLevel.Referenced, "HandlePreventFleeing", 157, "CcAuraHandlers.cs, CcState.cs", ""),
-        new(AuraType.ModUnattackable, AuraSupportLevel.Unsupported, "HandleModUnattackable", 158, "", ""),
+        new(AuraType.ModUnattackable, AuraSupportLevel.Handler, "HandleModUnattackable", 158, "SpellSystem.Sight.cs", ""),
         new(AuraType.InterruptRegen, AuraSupportLevel.Referenced, "HandleInterruptRegen", 159, "MapCombat.Regen.cs", ""),
         new(AuraType.Ghost, AuraSupportLevel.Handler, "HandleAuraGhost", 160, "GhostAuras.cs", ""),
         new(AuraType.SpellMagnet, AuraSupportLevel.Handler, "HandleNoImmediateEffect", 161, "../Magnet/SpellMagnetAuras.cs", ""),
@@ -128,7 +128,7 @@ public static partial class AuraSupport
         new(AuraType.ModMechanicResistance, AuraSupportLevel.Referenced, "HandleNoImmediateEffect", 182, "MechanicResistRule.cs, SpellCombatRules.cs", ""),
         new(AuraType.ModHealingPct, AuraSupportLevel.Referenced, "HandleNoImmediateEffect", 183, "DirectCombatEffects.cs, SpellBonusModule.cs", ""),
         new(AuraType.SharePetTracking, AuraSupportLevel.Unsupported, "HandleUnused", 184, "", ""),
-        new(AuraType.Untrackable, AuraSupportLevel.Unsupported, "HandleAuraUntrackable", 185, "", ""),
+        new(AuraType.Untrackable, AuraSupportLevel.Handler, "HandleAuraUntrackable", 185, "SpellSystem.Sight.cs", ""),
         new(AuraType.Empathy, AuraSupportLevel.Handler, "HandleAuraEmpathy", 186, "SpellSystem.Auras.cs", ""),
         new(AuraType.ModOffhandDamagePct, AuraSupportLevel.Handler, "HandleModOffhandDamagePercent", 187, "CombatStatAuras.cs, PlayerStatSystem.cs", ""),
         new(AuraType.ModTargetResistance, AuraSupportLevel.Referenced, "HandleNoImmediateEffect", 188, "SpellCombatRules.cs", ""),

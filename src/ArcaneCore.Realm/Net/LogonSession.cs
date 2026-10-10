@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.Realm.Protocol.Versioning;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Realm.Net;
@@ -39,7 +40,8 @@ public sealed class LogonSession(
     IBanStore? banStore = null,
     NetGuard? guard = null,
     RealmIpBanCache? ipBanCache = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    PatchCatalog? patches = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
 
@@ -47,6 +49,10 @@ public sealed class LogonSession(
     private readonly RealmIpBanCache? _ipBanCache = ipBanCache; // optional: null reads the row on every challenge (vmangos realmd)
     private readonly NetProtectionOptions _protection = guard?.Options ?? DefaultProtection;
     private readonly IpKey? _address = IpKey.TryParse(remoteEndpoint, out IpKey parsedAddress) ? parsedAddress : null;
+
+    // The client build's logon protocol (multi-version design S0), bound by the logon or reconnect challenge.
+    // Only build 5875 is registered, so this is the 5875 protocol on every path that reaches the proof.
+    private IAuthProtocol _authProtocol = Build5875AuthProtocol.Instance;
     private string _username = string.Empty;
     private Srp6Server? _srp;
     private Account? _pendingAccount;
@@ -66,6 +72,12 @@ public sealed class LogonSession(
     private CancellationToken _sessionToken;
     private CancellationTokenSource? _unauthenticatedLifetime;
     private ReadDeadline? _deadline;
+    private ClientPatch? _offeredPatch; // chosen at the challenge of a non-5875 build, sent at its proof
+    private ClientPatch? _xferPatch;
+    private CancellationTokenSource? _sessionCap; // Auth:MaxSessionDurationSeconds; re-armed per patch chunk so only an idle transfer hits it    // offered by XFER_INITIATE; XFER_ACCEPT/RESUME stream it
+
+    /// <summary>XFER_DATA payload size (vmangos XFER_DATA_CHUNK::data[4096], AuthPackets.h:135-140).</summary>
+    public const int XferChunkSize = 4096;
 
     // vmangos AuthSocket.cpp:248-262: the challenge body is sizeof(sAuthLogonChallengeBody) = 47 at
     // most and 47 - AUTH_LOGON_MAX_NAME (16) = 31 at least; username_len above 16 is dropped.
@@ -107,6 +119,7 @@ public sealed class LogonSession(
         }
 
         _unauthenticatedLifetime = unauthenticated;
+        _sessionCap = session;
 
         // Net:Protection:FrameReadTimeout (Auth:ReadTimeoutSeconds, when set, wins): one deadline per
         // connection, re-armed per packet, so no timer or token source is allocated per read.
@@ -151,6 +164,7 @@ public sealed class LogonSession(
         {
             _deadline = null;
             _unauthenticatedLifetime = null;
+            _sessionCap = null;
         }
     }
 
@@ -189,6 +203,14 @@ public sealed class LogonSession(
 
                     case AuthCommand.RealmList:
                         await HandleRealmListAsync(cancellationToken).ConfigureAwait(false);
+                        break;
+
+                    case AuthCommand.XferAccept or AuthCommand.XferResume or AuthCommand.XferCancel when _xferPatch is not null:
+                        if (!await HandleXferAsync(command, _xferPatch, cancellationToken).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
                         break;
 
                     default:
@@ -288,13 +310,29 @@ public sealed class LogonSession(
             return;
         }
 
-        if (request.Build != ClientBuild.Vanilla1121)
+        ClientPatch? offeredPatch = null;
+        if (!AuthProtocols.TryGet(request.Build, out IAuthProtocol authProtocol))
         {
-            logger.LogInformation("[{Endpoint}] rejected build {Build} (only {Supported} is supported)",
-                remoteEndpoint, request.Build, ClientBuild.Vanilla1121);
-            await SendChallengeFailureAsync(AuthResult.VersionInvalid, cancellationToken).ConfigureAwait(false);
-            return;
+            // Auth:AutoPatch (off by default): vmangos lets a wrong build finish the challenge and answers its proof with the patch
+            // (AuthSocket.cpp:665-676, _HandleLogonProof__PostRecv_HandleInvalidVersion).
+            offeredPatch = patches?.Find(request.Build, ReadLocale(body));
+            if (offeredPatch is null)
+            {
+                logger.LogInformation("[{Endpoint}] rejected build {Build} (only {Supported} is supported)",
+                    remoteEndpoint, request.Build, ClientBuild.Vanilla1121);
+                await SendChallengeFailureAsync(AuthResult.VersionInvalid, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            logger.LogInformation("[{Endpoint}] build {Build} will be offered patch {Patch}",
+                remoteEndpoint, request.Build, Path.GetFileName(offeredPatch.Path));
+
+            // A patched build is answered with the transfer at its proof and never reaches the integrity check or the realm list,
+            // so it keeps the default protocol.
+            authProtocol = Build5875AuthProtocol.Instance;
         }
+
+        _authProtocol = authProtocol;
 
         string username = request.Username.ToUpperInvariant();
         if (options.StrictUsernameCharset && !IsPrintableAscii(username))
@@ -397,6 +435,7 @@ public sealed class LogonSession(
         }
 
         // Only now, after every early-out, does the connection commit to this account.
+        _offeredPatch = offeredPatch;
         _username = username;
         _clientOs = request.Os;
         _clientPlatform = request.Platform;
@@ -437,6 +476,7 @@ public sealed class LogonSession(
         byte[]? pinSalt = _pinSalt;
         string clientOs = _clientOs;
         string clientPlatform = _clientPlatform;
+        ClientPatch? offeredPatch = _offeredPatch;
         ResetChallengeState();
 
         // The state machine: a proof consumes the challenge, so from here the session holds no SRP state
@@ -450,6 +490,14 @@ public sealed class LogonSession(
             logger.LogWarning("[{Endpoint}] logon proof without a valid challenge", remoteEndpoint);
             RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // vmangos checks the build before any SRP work (AuthSocket.cpp:669-676): a patched build gets WOW_FAIL_VERSION_UPDATE and the
+        // XFER_INITIATE, nothing is authenticated, and the connection may only accept, resume or cancel the transfer.
+        if (offeredPatch is not null)
+        {
+            await SendPatchOfferAsync(offeredPatch, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -555,12 +603,14 @@ public sealed class LogonSession(
 
         if (body[29] > MaxUsernameLength || !AllowedLocales.Contains(ReadLocale(body))
             || !LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request) || request is null
-            || request.Build != ClientBuild.Vanilla1121)
+            || !AuthProtocols.TryGet(request.Build, out IAuthProtocol reconnectProtocol))
         {
             RecordFailure();
             await SendReconnectFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
+
+        _authProtocol = reconnectProtocol;
 
         string username = request.Username.ToUpperInvariant();
         if (options.StrictUsernameCharset && !IsPrintableAscii(username))
@@ -703,7 +753,7 @@ public sealed class LogonSession(
 
         foreach (ClientIntegrityHashOptions entry in options.IntegrityHashes)
         {
-            if (entry.Build != ClientBuild.Vanilla1121
+            if (entry.Build != _authProtocol.Build
                 || !string.Equals(entry.Os, os, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(entry.Platform, platform, StringComparison.OrdinalIgnoreCase)) continue;
             if (entry.Hash.Length != 40) continue;
@@ -805,8 +855,92 @@ public sealed class LogonSession(
         return true;
     }
 
+    /// <summary>
+    /// vmangos _HandleLogonProof__PostRecv_HandleInvalidVersion (AuthSocket.cpp:632-660): <c>[CMD_AUTH_LOGON_PROOF, WOW_FAIL_VERSION_UPDATE]</c>
+    /// then XFER_INIT <c>{0x30, u8 5, "Patch", u64 size, md5[16]}</c> (AuthPackets.h:126-133).
+    /// </summary>
+    private async Task SendPatchOfferAsync(ClientPatch patch, CancellationToken cancellationToken)
+    {
+        byte[] packet = new byte[2 + 1 + 1 + 5 + 8 + 16];
+        packet[0] = (byte)AuthCommand.LogonProof;
+        packet[1] = (byte)AuthResult.VersionUpdate;
+        packet[2] = (byte)AuthCommand.XferInitiate;
+        packet[3] = 5;
+        "Patch"u8.CopyTo(packet.AsSpan(4));
+        BinaryPrimitives.WriteUInt64LittleEndian(packet.AsSpan(9), (ulong)patch.Size);
+        patch.Md5.CopyTo(packet.AsSpan(17));
+        await stream.WriteAsync(packet, cancellationToken).ConfigureAwait(false);
+        _xferPatch = patch;
+        // The download outlives the pre-proof lifetime; the session cap (Auth:MaxSessionDurationSeconds) still applies and the client resumes.
+        _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan);
+        logger.LogInformation("[{Endpoint}] offered patch {Patch} ({Size} bytes)", remoteEndpoint, Path.GetFileName(patch.Path), patch.Size);
+    }
+
+    /// <summary>
+    /// XFER_ACCEPT streams from the start, XFER_RESUME (+ u64 offset) from that byte, XFER_CANCEL closes (vmangos AuthSocket.cpp:1152-1200);
+    /// false closes the connection. Chunks are <c>{0x31, u16 size, data}</c> (RepeatInternalXferLoop, AuthSocket.cpp:1306-1329).
+    /// </summary>
+    private async Task<bool> HandleXferAsync(AuthCommand command, ClientPatch patch, CancellationToken cancellationToken)
+    {
+        long offset = 0;
+        if (command == AuthCommand.XferCancel)
+        {
+            return false;
+        }
+
+        if (command == AuthCommand.XferResume)
+        {
+            byte[] start = new byte[8];
+            await ReadPacketPartAsync(start, cancellationToken).ConfigureAwait(false);
+            ulong requested = BinaryPrimitives.ReadUInt64LittleEndian(start);
+            if (requested >= (ulong)patch.Size)
+            {
+                logger.LogInformation("[{Endpoint}] patch resume outside the file ({Offset})", remoteEndpoint, requested);
+                return false;
+            }
+
+            offset = (long)requested;
+        }
+
+        await using FileStream file = new(patch.Path, FileMode.Open, FileAccess.Read, FileShare.Read, XferChunkSize, useAsync: true);
+        if (file.Length != patch.Size)
+        {
+            logger.LogWarning("[{Endpoint}] patch {Patch} changed on disk during the offer; closing", remoteEndpoint, patch.Path);
+            return false;
+        }
+
+        file.Seek(offset, SeekOrigin.Begin);
+        byte[] chunk = new byte[3 + XferChunkSize];
+        chunk[0] = (byte)AuthCommand.XferData;
+        int read;
+        while ((read = await file.ReadAsync(chunk.AsMemory(3, XferChunkSize), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(chunk.AsSpan(1, 2), (ushort)read);
+            ExtendSessionCap(); // bytes are flowing: the cap counts from the last chunk, so a stalled download still closes
+            await stream.WriteAsync(chunk.AsMemory(0, 3 + read), cancellationToken).ConfigureAwait(false);
+        }
+
+        ExtendSessionCap(); // the idle cap runs again from the end of the transfer
+        logger.LogInformation("[{Endpoint}] patch sent from byte {Offset}", remoteEndpoint, offset);
+        return true;
+    }
+
+    /// <summary>
+    /// An active patch download is exempt from the absolute session cap: each chunk restarts the
+    /// <c>Auth:MaxSessionDurationSeconds</c> timer, so the cap becomes an idle limit while the transfer runs (0 keeps it off).
+    /// </summary>
+    private void ExtendSessionCap()
+    {
+        if (options.MaxSessionDurationSeconds > 0)
+        {
+            _sessionCap?.CancelAfter(TimeSpan.FromSeconds(options.MaxSessionDurationSeconds));
+        }
+    }
+
     private void ResetChallengeState()
     {
+        _offeredPatch = null;
+        _xferPatch = null;
         _srp = null;
         _pendingAccount = null;
         _promptPin = false;

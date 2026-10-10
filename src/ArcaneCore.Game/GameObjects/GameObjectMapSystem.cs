@@ -1012,13 +1012,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>
     /// Despawn now (vmangos GO_JUST_DEACTIVATED → SetRespawnTime): a database spawn with a
     /// non-negative spawntimesecs comes back after that delay (at least one second); a negative one stays despawned
-    /// until <see cref="ForceRespawn"/>; a runtime object is removed.
+    /// until <see cref="ForceRespawn"/>; a runtime object is removed unless it is <see cref="GameObject.SpawnedByDefault"/>.
     /// </summary>
     public void Despawn(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);
         if (!Tracks(go))
         {
+            return;
+        }
+
+        if (go.Spawn is null && go.SpawnedByDefault)
+        {
+            // GameObject.cpp GO_JUST_DEACTIVATED: not deleted (spawned by default), loot cleared, GO_READY, and no respawn delay so it stays.
+            Loot?.ForgetLoot(go);
+            go.LootState = GameObjectLootState.Ready;
             return;
         }
 
@@ -1106,6 +1114,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
         Map.AddObject(go);
+        if (go.Spawn is { SpawnTimeSeconds: >= 0 })
+        {
+            // AzerothCore reaches AI()->Reset() only for m_spawnedByDefault objects (GameObject.cpp:656-665): a negative spawntimesecs object
+            // brought back by a script or event keeps its script state.
+            AiOf(go)?.OnRespawn(this, go);
+        }
+
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectSpawn(go);
         RespawnLinkedTrap(go); // GameObject::Update, GO_READY respawn (GameObject.cpp:427-437)
     }

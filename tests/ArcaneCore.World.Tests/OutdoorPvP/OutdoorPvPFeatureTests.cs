@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.OutdoorPvP;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.OutdoorPvP;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Tests.Honor;
@@ -17,9 +18,24 @@ namespace ArcaneCore.World.Tests.OutdoorPvP;
 /// <summary>The world wiring of outdoor PvP: one script per continent, zone presence, world states and the Crown Guard graveyard link.</summary>
 public sealed class OutdoorPvPFeatureTests
 {
-    private static (ServiceProvider Services, WorldRuntime World, OutdoorPvPFeature Feature) Start()
+    private sealed class MemorySilithystStore : ISilithystStore
     {
-        ServiceProvider services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        public SilithystState? State;
+
+        public Task<SilithystState?> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(State);
+
+        public Task SaveAsync(SilithystState state, CancellationToken cancellationToken = default)
+        {
+            State = state;
+            return Task.CompletedTask;
+        }
+    }
+
+    private static (ServiceProvider Services, WorldRuntime World, OutdoorPvPFeature Feature) Start(ISilithystStore? store = null)
+    {
+        var collection = new ServiceCollection().AddLogging();
+        if (store is not null) collection.AddSingleton(store);
+        ServiceProvider services = collection.BuildServiceProvider();
         var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
             new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
             NullLogger<WorldRuntime>.Instance);
@@ -36,6 +52,35 @@ public sealed class OutdoorPvPFeatureTests
     {
         var character = new CharacterRecord { Id = id, AccountId = 1, Name = "Opvp" + id, Race = race, Class = 1, Gender = 0, Level = 60, MapId = mapId, ZoneId = 0 };
         return new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new HonorNullSession());
+    }
+
+    [Fact]
+    public void Silithus_reads_back_the_saved_maximum()
+    {
+        var store = new MemorySilithystStore { State = new SilithystState(7, 9, 50) };
+        (ServiceProvider services, WorldRuntime world, OutdoorPvPFeature feature) = Start(store);
+        using (services)
+        using (world)
+        {
+            SilithusZone zone = Assert.IsType<SilithusZone>(feature.Silithus);
+            Assert.Equal(50u, zone.MaxResources);                           // vmangos reads back only the maximum
+            Assert.Equal(0u, zone.GatheredAlliance);
+        }
+    }
+
+    [Theory]
+    [InlineData(0f, 0f)]
+    [InlineData(1f, 0f)]
+    [InlineData(-1f, 2.35619f)]
+    public void Squad_follow_angle_is_the_leaders_bearing_less_the_members_facing(float memberY, float memberO)
+    {
+        Player leader = NewPlayer(1, 1, 0);
+        Player member = NewPlayer(2, 1, 0);
+        leader.Relocate(0, 0, 0, 0, 0);
+        member.Relocate(1, memberY, 0, memberO, 0);
+        float expected = MathF.Atan2(memberY, 1) - memberO;
+        if (expected < 0) expected += MathF.Tau;
+        Assert.Equal(expected, OutdoorPvPWorldHost.FollowAngle(leader, member), 4);
     }
 
     [Fact]

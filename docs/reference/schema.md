@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 49 | `characters` |
-| `world` | 47 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 55 | `characters` |
+| `world` | 51 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -74,6 +74,12 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 47 | `Characters.WorldState.ScourgeInvasionCityDataModule` | creates `world_scourge_invasion_city` | yes |
 | 48 | `Characters.WorldState.FishingExtravaganzaDataModule` | creates `world_stv_fishing` | yes |
 | 49 | `Characters.WorldState.ElementalInvasionDataModule` | creates `world_elemental_invasion` | yes |
+| 50 | `Characters.WorldState.NightmareDragonsDataModule` | creates `world_nightmare_dragons` | yes |
+| 51 | `Characters.CharacterDrunkDataModule` | adds columns `characters.Drunk`, `characters.LogoutTime` | yes |
+| 52 | `Characters.Pets.PetLoyaltyDataModule` | adds columns `character_pet.Loyalty`, `character_pet.LoyaltyPoints`, `character_pet.TrainingPoints` | yes |
+| 53 | `Characters.WorldState.SilithystDataModule` | creates `world_silithyst` | yes |
+| 54 | `Characters.ServerMail.ServerMailDataModule` | creates `mail_server_template`, `mail_server_template_items`, `mail_server_template_conditions`, `mail_server_character` | yes |
+| 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | yes |
 
 ## `world`
 
@@ -125,5 +131,9 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 45 | `World.Creatures.MovementScriptDataModule` | creates `dbscripts_on_creature_movement`, `spell_script_target`, `creature_linking`, `creature_linking_template`; adds columns `creature_movement.ScriptId`, `creature_movement_template.ScriptId` |
 | 46 | `World.Pools.PoolDataModule` | creates `pool_template`, `pool_creature`, `pool_creature_template`, `pool_gameobject`, `pool_gameobject_template`, `pool_pool` |
 | 47 | `Content.Chat.ChatWordFilterWorldDataModule` | creates `chat_word_filter` |
+| 48 | `World.Creatures.SmartScriptDataModule` | creates `smart_scripts` |
+| 49 | `World.Warden.WardenDataModule` | creates `warden_checks` |
+| 50 | `Economy.AuctionBotItemWorldDataModule` | creates `ahbot_items` |
+| 51 | `World.Creatures.SmartScriptConditionDataModule` | adds columns `smart_scripts.ConditionId` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

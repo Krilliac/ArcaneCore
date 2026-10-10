@@ -75,6 +75,7 @@ public sealed class HotCodeRefresh
     private readonly Func<DateTimeOffset> _clock;
     private readonly SemaphoreSlim _serial = new(1, 1);
     private readonly Action? _onCodeEdited;
+    private readonly IServiceProvider? _services;
 
     public HotCodeRefresh(
         HotCodeState state,
@@ -86,9 +87,11 @@ public sealed class HotCodeRefresh
         ILogger logger,
         TimeSpan? commitTimeout = null,
         Func<DateTimeOffset>? clock = null,
-        Action? onCodeEdited = null)
+        Action? onCodeEdited = null,
+        IServiceProvider? services = null)
     {
         _onCodeEdited = onCodeEdited;
+        _services = services;
         _state = state;
         _world = world;
         _opcodes = opcodes;
@@ -261,7 +264,12 @@ public sealed class HotCodeRefresh
         var newRoots = new List<ChatCommand>();
         foreach (Type type in _catalog.CommandGroupTypes())
         {
-            newRoots.AddRange(((ICommandGroup)Create(type)).Commands.Where(c => !liveNames.Contains(c.Name)));
+            // A group behind a switch that is off stays out, as ChatCommands.Build leaves it out at startup: a refresh never turns it on.
+            var group = (ICommandGroup)Create(type);
+            if (group.IsEnabled(_services))
+            {
+                newRoots.AddRange(group.Commands.Where(c => !liveNames.Contains(c.Name)));
+            }
         }
 
         if (CommandTableSource.Validate(liveRoots, newRoots) is { } commandError)

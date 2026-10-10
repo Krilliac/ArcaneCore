@@ -49,7 +49,8 @@ public sealed partial class SummonService
             pet.Health, pet.GetUInt32(UpdateFields.UnitFieldPower1), pet.GetUInt32(UpdateFields.UnitFieldPower5), (byte)charm.ReactState,
             charm.ActionBar.Select(button => button.Packed).ToArray(),
             charm.SpellStates.Select(s => new PersistentPetSpell(s.Key, s.Value == ActionType.Enabled, s.Value == ActionType.Passive)).ToArray(),
-            Cooldowns: cooldowns, Name: charm.Name, NameTimestamp: charm.NameTimestamp, RenameAllowed: charm.RenameAllowed);
+            Cooldowns: cooldowns, Name: charm.Name, NameTimestamp: charm.NameTimestamp, RenameAllowed: charm.RenameAllowed,
+            LoyaltyLevel: PetLoyalty.Level(pet), LoyaltyPoints: charm.LoyaltyPoints, TrainingPoints: charm.TrainingPoints);
     }
 
     public async Task SaveCurrentPetAsync(Player owner, CancellationToken cancellationToken = default)
@@ -465,6 +466,7 @@ public sealed partial class SummonService
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(snapshot.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
             creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
             creature.Summon.Charm!.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
+            PetLoyalty.Restore(creature, snapshot.LoyaltyLevel, snapshot.LoyaltyPoints, snapshot.TrainingPoints);
             return new CreatureHome(owner.X, owner.Y, owner.Z, owner.Orientation);
         }, snapshot.PetNumber);
 
