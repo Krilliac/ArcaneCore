@@ -77,6 +77,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private string? _modelChoice;
     private long _nextPlanMs;
     private bool _needsRest;
+
+    /// <summary>The bot sat down to wait for health without food (<see cref="PlayerbotRisk.KeepWaiting"/>); it stands up when the wait ends.</summary>
+    private bool _satToWait;
+
+    /// <summary>The most health and mana seen while resting (<see cref="Fingerprint"/>): a rise is progress for the stall watch.</summary>
+    private ulong _restMark;
     private bool _deathIntentRetired;
     private int _stopped;
     // Creatures the bot could not path to (or looped trying to reach): skipped for a while, so the next think does
@@ -129,6 +135,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _lootResponseReceived = false;
         _restUntilMs = 0;
         _needsRest = false;
+        _satToWait = false;
         _thinkElapsed = 0;
         _combatSpells.Reset();
         _stall.Reset();
@@ -364,6 +371,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wanted, wanted, out _))
                     Rest(player, wanted);
                 else if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+                // No food or drink: sit, as a player waiting for health would (vmangos Player::RegenerateHealth: half as much again
+                // per tick when not standing up).
+                else if (player.StandState == StandState.Stand
+                         && _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Sit)))
+                    _satToWait = true;
+                return;
+            }
+
+            // The wait is over: stand up from it before anything else (a sitting player cannot cast, and the client stands
+            // before it moves).
+            if (_satToWait)
+            {
+                if (player.StandState != StandState.Sit) _satToWait = false;
+                else if (_session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand)))
+                    _satToWait = false;
                 return;
             }
 
@@ -599,7 +621,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         int spells = _session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
-        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells);
+        // Resting is standing still by design: health or mana rising above the best seen during the rest is its progress.
+        ulong vitals = (ulong)player.Health + (player.PowerType == PowerType.Mana ? ArcaneCore.Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) : 0u);
+        _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
+        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells, _restMark);
     }
 
     /// <summary>
@@ -636,6 +661,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _restUntilMs = 0;
         _restKind = default;
         _needsRest = false;
+        _satToWait = false;
         _thinkElapsed = 0;
         _combatSpells.Reset();
     }

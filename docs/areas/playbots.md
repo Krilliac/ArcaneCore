@@ -85,6 +85,27 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
 and logged once.
 
+**Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit
+healer when the walk stopped closing for `StuckMs` (10 s), faults a fallback that stalls the same way
+(`playerbot-recovery-spirit-healer-failed`), and faults a body never released for `NoProgressMs` (60 s)
+(`playerbot-recovery-stalled`). A bound now trips only once the recovery has also acted in more than `MinBoundThinks` (4) thinks
+since the progress it measures from; a think refused for lack of action budget is no attempt. A bot is thought for only when the
+shared budget and the 8 ms per-tick cap reach it (`PlayerbotThinkRotation`), while `PlayerbotMotion` carries the ghost on every tick,
+so a think gap longer than a bound used to be judged a stall at the first think after it. Live 2026-10-10 (200+ bots, a boost storm
+with world updates of up to 8.7 s): Graveweaver's ghost faulted with `playerbot-recovery-spirit-healer-failed` three times in 3.5
+minutes, each time at its first think after a gap, and was disabled. At the ordinary 500 ms think interval a bound spans 20 or more
+thinks, so nothing changes there (`PlayerbotRecoveryThinkGapTests`).
+
+**Waiting to recover without food.** After a retreat, or before a pull it is too hurt for, the bot waits for
+`World:Playerbots:Risk:RecoverHealthPct` (goal `Rest`, `PlayerbotRisk.KeepWaiting`, at most `MaxWaitMs` 90 s). With food or drink it
+eats or drinks; without, it now sits (`CMSG_STANDSTATECHANGE`; vmangos `Player::RegenerateHealth` gives half as much again per tick
+when not standing) and stands up when the wait ends. Health or mana rising during a rest is progress for the stall watch
+(`Fingerprint.RestMark`). A wait in which neither rose for `FruitlessWaitMs` (20 s, ten regeneration ticks) ends, and no new wait
+begins for `MaxWaitMs` unless health or mana rises meanwhile: under resurrection sickness (spell 15007, every stat -75%) a warrior,
+rogue, hunter or shaman regenerates no health out of combat at all, and the wait could only run out and be begun again by the next
+pull verdict. Live 2026-10-10: Wfbotcx (level 14), revived by the Darkshire spirit healer after a death loop, stood there with
+`stalled 120s: goal=Rest` (`PlayerbotRestStallTests`).
+
 `World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
 those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
 through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the
