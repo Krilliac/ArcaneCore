@@ -162,6 +162,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             {
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisHealth,
                     creature => new NecropolisHealthAi(creature, this));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.Necropolis,
+                    creature => new NecropolisAi(creature));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisRelay,
                     creature => new NecropolisRelayAi(creature));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisProxy,
@@ -194,6 +196,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 var ai = new InvasionCircleAi(this);
                 _circleAis.Add(objects, ai);
                 objects.RegisterAi(ScourgeInvasionCatalog.SummonCircle, ai);
+                var necropolisObject = new NecropolisObjectAi();
+                foreach (uint entry in ScourgeInvasionCatalog.NecropolisObjects) objects.RegisterAi(entry, necropolisObject);
             }
         }
     }

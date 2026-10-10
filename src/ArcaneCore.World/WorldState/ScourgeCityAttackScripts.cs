@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState.Weather;
 using ArcaneCore.Kernel.WorldData.WorldState;
 
@@ -159,7 +160,10 @@ internal sealed class PallidHorrorAi(Creature creature, ScourgeInvasionFeature f
         float angle = (float)(Random.NextDouble() * Math.PI * 2);
         if (system.SummonAt(Me, ScourgeInvasionCatalog.Flameshocker, target.X + 5f * MathF.Cos(angle), target.Y + 5f * MathF.Sin(angle),
                 target.Z, target.Orientation, target, 3_600_000) is { } shocker)
+        {
             _flameshockers.Add(shocker);
+            (shocker.AI as FlameshockerAi)?.ArmDespawn();
+        }
     }
 
     private static float DistanceSquared(WorldObject a, WorldObject b)
@@ -211,8 +215,24 @@ internal sealed class FlameshockerAi(Creature creature, Random random) : Creatur
 {
     private bool _started;
     private uint _touchMs = 2_000;
+    private uint _despawnMs; // EVENT_MINION_FLAMESHOCKERS_DESPAWN starts disabled; 0 is disarmed
 
     public override bool AggroesOnSight => true;
+
+    /// <summary>
+    /// AI_EVENT_CUSTOM_A with NPC_FLAMESHOCKER (scourge_invasion.cpp:1274-1282, 1051-1052): the Pallid Horror's attacker-side summon arms the
+    /// 60 s despawn action; the escort ring does not.
+    /// </summary>
+    public void ArmDespawn() => _despawnMs = 60_000;
+
+    /// <summary>Whether the 60 s despawn action is running (false for an escort-ring Flameshocker and after the action fired).</summary>
+    public bool DespawnArmed => _despawnMs > 0;
+
+    /// <summary>ScourgeMinion::SpellHit (:1069-1076): Spirit Spawn-out (17680) despawns it 3 s later.</summary>
+    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+        if (spell.Id == ScourgeInvasionCatalog.SpiritSpawnOut) System?.ForcedDespawn(Me, 3_000);
+    }
 
     public override void MoveInLineOfSight(Unit who)
     {
@@ -230,6 +250,17 @@ internal sealed class FlameshockerAi(Creature creature, Random random) : Creatur
             DoCast(Me, ScourgeInvasionCatalog.FlameshockerImmolateVisual, triggered: true);
         }
         UpdateVictim();
+        if (_despawnMs > 0)
+        {
+            // :1023-1029: out of combat cast Despawner, self (28091); in combat the action is re-armed for 60 s.
+            if (_despawnMs > diffMs) _despawnMs -= diffMs;
+            else if (Me.Combat.IsInCombat) _despawnMs = 60_000;
+            else
+            {
+                _despawnMs = 0;
+                DoCast(Me, ScourgeInvasionCatalog.DespawnerSelf, triggered: true);
+            }
+        }
         if (!Me.Combat.IsInCombat || Victim is not { } victim) return;
         if (_touchMs > diffMs)
         {

@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -75,6 +76,8 @@ internal sealed class NecroticShardAi(Creature creature) : CreatureAI(creature)
     private int _finderCapacity;
     private int _campType = Random.Shared.Next(3);
     private uint _buttressMs = 5_000;
+    private bool _timerPending = true;
+    private bool _active;
 
     public override void OnRespawn()
     {
@@ -82,12 +85,30 @@ internal sealed class NecroticShardAi(Creature creature) : CreatureAI(creature)
         _minionMs = 5_000;
         _finderCapacity = 0;
         _buttressMs = 5_000;
+        _timerPending = true;
+        _active = false;
     }
 
     private void AdoptCampType(int campType) => _campType = campType;
 
+    /// <summary>NecroticShard::SpellHit (scourge_invasion.cpp:754-757): the relay's camp communique makes the camp receive it (28449).</summary>
+    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+        if (spell.Id == ScourgeInvasionCatalog.CommuniqueRelayToCamp)
+            DoCast(Me, ScourgeInvasionCatalog.CampReceivesCommunique, triggered: true);
+    }
+
     public override void OnUpdate(uint diffMs)
     {
+        ScourgeNetwork.MarkActive(Me, ref _active); // SetActiveObjectState(true), scourge_invasion.cpp:642
+        if (_timerPending)
+        {
+            // NecroticShard::Reset (:740-743): DoCastSpellIfCan(nullptr, 28346, CAST_TRIGGERED | CAST_AURA_NOT_PRESENT).
+            _timerPending = false;
+            if (System is { } spawned && !spawned.HasAura(Me, ScourgeInvasionCatalog.CommuniqueTimerCamp))
+                DoCast(Me, ScourgeInvasionCatalog.CommuniqueTimerCamp, triggered: true);
+        }
+
         _checkMs = _checkMs > diffMs ? _checkMs - diffMs : 0;
         if (_checkMs == 0)
         {
@@ -188,24 +209,138 @@ internal sealed class ScourgeCampSpawnerAi(Creature creature) : CreatureAI(creat
     }
 }
 
-internal sealed class NecropolisRelayAi(Creature creature) : CreatureAI(creature)
+/// <summary>
+/// What the Necropolis, relay, proxy and shard scripts share (scourge_invasion.cpp:346-377, 542-636): they are active objects, and an
+/// alive one that fell under its respawn position is teleported back to it.
+/// </summary>
+internal static class ScourgeNetwork
 {
-    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    /// <summary>SetActiveObjectState(true): marks <paramref name="o"/> active once while it stands in the map (<paramref name="done"/> is the AI's latch).</summary>
+    public static void MarkActive(WorldObject o, ref bool done)
     {
-        if (spell.Id != ScourgeInvasionCatalog.CampDeathCommunique) return;
-        Creature? proxy = System?.CreaturesOfEntryInRange(Me, ScourgeInvasionCatalog.NecropolisProxy, 200f)
-            .Where(c => c.IsAlive).MinBy(c => InvasionCircleAi.DistanceSquared(Me, c));
-        if (proxy is not null) DoCast(proxy, ScourgeInvasionCatalog.CampDeathCommunique, triggered: true);
+        if (done || o.Map is not { } map || !o.IsInWorld) return;
+        map.SetActive(o, true);
+        done = true;
+    }
+
+    /// <summary>Alive and Z below the respawn Z by more than <paramref name="drop"/>: NearTeleportTo(respawn position).</summary>
+    public static void ReturnIfFallen(Creature me, CreatureMapSystem? system, float drop)
+    {
+        if (!me.IsAlive || system is null) return;
+        CreatureHome home = me.Home;
+        if (me.Z < home.Z - drop) system.NearTeleport(me, home.X, home.Y, home.Z, home.Orientation);
     }
 }
 
-internal sealed class NecropolisProxyAi(Creature creature) : CreatureAI(creature)
+/// <summary>
+/// NecropolisAI (scourge_invasion.cpp:347-377), the Necropolis creature 16401: an active object; the proxies' communique starts its own
+/// timer aura 28395 when it is absent; fallen 10 yd under its respawn Z it is put back.
+/// </summary>
+internal sealed class NecropolisAi(Creature creature) : CreatureAI(creature)
 {
+    private bool _active;
+
+    public override void OnRespawn() => _active = false;
+
     public override void OnSpellHit(Unit caster, SpellInfo spell)
     {
-        if (spell.Id != ScourgeInvasionCatalog.CampDeathCommunique) return;
-        Creature? health = System?.CreaturesOfEntryInRange(Me, ScourgeInvasionCatalog.NecropolisHealth, 200f)
-            .Where(c => c.IsAlive).MinBy(c => InvasionCircleAi.DistanceSquared(Me, c));
-        if (health is not null) DoCast(health, ScourgeInvasionCatalog.CampDeathCommunique, triggered: true);
+        if (spell.Id != ScourgeInvasionCatalog.CommuniqueProxyToNecropolis
+            || System is not { } system || system.HasAura(Me, ScourgeInvasionCatalog.CommuniqueTimerNecropolis)) return;
+        DoCast(Me, ScourgeInvasionCatalog.CommuniqueTimerNecropolis, triggered: true);
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        ScourgeNetwork.MarkActive(Me, ref _active);
+        ScourgeNetwork.ReturnIfFallen(Me, System, 10f);
+    }
+}
+
+/// <summary>
+/// scourge_invasion_go_necropolis (GoNecropolis, scourge_invasion.cpp:290-298): the necropolis objects are active objects. Deviation: only
+/// while spawned, because the grid index holds an object only then (a despawn drops its active mark).
+/// </summary>
+internal sealed class NecropolisObjectAi : IGameObjectAi
+{
+    private readonly HashSet<ObjectGuid> _active = [];
+
+    public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+    public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs)
+    {
+        if (!go.IsSpawned) _active.Remove(go.Guid);
+        else if (_active.Add(go.Guid)) objects.Map.SetActive(go, true);
+    }
+}
+
+/// <summary>
+/// NecropolisRelayAI (scourge_invasion.cpp:590-636): the proxy's communique (28366) casts the camp communique (28326) and the camp's
+/// (28281) the relay-to-proxy one (28365); the camp-death communique goes on to the nearest proxy. An active object, put back when it
+/// falls 5 yd under its respawn Z.
+/// </summary>
+internal sealed class NecropolisRelayAi(Creature creature) : CreatureAI(creature)
+{
+    private bool _active;
+
+    public override void OnRespawn() => _active = false;
+
+    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+        switch (spell.Id)
+        {
+            case ScourgeInvasionCatalog.CommuniqueProxyToRelay:
+                DoCast(Me, ScourgeInvasionCatalog.CommuniqueRelayToCamp, triggered: true);
+                break;
+            case ScourgeInvasionCatalog.CommuniqueCampToRelay:
+                DoCast(Me, ScourgeInvasionCatalog.CommuniqueRelayToProxy, triggered: true);
+                break;
+            case ScourgeInvasionCatalog.CampDeathCommunique:
+                Creature? proxy = System?.CreaturesOfEntryInRange(Me, ScourgeInvasionCatalog.NecropolisProxy, 200f)
+                    .Where(c => c.IsAlive).MinBy(c => InvasionCircleAi.DistanceSquared(Me, c));
+                if (proxy is not null) DoCast(proxy, ScourgeInvasionCatalog.CampDeathCommunique, triggered: true);
+                break;
+        }
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        ScourgeNetwork.MarkActive(Me, ref _active);
+        ScourgeNetwork.ReturnIfFallen(Me, System, 5f);
+    }
+}
+
+/// <summary>
+/// NecropolisProxyAI (scourge_invasion.cpp:542-588): the necropolis communique (28373) casts the proxy-to-relay one (28366) and the
+/// relay's (28365) the proxy-to-necropolis one (28367); the camp-death communique goes on to the nearest Necropolis Health. An active
+/// object, put back when it falls 10 yd under its respawn Z.
+/// </summary>
+internal sealed class NecropolisProxyAi(Creature creature) : CreatureAI(creature)
+{
+    private bool _active;
+
+    public override void OnRespawn() => _active = false;
+
+    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+        switch (spell.Id)
+        {
+            case ScourgeInvasionCatalog.CommuniqueNecropolisToProxies:
+                DoCast(Me, ScourgeInvasionCatalog.CommuniqueProxyToRelay, triggered: true);
+                break;
+            case ScourgeInvasionCatalog.CommuniqueRelayToProxy:
+                DoCast(Me, ScourgeInvasionCatalog.CommuniqueProxyToNecropolis, triggered: true);
+                break;
+            case ScourgeInvasionCatalog.CampDeathCommunique:
+                Creature? health = System?.CreaturesOfEntryInRange(Me, ScourgeInvasionCatalog.NecropolisHealth, 200f)
+                    .Where(c => c.IsAlive).MinBy(c => InvasionCircleAi.DistanceSquared(Me, c));
+                if (health is not null) DoCast(health, ScourgeInvasionCatalog.CampDeathCommunique, triggered: true);
+                break;
+        }
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        ScourgeNetwork.MarkActive(Me, ref _active);
+        ScourgeNetwork.ReturnIfFallen(Me, System, 10f);
     }
 }

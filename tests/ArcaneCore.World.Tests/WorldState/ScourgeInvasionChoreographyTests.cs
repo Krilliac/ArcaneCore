@@ -7,6 +7,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -93,7 +95,7 @@ public sealed class ScourgeInvasionChoreographyTests
         public ScourgeInvasionFeature Invasion { get; }
         public long Now { get; set; } = 1_800_000_000;
 
-        public Rig(StateStore store, bool withMaps = true)
+        public Rig(StateStore store, bool withMaps = true, ICreatureSpellCaster? spells = null)
         {
             var services = new ServiceCollection();
             services.AddSingleton(store);
@@ -133,7 +135,8 @@ public sealed class ScourgeInvasionChoreographyTests
                 foreach (uint mapId in new uint[] { 0, 1 })
                 {
                     Map map = World.GetMap(mapId);
-                    map.AddUpdater(new CreatureMapSystem(map, new CreatureContent(templates, [], [], [], [], ai, paths)));
+                    map.AddUpdater(new CreatureMapSystem(map, new CreatureContent(templates, [], [], [], [], ai, paths),
+                        aiServices: spells is null ? null : new CreatureAiServices { Spells = spells }));
                     map.AddUpdater(new GameObjectMapSystem(map, new GameObjectContent(
                     [
                         new GameObjectTemplate { Entry = ScourgeInvasionCatalog.SummonCircle, Type = 5, DisplayId = 1, Name = "Circle", Size = 1f, Data = new uint[GameObjectTemplate.DataCount] },
@@ -457,6 +460,201 @@ public sealed class ScourgeInvasionChoreographyTests
         Creature second = creatures.SummonForInstance(68, shocker.X + 3f, shocker.Y, shocker.Z, 0f)!;
         shocker.AI!.MoveInLineOfSight(second);
         Assert.Same(shocker, second.Combat.Victim);
+    }
+
+    private sealed class RecordingCaster : ICreatureSpellCaster
+    {
+        public List<(Creature Caster, uint Spell, Unit? Target, bool Triggered)> Casts { get; } = [];
+
+        public event Action<Unit, Unit, SpellInfo>? SpellHit;
+
+        public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered)
+        {
+            Casts.Add((caster, spellId, target, triggered));
+            return CreatureCastResult.Ok;
+        }
+
+        public void RaiseHit(Unit caster, Unit target, uint spellId) => SpellHit?.Invoke(caster, target, new SpellInfo { Id = spellId });
+
+        public IEnumerable<(Creature Caster, uint Spell, Unit? Target, bool Triggered)> Of(Creature caster, uint spell)
+            => Casts.Where(c => ReferenceEquals(c.Caster, caster) && c.Spell == spell);
+
+        public bool IsCasting(Creature caster) => false;
+        public bool HasAura(Unit unit, uint spellId) => false;
+        public void Interrupt(Creature caster) { }
+        public void OnCreatureRemoved(Creature creature) { }
+    }
+
+    private static Creature Summon(Rig rig, uint entry, float x, float y = 500f)
+        => rig.World.GetMap(0).FindUpdater<CreatureMapSystem>()!.SummonForInstance(entry, x, y, 100f, 0f)!;
+
+    /// <summary>Runs up to <paramref name="ticks"/> one-second world ticks and returns the 1-based tick on which <paramref name="count"/> first exceeded 0 (0: never).</summary>
+    private static int RunUntil(Rig rig, int ticks, Func<int> count)
+    {
+        for (int tick = 1; tick <= ticks; tick++)
+        {
+            rig.World.RunTick(1_000);
+            if (count() > 0) return tick;
+        }
+        return 0;
+    }
+
+    [Fact]
+    public void AnArmedFlameshockerCastsDespawnerSelfAfterSixtySecondsOutOfCombatAndAnUnarmedOneNever()
+    {
+        var spells = new RecordingCaster();
+        using var rig = new Rig(new StateStore(), spells: spells);
+        rig.World.RunTick(0);
+        Creature armed = Summon(rig, ScourgeInvasionCatalog.Flameshocker, -8000f);
+        Creature unarmed = Summon(rig, ScourgeInvasionCatalog.Flameshocker, -7900f);
+        var armedAi = Assert.IsType<FlameshockerAi>(armed.AI);
+        var unarmedAi = Assert.IsType<FlameshockerAi>(unarmed.AI);
+        Assert.False(armedAi.DespawnArmed); // EVENT_MINION_FLAMESHOCKERS_DESPAWN starts disabled
+        armedAi.ArmDespawn();
+        Assert.True(armedAi.DespawnArmed);
+        Assert.False(armed.Combat.IsInCombat);
+
+        int firedOn = RunUntil(rig, 75, () => spells.Of(armed, ScourgeInvasionCatalog.DespawnerSelf).Count());
+
+        Assert.Equal(60, firedOn);
+        (Creature caster, _, Unit? target, bool triggered) = Assert.Single(spells.Of(armed, ScourgeInvasionCatalog.DespawnerSelf));
+        Assert.Same(armed, caster);
+        Assert.Same(armed, target);
+        Assert.True(triggered);
+        Assert.False(armedAi.DespawnArmed); // the action fired once and is spent
+        Assert.Empty(spells.Of(unarmed, ScourgeInvasionCatalog.DespawnerSelf)); // 60+ s ran: an unarmed one never casts it
+        Assert.False(unarmedAi.DespawnArmed);
+    }
+
+    [Fact]
+    public void AnArmedFlameshockerInCombatRearmsInsteadOfCastingAndCastsOnlyOnceItIsOutOfCombatSixtySecondsLater()
+    {
+        var spells = new RecordingCaster();
+        using var rig = new Rig(new StateStore(), spells: spells);
+        rig.World.RunTick(0);
+        Creature shocker = Summon(rig, ScourgeInvasionCatalog.Flameshocker, -8000f);
+        Creature guard = Summon(rig, 68, -7998f);
+        var ai = Assert.IsType<FlameshockerAi>(shocker.AI);
+        ai.ArmDespawn();
+        Assert.True(shocker.AI!.AttackStart(guard));
+        Assert.True(shocker.Combat.IsInCombat);
+
+        for (int tick = 1; tick <= 100; tick++)
+        {
+            rig.World.RunTick(1_000);
+            Assert.True(shocker.Combat.IsInCombat, $"tick {tick}"); // otherwise the absence of a cast proves nothing
+        }
+        Assert.Empty(spells.Of(shocker, ScourgeInvasionCatalog.DespawnerSelf)); // 100 s of combat: re-armed at 60 s, never cast
+        Assert.True(ai.DespawnArmed);
+
+        rig.World.GetMap(0).FindUpdater<CreatureMapSystem>()!.KillCreature(guard);
+        rig.World.RunTick(1_000);
+        Assert.False(shocker.Combat.IsInCombat);
+        Assert.Empty(spells.Of(shocker, ScourgeInvasionCatalog.DespawnerSelf));
+
+        int firedOn = RunUntil(rig, 80, () => spells.Of(shocker, ScourgeInvasionCatalog.DespawnerSelf).Count());
+        Assert.InRange(firedOn, 1, 80);
+        Assert.Single(spells.Of(shocker, ScourgeInvasionCatalog.DespawnerSelf));
+        Assert.False(ai.DespawnArmed);
+    }
+
+    [Fact]
+    public void ThePallidHorrorArmsTheDespawnOfTheFlameshockerItSummonsBesideAnAttackerAndNotOfItsEscortRing()
+    {
+        var spells = new RecordingCaster();
+        var store = new StateStore();
+        using var rig = new Rig(store, spells: spells);
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        rig.World.RunTick(5_000);
+        rig.World.RunTick(1_000);
+        Creature attacker = rig.Invasion.CityAttackers[1519];
+        var ai = Assert.IsType<PallidHorrorAi>(attacker.AI);
+        Creature[] escort = [.. ai.Flameshockers];
+        Assert.InRange(escort.Length, 5, 9);
+        Assert.All(escort, f => Assert.False(Assert.IsType<FlameshockerAi>(f.AI).DespawnArmed));
+
+        Creature guard = Summon(rig, 68, attacker.X + 70f, attacker.Y); // far enough that no escort Flameshocker stands within 5 yd of it yet
+        Assert.True(guard.AI!.AttackStart(attacker));
+        Assert.Same(attacker, guard.Combat.Victim);
+        attacker.Combat.Threat.AddThreat(guard, 100f); // a ranged hit lands: the guard is on the threat list while still far from the escort
+        for (int tick = 0; tick < 6 && ai.Flameshockers.Count == escort.Length; tick++) rig.World.RunTick(1_000);
+
+        Creature[] added = [.. ai.Flameshockers.Except(escort)];
+        Assert.NotEmpty(added); // the summon timer put one beside the guard
+        Assert.All(added, f => Assert.True(Assert.IsType<FlameshockerAi>(f.AI).DespawnArmed));
+        Assert.All(escort, f => Assert.False(Assert.IsType<FlameshockerAi>(f.AI).DespawnArmed));
+    }
+
+    [Fact]
+    public void SpiritSpawnOutGivesBothMinionsAThreeSecondForcedDespawn()
+    {
+        var spells = new RecordingCaster();
+        using var rig = new Rig(new StateStore(), spells: spells);
+        rig.World.RunTick(0);
+        Creature shocker = Summon(rig, ScourgeInvasionCatalog.Flameshocker, -8000f);
+        Creature shadow = Summon(rig, ScourgeInvasionCatalog.ShadowOfDoom, -7900f);
+        Creature bystander = Summon(rig, ScourgeInvasionCatalog.Flameshocker, -7800f);
+        Assert.IsType<FlameshockerAi>(shocker.AI);
+        Assert.IsType<ShadowOfDoomAi>(shadow.AI);
+
+        spells.RaiseHit(shocker, shocker, ScourgeInvasionCatalog.SpiritSpawnOut);
+        spells.RaiseHit(shadow, shadow, ScourgeInvasionCatalog.SpiritSpawnOut);
+        spells.RaiseHit(bystander, bystander, ScourgeInvasionCatalog.DespawnerSelf); // another spell: no despawn
+        rig.World.RunTick(2_900);
+        Assert.True(shocker.IsInWorld && shocker.IsAlive);
+        Assert.True(shadow.IsInWorld && shadow.IsAlive);
+        rig.World.RunTick(200);
+        Assert.False(shocker.IsInWorld);
+        Assert.False(shadow.IsInWorld);
+        Assert.True(bystander.IsInWorld && bystander.IsAlive);
+    }
+
+    /// <summary>A Shadow of Doom set on <paramref name="victim"/>, one tick on: the Scourge Strike (28265) casts it made.</summary>
+    private static List<(Creature Caster, uint Spell, Unit? Target, bool Triggered)> StrikeAt(Rig rig, RecordingCaster spells, Creature shadow, Unit victim)
+    {
+        Assert.True(shadow.AI!.AttackStart(victim));
+        rig.World.RunTick(100);
+        Assert.True(shadow.Combat.IsInCombat); // a refusal below is the gate's, not a shadow that never fought
+        Assert.Same(victim, shadow.Combat.Victim);
+        return [.. spells.Of(shadow, ScourgeInvasionCatalog.ScourgeStrike)];
+    }
+
+    [Fact]
+    public void ShadowOfDoomScourgeStrikesACreatureVictimWithin30YardsButNeverAPlayerAPetOrADistantCreature()
+    {
+        var spells = new RecordingCaster();
+        using var rig = new Rig(new StateStore(), spells: spells);
+        rig.World.RunTick(0);
+
+        // Positive control: an attackable creature 5 yd away is struck, triggered, at the victim.
+        Creature near = Summon(rig, 68, -8000f, 505f);
+        Creature shadow = Summon(rig, ScourgeInvasionCatalog.ShadowOfDoom, -8000f);
+        var hits = StrikeAt(rig, spells, shadow, near);
+        Assert.NotEmpty(hits);
+        Assert.All(hits, h =>
+        {
+            Assert.Same(near, h.Target);
+            Assert.True(h.Triggered);
+        });
+
+        // A creature victim beyond 30 yd is refused (same gate otherwise).
+        Creature far = Summon(rig, 68, -8000f, 650f);
+        Creature distantShadow = Summon(rig, ScourgeInvasionCatalog.ShadowOfDoom, -8000f, 400f);
+        Assert.Empty(StrikeAt(rig, spells, distantShadow, far));
+        Assert.True(MathF.Abs(far.Y - distantShadow.Y) > 30f); // still out of range after the tick
+
+        // A pet (a creature whose owner is a player) is refused although it is in range and attackable.
+        rig.AddPlayer(0, -7000f, 0f, 100f); // one player: the pet owner and the player victim
+        Player owner = rig.LastPlayer!;
+        Creature pet = Summon(rig, 68, -8100f, 505f);
+        pet.SetOwnerGuid(owner.Guid);
+        Assert.True(pet.IsCharmerOrOwnerPlayerOrPlayerItself);
+        Creature petShadow = Summon(rig, ScourgeInvasionCatalog.ShadowOfDoom, -8100f);
+        Assert.Empty(StrikeAt(rig, spells, petShadow, pet));
+
+        // A player is refused although it is in range and attackable.
+        Creature playerShadow = Summon(rig, ScourgeInvasionCatalog.ShadowOfDoom, -7000f, 5f);
+        Assert.Empty(StrikeAt(rig, spells, playerShadow, owner));
     }
 
     private static NpcInfo NpcOf(Creature c)
