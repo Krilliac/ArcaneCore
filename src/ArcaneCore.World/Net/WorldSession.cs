@@ -309,6 +309,8 @@ public sealed partial class WorldSession : IPlayerSession
             CapturePacket(false, opcode, payload);
         }
 
+        ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketOut(frame.Length);
+
         if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)
         {
             _logger.LogWarning("[{Endpoint}] outbound queue over {Limit} bytes; disconnecting", RemoteEndpoint, _options.MaxOutboundBytes);
@@ -537,6 +539,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             deadline.Disarm();
+            ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(WorldHeaderCrypt.IncomingHeaderLength + payload.Length);
             CapturePacket(true, (WorldOpcode)rawOpcode, payload);
             if (!await DispatchAsync((WorldOpcode)rawOpcode, payload).ConfigureAwait(false))
             {

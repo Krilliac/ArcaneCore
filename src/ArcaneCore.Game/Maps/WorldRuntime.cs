@@ -527,6 +527,11 @@ public sealed class WorldRuntime : IDisposable
                     _logger.LogError(ex, "map {MapId} update failed", map.MapId);
                 }
 
+                if (MapUpdated is { } mapUpdated)
+                {
+                    mapUpdated(map, Micros(Stopwatch.GetTimestamp() - mapStart));
+                }
+
                 LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
                 if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
             }
@@ -599,6 +604,16 @@ public sealed class WorldRuntime : IDisposable
 
     /// <summary>Benchmark seam (tests): every tick of the world loop: its duration (µs), the world thread's allocation and the phases.</summary>
     internal Action<long, long, TickPhases>? TickObserver { get; set; }
+
+    /// <summary>
+    /// Raised on the world thread after every tick of the world loop with the tick body duration (microseconds), the
+    /// bytes the world thread allocated during it and its phase split (the metrics feature, docs/ops/metrics.md). A
+    /// handler must not block or allocate per call. Not raised by a direct <see cref="RunTick(uint)"/> call.
+    /// </summary>
+    public event Action<long, long, TickPhases>? TickCompleted;
+
+    /// <summary>Raised on the world thread after each map's update with the map and its update time in microseconds (the metrics feature). Same rules as <see cref="TickCompleted"/>.</summary>
+    public event Action<Map, long>? MapUpdated;
 
     /// <summary>Benchmark seam (tests): every timed world feature of every tick: its name, time (µs) and allocation.</summary>
     internal Action<string, long, long>? FeatureObserver { get; set; }
@@ -784,6 +799,7 @@ public sealed class WorldRuntime : IDisposable
             long tickBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
             Stats.Record(durationMicros, tickBytes, interval * 1000L, frameMicros, LastTickPhases);
             TickObserver?.Invoke(durationMicros, tickBytes, LastTickPhases);
+            TickCompleted?.Invoke(durationMicros, tickBytes, LastTickPhases);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {
