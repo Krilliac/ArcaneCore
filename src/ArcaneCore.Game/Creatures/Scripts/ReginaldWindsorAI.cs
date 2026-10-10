@@ -79,12 +79,23 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
     /// <summary>The constructor: his quest giver flag is the script's.</summary>
     protected override void JustSpawned() => Me.NpcFlags &= ~(uint)NpcFlags.QuestGiver;
 
+    /// <summary>
+    /// npc_reginald_windsorAI::Reset rerolls only the combat timers. The keep word and the guard check are the scene's, set in the
+    /// constructor: an evade (he can be drawn into the turned guards' fight) must not take back the word or stop the check that sends
+    /// Bolvar to him once the guards are dead.
+    /// </summary>
     protected override void Reset()
+    {
+        _hammerMs = (uint)(System?.RandomInt(0, 1000) ?? 0);
+        _cleaveMs = (uint)(System?.RandomInt(1000, 3000) ?? 1000);
+    }
+
+    /// <summary>A respawned Windsor starts the event over: no stale keep word or guard check survives his death (port choice; Reset no longer clears them).</summary>
+    protected override void JustRespawned()
     {
         _guardCheckMs = 0;
         _keepReady = false;
-        _hammerMs = (uint)(System?.RandomInt(0, 1000) ?? 0);
-        _cleaveMs = (uint)(System?.RandomInt(1000, 3000) ?? 1000);
+        base.JustRespawned();
     }
 
     protected override void Aggro(Unit target) => DoCast(Me, SpellShieldWall);
