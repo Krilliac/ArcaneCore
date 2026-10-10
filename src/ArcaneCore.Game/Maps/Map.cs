@@ -66,6 +66,13 @@ public sealed class Map
     private readonly List<WorldObject> _movedScratch = [];
     private bool _viewerScratchInUse;
     private readonly List<WorldObject> _visibilityScratch = [];
+    private readonly List<WorldObject> _candidateExtras = [];
+    private readonly List<WorldObject> _candidateMergeScratch = [];
+    private readonly List<Player> _viewerExtras = [];
+    private readonly List<Player> _viewerMergeScratch = [];
+
+    /// <summary>Tests only: build visibility candidates by collecting and sorting (the pre-wave-18 path) instead of merging.</summary>
+    internal bool UseReferenceVisibilityOrder { get; set; }
     private bool _visibilityScratchInUse;
 
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
@@ -932,13 +939,38 @@ public sealed class Map
     /// game objects — vmangos <c>Map::UpdateObjectVisibility</c> (Map.cpp) visits only the
     /// <c>WorldTypeMapContainer</c> (players' cameras) with its <c>VisibleChangesNotifier</c>.
     /// </summary>
-    private List<Player> ObjectVisibilityViewers(WorldObject obj)
+    internal List<Player> ObjectVisibilityViewers(WorldObject obj)
     {
         // One scratch list for the per-mover pass; a nested call (a visibility rule refreshing another object)
         // gets its own list.
         List<Player> viewers = _viewerScratchInUse ? [] : _viewerScratch;
         viewers.Clear();
         float radius = VisibilityRange + VisibilityGreyDistance + obj.BoundingRadius + _grid.MaxBoundingRadius;
+        if (!UseReferenceVisibilityOrder)
+        {
+            // The join-ordered cells merged, then the few viewers outside them merged in: the same list, no sort.
+            List<Player> extras = _viewerExtras;
+            extras.Clear();
+            if (_grid.TryCollectPlayersInJoinOrder(obj.X, obj.Y, radius, viewers, extras, out CellArea area))
+            {
+                if (_observers.TryGetValue(obj.Guid, out HashSet<Player>? watching))
+                {
+                    foreach (Player observer in watching)
+                    {
+                        if (!_grid.IsCollectedIn(observer, area))
+                        {
+                            extras.Add(observer);
+                        }
+                    }
+                }
+
+                SortByJoinOrderDistinct(extras);
+                JoinOrder.MergeDistinct(viewers, extras, _viewerMergeScratch);
+                extras.Clear();
+                return viewers;
+            }
+        }
+
         _grid.CollectPlayers(obj.X, obj.Y, radius, viewers);
         if (_observers.TryGetValue(obj.Guid, out HashSet<Player>? observers))
         {
@@ -955,7 +987,59 @@ public sealed class Map
     /// and whoever sees it. Anything else is out of range in both directions and invisible in
     /// both, so evaluating it would change nothing.
     /// </summary>
-    private void VisibilityCandidates(WorldObject center, List<WorldObject> candidates)
+    internal void VisibilityCandidates(WorldObject center, List<WorldObject> candidates)
+    {
+        float radius = VisibilityRange + VisibilityGreyDistance + center.BoundingRadius + _grid.MaxBoundingRadius;
+        List<WorldObject> extras = _candidateExtras;
+        extras.Clear();
+        if (UseReferenceVisibilityOrder || !_grid.TryCollectObjectsInJoinOrder(center.X, center.Y, radius, candidates, extras, out CellArea area))
+        {
+            extras.Clear();
+            VisibilityCandidatesBySort(center, candidates);
+            return;
+        }
+
+        // The cells came back merged in join order. What is not in them (an object seen from farther away, an observer
+        // outside the area, a remote camera's surroundings, unplaced objects) is usually a handful: sort only those and
+        // merge them in. The result is exactly VisibilityCandidatesBySort's.
+        if (center is Player player)
+        {
+            foreach (ObjectGuid guid in player.VisibleObjects)
+            {
+                if (_objects.TryGetValue(guid, out WorldObject? seen) && !_grid.IsCollectedIn(seen, area))
+                {
+                    extras.Add(seen);
+                }
+            }
+
+            if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
+            {
+                float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
+                _grid.CollectObjects(eye.X, eye.Y, eyeRadius, extras);
+            }
+        }
+
+        if (_observers.TryGetValue(center.Guid, out HashSet<Player>? observers))
+        {
+            foreach (Player observer in observers)
+            {
+                if (!_grid.IsCollectedIn(observer, area))
+                {
+                    extras.Add(observer);
+                }
+            }
+        }
+
+        SortByJoinOrderDistinct(extras);
+        JoinOrder.MergeDistinct(candidates, extras, _candidateMergeScratch);
+        extras.Clear();
+    }
+
+    /// <summary>
+    /// The reference form of <see cref="VisibilityCandidates"/>: collect everything, then sort into join order and drop
+    /// repeats. Used when the cells cannot be merged (a non-finite or oversized query), and by the equivalence tests.
+    /// </summary>
+    internal void VisibilityCandidatesBySort(WorldObject center, List<WorldObject> candidates)
     {
         if (center is Player player)
         {
