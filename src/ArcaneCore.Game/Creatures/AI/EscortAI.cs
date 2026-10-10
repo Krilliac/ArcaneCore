@@ -309,6 +309,15 @@ public abstract class EscortAI : CreatureAI
         _escortQuestId = 0;
     }
 
+    /// <summary>
+    /// An escort's evade raises the evade events although it does not run home. mangos-classic npc_escortAI has no EnterEvadeMode of its
+    /// own (AI/ScriptDevAI/base/escort_ai.h:20). It takes CreatureAI::EnterEvadeMode (AI/BaseAI/CreatureAI.cpp:66-71), then
+    /// UnitAI::EnterEvadeMode, which ends in Unit::TriggerEvadeEvents (AI/BaseAI/UnitAI.cpp:129). That raises LINKING_EVENT_EVADE and
+    /// CREATURE_GROUP_EVENT_EVADE (Entities/Unit.cpp:591-595). This includes a subclass that rejoins a formation instead, such as the AV
+    /// riders and soldiers: vmangos AV_NpcEventTroopsAI is a plain npc_escortAI (scripts/battlegrounds/battleground_alterac.cpp:1335).
+    /// </summary>
+    protected internal sealed override bool TakeOverEvadeRaisesEvadeEvents => true;
+
     /// <summary>vmangos npc_escortAI::EnterEvadeMode: back to the combat start position (<see cref="ReturnToCombatStartPosition"/>), then <see cref="Reset"/>.</summary>
     public override void OnEvade()
     {

@@ -85,6 +85,14 @@ public abstract class CreatureAI
     }
 
     /// <summary>
+    /// Whether the linked-creature and spawn-group evade events are still raised when <see cref="OnEvade"/> takes the evade movement over
+    /// (clears <see cref="Creature.IsEvading"/> so the creature does not run home). False here: mangos-classic FollowerAI::EnterEvadeMode
+    /// (AI/ScriptDevAI/base/follower_ai.cpp:105-131) replaces the evade and never calls Unit::TriggerEvadeEvents. <see cref="EscortAI"/>
+    /// says true. An evade that runs home raises them whatever this says.
+    /// </summary>
+    protected internal virtual bool TakeOverEvadeRaisesEvadeEvents => false;
+
+    /// <summary>
     /// A script's own evade (an SD2 / vmangos <c>EnterEvadeMode() override</c> that does not call the base): asked first by
     /// <see cref="CreatureMapSystem.EnterEvadeMode"/>. Return true when the script handled the evade itself; the engine's evade (interrupt,
     /// aura reset, combat stop, <see cref="OnEvade"/>, the run home) is then skipped entirely. Return false (the default) for the engine's
