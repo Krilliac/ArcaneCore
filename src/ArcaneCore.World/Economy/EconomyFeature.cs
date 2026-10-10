@@ -220,6 +220,20 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
 
+    /// <summary>A fresh mail id above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (<c>.pdump load</c>).</summary>
+    internal uint ReserveMailId(uint atLeast)
+    {
+        RaiseTo(ref _lastMailId, atLeast);
+        return NextMailId();
+    }
+
+    /// <summary>A fresh item text id above <paramref name="atLeast"/>, for a loaded character dump.</summary>
+    internal uint ReserveItemTextId(uint atLeast)
+    {
+        RaiseTo(ref _lastTextId, atLeast);
+        return NextTextId();
+    }
+
     private IMailboxAccess? _retailMailboxAccess;
 
     /// <summary>Test seam: replaces the mailbox check on a running host (a registered <see cref="IMailboxAccess"/> is the production hook).</summary>
