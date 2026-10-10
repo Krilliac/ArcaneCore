@@ -479,6 +479,57 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Daphne_HoldsAtSevenThroughThreeRaiderWaves_ThenCreditsAt16()
+    {
+        // npc_daphne_stilwellAI (westfall.cpp at 8ec338a): waves of 3, 4 and 5 raiders 50 s apart from point 4, paused at 7 until all are dead.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000412, -1000413, -1000293, -1000294, -1000295, -1000414, -1000296, -1000297];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(6180)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            world.RunTick(100);
+            Creature daphne = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI>(daphne.AI);
+            player.Relocate(daphne.X, daphne.Y, daphne.Z, 0, 0); // her hut is 50 yards up
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.QuestTomeOfValor);
+            var seen = new HashSet<Creature>();
+            int maxWave = 0;
+            for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(daphne.X, daphne.Y, daphne.Z, 0, 0);
+                world.RunTick(100);
+                maxWave = Math.Max(maxWave, ai.Wave);
+                foreach (Creature raider in system.Creatures.Where(c => c.Entry == 6180 && c.IsAlive).ToList())
+                {
+                    if (seen.Add(raider))
+                    {
+                        continue; // let it live a tick
+                    }
+
+                    map.Combat.Kill(null, raider);
+                }
+            }
+
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.DaphneStilwellAI.QuestTomeOfValor)], quests.Completed);
+            Assert.Equal(12, seen.Count);
+            Assert.Equal(3, maxWave);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains("-1000293", said);
+            Assert.Contains("-1000413", said);
+            Assert.Contains("-1000296", said);
+            Assert.Contains("-1000297", said);
+        }
+    }
+
+    [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {
         // npc_muglashAI + GOUse_go_naga_brazier (ashenvale.cpp at e27966cec7): pause at 25, waves 10 s apart once the brazier is out.
