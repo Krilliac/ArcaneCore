@@ -37,6 +37,7 @@ How to read the tables:
 - [`Locomotion`](#locomotion)
 - [`Logging:ArcaneCore`](#loggingarcanecore)
 - [`Loot`](#loot)
+- [`Modules:DuelReset`](#modulesduelreset)
 - [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
@@ -484,6 +485,17 @@ How to read the tables:
 | `Loot:MoneyRate` | `float` | `1` | - | vmangos Rate.Drop.Money. |
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
 | `Loot:RollTimeoutMs` | `uint` | `60000` | - | How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown). |
+
+## `Modules:DuelReset`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Modules:DuelReset:Areas` | `string` | `"12;14;809"` | - | `DuelReset.Areas`: area ids separated by ';' (default Elwynn Forest, Durotar, Gates of Ironforge); "" or "0" means none. |
+| `Modules:DuelReset:CooldownAge` | `uint` | `30` | - | `DuelReset.CooldownAge`: seconds a cooldown must have run before the start resets it. |
+| `Modules:DuelReset:Cooldowns` | `bool` | `true` | - | `DuelReset.Cooldowns`: reset cooldowns when the duel starts and restore them when it is won. |
+| `Modules:DuelReset:Enabled` | `bool` | `false` | - | Load the module at all. Off by default: it changes duels in Elwynn Forest, Durotar and the Gates of Ironforge. |
+| `Modules:DuelReset:HealthMana` | `bool` | `true` | - | `DuelReset.HealthMana`: fill health and power when the duel starts and restore them when it is won. |
+| `Modules:DuelReset:Zones` | `string` | `"0"` | - | `DuelReset.Zones`: zone ids separated by ';'. "" means any zone (areas then do not matter); "0" means none. |
 
 ## `Names`
 
