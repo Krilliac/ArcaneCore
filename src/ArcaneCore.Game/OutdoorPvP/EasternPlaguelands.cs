@@ -240,7 +240,10 @@ public sealed class EasternPlaguelandsTower : CapturePoint
         }
     }
 
-    /// <summary>vmangos <c>SummonSquadAtEastWallTower</c>. The formation link to the commander is not modelled.</summary>
+    /// <summary>
+    /// vmangos <c>SummonSquadAtEastWallTower</c>: slot 0 is the Lordaeron Commander (Alliance) or Veteran (Horde); the Soldiers or Fighters
+    /// join its creature group.
+    /// </summary>
     private void SummonSquad(Team team)
     {
         OutdoorPvPSpawn[] squad = team == Team.Alliance ? C.EastwallSquadAlliance : C.EastwallSquadHorde;
@@ -248,6 +251,10 @@ public sealed class EasternPlaguelandsTower : CapturePoint
         {
             Delete(ref _squad[i], creature: true);
             _squad[i] = Host.SummonCreature(squad[i]);
+            if (i > 0 && _squad[i] is { } member && _squad[0] is { } commander)
+            {
+                Host.JoinCreatureGroup(member, commander);
+            }
         }
     }
 
@@ -256,7 +263,7 @@ public sealed class EasternPlaguelandsTower : CapturePoint
         OutdoorPvPSpawn[] shrine = team == Team.Alliance ? C.NorthpassShrineAlliance : C.NorthpassShrineHorde;
         Delete(ref _shrine, creature: false);
         Delete(ref _bannerAura, creature: false);
-        _shrine = Host.SummonObject(shrine[0]);
+        _shrine = Host.SummonObject(shrine[0], spawnedByDefault: true); // vmangos SummonCuringShrine
         _bannerAura = Host.SummonObject(shrine[1]);
     }
 
@@ -274,12 +281,16 @@ public sealed class EasternPlaguelandsTower : CapturePoint
             team == Team.Alliance ? C.SpellSpiritParticles : C.SpellSpiritParticlesRedBig);
     }
 
-    /// <summary>vmangos <c>SummonSpiritOfVictory</c>. Its waypoint path (PATH_FROM_SPECIAL 18039) is not modelled.</summary>
+    /// <summary>vmangos <c>SummonSpiritOfVictory</c>: it walks special path 18039.</summary>
     private void SummonSpiritOfVictory(Team team)
     {
         Delete(ref _spirit, creature: true);
         _spirit = Host.SummonCreature(C.CrownGuardSpiritOfVictory, 0,
             team == Team.Alliance ? C.SpellSpiritParticlesSuperBig : C.SpellSpiritParticlesRedSuperBig);
+        if (_spirit is { } spirit)
+        {
+            Host.StartSpecialPath(spirit, C.SpiritOfVictoryPath);
+        }
     }
 }
 

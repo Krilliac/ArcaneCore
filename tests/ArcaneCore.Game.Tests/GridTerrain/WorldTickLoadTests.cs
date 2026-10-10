@@ -63,8 +63,16 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
             simulation += d.SimulationMicros; visibility += d.VisibilityMicros;
             values += d.ValuesMicros; flush += d.FlushMicros; cleanup += d.CleanupMicros;
         };
+        // ARCANECORE_VISIBILITY_AB=1: alternate the merged and the sorted visibility candidates in blocks of 10 ticks on the
+        // same world (their results are identical, VisibilityJoinOrderEquivalenceTests), so load on a shared box hits both
+        // alike; medians of visibility wall time and of the world thread's CPU time are reported per mode.
+        bool ab = Environment.GetEnvironmentVariable("ARCANECORE_VISIBILITY_AB") == "1";
+        var abRows = new List<(bool Sorted, long VisibilityUs, long CpuNs)>();
         for (int tick = 0; tick < warmup + samples; tick++)
         {
+            bool sorted = ab && (tick / 10) % 2 == 1;
+            map.UseReferenceVisibilityOrder = sorted;
+            long cpu0 = ab ? ThreadCpuNs() : 0;
             simulation = visibility = values = flush = cleanup = 0;
             int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
             long bytes = GC.GetAllocatedBytesForCurrentThread(), start = Stopwatch.GetTimestamp();
@@ -73,7 +81,13 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
             rows.Add(new(tick, elapsed, allocated, GC.CollectionCount(0) - g0, GC.CollectionCount(1) - g1,
                 GC.CollectionCount(2) - g2, world.LastTickPhases.CommandsMicros, world.LastTickPhases.FeaturesMicros,
                 simulation, visibility, values, flush, cleanup, queries.LoadMicros, queries.TerrainMicros, queries.VmapMicros, queries.PathMicros));
+            if (ab && tick >= warmup)
+            {
+                abRows.Add((sorted, visibility, ThreadCpuNs() - cpu0));
+            }
         }
+
+        map.UseReferenceVisibilityOrder = false;
         Assert.Equal(2, ships.Ships.Count);
         Assert.All(ships.Ships, ship => Assert.True(ship.PathProgress > 0));
         Assert.All(players, p => Assert.True(p.VisibleObjects.Count > 100));
@@ -94,6 +108,17 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
         Report("vmap", measured.Select(r => r.VmapUs));
         Report("cleanup", measured.Select(r => r.CleanupUs));
         output.WriteLine($"allocated mean={measured.Average(r => r.Bytes):F0} bytes/tick; GC={measured.Sum(r => r.Gen0)}/{measured.Sum(r => r.Gen1)}/{measured.Sum(r => r.Gen2)}; cold first tick={rows[0].TickUs}us load={rows[0].LoadUs}us; mesh paths={queries.MeshPaths}");
+        if (ab)
+        {
+            foreach (bool mode in new[] { false, true })
+            {
+                long[] vis = [.. abRows.Where(r => r.Sorted == mode).Select(r => r.VisibilityUs).Order()];
+                long[] cpu = [.. abRows.Where(r => r.Sorted == mode).Select(r => r.CpuNs).Order()];
+                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"AB {(mode ? "sorted" : "merged")}: ticks={vis.Length} visibility median={vis[vis.Length / 2] / 1000d:F3} ms; thread cpu median={cpu[cpu.Length / 2] / 1e6:F3} ms"));
+            }
+        }
+
         string? csv = Environment.GetEnvironmentVariable("ARCANECORE_TICK_CSV");
         if (!string.IsNullOrWhiteSpace(csv))
         {
@@ -108,6 +133,24 @@ public sealed class WorldTickLoadTests(ITestOutputHelper output)
         long[] sorted = values.Order().ToArray();
         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{phase}: mean={sorted.Average()/1000:F3} p95={sorted[(int)Math.Ceiling(sorted.Length*.95)-1]/1000d:F3} p99={sorted[(int)Math.Ceiling(sorted.Length*.99)-1]/1000d:F3} max={sorted[^1]/1000d:F3} ms"));
     }
+    /// <summary>CPU time of the calling thread in ns (Linux schedstat; 0 elsewhere): unlike wall time, not inflated by other load.</summary>
+    private static long ThreadCpuNs()
+    {
+        try
+        {
+            string text = File.ReadAllText("/proc/thread-self/schedstat");
+            return long.Parse(text.AsSpan(0, text.IndexOf(' ')), CultureInfo.InvariantCulture);
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
     private static long Micros(long start) => (Stopwatch.GetTimestamp() - start) * 1_000_000 / Stopwatch.Frequency;
     private sealed record Row(int Index, long TickUs, long Bytes, int Gen0, int Gen1, int Gen2, long CommandsUs, long FeaturesUs,
         long SimulationUs, long VisibilityUs, long ValuesUs, long FlushUs, long CleanupUs, long LoadUs, long TerrainUs, long VmapUs, long PathUs);

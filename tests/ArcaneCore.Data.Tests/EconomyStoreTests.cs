@@ -76,6 +76,31 @@ public sealed class EconomyStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task CreateEscrowItem_PutsANewItemUnderItsLetter_AndRefusesAnExistingGuidOrAnUnattachedItem(DatabaseProvider provider)
+    {
+        // Server mail (AzerothCore ServerMailMgr): the item is created straight into escrow with the letter that carries it.
+        Seed seed = await CreateAsync(provider);
+        MailRecord mail = Letter(1, 15077u, seed.B.Id, itemGuid: 500, itemEntry: 117, money: 25) with { MessageType = MailMessageType.Creature };
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new CreateEscrowItem(Item(500, 117, 3)), new InsertMail(mail, null)])));
+        await AssertItemOnceAsync(seed, 500);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection))
+        {
+            Assert.Equal(3u, (await new EfEconomyStore(db).GetEscrowItemsAsync([500]))[500].Count);
+        }
+
+        // An item already in use, or one no letter of the operation carries, is refused and nothing is written.
+        Assert.Equal(EconomyCommitResult.Conflict, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new CreateEscrowItem(Item(100, 117, 1)), new InsertMail(Letter(2, 15077u, seed.B.Id, itemGuid: 100, itemEntry: 117), null)])));
+        Assert.Equal(EconomyCommitResult.Conflict, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new CreateEscrowItem(Item(501, 117, 1)), new InsertMail(Letter(3, 15077u, seed.B.Id), null)])));
+        await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.Single(await new EfEconomyStore(check).GetMailsAsync(seed.B.Id));
+        Assert.False(await check.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 501));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task InsertMail_WithRecipientCap_RechecksTheBoxInsideTheCommit(DatabaseProvider provider)
     {
         // Security (wave-3 scan finding 3): the world thread's pre-read count can be stale, so the insert itself enforces the cap.

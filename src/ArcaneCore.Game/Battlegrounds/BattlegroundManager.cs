@@ -363,6 +363,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             Calendar = _basePorts.Calendar,
             Random = _basePorts.Random,
             Lifecycle = this,
+            Scripts = _basePorts.Scripts,
         };
 
         Battleground? bg = _factory(template, bracket, instanceId, clientId, Options, ports);

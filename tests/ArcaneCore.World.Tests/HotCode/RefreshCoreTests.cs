@@ -58,6 +58,15 @@ public sealed class AddedCommandGroup : ICommandGroup
         })];
 }
 
+/// <summary>A group behind a switch that is off (as AuctionBot:Enabled is by default): its roots must not exist.</summary>
+public sealed class DisabledCommandGroup : ICommandGroup
+{
+    public IReadOnlyList<ChatCommand> Commands { get; } =
+        [new ChatCommand("hotoff", AccountSecurity.Player, "disabled", (_, _) => true)];
+
+    public bool IsEnabled(IServiceProvider? services) => false;
+}
+
 /// <summary>A root that is a proper prefix of an existing one ("hotbase"), which a refresh must refuse.</summary>
 public sealed class ShadowingCommandGroup : ICommandGroup
 {
@@ -233,6 +242,20 @@ public sealed class RefreshCoreTests : IDisposable
         Assert.Same(baseHandler, after); // an existing handler is kept, not replaced
         Assert.Equal(1, _state.Snapshot().Applied);
         Assert.False(_state.Snapshot().Degraded);
+    }
+
+    [Fact]
+    public async Task ADisabledCommandGroup_IsNotAddedByARefresh()
+    {
+        _catalog.CommandGroups.Add(typeof(AddedCommandGroup));
+        _catalog.CommandGroups.Add(typeof(DisabledCommandGroup));
+
+        RefreshResult result = await _refresh.RunAsync(1, "test");
+
+        Assert.Equal(RefreshStatus.Applied, result.Status);
+        Assert.Equal(1, result.NewCommandRoots);
+        Assert.Equal("hotadded", _commands.Current.Resolve("hotadded", AccountSecurity.Player)?.Name);
+        Assert.Null(_commands.Current.Resolve("hotoff", AccountSecurity.Player));
     }
 
     [Fact]
@@ -492,7 +515,8 @@ public sealed class RefreshCoreTests : IDisposable
 
         var refresh = new HotCodeRefresh(
             new HotCodeState(), new WorldRuntimeHotCodeWorld(host.World), host.Opcodes,
-            host.WorldServices.GetRequiredService<CommandTableSource>(), catalog, new HotCodeAudit(null), NullLogger.Instance);
+            host.WorldServices.GetRequiredService<CommandTableSource>(), catalog, new HotCodeAudit(null), NullLogger.Instance,
+            services: host.WorldServices);
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".hotadded");
         Assert.Equal("There is no such command", (await player.ReadChatAsync()).Text); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).

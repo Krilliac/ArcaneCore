@@ -11,6 +11,21 @@ public enum AuthCommand : byte
     ReconnectChallenge = 0x02,
     ReconnectProof = 0x03,
     RealmList = 0x10,
+
+    /// <summary>CMD_XFER_INITIATE (server): a file transfer is offered (vmangos AuthCodes.h).</summary>
+    XferInitiate = 0x30,
+
+    /// <summary>CMD_XFER_DATA (server): one chunk of the file.</summary>
+    XferData = 0x31,
+
+    /// <summary>CMD_XFER_ACCEPT (client): send the file from the start.</summary>
+    XferAccept = 0x32,
+
+    /// <summary>CMD_XFER_RESUME (client) + u64 offset: send the rest of a partial download.</summary>
+    XferResume = 0x33,
+
+    /// <summary>CMD_XFER_CANCEL (client): the transfer is refused; close.</summary>
+    XferCancel = 0x34,
 }
 
 /// <summary>
@@ -28,6 +43,9 @@ public enum AuthResult : byte
     /// <summary>WOW_FAIL_DB_BUSY (vmangos AuthCodes.h): the logon server could not use its database; the client is told to try again later.</summary>
     FailDbBusy = 0x08,
     VersionInvalid = 0x09,
+
+    /// <summary>WOW_FAIL_VERSION_UPDATE: the client must download the patch that follows (vmangos AuthSocket.cpp:642).</summary>
+    VersionUpdate = 0x0A,
     Suspended = 0x0C,
 
     /// <summary>WOW_FAIL_NOACCESS: used when the stored credentials are unusable (vmangos AuthCodes.h).</summary>

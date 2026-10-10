@@ -407,12 +407,12 @@ public sealed partial class SpellSystem
                 int order = ad.CompareTo(bd);
                 return order != 0 ? order : a.Guid.Value.CompareTo(b.Guid.Value);
             });
-            if (cast.Spell.MaxAffectedTargets > 0 && found.Count > cast.Spell.MaxAffectedTargets)
-                found.RemoveRange((int)cast.Spell.MaxAffectedTargets, found.Count - (int)cast.Spell.MaxAffectedTargets);
+            if (MaxTargetsOf(cast.Spell) > 0 && found.Count > MaxTargetsOf(cast.Spell))
+                found.RemoveRange((int)MaxTargetsOf(cast.Spell), found.Count - (int)MaxTargetsOf(cast.Spell));
         }
         else
         {
-            CapTargets(found, cast.Spell.MaxAffectedTargets);
+            CapTargets(found, MaxTargetsOf(cast.Spell));
         }
         return [.. found.Select(u => (u, 1.0f))];
     }
@@ -453,9 +453,9 @@ public sealed partial class SpellSystem
             _ => u.IsAlive && !ReferenceEquals(u, caster),
         } && IsInLineOfSight(cast.Spell, caster, u)).ToList();
         int count = Math.Max(1, ChainTargetsOf(cast, effect));
-        if (cast.Spell.MaxAffectedTargets > 0)
+        if (MaxTargetsOf(cast.Spell) > 0)
         {
-            count = Math.Min(count, (int)cast.Spell.MaxAffectedTargets);
+            count = Math.Min(count, (int)MaxTargetsOf(cast.Spell));
         }
 
         var picked = new List<(Unit, float)>();
@@ -486,9 +486,9 @@ public sealed partial class SpellSystem
         }
 
         int max = ChainTargetsOf(cast, effect);
-        if (cast.Spell.MaxAffectedTargets > 0)
+        if (MaxTargetsOf(cast.Spell) > 0)
         {
-            max = Math.Min(max, (int)cast.Spell.MaxAffectedTargets);
+            max = Math.Min(max, (int)MaxTargetsOf(cast.Spell));
         }
 
         bool hostile = selector == SpellImplicitTarget.UnitEnemy

@@ -59,10 +59,25 @@ internal sealed class FakeOutdoorPvPHost : IOutdoorPvPHost
 
     public CapturePointTemplate? CapturePoint(uint entry) => Template;
 
-    public ObjectGuid? SummonObject(OutdoorPvPSpawn spawn)
+    public HashSet<ObjectGuid> SpawnedByDefault { get; } = [];
+
+    public Dictionary<ObjectGuid, ObjectGuid> Groups { get; } = [];
+
+    public List<(ObjectGuid Creature, uint PathId)> SpecialPaths { get; } = [];
+
+    public void JoinCreatureGroup(ObjectGuid member, ObjectGuid leader) => Groups[member] = leader;
+
+    public bool StartSpecialPath(ObjectGuid creature, uint pathId)
+    {
+        SpecialPaths.Add((creature, pathId));
+        return true;
+    }
+
+    public ObjectGuid? SummonObject(OutdoorPvPSpawn spawn, bool spawnedByDefault = false)
     {
         var guid = ObjectGuid.WithEntry(HighGuid.GameObject, spawn.Entry, _next++);
         Objects[guid] = spawn;
+        if (spawnedByDefault) SpawnedByDefault.Add(guid);
         return guid;
     }
 

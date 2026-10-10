@@ -39,6 +39,10 @@ dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
+CI splits the test step into a matrix (`test (Game)`, `test (World)`, `test (Data)`, `test (Rest)`): each job runs the same `dotnet test`
+line on one solution filter of `ArcaneCore.slnx` (`tests/ci/<suite>.slnf`), and the filters together cover every test project exactly once
+(a test checks this, so a new test project must be added to one of them). The mock-client self-test runs in the `Rest` job.
+
 Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. Test projects run serially
 (`-m:1`) because first-time database fixture start-up has a bounded deadline. A count of 0 tests, or a run that prints no summary line, means the check did not run.
 

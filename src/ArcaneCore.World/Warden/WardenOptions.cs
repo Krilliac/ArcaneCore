@@ -32,6 +32,15 @@ public enum WardenCheckKind
 
     /// <summary>CHECK_TIMING_VALUES: the client clock is consistent.</summary>
     Timing,
+
+    /// <summary>FIND_MODULE_BY_NAME: look for a loaded DLL named <c>Module</c>.</summary>
+    ModuleByName,
+
+    /// <summary>HASH_CLIENT_FILE: the SHA-1 of the MPQ file <c>Path</c> is <c>Expected</c> (empty: the file must not exist).</summary>
+    Mpq,
+
+    /// <summary>GET_LUA_VARIABLE: the Lua global <c>Path</c> reports <c>Expected</c> (empty: <c>Wanted</c> says whether it may exist).</summary>
+    Lua,
 }
 
 /// <summary>One scan from <c>Warden:Checks</c>. Byte values are hex strings.</summary>
@@ -41,14 +50,17 @@ public sealed class WardenCheckOptions
 
     public WardenCheckKind Kind { get; set; }
 
-    /// <summary>Memory: the module name (empty for the main executable).</summary>
+    /// <summary>Memory: the module name (empty for the main executable); ModuleByName: the DLL to look for.</summary>
     public string Module { get; set; } = string.Empty;
 
     /// <summary>Memory: the absolute address (or module-relative offset); page checks: the start offset.</summary>
     public uint Address { get; set; }
 
-    /// <summary>Memory: the expected bytes (1-255).</summary>
+    /// <summary>Memory: the expected bytes (1-255, hex); Mpq: the expected SHA-1 (hex, or empty); Lua: the expected value (text, or empty).</summary>
     public string Expected { get; set; } = string.Empty;
+
+    /// <summary>Mpq: the file path inside the client archives; Lua: the global variable name.</summary>
+    public string Path { get; set; } = string.Empty;
 
     /// <summary>Page checks: the code pattern (1-255 bytes) whose HMAC-SHA1 the client searches for.</summary>
     public string Pattern { get; set; } = string.Empty;
@@ -59,7 +71,7 @@ public sealed class WardenCheckOptions
     /// <summary>Driver: the target path whose HMAC-SHA1 the client compares.</summary>
     public string DriverPath { get; set; } = string.Empty;
 
-    /// <summary>Page and driver checks: true when the pattern or driver must be present (a legitimate client), false when finding it is the failure (a cheat signature).</summary>
+    /// <summary>Page, driver, module and existence-only Lua checks: true when the pattern or driver must be present (a legitimate client), false when finding it is the failure (a cheat signature).</summary>
     public bool Wanted { get; set; }
 
     /// <summary>A per-check action; null uses <see cref="WardenOptions.Action"/> (vmangos warden_scans.penalty).</summary>
@@ -109,7 +121,10 @@ public sealed class WardenOptions
     /// <summary>Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500).</summary>
     public int ChunkSize { get; set; } = 500;
 
-    /// <summary>Warden:Checks: the scans to run. Empty runs the timing scan only.</summary>
+    /// <summary>Warden:LoadFromDatabase: also run the scans of the world table <c>warden_checks</c> for this build. Default true.</summary>
+    public bool LoadFromDatabase { get; set; } = true;
+
+    /// <summary>Warden:Checks: scans added to the table's (a configured id replaces the table row with that id). With neither, the timing scan runs alone.</summary>
     public List<WardenCheckOptions> Checks { get; set; } = [];
 
     public IReadOnlyList<string> Validate()

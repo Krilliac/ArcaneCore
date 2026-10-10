@@ -220,6 +220,20 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
 
+    /// <summary>A fresh mail id above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (<c>.pdump load</c>).</summary>
+    internal uint ReserveMailId(uint atLeast)
+    {
+        RaiseTo(ref _lastMailId, atLeast);
+        return NextMailId();
+    }
+
+    /// <summary>A fresh item text id above <paramref name="atLeast"/>, for a loaded character dump.</summary>
+    internal uint ReserveItemTextId(uint atLeast)
+    {
+        RaiseTo(ref _lastTextId, atLeast);
+        return NextTextId();
+    }
+
     private IMailboxAccess? _retailMailboxAccess;
 
     /// <summary>Test seam: replaces the mailbox check on a running host (a registered <see cref="IMailboxAccess"/> is the production hook).</summary>
@@ -290,7 +304,8 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     /// World thread: start an economy operation (enabled store required). <paramref name="finished"/>
     /// receives the outcome; its packets and cache updates only run when <c>live</c>.
     /// </summary>
-    private bool Start(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome> finished)
+    private bool Start(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome> finished,
+        Guid? operationId = null)
         => Enabled && !_stopping && Settlements.TryStart(actors, changes, (outcome, live) =>
         {
             if (outcome == EconomyOutcome.Before && changes.Any(c => c is InsertAuction or InsertMail))
@@ -303,7 +318,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             {
                 finished(outcome);
             }
-        });
+        }, operationId);
 
     /// <summary>
     /// World thread: re-read the highest IDs in use and raise (never lower) the allocators. Every
