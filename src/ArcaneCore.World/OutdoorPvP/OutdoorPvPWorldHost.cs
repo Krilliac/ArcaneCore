@@ -88,7 +88,7 @@ internal sealed class OutdoorPvPWorldHost(OutdoorPvPFeature feature) : IOutdoorP
         return null;
     }
 
-    public ObjectGuid? SummonObject(OutdoorPvPSpawn spawn)
+    public ObjectGuid? SummonObject(OutdoorPvPSpawn spawn, bool spawnedByDefault = false)
     {
         if (Continent(spawn.MapId) is not { } map || map.FindUpdater<GameObjectMapSystem>() is not { } objects
             || objects.Summon(spawn.Entry, spawn.X, spawn.Y, spawn.Z, spawn.Orientation) is not { } go)
@@ -96,6 +96,7 @@ internal sealed class OutdoorPvPWorldHost(OutdoorPvPFeature feature) : IOutdoorP
             return null;
         }
 
+        go.SpawnedByDefault = spawnedByDefault;
         _owned[go.Guid] = (map, false);
         return go.Guid;
     }
@@ -162,6 +163,98 @@ internal sealed class OutdoorPvPWorldHost(OutdoorPvPFeature feature) : IOutdoorP
         {
             creatures.Despawn(creature);
         }
+    }
+
+    private const float AttackDistance = 5f; // vmangos ATTACK_DISTANCE
+
+    /// <summary>member → leader, for the creature groups the scripts joined (<see cref="UpdateCreatureGroups"/>).</summary>
+    private readonly Dictionary<ObjectGuid, ObjectGuid> _groups = [];
+
+    private Creature? OwnedCreature(ObjectGuid guid)
+        => _owned.TryGetValue(guid, out var owner) && owner.Creature && owner.Map.FindUpdater<CreatureMapSystem>() is { } creatures
+            ? creatures.FindCreature(guid)
+            : null;
+
+    private CreatureMapSystem? SystemOf(ObjectGuid guid)
+        => _owned.TryGetValue(guid, out var owner) ? owner.Map.FindUpdater<CreatureMapSystem>() : null;
+
+    public void JoinCreatureGroup(ObjectGuid member, ObjectGuid leader)
+    {
+        if (OwnedCreature(member) is not { } m || OwnedCreature(leader) is not { } l)
+        {
+            return;
+        }
+
+        _groups[member] = leader;
+        m.Motion.MoveFollow(l, AttackDistance, FollowAngle(l, m));
+    }
+
+    /// <summary>vmangos <c>leader-&gt;GetAngle(member) - member-&gt;GetOrientation()</c>, normalised to [0, 2pi).</summary>
+    internal static float FollowAngle(WorldObject leader, WorldObject member)
+    {
+        float angle = MathF.Atan2(member.Y - leader.Y, member.X - leader.X) - member.Orientation;
+        angle %= MathF.Tau;
+        return angle < 0 ? angle + MathF.Tau : angle;
+    }
+
+    /// <summary>
+    /// The group options each world tick: OPTION_AGGRO_TOGETHER (a member or the leader in a fight pulls the idle others onto its victim),
+    /// OPTION_EVADE_TOGETHER (the leader evading sends the fighting members home too) and OPTION_FORMATION_MOVE (an idle member that lost
+    /// its follow takes its slot again). Members whose leader is gone leave the group.
+    /// </summary>
+    internal void UpdateCreatureGroups()
+    {
+        foreach (ObjectGuid leaderGuid in _groups.Values.Distinct().ToArray())
+        {
+            ObjectGuid[] memberGuids = [.. _groups.Where(p => p.Value == leaderGuid).Select(p => p.Key)];
+            if (OwnedCreature(leaderGuid) is not { IsAlive: true } leader)
+            {
+                foreach (ObjectGuid m in memberGuids) _groups.Remove(m);
+                continue;
+            }
+
+            List<Creature> group = [leader];
+            foreach (ObjectGuid m in memberGuids)
+            {
+                if (OwnedCreature(m) is { } member) group.Add(member);
+                else _groups.Remove(m);
+            }
+
+            if (leader.IsInEvadeMode)
+            {
+                foreach (Creature member in group.Skip(1).Where(c => c.IsAlive && c.Combat.IsInCombat && !c.IsInEvadeMode))
+                {
+                    SystemOf(member.Guid)?.EnterEvadeMode(member);
+                }
+
+                continue;
+            }
+
+            Unit? enemy = group.FirstOrDefault(c => c.IsAlive && c.Combat.IsInCombat && c.Combat.Victim is { IsAlive: true })?.Combat.Victim;
+            foreach (Creature c in group)
+            {
+                if (!c.IsAlive || c.Combat.IsInCombat || c.IsInEvadeMode) continue;
+                if (enemy is not null && c.AI is { } ai)
+                {
+                    ai.AttackStart(enemy);
+                }
+                else if (!ReferenceEquals(c, leader) && c.Motion.CurrentType != MovementGeneratorType.Follow)
+                {
+                    c.Motion.MoveFollow(leader, AttackDistance, FollowAngle(leader, c));
+                }
+            }
+        }
+    }
+
+    public bool StartSpecialPath(ObjectGuid creature, uint pathId)
+    {
+        if (OwnedCreature(creature) is not { } c || SystemOf(creature) is not { } creatures)
+        {
+            return false;
+        }
+
+        // The special path is keyed by its own id; cmangos-format data keeps the Spirit of Victory's walk as entry 18039 path 0.
+        return c.Template.Entry == pathId && creatures.StartEntryWaypointPath(c, 0);
     }
 
     public void CreatureCastOnSelf(ObjectGuid creature, uint spellId)

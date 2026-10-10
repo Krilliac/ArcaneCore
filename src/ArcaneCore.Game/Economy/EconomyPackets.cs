@@ -166,7 +166,7 @@ public static class EconomyPackets
             w.WriteUInt32(item.Charges.Count > 0 ? unchecked((uint)item.Charges[0]) : 0);
             w.WriteUInt64(ObjectGuid.Player((uint)a.SellerId).Value);
             w.WriteUInt32(a.StartBid);
-            w.WriteUInt32(a.BidderId != 0 ? AuctionHouseRules.OutBid(a.Bid) : 0);
+            w.WriteUInt32(a.BidderId != 0 || a.Bid > 0 ? AuctionHouseRules.OutBid(a.Bid) : 0);
             w.WriteUInt32(a.Buyout);
             w.WriteUInt32((uint)Math.Clamp((a.ExpireTime - now) * 1000, 0, uint.MaxValue));
             w.WriteUInt64(a.BidderId != 0 ? ObjectGuid.Player((uint)a.BidderId).Value : 0);

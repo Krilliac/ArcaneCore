@@ -13,6 +13,9 @@ public sealed class DynamicObject : WorldObject
     /// <summary>vmangos DYNAMIC_OBJECT_AREA_SPELL (DynamicObject.h:31), the DYNAMICOBJECT_BYTES value of a persistent area aura.</summary>
     public const uint AreaSpell = 0x1;
 
+    /// <summary>vmangos DYNAMIC_OBJECT_FARSIGHT_FOCUS (DynamicObject.h:32): the camera point of Far Sight and Eagle Eye.</summary>
+    public const uint FarSightFocus = 0x2;
+
     /// <summary>Flare (1543): vmangos sends bytes 0x10 and the diameter as the radius ("Fix diametre visuel", DynamicObject.cpp:102-110).</summary>
     public const uint FlareSpell = 1543;
 
@@ -63,6 +66,9 @@ public sealed class DynamicObject : WorldObject
     /// <summary>The object was deleted (vmangos m_deleted); its auras end on their next update.</summary>
     public bool IsDeleted { get; internal set; }
 
+    /// <summary>A DYNAMIC_OBJECT_FARSIGHT_FOCUS object: the caster's camera, with no area effect.</summary>
+    public bool IsFarSightFocus { get; private set; }
+
     /// <summary>The units this object applied its aura to, with the time since that application (vmangos m_affected).</summary>
     internal Dictionary<ObjectGuid, uint> Affected { get; } = [];
 
@@ -70,7 +76,8 @@ public sealed class DynamicObject : WorldObject
     internal bool NeedsRefresh(Unit unit) => !Affected.TryGetValue(unit.Guid, out uint since) || since > RefreshIntervalMs;
 
     /// <summary>vmangos DynamicObject::Create (DynamicObject.cpp:76-135) for a DYNAMIC_OBJECT_AREA_SPELL object.</summary>
-    internal static DynamicObject Create(Unit caster, SpellInfo spell, int effectIndex, float x, float y, float z, int durationMs, float radius, bool positive)
+    internal static DynamicObject Create(Unit caster, SpellInfo spell, int effectIndex, float x, float y, float z, int durationMs, float radius, bool positive,
+        uint? type = null)
     {
         uint counter = (uint)Interlocked.Increment(ref s_nextCounter) & 0x00FFFFFF;
         var dynamic = new DynamicObject(new ObjectGuid(((ulong)HighGuid.DynamicObject << 48) | counter), caster, spell, effectIndex, radius, durationMs)
@@ -83,7 +90,8 @@ public sealed class DynamicObject : WorldObject
             Orientation = 0,
         };
 
-        uint bytes = spell.Id == FlareSpell ? 0x10u : AreaSpell;
+        uint bytes = type ?? (spell.Id == FlareSpell ? 0x10u : AreaSpell);
+        dynamic.IsFarSightFocus = bytes == FarSightFocus;
         dynamic.SetUInt32(UpdateFields.ObjectFieldEntry, spell.Id);
         dynamic.SetUInt64(UpdateFields.DynamicobjectCaster, caster.Guid.Value);
         dynamic.SetUInt32(UpdateFields.DynamicobjectBytes, bytes);

@@ -31,6 +31,11 @@ public sealed class Grid
     // container (GridDefines.h: AllWorldObjectTypes, the "world" half of a cell), so a query that is
     // only about players (Map::UpdateObjectVisibility) does not walk the creatures and game objects.
     private readonly List<Player>?[] _playerCells = new List<Player>?[GridDefines.MaxNumberOfCells * GridDefines.MaxNumberOfCells];
+
+    // The objects of each cell again, in map-join order (WorldObject.MapSequence), for the visibility pass: it merges
+    // ordered cells instead of sorting every mover's candidates. _cells keeps its insertion order, which spell, trap and
+    // totem searches iterate. _playerCells is join-ordered too: its only readers sort into join order anyway.
+    private readonly List<WorldObject>?[] _orderedCells = new List<WorldObject>?[GridDefines.MaxNumberOfCells * GridDefines.MaxNumberOfCells];
     private long _timerMs;
     private int _unloadActiveLocks;
 
@@ -101,10 +106,11 @@ public sealed class Grid
     {
         int index = Index(cell);
         (_cells[index] ??= []).Add(obj);
+        JoinOrder.Insert(_orderedCells[index] ??= [], obj);
         ObjectCount++;
         if (obj is Player player)
         {
-            (_playerCells[index] ??= []).Add(player);
+            JoinOrder.Insert(_playerCells[index] ??= [], player);
         }
     }
 
@@ -115,9 +121,14 @@ public sealed class Grid
         if (list is not null && list.Remove(obj))
         {
             ObjectCount--;
-            if (obj is Player player)
+            if (_orderedCells[index] is { } ordered)
             {
-                _playerCells[index]?.Remove(player);
+                JoinOrder.Remove(ordered, obj);
+            }
+
+            if (obj is Player player && _playerCells[index] is { } players)
+            {
+                JoinOrder.Remove(players, player);
             }
         }
     }
@@ -139,6 +150,12 @@ public sealed class Grid
             results.AddRange(list);
         }
     }
+
+    /// <summary>A cell's objects in join order (null or empty when it has none).</summary>
+    internal List<WorldObject>? OrderedObjects(int localX, int localY) => _orderedCells[(localX * GridDefines.MaxNumberOfCells) + localY];
+
+    /// <summary>A cell's players in join order (null or empty when it has none).</summary>
+    internal List<Player>? OrderedPlayers(int localX, int localY) => _playerCells[(localX * GridDefines.MaxNumberOfCells) + localY];
 
     /// <summary>vmangos <c>GridInfo::UpdateTimeTracker</c>; true once the timer has passed.</summary>
     internal bool AdvanceTimer(long diffMs)

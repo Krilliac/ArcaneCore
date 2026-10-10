@@ -2,12 +2,29 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main", "integrate/**"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# A new push to the same ref cancels the older, now-stale run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  test:
+    # Full suites run on pushes to main/integrate/** and on non-draft PRs only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each suite's test projects are a solution filter of ArcaneCore.slnx (tests/ci/*.slnf). Together they cover every
+        # test project in the solution exactly once; ContributingGuideTests fails when a project is left out or doubled.
+        suite: [Game, World, Data, Rest]
+
+    name: test (${{ matrix.suite }})
 
     # The data-layer tests run against every supported engine (charter §2 + ROADMAP):
     # SQLite in-process, MariaDB and PostgreSQL as service containers.
@@ -42,17 +59,27 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', '**/packages.lock.json', '**/global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Restore
         run: dotnet restore ArcaneCore.slnx
 
       # Directory.Build.props sets TreatWarningsAsErrors=true, so a warning fails the build.
+      # The whole solution is built in every job so warnings anywhere still fail CI.
       - name: Build
         run: dotnet build ArcaneCore.slnx -c Release --no-restore
 
       - name: Test
-        # Run test projects serially: first-time EF fixture startup has a bounded
+        # Projects within a job run serially: first-time EF fixture startup has a bounded
         # deadline and must not compete with the crypto suite and provider matrix.
-        run: dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
+        run: dotnet test tests/ci/${{ matrix.suite }}.slnf -c Release --no-build -m:1 --verbosity normal
 
       - name: Native mock-client scenario
+        if: matrix.suite == 'Rest'
         run: dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test

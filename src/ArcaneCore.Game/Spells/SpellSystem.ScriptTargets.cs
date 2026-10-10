@@ -58,7 +58,7 @@ public sealed partial class SpellSystem
             return units.Count == 0 ? [] : [(units.MinBy(Distance)!, 1f)];
         }
 
-        CapTargets(units, cast.Spell.MaxAffectedTargets);
+        CapTargets(units, MaxTargetsOf(cast.Spell));
         return [.. units.Select(unit => (unit, 1f))];
     }
 }

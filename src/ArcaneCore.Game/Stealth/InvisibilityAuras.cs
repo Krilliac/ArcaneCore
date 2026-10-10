@@ -61,6 +61,9 @@ public static class InvisibilityAuras
         }
     }, null);
 
+    /// <summary>The invisibility type only drunk players see (vmangos Player::SetDrunkValue, 1 &lt;&lt; 6).</summary>
+    public const int DrunkInvisibilityType = 6;
+
     /// <summary>vmangos Unit.cpp:6502-6541; one matching invisibility type suffices.</summary>
     public static bool CanDetect(SpellSystem spells, Unit viewer, Unit target)
     {
@@ -94,6 +97,12 @@ public static class InvisibilityAuras
             int detectLevel = (detectMask & bit) != 0
                 ? MaxLevel(spells, viewer, AuraType.ModInvisibilityDetection, type)
                 : 0;
+            if (type == DrunkInvisibilityType && viewer is Entities.Player drunk)
+            {
+                // Unit.cpp:6532-6533: for type 6 a player's detect level is its drunk value.
+                detectLevel = SpellSystem.GetDrunkValue(drunk);
+            }
+
             if (invisLevel <= detectLevel)
             {
                 return true;

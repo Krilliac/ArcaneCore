@@ -109,6 +109,16 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAda, sfkPrisoners);
             Services.RegisterGossipScript(ShadowfangKeepInstance.NpcAsh, sfkPrisoners);
             Services.RegisterGossipScript(WailingCavernsInstance.NpcDisciple, new DiscipleOfNaralexGossip());
+            QuestNpcServices services = Services;
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.SquireRoweAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.SquireRoweGossip(player => services.StateOf(player)?.Quests));
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(player => services.StateOf(player)?.Quests));
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorGossip(player => services.StateOf(player)?.Quests));
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonGossip(player => services.StateOf(player)?.Quests,
+                    (player, questId) => Services.AreaExploredOrEventHappens(player, questId)));
         }
 
         _world = world;
@@ -219,6 +229,23 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     /// <summary>SpellFeature attaches after this feature; rebuild the taxi network once its spell rows have loaded.</summary>
     public void RefreshTaxiNetwork(SpellStore spells)
         => Services.ReplaceNpcs(new NpcStore(Services.Npcs.Content, SendTaxiPaths(spells)));
+
+    /// <summary>
+    /// The spell effects served by the NPC services: SPELL_EFFECT_BIND (11) moves the target player's home bind here with the caster as the
+    /// binder (<see cref="QuestNpcServices.BindHome"/>). SPELL_EFFECT_SEND_TAXI is registered by SpellFeature
+    /// (<see cref="QuestNpcServices.ActivateTaxiBySpell"/>).
+    /// </summary>
+    public void InstallSpellEffects(SpellSystem spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        spells.RegisterEffect(SpellEffectName.Bind, context =>
+        {
+            if (context.Target is Player player)
+            {
+                Services.BindHome(player, context.Caster.Guid);
+            }
+        });
+    }
 
     /// <summary>vmangos DBCStores.cpp taxi mask: the EffectMiscValue of every SPELL_EFFECT_SEND_TAXI (123) effect.</summary>
     private static HashSet<uint> SendTaxiPaths(SpellStore spells) => spells.All.SelectMany(spell => spell.Effects)

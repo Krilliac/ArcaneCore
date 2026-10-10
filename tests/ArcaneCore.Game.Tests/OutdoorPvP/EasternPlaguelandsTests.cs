@@ -94,6 +94,9 @@ public sealed class EasternPlaguelandsTests
         zone.Update(250_000);
         Assert.Equal(1, host.CreaturesOf(17635));
         Assert.Equal(4, host.CreaturesOf(17647));
+        ObjectGuid commander = host.Creatures.Single(c => c.Value.Spawn.Entry == 17635).Key;
+        Assert.Equal(4, host.Groups.Count);                                 // every soldier joins the commander's group
+        Assert.All(host.Groups, g => Assert.Equal(commander, g.Value));
 
         host.Move(alliance, 0, 0, 0);
         ObjectGuid h1 = AtTower(host, zone, 2, Team.Horde, C.Eastwall);
@@ -137,6 +140,22 @@ public sealed class EasternPlaguelandsTests
         Assert.Equal(Team.Horde, zone.GraveyardTeam);
         Assert.Equal(1, host.ObjectsOf(180422));
         Assert.Equal(C.SpellSpiritParticlesRedSuperBig, host.Creatures.Values.Single(c => c.Spawn.Entry == 18039).Aura);
+        ObjectGuid spirit = host.Creatures.Single(c => c.Value.Spawn.Entry == 18039).Key;
+        Assert.Equal([(spirit, 18039u)], host.SpecialPaths);               // vmangos MoveWaypoint(0, PATH_FROM_SPECIAL, ..., 18039)
+    }
+
+    [Fact]
+    public void Northpass_curing_shrine_is_spawned_by_default_and_its_banner_aura_is_not()
+    {
+        (FakeOutdoorPvPHost host, EasternPlaguelandsZone zone) = Setup();
+        AtTower(host, zone, 1, Team.Alliance, C.Northpass);
+
+        zone.Update(250_000);
+
+        ObjectGuid shrine = host.Objects.Single(o => o.Value.Entry == C.NorthpassShrineAlliance[0].Entry).Key;
+        ObjectGuid aura = host.Objects.Single(o => o.Value.Entry == C.NorthpassShrineAlliance[1].Entry).Key;
+        Assert.Contains(shrine, host.SpawnedByDefault);
+        Assert.DoesNotContain(aura, host.SpawnedByDefault);
     }
 
     [Fact]

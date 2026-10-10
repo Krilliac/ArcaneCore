@@ -116,6 +116,12 @@ public sealed partial class SpellSystem
 
         dynamic.IsDeleted = true;
         _dynamicObjects.Remove(dynamic);
+        if (dynamic.Caster is Player viewer && viewer.GetUInt64(UpdateFields.PlayerFarsight) == dynamic.Guid.Value)
+        {
+            // vmangos Camera::Event_RemovedFromWorld: the view returns to the player when its far sight point goes.
+            global::ArcaneCore.Game.Pets.Control.CharmService.SetView(viewer, null);
+        }
+
         if (dynamic.Map is { } map)
         {
             var writer = new Protocol.PacketWriter(8);
@@ -154,6 +160,8 @@ public sealed partial class SpellSystem
         dynamic.RemainingMs = Math.Max(0, dynamic.RemainingMs - (int)diffMs);
         bool delete = dynamic.RemainingMs == 0
             && (!dynamic.IsChanneled || caster.GetUInt64(UpdateFields.UnitFieldChannelObject) != dynamic.Guid.Value);
+        // A channeled far sight point (Eagle Eye, Far Sight) goes when its channel ends early, as the channel's DynObject removal does.
+        delete |= dynamic.IsFarSightFocus && dynamic.IsChanneled && caster.GetUInt64(UpdateFields.UnitFieldChannelObject) != dynamic.Guid.Value;
         foreach (ObjectGuid guid in dynamic.Affected.Keys.ToArray())
         {
             dynamic.Affected[guid] += diffMs;

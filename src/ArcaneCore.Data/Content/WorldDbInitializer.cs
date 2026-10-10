@@ -107,6 +107,16 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
             }
         }
 
+        // The vmangos 5875 Warden scans (World.Warden.WardenCheckSeed), into an empty table only: a table an admin edited is left alone.
+        if (!await db.Set<World.Warden.WardenCheckRow>().AnyAsync(cancellationToken).ConfigureAwait(false))
+        {
+            db.Set<World.Warden.WardenCheckRow>().AddRange(World.Warden.WardenCheckSeed.Rows.Select(r => new World.Warden.WardenCheckRow
+            {
+                Id = r.Id, Type = r.Type, Str = r.Str, Data = r.Data, Address = r.Address, Length = r.Length, Result = r.Result,
+                Flags = r.Flags, Penalty = r.Penalty, BuildMin = r.BuildMin, BuildMax = r.BuildMax, Comment = r.Comment,
+            }));
+        }
+
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 }

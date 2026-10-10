@@ -41,6 +41,9 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
 
+    /// <summary>Built SMSG_CREATURE_QUERY_RESPONSE replies (cleared when the content is installed or its definitions swapped).</summary>
+    public Packets.QueryResponseCache<CreatureTemplate> QueryCache { get; } = new();
+
     /// <summary>
     /// True once <see cref="Install"/> has put the loaded content in place. The content is loaded at attach but installed from the world
     /// thread (a posted call), so until then <see cref="Content"/> is still the empty content even when the world has spawns.
@@ -134,6 +137,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         ArgumentNullException.ThrowIfNull(content);
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
+        QueryCache.Clear();
         foreach (uint mapId in content.MapsWithSpawns)
         {
             GetOrCreateSystem(mapId);

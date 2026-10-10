@@ -44,12 +44,16 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// <summary>The immutable store lookups currently go to (empty until loaded).</summary>
     public IItemTemplateStore LoadedStore => _templates ?? ItemTemplateStore.Empty;
 
+    /// <summary>Built SMSG_ITEM_QUERY_SINGLE_RESPONSE replies (cleared when the templates are loaded or replaced).</summary>
+    public Packets.QueryResponseCache<ItemTemplate> QueryCache { get; } = new();
+
     /// <summary>Make <paramref name="store"/> the item content (the reload's swap; the world thread).</summary>
     public void ReplaceTemplates(IItemTemplateStore store)
     {
         ArgumentNullException.ThrowIfNull(store);
         _live.Replace(store);
         _templates = store;
+        QueryCache.Clear();
     }
 
     /// <summary>
@@ -122,6 +126,7 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
             logger.LogInformation("Loaded {Count} item templates", store.Count);
             _live.Replace(store);
             _templates = store;
+            QueryCache.Clear();
             return _live;
         }
         finally

@@ -23,8 +23,15 @@ public sealed class LogonServer(
     IOptions<AuthOptions> options,
     ILoggerFactory loggerFactory,
     ILogger<LogonServer> logger,
-    IOptions<NetProtectionOptions>? protection = null) : BackgroundService
+    IOptions<NetProtectionOptions>? protection = null,
+    IOptionsMonitor<AutoPatchOptions>? autoPatch = null) : BackgroundService
 {
+    // Auth:AutoPatch is read through the monitor on every challenge, so an appsettings edit applies to the next connection.
+    private readonly PatchCatalog patches = new(() => autoPatch?.CurrentValue ?? new AutoPatchOptions());
+
+    /// <summary>The auto-patcher's catalog (Auth:AutoPatch, off by default).</summary>
+    public PatchCatalog Patches => patches;
+
     /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
     public NetGuard? Guard { get; private set; }
 
@@ -103,7 +110,7 @@ public sealed class LogonServer(
 
                 var session = new LogonSession(
                     stream, accountStore, realmStore, config,
-                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard, IpBans);
+                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard, IpBans, patches: patches);
 
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }

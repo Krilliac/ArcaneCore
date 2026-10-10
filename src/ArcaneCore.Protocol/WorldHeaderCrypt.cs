@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Protocol.Versioning;
 
 namespace ArcaneCore.Protocol;
 
@@ -14,7 +15,7 @@ namespace ArcaneCore.Protocol;
 ///
 /// Algorithm verified byte-for-byte against vmangos src/shared/Auth/AuthCrypt.cpp.
 /// </summary>
-public sealed class WorldHeaderCrypt
+public sealed class WorldHeaderCrypt : IWorldHeaderCrypt
 {
     public const int OutgoingHeaderLength = 4; // SMSG: CRYPTED_SEND_LEN
     public const int IncomingHeaderLength = 6; // CMSG: CRYPTED_RECV_LEN
@@ -30,6 +31,10 @@ public sealed class WorldHeaderCrypt
     private bool _initialized;
 
     public bool IsInitialized => _initialized;
+
+    int IWorldHeaderCrypt.OutgoingHeaderLength => OutgoingHeaderLength;
+
+    int IWorldHeaderCrypt.IncomingHeaderLength => IncomingHeaderLength;
 
     /// <summary>Set the cipher key (the 40-byte SRP6 session key) and engage encryption.</summary>
     public void Initialize(byte[] sessionKey)

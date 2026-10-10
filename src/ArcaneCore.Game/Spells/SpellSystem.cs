@@ -54,8 +54,11 @@ public sealed partial class SpellSystem
         EffectHandlers = CreateEffectHandlers();
         InstallInebriate();
         InstallTriggerMissile();
+        InstallSight();
+        InstallSummonChangeItem();
         _builtInEffectHandlers = new Dictionary<SpellEffectName, SpellEffectHandler>(EffectHandlers);
         AuraHandlers = CreateAuraHandlers();
+        InstallSightAuras();
         RegisterModules(SpellHandlerModules.BuiltIn);
     }
 
