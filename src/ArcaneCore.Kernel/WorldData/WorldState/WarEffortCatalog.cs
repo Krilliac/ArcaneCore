@@ -19,6 +19,21 @@ public static class WarEffortCatalog
     public const uint ColossusOfZora = 15740;
     public const int ResourceCount = 30;
 
+    // vmangos silithus.cpp scarab_gongAI: the Ahn'Qiraj gate pieces near the Scarab Gong.
+    public const uint GateBarrier = 176146;
+    public const uint GateRoots = 176147;
+    public const uint GateRunes = 176148;
+    public const int ChampionBroadcastText = 11427;
+
+    // scarab_gongAI timeline from the first ring: +1 s roots, +5 s runes, +8 s barrier, then +10 s the war begins
+    // (VAR_WE_GONG_TIME). vmangos holds these in GameObjectAI timers; here they are offsets from the saved ring time.
+    public const int RootsOpenAfterSeconds = 1;
+    public const int RunesOpenAfterSeconds = 6;
+    public const int BarrierOpenAfterSeconds = 14;
+    public const int WarStartsAfterSeconds = 24;
+    public const int TenHourWarSeconds = 10 * 3_600;
+    public const int TransportSeconds = 5 * 86_400;
+
     public static IReadOnlyList<WarEffortResource> Resources { get; } =
     [
         new(0, 2021, 96000, 8549, 8550), // Peacebloom
@@ -88,8 +103,22 @@ public enum WarEffortPhase : byte
 
 /// <summary>Immutable snapshot of the global AQ state loaded from character storage.</summary>
 public sealed record WarEffortSnapshot(WarEffortPhase Phase, long PhaseEndsAtUnix, IReadOnlyList<long> Counters,
-    byte KilledBossMask = 0)
+    byte KilledBossMask = 0, long GongRingCount = 0, long GongFirstRungAtUnix = 0, int GongFirstRingerId = 0)
 {
+    /// <summary>
+    /// The gate pieces open at <paramref name="nowUnix"/>. Before the first ring every piece is closed; after it each piece
+    /// opens at its scarab_gongAI step; once the war is over (Done) the gate is permanently open. The answer is a pure
+    /// function of the saved state, so a restart during the opening resumes at the right step.
+    /// </summary>
+    public WarEffortGateState GateAt(long nowUnix)
+    {
+        if (Phase == WarEffortPhase.Done) return WarEffortGateState.AllOpen;
+        if (Phase != WarEffortPhase.TenHourWar || GongFirstRungAtUnix <= 0) return WarEffortGateState.Closed;
+        long elapsed = nowUnix - GongFirstRungAtUnix;
+        return new WarEffortGateState(elapsed >= WarEffortCatalog.RootsOpenAfterSeconds,
+            elapsed >= WarEffortCatalog.RunesOpenAfterSeconds, elapsed >= WarEffortCatalog.BarrierOpenAfterSeconds);
+    }
+
     public static WarEffortSnapshot Disabled { get; } = new(WarEffortPhase.Disabled, 0, new long[WarEffortCatalog.ResourceCount]);
 
     public bool? WorldScriptCondition(uint field, uint state, DateTimeOffset now)
@@ -104,6 +133,13 @@ public sealed record WarEffortSnapshot(WarEffortPhase Phase, long PhaseEndsAtUni
         WarEffortResource? resource = WarEffortCatalog.ForField(field);
         return resource is null ? null : Counters[resource.Id] == resource.Goal;
     }
+}
+
+/// <summary>Which Ahn'Qiraj gate pieces are open.</summary>
+public readonly record struct WarEffortGateState(bool Roots, bool Runes, bool Barrier)
+{
+    public static WarEffortGateState Closed => default;
+    public static WarEffortGateState AllOpen => new(true, true, true);
 }
 
 /// <summary>Global AQ state persistence. A reward's contribution is written by the quest reward transaction.</summary>

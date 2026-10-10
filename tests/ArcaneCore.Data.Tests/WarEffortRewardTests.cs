@@ -90,12 +90,95 @@ public sealed class WarEffortRewardTests : IAsyncLifetime
         Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(connection, request));
         WarEffortSnapshot state = await LoadAsync(connection);
         Assert.Equal(WarEffortPhase.TenHourWar, state.Phase);
-        Assert.InRange(state.PhaseEndsAtUnix, before + 10 * 3_600,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10 * 3_600);
+        // The ten hours start after the scarab_gongAI opening sequence.
+        int war = WarEffortCatalog.WarStartsAfterSeconds + 10 * 3_600;
+        Assert.InRange(state.PhaseEndsAtUnix, before + war, DateTimeOffset.UtcNow.ToUnixTimeSeconds() + war);
         Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(connection, request));
         WarEffortSnapshot afterDuplicate = await LoadAsync(connection);
         Assert.Equal(state.Phase, afterDuplicate.Phase);
         Assert.Equal(state.PhaseEndsAtUnix, afterDuplicate.PhaseEndsAtUnix);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task OnlyTheFirstGongRingerOpensTheGateAndLaterRingsOnlyCount(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, CharacterQuestRewardRequest first) =
+            await CreateAsync(provider, WarEffortCatalog.GongQuest, repeatable: false);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await new EfWarEffortStateStore(db).SetPhaseAsync(WarEffortPhase.Gong, 0);
+
+        long before = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(connection, first));
+        WarEffortSnapshot opened = await LoadAsync(connection);
+        Assert.Equal(WarEffortPhase.TenHourWar, opened.Phase);
+        Assert.Equal(1, opened.GongRingCount);
+        Assert.Equal(first.After.Id, opened.GongFirstRingerId);
+        Assert.InRange(opened.GongFirstRungAtUnix, before, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        Assert.Equal(opened.GongFirstRungAtUnix + WarEffortCatalog.WarStartsAfterSeconds + WarEffortCatalog.TenHourWarSeconds,
+            opened.PhaseEndsAtUnix);
+
+        CharacterQuestRewardRequest second = await AddRingerAsync(connection, "SecondRinger");
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(connection, second));
+        WarEffortSnapshot later = await LoadAsync(connection);
+        Assert.Equal(2, later.GongRingCount);
+        Assert.Equal(opened.GongFirstRingerId, later.GongFirstRingerId);
+        Assert.Equal(opened.GongFirstRungAtUnix, later.GongFirstRungAtUnix);
+        Assert.Equal(opened.PhaseEndsAtUnix, later.PhaseEndsAtUnix);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task GongRingBeforeTheGongPhaseOrAfterTheWarIsNotCounted(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, CharacterQuestRewardRequest early) =
+            await CreateAsync(provider, WarEffortCatalog.GongQuest, repeatable: false);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await new EfWarEffortStateStore(db).SetPhaseAsync(WarEffortPhase.Transporting, 123);
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(connection, early));
+        WarEffortSnapshot state = await LoadAsync(connection);
+        Assert.Equal(WarEffortPhase.Transporting, state.Phase);
+        Assert.Equal(123, state.PhaseEndsAtUnix);
+        Assert.Equal(0, state.GongRingCount);
+        Assert.Equal(0, state.GongFirstRungAtUnix);
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await new EfWarEffortStateStore(db).SetPhaseAsync(WarEffortPhase.Done, 0);
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(connection, await AddRingerAsync(connection, "LateRinger")));
+        Assert.Equal(0, (await LoadAsync(connection)).GongRingCount);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RolledBackGongRewardLeavesTheGateClosed(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, CharacterQuestRewardRequest request) =
+            await CreateAsync(provider, WarEffortCatalog.GongQuest, repeatable: false);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await new EfWarEffortStateStore(db).SetPhaseAsync(WarEffortPhase.Gong, 0);
+        // An invalid contribution in the same reward transaction throws; the gong ring must not commit either.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CommitAsync(connection,
+            request with { WarEffort = new WarEffortContribution(0, 20) }));
+        WarEffortSnapshot state = await LoadAsync(connection);
+        Assert.Equal(WarEffortPhase.Gong, state.Phase);
+        Assert.Equal(0, state.GongRingCount);
+        Assert.Equal(0, state.GongFirstRungAtUnix);
+    }
+
+    private static async Task<CharacterQuestRewardRequest> AddRingerAsync(DatabaseConnectionOptions connection, string name)
+    {
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord
+        {
+            AccountId = 78, Name = name, Race = 1, Class = 1, Level = 60,
+        });
+        var before = new CharacterState(character.Id, 0, 12, 1, 2, 3, 0, 60, 50, Money: 100,
+            Inventory: new InventorySnapshot([]));
+        await new EfCharacterStore(db).SaveStateAsync(before);
+        var expected = new CharacterQuestStatus(character.Id, WarEffortCatalog.GongQuest, 1, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        await new EfCharacterQuestStore(db).SaveQuestsAsync(character.Id, [expected]);
+        return new CharacterQuestRewardRequest(before, before with { Money = 101 }, expected,
+            expected with { Status = 1, Rewarded = true }, WarEffortGong: true);
     }
 
     [Theory]

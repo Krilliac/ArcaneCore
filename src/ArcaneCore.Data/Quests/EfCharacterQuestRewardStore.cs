@@ -192,7 +192,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                     if (WarEffortCatalog.Resources.All(r => counters.FirstOrDefault(c => c.ResourceId == r.Id)?.Count >= r.Goal))
                     {
                         phase.Phase = (byte)WarEffortPhase.Transporting;
-                        phase.PhaseEndsAtUnix = DateTimeOffset.UtcNow.AddDays(5).ToUnixTimeSeconds();
+                        phase.PhaseEndsAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + WarEffortCatalog.TransportSeconds;
                     }
                 }
             }
@@ -202,10 +202,28 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                     throw new InvalidOperationException("invalid AQ gong quest reward");
                 WarEffortPhaseRow? phase = await db.Set<WarEffortPhaseRow>()
                     .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
-                if (phase?.Phase == (byte)WarEffortPhase.Gong)
+                if (phase?.Phase is (byte)WarEffortPhase.Gong or (byte)WarEffortPhase.TenHourWar)
                 {
-                    phase.Phase = (byte)WarEffortPhase.TenHourWar;
-                    phase.PhaseEndsAtUnix = DateTimeOffset.UtcNow.AddHours(10).ToUnixTimeSeconds();
+                    // QuestRewarded_scarab_gong: every committed ring counts; only the first (count 0) opens the gate.
+                    WarEffortGongRow? gong = await db.Set<WarEffortGongRow>()
+                        .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+                    if (gong is null)
+                    {
+                        gong = new WarEffortGongRow { Id = 1 };
+                        db.Add(gong);
+                    }
+
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    if (gong.RingCount == 0 && phase.Phase == (byte)WarEffortPhase.Gong)
+                    {
+                        gong.FirstRungAtUnix = now;
+                        gong.FirstRingerId = request.After.Id;
+                        phase.Phase = (byte)WarEffortPhase.TenHourWar;
+                        // The ten hours start when the opening sequence ends (HandleWarStage sets VAR_WE_GONG_TIME).
+                        phase.PhaseEndsAtUnix = now + WarEffortCatalog.WarStartsAfterSeconds + WarEffortCatalog.TenHourWarSeconds;
+                    }
+
+                    gong.RingCount = checked(gong.RingCount + 1);
                 }
             }
 
