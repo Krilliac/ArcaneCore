@@ -768,6 +768,22 @@ public sealed partial class CreatureMapSystem
                 return false;
             }
 
+            case 37: // SCRIPT_COMMAND_MOVE_DYNAMIC (CreatureMapSystem.RelayCommandsExtra.cs)
+                RelayMoveDynamic(step, source, target);
+                return false;
+
+            case 39: // SCRIPT_COMMAND_SET_HOVER
+                RelaySetHover(step, source);
+                return false;
+
+            case 42: // SCRIPT_COMMAND_SET_EQUIPMENT_SLOTS
+                RelaySetEquipment(step, source);
+                return false;
+
+            case 52: // SCRIPT_COMMAND_SET_GOSSIP_MENU
+                RelaySetGossipMenu(step, target);
+                return false;
+
             default:
                 ReportRelay(step, $"command {step.Command}");
                 return false;

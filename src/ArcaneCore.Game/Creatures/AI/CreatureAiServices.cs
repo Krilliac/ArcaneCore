@@ -360,6 +360,12 @@ public sealed class CreatureAiServices
     /// null: those credit nothing and an escort sees only its own player. Bound by the world to its quest service.
     /// </summary>
     public IScriptQuestEvents? ScriptQuests { get; init; }
+
+    /// <summary>
+    /// The item templates DB scripts equip creatures with (SCRIPT_COMMAND_SET_EQUIPMENT_SLOTS 42, cmangos Creature::SetVirtualItem); null:
+    /// such a step can only empty slots. Bound by the world to its item store.
+    /// </summary>
+    public Func<uint, ArcaneCore.Kernel.Items.ItemTemplate?>? ItemTemplateOf { get; init; }
 }
 
 /// <summary>The quest credit EventAI actions give (cmangos Player methods called from CreatureEventAI::ProcessAction).</summary>
