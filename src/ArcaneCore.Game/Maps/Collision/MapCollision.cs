@@ -55,6 +55,7 @@ public sealed class MapCollision : IMapUpdater
         {
             map.Grids.GridCreated += OnGridCreated;
             map.Grids.GridUnloaded += OnGridUnloaded;
+            map.Grids.GridApproaching += OnGridApproaching;
         }
     }
 
@@ -175,6 +176,20 @@ public sealed class MapCollision : IMapUpdater
     {
         (int tx, int ty) = TerrainTile.TileOf(grid.Coord);
         ForEachLifecycle(l => l.OnTileLoaded(Map.MapId, tx, ty));
+    }
+
+    private void OnGridApproaching(Grid.GridCoord coord)
+    {
+        (int tx, int ty) = TerrainTile.TileOf(coord);
+        if (_services.LineOfSight is ICollisionTilePrefetch los)
+        {
+            los.Prefetch(Map.MapId, tx, ty);
+        }
+
+        if (_services.Pathfinder is ICollisionTilePrefetch path && !ReferenceEquals(path, _services.LineOfSight))
+        {
+            path.Prefetch(Map.MapId, tx, ty);
+        }
     }
 
     private void OnGridUnloaded(Grid.GridCoord coord)

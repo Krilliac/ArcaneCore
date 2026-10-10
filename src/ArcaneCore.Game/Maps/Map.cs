@@ -55,7 +55,9 @@ public sealed class Map
     private readonly HashSet<WorldObject> _movedObjects = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<ObjectGuid> _newObjects = [];
     private readonly List<Player> _transit = [];
-    private readonly List<Action> _afterUpdate = [];
+    private readonly List<Player> _updatePlayers = []; // Update's player snapshots (Update does not nest)
+    private List<Action> _afterUpdate = [];
+    private List<Action> _afterUpdateRunning = []; // the batch being run; swapped with _afterUpdate so neither is copied
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
     private readonly List<Unit> _heartbeatUnits = [];
@@ -96,6 +98,14 @@ public sealed class Map
         {
             (int tx, int ty) = TerrainTile.TileOf(coord);
             _terrain.Unload(tx, ty);
+        };
+
+        // Read the tile of a grid about to be created ahead of time (MapOptions.GridPrefetchDistance).
+        TerrainManager terrain = WorldMaps.Of(world).Terrain;
+        _grid.GridApproaching += coord =>
+        {
+            (int tx, int ty) = TerrainTile.TileOf(coord);
+            terrain.Prefetch(mapId, tx, ty);
         };
     }
 
@@ -489,6 +499,16 @@ public sealed class Map
         }
     }
 
+    private MapUpdateDiagnostics? _diagnostics;
+
+    /// <summary>The map's diagnostics record, cleared for the next update (one per map; world thread).</summary>
+    internal MapUpdateDiagnostics ReusableDiagnostics()
+    {
+        _diagnostics ??= new MapUpdateDiagnostics();
+        _diagnostics.Reset();
+        return _diagnostics;
+    }
+
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
         => Update(diffMs, diagnostics: null);
@@ -496,15 +516,25 @@ public sealed class Map
     internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
         diagnostics?.Begin();
-        // (1) in-world packets
-        foreach (Player player in _players.Values.ToArray())
+        GridLifecycleCounters gridsBefore = diagnostics is not null ? _grid.Counters : default;
+        // (1) in-world packets, over a snapshot (a handler may add or remove players); the snapshot list is reused
+        List<Player> snapshot = _updatePlayers;
+        snapshot.AddRange(_players.Values);
+        try
         {
-            if (player.Map != this)
+            foreach (Player player in snapshot)
             {
-                continue; // removed while processing an earlier player
-            }
+                if (player.Map != this)
+                {
+                    continue; // removed while processing an earlier player
+                }
 
-            ProcessPackets(player);
+                ProcessPackets(player);
+            }
+        }
+        finally
+        {
+            snapshot.Clear();
         }
 
         // (1a) players in transit from this map: only their world-port ack is handled (the
@@ -522,13 +552,23 @@ public sealed class Map
 
         // (1b) timers: logouts whose countdown is over (vmangos WorldSession::Update → LogoutPlayer)
         uint now = _world.NowMs;
-        foreach (Player player in _players.Values.ToArray())
+        snapshot.AddRange(_players.Values);
+        try
         {
-            if (player.Map == this && player.IsLogoutDue(now, _world.Options.LogoutDelayMs))
+            foreach (Player player in snapshot)
             {
-                _world.LogoutPlayer(player);
+                if (player.Map == this && player.IsLogoutDue(now, _world.Options.LogoutDelayMs))
+                {
+                    _world.LogoutPlayer(player);
+                }
             }
         }
+        finally
+        {
+            snapshot.Clear();
+        }
+
+        diagnostics?.EndPackets();
 
         // Snapshot only when membership changes. Heartbeat callbacks can add/remove units: keep this tick's
         // snapshot intact and rebuild next tick, still skipping removed units below. Timers and dictionary order
@@ -547,6 +587,7 @@ public sealed class Map
             if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
                 && unit is not Player { IsQuestSettlementPending: true })
                 unit.UpdateHeartbeat(diffMs);
+        diagnostics?.EndHeartbeat();
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
@@ -569,6 +610,8 @@ public sealed class Map
                 _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
                 CountUpdaterFault(updater);
             }
+
+            diagnostics?.EndUpdater(updater);
         }
 
         if (diagnostics is not null)
@@ -660,13 +703,17 @@ public sealed class Map
 
         // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
         _grid.Update(diffMs);
+        diagnostics?.EndGrid();
         _terrain.CleanUp(diffMs);
+        diagnostics?.EndTerrain();
 
         // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
         if (_afterUpdate.Count > 0)
         {
-            Action[] pending = [.. _afterUpdate];
-            _afterUpdate.Clear();
+            // Work scheduled while this batch runs goes to the other list and runs after the next update, as before.
+            List<Action> pending = _afterUpdate;
+            _afterUpdate = _afterUpdateRunning;
+            _afterUpdateRunning = pending;
             foreach (Action action in pending)
             {
                 try
@@ -678,9 +725,16 @@ public sealed class Map
                     _logger.LogError(ex, "deferred work on map {MapId} failed", MapId);
                 }
             }
+
+            pending.Clear();
         }
 
-        diagnostics?.Complete();
+        if (diagnostics is not null)
+        {
+            diagnostics.EndDeferred();
+            diagnostics.Grids = _grid.Counters - gridsBefore;
+            diagnostics.Complete();
+        }
     }
 
     /// <summary>
@@ -1005,7 +1059,11 @@ public sealed class Map
 
     private void AddVisible(Player viewer, ObjectGuid target)
     {
-        viewer.VisibleObjects.Add(target);
+        if (viewer.VisibleObjects.Add(target))
+        {
+            viewer.VisibilityVersion++;
+        }
+
         if (!_observers.TryGetValue(target, out HashSet<Player>? observers))
         {
             observers = new HashSet<Player>(ReferenceEqualityComparer.Instance);
@@ -1021,6 +1079,8 @@ public sealed class Map
         {
             return false;
         }
+
+        viewer.VisibilityVersion++;
 
         if (_observers.TryGetValue(target, out HashSet<Player>? observers))
         {
@@ -1054,6 +1114,7 @@ public sealed class Map
             {
                 if (other.VisibleObjects.Remove(obj.Guid))
                 {
+                    other.VisibilityVersion++;
                     // A joining observer may still have this object's create queued.
                     // Flush it before destroying the object so the client cannot recreate it
                     // later from the end-of-tick flush (vmangos update-before-remove order).
@@ -1078,6 +1139,7 @@ public sealed class Map
             }
 
             player.VisibleObjects.Clear();
+            player.VisibilityVersion++;
             player.PendingUpdates.Clear();
         }
 

@@ -510,7 +510,7 @@ public sealed class WorldRuntime : IDisposable
         {
             long mapStart = Stopwatch.GetTimestamp();
             MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
-                ? new MapUpdateDiagnostics()
+                ? map.ReusableDiagnostics()
                 : null;
             try
             {
@@ -583,6 +583,15 @@ public sealed class WorldRuntime : IDisposable
         }
     }
 
+    /// <summary>Benchmark seam (tests): every map update of the world loop, with its diagnostics (world thread).</summary>
+    internal Action<Map, MapUpdateDiagnostics>? MapUpdateObserver { get; set; }
+
+    /// <summary>Benchmark seam (tests): every tick of the world loop: its duration (µs), the world thread's allocation and the phases.</summary>
+    internal Action<long, long, TickPhases>? TickObserver { get; set; }
+
+    /// <summary>Benchmark seam (tests): every timed world feature of every tick: its name, time (µs) and allocation.</summary>
+    internal Action<string, long, long>? FeatureObserver { get; set; }
+
     /// <summary>The phase times of the last <see cref="RunTick"/> (world thread).</summary>
     public TickPhases LastTickPhases { get; private set; }
 
@@ -609,8 +618,11 @@ public sealed class WorldRuntime : IDisposable
                 _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
             }
 
-            Stats.RecordFeature(handler.Method.DeclaringType?.Name ?? handler.Method.Name, Micros(Stopwatch.GetTimestamp() - start),
-                GC.GetAllocatedBytesForCurrentThread() - startBytes);
+            string name = handler.Method.DeclaringType?.Name ?? handler.Method.Name;
+            long micros = Micros(Stopwatch.GetTimestamp() - start);
+            long bytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
+            Stats.RecordFeature(name, micros, bytes);
+            FeatureObserver?.Invoke(name, micros, bytes);
         }
     }
 
@@ -756,10 +768,11 @@ public sealed class WorldRuntime : IDisposable
 
             long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             long stampBefore = Stopwatch.GetTimestamp();
-            RunTick(diff);
+            RunTick(diff, MapUpdateObserver);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
-            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore,
-                interval * 1000L, frameMicros, LastTickPhases);
+            long tickBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            Stats.Record(durationMicros, tickBytes, interval * 1000L, frameMicros, LastTickPhases);
+            TickObserver?.Invoke(durationMicros, tickBytes, LastTickPhases);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {

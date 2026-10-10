@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,12 +18,19 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle
+public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     private readonly string _directory;
     private readonly ILogger _logger;
     private readonly Dictionary<uint, VMapTree?> _trees = [];
     private readonly Dictionary<string, WorldModel?> _models = new(StringComparer.Ordinal);
+
+    // Prefetch (TilePrefetchCache): parsed tile spawn lists, the models they need that were not cached yet (parsed on the pool), and
+    // the names already cached (read by the pool to skip them; written on the world thread).
+    private readonly TilePrefetchCache<List<(ModelSpawn Spawn, uint Slot)>> _prefetch = new();
+    private readonly ConcurrentDictionary<string, WorldModel> _prefetchedModels = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _cachedModelNames = new(StringComparer.Ordinal);
+    private const int MaxPrefetchedModels = 512;
 
     public VMapManager(string directory, bool enableLineOfSight = true, bool enableHeight = true, ILogger? logger = null)
     {
@@ -71,21 +79,23 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle
         }
 
         string path = Path.Combine(_directory, VMapFormat.TileFileName(mapId, tileX, tileY));
-        byte[]? bytes = ReadFile(path, missingIsNormal: true);
-        if (bytes is null)
+        if (!_prefetch.TryTake(mapId, tileX, tileY, out List<(ModelSpawn Spawn, uint Slot)> spawns))
         {
-            return false;
-        }
+            byte[]? bytes = ReadFile(path, missingIsNormal: true);
+            if (bytes is null)
+            {
+                return false;
+            }
 
-        List<(ModelSpawn Spawn, uint Slot)> spawns;
-        try
-        {
-            spawns = VMapTree.ParseTile(bytes);
-        }
-        catch (InvalidDataException ex)
-        {
-            _logger.LogError("VMaps: {Path} is not a usable {Magic} tile ({Reason}); the tile is ignored", path, VMapFormat.Magic, ex.Message);
-            return false;
+            try
+            {
+                spawns = VMapTree.ParseTile(bytes);
+            }
+            catch (InvalidDataException ex)
+            {
+                _logger.LogError("VMaps: {Path} is not a usable {Magic} tile ({Reason}); the tile is ignored", path, VMapFormat.Magic, ex.Message);
+                return false;
+            }
         }
 
         tree.AddTile((tileX, tileY), Instantiate(tree, spawns, path));
@@ -102,6 +112,61 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle
     }
 
     void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY) => LoadTile(mapId, tileX, tileY);
+
+    /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
+    internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>
+    /// Read and parse a tile's <c>.vmtile</c> and the model files it names that are not cached yet, on the thread pool
+    /// (<see cref="TilePrefetchCache{T}"/>), so <see cref="LoadTile"/> only instantiates them. Nothing happens for a map without vmap
+    /// data, an untiled map or a tile already loaded. World thread.
+    /// </summary>
+    public void Prefetch(uint mapId, int tileX, int tileY)
+    {
+        if (GetTree(mapId) is not { IsTiled: true } tree || tree.IsTileLoaded(tileX, tileY))
+        {
+            return;
+        }
+
+        if (_prefetchedModels.Count > MaxPrefetchedModels)
+        {
+            _prefetchedModels.Clear(); // models of tiles nobody loaded; a later load reads what it needs itself
+        }
+
+        string path = Path.Combine(_directory, VMapFormat.TileFileName(mapId, tileX, tileY));
+        _prefetch.Request(mapId, tileX, tileY, () =>
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            List<(ModelSpawn Spawn, uint Slot)> spawns = VMapTree.ParseTile(File.ReadAllBytes(path));
+            foreach ((ModelSpawn spawn, uint _) in spawns)
+            {
+                string name = spawn.Name;
+                if (_cachedModelNames.ContainsKey(name) || _prefetchedModels.ContainsKey(name) || !VMapFormat.IsSafeModelName(name))
+                {
+                    continue;
+                }
+
+                string modelPath = Path.Combine(_directory, VMapFormat.ModelFileName(name));
+                try
+                {
+                    if (File.Exists(modelPath))
+                    {
+                        _prefetchedModels.TryAdd(name, WorldModel.Parse(File.ReadAllBytes(modelPath)));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    // Left to the world thread, which reads it again and logs what it always logged.
+                }
+            }
+
+            return spawns;
+        });
+    }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY) => UnloadTile(mapId, tileX, tileY);
 
@@ -212,7 +277,12 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle
         }
 
         WorldModel? model = null;
-        if (!VMapFormat.IsSafeModelName(name))
+        if (_prefetchedModels.TryRemove(name, out WorldModel? prefetched))
+        {
+            model = prefetched;
+            ModelFilesLoaded++;
+        }
+        else if (!VMapFormat.IsSafeModelName(name))
         {
             _logger.LogError("VMaps: refusing model name '{Name}' (not a plain file name)", name);
         }
@@ -235,6 +305,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle
         }
 
         _models[name] = model;
+        _cachedModelNames.TryAdd(name, 0);
         return model;
     }
 

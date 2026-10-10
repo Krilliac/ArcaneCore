@@ -311,6 +311,10 @@ public sealed partial class CreatureMapSystem
         creature.RunSpeed = creature.CreatureRunSpeed;
         creature.ClearChangedFields();
         _creatures[creature.Guid] = creature;
+        if (creature.IsNewObject)
+        {
+            _newCreatures.Add(creature);
+        }
         grid.Creatures.Add(creature);
         if (creature.DeathState != CreatureDeathState.Dead)
         {
@@ -496,9 +500,12 @@ public sealed partial class CreatureMapSystem
 
     private void ForgetObservers(Creature creature)
     {
-        foreach (HashSet<Creature> seen in _seen.Values)
+        foreach (SeenCreatures seen in _seen.Values)
         {
-            seen.Remove(creature);
+            if (seen.Creatures.Remove(creature))
+            {
+                seen.Dirty = true;
+            }
         }
 
         _catchUp.RemoveAll(c => ReferenceEquals(c.Creature, creature));

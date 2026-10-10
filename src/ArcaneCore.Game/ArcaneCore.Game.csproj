@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.Game.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
   </ItemGroup>
 
   <ItemGroup>

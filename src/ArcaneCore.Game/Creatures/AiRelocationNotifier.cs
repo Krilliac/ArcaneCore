@@ -26,6 +26,8 @@ internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOpt
     private readonly List<WorldObject> _order = [];
     private readonly List<WorldObject> _candidates = [];
     private readonly HashSet<WorldObject> _seen = new(ReferenceEqualityComparer.Instance);
+    private readonly List<WorldObject> _dueScratch = [];
+    private bool _dueScratchInUse;
 
     /// <summary>Notifies waiting for their delay.</summary>
     public int PendingCount => _order.Count;
@@ -50,16 +52,41 @@ internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOpt
             return;
         }
 
-        WorldObject[] due = [.. _order.Where(o => _due[o] <= nowMs)];
-        foreach (WorldObject obj in due)
+        // One pass: the due notifies leave the queue in their scheduled order, the rest keep theirs (removing them one by one
+        // was quadratic in the queue length, which grows with every moving unit of the map).
+        bool ownsScratch = !_dueScratchInUse;
+        List<WorldObject> due = ownsScratch ? _dueScratch : [];
+        _dueScratchInUse = true;
+        try
         {
-            _due.Remove(obj);
-            _order.Remove(obj);
-        }
+            int kept = 0;
+            for (int i = 0; i < _order.Count; i++)
+            {
+                WorldObject obj = _order[i];
+                if (_due[obj] <= nowMs)
+                {
+                    due.Add(obj);
+                    _due.Remove(obj);
+                }
+                else
+                {
+                    _order[kept++] = obj;
+                }
+            }
 
-        foreach (WorldObject obj in due)
+            _order.RemoveRange(kept, _order.Count - kept);
+            foreach (WorldObject obj in due)
+            {
+                Notify(obj);
+            }
+        }
+        finally
         {
-            Notify(obj);
+            due.Clear();
+            if (ownsScratch)
+            {
+                _dueScratchInUse = false;
+            }
         }
     }
 

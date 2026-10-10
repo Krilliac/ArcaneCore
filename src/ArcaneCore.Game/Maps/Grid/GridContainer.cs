@@ -29,6 +29,11 @@ public sealed class GridContainer
     private readonly HashSet<WorldObject> _unplaced = new(ReferenceEqualityComparer.Instance);
     private readonly List<Grid> _loaded = [];
     private float _visibilityDistance;
+    private GridLifecycleCounters _counters;
+
+    // Grids GridApproaching was raised for and when (the container's update clock), so a prefetch is asked for once per expiry.
+    private readonly Dictionary<int, long> _approached = [];
+    private long _clockMs;
 
     public GridContainer(MapOptions options, float visibilityDistance)
     {
@@ -56,6 +61,13 @@ public sealed class GridContainer
     /// </summary>
     public event Action<Grid>? GridUnloading;
 
+    /// <summary>
+    /// Raised when an object entered a cell from which a grid that does not exist yet is within reach
+    /// (<see cref="MapOptions.GridPrefetchDistance"/>): its tiles may be read ahead of <see cref="GridCreated"/>. At most once per grid
+    /// every two minutes; nothing else depends on it.
+    /// </summary>
+    public event Action<GridCoord>? GridApproaching;
+
     /// <summary>Raised after a grid was unloaded and dropped.</summary>
     public event Action<GridCoord>? GridUnloaded;
 
@@ -80,6 +92,9 @@ public sealed class GridContainer
 
     /// <summary>The largest bounding radius of any object added or moved so far (pads distance queries).</summary>
     public float MaxBoundingRadius { get; private set; }
+
+    /// <summary>Cumulative grid lifecycle work of this container (diagnostics; world thread).</summary>
+    internal GridLifecycleCounters Counters => _counters;
 
     public Grid? GetGrid(GridCoord coord) => _grids[coord.Id];
 
@@ -118,6 +133,8 @@ public sealed class GridContainer
             grid.ActiveObjectCount++;
             LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
         }
+
+        Approach(obj, active);
     }
 
     /// <summary>Remove an object from the index (vmangos <c>RemoveFromGrid</c>).</summary>
@@ -186,7 +203,36 @@ public sealed class GridContainer
             LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
         }
 
+        Approach(obj, active);
         return true;
+    }
+
+    /// <summary>Raise <see cref="GridApproaching"/> for the grids within reach of an object that do not exist yet.</summary>
+    private void Approach(WorldObject obj, bool active)
+    {
+        float prefetch = Options.GridPrefetchDistance;
+        if (GridApproaching is null || !(prefetch > 0) || !float.IsFinite(obj.X) || !float.IsFinite(obj.Y))
+        {
+            return;
+        }
+
+        float radius = active ? Options.GridActivationDistance + prefetch : prefetch / 2;
+        CellArea area = GridDefines.CalculateCellArea(obj.X, obj.Y, radius);
+        for (int gx = area.Low.Grid.X; gx <= area.High.Grid.X; gx++)
+        {
+            for (int gy = area.Low.Grid.Y; gy <= area.High.Grid.Y; gy++)
+            {
+                var coord = new GridCoord(gx, gy);
+                if (_grids[coord.Id] is not null
+                    || (_approached.TryGetValue(coord.Id, out long at) && _clockMs - at < TilePrefetchCache<object>.ExpiryMs))
+                {
+                    continue;
+                }
+
+                _approached[coord.Id] = _clockMs;
+                GridApproaching(coord);
+            }
+        }
     }
 
     /// <summary>
@@ -333,6 +379,7 @@ public sealed class GridContainer
     /// </summary>
     public void Update(long diffMs)
     {
+        _clockMs += diffMs;
         long expiry = Options.EffectiveCleanUpDelayMs;
         for (int i = _loaded.Count - 1; i >= 0; i--)
         {
@@ -387,8 +434,10 @@ public sealed class GridContainer
         int maxX = Math.Min(GridDefines.TotalNumberOfCellsPerMap - 1, (coord.X * GridDefines.MaxNumberOfCells) + GridDefines.MaxNumberOfCells + cellRange);
         int maxY = Math.Min(GridDefines.TotalNumberOfCellsPerMap - 1, (coord.Y * GridDefines.MaxNumberOfCells) + GridDefines.MaxNumberOfCells + cellRange);
 
+        _counters.NearChecks++;
         foreach (WorldObject obj in _active)
         {
+            _counters.NearCheckObjects++;
             CellCoord p = GridDefines.ComputeCellCoord(obj.X, obj.Y);
             if (p.X >= minX && p.X <= maxX && p.Y >= minY && p.Y <= maxY)
             {
@@ -417,6 +466,7 @@ public sealed class GridContainer
             return false;
         }
 
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
         GridUnloading?.Invoke(grid);
         foreach (WorldObject obj in grid.AllObjects())
         {
@@ -431,6 +481,8 @@ public sealed class GridContainer
         _grids[coord.Id] = null;
         _loaded.Remove(grid);
         GridUnloaded?.Invoke(coord);
+        _counters.Unloaded++;
+        _counters.UnloadMicros += GridLifecycleCounters.MicrosSince(start);
         return true;
     }
 
@@ -449,10 +501,14 @@ public sealed class GridContainer
         Grid? grid = _grids[coord.Id];
         if (grid is null)
         {
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
+            _approached.Remove(coord.Id);
             grid = new Grid(coord, Options.EffectiveCleanUpDelayMs, Options.GridUnload) { State = GridState.Idle };
             _grids[coord.Id] = grid;
             _loaded.Add(grid);
             GridCreated?.Invoke(grid);
+            _counters.Created++;
+            _counters.CreateMicros += GridLifecycleCounters.MicrosSince(start);
         }
 
         return grid;
@@ -470,7 +526,10 @@ public sealed class GridContainer
         {
             // "it's important to set it loaded before loading!" (vmangos EnsureGridLoaded)
             grid.ObjectDataLoaded = true;
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
             GridLoaded?.Invoke(grid);
+            _counters.Loaded++;
+            _counters.LoadMicros += GridLifecycleCounters.MicrosSince(start);
             grid.ResetTimer(Options.EffectiveCleanUpDelayMs, 0.1f);
             grid.State = GridState.Active;
         }
@@ -506,4 +565,31 @@ public sealed class GridContainer
             MaxBoundingRadius = radius;
         }
     }
+}
+
+/// <summary>
+/// Cumulative grid lifecycle work of a <see cref="GridContainer"/> (diagnostics): grids created (terrain and collision tiles
+/// loaded by the handlers), grids whose objects were loaded (spawns), grids unloaded (handlers and evictions), the time those
+/// handlers took, and the activity checks (<see cref="GridContainer.ActiveObjectsNearGrid"/>) with the active objects they visited.
+/// </summary>
+internal struct GridLifecycleCounters
+{
+    public long Created;
+    public long Loaded;
+    public long Unloaded;
+    public long CreateMicros;
+    public long LoadMicros;
+    public long UnloadMicros;
+    public long NearChecks;
+    public long NearCheckObjects;
+
+    public static GridLifecycleCounters operator -(GridLifecycleCounters a, GridLifecycleCounters b) => new()
+    {
+        Created = a.Created - b.Created, Loaded = a.Loaded - b.Loaded, Unloaded = a.Unloaded - b.Unloaded,
+        CreateMicros = a.CreateMicros - b.CreateMicros, LoadMicros = a.LoadMicros - b.LoadMicros, UnloadMicros = a.UnloadMicros - b.UnloadMicros,
+        NearChecks = a.NearChecks - b.NearChecks, NearCheckObjects = a.NearCheckObjects - b.NearCheckObjects,
+    };
+
+    internal static long MicrosSince(long start)
+        => (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
 }

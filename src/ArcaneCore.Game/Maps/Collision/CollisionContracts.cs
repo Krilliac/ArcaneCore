@@ -239,3 +239,15 @@ public interface ICollisionTileLifecycle
     /// <summary>The grid covering the tile was unloaded (release the tile).</summary>
     void OnTileUnloaded(uint mapId, int tileX, int tileY);
 }
+
+/// <summary>
+/// Optional: a collision service that can read and parse a tile ahead of <see cref="ICollisionTileLifecycle.OnTileLoaded"/> on the
+/// thread pool, so that the grid creation itself does not wait for the files (docs/integration/tick-scaling-20261009.md). Called on
+/// the world thread when a grid that does not exist yet comes within reach of an object; it changes nothing but when the files
+/// are read.
+/// </summary>
+public interface ICollisionTilePrefetch
+{
+    /// <summary>Start reading the tile's data in the background (no effect when it is loaded or already on its way).</summary>
+    void Prefetch(uint mapId, int tileX, int tileY);
+}

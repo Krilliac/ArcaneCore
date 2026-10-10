@@ -19,7 +19,7 @@ namespace ArcaneCore.Game.Maps.Collision.MMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifecycle
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -30,6 +30,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     private readonly string _directory;
     private readonly ILogger _logger;
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
+    private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
 
     public NavMeshPathfinder(string directory, ILogger? logger = null)
     {
@@ -91,6 +92,17 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
 
         string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
+        if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile? prefetched))
+        {
+            if (mesh.AddTile(tileX, tileY, prefetched))
+            {
+                return true;
+            }
+
+            _logger.LogError("MMaps: {Path} claims Detour tile ({X}, {Y}), which is already loaded; ignored", path, prefetched.X, prefetched.Y);
+            return false;
+        }
+
         if (ReadFile(path) is not { } bytes)
         {
             return false;
@@ -126,6 +138,24 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY) => LoadTile(mapId, tileX, tileY);
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY) => UnloadTile(mapId, tileX, tileY);
+
+    /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
+    internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>
+    /// Read and parse a tile's <c>.mmtile</c> on the thread pool (<see cref="TilePrefetchCache{T}"/>) so <see cref="LoadTile"/> only
+    /// adds it. Nothing happens for a map without a navmesh or a tile already loaded. World thread.
+    /// </summary>
+    public void Prefetch(uint mapId, int tileX, int tileY)
+    {
+        if (GetNavMesh(mapId) is not { } mesh || mesh.IsTerrainTileLoaded(tileX, tileY))
+        {
+            return;
+        }
+
+        string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
+        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? NavMeshTile.ParseFile(File.ReadAllBytes(path)) : null);
+    }
 
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
