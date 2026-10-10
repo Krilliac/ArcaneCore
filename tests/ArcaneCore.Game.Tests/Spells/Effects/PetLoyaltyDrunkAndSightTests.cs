@@ -40,7 +40,7 @@ public sealed class PetLoyaltyDrunkAndSightTests
             Spell(TeachGrowl, Effect(SpellEffectName.LearnPetSpell, 0, trigger: Growl)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             Spell(Growl, Effect(SpellEffectName.Dummy, 1)),
             Spell(HighGrowl, Effect(SpellEffectName.Dummy, 1)) with { SpellLevel = 40 },
-            Spell(TeachHighGrowl, Effect(SpellEffectName.LearnPetSpell, 0, trigger: HighGrowl)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+            Spell(TeachHighGrowl, Effect(SpellEffectName.LearnPetSpell, 0, trigger: HighGrowl)) with { SpellLevel = 40, StartRecoveryCategory = 0, StartRecoveryTime = 0 }, // Spell.cpp:5856 reads the teach spell
         ],
         petContent: new PetContent([], [new PetCreateSpells(BeastEntry, [LearnBite])]),
         extraTemplates:

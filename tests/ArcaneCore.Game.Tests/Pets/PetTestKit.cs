@@ -54,7 +54,7 @@ internal sealed class PetTestKit : IDisposable
     public const int TotemDurationMs = 30_000;
 
     public PetTestKit(IEnumerable<SpellInfo>? extraSpells = null, PetContent? petContent = null, bool creatureSpells = false,
-        IEnumerable<CreatureTemplate>? extraTemplates = null)
+        IEnumerable<CreatureTemplate>? extraTemplates = null, PetOptions? petOptions = null)
     {
         Spells = new SpellTestKit([.. DefaultPetSpells(), .. extraSpells ?? []]);
         Map = Spells.World.GetMap(0);
@@ -87,7 +87,7 @@ internal sealed class PetTestKit : IDisposable
         Creatures = new CreatureMapSystem(Map, Content, random: new Random(1),
             aiServices: creatureSpells ? new CreatureAiServices { Spells = new SpellSystemCreatureCaster(Spells.System) } : null);
         Map.AddUpdater(Creatures);
-        Service = new SummonService(systems: map => ReferenceEquals(map, Map) ? Creatures : null, random: new Random(3));
+        Service = new SummonService(petOptions, systems: map => ReferenceEquals(map, Map) ? Creatures : null, random: new Random(3));
         Spells.System.Units = new MapObjectResolver();
         Service.Content = petContent ?? PetContent.Empty;
         Service.Install(Spells.System);
