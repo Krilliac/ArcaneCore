@@ -31,8 +31,12 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     private const int RewardQuestField = 0x00C9;
     private const int RewardProgressField = 0x00CA;
     private const int MoneyField = 0x0498;
-    private static readonly TimeSpan ResponseBudget = TimeSpan.FromMilliseconds(200);
+    // A hang bound, not a latency target. A world blocked by a held settlement answers nothing until the test releases the hold, which
+    // it does only after these measurements, so any finite budget fails that regression; a 200 ms budget also failed healthy runs whose
+    // world thread the machine descheduled for a few milliseconds more (205.9 ms in a loaded full run).
+    private static readonly TimeSpan ResponseBudget = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan IntentionalPause = TimeSpan.FromMilliseconds(650);
+    private const int HeldMapTicks = 10;
 
     [Fact]
     public async Task SettlementCapacity_EightHeldRealTurnInsLeaveTheNinthPlayerActiveAndAbleToRetry()
@@ -255,7 +259,9 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             await slow.Connection.SendAsync(WorldOpcode.CmsgQuestlogRemoveQuest, [1], token);
             await MockScenarios.ChooseRewardAsync(slow.Connection, 0, token);
 
-            while (Stopwatch.GetElapsedTime(hold.EnteredTimestamp) < IntentionalPause)
+            // Held for at least the pause and until the map has ticked HeldMapTicks times: the count is waited for, not expected of a
+            // wall-clock window (a blocked world never reaches it, and the test deadline ends the wait).
+            while (Stopwatch.GetElapsedTime(hold.EnteredTimestamp) < IntentionalPause || probe.TickCount < HeldMapTicks)
             {
                 await MeasureAsync(async responseToken =>
                 {
@@ -286,7 +292,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             heldMilliseconds = Stopwatch.GetElapsedTime(hold.EnteredTimestamp).TotalMilliseconds;
             tickMeasurement = probe.End();
             Assert.True(heldMilliseconds >= IntentionalPause.TotalMilliseconds, "Store hold ended before the intentional pause.");
-            Assert.True(tickMeasurement.TickCount >= 10, $"Only {tickMeasurement.TickCount} actual map ticks ran during the held reward.");
+            Assert.True(tickMeasurement.TickCount >= HeldMapTicks, $"Only {tickMeasurement.TickCount} actual map ticks ran during the held reward.");
             Assert.True(tickMeasurement.MaximumGapMilliseconds < ResponseBudget.TotalMilliseconds,
                 $"Actual map tick gap {tickMeasurement.MaximumGapMilliseconds:F2} ms exceeded {ResponseBudget.TotalMilliseconds} ms.");
 
@@ -637,6 +643,18 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
 
         public void OnPlayerRemoved(Map map, Player player)
         {
+        }
+
+        /// <summary>Map ticks since <see cref="Begin"/> (any thread).</summary>
+        internal int TickCount
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _measuring ? _gaps.Count : 0;
+                }
+            }
         }
 
         internal void Begin()

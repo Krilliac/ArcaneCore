@@ -185,9 +185,23 @@ internal sealed class WorldTestClient : IAsyncDisposable
         return packets;
     }
 
-    /// <summary>The text of every chat line answering a request: waits for the first, then collects the rest.</summary>
-    internal async Task<string[]> CollectChatLinesAsync()
-        => [.. (await CollectFromAsync(WorldOpcode.SmsgMessagechat)).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+    /// <summary>
+    /// The text of every chat line answering a request: waits for the first <paramref name="atLeast"/> lines (read timeout each), then
+    /// collects the rest. A command's lines are sent one by one; on a loaded machine the handler or the session writer can be descheduled
+    /// between two of them for longer than the quiet window, so a test that knows how many lines it expects waits for that many.
+    /// </summary>
+    internal async Task<string[]> CollectChatLinesAsync(int atLeast = 1)
+    {
+        var lines = new List<string>();
+        while (lines.Count < atLeast)
+        {
+            byte[] payload = await ReadUntilAsync(WorldOpcode.SmsgMessagechat);
+            lines.Add(ChatMessage.Parse(payload).Text);
+        }
+
+        lines.AddRange((await CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text));
+        return [.. lines];
+    }
 
     /// <summary>CMSG_MESSAGECHAT: u32 type, u32 language, [target], message.</summary>
     public Task SendChatAsync(ChatType type, Language language, string message, string? target = null)

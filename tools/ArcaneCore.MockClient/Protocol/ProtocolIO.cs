@@ -5,20 +5,33 @@ namespace ArcaneCore.MockClient.Protocol;
 
 internal static class ProtocolIO
 {
-    internal static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(5);
+    /// <summary>The tool's deadline for one network operation (a read, a send, a logon step): 5 s.</summary>
+    internal static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The deadline <see cref="BoundedAsync{T}(string, CancellationToken, Func{CancellationToken, Task{T}})"/> applies, and a new
+    /// <see cref="WorldClient"/>'s. The tool keeps <see cref="DefaultOperationTimeout"/> against a live server. The in-process test
+    /// suite raises it once, before any test runs: there it is only a hang bound, because a loaded machine answered a real SQLite
+    /// character create later than 5 s and failed healthy scenarios; each test's own deadline still ends a hung one.
+    /// </summary>
+    internal static TimeSpan OperationTimeout { get; set; } = DefaultOperationTimeout;
+
+    internal static Task<T> BoundedAsync<T>(
+        string operation, CancellationToken cancellationToken, Func<CancellationToken, Task<T>> action)
+        => BoundedAsync(operation, OperationTimeout, cancellationToken, action);
 
     internal static async Task<T> BoundedAsync<T>(
-        string operation, CancellationToken cancellationToken, Func<CancellationToken, Task<T>> action)
+        string operation, TimeSpan timeout, CancellationToken cancellationToken, Func<CancellationToken, Task<T>> action)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(OperationTimeout);
+        deadline.CancelAfter(timeout);
         try
         {
             return await action(deadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException($"{operation} exceeded the {OperationTimeout.TotalSeconds:0}-second deadline.", exception);
+            throw new TimeoutException($"{operation} exceeded the {timeout.TotalSeconds:0}-second deadline.", exception);
         }
     }
 

@@ -47,7 +47,7 @@ public sealed class DismissPetTests
         kit.Service.SavePersistence = async (snapshot, _) => { states.Add(snapshot.IsCurrent); entered.SetResult(); await release.Task; };
         kit.Service.SaveDetachedPersistence = (snapshot, _) => { states.Add(snapshot.IsCurrent); return Task.CompletedTask; };
         kit.Service.QueueCurrentPetSave(owner);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         kit.Cast(owner, Dismiss);
         release.SetResult();
         await kit.Service.FlushCharacterAsync(1);

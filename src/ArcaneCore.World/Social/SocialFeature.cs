@@ -150,7 +150,23 @@ public sealed class SocialFeature(
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
         _guildsLoaded = Task.Run(LoadGuildsAsync);
-        _statsTimer = new Timer(_ => world.Post(() => Context.Groups.UpdateOutOfRangeStats()), null, StatsIntervalMs, StatsIntervalMs);
+        _statsTimer = new Timer(_ => world.Post(RunPeriodicStatsPass), null, StatsIntervalMs, StatsIntervalMs);
+    }
+
+    /// <summary>
+    /// Whether the <see cref="StatsIntervalMs"/> timer runs the out-of-range stats pass (world thread). Always on in a server; a test
+    /// that drives <see cref="ArcaneCore.Game.Groups.GroupManager.UpdateOutOfRangeStats"/> itself and asserts each packet switches it off, because a timer pass
+    /// landing between the test's change and its own pass sends that change first and leaves the test's pass with nothing to send.
+    /// </summary>
+    internal bool PeriodicStatsPass { get; set; } = true;
+
+    /// <summary>The timer's pass, on the world thread.</summary>
+    internal void RunPeriodicStatsPass()
+    {
+        if (PeriodicStatsPass)
+        {
+            Context.Groups.UpdateOutOfRangeStats();
+        }
     }
 
     /// <summary>

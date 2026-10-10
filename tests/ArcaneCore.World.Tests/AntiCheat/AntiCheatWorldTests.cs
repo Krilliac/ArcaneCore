@@ -65,13 +65,26 @@ public sealed class AntiCheatWorldTests
     private static Task SettledAsync(WorldTestHost host, string name, Mover mover)
         => host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name) is { } p && MathF.Abs(p.X - mover.X) < 0.01f, $"{name} at x={mover.X}");
 
+    /// <summary>
+    /// Apply <paramref name="options"/> with no baseline gap. The mover paces itself in real time, but every check judges a step by the
+    /// client's own elapsed time capped by the receive interval plus slack, so a late packet never makes a legitimate step look fast.
+    /// The one wall-clock rule is the baseline gap: a pause over <see cref="AntiCheatOptions.BaselineGapMs"/> (3 s) re-baselines (AFK, a
+    /// loading screen), and a test continuation the thread pool held back that long under full-suite load sent the blink as a fresh
+    /// baseline, which is never scored. With the gap out of reach every result here depends only on the packets.
+    /// </summary>
     private static Task ApplyAsync(WorldTestHost host, AntiCheatOptions options)
-        => host.OnWorldAsync(() => FeatureOf(host).ApplyOptions(options));
+    {
+        options.BaselineGapMs = NoBaselineGapMs;
+        return host.OnWorldAsync(() => FeatureOf(host).ApplyOptions(options));
+    }
+
+    private const int NoBaselineGapMs = 600_000;
 
     [Fact]
     public async Task ALegitimatePlayer_RunningJumpingAndStopping_ScoresNothing_ButTheSameClientsBlinkIsScored()
     {
         await using var host = WorldTestHost.Start();
+        await ApplyAsync(host, new AntiCheatOptions());
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient client = await host.EnterWorldAsync("LEGIT", "Legit");
         Mover mover = await MoverAsync(host, client, "Legit");
@@ -143,6 +156,7 @@ public sealed class AntiCheatWorldTests
     public async Task StaffAndGmMode_AreExempt_AndGmModeOffIsCheckedWhenTheLevelIsNot()
     {
         await using var host = WorldTestHost.Start();
+        await ApplyAsync(host, new AntiCheatOptions());
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staffer", AccountSecurity.GameMaster);
         Mover mover = await MoverAsync(host, gm, "Staffer");
@@ -274,6 +288,7 @@ public sealed class AntiCheatWorldTests
         await using WorldTestClient admin = await host.EnterWorldAsync("BOSS", "Boss", AccountSecurity.Administrator);
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
         await using WorldTestClient cheater = await host.EnterWorldAsync("SHADY", "Shady");
+        await ApplyAsync(host, new AntiCheatOptions());
         Mover mover = await MoverAsync(host, cheater, "Shady");
         await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
         await mover.StepAsync(100, 80f);

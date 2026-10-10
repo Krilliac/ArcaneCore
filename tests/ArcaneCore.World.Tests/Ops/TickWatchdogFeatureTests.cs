@@ -52,7 +52,10 @@ public sealed class TickWatchdogFeatureTests
     [Fact]
     public async Task OnTheRealWorldThread_EveryTickIsRecorded_FrameTimesMatchTheInterval_AndTheHeartbeatIsAlive()
     {
-        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options()));
+        // A real world thread on a loaded machine can be descheduled for seconds (the full suite saw two 2 s "hangs" at the default
+        // threshold). The hang threshold is therefore a bound no healthy run reaches, so HangsCompleted == 0 still proves that ordinary
+        // frames are not counted as hangs; the hang path itself is covered on the fake clock below.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
         TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
         var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
         Assert.Same(monitor, feature.Monitor);
@@ -63,11 +66,14 @@ public sealed class TickWatchdogFeatureTests
         RingStats stats = monitor.Stats(out long[] buffer);
         System.Buffers.ArrayPool<long>.Shared.Return(buffer);
         Assert.True(stats.Samples >= 50);
-        // The mean frame, not the median: the 5 ms test tick is shorter than a Windows wait's ~15.6 ms granularity, so the drift-compensated
-        // loop (WorldTickScheduler, like vmangos WorldRunnable's "no sleep after an overrun") alternates an oversleeping wait (a ~15.6 ms frame)
-        // with an immediate tick (a ~0.1 ms frame). The median of that even split lands on either side; the mean is the tick rate (~7.8 ms
-        // on the coarse timer, 5 ms on a fine one). Generous for a loaded CI box.
-        Assert.InRange(stats.Mean, 4_000, 60_000);
+        // The 5 ms test tick is shorter than a Windows wait's ~15.6 ms granularity, so the drift-compensated loop (WorldTickScheduler, like
+        // vmangos WorldRunnable's "no sleep after an overrun") alternates an oversleeping wait (a ~15.6 ms frame) with an immediate tick
+        // (a ~0.1 ms frame). The mean is the tick rate (~7.8 ms on the coarse timer, 5 ms on a fine one) and is never below the interval:
+        // the loop does not tick early. Load only lengthens frames, and one descheduled frame of seconds moves the mean of fifty past any
+        // fixed ceiling, so the ceiling is on the median instead: whichever side of the even split it lands on, a few stalled frames
+        // cannot move it, and only a loop that no longer ticks at its interval puts it past 60 ms.
+        Assert.True(stats.Mean >= 4_000, $"mean frame {stats.Mean} us is shorter than the 5 ms interval allows");
+        Assert.InRange(stats.P50, 0, 60_000);
         Assert.True(monitor.IsAlive(WatchdogClock.System.NowMicros, out _));
         Assert.Equal(0, monitor.HangsCompleted);
 

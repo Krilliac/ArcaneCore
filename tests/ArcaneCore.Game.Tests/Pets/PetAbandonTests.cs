@@ -47,7 +47,7 @@ public sealed class PetAbandonTests
             return snapshot with { IsCurrent = false };
         };
         kit.Service.QueueCurrentPetSave(owner);
-        await currentEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await currentEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Task<PersistentPetSnapshot?> lateRead = kit.Service.ReadCurrentPetAsync(owner);
         Task<PersistentPetSnapshot?> lateCallableRead = kit.Service.ReadCallablePetAsync(owner);
         kit.Controller.HandleAbandon(owner, pet.Guid);
@@ -97,7 +97,7 @@ public sealed class PetAbandonTests
         };
         kit.Service.DeletePersistence = (_, _) => { events.Add("delete"); return Task.CompletedTask; };
         kit.Service.QueueDetachedPetSave(owner);
-        await detachedEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await detachedEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         kit.Controller.HandleAbandon(owner, pet.Guid);
         releaseDetached.SetResult();
         await kit.Service.FlushCharacterAsync(1);

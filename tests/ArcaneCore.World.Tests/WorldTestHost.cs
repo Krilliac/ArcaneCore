@@ -32,7 +32,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly ServiceProvider _services;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _stop = new();
-    private readonly List<Task> _sessions = [];
+    private readonly List<SessionEntry> _sessions = [];
 
     // Every client this host handed out. The test holds the only other reference; a client the test drops is otherwise garbage, and the
     // finalizer of its TcpClient closes the socket, which logs the player out in the middle of the test (a GC-timing flake). Keeping them
@@ -48,7 +48,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
         BanOptions? banOptions)
     {
-        _sessionOptions = sessionOptions ?? new WorldSessionOptions();
+        _sessionOptions = sessionOptions ?? new WorldSessionOptions { PreAuthTimeout = TestPreAuthTimeout };
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
         Bans = new Bans.InMemoryBanStore(StatusEvents);
         var collection = new ServiceCollection();
@@ -109,6 +109,14 @@ internal sealed class WorldTestHost : IAsyncDisposable
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _acceptLoop = Task.Run(AcceptLoopAsync);
     }
+
+    /// <summary>
+    /// The pre-auth deadline of a host started without session options. The retail 10 s (World:PreAuthTimeout) is a wall-clock limit on
+    /// the client: a test whose continuation the thread pool held back for 10 s under full-suite load had its connection closed between
+    /// SMSG_AUTH_CHALLENGE and CMSG_AUTH_SESSION ("an established connection was aborted"). Here it is only a bound on a hung test; the
+    /// deadline itself is tested with its own short value (CodexNetAuthWorldTests).
+    /// </summary>
+    public static readonly TimeSpan TestPreAuthTimeout = TimeSpan.FromMinutes(2);
 
     public InMemoryAccountStore Accounts { get; } = new();
 
@@ -274,13 +282,13 @@ internal sealed class WorldTestHost : IAsyncDisposable
             }
         }
 
-        Task[] sessions;
+        SessionEntry[] sessions;
         lock (_sessions)
         {
             sessions = [.. _sessions];
         }
 
-        await Task.WhenAll(sessions).WaitAsync(TimeSpan.FromSeconds(10));
+        await DrainSessionsAsync(sessions);
         World.Stop();
         await _services.StopWorldFeaturesAsync();
         await SaveQueue.StopAsync();
@@ -290,11 +298,44 @@ internal sealed class WorldTestHost : IAsyncDisposable
         _wireOracle?.AssertValid();
     }
 
+    /// <summary>
+    /// How long the host waits for its sessions to end once their clients are closed. A session's own teardown is bounded: the read loop
+    /// ends at once (the client is gone and the host's token cancelled), and <c>DrainWriterAsync</c> gives a writer that cannot finish up
+    /// to twice <see cref="WorldSessionOptions.EffectiveWriterDrainBound"/> (5 s each) before abandoning it. The old 10 s wait was exactly
+    /// that worst case with no margin, and a teardown the loaded machine stretched past it failed a passing test in its dispose
+    /// (PlayerbotGroupPlayerTests, about one full run in ten). This bound only catches a session that never ends.
+    /// </summary>
+    private TimeSpan SessionTeardownBound => (2 * _sessionOptions.EffectiveWriterDrainBound) + TimeSpan.FromSeconds(20);
+
+    private async Task DrainSessionsAsync(SessionEntry[] sessions)
+    {
+        try
+        {
+            await Task.WhenAll(sessions.Select(s => s.Task)).WaitAsync(SessionTeardownBound);
+        }
+        catch (TimeoutException ex)
+        {
+            IEnumerable<string> running = sessions.Where(s => !s.Task.IsCompleted).Select(s => s.Session is { } session
+                ? $"{session.RemoteEndpoint} account '{session.AccountName}' state {session.State} player {session.Player?.Name ?? "-"}"
+                : "a session not yet constructed");
+            throw new TimeoutException($"sessions still running {SessionTeardownBound.TotalSeconds:0} s after their clients closed: {string.Join("; ", running)}", ex);
+        }
+    }
+
+    /// <summary>One accepted connection: its task and, once constructed, its session (for the teardown diagnostic).</summary>
+    private sealed class SessionEntry
+    {
+        public Task Task { get; set; } = Task.CompletedTask;
+
+        public volatile WorldSession? Session;
+    }
+
     private async Task AcceptLoopAsync()
     {
         while (!_stop.IsCancellationRequested)
         {
             TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
+            var entry = new SessionEntry();
             Task session = Task.Run(async () =>
             {
                 using (client)
@@ -304,6 +345,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
                     var worldSession = new WorldSession(
                         stream, client.Client.RemoteEndPoint?.ToString() ?? "test", scope.ServiceProvider, Opcodes, World, Registry,
                         _sessionOptions, _sessionLogger);
+                    entry.Session = worldSession;
                     try
                     {
                         await worldSession.RunAsync(_stop.Token);
@@ -320,9 +362,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
                 }
             });
 
+            entry.Task = session;
             lock (_sessions)
             {
-                _sessions.Add(session);
+                _sessions.Add(entry);
             }
         }
     }
