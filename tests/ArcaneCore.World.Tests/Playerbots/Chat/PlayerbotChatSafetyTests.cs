@@ -490,7 +490,10 @@ public sealed class PlayerbotChatSafetyTests
         foreach (string input in inputs)
         {
             // Screen cuts a line at MaxScreenedLength, so every pattern (personal data too) also runs over the whole input, untimed.
-            Assert.False(filter.Screen(input, PlayerbotChatSafetyCategories.All).TimedOut);
+            // Screen keeps its 100 ms per-pattern guard, so whether it reports TimedOut depends on how starved the CPU is (it
+            // tripped on Node1 with seven suites running, load 29 on 14 cores) and is not asserted: tripping is the guard
+            // working. Linear time is proven below on the same patterns with the guard removed, against a wall-clock bound.
+            filter.Screen(input, PlayerbotChatSafetyCategories.All);
             foreach (System.Text.RegularExpressions.Regex pattern in filter.AllPatterns) Untimed(pattern).IsMatch(input);
         }
 
