@@ -51,6 +51,8 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
 
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
     // mangos-classic instance_naxxramas::IsEncounterInProgress: "Some Encounters use SPECIAL while in progress" (Gothik).
+    /// <summary>Anub'Rekhan's Crypt Guard link (16573 -> 15956) is pulled by NaxxramasBossAI.OnAggro.</summary>
+    public override bool CarriesAggroLinking(uint masterEntry) => masterEntry == 15956;
     public override bool IsEncounterInProgress => Encounters.Contains(EncounterState.InProgress)
         || GetData(Gothik) == EncounterState.Special;
 
