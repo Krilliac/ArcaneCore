@@ -132,6 +132,19 @@ public sealed partial class CreatureMapSystem
         }
     }
 
+    /// <summary>
+    /// Strip every aura of <paramref name="creature"/> (Unit::RemoveAllAuras), for a script's own evade such as vmangos silithus.cpp
+    /// npc_colossusAI::EnterEvadeMode. Does nothing when the spell caster cannot reset auras.
+    /// </summary>
+    public void RemoveAllAuras(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (_ai.Spells is ICreatureAuraReset reset)
+        {
+            reset.RemoveAllAuras(creature);
+        }
+    }
+
     private static void ClearLootTap(Creature creature)
     {
         creature.LootTapPlayerGuid = default;

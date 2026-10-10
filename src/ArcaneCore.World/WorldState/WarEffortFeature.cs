@@ -427,9 +427,13 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             System?.Say(Me, new CreatureAiText(0, text, 2, 0, 0), null); // MonsterTextEmote
         }
 
-        /// <summary>Ustaag (Nostalrius): it neither heals nor walks home on evade; it drops its threat list and stays put.</summary>
+        /// <summary>
+        /// vmangos silithus.cpp npc_colossusAI::EnterEvadeMode (:531-538; Ustaag, Nostalrius): it neither heals nor walks home on evade.
+        /// Every aura goes (RemoveAllAuras), the threat list is dropped and it stays put.
+        /// </summary>
         public override bool OnEnterEvadeMode()
         {
+            System?.RemoveAllAuras(Me);
             System?.StopCombatInPlace(Me);
             return true;
         }
