@@ -84,6 +84,13 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
             .ToDictionaryAsync(r => r.ZoneId, cancellationToken).ConfigureAwait(false);
         uint[] destroyed = await db.Set<ScourgeInvasionKillRow>().AsNoTracking()
             .Select(r => r.SpawnGuid).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+        var cities = await db.Set<ScourgeInvasionCityRow>().AsNoTracking()
+            .ToDictionaryAsync(r => r.ZoneId, cancellationToken).ConfigureAwait(false);
+        foreach (ScourgeInvasionCityRow row in cities.Values)
+        {
+            if (ScourgeInvasionCatalog.ForCity(row.ZoneId) is null || row.NextAttackUnix < 0)
+                throw new InvalidOperationException($"invalid Scourge city attack {row.ZoneId}={row.NextAttackUnix}");
+        }
         if (state is not null && !Enum.IsDefined((ScourgeInvasionState)state.State))
             throw new InvalidOperationException($"invalid Scourge invasion state {state.State}");
         foreach (ScourgeInvasionZoneRow row in stored.Values)
@@ -99,6 +106,8 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
                 : new ScourgeInvasionZoneProgress(z.ZoneId, 0, 0)).ToArray())
         {
             DestroyedSpawnGuids = new HashSet<uint>(destroyed),
+            Cities = ScourgeInvasionCatalog.Cities.Select(c => new ScourgeCityAttackProgress(c.ZoneId,
+                cities.TryGetValue(c.ZoneId, out ScourgeInvasionCityRow? row) ? row.NextAttackUnix : 0)).ToArray(),
         };
     }
 
@@ -117,6 +126,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
         state.LastAttackZone = 0;
         await db.Set<ScourgeInvasionZoneRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScourgeInvasionKillRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<ScourgeInvasionCityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
             db.Add(new ScourgeInvasionZoneRow { ZoneId = zone.ZoneId, Remaining = zone.Necropolises });
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -139,6 +149,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
         }
         await db.Set<ScourgeInvasionZoneRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScourgeInvasionKillRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<ScourgeInvasionCityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -191,6 +202,28 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         zone.Remaining = definition.Necropolises;
         zone.NextAttackUnix = 0;
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> ClaimCityAttackAsync(uint zoneId, long nowUnix, int nextAttackSeconds,
+        CancellationToken cancellationToken = default)
+    {
+        if (ScourgeInvasionCatalog.ForCity(zoneId) is null
+            || nextAttackSeconds is < ScourgeInvasionCatalog.CityAttackTimerMinSeconds or > ScourgeInvasionCatalog.CityAttackTimerMaxSeconds)
+            throw new ArgumentOutOfRangeException(nameof(zoneId));
+        await using SqliteRewardWriterCoordinator.Lease writer =
+            await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        ScourgeInvasionStateRow? state = await db.Set<ScourgeInvasionStateRow>()
+            .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+        if (state?.State != (byte)ScourgeInvasionState.Enabled) return false;
+        ScourgeInvasionCityRow? city = await db.Set<ScourgeInvasionCityRow>()
+            .SingleOrDefaultAsync(r => r.ZoneId == zoneId, cancellationToken).ConfigureAwait(false);
+        if (city is not null && city.NextAttackUnix > nowUnix) return false;
+        if (city is null) db.Add(city = new ScourgeInvasionCityRow { ZoneId = zoneId });
+        city.NextAttackUnix = checked(nowUnix + nextAttackSeconds);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;

@@ -28,6 +28,20 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private readonly Dictionary<GameObjectMapSystem, InvasionCircleAi> _circleAis = [];
     private readonly HashSet<(uint ZoneId, uint SpawnGuid)> _pendingDeaths = [];
     private uint _reloadMs;
+    private readonly Dictionary<uint, Creature> _mouths = [];
+    private readonly Dictionary<uint, Creature> _cityAttackers = [];
+
+    /// <summary>The live Mouth of Kel'Thuzad per attacked zone (mangos-classic InvasionZone::mouthGuid).</summary>
+    public IReadOnlyDictionary<uint, Creature> Mouths => _mouths;
+
+    /// <summary>The live Pallid Horror or Patchwork Terror per capital (mangos-classic CityAttack::pallidGuid).</summary>
+    public IReadOnlyDictionary<uint, Creature> CityAttackers => _cityAttackers;
+
+    /// <summary>Test seam for the reference's urand/PickRandomValue picks.</summary>
+    internal Random Random { get; set; } = Random.Shared;
+
+    /// <summary>Wall clock for timers; tests move it.</summary>
+    internal Func<long> NowUnix { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
     public ScourgeInvasionSnapshot Snapshot => Volatile.Read(ref _snapshot);
 
@@ -54,6 +68,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             if (map.FindUpdater<CreatureMapSystem>() is { } system) _healthSystems.Remove(system);
             if (map.FindUpdater<GameObjectMapSystem>() is { } objects) _circleAis.Remove(objects);
+            foreach (uint key in _mouths.Where(p => ReferenceEquals(p.Value.Map, map)).Select(p => p.Key).ToArray()) _mouths.Remove(key);
+            foreach (uint key in _cityAttackers.Where(p => ReferenceEquals(p.Value.Map, map)).Select(p => p.Key).ToArray())
+                _cityAttackers.Remove(key);
         };
     }
 
@@ -206,8 +223,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             IScourgeInvasionStateStore store = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>();
             foreach ((uint zone, uint guid) in _pendingDeaths.ToArray())
             {
-                store.NecropolisDestroyedAsync(zone, guid, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    Random.Shared.Next(2700, 3601)).GetAwaiter().GetResult();
+                store.NecropolisDestroyedAsync(zone, guid, NowUnix(),
+                    Random.Next(2700, 3601)).GetAwaiter().GetResult();
                 _pendingDeaths.Remove((zone, guid));
             }
             Reload();
@@ -231,7 +248,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             Reload();
             if (Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon < 150)
             {
-                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                long now = NowUnix();
                 foreach (ScourgeInvasionZoneProgress zone in Snapshot.Zones.OrderBy(z => z.NextAttackUnix))
                 {
                     if (zone.Remaining != 0 || zone.NextAttackUnix == 0 || zone.NextAttackUnix > now) continue;
@@ -242,6 +259,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 }
             }
             SyncEvents();
+            SyncChoreography();
         }
         catch (Exception ex)
         {
@@ -277,6 +295,69 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         SetEvent(service, 97, attacking && Snapshot.BattlesWon is >= 100 and < 150);
         SetEvent(service, 98, Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon >= 150);
         SetEvent(service, 99, Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon >= 150);
+    }
+
+    private CreatureMapSystem? Creatures(uint mapId)
+        => _world?.FindMap(mapId)?.FindUpdater<CreatureMapSystem>();
+
+    private static void Despawn(Creature creature)
+        => creature.Map?.FindUpdater<CreatureMapSystem>()?.ForcedDespawn(creature, 0);
+
+    private static bool IsLive(Creature creature) => creature.IsInWorld && creature.IsAlive;
+
+    /// <summary>
+    /// mangos-classic SummonMouth/OnDisable and StartNewCityAttackIfTime/SummonPallid: one Mouth of Kel'Thuzad stands at each
+    /// attacked zone's point, and each capital gets a Pallid Horror or Patchwork Terror whenever its saved 45-60 minute timer is
+    /// due. An unavailable map is retried on the next refresh, and the timer is only advanced once the summon can happen.
+    /// </summary>
+    private void SyncChoreography()
+    {
+        bool enabled = Snapshot.State == ScourgeInvasionState.Enabled;
+        bool attacking = enabled && Snapshot.BattlesWon < 150;
+        foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
+        {
+            if (_mouths.TryGetValue(zone.ZoneId, out Creature? mouth) && !IsLive(mouth))
+                _mouths.Remove(zone.ZoneId, out mouth);
+            bool active = attacking && Snapshot.Remaining(zone.ZoneId) > 0;
+            if (!active && mouth is not null)
+            {
+                Despawn(mouth);
+                _mouths.Remove(zone.ZoneId);
+            }
+            else if (active && mouth is null && Creatures(zone.MapId) is { } creatures
+                && ScourgeInvasionCatalog.MouthPositions.TryGetValue(zone.ZoneId, out ScourgeInvasionPosition at)
+                && creatures.SummonInstanceCreature(ScourgeInvasionCatalog.MouthOfKelThuzad, at.X, at.Y, at.Z, at.O) is { } summoned)
+                _mouths[zone.ZoneId] = summoned;
+        }
+
+        long now = NowUnix();
+        foreach (ScourgeCityAttack city in ScourgeInvasionCatalog.Cities)
+        {
+            if (_cityAttackers.TryGetValue(city.ZoneId, out Creature? attacker) && !IsLive(attacker))
+                _cityAttackers.Remove(city.ZoneId, out attacker);
+            if (!enabled)
+            {
+                if (attacker is not null) Despawn(attacker);
+                _cityAttackers.Remove(city.ZoneId);
+                continue;
+            }
+            if (!Snapshot.IsCityAttackDue(city.ZoneId, now) || Creatures(city.MapId) is not { } creatures) continue;
+            using (IServiceScope scope = scopes.CreateScope())
+            {
+                if (!scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>().ClaimCityAttackAsync(city.ZoneId, now,
+                        Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1))
+                    .GetAwaiter().GetResult()) continue;
+            }
+            if (attacker is not null) Despawn(attacker);
+            _cityAttackers.Remove(city.ZoneId);
+            ScourgeInvasionPosition at = city.Spawns[Random.Next(city.Spawns.Count)];
+            uint entry = Random.Next(2) == 0 ? ScourgeInvasionCatalog.PallidHorror : ScourgeInvasionCatalog.PatchworkTerror;
+            if (creatures.SummonInstanceCreature(entry, at.X, at.Y, at.Z, at.O) is { } summoned)
+                _cityAttackers[city.ZoneId] = summoned;
+            else
+                logger.LogWarning("Scourge city attack in zone {Zone}: creature template {Entry} is missing", city.ZoneId, entry);
+            Reload();
+        }
     }
 
     private static void SetEvent(GameEventService service, ushort id, bool active)
