@@ -102,6 +102,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule.Version),
             (typeof(SmartScriptDataModule), DatabaseComponent.World, SmartScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Warden.WardenDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Warden.WardenDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -153,6 +154,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetLoyaltyDataModule), DatabaseComponent.Characters, PetLoyaltyDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.SilithystDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.SilithystDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.ServerMail.ServerMailDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.ServerMail.ServerMailDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotCustodyDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Economy.AuctionBotCustodyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -183,8 +185,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(49, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49)
-        Assert.Equal(54, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54)
+        Assert.Equal(50, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50)
+        Assert.Equal(55, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
