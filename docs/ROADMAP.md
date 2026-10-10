@@ -241,7 +241,7 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 - Do **not** merge `grok/w18-respawn` (stale and broken; delete it). `grok/wave17-test-fixes` overlaps `e7fdd74a`/`ac326b41`, so check before reusing it.
 
 ### Open work
-- **World scripts:** about 82 of 186 mangos-classic SD2 scripts are still missing (87 before #89). Next up are Scourge invasion scripts (10), then GO/areatrigger scripts. Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
+- **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). Next up are the 10 area-trigger scripts (`areatrigger_scripts.cpp`). Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
 - **SmartAI slice 2:** conditions, plus GO, areatrigger and timed-action-list sources.
 - **Pets:** happiness/loyalty gain, training-point costs (SkillLineAbility.dbc), beast training, Far Sight view extension, possess summon limits.
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
