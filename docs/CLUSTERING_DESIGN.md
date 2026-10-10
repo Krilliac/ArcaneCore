@@ -530,7 +530,7 @@ validates and applies them on its own tick. Common rules (planned):
 ### Considered and kept in existing roles
 
 - **Metrics exporter.** No service. Each daemon already runs its own
-  `MetricsHost` (`src/ArcaneCore.Kernel/Ops/Metrics/MetricsHost.cs:14`) with
+  `MetricsHost` (`src/ArcaneCore.Kernel/Ops/Metrics/MetricsHost.cs:15`) with
   Prometheus pull and/or OTLP push, and an exporter failure never stops the daemon
   ([metrics](ops/metrics.md)). In a cluster every role exports its own series,
   and aggregation belongs to the operator's collector. Planned: `role`, node and

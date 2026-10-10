@@ -10,8 +10,10 @@ namespace ArcaneCore.Kernel.Ops.Metrics;
 /// Runs the exporters of <c>Ops:Metrics</c> (docs/ops/metrics.md): the Prometheus scrape listener and/or the OTLP push
 /// loop, both reading <see cref="MetricsStore.Collect"/> off the world thread. Disabled: nothing starts. An exporter
 /// that cannot start (a port in use) logs an error and the daemon keeps running; metrics are never a reason to stop.
+/// The role picks the scrape prefix: the World and the Realm share the section but not the port.
 /// </summary>
-public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILogger<MetricsHost> logger, string serviceName) : IHostedService, IDisposable
+public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILogger<MetricsHost> logger, string serviceName, MetricsRole role = MetricsRole.World)
+    : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _stop = new();
     private HttpListener? _listener;
@@ -21,6 +23,9 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
 
     /// <summary>The bound Prometheus prefix, or null when that exporter is not running.</summary>
     public string? PrometheusPrefix => _listener?.Prefixes.FirstOrDefault();
+
+    /// <summary>The prefix this daemon's role is configured to bind (<see cref="MetricsOptions.PrometheusPrefixFor"/>).</summary>
+    public string ConfiguredPrometheusPrefix => options.PrometheusPrefixFor(role);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -33,18 +38,28 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
         _ = RuntimeMeters.Meter;
         if (options.Exporter is MetricsExporter.Prometheus or MetricsExporter.Both)
         {
+            string prefix = ConfiguredPrometheusPrefix;
             try
             {
                 var listener = new HttpListener();
-                listener.Prefixes.Add(options.PrometheusPrefix);
+                listener.Prefixes.Add(prefix);
                 listener.Start();
                 _listener = listener;
                 _prometheus = Task.Run(ServePrometheusAsync, CancellationToken.None);
-                logger.LogInformation("metrics: Prometheus endpoint on {Prefix}", options.PrometheusPrefix);
+                logger.LogInformation("metrics: Prometheus endpoint on {Prefix} ({Key})", prefix, MetricsOptions.PrometheusPrefixKey(role));
             }
             catch (Exception ex) when (ex is HttpListenerException or InvalidOperationException or ArgumentException or PlatformNotSupportedException)
             {
-                logger.LogError(ex, "metrics: the Prometheus endpoint {Prefix} could not start; metrics are not served", options.PrometheusPrefix);
+                MetricsRole other = role == MetricsRole.Realm ? MetricsRole.World : MetricsRole.Realm;
+                logger.LogError(
+                    ex,
+                    "metrics: the Prometheus endpoint {Prefix} could not start; metrics are not served. If another process holds it (likely the {Other} daemon, "
+                    + "which binds {OtherKey} from a shared appsettings.json), give this {Role} daemon a different prefix with {Key}",
+                    prefix,
+                    other,
+                    MetricsOptions.PrometheusPrefixKey(other),
+                    role,
+                    MetricsOptions.PrometheusPrefixKey(role));
             }
         }
 

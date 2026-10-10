@@ -52,7 +52,7 @@ services:
       Realms__Seed__0__Address: ${ARCANE_REALM_ADDRESS:-127.0.0.1:8085}
       Ops__Watchdog__Heartbeat__Mode: Stdout
       Ops__Metrics__Enabled: ${ARCANE_METRICS_ENABLED:-false}
-      Ops__Metrics__PrometheusPrefix: "http://+:9465/metrics/"
+      Ops__Metrics__RealmPrometheusPrefix: "http://+:9465/metrics/" # the Realm reads its own key (docs/ops/metrics.md)
     ports:
       - ${DOCKER_REALM_EXTERNAL_PORT:-3724}:3724
     volumes:

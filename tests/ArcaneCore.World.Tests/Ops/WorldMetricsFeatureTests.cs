@@ -2,6 +2,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Metrics;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -18,6 +19,29 @@ public sealed class WorldMetricsFeatureTests
         using var provider = new ServiceCollection().AddSingleton(new MetricsOptions()).BuildServiceProvider();
         using var feature = new WorldMetricsFeature(provider, NullLogger<WorldMetricsFeature>.Instance);
         Assert.Empty(feature.Samples);
+    }
+
+    [Fact]
+    public void AddWorldMetrics_BindsTheWorldPrefix_NotTheRealmOne()
+    {
+        IConfiguration shared = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Ops:Metrics:Enabled"] = "true",
+            ["Ops:Metrics:RealmPrometheusPrefix"] = "http://+:9601/metrics/",
+        }).Build();
+        var services = new ServiceCollection().AddLogging();
+        services.AddWorldMetrics(shared);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        Assert.Equal("http://localhost:9464/metrics/", provider.GetRequiredService<MetricsHost>().ConfiguredPrometheusPrefix);
+
+        IConfiguration overridden = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Ops:Metrics:PrometheusPrefix"] = "http://+:9600/metrics/",
+        }).Build();
+        var services2 = new ServiceCollection().AddLogging();
+        services2.AddWorldMetrics(overridden);
+        using ServiceProvider provider2 = services2.BuildServiceProvider();
+        Assert.Equal("http://+:9600/metrics/", provider2.GetRequiredService<MetricsHost>().ConfiguredPrometheusPrefix);
     }
 
     [Fact]
