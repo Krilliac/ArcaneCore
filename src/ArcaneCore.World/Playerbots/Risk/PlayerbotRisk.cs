@@ -154,7 +154,7 @@ internal sealed class PlayerbotRisk
         ScanHazards(player);
         if (player.Combat.IsInCombat) return;
         _cornered = false;
-        if (Tracker.Active) Tracker.End();
+        if (Tracker.Active) Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
     }
 
     /// <summary>The bot died: remember its killers and the place, and forget the fight.</summary>
@@ -171,7 +171,7 @@ internal sealed class PlayerbotRisk
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");
         Retreat.Stop("died");
-        Tracker.End();
+        Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         Breadcrumbs.Clear();
         Detour = null;
         _waitUntilMs = 0;
@@ -549,7 +549,7 @@ internal sealed class PlayerbotRisk
             Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
             Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
         }
-        Tracker.End();
+        Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         if (Retreat.Outcome == "safe") BeginWait(player);
         else if (Retreat.Outcome == "cornered") _cornered = true;
         return false;

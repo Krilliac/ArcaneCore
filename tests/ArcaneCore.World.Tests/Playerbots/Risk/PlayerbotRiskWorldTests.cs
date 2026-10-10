@@ -151,6 +151,61 @@ public sealed class PlayerbotRiskWorldTests
     }
 
     /// <summary>
+    /// The bot's damage estimate is an average that starts from the level estimate, so one short unlucky fight does not decide it
+    /// alone. The losing fight above observes 8 seconds of the bot's swings against three creatures: 22 to 33 damage with the
+    /// rolls of its first level, and at the low end (2.75 per second) taken alone it put a lone same-level creature of 60 health
+    /// out of reach for good ("decision=avoid reason=too-strong"), since only fights refresh the estimate and the bot no longer
+    /// took one. Fight after fight of poor damage still brings the estimate down.
+    /// </summary>
+    [Fact]
+    public async Task OneUnluckyFight_DoesNotPutALoneSameLevelCreatureOutOfReach_ManyPoorOnesDo()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        CreatureTemplate template = RiskTestWorld.Template(991022, health: 60, minDamage: 3, maxDamage: 4);
+        Creature lone = await world.OnWorldAsync(() => world.Spawn(template, 0, 60));
+        Creature foe = await world.OnWorldAsync(() => world.Spawn(template, 0, -60));
+        await world.SeeAsync(lone, foe);
+
+        // One fight of the bot's against the foe (the bot is out of combat, so the next track closes it): damage over 8 seconds.
+        async Task Fight(uint damage) => await world.OnWorldAsync(() =>
+        {
+            PlayerbotFightTracker tracker = world.Brain.Risk.Tracker;
+            uint at = world.Host.World.NowMs;
+            foe.Health = foe.MaxHealth;
+            tracker.Observe(world.Player, [foe], foe, at, 1f, 1f);
+            foe.Health = foe.MaxHealth - damage;
+            tracker.Observe(world.Player, [foe], foe, at + PlayerbotFightTracker.WindowMs, 1f, 1f);
+            Assert.False(world.Player.Combat.IsInCombat);
+            world.Brain.Risk.Track(world.Player);
+            Assert.False(tracker.Active);
+            foe.Health = foe.MaxHealth;
+            return true;
+        });
+
+        // A fresh verdict (past the 5 second cache) on the lone creature, the bot at full health.
+        async Task<PlayerbotEngagement> Assess()
+        {
+            await world.Host.World.AdvanceClockAsync(6_000);
+            return await world.OnWorldAsync(() =>
+            {
+                Assert.Equal(world.Player.MaxHealth, world.Player.Health);
+                return world.Brain.Risk.Assess(world.Player, lone, false, out _);
+            });
+        }
+
+        Assert.Equal(PlayerbotEngageDecision.Engage, (await Assess()).Decision);
+        await Fight(22);
+        PlayerbotEngagement afterOne = await Assess();
+        Assert.True(afterOne.Decision == PlayerbotEngageDecision.Engage, "one fight of 2.75 damage a second decided alone: "
+            + $"{afterOne}, estimate {await world.OnWorldAsync(() => world.Brain.Risk.Tracker.ObservedDps)}");
+
+        for (int i = 0; i < 10; i++) await Fight(8);
+        PlayerbotEngagement afterMany = await Assess();
+        Assert.Equal(PlayerbotEngageDecision.Avoid, afterMany.Decision);
+        Assert.Equal("too-strong", afterMany.Reason);
+    }
+
+    /// <summary>
     /// A fight the bot is about to win is finished, though the bot is hurt below its retreat threshold: the creature at 10% health.
     /// The same bot, as hurt, against the same creature at full health, retreats (so the first half is not vacuous).
     /// </summary>
