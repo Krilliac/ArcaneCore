@@ -406,10 +406,13 @@ public sealed class AuctionBotFeatureTests
                 });
                 db.Add(auction);
                 await db.SaveChangesAsync();
-                if (seed is not null)
-                {
-                    await seed(db);
-                }
+            }
+
+            if (seed is not null)
+            {
+                // A fresh context: economy commits refuse one with tracked state.
+                await using var seedDb = new CharacterDbContext(options);
+                await seed(seedDb);
             }
 
             // Green armor with a vendor price of 1000: the bot values it at 2000 ± 10 %, above the player's 1000 buyout.

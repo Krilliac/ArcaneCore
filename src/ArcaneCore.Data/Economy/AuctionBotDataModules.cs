@@ -25,12 +25,12 @@ public sealed class AhBotCustodyRow
 }
 
 /// <summary>
-/// Characters schema 50 (wave 18): the auction house bot custody ledger, so a reservation whose outcome was unknown at shutdown is
+/// Characters schema 55 (wave 18): the auction house bot custody ledger, so a reservation whose outcome was unknown at shutdown is
 /// rechecked against the economy operation ledger after a restart, and the daily budgets survive it.
 /// </summary>
 public sealed class AuctionBotCustodyDataModule : IDataModule
 {
-    public const int Version = 50;
+    public const int Version = 55;
     public const string Table = "ahbot_custody";
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
@@ -120,10 +120,10 @@ public sealed class AhBotItemRow
     public uint MaxAmount { get; set; }
 }
 
-/// <summary>World schema 48 (wave 18): the auction house bot's per-item overrides (cMaNGOS <c>ahbot_items</c>). Empty by default.</summary>
+/// <summary>World schema 50 (wave 18): the auction house bot's per-item overrides (cMaNGOS <c>ahbot_items</c>). Empty by default.</summary>
 public sealed class AuctionBotItemWorldDataModule : IDataModule
 {
-    public const int Version = 48;
+    public const int Version = 50;
     public const string Table = "ahbot_items";
 
     public DatabaseComponent Component => DatabaseComponent.World;

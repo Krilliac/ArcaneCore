@@ -22,7 +22,7 @@ and checked by `check-config` (`AuctionBotConfigChecks`).
   creature rank (`LootCreatureNormal`, `Elite`, `RareElite`, `WorldBoss`, `Rare`), plus `LootDisenchant`, `LootFishing`,
   `LootGameobject` and `LootSkinning`. Each setting is "minTables, maxTables, minRolls, maxRolls". Quest drops and rows behind a
   condition are skipped, because no player is looting. The drops join the item map and must pass the same filters.
-- **`ahbot_items` (world schema 48).** Each row holds `item, value, add_chance, min_amount, max_amount`, as in cMaNGOS
+- **`ahbot_items` (world schema 50).** Each row holds `item, value, add_chance, min_amount, max_amount`, as in cMaNGOS
   `ahbot_items` (which cMaNGOS keeps in the characters database):
   - `value` 0 means the bot never lists or buys the item. Any other value replaces the computed price per item.
   - `add_chance` > 0 replaces every other source: each pass lists `min_amount..max_amount` of the item with that percent chance,
@@ -51,7 +51,7 @@ and checked by `check-config` (`AuctionBotConfigChecks`).
 - **Ledger rows.** Each listing, buyout and bid first reserves a row in `AuctionBotCustodyLedger`. Each row has an idempotency key:
   `ahbot:list:<auction>`, `ahbot:buy:<auction>:<attempt>` or `ahbot:bid:<auction>:<attempt>`. The economy operation id is derived
   from that key, so a replayed transaction comes back AlreadyCommitted.
-- **Durable ledger (characters schema 50, `ahbot_custody`).** A reserved row is written before its transaction starts. If that
+- **Durable ledger (characters schema 55, `ahbot_custody`).** A reserved row is written before its transaction starts. If that
   write fails, nothing starts and the row rolls back. Outcomes and prunes are written after the fact.
   - At startup the rows are loaded. Every row still Reserved, whatever happened to its process, is rechecked against
     `economy_operation` and settled.
