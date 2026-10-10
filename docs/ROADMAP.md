@@ -242,7 +242,7 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 
 ### Open work
 - **World scripts:** about 82 of 186 mangos-classic SD2 scripts are still missing (87 before #89). Next up are Scourge invasion scripts (10), then GO/areatrigger scripts. Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
-- **SmartAI slice 2:** conditions, plus GO, areatrigger and timed-action-list sources.
+- **SmartAI slice 3:** slice 2 (conditions via `ConditionId`, GO, areatrigger and timed-action-list sources) is done, see `docs/integration/smartai-slice2-20261010.md`. Open: the events, actions and targets listed there as rejected, AIName for game objects, and ending the area-trigger handler when a script ran.
 - **Pets:** happiness/loyalty gain, training-point costs (SkillLineAbility.dbc), beast training, Far Sight view extension, possess summon limits.
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
 - **Metrics:** realm packet counters, per-opcode labels. Docker is untested.
