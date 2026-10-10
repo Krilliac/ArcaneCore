@@ -243,12 +243,17 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         return !inThreatArea && LeashExtensionSeconds(creature) + _options.LeashExtensionSeconds < _clockMs / 1000;
     }
 
+    /// <summary>
+    /// vmangos WorldObject::IsWithinDist3d(x, y, z, dist) (Objects/Object.cpp:1712-1721) with its default SizeFactor::BoundingRadius: the
+    /// object's own bounding radius is added to the distance, so a large creature leashes a little later than its centre would.
+    /// </summary>
     private static bool WithinDistance3d(WorldObject obj, CreatureHome point, float distance)
     {
         float dx = obj.X - point.X;
         float dy = obj.Y - point.Y;
         float dz = obj.Z - point.Z;
-        return (dx * dx) + (dy * dy) + (dz * dz) < distance * distance;
+        float max = distance + obj.BoundingRadius;
+        return (dx * dx) + (dy * dy) + (dz * dz) < max * max;
     }
 
     /// <summary>The leash extension clock in whole seconds, started now when this is the first look (vmangos GetLastLeashExtensionTime).</summary>
