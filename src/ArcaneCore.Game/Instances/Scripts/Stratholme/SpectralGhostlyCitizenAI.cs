@@ -10,6 +10,7 @@ public sealed class SpectralGhostlyCitizenAI(Creature creature) : ScriptDevBossA
 {
     public const uint SpellIncorporealDefense = 16331, SpellSlap = 6754, SpellEganBlaster = 17368, SpellSoulFreed = 17370,
         SpellSummonFreedSoul = 17408;
+    // EmotesText.dbc / Emotes.dbc ids; they match the vanilla TextEmote and Emote enums in tests/ThirdParty/WowWorldMessages.
     public const uint TextEmoteBow = 17, TextEmoteDance = 34, TextEmoteKiss = 58, TextEmoteRude = 77, TextEmoteWave = 101;
     public const uint EmoteOneshotBow = 2, EmoteOneshotWave = 3, EmoteOneshotRude = 14, EmoteOneshotFlex = 23;
     private const float InteractionDistance = 5f;

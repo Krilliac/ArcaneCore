@@ -47,7 +47,11 @@ public sealed class DungeonScriptsW18Tests
         Use(boxes[2]);
         Assert.Equal([StratholmeInstance.SpellSummonPostmaster], cast);
         Assert.Equal(EncounterState.Done, strath.GetData(StratholmeInstance.TypePostmaster));
-        Assert.Equal(9, run.Creatures.Creatures.Count(c => c.Template.Entry == StratholmeInstance.NpcUndeadPostman));
+        Creature[] postmen = [.. run.Creatures.Creatures.Where(c => c.Template.Entry == StratholmeInstance.NpcUndeadPostman)];
+        Assert.Equal(9, postmen.Length);
+        Creature last = postmen[^1];
+        float dx = last.X - run.Player.X, dy = last.Y - run.Player.Y;
+        Assert.InRange(MathF.Sqrt((dx * dx) + (dy * dy)), 0f, 3.001f); // GetRandomPoint(..., 3.0f)
     }
 
     [Fact]

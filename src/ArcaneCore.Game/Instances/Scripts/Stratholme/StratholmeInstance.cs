@@ -161,10 +161,17 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
 
         // SummonCreature(NPC_UNDEAD_POSTMAN, random point within 3 yards, TEMPSPAWN_DEAD_DESPAWN) x3.
         CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+        if (creatures is null)
+        {
+            return;
+        }
+
         for (int i = 0; i < 3; i++)
         {
-            float angle = i * (2f * MathF.PI / 3f);
-            creatures?.SummonForInstance(NpcUndeadPostman, player.X + (2f * MathF.Cos(angle)), player.Y + (2f * MathF.Sin(angle)), player.Z, 0f);
+            // WorldObject::GetRandomPoint: a uniform point in the 3 yard circle around the player.
+            float angle = creatures.RandomInt(0, 35_999) * (MathF.PI / 18_000f);
+            float distance = 3f * MathF.Sqrt(creatures.RandomInt(0, 10_000) / 10_000f);
+            creatures.SummonForInstance(NpcUndeadPostman, player.X + (distance * MathF.Cos(angle)), player.Y + (distance * MathF.Sin(angle)), player.Z, 0f);
         }
     }
 
