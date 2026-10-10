@@ -545,7 +545,7 @@ public sealed partial class EconomyFeature
     }
 
     internal void RunAuctionOperation(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, uint auctionId,
-        Action<EconomyOutcome> finished)
+        Action<EconomyOutcome> finished, Guid? operationId = null)
     {
         if (!_busyAuctions.Add(auctionId))
         {
@@ -568,7 +568,7 @@ public sealed partial class EconomyFeature
                 _busyAuctions.Remove(auctionId);
             }
             finished(outcome);
-        });
+        }, operationId);
         if (!started)
         {
             _busyAuctions.Remove(auctionId);
