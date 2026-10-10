@@ -39,7 +39,11 @@ public sealed partial class CharacterStoreActionButtonDiffTests : IAsyncLifetime
         {
             ActionButton[] bar = [new ActionButton(0, 6603, Spell), new ActionButton(1, 133, Macro), new ActionButton(119, 0xFFFFFF, Item)];
             await store.SaveStateAsync(State(id, bar));
-            Assert.Equal(3, log.Count("INSERT")); // the first save writes the bar
+            // The first save writes the bar. How many INSERT statements that takes is the provider's batching, not the contract:
+            // Pomelo (MariaDB/MySQL) sends the three new rows as ONE multi-row INSERT, SQLite and Npgsql as one per row. The count
+            // is therefore bounded (at least one, never more than one per button) and the content is checked by reading it back.
+            Assert.InRange(log.Count("INSERT"), 1, bar.Length);
+            Assert.Equal(bar.OrderBy(b => b.Button), (await store.GetActionButtonsAsync(id)).OrderBy(b => b.Button));
             log.Clear();
 
             await store.SaveStateAsync(State(id, bar));

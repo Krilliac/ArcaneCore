@@ -249,7 +249,7 @@ public sealed class SaveQueueLoadBenchmarkTests(ITestOutputHelper output) : IDis
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        // Every connection string here is Pooling=False, so no pooled handle outlives its connection; never clear the process-wide pools (tests run in parallel).
         try
         {
             Directory.Delete(_directory, recursive: true);

@@ -26,7 +26,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        // Every connection string here is Pooling=False, so no pooled handle outlives its connection; never clear the process-wide pools (tests run in parallel).
         try
         {
             Directory.Delete(_directory, recursive: true);
@@ -34,6 +34,36 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         catch (IOException)
         {
             // best effort temp cleanup
+        }
+    }
+
+    [Fact]
+    public async Task BusyTimeoutIsClampedToTheGuardsQueryTimeout_OnlyWhenTheGuardIsOn()
+    {
+        string auth = Connection("auth.db");
+        (string, string?)[] sqlite = [("Database:Provider", "Sqlite"), ("Database:ConnectionString", auth)];
+
+        // Guard on with a 2 s deadline: a refused call must not outlive it inside SQLite's busy handler.
+        await using (ServiceProvider provider = Build(true, [.. sqlite, ("Database:SqliteBusyTimeoutMs", "5000"), ("Resilience:Database:QueryTimeoutMs", "2000")]))
+        {
+            Assert.Equal(2000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
+        }
+
+        // A configured value below the deadline is kept.
+        await using (ServiceProvider provider = Build(true, [.. sqlite, ("Database:SqliteBusyTimeoutMs", "300"), ("Resilience:Database:QueryTimeoutMs", "2000")]))
+        {
+            Assert.Equal(300L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
+        }
+
+        // No deadline (0) or the guard switched off: the configured value stands.
+        await using (ServiceProvider provider = Build(true, [.. sqlite, ("Database:SqliteBusyTimeoutMs", "5000"), ("Resilience:Database:QueryTimeoutMs", "0")]))
+        {
+            Assert.Equal(5000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
+        }
+
+        await using (ServiceProvider provider = Build(true, [.. sqlite, ("Database:SqliteBusyTimeoutMs", "5000"), ("Resilience:Database:Enabled", "false"), ("Resilience:Database:QueryTimeoutMs", "2000")]))
+        {
+            Assert.Equal(5000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
         }
     }
 
@@ -240,7 +270,9 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         return await command.ExecuteScalarAsync();
     }
 
-    private static ServiceProvider Build(params (string Key, string? Value)[] values)
+    private static ServiceProvider Build(params (string Key, string? Value)[] values) => Build(false, values);
+
+    private static ServiceProvider Build(bool withGuard, (string Key, string? Value)[] values)
     {
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => v.Value)).Build();
         var services = new ServiceCollection();
@@ -248,6 +280,11 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         services.AddAuthDatabase(config);
         services.AddCharacterDatabase(config);
         services.AddWorldDatabase(config);
+        if (withGuard)
+        {
+            services.AddDatabaseResilience(config);
+        }
+
         return services.BuildServiceProvider();
     }
 }

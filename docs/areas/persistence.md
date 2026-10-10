@@ -91,7 +91,7 @@ The warning is `character save backlog: N characters pending, oldest waiting M m
 the backlog persists, followed by one `character save backlog cleared: ...` line (Information) when it ends. An idle queue wakes once a
 second so the cleared line is not delayed until the next save. Both keys are checked by `check-config` (integer, 0 or more) and listed in
 the generated [configuration reference](../reference/configuration.md). The age is also exported as the gauge
-`arcanecore.db.save_queue_oldest_age` ([metrics](../ops/metrics.md)) and appended to every watchdog hang line.
+`arcanecore.db.save_queue_oldest_age` ([metrics](../ops/metrics.md)) and appended to every watchdog hang line. Both keys are live: `.reload config` applies them at the next once-a-second check.
 
 ## SQLite busy timeout
 
@@ -104,7 +104,7 @@ milliseconds, instead of reporting busy at once and leaving the wait to `Microso
 | `Database:SqliteBusyTimeoutMs` | `5000` | 0 to 60000 ms. 0 leaves SQLite's "fail at once" behaviour. |
 | `Database:<Component>:SqliteBusyTimeoutMs` | unset | Per component (Auth, Characters, World); unset inherits the shared value. |
 
-The timeout never exceeds the connection's own `Default Timeout`, so `DatabaseGuard`'s pessimistic-timeout contract (the outer bound on
+The timeout never exceeds the connection's own `Default Timeout`, and when the database guard is on (`Resilience:Database:Enabled`, `QueryTimeoutMs` above 0) it is **clamped, silently, to `Resilience:Database:QueryTimeoutMs`** (the effective value is `min(configured, QueryTimeoutMs)`; a configured value above it is not an error). Reason: the guard abandons a call past its deadline, but the abandoned call keeps waiting in SQLite's busy handler and disposing its scope blocks until it returns, so a longer busy timeout lengthened every refused logon (measured 7.0-7.6 s against a 2 s deadline before the clamp). `DatabaseGuard`'s pessimistic-timeout contract (the outer bound on
 a whole operation) is unchanged. MariaDB, MySQL and PostgreSQL ignore the key. Out-of-range values are a `check-config` error and the
 interceptor refuses them at start.
 

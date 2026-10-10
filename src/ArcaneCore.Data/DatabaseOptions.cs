@@ -56,7 +56,8 @@ public sealed class DatabaseOptions
     /// <summary>
     /// SQLite only: how long (0..60000 ms, default 5000) a connection waits inside SQLite for another connection's write lock before
     /// reporting "database is locked", set as <c>PRAGMA busy_timeout</c> on every connection (never more than the connection string's
-    /// Default Timeout). Without it a waiting writer retries only every 150 ms, so the many background writers on one SQLite file starve
+    /// Default Timeout, and clamped to <c>Resilience:Database:QueryTimeoutMs</c> when the database guard is on, so a refused call never
+    /// outlives its deadline in SQLite's busy handler). Without it a waiting writer retries only every 150 ms, so the many background writers on one SQLite file starve
     /// each other. 0 disables the pragma. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
     public int SqliteBusyTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs;

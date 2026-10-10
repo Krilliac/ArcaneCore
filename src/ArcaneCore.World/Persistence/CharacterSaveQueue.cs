@@ -31,8 +31,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<CharacterSaveQueue> _logger;
-    private readonly int _warnDepth;
-    private readonly int _warnAgeMs;
+    private readonly WorldRuntimeOptions _settings; // the shared options object: the two warning thresholds are live (.reload config)
     private readonly Lock _gate = new();
     private readonly Lock _reportGate = new();
     private readonly Dictionary<int, FailedSave> _failed = [];
@@ -57,9 +56,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     {
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        WorldRuntimeOptions settings = options?.Value ?? new WorldRuntimeOptions();
-        _warnDepth = settings.SaveQueueWarnDepth;
-        _warnAgeMs = settings.SaveQueueWarnAgeMs;
+        _settings = options?.Value ?? new WorldRuntimeOptions();
     }
 
     /// <summary>Characters with a snapshot waiting or being written.</summary>
@@ -673,6 +670,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
         int depth;
         TimeSpan age;
+        int warnDepth;
+        int warnAgeMs;
         bool warn = false;
         bool cleared = false;
         lock (_reportGate)
@@ -689,7 +688,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 age = OldestAgeLocked();
             }
 
-            bool over = (_warnDepth > 0 && depth >= _warnDepth) || (_warnAgeMs > 0 && age.TotalMilliseconds >= _warnAgeMs);
+            warnDepth = _settings.SaveQueueWarnDepth;
+            warnAgeMs = _settings.SaveQueueWarnAgeMs;
+            bool over = (warnDepth > 0 && depth >= warnDepth) || (warnAgeMs > 0 && age.TotalMilliseconds >= warnAgeMs);
             if (over)
             {
                 if (!_warning || now - _lastWarning >= ReportRepeatTicks)
@@ -710,7 +711,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         if (warn)
         {
             _logger.LogWarning("character save backlog: {Depth} characters pending, oldest waiting {AgeMs} ms (warns at {WarnDepth} characters or {WarnAgeMs} ms)",
-                depth, (long)age.TotalMilliseconds, _warnDepth, _warnAgeMs);
+                depth, (long)age.TotalMilliseconds, warnDepth, warnAgeMs);
         }
         else if (cleared)
         {
