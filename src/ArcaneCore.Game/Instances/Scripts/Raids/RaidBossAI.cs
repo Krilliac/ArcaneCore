@@ -77,6 +77,8 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance temple, 15543) => new YaujAI(creature, temple),
             (TempleOfAhnQirajInstance temple, 15544) => new VemAI(creature, temple),
             (TempleOfAhnQirajInstance, 15509) => new HuhuranAI(creature),
+            (TempleOfAhnQirajInstance, AnubisathSentinelAI.Entry) => new AnubisathSentinelAI(creature),
+            (TempleOfAhnQirajInstance, AnubisathDefenderAI.Entry) => new AnubisathDefenderAI(creature),
             (TempleOfAhnQirajInstance temple, 15516) => new SarturaAI(creature, temple),
             (TempleOfAhnQirajInstance temple, 15984) => new SarturaRoyalGuardAI(creature, temple),
             (TempleOfAhnQirajInstance, 15510) => new FankrissAI(creature),
@@ -98,6 +100,8 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (TempleOfAhnQirajInstance, 15589) => new CthunEyeAI(creature),
             (TempleOfAhnQirajInstance, 15725 or 15726 or 15728 or 15334 or 15802) => new CthunTentacleAI(creature),
             (ZulGurubInstance, 14834) => new HakkarAI(creature),
+            (ZulGurubInstance, SoulflayerAI.Entry) => new SoulflayerAI(creature),
+            (ZulGurubInstance, GurubashiBatRiderAI.Entry) => new GurubashiBatRiderAI(creature),
             (NaxxramasInstance raid, 15956 or 15953 or 15952 or 15954 or 15936 or 16011)
                 => new NaxxramasBossAI(creature, raid),
             (NaxxramasInstance raid, 16573) => new NaxxramasCryptGuardAI(creature, raid),
@@ -112,6 +116,9 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (NaxxramasInstance, 15989) => new SapphironAI(creature),
             (NaxxramasInstance, 15990) => new KelThuzadAI(creature),
             (NaxxramasInstance, LivingPoisonAI.Entry) => new LivingPoisonAI(creature),
+            (NaxxramasInstance, StoneskinGargoyleAI.Entry) => new StoneskinGargoyleAI(creature),
+            (NaxxramasInstance, DiseasedMaggotAI.Diseased or DiseasedMaggotAI.Rotting) => new DiseasedMaggotAI(creature),
+            (NaxxramasInstance, IcecrownGuardianAI.Entry) => new IcecrownGuardianAI(creature),
             _ => null,
         };
     }

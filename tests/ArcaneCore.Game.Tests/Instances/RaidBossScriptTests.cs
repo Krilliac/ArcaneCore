@@ -6,7 +6,11 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 using ArcaneCore.Game.Instances.Scripts.Naxxramas;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.ZulGurub;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
@@ -829,6 +833,261 @@ public sealed class RaidBossScriptTests
         raid.Tank.Relocate(poisons[0].X + 3, poisons[0].Y, poisons[0].Z, 0, 0);
         ai.MoveInLineOfSight(raid.Tank);
         Assert.Contains(raid.Caster.Casts, c => c.Spell == LivingPoisonAI.ExplodeSpell && c.Triggered);
+    }
+
+    // mangos-classic zulgurubScripts.cpp npc_soulflayerAI.
+    [Fact]
+    public void Soulflayer_RollsItsAbilitiesOnRespawn_StaggersItsTimers_AndBuffsAtThirtyPercent()
+    {
+        using var raid = new Raid(309, SoulflayerAI.Entry, engage: false);
+        var ai = Assert.IsType<SoulflayerAI>(raid.Boss.AI);
+        ai.OnRespawn();
+        Assert.Contains(ai.CcSpell, new[] { SoulflayerAI.Fear, SoulflayerAI.Knockdown });
+        Assert.Contains(ai.BuffSpell, new[] { SoulflayerAI.Enrage, SoulflayerAI.Frenzy, SoulflayerAI.Thrash });
+        var (tap, breath, cc) = ai.Timers;
+        Assert.InRange(cc, 2000u, 5000u);
+        Assert.InRange(tap, cc, 7000u);
+        Assert.InRange(breath, tap, 9000u);
+        raid.Boss.AI!.AttackStart(raid.Tank);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(cc - 1);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == ai.CcSpell);
+        ai.OnUpdate(9001 - (cc - 1));
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == ai.CcSpell);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == SoulflayerAI.SoulTap);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == SoulflayerAI.LightningBreath);
+        Assert.InRange(ai.Timers.SoulTap, 10000u, 15000u);
+        Assert.InRange(ai.Timers.Cc, 8000u, 10000u);
+    }
+
+    // mangos-classic boss_jeklik.cpp npc_gurubashi_bat_riderAI.
+    [Fact]
+    public void GurubashiBatRider_SummonedIsPassive_ThrashOnReset_AndDetonatesOnceBelowForty()
+    {
+        using var raid = new Raid(309, GurubashiBatRiderAI.Entry, engage: false);
+        var ai = Assert.IsType<GurubashiBatRiderAI>(raid.Boss.AI);
+        Assert.True(ai.IsSummon);
+        Assert.Equal(CreatureReactState.Passive, raid.Boss.ReactState);
+        ai.OnRespawn();
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == GurubashiBatRiderAI.Thrash);
+        // A summoned rider is passive: it only fights what put it in combat (Jeklik's Liquid Fire in the reference).
+        raid.Creatures.EnterCombatWithTarget(raid.Boss, raid.Tank);
+        raid.Boss.Combat.Threat.AddThreat(raid.Tank, 100);
+        ai.OnAggro(raid.Tank);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == GurubashiBatRiderAI.DemoralizingShout);
+        raid.Boss.Health = raid.Boss.MaxHealth / 2;
+        ai.OnUpdate(100);
+        Assert.False(ai.HasDoneConcoction);
+        raid.Boss.Health = raid.Boss.MaxHealth / 3;
+        ai.OnUpdate(100);
+        ai.OnUpdate(100);
+        Assert.True(ai.HasDoneConcoction);
+        Assert.Single(raid.Caster.Casts, c => c.Spell == GurubashiBatRiderAI.UnstableConcoction);
+    }
+
+    // mangos-classic zulgurubScripts.cpp WyvernStingAura.
+    [Fact]
+    public void WyvernSting_ExpiryCastsTheDot_ButADispelDoesNot()
+    {
+        using var kit = new SpellTestKit(
+            SpellTestKit.Spell(WyvernStingAuraModule.WyvernSting, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy))
+                with { Duration = new SpellDuration(12000, 0, 12000) },
+            SpellTestKit.Spell(WyvernStingAuraModule.WyvernStingDot, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy))
+                with { Duration = new SpellDuration(12000, 0, 12000) });
+        new WyvernStingAuraModule().Register(kit.System);
+        (Player player, _) = kit.AddPlayer(1);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, WyvernStingAuraModule.WyvernSting, SpellCastTargets.ForSelf(), triggered: true));
+        kit.System.RemoveAuras(player, WyvernStingAuraModule.WyvernSting, AuraRemoveMode.Dispel);
+        Assert.False(kit.System.HasAura(player, WyvernStingAuraModule.WyvernStingDot));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, WyvernStingAuraModule.WyvernSting, SpellCastTargets.ForSelf(), triggered: true));
+        kit.System.RemoveAuras(player, WyvernStingAuraModule.WyvernSting, AuraRemoveMode.Expire);
+        Assert.True(kit.System.HasAura(player, WyvernStingAuraModule.WyvernStingDot));
+    }
+
+    // mangos-classic zulgurub.cpp AreaTrigger_at_zulgurub.
+    [Fact]
+    public void ZulGurubAreaTriggers_YellOncePerTrigger_AndNeedHakkar()
+    {
+        using var raid = new Raid(309, 14834, engage: false);
+        var zg = Assert.IsType<ArcaneCore.Game.Instances.Scripts.Classic.ZulGurubInstance>(raid.Data);
+        zg.OnCreatureCreate(raid.Boss);
+        zg.OnAreaTrigger(raid.Tank, 3960);
+        Assert.True(zg.HasAltarYelled);
+        Assert.False(zg.HasIntroYelled);
+        zg.OnAreaTrigger(raid.Tank, 3958);
+        Assert.True(zg.HasIntroYelled);
+    }
+
+    // mangos-classic mob_anubisath_sentinel.cpp npc_anubisath_sentinelAI.
+    [Fact]
+    public void AnubisathSentinels_ShareDistinctAbilities_PassThemOnDeath_AndRespawnOnEvade()
+    {
+        using var raid = new Raid(531, AnubisathSentinelAI.Entry, engage: false);
+        Creature[] others = [.. Enumerable.Range(1, 3).Select(i => raid.Creatures.SpawnTemporary(Template(AnubisathSentinelAI.Entry), 1 + (i * 5), 0, 450, 0))];
+        var first = Assert.IsType<AnubisathSentinelAI>(raid.Boss.AI);
+        raid.Boss.AI!.AttackStart(raid.Tank);
+        first.OnAggro(raid.Tank);
+        AnubisathSentinelAI[] all = [first, .. others.Select(o => Assert.IsType<AnubisathSentinelAI>(o.AI))];
+        Assert.Equal(4, first.Group.Count);
+        Assert.All(all, a => Assert.Contains(a.Ability, AnubisathSentinelAI.Abilities));
+        Assert.Equal(4, all.Select(a => a.Ability).Distinct().Count());
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == first.Ability && ReferenceEquals(c.Target, raid.Boss));
+
+        first.OnDeath(raid.Tank);
+        Assert.Equal(3, raid.Caster.UnitCasts.Count(c => c.Spell == first.Ability));
+        Assert.Equal(3, raid.Caster.UnitCasts.Count(c => c.Spell == AnubisathSentinelAI.HealBrethren));
+
+        raid.Boss.Health = raid.Boss.MaxHealth / 4;
+        raid.Caster.Casts.Clear();
+        var second = all[1];
+        others[0].Health = others[0].MaxHealth / 4;
+        second.OnUpdate(1);
+        second.OnUpdate(1);
+        Assert.Single(raid.Caster.Casts, c => c.Spell == AnubisathSentinelAI.Enrage);
+    }
+
+    // mangos-classic mob_anubisath_sentinel.cpp npc_anubisath_defenderAI.
+    [Fact]
+    public void AnubisathDefender_ArmsOneOfEachPairOnAggro_WithTheReferenceDelays()
+    {
+        using var raid = new Raid(531, AnubisathDefenderAI.Entry, engage: false);
+        var ai = Assert.IsType<AnubisathDefenderAI>(raid.Boss.AI);
+        raid.Boss.AI!.AttackStart(raid.Tank);
+        ai.OnAggro(raid.Tank);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell is AnubisathDefenderAI.ReflectFireArcane or AnubisathDefenderAI.ReflectShadowFrost);
+        var t = ai.Timers;
+        Assert.True((t.Meteor == 0) != (t.Plague == 0));
+        Assert.InRange(Math.Max(t.Meteor, t.Plague), 6000u, 10000u);
+        Assert.True((t.Thunderclap == 0) != (t.ShadowStorm == 0));
+        Assert.InRange(Math.Max(t.Thunderclap, t.ShadowStorm), 5000u, 8000u);
+        Assert.InRange(t.Summon, 3000u, 5000u);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(10000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell is AnubisathDefenderAI.SummonWarrior or AnubisathDefenderAI.SummonSwarmguard);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell is AnubisathDefenderAI.Thunderclap or AnubisathDefenderAI.ShadowStorm);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell is AnubisathDefenderAI.Meteor or AnubisathDefenderAI.Plague);
+        Assert.InRange(ai.Timers.Summon, 12000u, 16000u);
+        raid.Caster.Casts.Clear();
+        raid.Boss.Health = raid.Boss.MaxHealth / 20;
+        ai.OnUpdate(1);
+        ai.OnUpdate(1);
+        Assert.Single(raid.Caster.Casts, c => c.Spell is AnubisathDefenderAI.Enrage or AnubisathDefenderAI.Explode);
+    }
+
+    // mangos-classic temple_of_ahnqiraj.cpp DoHandleTempleAreaTrigger and aIntroDialogue.
+    [Fact]
+    public void TempleAreaTriggers_TwinsIntroRunsOnceAndSaves_AndSarturaIsPulled()
+    {
+        using var raid = new Raid(531, TempleOfAhnQirajInstance.Veklor, engage: false, TempleOfAhnQirajInstance.Veknilash, TempleOfAhnQirajInstance.MastersEye, TempleOfAhnQirajInstance.SarturaEntry);
+        var aq = Assert.IsType<TempleOfAhnQirajInstance>(raid.Data);
+        Creature veknilash = raid.Creatures.SpawnTemporary(Template(TempleOfAhnQirajInstance.Veknilash), 3, 0, 450, 0);
+        Creature eye = raid.Creatures.SpawnTemporary(Template(TempleOfAhnQirajInstance.MastersEye), 5, 0, 450, 0);
+        Assert.Equal(StandState.Kneel, raid.Boss.StandState);
+        aq.OnAreaTrigger(raid.Tank, TempleOfAhnQirajInstance.AreaTriggerTwinEmperors);
+        Assert.Equal(EncounterState.InProgress, aq.GetData(TempleOfAhnQirajInstance.TwinsIntro));
+        aq.Update(0);
+        Assert.Equal(1, aq.TwinsIntroStep);
+        aq.Update(1999);
+        Assert.Equal(StandState.Kneel, veknilash.StandState);
+        aq.Update(1);
+        Assert.Equal(StandState.Stand, veknilash.StandState);
+        Assert.Equal(StandState.Stand, raid.Boss.StandState);
+        aq.Update(6000 + 6000 + 8000 + 3000 + 3000 + 1000);
+        Assert.Equal(-1, aq.TwinsIntroStep);
+        Assert.Equal(EncounterState.Done, aq.GetData(TempleOfAhnQirajInstance.TwinsIntro));
+        aq.OnAreaTrigger(raid.Tank, TempleOfAhnQirajInstance.AreaTriggerTwinEmperors);
+        Assert.Equal(-1, aq.TwinsIntroStep);
+        _ = eye;
+
+        // The real map_template type (AQ40 is MAP_RAID): SetInCombatWithZone only works in a dungeon or raid.
+        WorldMaps.Of(raid.World).Load(new MapContent([new MapTemplate(531, 0, MapType.Raid, 0, 40, 0, -1, 0, 0, "raid", "")], [], [], [], []));
+        Creature sartura = raid.Creatures.SpawnTemporary(Template(TempleOfAhnQirajInstance.SarturaEntry), 2, 0, 450, 0);
+        Assert.False(sartura.Combat.IsInCombat);
+        aq.OnAreaTrigger(raid.Tank, TempleOfAhnQirajInstance.AreaTriggerSartura);
+        Assert.True(sartura.Combat.IsInCombat);
+    }
+
+    // mangos-classic naxxramas.cpp npc_stoneskin_gargoyleAI.
+    [Fact]
+    public void StoneskinGargoyle_SleepsInStone_WakesWithinSeventeenYards_VolleysAndStoneskins()
+    {
+        using var raid = new Raid(533, StoneskinGargoyleAI.Entry, engage: false);
+        var ai = Assert.IsType<StoneskinGargoyleAI>(raid.Boss.AI);
+        ai.OnRespawn();
+        Assert.True(ai.IsStone);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == StoneskinGargoyleAI.Stoneform);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == StoneskinGargoyleAI.StealthDetection);
+        raid.Tank.Relocate(raid.Boss.X + 30, raid.Boss.Y, raid.Boss.Z, 0, 0);
+        ai.MoveInLineOfSight(raid.Tank);
+        Assert.True(ai.IsStone);
+        raid.Tank.Relocate(raid.Boss.X + 10, raid.Boss.Y, raid.Boss.Z, 0, 0);
+        ai.MoveInLineOfSight(raid.Tank);
+        Assert.False(ai.IsStone);
+        ai.OnAggro(raid.Tank);
+        Assert.True(ai.CanCastVolley);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(4000);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == StoneskinGargoyleAI.AcidVolley);
+        ai.OnUpdate(1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == StoneskinGargoyleAI.AcidVolley);
+        raid.Boss.Health = raid.Boss.MaxHealth / 4;
+        ai.OnUpdate(1);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == StoneskinGargoyleAI.Stoneskin);
+    }
+
+    // mangos-classic boss_heigan.cpp npc_diseased_maggotAI.
+    [Fact]
+    public void DiseasedMaggot_EvadesEveryThreeSecondsNearTheHeiganTrigger()
+    {
+        using var raid = new Raid(533, DiseasedMaggotAI.Diseased, engage: true, DiseasedMaggotAI.WorldTrigger);
+        var ai = Assert.IsType<DiseasedMaggotAI>(raid.Boss.AI);
+        ai.OnUpdate(DiseasedMaggotAI.CheckMs);
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        raid.Creatures.SpawnTemporary(Template(DiseasedMaggotAI.WorldTrigger), raid.Boss.X + 30, raid.Boss.Y, raid.Boss.Z, 0);
+        ai.OnUpdate(DiseasedMaggotAI.CheckMs - 1);
+        Assert.True(raid.Boss.Combat.IsInCombat);
+        ai.OnUpdate(1);
+        Assert.False(raid.Boss.Combat.IsInCombat);
+    }
+
+    // mangos-classic boss_kelthuzad.cpp npc_icecrown_guardianAI.
+    [Fact]
+    public void IcecrownGuardian_BloodTapsOnKillAndOnAVictimChange()
+    {
+        using var raid = new Raid(533, IcecrownGuardianAI.Entry, engage: false);
+        var ai = Assert.IsType<IcecrownGuardianAI>(raid.Boss.AI);
+        ai.OnRespawn();
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == IcecrownGuardianAI.GuardianPassive);
+        raid.Boss.AI!.AttackStart(raid.Tank);
+        raid.Caster.Casts.Clear();
+        ai.OnUpdate(IcecrownGuardianAI.CheckMs + 1);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Spell == IcecrownGuardianAI.BloodTap);
+        ai.OnKilledUnit(raid.Tank);
+        Assert.Single(raid.Caster.Casts, c => c.Spell == IcecrownGuardianAI.BloodTap);
+    }
+
+    // mangos-classic naxxramas.cpp DoHandleAreaTrigger (4115) and the Faerlina follower steps.
+    [Fact]
+    public void FaerlinaIntro_SaysOnce_ThenFollowersStandChannelAndKneel()
+    {
+        using var raid = new Raid(533, 15953, engage: false, NaxxramasInstance.Cultist);
+        var naxx = Assert.IsType<NaxxramasInstance>(raid.Data);
+        Creature cultist = raid.Creatures.SpawnTemporary(Template(NaxxramasInstance.Cultist), 4, 0, 450, 0);
+        cultist.StandState = StandState.Kneel;
+        naxx.OnAreaTrigger(raid.Tank, NaxxramasInstance.AreaTriggerFaerlinaIntro);
+        Assert.Equal(1, naxx.FaerlinaIntroStep);
+        naxx.Update(9999);
+        Assert.Equal(StandState.Kneel, cultist.StandState);
+        naxx.Update(1);
+        Assert.Equal(StandState.Stand, cultist.StandState);
+        Assert.True(naxx.IsFaerlinaIntroDone);
+        naxx.Update(3000);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == NaxxramasInstance.DarkChanneling);
+        naxx.Update(30000);
+        Assert.Equal(StandState.Kneel, cultist.StandState);
+        Assert.Equal(-1, naxx.FaerlinaIntroStep);
+        naxx.OnAreaTrigger(raid.Tank, NaxxramasInstance.AreaTriggerFaerlinaIntro);
+        Assert.Equal(-1, naxx.FaerlinaIntroStep);
     }
 }
 
