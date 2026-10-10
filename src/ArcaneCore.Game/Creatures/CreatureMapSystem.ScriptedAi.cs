@@ -21,6 +21,9 @@ public sealed partial class CreatureMapSystem
     private readonly HashSet<Creature> _corpseDespawns = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>A player-linked escort failed (vmangos npc_escortAI::JustDied): its quest fails for the player's group.</summary>
+    /// <summary>vmangos Player::KilledMonster(cInfo, guid) from a script: the kill credit of <paramref name="entry"/> without group credit.</summary>
+    internal void KilledMonsterCredit(Player player, uint entry, ObjectGuid source) => _ai.ScriptQuests?.KilledMonsterCredit(player, entry, source);
+
     internal void FailEscortQuest(Player player, uint questId) => _ai.ScriptQuests?.GroupEventFailHappens(player, questId);
 
     /// <summary>
