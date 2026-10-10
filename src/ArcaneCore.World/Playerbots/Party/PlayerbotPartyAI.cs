@@ -36,8 +36,10 @@ namespace ArcaneCore.World.Playerbots.Party;
 /// </para>
 /// <para>
 /// <b>Driving</b> (<see cref="Drives"/>, then <see cref="Update"/>): while the bot's group has a master (the leader, or the first real
-/// player when the leader is a bot) this AI drives the bot. It follows at 2-5 yards, teleports (out of combat) to a master more than
-/// 100 yards away or on another map (the teleport service the GM .goname/.namego commands use, with its instance checks), fights what
+/// player when the leader is a bot) this AI drives the bot. It follows at 2-5 yards and catches up when it cannot simply walk
+/// (<see cref="PlayerbotFollower"/>, <c>World:Playerbots:Follow</c>: by default it teleports, as vmangos does, to a master more than 100
+/// yards away or on another map, and also to one it has no reasonable way to, through the teleport service the GM .goname/.namego
+/// commands use with its instance checks; it drops to a master below when the fall is survivable), fights what
 /// the master orders, what the master fights and what attacks the group, eats and drinks, and releases any round-robin loot it holds
 /// so the players can take it, whoever made the kill. A dead bot accepts a member's resurrection, revives in place when vmangos
 /// ShouldAutoRevive allows it, or runs back (<see cref="PlayerbotRecovery"/>). When the master has been offline or gone for
@@ -70,9 +72,6 @@ internal sealed class PlayerbotPartyAI
     /// <summary>A corpse whose loot the bot could not release after this many tries (walk failed, or the open was refused) is left.</summary>
     internal const int MaxReleaseAttempts = 3;
 
-    /// <summary>A refused teleport (a full or locked instance) is tried again after this long.</summary>
-    internal const long TeleportRetryMs = 10_000;
-
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _combatSpells;
@@ -102,7 +101,7 @@ internal sealed class PlayerbotPartyAI
     private bool _corpseRun;
     private readonly Dictionary<ObjectGuid, int> _releaseTries = [];
     private Vector3? _stayPoint;
-    private long _teleportRetryAtMs;
+    private readonly PlayerbotFollower _follower;
     private uint _idleIntakeAtMs;
     private bool _idleIntakeStarted;
     private readonly Chat.PlayerbotChat? _chat;
@@ -116,6 +115,7 @@ internal sealed class PlayerbotPartyAI
         _combatSpells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _combatSpells);
+        _follower = new PlayerbotFollower(session, options);
         _random = new Random(session.AccountId);
         _chat = chat;
         _botId = botId;
@@ -154,6 +154,9 @@ internal sealed class PlayerbotPartyAI
     internal uint TargetEntry { get; private set; }
 
     internal Creature? InspectionTarget => _target;
+
+    /// <summary>How the bot follows its master and catches up (<see cref="PlayerbotFollower"/>; inspection and tests).</summary>
+    internal PlayerbotFollower Follower => _follower;
 
     /// <summary>
     /// How long a dead bot waits for a resurrection before it runs back to its body (<see cref="DefaultDeadWaitMs"/>; a test seam,
@@ -409,6 +412,7 @@ internal sealed class PlayerbotPartyAI
                 _stayPoint = null; // taken where the bot comes to a stop
                 _ordered = ObjectGuid.Empty;
                 _route = null;
+                _follower.Reset(player);
                 PlayerbotMovementControl.Stop(_session, player);
                 if (acknowledge) Tell(player, master.Name, "Staying here.");
                 break;
@@ -561,6 +565,7 @@ internal sealed class PlayerbotPartyAI
         _stayPoint = null;
         _ordered = ObjectGuid.Empty;
         _route = null;
+        _follower.Reset(player);
         _target = null;
         _attacking = false;
         _thinkElapsed = 0;
@@ -585,6 +590,7 @@ internal sealed class PlayerbotPartyAI
 
     private void Release(Player player)
     {
+        _follower.Reset(player); // first: a fall under way lands before anything stops the bot
         if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
         PlayerbotMovementControl.Stop(_session, player);
         _engaged = false;
@@ -625,6 +631,7 @@ internal sealed class PlayerbotPartyAI
         if (dead && !_deathRetired)
         {
             _risk.OnDeath(player);
+            _follower.Reset(player); // a fall under way is forgotten, not landed: the corpse lies where the bot died
             RetireDeath();
             _deathRetired = true;
         }
@@ -635,7 +642,11 @@ internal sealed class PlayerbotPartyAI
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
 
-        if (PlayerbotMotion.ConsumeLoop(player)) _route = null;
+        if (PlayerbotMotion.ConsumeLoop(player))
+        {
+            _route = null;
+            _follower.Reset(player);
+        }
         if (dead)
         {
             UpdateDead(player, interval);
@@ -646,6 +657,14 @@ internal sealed class PlayerbotPartyAI
         _deadSinceMs = -1;
         _corpseRun = false;
         _recovery.Reset();
+
+        // In the air of a drop to the master: nothing else until it lands (a client cannot act mid-fall either).
+        if (_follower.Airborne)
+        {
+            _follower.ContinueFall(player);
+            Goal = PlayerbotGoalKind.Follow;
+            return;
+        }
 
         Player? master = _session.World.FindOnlinePlayer(_master);
 
@@ -724,7 +743,10 @@ internal sealed class PlayerbotPartyAI
         Creature? masterVictim = !stay && master is not null && ReferenceEquals(master.Map, map) ? master.Combat.Victim as Creature : null;
         IEnumerable<Creature> own = player.Combat.Attackers.OfType<Creature>().OrderBy(attacker => Distance(player, attacker));
         IEnumerable<(Creature, float)> members = stay ? [] : MemberAttackers(player, map);
-        return PlayerbotParty.SelectAttackTarget(stay ? null : ordered, masterVictim, own, members, unit => IsValidTarget(player, unit));
+        Creature? selected = PlayerbotParty.SelectAttackTarget(stay ? null : ordered, masterVictim, own, members, unit => IsValidTarget(player, unit));
+        // FightThrough: what blocks the way to the master is fought, not run past (World:Playerbots:Follow:CatchUpMode).
+        if (selected is null && !stay && _follower.Blocker(player) is { } blocker && IsValidTarget(player, blocker)) selected = blocker;
+        return selected;
     }
 
     private IEnumerable<(Creature, float)> MemberAttackers(Player player, Map map)
@@ -751,6 +773,7 @@ internal sealed class PlayerbotPartyAI
             _target = target;
             _attacking = false;
             _route = null;
+            _follower.Suspend(player); // the fight takes the bot off its follow route (a fall under way lands first)
         }
 
         Goal = PlayerbotGoalKind.Assist;
@@ -764,7 +787,7 @@ internal sealed class PlayerbotPartyAI
                 return;
             }
 
-            MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval);
+            if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval)) _follower.NoteUnreachable(target);
             return;
         }
 
@@ -790,38 +813,23 @@ internal sealed class PlayerbotPartyAI
 
     private void Follow(Player player, Player master, uint interval)
     {
-        TeleportService? teleports = Services.Teleports;
-        Map? masterMap = master.Map;
-        bool sameMap = masterMap is not null && ReferenceEquals(player.Map, masterMap);
-        bool otherInstance = !sameMap && masterMap is not null && player.Map is { } own && own.MapId == masterMap.MapId;
-        bool masterInWorld = master.IsInWorld && masterMap is not null && teleports?.StageOf(master) is null;
-        float distance = sameMap ? Distance(player, master) : float.NaN;
-        PlayerbotFollowAction action = PlayerbotParty.DecideFollow(new PlayerbotFollowFacts(_mode, masterInWorld, sameMap, distance,
-            _options.Party.TeleportToLeader, _options.AllowedMaps.Contains(master.MapId), Services.Flights?.IsFlying(master) == true,
-            player.Combat.IsInCombat, otherInstance));
+        Goal = PlayerbotGoalKind.Follow;
+        if (_mode == PlayerbotPartyMode.Stay)
+        {
+            // Stay holds whatever the master does: back to its place when something moved it (loot), else stand.
+            _follower.Reset(player);
+            if (HoldStayPoint(player, interval)) return;
+            _route = null;
+            PlayerbotMovementControl.Stop(_session, player);
+            return;
+        }
+
+        PlayerbotFollowAction action = _follower.Update(player, master, _mode, _followAngle, _followDistance, interval);
         if (action == PlayerbotFollowAction.Hold && _comeRequested && _mode == PlayerbotPartyMode.Follow)
         {
             // 'come': arrived beside the master, now hold here.
             _comeRequested = false;
             _mode = PlayerbotPartyMode.Stay;
-        }
-
-        Goal = PlayerbotGoalKind.Follow;
-        if (action == PlayerbotFollowAction.Hold && _mode == PlayerbotPartyMode.Stay && HoldStayPoint(player, interval)) return;
-        switch (action)
-        {
-            case PlayerbotFollowAction.Hold:
-            case PlayerbotFollowAction.Wait:
-                _route = null;
-                PlayerbotMovementControl.Stop(_session, player);
-                break;
-            case PlayerbotFollowAction.Teleport:
-                TeleportToMaster(player, master, teleports);
-                break;
-            case PlayerbotFollowAction.Move:
-                Vector3 goal = PlayerbotParty.FollowPoint(new Vector3(master.X, master.Y, master.Z), master.Orientation, _followAngle, _followDistance);
-                if (!MoveTo(player, goal, interval)) MoveTo(player, new Vector3(master.X, master.Y, master.Z), interval);
-                break;
         }
     }
 
@@ -855,27 +863,6 @@ internal sealed class PlayerbotPartyAI
 
         if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, interval, _session.World.NowMs)) _route = null;
         return true;
-    }
-
-    /// <summary>
-    /// vmangos UpdateAI :806-817 (ChatHandler(me).HandleGonameCommand(leader)): the ordinary teleport service, so the map resolver
-    /// puts the bot into the master's instance (the group's bind) or refuses it as it would refuse the GM command. The bot lands on
-    /// the master's spot, not 5 yards above as .goname puts a GM: it has no client to fall.
-    /// </summary>
-    private void TeleportToMaster(Player player, Player master, TeleportService? teleports)
-    {
-        _route = null;
-        if (teleports is null || teleports.IsBeingTeleported(player) || Now < _teleportRetryAtMs) return;
-        // Within one map id the service teleports near and keeps the bot's own instance: that never reaches a master in another one.
-        if (player.Map is { } own && own.MapId == master.MapId && !ReferenceEquals(own, master.Map))
-        {
-            _teleportRetryAtMs = Now + TeleportRetryMs;
-            return;
-        }
-
-        PlayerbotMovementControl.Stop(_session, player);
-        if (!teleports.TeleportTo(player, master.MapId, master.X, master.Y, master.Z, master.Orientation))
-            _teleportRetryAtMs = Now + TeleportRetryMs;
     }
 
     // --- loot ---------------------------------------------------------------------------------------------------------

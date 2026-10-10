@@ -152,14 +152,14 @@ where the master goes.
   one (the old one's routes and targets belong to another place). When every real player of the group is offline or gone, the
   bot waits `MasterTimeoutSeconds` (60, 1..3600), then leaves the group (CMSG_GROUP_DISBAND, vmangos `requestRemoval`).
 - **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
-  through `PlayerbotConsumables` while its master is within 30 yards, and teleports to a master more than 100 yards away or on
-  another map (`TeleportToLeader`, default on; vmangos `.goname`, only while the bot is out of combat, as vmangos does it inside
-  its `!IsInCombat()` block; in combat it walks after a far master on its map) through the teleport service the GM
-  `.goname`/`.namego` commands use, so the map resolver's instance rules and the group's instance bind decide where it lands
-  (into the master's instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to
-  fall. A master on a map outside `AllowedMaps`, on a taxi flight (vmangos idles then), or in another instance of the bot's own
-  map id (the service teleports within one map id by a near teleport, which keeps the bot's instance) is waited for, not
-  followed. A refused teleport is retried after 10 s.
+  through `PlayerbotConsumables` while its master is within 30 yards, and catches up with a master it cannot simply walk to as
+  [Following and catch-up](#following-and-catch-up) describes: by default it teleports (vmangos `.goname`) to a master more than 100
+  yards away or on another map, and to one it has no reasonable way to, through the teleport service the GM `.goname`/`.namego`
+  commands use, so the map resolver's instance rules and the group's instance bind decide where it lands (into the master's
+  instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to fall. A master on a map
+  the bot may not be on (outside `AllowedMaps` and no dungeon or raid, `PlayerbotMapPolicy`), on a taxi flight (vmangos idles
+  then), or in another instance of the bot's own map id (the service teleports within one map id by a near teleport, which keeps
+  the bot's instance) is waited for, not followed. A refused teleport is retried after 10 s.
 - **Combat** (vmangos `SelectAttackTarget`/`SelectPartyAttackTarget`): the target the master ordered, else the master's
   victim, else whoever attacks the bot, else whoever attacks another member within 50 yards; `PlayerbotCombatSpells`, then a
   chase to 4 yards and CMSG_ATTACKSWING.
@@ -193,6 +193,80 @@ grouped bot (scripted mode) makes the party AI let go: no party goal, master or 
 detaches a bot still grouped is engaged afresh. Brain bots do not acknowledge a
 far teleport (the brain returns while the player is in no map, before `PlayerbotMovementControl`); the party AI does, so it can
 follow its master into an instance.
+
+#### Following and catch-up
+
+`Playerbots/Party/PlayerbotFollower.cs` (rules in `PlayerbotFollowRules.cs`, the drop in `PlayerbotFollowDrop.cs`), configured under
+`World:Playerbots:Follow` (every key live through `.reload config`). The party AI drives it; it takes a session and a leader, so any
+other follow of a managed bot can drive it the same way.
+
+The live report behind it (2026-10-10, build a88f6135): the master dropped into the Moonbrook mine just short of the Deadmines portal
+(landing at -11138.0, 1506.9, 24.4) and his bots, following, ran round the mine through its Defias and died or looped. On the real
+mmaps the follow planner's way from the mine ledge 11.9 yards above him is 89.5 yards for 16.4 yards of straight distance, past an
+elite Defias Conjurer; from the Moonbrook surface above it is 320.6 yards for 22.6; no off-mesh (drop) connection exists in the nine
+navigation tiles round the mine. The 100-yard teleport never fired, so the bots walked; and a party bot whose master went into the
+Deadmines waited outside, because the master's map had to be in `AllowedMaps` ([0, 1] on the live server).
+`PlayerbotFollowDeadminesTests` replays both places.
+
+Each think the follower first takes the reference decision (`PlayerbotParty.DecideFollow`, vmangos `PartyBotAI::UpdateAI`
+:795-817 and :884-891): hold within 5 yards; wait for a master between maps, on a taxi flight, in another instance of the bot's map
+id or on a map it may not be on; teleport to a master on another map or, in `Teleport` mode, more than `TeleportDistanceYards` (100,
+vmangos `IsWithinDistInMap(pLeader, 100.0f)`) away; otherwise walk. A walking follower plans to the point beside its master and judges
+every fresh plan (`PlayerbotFollowRules.Judge`). The way is **no way** when:
+
+- the navigation mesh has no route (`NoRoute`);
+- the master is within 50 yards across and 30 yards or more above or below (`Vertical`: mangoszero's playerbot
+  `MovementAction::Follow`, `AiPlayerbot.SightDistance` 50 and `SpellDistance` 30, teleports then);
+- the route passes inside the aggro radius of a hostile `DangerLevelMargin` (3) levels or more above the bot, or of an elite (rank 1
+  to 3) at or above its level (`Danger`; the radius is the server's own, `PlayerbotRecovery.Threats`);
+- the route is longer than `MaxPathRatio` (3) times the straight distance and more than `MinDetourYards` (40) longer than it
+  (`Detour`);
+- the follower made no progress towards a master standing still for `NoProgressSeconds` (8) twice in a row (`Stalled`). The first
+  such window re-plans from where the bot stands (and forgives the motion's loop blacklist round the master); progress is the way
+  left shrinking by 2 yards, and a master who moves more than 5 yards starts a new window, so trailing a running master never
+  stalls.
+
+A good way is walked. Otherwise a **drop** is taken in every mode when the master is at least 3 yards below and within 40 yards
+across (`PlayerbotFollowDrop`): the floor is followed towards him (and in a fan up to 90 degrees either side) to its edge; past it the
+floor beneath must lie at least 3 yards lower, the way over the edge and the column down must be clear, the vmangos fall damage
+(`Player::HandleFall`: nothing under 14.57 yards; gravity `Movement::gravity`, vmangos `spline/util.cpp:24`) must cost less than `MaxFallHealthPercent` (50) of the bot's current health, and
+the floor it lands on must lead to the master by the mesh within twice the straight distance plus 10 yards. The bot walks to the edge,
+reports the step off it as a client does (MSG_MOVE_HEARTBEAT with MOVEFLAG_FALLINGFAR one step out) and, the free-fall time later
+(vmangos gravity 19.29 yd/s²), MSG_MOVE_FALL_LAND with that fall time: the server applies the fall damage. In the Deadmines it drops
+12.4 yards from the ledge (no damage) and stands beside its master 2.2 s after he landed. A fall always ends on the ground or is
+forgotten: an order that stops the follow mid-air (stay, a fight, leaving the group) lands it first; a bot that dies or is
+teleported away mid-air is not landed afterwards. A drop searched for in vain is searched for again only after 2 s. Then by
+`CatchUpMode`:
+
+- `Teleport` (default, the reference behaviour: vmangos PartyBotAI and mangoszero's playerbot both teleport a follower): teleport for
+  any of the reasons above. From the Moonbrook surface the follower teleports at once instead of running the 320-yard mine.
+- `FightThrough`: never teleport, on the bot's map or to another: walk the way it has (a partial way towards the master when there is
+  no route), drop where a drop leads down, engage the hostiles whose aggro reaches the next 40 yards of the way (after the ordinary
+  targets: the ordered one, the master's, the bot's and the group's attackers; never when passive), and, with the master on another
+  map, walk into the area trigger on the bot's map that leads there (a dungeon entrance or exit; the bot may take the triggers that
+  lead to its master's map, and only those, whatever `AllowedMaps` says); with no such trigger it waits. A blocker the bot failed
+  to reach three times is left alone. Stalls re-plan for ever. A follower that keeps dying stays a corpse-run
+  follower.
+- `Auto`: teleport only for `NoRoute` or `Stalled` (and to another map); otherwise as `FightThrough`.
+
+A catch-up teleport needs `World:Playerbots:Party:TeleportToLeader` (off: never), a server-owned session with no teleport pending (the client half
+acknowledges near and far teleports every tick: `PlayerbotMovementControl.Update`, `PlayerbotMotion.Pump`), a master on the ground
+(not in the air), the bot not duelling (vmangos `PartyBotAI.cpp:808`, `!IsInDuel()`), and the bot out of combat (vmangos teleports only inside its `!IsInCombat()` block) unless its master left the
+fight: out of combat himself and farther than `LeaderCombatRangeYards` (50, vmangos' party assist range) or on another map. The
+master's map counts as one the bot may be on when `AllowedMaps` lists it (an empty list allows every map) or when it is a dungeon or
+raid (`PlayerbotMapPolicy`; the login gate lets a bot stay in the instance it is in). Each catch-up teleport and drop is logged at
+Information by `PlayerbotFollower` with its reason and the measured way.
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `CatchUpMode` | `Teleport` | `Teleport`, `FightThrough`, `Auto` | How a follower catches up (above). |
+| `TeleportDistanceYards` | 100 | 10..1000 | `Teleport` mode: a master farther away on the bot's map is teleported to (vmangos). |
+| `MaxPathRatio` | 3 | 1.5..20 | A way longer than this times the straight distance (and `MinDetourYards` longer) is a detour. |
+| `MinDetourYards` | 40 | 0..500 | A way at most this much longer than the straight distance is always walked. |
+| `DangerLevelMargin` | 3 | 0..60 | A hostile this many levels above the bot (or an elite at its level) on the way makes it no way. |
+| `LeaderCombatRangeYards` | 50 | 0..1000 | A bot in combat teleports only to a master out of combat and farther than this. |
+| `NoProgressSeconds` | 8 | 2..120 | The no-progress window of the loop detection. |
+| `MaxFallHealthPercent` | 50 | 0..99 | A drop is taken when the fall costs less than this % of the bot's health (0: only harmless falls). |
 
 ### Bot chat
 

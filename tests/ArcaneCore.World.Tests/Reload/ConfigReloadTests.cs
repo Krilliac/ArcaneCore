@@ -515,6 +515,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
         }
 
+        // Following and catch-up is live key by key (docs/areas/playbots.md, Following and catch-up).
+        foreach (PropertyInfo property in typeof(PlayerbotFollowOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Follow)}:{property.Name}");
+        }
+
         // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

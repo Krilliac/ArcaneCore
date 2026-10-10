@@ -79,6 +79,17 @@ internal static class PlayerbotAreaTriggers
         Trackers.GetValue(player, _ => new PlayerbotTriggerTracker()).TeleportsAllowed = allowed;
     }
 
+    /// <summary>
+    /// Let the bot take the teleports that lead to <paramref name="targetMap"/> only (null: none), whatever its
+    /// <see cref="PlayerbotOptions.AllowedMaps"/>: a follower walking into the entrance its leader took (<see cref="Party.PlayerbotFollower"/>).
+    /// Every other trigger keeps the ordinary rule. Kept across teleports.
+    /// </summary>
+    internal static void AllowTeleportsTo(Player player, uint? targetMap)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Trackers.GetValue(player, _ => new PlayerbotTriggerTracker()).TeleportTarget = targetMap;
+    }
+
     /// <summary>Forget what the bot is inside (teleport, death): the next position seen sets it again without firing.</summary>
     internal static void Reset(Player player)
     {
@@ -135,7 +146,8 @@ internal static class PlayerbotAreaTriggers
         if (maps.FindAreaTriggerTeleport(trigger) is not { } teleport) return true;
         bool leadsToCorpse = !player.IsAlive && player.Combat.Corpse is { } corpse
             && PlayerbotMapPolicy.LeadsTo(maps.Registry, corpse.MapId, teleport.TargetMap);
-        return PlayerbotMapPolicy.AllowsTrigger(tracker.AllowedMaps, teleport.TargetMap, tracker.TeleportsAllowed, leadsToCorpse);
+        bool optedIn = tracker.TeleportsAllowed || tracker.TeleportTarget == teleport.TargetMap;
+        return PlayerbotMapPolicy.AllowsTrigger(tracker.AllowedMaps, teleport.TargetMap, optedIn, leadsToCorpse);
     }
 }
 
@@ -231,6 +243,9 @@ internal sealed class PlayerbotTriggerTracker
 
     /// <summary>A controller lets the bot take teleports off <see cref="AllowedMaps"/> (<see cref="PlayerbotAreaTriggers.AllowTeleports"/>).</summary>
     internal bool TeleportsAllowed { get; set; }
+
+    /// <summary>The one map whose teleports the bot may take besides (<see cref="PlayerbotAreaTriggers.AllowTeleportsTo"/>); null: none.</summary>
+    internal uint? TeleportTarget { get; set; }
 
     internal bool Knows(object map) => ReferenceEquals(_map, map);
 

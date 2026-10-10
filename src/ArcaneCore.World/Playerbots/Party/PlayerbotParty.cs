@@ -31,15 +31,25 @@ internal enum PlayerbotFollowAction
 
     /// <summary>The master cannot be reached now (between maps, or on a map the bot may not enter): stand and wait.</summary>
     Wait,
+
+    /// <summary>
+    /// <see cref="PlayerbotCatchUpMode.FightThrough"/>: the master is on another map and an area trigger on the bot's map leads there
+    /// (a dungeon entrance or exit): walk into it, as the master did.
+    /// </summary>
+    WalkToEntrance,
 }
 
 /// <summary>
 /// The facts one follow decision needs (all read on the world thread). <see cref="SameMap"/> means the same map instance;
 /// <see cref="MasterInOtherInstance"/> that the master is on the bot's map id but in another instance of it.
+/// <see cref="CatchUp"/>, <see cref="TeleportDistance"/> and <see cref="LeaderCombatRange"/> are <c>World:Playerbots:Follow</c>'s;
+/// <see cref="EntranceToMaster"/> that an area trigger on the bot's map leads to the master's map.
 /// </summary>
 internal readonly record struct PlayerbotFollowFacts(
     PlayerbotPartyMode Mode, bool MasterInWorld, bool SameMap, float Distance, bool TeleportToLeader, bool MasterMapAllowed,
-    bool MasterFlying = false, bool InCombat = false, bool MasterInOtherInstance = false);
+    bool MasterFlying = false, bool InCombat = false, bool MasterInOtherInstance = false,
+    PlayerbotCatchUpMode CatchUp = PlayerbotCatchUpMode.Teleport, float TeleportDistance = PlayerbotParty.TeleportDistance,
+    bool MasterInCombat = false, float LeaderCombatRange = PlayerbotParty.PartyAssistRange, bool EntranceToMaster = false);
 
 /// <summary>Another group member as <see cref="PlayerbotParty.ShouldAutoRevive"/> sees it.</summary>
 internal readonly record struct PlayerbotReviveMember(bool InCombat, bool Alive, bool Healer, float? Distance);
@@ -82,24 +92,51 @@ internal static class PlayerbotParty
     }
 
     /// <summary>
-    /// One follow step (vmangos UpdateAI :795-817 and :884-891). Stay holds whatever happens. A master between maps is waited for,
-    /// and so is one on a taxi flight (vmangos UpdateAI: idle while the leader IsTaxiFlying). A master on another map, or more than
-    /// <see cref="TeleportDistance"/> yards away, is teleported to when <see cref="PlayerbotPartyOptions.TeleportToLeader"/> is on, the
-    /// bot may be on the master's map (AllowedMaps) and the bot is out of combat (vmangos teleports only inside its !IsInCombat()
-    /// block); otherwise a far master on the same map is walked to and one on another map waited for. A master in another instance of
-    /// the bot's own map id is waited for: the teleport service moves a bot within its map id by a near teleport, which never changes
-    /// the instance. Within <see cref="MaxFollowDistance"/> the bot holds.
+    /// One follow step before any route is planned (vmangos UpdateAI :795-817 and :884-891). Stay holds whatever happens. A master
+    /// between maps is waited for, and so is one on a taxi flight (vmangos UpdateAI: idle while the leader IsTaxiFlying).
+    /// <list type="bullet">
+    /// <item><description>A master on another map is teleported to when <see cref="MayTeleport"/> allows it and the bot may be on that
+    /// map (AllowedMaps, or the dungeon or raid the master is in: <see cref="PlayerbotMapPolicy"/>); with
+    /// <see cref="PlayerbotCatchUpMode.FightThrough"/> the bot instead walks into the area trigger that leads there when there is one.
+    /// A master in another instance of the bot's own map id is waited for: the teleport service moves a bot within its map id by a
+    /// near teleport, which never changes the instance, and no trigger leads from an instance to another one of the same map.</description></item>
+    /// <item><description>In <see cref="PlayerbotCatchUpMode.Teleport"/> mode a master on the bot's map farther than
+    /// <see cref="PlayerbotFollowFacts.TeleportDistance"/> (vmangos: 100 yards) is teleported to; the other modes walk.</description></item>
+    /// <item><description>Within <see cref="MaxFollowDistance"/> the bot holds, otherwise it walks (and <see cref="PlayerbotFollower"/> judges the
+    /// route it plans: <see cref="PlayerbotFollowRules"/>).</description></item>
+    /// </list>
     /// </summary>
     internal static PlayerbotFollowAction DecideFollow(in PlayerbotFollowFacts facts)
     {
         if (facts.Mode == PlayerbotPartyMode.Stay) return PlayerbotFollowAction.Hold;
         if (!facts.MasterInWorld || facts.MasterFlying) return PlayerbotFollowAction.Wait;
-        bool mayTeleport = facts.TeleportToLeader && !facts.InCombat;
+        bool mayTeleport = MayTeleport(facts);
         if (!facts.SameMap)
-            return mayTeleport && facts.MasterMapAllowed && !facts.MasterInOtherInstance ? PlayerbotFollowAction.Teleport : PlayerbotFollowAction.Wait;
+        {
+            if (!facts.MasterMapAllowed || facts.MasterInOtherInstance) return PlayerbotFollowAction.Wait;
+            if (mayTeleport) return PlayerbotFollowAction.Teleport;
+            return facts.CatchUp == PlayerbotCatchUpMode.FightThrough && facts.EntranceToMaster
+                ? PlayerbotFollowAction.WalkToEntrance : PlayerbotFollowAction.Wait;
+        }
+
         if (!float.IsFinite(facts.Distance)) return PlayerbotFollowAction.Wait;
-        if (facts.Distance > TeleportDistance && mayTeleport) return PlayerbotFollowAction.Teleport;
+        if (facts.CatchUp == PlayerbotCatchUpMode.Teleport && facts.Distance > facts.TeleportDistance && mayTeleport)
+            return PlayerbotFollowAction.Teleport;
         return facts.Distance > MaxFollowDistance ? PlayerbotFollowAction.Move : PlayerbotFollowAction.Hold;
+    }
+
+    /// <summary>
+    /// Whether a catch-up teleport is allowed at all: <see cref="PlayerbotPartyOptions.TeleportToLeader"/> is on, the mode is not
+    /// <see cref="PlayerbotCatchUpMode.FightThrough"/>, and the bot is out of combat (vmangos teleports only inside its
+    /// <c>!IsInCombat()</c> block), or its master left the fight: the master is out of combat and farther than
+    /// <see cref="PlayerbotFollowFacts.LeaderCombatRange"/> yards (or on another map). A bot then teleports out of a fight its group
+    /// has left instead of dying in it alone.
+    /// </summary>
+    internal static bool MayTeleport(in PlayerbotFollowFacts facts)
+    {
+        if (!facts.TeleportToLeader || facts.CatchUp == PlayerbotCatchUpMode.FightThrough) return false;
+        if (!facts.InCombat) return true;
+        return !facts.MasterInCombat && (!facts.SameMap || !float.IsFinite(facts.Distance) || facts.Distance > facts.LeaderCombatRange);
     }
 
     /// <summary>

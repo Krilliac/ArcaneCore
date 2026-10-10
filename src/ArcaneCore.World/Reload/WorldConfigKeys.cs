@@ -175,6 +175,21 @@ public static class WorldConfigKeys
         LivePlayerbots("Groups:RaidsEnabled", o => o.Groups.RaidsEnabled, (o, v) => o.Groups.RaidsEnabled = v),
         LivePlayerbots("Groups:InvitePlayers", o => o.Groups.InvitePlayers, (o, v) => o.Groups.InvitePlayers = v),
 
+        // Following and catch-up (docs/areas/playbots.md): a follower reads the shared object at each decision.
+        LivePlayerbotsValue("Follow:CatchUpMode", o => o.Follow.CatchUpMode, (o, v) => o.Follow.CatchUpMode = v, PlayerbotFollowOptions.CheckMode),
+        LivePlayerbotsValue("Follow:TeleportDistanceYards", o => o.Follow.TeleportDistanceYards, (o, v) => o.Follow.TeleportDistanceYards = v,
+            PlayerbotFollowOptions.CheckTeleportDistance),
+        LivePlayerbotsValue("Follow:MaxPathRatio", o => o.Follow.MaxPathRatio, (o, v) => o.Follow.MaxPathRatio = v, PlayerbotFollowOptions.CheckPathRatio),
+        LivePlayerbotsValue("Follow:MinDetourYards", o => o.Follow.MinDetourYards, (o, v) => o.Follow.MinDetourYards = v, PlayerbotFollowOptions.CheckDetour),
+        LivePlayerbotsValue("Follow:DangerLevelMargin", o => o.Follow.DangerLevelMargin, (o, v) => o.Follow.DangerLevelMargin = v,
+            PlayerbotFollowOptions.CheckLevelMargin),
+        LivePlayerbotsValue("Follow:LeaderCombatRangeYards", o => o.Follow.LeaderCombatRangeYards, (o, v) => o.Follow.LeaderCombatRangeYards = v,
+            PlayerbotFollowOptions.CheckCombatRange),
+        LivePlayerbotsValue("Follow:NoProgressSeconds", o => o.Follow.NoProgressSeconds, (o, v) => o.Follow.NoProgressSeconds = v,
+            PlayerbotFollowOptions.CheckNoProgress),
+        LivePlayerbotsValue("Follow:MaxFallHealthPercent", o => o.Follow.MaxFallHealthPercent, (o, v) => o.Follow.MaxFallHealthPercent = v,
+            PlayerbotFollowOptions.CheckFallPercent),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,
