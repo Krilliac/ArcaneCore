@@ -44,6 +44,12 @@ public sealed class CharacterRecord
     /// <summary>Purchased bank bag slots (PLAYER_BYTES_2 byte 2; vmangos Player.cpp:14663,16403).</summary>
     public byte BankBagSlotCount { get; set; }
 
+    /// <summary>The drunk value at the last save (vmangos characters.drunk; PLAYER_BYTES_3 without the gender bit).</summary>
+    public ushort Drunk { get; set; }
+
+    /// <summary>Unix seconds of the last save (vmangos characters.logout_time); the drunk value sobers from it at login.</summary>
+    public long LogoutTime { get; set; }
+
     /// <summary>Hearthstone bind point (SMSG_BINDPOINTUPDATE). Defaults to the start position.</summary>
     public uint HomeMapId { get; set; }
 

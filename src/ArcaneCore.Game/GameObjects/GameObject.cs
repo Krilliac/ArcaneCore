@@ -119,6 +119,12 @@ public sealed partial class GameObject : WorldObject
     /// A database spawn that never despawns (GameObject.cpp:985-991): it carries GO_FLAG_NODESPAWN and keeps
     /// no respawn delay. Runtime objects (summons, GM adds) never get the flag.
     /// </summary>
+    /// <summary>
+    /// vmangos <c>GameObject::SetSpawnedByDefault(true)</c> on a runtime summon with no respawn delay (OPvPCapturePoint::AddObject passes 0):
+    /// a use that would despawn it only resets its loot state, so it stays in the world instead of being deleted. False by default.
+    /// </summary>
+    public bool SpawnedByDefault { get; set; }
+
     public bool NeverDespawns => Spawn is { } spawn && Template.NeverDespawns(spawn.SpawnTimeSeconds);
 
     /// <summary>When a goober/trap may be used again (system clock, ms).</summary>

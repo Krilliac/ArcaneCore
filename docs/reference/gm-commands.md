@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
 | `GameMaster` | 3 | 184 |
-| `Administrator` | 6 | 263 |
+| `Administrator` | 6 | 266 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -37,6 +37,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
+| `.character boost` | 6 | Administrator | stored level through the map | Syntax: .character boost [$playername] #level Bring the named online player, the selected player or yourself to the level: class trainer spells, a level-appropriate equipped gear kit, filled action bars and some money. |
 | `.character rename` | 3 | GameMaster | declared retail level | Syntax: .character rename [$name] Request a rename of the selected character, or the named one (online or not); the player is asked for a new name at the character screen. |
 | `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
 | `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
@@ -148,6 +149,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.npc set` ... | 3 | GameMaster | declared retail level | Syntax: .npc set $subcommand |
 | `.npc set flag` | 3 | GameMaster | declared retail level | Syntax: .npc set flag #flags Change the selected creature's NPC service flags for its current life. |
 | `.npc set faction` | 3 | GameMaster | declared retail level | Syntax: .npc set faction #faction Change the selected creature's faction for its current life. |
+| `.pdump` ... | 6 | Administrator | declared retail level | Syntax: .pdump $subcommand |
+| `.pdump load` | 6 | Administrator | declared retail level | Syntax: .pdump load $filename $account [$newname] [$newguid] Load a character dump from the file into the account, under the new name and guid if given. |
+| `.pdump write` | 6 | Administrator | declared retail level | Syntax: .pdump write $filename $playerNameOrGUID Write the character's dump to the file. |
 | `.quest` ... | 3 | GameMaster | declared retail level | Syntax: .quest $subcommand Type .quest to see the list of possible subcommands or .help quest $subcommand to see info on subcommands. |
 | `.quest add` | 6 | Administrator | declared retail level | Syntax: .quest add #quest_id\|[$quest_title]\|#shift-click-quest-link Add the quest to the log of the selected player (or yourself) without its requirements; a quest started by an item is refused. |
 | `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |

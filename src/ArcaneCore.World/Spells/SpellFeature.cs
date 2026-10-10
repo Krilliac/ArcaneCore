@@ -148,6 +148,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
                 if (context.Target is Player taxiPlayer && context.Effect.MiscValue > 0)
                     taxiNpcs?.Services.ActivateTaxiBySpell(taxiPlayer, (uint)context.Effect.MiscValue);
             });
+            scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.InstallSpellEffects(System);
+            InstallUnstuck(scope.ServiceProvider.GetService<ArcaneCore.World.Teleport.TeleportFeature>());
 
             // The enchantments are the enchanting feature's SpellItemEnchantment.dbc catalog (Enchanting:SpellItemEnchantmentDbcPath; that feature
             // attaches before this one); item combat procs and trade enchant planning read them through this catalog, layered with the SQL
@@ -436,6 +438,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             System.RestoreAuras(player, auras, UnixNowMs);
         }
 
+        System.ResumeSobering(player);
+
         foreach (uint spellId in Spellbook.GetSpells(player))
         {
             SpellInfo? spell = System.Store.Get(spellId);
@@ -474,5 +478,30 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
 
         System.RemoveUnit(player);
+    }
+
+    /// <summary>
+    /// SPELL_EFFECT_STUCK (84; vmangos Spell::EffectStuck, SpellEffects.cpp:4764-4782, CONFIG_BOOL_CAST_UNSTUCK on): a player not on a taxi
+    /// is teleported to its last safe position on the same map (<see cref="Player.LastSafePosition"/>), at z - 2 + 0.7 as vmangos does.
+    /// </summary>
+    private void InstallUnstuck(ArcaneCore.World.Teleport.TeleportFeature? teleport)
+    {
+        if (teleport is null)
+        {
+            return;
+        }
+
+        System.RegisterEffect(SpellEffectName.Stuck, context =>
+        {
+            if (context.Target is not Player player || (player.UnitFlags & ArcaneCore.Game.UnitFlags.TaxiFlight) != 0
+                || player.LastSafePosition is not { } safe || safe.MapId != player.MapId
+                || Math.Abs(safe.X) <= 0.1f || Math.Abs(safe.Y) <= 0.1f)
+            {
+                return;
+            }
+
+            _logger.LogInformation("Player {Name} used auto-unstuck at map {Map} ({X}, {Y}, {Z})", player.Name, player.MapId, player.X, player.Y, player.Z);
+            teleport.Teleports.TeleportTo(player, player.MapId, safe.X, safe.Y, safe.Z - 2.0f + 0.7f, safe.O);
+        });
     }
 }

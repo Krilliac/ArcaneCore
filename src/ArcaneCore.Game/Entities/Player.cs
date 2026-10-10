@@ -142,6 +142,12 @@ public sealed partial class Player : Unit
 
     public HomeBind Home { get; set; }
 
+    /// <summary>
+    /// vmangos Player::SaveNoUndermapPosition (Player.h, from HandleMoverRelocation): the last place the player moved freely and was not
+    /// falling far, with z already raised by the 3 + 2 yards vmangos adds. Null until the first such movement; reset on a map change.
+    /// </summary>
+    public (uint MapId, float X, float Y, float Z, float O)? LastSafePosition { get; set; }
+
     /// <summary>GUIDs of the objects this player's client currently has (vmangos m_visibleGUIDs).</summary>
     public HashSet<ObjectGuid> VisibleObjects { get; } = [];
 
@@ -502,7 +508,8 @@ public sealed partial class Player : Unit
         => new(
             (int)Guid.Low, mapId, ZoneId, x, y, z, orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
-            inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount);
+            inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount,
+            Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this));
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
 
@@ -540,7 +547,10 @@ public sealed partial class Player : Unit
         SetByte(UpdateFields.PlayerBytes2, 1, 0xEE);
         SetByte(UpdateFields.PlayerBytes2, 2, c.BankBagSlotCount);
         SetByte(UpdateFields.PlayerBytes2, 3, 0x02); // REST_STATE_NORMAL
-        SetUInt16(UpdateFields.PlayerBytes3, 0, c.Gender);
+        // Player.cpp:14668, 14887-14895: the saved drunk value next to the gender bit, sobered by the time logged out.
+        ushort drunk = c.Drunk == 0 ? (ushort)0
+            : ArcaneCore.Game.Spells.SpellSystem.SoberedAfterLogout(c.Drunk, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - c.LogoutTime);
+        SetUInt16(UpdateFields.PlayerBytes3, 0, (ushort)((c.Gender & 0x01) | drunk));
 
         SetFloat(UpdateFields.UnitFieldBoundingradius, DefaultBoundingRadius);
         SetFloat(UpdateFields.UnitFieldCombatreach, DefaultCombatReach);

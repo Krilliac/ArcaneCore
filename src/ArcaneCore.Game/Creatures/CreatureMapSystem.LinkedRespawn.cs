@@ -6,11 +6,11 @@ namespace ArcaneCore.Game.Creatures;
 
 /// <summary>
 /// creature_linking respawn, despawn and death events (cmangos CreatureLinkingHolder, Entities/CreatureLinkingMgr.cpp; flags in
-/// CreatureLinkingMgr.h:57-81), and TrinityCore's population-scaled respawn delay. Aggro linking stays with the instance scripts.
+/// CreatureLinkingMgr.h:57-81), the aggro event, and TrinityCore's population-scaled respawn delay.
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
-    internal const uint LinkRespawnOnEvade = 0x0004, LinkToRespawnOnEvade = 0x0008, LinkDespawnOnDeath = 0x0010, LinkSelfkillOnDeath = 0x0020,
+    internal const uint LinkAggroOnAggro = 0x0001, LinkToAggroOnAggro = 0x0002, LinkRespawnOnEvade = 0x0004, LinkToRespawnOnEvade = 0x0008, LinkDespawnOnDeath = 0x0010, LinkSelfkillOnDeath = 0x0020,
         LinkRespawnOnDeath = 0x0040, LinkRespawnOnRespawn = 0x0080, LinkDespawnOnRespawn = 0x0100, LinkCantSpawnIfBossDead = 0x0400,
         LinkCantSpawnIfBossAlive = 0x0800, LinkDespawnOnEvade = 0x1000, LinkDespawnOnDespawn = 0x2000, LinkEvadeOnEvade = 0x4000;
 
@@ -25,7 +25,7 @@ public sealed partial class CreatureMapSystem
         _ => LinkDespawnOnDespawn,
     };
 
-    private const uint LinkEventFlags = 0x7DFC; // every flag above
+    private const uint LinkEventFlags = 0x7DFF; // every flag above
     private HashSet<uint>? _linkMasterGuids, _linkMasterEntries, _linkSlaveEntries;
     private readonly HashSet<ObjectGuid> _linkEventsInUse = []; // cmangos HolderMap inUse: no recursion through the same master
 
@@ -181,5 +181,52 @@ public sealed partial class CreatureMapSystem
         double factor = rate / players;
         if (factor >= 1.0) return delaySeconds;
         return Math.Max((uint)Math.Ceiling(delaySeconds * factor), minimum);
+    }
+
+    /// <summary>
+    /// cmangos DoCreatureLinkingEvent(LINKING_EVENT_AGGRO) (CreatureLinkingMgr.cpp:401-510, ProcessSlave :559-575), fired from
+    /// Unit::SetInCombatWith after InstanceData::OnCreatureEnterCombat: slaves with FLAG_AGGRO_ON_AGGRO join their master's fight, and a slave
+    /// with FLAG_TO_AGGRO_ON_AGGRO pulls its master. Links whose master an instance script already pulls
+    /// (<see cref="Instances.Scripts.InstanceData.CarriesAggroLinking"/>: Molten Core, Anub'Rekhan) are left to that script.
+    /// </summary>
+    private void DoLinkedAggro(Creature source, Unit enemy)
+    {
+        if (!_options.Respawn.Linked || source.Spawn is not { } sourceSpawn || source.IsCharmerOrOwnerPlayerOrPlayerItself || !enemy.IsAlive) return;
+        EnsureLinkIndex();
+        Instances.Scripts.InstanceData? instance = Map.FindUpdater<Instances.Scripts.InstanceData>();
+
+        bool isMaster = _linkMasterGuids!.Contains(sourceSpawn.Guid) || _linkMasterEntries!.Contains(source.Entry);
+        if (isMaster && instance?.CarriesAggroLinking(source.Entry) != true && _linkEventsInUse.Add(source.Guid))
+        {
+            try
+            {
+                foreach (Creature slave in _creatures.Values.ToArray())
+                {
+                    if (ReferenceEquals(slave, source) || slave.Summon is { Kind: SummonKind.Pet }) continue;
+                    if (LinkOf(slave) is not { } info || (info.Flags & LinkAggroOnAggro) == 0) continue;
+                    bool linked = info.Template is { } t
+                        ? t.MasterEntry == source.Entry && InSearchRange(slave.Spawn!, sourceSpawn, t.SearchRange)
+                        : info.MasterGuid == sourceSpawn.Guid;
+                    if (linked) JoinLinkedFight(slave, enemy);
+                }
+            }
+            finally
+            {
+                _linkEventsInUse.Remove(source.Guid);
+            }
+        }
+
+        if (LinkOf(source) is { } own && (own.Flags & LinkToAggroOnAggro) != 0 && FindLinkedMaster(source, own) is { } master
+            && instance?.CarriesAggroLinking(master.Entry) != true)
+        {
+            JoinLinkedFight(master, enemy);
+        }
+    }
+
+    /// <summary>ProcessSlave AGGRO: one already fighting gains the enemy (threat and combat), else it attacks; never a player-controlled one.</summary>
+    private void JoinLinkedFight(Creature who, Unit enemy)
+    {
+        if (!who.IsAlive || who.IsEvading || who.IsCharmerOrOwnerPlayerOrPlayerItself || !enemy.IsAlive) return;
+        EnterCombatWithTarget(who, enemy);
     }
 }

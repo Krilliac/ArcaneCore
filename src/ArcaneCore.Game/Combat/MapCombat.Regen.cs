@@ -195,13 +195,6 @@ public sealed partial class MapCombat
         uint mana = GetPower(unit, PowerType.Mana);
         if (maxMana == 0 || mana >= maxMana)
         {
-            // vmangos Creature::RegenerateAll (Creature.cpp:1094): a polymorphed creature heals in combat too, a third of its maximum per
-            // tick (RegenerateHealth :1155-1158). In-combat mana is still left out.
-            if (CombatEnvironment.For(_world).IsPolymorphed(unit) && (unit is not ICombatCreature pc || pc.RegeneratesHealth))
-            {
-                unit.Health = Math.Min(unit.MaxHealth, unit.Health + (unit.MaxHealth / 3));
-            }
-
             return;
         }
 

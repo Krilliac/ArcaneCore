@@ -65,7 +65,9 @@ public static class SyntheticQuestContent
             ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
             var baseline = new HashSet<string>(StringComparer.Ordinal)
             {
-                "player_create_info", "race_info", "class_info", WorldDbContext.Schema.VersionTable,
+                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49) included.
+                "player_create_info", "race_info", "class_info", ArcaneCore.Data.World.Warden.WardenDataModule.Table,
+                WorldDbContext.Schema.VersionTable,
             };
             var tables = db.Model.GetEntityTypes()
                 .Select(entity => (Table: entity.GetTableName(), Schema: entity.GetSchema()))

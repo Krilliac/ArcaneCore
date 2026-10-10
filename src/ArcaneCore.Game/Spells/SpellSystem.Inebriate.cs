@@ -36,7 +36,14 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(player);
         ushort gender = (ushort)(player.GetUInt16(UpdateFields.PlayerBytes3, 0) & 0x0001);
+        bool couldSeeDrunk = DrunkenState(GetDrunkValue(player)) >= 2;
         player.SetUInt16(UpdateFields.PlayerBytes3, 0, (ushort)(gender | (value & 0xFFFE)));
+        if (couldSeeDrunk != DrunkenState(value) >= 2)
+        {
+            // Player.cpp:803-807: from DRUNKEN_DRUNK on the player detects invisibility type 6 (the drunk-only spirits).
+            player.Map?.RefreshVisibility(player);
+        }
+
         if ((value & 0xFFFE) == 0)
         {
             _drunkPlayers.Remove(player.Guid);
@@ -46,6 +53,23 @@ public sealed partial class SpellSystem
             _drunkPlayers[player.Guid] = (player, 0);
         }
     }
+
+    /// <summary>
+    /// vmangos Player::LoadFromDB (Player.cpp:14887-14895): the saved drunk value sobers linearly over 15 minutes logged out.
+    /// </summary>
+    public static ushort SoberedAfterLogout(ushort saved, long secondsOffline)
+    {
+        if (secondsOffline <= 0)
+        {
+            return (ushort)(saved & 0xFFFE);
+        }
+
+        float factor = secondsOffline > 15 * 60 ? 0f : 1f - secondsOffline / (15f * 60f);
+        return (ushort)((ushort)(factor * saved) & 0xFFFE);
+    }
+
+    /// <summary>Resume sobering for a player who logged in drunk.</summary>
+    public void ResumeSobering(Player player) => SetDrunkValue(player, GetDrunkValue(player));
 
     private void UpdateSobering(uint diffMs)
     {

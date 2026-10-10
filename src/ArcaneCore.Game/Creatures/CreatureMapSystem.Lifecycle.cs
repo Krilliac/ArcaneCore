@@ -202,6 +202,7 @@ public sealed partial class CreatureMapSystem
     /// <summary>Create the creatures of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
     private void LoadSpawns(LoadedGrid grid, IEnumerable<CreatureSpawn> spawns)
     {
+        List<Creature> loadedAlive = [];
         foreach (CreatureSpawn spawn in spawns)
         {
             if (_scriptOnlySpawns.Contains(spawn.Guid) && !_activatingScriptSpawns.Contains(spawn.Guid))
@@ -287,6 +288,13 @@ public sealed partial class CreatureMapSystem
             }
 
             AddToWorld(creature, grid);
+            if (creature.DeathState == CreatureDeathState.Alive) loadedAlive.Add(creature);
+        }
+
+        // cmangos Creature::LoadFromDB (Entities/Creature.cpp:1745-1747): "Initial load is handled like respawn".
+        foreach (Creature loaded in loadedAlive)
+        {
+            if (loaded.IsAlive && _creatures.ContainsKey(loaded.Guid)) DoLinkedEvent(loaded, LinkEvent.Respawn);
         }
     }
 

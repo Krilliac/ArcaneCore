@@ -28,6 +28,7 @@ public sealed partial class SpellSystem
         {
             // Player::SetDeathState(JUST_DIED) picks the self-resurrection spell before Unit::SetDeathState strips the auras (the Soulstone is one).
             Death.Resurrection.SelfResurrection.OnPlayerDied(this, dying);
+            SetDrunkValue(dying, 0); // Player.cpp:1517: the drunken state is cleared on death
         }
 
         RemoveOwnedTrackingAurasOnDeath(unit);

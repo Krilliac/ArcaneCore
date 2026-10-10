@@ -135,5 +135,16 @@
       { "point": 21, "actions": [{ "type": "say", "id": -1000109, "toPlayer": true }, { "type": "quest_complete", "id": 6544 }] },
       { "point": 22, "actions": [{ "type": "say", "id": -1000110, "toPlayer": true }] }
     ]
+  },
+  {
+    "entry": 8284, "questId": 3367, "faction": 10,
+    "requirePlayerAtWaypoint": true, "clearImmuneToNpc": true, "acceptStandState": 0,
+    "aggro": { "chanceDenominator": 1, "toTarget": true, "textIds": [-1000993, -1000994] },
+    "source": "src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/searing_gorge.cpp@3e8597afe7:npc_dorius_stonetenderAI,QuestAccept_npc_dorius_stonetender",
+    "waypoints": [
+      { "point": 21, "actions": [{ "type": "summon", "id": 8337, "despawnMs": 60000, "oocOrCorpse": true, "attackEscort": true,
+        "positions": [[-6738.47, -1876.91, 244.17, 0], [-6753.47, -1861.91, 244.17, 0], [-6768.47, -1876.91, 244.17, 0], [-6753.47, -1891.91, 244.17, 0]] }] },
+      { "point": 34, "actions": [{ "type": "quest_complete", "id": 3367 }, { "type": "stand_state", "id": 7 }] }
+    ]
   }
 ]
