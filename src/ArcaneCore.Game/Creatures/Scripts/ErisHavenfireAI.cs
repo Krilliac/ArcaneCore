@@ -79,7 +79,7 @@ public sealed class ErisHavenfireAI(Creature creature) : CreatureAI(creature), I
 
     private Creature? Summon(uint entry, float x, float y, float z, float o)
     {
-        if (System is not { } system || system.SummonAt(Me, entry, x, y, z, o, null, 0) is not { } summoned)
+        if (System is not { } system || system.SummonCorpseTimedDespawn(Me, entry, x, y, z, o, null, 0) is not { } summoned)
         {
             return null;
         }

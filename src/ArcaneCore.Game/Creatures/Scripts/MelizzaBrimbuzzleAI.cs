@@ -62,7 +62,7 @@ public sealed class MelizzaBrimbuzzleAI(Creature creature) : EscortAI(creature),
     private void Summon(uint entry, (float X, float Y, float Z) at)
     {
         // TEMPSPAWN_DEAD_DESPAWN: they stay until they die.
-        if (System?.SummonAt(Me, entry, at.X, at.Y, at.Z, 0f, null, 0) is { } summoned)
+        if (System?.SummonCorpseTimedDespawn(Me, entry, at.X, at.Y, at.Z, 0f, null, 0) is { } summoned)
         {
             Summoned.Add(summoned);
         }

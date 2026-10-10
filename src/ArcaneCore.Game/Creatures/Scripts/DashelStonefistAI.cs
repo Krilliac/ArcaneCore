@@ -72,7 +72,7 @@ public sealed class DashelStonefistAI(Creature creature) : CreatureAI(creature),
                     // TEMPSPAWN_DEAD_DESPAWN: the thugs stay until they die; JustSummoned's AttackStart(pPlayer).
                     foreach ((float x, float y, float z, float o) in ((float, float, float, float)[])[(-8672.33f, 442.88f, 99.98f, 3.5f), (-8691.59f, 441.66f, 99.41f, 6.1f)])
                     {
-                        if (system.SummonAt(Me, NpcOldTownThug, x, y, z, o, player, 0) is { } thug)
+                        if (system.SummonCorpseTimedDespawn(Me, NpcOldTownThug, x, y, z, o, player, 0) is { } thug)
                         {
                             Thugs.Add(thug);
                         }
