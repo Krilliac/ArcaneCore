@@ -91,7 +91,13 @@ public sealed class ScourgeInvasionStoreTests : IAsyncLifetime
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => Claim(connection, 16, now, 3000)); // not a capital
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => Claim(connection, 1519, now, 60));
 
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            Assert.True(await new EfScourgeInvasionStateStore(db).CityAttackDefeatedAsync(1497, now + 100, 2800));
+        Assert.Equal(now + 2900, (await Load(connection)).NextCityAttack(1497)); // the defeat time wins over the claim time
+
         await Stop(connection);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            Assert.False(await new EfScourgeInvasionStateStore(db).CityAttackDefeatedAsync(1497, now, 2800)); // off: nothing saved
         state = await Load(connection);
         Assert.All(state.Cities, c => Assert.Equal(0, c.NextAttackUnix));
         Assert.False(state.IsCityAttackDue(1519, now));

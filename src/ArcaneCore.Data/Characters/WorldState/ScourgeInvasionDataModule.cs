@@ -228,4 +228,25 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }
+
+    public async Task<bool> CityAttackDefeatedAsync(uint zoneId, long nowUnix, int nextAttackSeconds,
+        CancellationToken cancellationToken = default)
+    {
+        if (ScourgeInvasionCatalog.ForCity(zoneId) is null
+            || nextAttackSeconds is < ScourgeInvasionCatalog.CityAttackTimerMinSeconds or > ScourgeInvasionCatalog.CityAttackTimerMaxSeconds)
+            throw new ArgumentOutOfRangeException(nameof(zoneId));
+        await using SqliteRewardWriterCoordinator.Lease writer =
+            await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        ScourgeInvasionStateRow? state = await db.Set<ScourgeInvasionStateRow>()
+            .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+        if (state?.State != (byte)ScourgeInvasionState.Enabled) return false;
+        ScourgeInvasionCityRow? city = await db.Set<ScourgeInvasionCityRow>()
+            .SingleOrDefaultAsync(r => r.ZoneId == zoneId, cancellationToken).ConfigureAwait(false);
+        if (city is null) db.Add(city = new ScourgeInvasionCityRow { ZoneId = zoneId });
+        city.NextAttackUnix = checked(nowUnix + nextAttackSeconds);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 }

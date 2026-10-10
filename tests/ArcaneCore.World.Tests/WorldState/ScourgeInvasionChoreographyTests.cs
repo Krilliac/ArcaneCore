@@ -1,8 +1,12 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.WorldState;
@@ -42,6 +46,19 @@ public sealed class ScourgeInvasionChoreographyTests
             Assert.InRange(nextAttackSeconds, ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds);
             if (!State.IsCityAttackDue(zoneId, nowUnix)) return Task.FromResult(false);
             Claims++;
+            State = State with
+            {
+                Cities = State.Cities.Select(c => c.ZoneId == zoneId ? c with { NextAttackUnix = nowUnix + nextAttackSeconds } : c).ToArray(),
+            };
+            return Task.FromResult(true);
+        }
+        public List<uint> CityDefeats { get; } = [];
+        public Task<bool> CityAttackDefeatedAsync(uint zoneId, long nowUnix, int nextAttackSeconds,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.InRange(nextAttackSeconds, ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds);
+            if (State.State != ScourgeInvasionState.Enabled) return Task.FromResult(false);
+            CityDefeats.Add(zoneId);
             State = State with
             {
                 Cities = State.Cities.Select(c => c.ZoneId == zoneId ? c with { NextAttackUnix = nowUnix + nextAttackSeconds } : c).ToArray(),
@@ -91,11 +108,23 @@ public sealed class ScourgeInvasionChoreographyTests
                     Template(ScourgeInvasionCatalog.MouthOfKelThuzad, "Mouth of Kel'Thuzad"),
                     Template(ScourgeInvasionCatalog.PallidHorror, "Pallid Horror"),
                     Template(ScourgeInvasionCatalog.PatchworkTerror, "Patchwork Terror"),
+                    Template(ScourgeInvasionCatalog.Flameshocker, "Flameshocker"),
+                ];
+                int[] textIds = [.. ScourgeInvasionCatalog.PallidYells, .. ScourgeInvasionCatalog.MouthZoneStartYells,
+                    .. ScourgeInvasionCatalog.MouthZoneEndYells, .. ScourgeInvasionCatalog.MouthRandomYells,
+                    ScourgeInvasionCatalog.BolvarCastleDefended, ScourgeInvasionCatalog.SylvanasCourtDefended];
+                var ai = new CreatureAiContent([], [], new BroadcastTextCatalog(textIds.Select(id =>
+                    new BroadcastText((uint)id, $"text {id}", "", 1, 0, 0, [], []))));
+                (uint, uint, CreatureWaypoint)[] paths =
+                [
+                    .. new[] { ScourgeInvasionCatalog.PallidHorror, ScourgeInvasionCatalog.PatchworkTerror }
+                        .SelectMany(entry => Enumerable.Range(0, 4).SelectMany(path => Enumerable.Range(1, 3).Select(point =>
+                            (entry, (uint)path, new CreatureWaypoint((uint)point, -8578f + point * 10, 886f, 87.3f, 0, 0))))),
                 ];
                 foreach (uint mapId in new uint[] { 0, 1 })
                 {
                     Map map = World.GetMap(mapId);
-                    map.AddUpdater(new CreatureMapSystem(map, new CreatureContent(templates, [], [], [], [])));
+                    map.AddUpdater(new CreatureMapSystem(map, new CreatureContent(templates, [], [], [], [], ai, paths)));
                 }
             }
             _provider.GetRequiredService<GameEventFeature>().Attach(World);
@@ -103,6 +132,18 @@ public sealed class ScourgeInvasionChoreographyTests
             Invasion.Random = new Random(20261010);
             Invasion.NowUnix = () => Now;
             Invasion.Attach(World);
+        }
+
+        public RecordingSession AddPlayer(uint mapId, float x, float y, float z)
+        {
+            var session = new RecordingSession();
+            var player = new Player(new CharacterRecord
+            {
+                Id = 7, AccountId = 1, Name = "Watcher", Race = (byte)Race.Human, Class = (byte)Class.Warrior,
+                Gender = (byte)Gender.Male, Level = 60, MapId = mapId, X = x, Y = y, Z = z,
+            }, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), session);
+            World.AddPlayer(player);
+            return session;
         }
 
         public GameEventFeature Events => _provider.GetRequiredService<GameEventFeature>();
@@ -197,6 +238,83 @@ public sealed class ScourgeInvasionChoreographyTests
             Assert.Empty(restarted.Living(ScourgeInvasionCatalog.PallidHorror));
             Assert.Empty(restarted.Living(ScourgeInvasionCatalog.PatchworkTerror));
         }
+    }
+
+    internal sealed class RecordingSession : IPlayerSession
+    {
+        public int AccountId => 1;
+        public AccountSecurity Security => AccountSecurity.Player;
+        public int Chat { get; private set; }
+        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+        {
+            if (opcode == WorldOpcode.SmsgMessagechat) Chat++;
+        }
+        public void ProcessWorldPackets(Player player) { }
+        public void Kick() { }
+        public void OnLoggedOut() { }
+    }
+
+    [Fact]
+    public void CityAttackerWalksItsEntryPathWithFlameshockersAndItsDeathSavesTheNextAttack()
+    {
+        var store = new StateStore();
+        using var rig = new Rig(store);
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        rig.World.RunTick(5_000);
+        rig.World.RunTick(1_000);
+        Creature attacker = rig.Invasion.CityAttackers[1519];
+        Assert.Equal(MovementGeneratorType.Waypoint, attacker.Motion.CurrentType);
+        var ai = Assert.IsType<PallidHorrorAi>(attacker.AI);
+        Assert.Equal(1519u, ai.ZoneId);
+        Assert.InRange(ai.Flameshockers.Count, 5, 9);
+        Assert.All(ai.Flameshockers, f =>
+        {
+            Assert.True(f.IsAlive);
+            Assert.Equal(MovementGeneratorType.Follow, f.Motion.CurrentType);
+            Assert.IsType<FlameshockerAi>(f.AI);
+        });
+        Creature[] shockers = [.. ai.Flameshockers];
+
+        rig.Now += 60;
+        attacker.Map!.FindUpdater<CreatureMapSystem>()!.KillCreature(attacker);
+        Assert.All(shockers, f => Assert.False(f.IsAlive));
+        Assert.Equal([1519u], store.CityDefeats);
+        Assert.InRange(store.State.NextCityAttack(1519), rig.Now + 2700, rig.Now + 3600);
+        Assert.False(rig.Invasion.CityAttackers.ContainsKey(1519));
+        int claims = store.Claims;
+        rig.World.RunTick(5_000); // the defended capital waits for its saved timer
+        Assert.Equal(claims, store.Claims);
+        Assert.False(rig.Invasion.CityAttackers.ContainsKey(1519));
+    }
+
+    [Fact]
+    public void MouthsYellTheirZoneStartAndEndToPlayersOfTheirZone()
+    {
+        var store = new StateStore();
+        using var rig = new Rig(store);
+        ScourgeInvasionPosition azshara = ScourgeInvasionCatalog.MouthPositions[16];
+        RecordingSession watcher = rig.AddPlayer(1, azshara.X + 5, azshara.Y, azshara.Z);
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        rig.World.RunTick(5_000);
+        rig.World.RunTick(1_000);
+        Assert.All(rig.Invasion.Mouths.Values, m => Assert.IsType<ScourgeMouthAi>(m.AI));
+        // Without terrain every map-1 point reads zone 0, so the three Kalimdor Mouths all reach the watcher once.
+        Assert.Equal(3, watcher.Chat);
+        Creature mouth = rig.Invasion.Mouths[16];
+        var mouthAi = Assert.IsType<ScourgeMouthAi>(mouth.AI);
+        CreatureMapSystem kalimdor = mouth.Map!.FindUpdater<CreatureMapSystem>()!;
+        MovementGeneratorType before = mouth.Motion.CurrentType;
+        Assert.False(kalimdor.StartEntryWaypointPath(mouth, 0)); // the Mouth's entry has no path: nothing changes
+        Assert.Equal(before, mouth.Motion.CurrentType);
+        Assert.Equal(16u, mouthAi.ZoneId);
+
+        store.ZoneDefeated(16);
+        rig.World.RunTick(5_000);
+        Assert.Equal(4, watcher.Chat); // one end yell
+        Assert.True(mouthAi.Ended);
+        Assert.False(mouth.IsInWorld && mouth.IsAlive);
+        rig.World.RunTick(5_000);
+        Assert.Equal(4, watcher.Chat);
     }
 
     [Fact]
