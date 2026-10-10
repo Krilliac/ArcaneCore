@@ -340,6 +340,40 @@ public sealed class WarEffortSceneTests
     }
 
     [Fact]
+    public void EachColossusResearcherAppearsOnlyOnceHisColossusIsDead()
+    {
+        CreatureSpawn[] db =
+        [
+            new() { Guid = 910001, Entry = 15797, MapId = 1, X = -6826.11f, Y = 813.571f, Z = 51f }, // Zora's
+            new() { Guid = 910002, Entry = 15798, MapId = 1, X = -6824.03f, Y = 813.17f, Z = 51f },  // Ashi's
+            new() { Guid = 910003, Entry = 15799, MapId = 1, X = -6825.01f, Y = 811.389f, Z = 51f }, // Regal's
+        ];
+        long now = WarStart + 60;
+        using Rig rig = new(War, () => now, db);
+        rig.World.RunTick(100);
+        Assert.DoesNotContain(rig.Creatures.Creatures, c => WarEffortFeature.ColossusResearchers.Contains(c.Entry));
+
+        rig.Store.State = War with { KilledBossMask = 0b001 }; // Ashi dead
+        rig.War.Reload();
+        rig.World.RunTick(100);
+        Creature nestor = Assert.Single(rig.Creatures.Creatures, c => WarEffortFeature.ColossusResearchers.Contains(c.Entry));
+        Assert.Equal(910002u, nestor.Spawn?.Guid);
+        rig.World.RunTick(100);
+        Assert.Single(rig.Creatures.Creatures, c => WarEffortFeature.ColossusResearchers.Contains(c.Entry)); // not doubled
+
+        rig.Store.State = War with { KilledBossMask = 0b110 }; // a restart with Regal and Zora saved dead
+        rig.War.Reload();
+        rig.World.RunTick(100);
+        Assert.Equal([910001u, 910003u], rig.Creatures.Creatures.Where(c => WarEffortFeature.ColossusResearchers.Contains(c.Entry))
+            .Select(c => c.Spawn!.Guid).Order());
+
+        rig.Store.State = War with { Phase = WarEffortPhase.Done, KilledBossMask = 0b111 };
+        rig.War.Reload();
+        rig.World.RunTick(100);
+        Assert.DoesNotContain(rig.Creatures.Creatures, c => WarEffortFeature.ColossusResearchers.Contains(c.Entry));
+    }
+
+    [Fact]
     public void AStaticSaurfangSpawnElsewhereKeepsItsOwnAi()
     {
         long now = WarStart + FinalBattleAfterWarStartSeconds + 10;
@@ -390,7 +424,7 @@ public sealed class WarEffortSceneTests
                 NullLogger<WorldRuntime>.Instance);
             Map kalimdor = World.GetMap(1);
             Creatures = new CreatureMapSystem(kalimdor, new CreatureContent(
-                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Distinct().Select(Template).ToArray(),
+                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Concat(WarEffortFeature.ColossusResearchers).Distinct().Select(Template).ToArray(),
                 dbSpawns ?? [], [], [], []), random: new Random(3));
             kalimdor.AddUpdater(Creatures);
             var objectContent = new GameObjectContent(

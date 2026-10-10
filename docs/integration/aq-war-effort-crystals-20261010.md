@@ -44,3 +44,12 @@ There are 3 more tests in `WarEffortSceneTests` (15 in total): the migrations in
 Ironforge crates and their removal, and adopting the ClassicDB war layout (no second Saurfang, no doubled infantry, the database
 soldier turning for the attack, the Orgrimmar Saurfang untouched). `ArcaneCore.World.Tests` passes in Release
 (3354 passed, 46 skipped).
+
+## Follow-up: Colossus researchers hidden until the kill (`grok/aq-war-effort-researchers`, stacked on #45)
+
+This matches vmangos events 62-64. Researchers 15798 (Ashi), 15799 (Regal) and 15797 (Zora) appear only once their Colossus is
+killed. Their ClassicDB event-123 spawns are kept off the map as script-only spawns, and each one is brought in by
+`SpawnScripted` once the saved Colossus death flag is set during the ten-hour war. `SpawnScripted` keeps the spawn's own gating,
+so a researcher still needs event 123 to be running. He leaves when the war ends. Because the flags are saved, a restart brings
+back the researchers whose Colossus is already dead (vmangos forgets them on a crash). The crystal layout is unchanged. Test:
+`EachColossusResearcherAppearsOnlyOnceHisColossusIsDead`.
