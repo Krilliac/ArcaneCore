@@ -318,71 +318,88 @@ public sealed partial class SpellSystem
             return;
         }
 
-        foreach (SpellAuraHolder holder in state.Auras.ToArray())
+        // A pooled snapshot (handlers may add or remove holders); reentrant, unlike a shared list.
+        int count = state.Auras.Count;
+        SpellAuraHolder[] snapshot = System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Rent(count);
+        state.Auras.CopyTo(snapshot);
+        try
         {
+            for (int i = 0; i < count; i++)
+            {
+                UpdateAuraHolder(state, snapshot[i], diffMs);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Return(snapshot, clearArray: true);
+        }
+    }
+
+    private void UpdateAuraHolder(UnitSpellState state, SpellAuraHolder holder, uint diffMs)
+    {
+        if (holder.IsRemoved)
+        {
+            return;
+        }
+
+        if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
+        {
+            // vmangos AreaAura::Update: the aura goes with its source or when the owner left the map.
+            RemoveHolder(state, holder);
+            return;
+        }
+
+        if (IsQuestSettlementPending(holder.Target)
+            || IsQuestSettlementPending(ResolveAuraCaster(holder)))
+        {
+            return;
+        }
+
+        // vmangos Unit::SetStandState (Unit.cpp:9302-9310): standing up removes STANDING_CANCELS auras (food, drink).
+        if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
+            && holder.Target.StandState is StandState.Stand or StandState.Dead)
+        {
+            RemoveHolder(state, holder);
+            return;
+        }
+
+        bool runs = !holder.IsPermanent && holder.Duration > 0;
+        if (!holder.IsPermanent)
+        {
+            holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);
+        }
+
+        // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
+        if (runs)
+        {
+            ChargePerSecondCost(holder, diffMs);
             if (holder.IsRemoved)
             {
-                continue;
+                return;
             }
+        }
 
-            if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
-            {
-                // vmangos AreaAura::Update: the aura goes with its source or when the owner left the map.
-                RemoveHolder(state, holder);
-                continue;
-            }
-
-            if (IsQuestSettlementPending(holder.Target)
-                || IsQuestSettlementPending(ResolveAuraCaster(holder)))
+        IReadOnlyList<SpellAura?> auras = holder.Auras;
+        for (int a = 0; a < auras.Count; a++)
+        {
+            if (auras[a] is not { } aura || !aura.IsPeriodic)
             {
                 continue;
             }
 
-            // vmangos Unit::SetStandState (Unit.cpp:9302-9310): standing up removes STANDING_CANCELS auras (food, drink).
-            if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
-                && holder.Target.StandState is StandState.Stand or StandState.Dead)
+            // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
+            int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
+            for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
             {
-                RemoveHolder(state, holder);
-                continue;
+                aura.TickCount++;
+                using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
+                AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
             }
+        }
 
-            bool runs = !holder.IsPermanent && holder.Duration > 0;
-            if (!holder.IsPermanent)
-            {
-                holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);
-            }
-
-            // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
-            if (runs)
-            {
-                ChargePerSecondCost(holder, diffMs);
-                if (holder.IsRemoved)
-                {
-                    continue;
-                }
-            }
-
-            foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
-            {
-                if (!aura.IsPeriodic)
-                {
-                    continue;
-                }
-
-                // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
-                int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
-                for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
-                {
-                    aura.TickCount++;
-                    using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
-                    AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
-                }
-            }
-
-            if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
-            {
-                RemoveHolder(state, holder, AuraRemoveMode.Expire);
-            }
+        if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
+        {
+            RemoveHolder(state, holder, AuraRemoveMode.Expire);
         }
     }
 

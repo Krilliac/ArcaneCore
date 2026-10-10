@@ -307,6 +307,9 @@ public sealed class SpellAuraHolder
 
     public IReadOnlyList<SpellAura?> Auras => _auras;
 
+    /// <summary>The effect slots as a span: <c>foreach</c> over <see cref="Auras"/> boxes an enumerator, hot paths use this.</summary>
+    internal ReadOnlySpan<SpellAura?> AuraSpan => _auras;
+
     public bool HasAura(AuraType type) => _auras.Any(a => a?.Type == type);
 
     internal void SetAura(SpellAura aura)
