@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState.Events;
@@ -18,7 +19,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private bool _hasStore;
     private GameEventService? _events;
     private readonly Dictionary<uint, uint> _spawnZoneByGuid = [];
+    private readonly Dictionary<uint, uint> _circleZoneByGuid = [];
     private readonly HashSet<CreatureMapSystem> _healthSystems = [];
+    private readonly Dictionary<GameObjectMapSystem, InvasionCircleAi> _circleAis = [];
     private readonly HashSet<(uint ZoneId, uint SpawnGuid)> _pendingDeaths = [];
     private uint _reloadMs;
 
@@ -38,12 +41,13 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
         {
-            InstallHealthAis(world);
+            InstallInvasionAis(world);
             OnTick(diffMs);
         };
         world.MapUnloading += map =>
         {
             if (map.FindUpdater<CreatureMapSystem>() is { } system) _healthSystems.Remove(system);
+            if (map.FindUpdater<GameObjectMapSystem>() is { } objects) _circleAis.Remove(objects);
         };
     }
 
@@ -73,24 +77,52 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     {
         _events = service;
         _spawnZoneByGuid.Clear();
+        _circleZoneByGuid.Clear();
         foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
         {
             if (service.Rows.Creatures.TryGetValue(zone.EventId, out IReadOnlyList<uint>? guids))
                 foreach (uint guid in guids) _spawnZoneByGuid[guid] = zone.ZoneId;
+            if (service.Rows.GameObjects.TryGetValue(zone.EventId, out IReadOnlyList<uint>? objects))
+                foreach (uint guid in objects) _circleZoneByGuid[guid] = zone.ZoneId;
         }
         service.AddListener(this);
     }
 
-    private void InstallHealthAis(WorldRuntime world)
+    private void InstallInvasionAis(WorldRuntime world)
     {
         if (!_hasStore) return;
         foreach (Map map in world.Maps.Where(m => m.MapId is 0 or 1))
         {
-            if (map.FindUpdater<CreatureMapSystem>() is not { } creatures || !_healthSystems.Add(creatures)) continue;
-            creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisHealth,
-                creature => new NecropolisHealthAi(creature, this));
+            if (map.FindUpdater<CreatureMapSystem>() is { } creatures && _healthSystems.Add(creatures))
+            {
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisHealth,
+                    creature => new NecropolisHealthAi(creature, this));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisRelay,
+                    creature => new NecropolisRelayAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecropolisProxy,
+                    creature => new NecropolisProxyAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.NecroticShard,
+                    creature => new NecroticShardAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.DamagedNecroticShard,
+                    creature => new NecroticShardAi(creature));
+            }
+            if (map.FindUpdater<GameObjectMapSystem>() is { } objects && !_circleAis.ContainsKey(objects))
+            {
+                var ai = new InvasionCircleAi(this);
+                _circleAis.Add(objects, ai);
+                objects.RegisterAi(ScourgeInvasionCatalog.SummonCircle, ai);
+            }
         }
     }
+
+    internal uint? CircleZone(GameObject go)
+        => go.Spawn is { } spawn && _circleZoneByGuid.TryGetValue(spawn.Guid, out uint zone)
+            ? zone : null;
+
+    internal bool IsCircleAttackActive(uint zoneId)
+        => ScourgeInvasionCatalog.ForZone(zoneId) is { } zone
+            && Snapshot.Remaining(zoneId) > 0
+            && _events?.IsActiveEvent(zone.EventId) == true;
 
     internal void OnNecropolisDied(Creature creature)
     {
@@ -170,7 +202,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         bool attacking = Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon < 150;
         SetEvent(service, 17, attacking);
         foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
-            SetEvent(service, zone.EventId, attacking && Snapshot.Remaining(zone.ZoneId) > 0);
+        {
+            bool zoneActive = attacking && Snapshot.Remaining(zone.ZoneId) > 0;
+            if (!zoneActive && service.IsActiveEvent(zone.EventId))
+                foreach (InvasionCircleAi ai in _circleAis.Values) ai.ForgetZone(zone.ZoneId);
+            SetEvent(service, zone.EventId, zoneActive);
+        }
         SetEvent(service, 96, attacking && Snapshot.BattlesWon is >= 50 and < 100);
         SetEvent(service, 97, attacking && Snapshot.BattlesWon is >= 100 and < 150);
         SetEvent(service, 98, Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon >= 150);

@@ -2,6 +2,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
@@ -126,6 +127,106 @@ public sealed class ScourgeInvasionImportedRuntimeTests
             if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase)
                 || !Path.GetFileName(target).StartsWith("arcane-scourge-runtime-", StringComparison.Ordinal))
                 throw new InvalidOperationException("refusing cleanup outside the Scourge runtime test directory");
+            if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
+        }
+    }
+
+    [RealWorldContentFact]
+    public async Task ImportedCircleShardRelayAndProxyDeliverOneZapToAzsharaHealth()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcane-scourge-chain-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string copy = Path.Combine(directory, "world.db");
+        File.Copy(Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!, copy);
+        try
+        {
+            IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Database:World:Provider"] = "Sqlite",
+                ["Database:World:ConnectionString"] = $"Data Source={copy};Pooling=False",
+            }).Build();
+            string? terrain = Environment.GetEnvironmentVariable("ARCANECORE_TEST_TERRAIN_DIR");
+            var state = new StateStore();
+            await using var host = WorldTestHost.Start(configure: options =>
+            {
+                if (terrain is { Length: > 0 }) options.Maps.DataDirectory = terrain;
+            }, configureServices: services =>
+            {
+                ServiceDescriptor appearance = services.Last(d => d.ServiceType == typeof(IWorldDataStore));
+                services.AddSingleton(config);
+                services.AddWorldDatabase(config);
+                services.Add(appearance);
+                services.AddSingleton<IScourgeInvasionStateStore>(state);
+            });
+            await using WorldTestClient client = await host.EnterWorldAsync("SCOCHAIN", "Scochain", AccountSecurity.Administrator)
+                .WaitAsync(TimeSpan.FromSeconds(20));
+            GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();
+            await host.WaitForWorldAsync(() => events.IsActiveEvent(92), "Azshara invasion event")
+                .WaitAsync(TimeSpan.FromSeconds(15));
+
+            TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+            bool accepted = await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Scochain")!;
+                player.Flags |= PlayerFlags.Gm;
+                return teleports.TeleportTo(player, 1, 3337.51f, -4516.62f, 97.71f, 0);
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(accepted);
+            await host.WaitForWorldAsync(() => teleports.StageOf(host.World.FindOnlinePlayer("Scochain")!) == TeleportStage.Far,
+                "Azshara circle transfer").WaitAsync(TimeSpan.FromSeconds(15));
+            await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map is { MapId: 1 },
+                "Azshara circle arrival").WaitAsync(TimeSpan.FromSeconds(15));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<GameObjectMapSystem>()?.GameObjects.Any(go => go.Spawn?.Guid == 67776) == true,
+                "imported summon circle").WaitAsync(TimeSpan.FromSeconds(15));
+            await host.OnWorldAsync(() =>
+            {
+                GameObject circle = Assert.Single(host.World.FindOnlinePlayer("Scochain")!.Map!
+                    .FindUpdater<GameObjectMapSystem>()!.GameObjects, go => go.Spawn?.Guid == 67776);
+                Assert.True(circle.IsSpawned, $"circle {circle.Entry} loaded but not spawned");
+                ScourgeInvasionFeature feature = host.WorldServices.GetRequiredService<ScourgeInvasionFeature>();
+                Assert.Equal(16u, feature.CircleZone(circle));
+                Assert.Equal(2, feature.Snapshot.Remaining(16));
+                return true;
+            });
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<CreatureMapSystem>()?.Creatures.Any(c => c.Entry == ScourgeInvasionCatalog.NecroticShard
+                    && MathF.Abs(c.X - 3337.51f) < 3f && MathF.Abs(c.Y + 4516.62f) < 3f) == true,
+                "summoned original shard").WaitAsync(TimeSpan.FromSeconds(15));
+
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Scochain")!;
+                var creatures = player.Map!.FindUpdater<CreatureMapSystem>()!;
+                Creature original = Assert.Single(creatures.Creatures, c => c.Entry == ScourgeInvasionCatalog.NecroticShard
+                    && MathF.Abs(c.X - 3337.51f) < 3f && MathF.Abs(c.Y + 4516.62f) < 3f);
+                Assert.Equal("NecroticShardAi", original.AI?.GetType().Name);
+                creatures.KillCreature(original);
+                Creature damaged = Assert.Single(creatures.Creatures, c => c.Entry == ScourgeInvasionCatalog.DamagedNecroticShard
+                    && MathF.Abs(c.X - 3337.51f) < 3f && MathF.Abs(c.Y + 4516.62f) < 3f);
+                Assert.Equal("NecroticShardAi", damaged.AI?.GetType().Name);
+                Assert.Contains(creatures.Creatures, c => c.Entry == ScourgeInvasionCatalog.NecropolisRelay
+                    && c.AI?.GetType().Name == "NecropolisRelayAi");
+                Assert.Contains(creatures.Creatures, c => c.Entry == ScourgeInvasionCatalog.NecropolisProxy
+                    && c.AI?.GetType().Name == "NecropolisProxyAi");
+                Assert.Contains(creatures.Creatures, c => c.Spawn?.Guid == 97592 && c.IsAlive);
+                creatures.KillCreature(damaged);
+                return true;
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Scochain")?.Map?
+                .FindUpdater<CreatureMapSystem>()?.Creatures.Any(c => c.Spawn?.Guid == 97592 && c.Health < c.MaxHealth) == true,
+                "relay zap reached Necropolis Health").WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(2, (await state.LoadAsync()).Remaining(16)); // one of three circles; the Necropolis still stands
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            string root = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            string target = Path.GetFullPath(directory);
+            if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                || !Path.GetFileName(target).StartsWith("arcane-scourge-chain-", StringComparison.Ordinal))
+                throw new InvalidOperationException("refusing cleanup outside the Scourge chain test directory");
             if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
         }
     }

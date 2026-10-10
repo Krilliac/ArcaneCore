@@ -10,6 +10,11 @@ public static class ScourgeInvasionCatalog
     public const uint NecropolisHealth = 16421;
     public const uint ZapNecropolis = 28386;
     public const uint CampDeathCommunique = 28351;
+    public const uint NecroticShard = 16136;
+    public const uint DamagedNecroticShard = 16172;
+    public const uint NecropolisRelay = 16386;
+    public const uint NecropolisProxy = 16398;
+    public const uint SummonCircle = 181136;
 
     public static IReadOnlyList<ScourgeInvasionZone> Zones { get; } =
     [
