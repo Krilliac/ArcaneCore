@@ -37,6 +37,9 @@ Content one bot cannot do (elite, dungeon and raid quests, objectives inside ins
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
 live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
 
+Bots found guilds, fill and rank them, say a short line in guild chat and (off by default) wave at nearby real players
+(`World:Playerbots:Social`, live): `docs/areas/playbots-social.md`.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
