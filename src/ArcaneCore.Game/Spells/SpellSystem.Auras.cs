@@ -38,7 +38,7 @@ public sealed partial class SpellSystem
     private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
         // vmangos Aura::HandleAuraDummy (SpellAuras.cpp:1700-2215) is a switch on the spell id: RegisterDummyAuraHandler adds a case.
-        [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), null),
+        [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), static (s, h, a) => s.TickDummyAura(h, a)),
         // Threat reads installed modifiers by school when damage/healing is resolved.
         [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
@@ -80,6 +80,31 @@ public sealed partial class SpellSystem
     public bool HasDummyAuraHandler(uint spellId) => _dummyAuraHandlers.ContainsKey(spellId);
 
     private readonly Dictionary<uint, Action<SpellSystem, SpellAuraHolder, SpellAura, bool>> _dummyAuraHandlers = [];
+
+    /// <summary>
+    /// A periodic SPELL_AURA_DUMMY (vmangos Aura::Aura's switch that sets m_isPeriodic and periodictime for a few dummy spells, SpellAuras.cpp
+    /// ~1760-1790, with its Aura::PeriodicDummyTick case): the aura ticks every <paramref name="periodMs"/> and each tick runs <paramref name="tick"/>.
+    /// A second registration for the same spell is a startup error.
+    /// </summary>
+    public void RegisterPeriodicDummyAura(uint spellId, uint periodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> tick)
+    {
+        ArgumentNullException.ThrowIfNull(tick);
+        ArgumentOutOfRangeException.ThrowIfZero(periodMs);
+        if (!_periodicDummyAuras.TryAdd(spellId, (periodMs, tick)))
+        {
+            throw new InvalidOperationException($"spell {spellId} already has a periodic dummy aura");
+        }
+    }
+
+    private readonly Dictionary<uint, (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick)> _periodicDummyAuras = [];
+
+    private void TickDummyAura(SpellAuraHolder holder, SpellAura aura)
+    {
+        if (_periodicDummyAuras.TryGetValue(holder.Spell.Id, out (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick) dummy))
+        {
+            dummy.Tick(this, holder, aura);
+        }
+    }
 
     private void ApplyDummyAura(SpellAuraHolder holder, SpellAura aura, bool apply)
     {
@@ -185,6 +210,11 @@ public sealed partial class SpellSystem
             : SnapshotAuraAmount(context);
         var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, ModifiedAmplitude(context.Caster, context.Spell, effect), effect.MiscValue,
             context.Target.PowerType);
+        if (aura.Type == AuraType.Dummy && _periodicDummyAuras.TryGetValue(context.Spell.Id, out (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick) dummy))
+        {
+            aura.Amplitude = dummy.PeriodMs; // vmangos Aura::Aura: m_isPeriodic = true, m_modifier.periodictime for the scripted dummy
+        }
+
         aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
         context.PendingHolder.SetAura(aura);
     }

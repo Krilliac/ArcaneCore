@@ -19,6 +19,8 @@ public sealed class HolidaySpellScriptTests
         Assert.IsType<MistletoeKissScript>(registry.Find(26218));
         Assert.IsType<WinterWondervoltScript>(registry.Find(26275));
         Assert.IsType<RibbonPoleTriggerScript>(registry.Find(29710));
+        Assert.IsType<SnowballKnockdownScript>(registry.Find(21343));
+        Assert.IsType<ReindeerTransformationScript>(registry.Find(25860));
     }
 
     [Theory]
