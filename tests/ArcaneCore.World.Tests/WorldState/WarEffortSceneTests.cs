@@ -1,5 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -58,7 +60,7 @@ public sealed class WarEffortSceneTests
     {
         Assert.Equal(98, WarEffortTroopCatalog.Creatures.Count(t => t.Event is >= 54 and <= 58));
         Assert.Equal(8, WarEffortTroopCatalog.Creatures.Count(t => t.Event == 61));
-        Assert.Equal(8, WarEffortTroopCatalog.GameObjects.Count);
+        Assert.Equal(32, WarEffortTroopCatalog.GameObjects.Count);
         // vmangos day 1 has 19 creatures; its Saurfang (custom entry 987000) is spawned by the scene, not the catalog.
         Assert.Equal([18, 24, 24, 19, 13], Enumerable.Range(54, 5).Select(e => WarEffortTroopCatalog.Creatures.Count(t => t.Event == e)).ToArray());
         Assert.Equal(WarEffortTroopCatalog.Creatures.Count, WarEffortTroopCatalog.Creatures.Select(t => t.Guid).Distinct().Count());
@@ -270,6 +272,74 @@ public sealed class WarEffortSceneTests
     }
 
     [Fact]
+    public void LaterVmangosMigrationsAreAppliedToTheCatalog()
+    {
+        WarEffortTroop priestess = WarEffortTroopCatalog.Creatures.Single(t => t.Guid == 113015); // 20230314125943
+        Assert.Equal(-6834.13f, priestess.X);
+        Assert.Equal(-8046.22f, WarEffortTroopCatalog.Creatures.Single(t => t.Guid == 112831).X); // 20230125042234
+        Assert.Equal(-6775.07f, SaurfangWarRoom.X); // 20231111021653
+        Assert.DoesNotContain(WarEffortTroopCatalog.GameObjects, g => g.Guid is 220204 or 220205 or 220206);
+        Assert.Equal([(8152u, (byte)57), (8153u, (byte)58), (8154u, (byte)56), (8155u, (byte)55)],
+            WarEffortTroopCatalog.GameObjects.Where(g => g.Entry == 180744).Select(g => (g.Guid, g.Event)).OrderBy(x => x.Guid));
+        Assert.Equal(-6947.34f, WarEffortTroopCatalog.GameObjects.Single(g => g.Guid == 220202).X); // 20241226150330
+        Assert.Equal(-6779.12f, WarEffortTroopCatalog.GameObjects.Single(g => g.Guid == 220200).X); // 20241228161610
+        Assert.Equal(23, WarEffortTroopCatalog.GameObjects.Count(g => g.Entry == 180714 && g.MapId == 0 && g.Event == 58));
+    }
+
+    [Fact]
+    public void DayObjectsSpawnOnTheirMapIncludingTheIronforgeCratesOnDayFive()
+    {
+        long deadline = 1_800_000_000, start = deadline - 5 * 86_400;
+        long now = start + 5;
+        using Rig rig = new(Moving(deadline), () => now);
+        rig.World.RunTick(100);
+        Assert.Equal(WarEffortTroopCatalog.GameObjects.Count(g => g.Event == 54), rig.War.TroopObjects.Count);
+        Assert.Empty(rig.EkObjects.GameObjects);
+
+        now = start + 4 * 86_400;
+        rig.World.RunTick(100);
+        Assert.Equal(32, rig.War.TroopObjects.Count);
+        Assert.Equal(23, rig.EkObjects.GameObjects.Count(o => o.Entry == 180714));
+
+        rig.Store.State = War with { Phase = WarEffortPhase.Done };
+        rig.War.Reload();
+        rig.World.RunTick(100);
+        Assert.Empty(rig.War.TroopObjects);
+        Assert.DoesNotContain(rig.EkObjects.GameObjects, o => o.Entry == 180714 && o.IsSpawned);
+    }
+
+    [Fact]
+    public void TheClassicDbWarLayoutsSaurfangAndInfantryAreAdoptedNotDoubled()
+    {
+        CreatureSpawn[] db =
+        [
+            new() { Guid = 900001, Entry = Saurfang, MapId = 1, X = -6983.31f, Y = 961.757f, Z = 11f },
+            new() { Guid = 900002, Entry = IronforgeInfantry, MapId = 1, X = -6960f, Y = 950f, Z = 15f, Orientation = 4f },
+            new() { Guid = 900003, Entry = Saurfang, MapId = 1, X = 1565.79f, Y = -4395.27f, Z = 7f }, // Orgrimmar
+        ];
+        long now = WarStart + 60;
+        using Rig rig = new(War, () => now, db);
+        rig.World.RunTick(100);
+        rig.World.RunTick(100);
+        Creature saurfang = Assert.IsType<Creature>(rig.War.SceneSaurfang);
+        Assert.Equal(900001u, saurfang.Spawn?.Guid);
+        Assert.IsType<WarEffortFeature.SaurfangWarAi>(saurfang.AI);
+        Assert.Single(rig.Creatures.Creatures, c => c.Entry == Saurfang && WarEffortFeature.InSilithus(c));
+        Assert.DoesNotContain(rig.Creatures.Creatures, c => c.Entry == Saurfang && c.Spawn is null);
+        Assert.IsNotType<WarEffortFeature.SaurfangWarAi>(rig.Creatures.Creatures.Single(c => c.Spawn?.Guid == 900003).AI);
+
+        Assert.DoesNotContain(rig.War.Troops.Values, c => c.Entry is IronforgeInfantry or OrgrimmarInfantry);
+        Assert.Contains(rig.War.Troops.Values, c => c.Entry == Priestess);
+        Creature dbDwarf = rig.Creatures.Creatures.Single(c => c.Spawn?.Guid == 900002);
+        Assert.IsType<WarEffortFeature.TroopAi>(dbDwarf.AI);
+
+        now = WarStart + AttackAfterWarStartSeconds + 5;
+        rig.World.RunTick(100);
+        Assert.Equal(IronforgeOrigin.X + (950f - IronforgeOrigin.Y), dbDwarf.Home.X, 3); // the database soldier turns too
+        Assert.Equal(SaurfangPost.X, saurfang.Home.X);
+    }
+
+    [Fact]
     public void AStaticSaurfangSpawnElsewhereKeepsItsOwnAi()
     {
         long now = WarStart + FinalBattleAfterWarStartSeconds + 10;
@@ -301,7 +371,10 @@ public sealed class WarEffortSceneTests
         public CreatureMapSystem Creatures { get; }
         public MemoryStore Store { get; }
 
-        public Rig(WarEffortSnapshot saved, Func<long> clock)
+        public GameObjectMapSystem KalimdorObjects { get; }
+        public GameObjectMapSystem EkObjects { get; }
+
+        public Rig(WarEffortSnapshot saved, Func<long> clock, IReadOnlyList<CreatureSpawn>? dbSpawns = null)
         {
             var services = new ServiceCollection();
             Store = new MemoryStore(saved);
@@ -317,13 +390,32 @@ public sealed class WarEffortSceneTests
                 NullLogger<WorldRuntime>.Instance);
             Map kalimdor = World.GetMap(1);
             Creatures = new CreatureMapSystem(kalimdor, new CreatureContent(
-                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Distinct().Select(Template).ToArray(), [], [], [], []), random: new Random(3));
+                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Distinct().Select(Template).ToArray(),
+                dbSpawns ?? [], [], [], []), random: new Random(3));
             kalimdor.AddUpdater(Creatures);
+            var objectContent = new GameObjectContent(
+                [.. WarEffortTroopCatalog.GameObjects.Select(g => g.Entry).Distinct().Select(ObjectTemplate)], [], [], [], []);
+            KalimdorObjects = new GameObjectMapSystem(kalimdor, objectContent);
+            kalimdor.AddUpdater(KalimdorObjects);
+            Map ek = World.GetMap(0);
+            EkObjects = new GameObjectMapSystem(ek, objectContent);
+            ek.AddUpdater(EkObjects);
+            if (dbSpawns is not null)
+            {
+                Creatures.RegisterScriptOnlySpawns(dbSpawns.Select(sp => sp.Guid));
+                foreach (CreatureSpawn sp in dbSpawns) Creatures.SpawnScripted(sp.Guid);
+            }
             _provider.GetRequiredService<GameEventFeature>().Attach(World);
             War = _provider.GetRequiredService<WarEffortFeature>();
             War.UtcNowUnix = clock;
             War.Attach(World);
         }
+
+        private static GameObjectTemplate ObjectTemplate(uint entry) => new()
+        {
+            Entry = entry, Type = (uint)GameObjectType.Generic, DisplayId = 6500, Name = $"AQ war object {entry}", Size = 1.0f,
+            Data = new uint[GameObjectTemplate.DataCount],
+        };
 
         private static CreatureTemplate Template(uint entry) => new()
         {

@@ -64,8 +64,11 @@ public static class WarEffortSceneSchedule
         (-7933.09f, 1490.65f, -6.62f, 2.68f), (-8014.01f, 1532.97f, 2.81f, 3.10f), (-8079.99f, 1523.19f, 2.61f, 3.15f),
     ];
 
-    /// <summary>The Silithus Saurfang's post in the Cenarion Hold war room (vmangos spawn 113001, event 54).</summary>
-    public static (float X, float Y, float Z, float O) SaurfangWarRoom => (-6774.63f, 814.611f, 55.7475f, 3.07395f);
+    /// <summary>The Silithus Saurfang's post in the Cenarion Hold war room (vmangos spawn 113001, event 54; moved by migration 20231111021653).</summary>
+    public static (float X, float Y, float Z, float O) SaurfangWarRoom => (-6775.07f, 815.446f, 55.8303f, 3.31613f);
+
+    /// <summary>The ClassicDB ten-hour-war event (mangos-classic phase 4), whose own layout includes a Saurfang and Cenarion Hold infantry.</summary>
+    public const ushort ClassicDbWarEvent = 123;
 
     /// <summary>
     /// How many transport-day events (54 = day 1 ... 58 = day 5) are active: day n starts n-1 days into the transport; all five stay
