@@ -262,6 +262,18 @@ public sealed partial class CreatureMapSystem
         UpdateTimedSummons();
     }
 
+    /// <summary>
+    /// cMaNGOS Unit::TriggerHomeEvents (Entities/Unit.cpp): the AI's reached-home hook (EventAI's reached-home events and Reset), the
+    /// instance script's hook and the group's CREATURE_GROUP_EVENT_HOME. Runs when the home movement arrives, and at once for a creature
+    /// that evades while still rooted (it never walks home).
+    /// </summary>
+    private void TriggerHomeEvents(Creature creature)
+    {
+        creature.AI?.OnReachedHome();
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureReachedHome(creature);
+        OnGroupMemberReachedHome(creature);
+    }
+
     private void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
     {
         switch (type)
@@ -269,9 +281,7 @@ public sealed partial class CreatureMapSystem
             case MovementGeneratorType.Home:
                 creature.IsEvading = false;
                 creature.AI?.OnMovementInform(type, pointId);
-                creature.AI?.OnReachedHome();
-                Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureReachedHome(creature);
-                OnGroupMemberReachedHome(creature); // cmangos Unit::TriggerHomeEvents → CREATURE_GROUP_EVENT_HOME
+                TriggerHomeEvents(creature);
                 break;
 
             case MovementGeneratorType.Waypoint:

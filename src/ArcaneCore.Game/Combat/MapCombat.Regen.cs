@@ -159,7 +159,7 @@ public sealed partial class MapCombat
     /// health and mana return a third of their maximum per tick (Creature::RegenerateHealth / RegenerateMana); in-combat mana
     /// regeneration needs creature stats and is left to the creatures area.
     /// </summary>
-    private static void UpdateCreatureRegen(Unit unit, uint diff)
+    private void UpdateCreatureRegen(Unit unit, uint diff)
     {
         UnitCombat c = unit.Combat;
         if (!IsAliveState(unit))
@@ -178,6 +178,13 @@ public sealed partial class MapCombat
         // that has not reached its victim for 3 s regenerates as if out of combat.
         if (c.IsInCombat && unit is not ICombatCreature { IsInEvadeMode: true })
         {
+            // vmangos Creature::RegenerateAll (Creature.cpp:1094): a polymorphed creature heals in combat too, a third of its maximum per
+            // tick (RegenerateHealth :1155-1158). In-combat mana is still left out.
+            if (CombatEnvironment.For(_world).IsPolymorphed(unit) && (unit is not ICombatCreature pc || pc.RegeneratesHealth))
+            {
+                unit.Health = Math.Min(unit.MaxHealth, unit.Health + (unit.MaxHealth / 3));
+            }
+
             return;
         }
 

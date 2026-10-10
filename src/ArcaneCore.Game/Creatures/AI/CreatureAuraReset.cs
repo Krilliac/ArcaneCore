@@ -12,4 +12,10 @@ public interface ICreatureAuraReset
     /// a player (a buff a player put on the creature survives its evade).
     /// </summary>
     void ResetAuras(Creature creature, bool keepPositive);
+
+    /// <summary>
+    /// Remove every aura of <paramref name="creature"/>, passives included (vmangos and cMaNGOS Unit::RemoveAllAuras). For a script's own
+    /// evade that strips the creature bare, such as vmangos silithus.cpp npc_colossusAI::EnterEvadeMode.
+    /// </summary>
+    void RemoveAllAuras(Creature creature);
 }

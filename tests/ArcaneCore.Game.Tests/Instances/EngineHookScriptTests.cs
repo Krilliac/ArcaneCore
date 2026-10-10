@@ -268,5 +268,7 @@ internal sealed class CountingCreatureSpells : ICreatureSpellCaster, ICreatureAu
     public void Interrupt(Creature caster) => Interrupts++;
     public void OnCreatureRemoved(Creature creature) { }
     public void ResetAuras(Creature creature, bool keepPositive) => AuraResets++;
+    public int AuraWipes { get; private set; }
+    public void RemoveAllAuras(Creature creature) => AuraWipes++;
     public event Action<Unit, Unit, SpellInfo>? SpellHit { add { } remove { } }
 }

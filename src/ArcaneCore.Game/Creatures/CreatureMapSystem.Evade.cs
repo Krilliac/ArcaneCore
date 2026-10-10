@@ -55,6 +55,7 @@ public sealed partial class CreatureMapSystem
         CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;
 
         bool charmed = !creature.CharmerGuid.IsEmpty;
+        ClearCombatOnlyRoot(creature); // cMaNGOS UnitAI::EnterEvadeMode starts with ClearCombatOnlyRoot (AI/BaseAI/UnitAI.cpp:115)
         _ai.Spells?.Interrupt(creature);
         if (!charmed && _options.EvadeResetsAuras && _ai.Spells is ICreatureAuraReset reset)
         {
@@ -91,7 +92,18 @@ public sealed partial class CreatureMapSystem
 
         if (!charmed)
         {
-            creature.Motion.MoveTargetedHome(home);
+            if (IsImmobilizedState(creature))
+            {
+                // cMaNGOS UnitAI::EnterEvadeMode (AI/BaseAI/UnitAI.cpp:122-125): still rooted after the aura removal means permarooted, so
+                // it does not walk home; the home events run where it stands and it is out of evade mode at once.
+                creature.IsEvading = false;
+                creature.Motion.Remove(MovementGeneratorType.Chase);
+                TriggerHomeEvents(creature);
+            }
+            else
+            {
+                creature.Motion.MoveTargetedHome(home);
+            }
         }
 
         Evaded?.Invoke(creature);
@@ -131,6 +143,23 @@ public sealed partial class CreatureMapSystem
             creature.Motion.Remove(MovementGeneratorType.Chase);
         }
     }
+
+    /// <summary>
+    /// Strip every aura of <paramref name="creature"/> (Unit::RemoveAllAuras), for a script's own evade such as vmangos silithus.cpp
+    /// npc_colossusAI::EnterEvadeMode. Does nothing when the spell caster cannot reset auras.
+    /// </summary>
+    public void RemoveAllAuras(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (_ai.Spells is ICreatureAuraReset reset)
+        {
+            reset.RemoveAllAuras(creature);
+        }
+    }
+
+    /// <summary>cMaNGOS Unit::IsImmobilizedState: a root or stun aura, or a script root (EventAI SET_COMBAT_MOVEMENT root / SetImmobilized).</summary>
+    private bool IsImmobilizedState(Creature creature)
+        => creature.AiImmobilized || (_ai.UnitSpells is { } spells && spells.IsRooted(creature));
 
     private static void ClearLootTap(Creature creature)
     {
