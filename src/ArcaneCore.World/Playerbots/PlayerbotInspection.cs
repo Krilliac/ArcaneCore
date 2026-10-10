@@ -57,6 +57,9 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
 
     /// <summary>The bot's bot-led group (<c>group=3:tank:engaging</c>) or its wait for one, else null (<see cref="Groups.PlayerbotGroupCoordinator.Describe"/>).</summary>
     public string? Group { get; init; }
+
+    /// <summary>The bot's home area (place, map, centre, radius, distance, state; <see cref="PlayerbotHomeReturn.Describe"/>), else null.</summary>
+    public string? Home { get; init; }
 }
 
 internal static class PlayerbotInspector
@@ -115,6 +118,7 @@ internal static class PlayerbotInspector
             Master = partyDriven ? party!.MasterName : null,
             PartyMode = partyDriven ? party!.Mode : null,
             Risk = partyDriven ? party!.RiskReport : brain.RiskReport,
+            Home = brain.HomeDescription,
         };
     }
 

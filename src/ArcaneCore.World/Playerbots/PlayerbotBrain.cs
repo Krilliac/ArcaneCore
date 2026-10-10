@@ -42,7 +42,52 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
+    private readonly PlayerbotHomeReturn _homeReturn = new();
+    private PlayerbotHomeArea? _home;
     private PlayerbotRisk? _risk;
+
+    /// <summary>
+    /// The bot's home area (<see cref="PlayerbotHomeArea"/>), or null for none. While set, goal selection prefers what lies inside it
+    /// and a bot that strays out of it with no errand walks back (<see cref="PlayerbotHomeReturn"/>). Setting a home drops the current
+    /// intent and the walk home in progress. World thread (or before the bot is started).
+    /// </summary>
+    internal PlayerbotHomeArea? Home
+    {
+        get => _home;
+        set
+        {
+            if (ReferenceEquals(_home, value)) return;
+            _home = value;
+            _homeReturn.Reset();
+            _quests.Home = value;
+            _destinations.Home = value;
+            DropIntent();
+        }
+    }
+
+    /// <summary>
+    /// The in-area filters (quest takers, quest and errand destinations) apply only while the bot is on its home map. A bot on
+    /// another map is off-map (<see cref="PlayerbotHomeState.OffMap"/>): the area has no meaning there, and applying it would skip every
+    /// creature and take no quest, so it behaves as a bot with no home until it is on the home map again.
+    /// </summary>
+    private void SyncHomeFilters(Player player)
+    {
+        PlayerbotHomeArea? active = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId ? home : null;
+        _quests.Home = active;
+        _destinations.Home = active;
+    }
+
+    /// <summary>The home the in-area filters use right now: the home while the bot is on its map, else null (tests).</summary>
+    internal PlayerbotHomeArea? ActiveFilterHome => _quests.Home;
+
+    /// <summary>The home line <c>.playerbot status</c> shows (<c>inside:120</c>, <c>returning:812</c>, <c>off-map</c>, <c>blocked:812</c>), null without a home.</summary>
+    internal string? HomeReport => _home is null ? null : _homeReturn.Report;
+
+    /// <summary>The home line BOTINSPECT shows (place, map, centre, radius, distance, state), null without a home.</summary>
+    internal string? HomeDescription => _home is null ? null : _homeReturn.Describe(_home);
+
+    /// <summary>The walk back to the home (inspection and tests).</summary>
+    internal PlayerbotHomeReturn HomeReturn => _homeReturn;
 
     /// <summary>Risk against reward and retreat (<see cref="PlayerbotRisk"/>; inspection and tests).</summary>
     internal PlayerbotRisk Risk => _risk ??= NewRisk();
@@ -132,6 +177,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _thinkElapsed = 0;
         _combatSpells.Reset();
         _stall.Reset();
+        _homeReturn.Reset();
         _goal = PlayerbotGoalKind.Explore;
     }
 
@@ -146,11 +192,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
+        SyncHomeFilters(player);
 
         bool dead = !player.IsAlive;
         if (dead)
         {
             _stall.Reset();
+            // The walk home planned from where the bot fell: after the resurrection (maybe far away) it plans afresh.
+            _homeReturn.Reset();
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
@@ -386,6 +435,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
             if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
             UpdateLocalPlan(player);
+            if (_home is { } home && TryReturnHome(player, home, interval)) return;
             // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
             if (_modelChoice == "town" && _town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
@@ -548,6 +598,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     }
 
     /// <summary>
+    /// The walk back to the home area, in the out-of-combat block after the class upkeep and before the quest, town and trainer
+    /// steps. A bot on the home map, outside the radius (or still walking back and outside the return radius) with no errand drops its
+    /// intent and walks to the centre. Errands that are really needed keep their priority and may take the bot anywhere: a vendor or
+    /// trainer that has something useful to do (<see cref="PlayerbotTownGoals.HasCandidate"/>, <see cref="PlayerbotTrainerDestinations.HasCandidate"/>)
+    /// and a quest exchange already under way. A completed quest's turn-in, combat, looting, rest and retreat run earlier in
+    /// <see cref="Update"/> and are not touched; a dead bot follows the ghost recovery and walks home after the resurrection. A bot on
+    /// another map is reported off-map and left alone: bots have no teleport, taxi or hearth logic.
+    /// </summary>
+    private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval)
+    {
+        uint now = _session.World.NowMs;
+        if (_homeReturn.Evaluate(player, home, now) != PlayerbotHomeState.Returning) return false;
+        if (_quests.Busy || _town.HasCandidate(player)
+            || _quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player)) return false;
+        DropIntent();
+        if (!_homeReturn.Update(_session, player, home, _options, interval, now)) return false;
+        _goal = PlayerbotGoalKind.Home;
+        return true;
+    }
+
+    /// <summary>
     /// A new stall (<see cref="PlayerbotStallWatch"/>): set the goal's target aside for <see cref="PlayerbotSuspensions.SuspendMs"/>
     /// and drop the intent, so the next decision picks something else. A quest goal sets its quest and its giver aside (a completed
     /// quest whose ender cannot be reached no longer holds the bot at its giver for good), a vendor or trainer goal that NPC, a
@@ -568,6 +639,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
                 if (_target is { } target) MarkUnreachable(target);
+                break;
+            case PlayerbotGoalKind.Home:
+                _homeReturn.MarkBlocked(now);
                 break;
             default:
                 _exploreRefusals = 3;
@@ -858,8 +932,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
 
-    /// <summary>A creature the goals do not choose now: unreachable, or of an entry set aside (stall, death loop).</summary>
-    private bool IsSkipped(Creature creature) => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs);
+    /// <summary>
+    /// A creature the goals do not choose now: unreachable, of an entry set aside (stall, death loop), or outside the bot's home area
+    /// (a creature on another map than the home is not judged: the bot is off-map and behaves as one with no home).
+    /// The defensive-attacker path does not use this: a bot always fights back.
+    /// </summary>
+    private bool IsSkipped(Creature creature)
+        => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+            || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
 
     private void RememberAttackers(Player player)
     {
@@ -926,6 +1006,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         float angle = _exploreRefusals >= 3
             ? (attempt + player.Guid.Low) * 2.39996323f
             : player.Orientation + (spread * MathF.PI * 2f / 3f);
+        // Beyond 0.8 of the home radius the next leg heads for the centre instead of wandering further out.
+        if (_home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && home.DistanceTo(player.X, player.Y) > home.ExploreRadius)
+            angle = MathF.Atan2(home.Centre.Y - player.Y, home.Centre.X - player.X);
         var destination = new System.Numerics.Vector3(
             player.X + (MathF.Cos(angle) * 48f),
             player.Y + (MathF.Sin(angle) * 48f),
