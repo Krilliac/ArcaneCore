@@ -354,7 +354,9 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
   remembered either, so it is never sent later as conversation memory.
 - **Screening what a model says** (`ScreenOutput`, on). A model's reply is run through the same local filter before the bot says
   it; a hit is never said: the built-in provider answers the player's line instead (`OnOutputFlagged`: `BuiltinReply`) or nothing
-  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player.
+  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player. A reply the filter cannot judge in
+  time fails closed: it is never said either and takes the same path (`OnOutputFlagged`), with no flag record (nothing was found)
+  and no strike; it is counted and warned as an `output` timeout.
 - **Flags, strikes and cut-off.** Every flag is kept in an in-memory ring of `FlagLogSize` (200) records and logged as a warning:
   the character's name and GUID, the account id, the bot, the category, the source (local filter, moderation or output
   screening), the time, and, while `StoreExcerpt` is on, at most 60 characters of the line with emails, phone numbers and addresses
@@ -379,7 +381,9 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **What is sent.** A model request carries the bot's facts, the bounded memory (`MemoryExchanges`) and the current line, with
   players named only by character name: never an account name, an address or a GUID. With `StripPersonalData` (on), email
   addresses, phone numbers and street addresses in the line and the memory are replaced by `[email]`, `[phone]` and `[address]`
-  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far).
+  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far). If
+  one of those patterns runs out of time, the whole text is sent as `[removed]` (fails closed), counted and warned as a `strip`
+  timeout.
 
 **Operator responsibilities.** Read and follow the usage policies of every provider you configure, and keep the server's own
 rules in line with them. Keep `Enabled` on whenever a model provider is configured (the start log warns when it is off). Review

@@ -350,9 +350,10 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 continue;
             }
 
-            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
             {
-                _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                // Flagged, or not judged in time (fails closed: an unjudged reply is never said, nothing is flagged): the blocked-reply path.
+                if (verdict.Category is { } said) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
                 if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
                 modelAllowed = false; // the built-in provider answers the (clean) line instead
                 continue;
@@ -412,13 +413,12 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
     /// <summary>The line as sent to a model provider: emails and phone numbers replaced when <see cref="PlayerbotChatSafetyOptions.StripPersonalData"/>.</summary>
     private BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
-        => options.Safety.StripPersonalData ? ask with { Text = _safety.Filter().StripPersonalData(ask.Text) } : ask;
+        => options.Safety.StripPersonalData ? ask with { Text = _safety.StripPersonalData(ask.Text) } : ask;
 
     private List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
     {
         if (!options.Safety.StripPersonalData) return memory;
-        PlayerbotChatSafetyFilter filter = _safety.Filter();
-        return [.. memory.Select(turn => turn with { Text = filter.StripPersonalData(turn.Text) })];
+        return [.. memory.Select(turn => turn with { Text = _safety.StripPersonalData(turn.Text) })];
     }
 
     /// <summary>A provider's moderation step for <paramref name="ask"/>'s line (as it would be sent); any error fails the step.</summary>

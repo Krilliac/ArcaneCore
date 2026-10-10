@@ -12,7 +12,10 @@ internal static class PlayerbotChatMeters
     /// <summary>The bot chat meter.</summary>
     internal static Meter Meter { get; } = new("ArcaneCore.Playerbots.Chat", "1.0");
 
-    /// <summary>Safety screenings that ran out of time, by <c>kind</c> (<c>input</c>: a player's line, <c>output</c>: a model reply).</summary>
+    /// <summary>
+    /// Safety patterns that ran out of time, by <c>kind</c> (<c>input</c>: screening a player's line, <c>output</c>: screening a model
+    /// reply, <c>strip</c>: removing personal data before sending).
+    /// </summary>
     internal static Counter<long> ScreeningTimeouts { get; } = Meter.CreateCounter<long>(
         "arcanecore.playerbot.chat.screening_timeouts", "{screening}", "Bot chat safety screenings that ran out of time.");
 

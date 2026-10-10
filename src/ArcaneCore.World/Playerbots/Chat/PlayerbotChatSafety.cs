@@ -143,12 +143,29 @@ internal sealed class PlayerbotChatSafety
     internal static readonly TimeSpan TimeoutWarningInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>
-    /// A screening that ran out of time: counted (status <c>timed-out=</c>, metric <c>arcanecore.playerbot.chat.screening_timeouts</c>)
-    /// and logged at most once per <see cref="TimeoutWarningInterval"/>, naming the pattern and never the line.
+    /// <paramref name="text"/> with personal data replaced (what is sent to a model, and flag excerpts). A personal-data pattern out of
+    /// time removes the whole text (<c>[removed]</c>) and is counted as a <c>strip</c> timeout.
     /// </summary>
+    internal string StripPersonalData(string text)
+    {
+        string stripped = Filter().StripPersonalData(text, out string? timedOutOn);
+        if (timedOutOn is not null) CountTimeout("strip", timedOutOn);
+        return stripped;
+    }
+
     private SafetyVerdict Counted(SafetyVerdict verdict, string kind)
     {
-        if (!verdict.TimedOut) return verdict;
+        if (verdict.TimedOut) CountTimeout(kind, verdict.TimedOutOn);
+        return verdict;
+    }
+
+    /// <summary>
+    /// A screening (<c>input</c>, <c>output</c>) or a personal-data strip (<c>strip</c>) that ran out of time: counted (status
+    /// <c>timed-out=</c>, metric <c>arcanecore.playerbot.chat.screening_timeouts{kind}</c>) and logged at most once per
+    /// <see cref="TimeoutWarningInterval"/>, naming the pattern and never the text.
+    /// </summary>
+    private void CountTimeout(string kind, string? timedOutOn)
+    {
         long total = Interlocked.Increment(ref _timedOut);
         PlayerbotChatMeters.CountScreeningTimeout(kind);
         DateTimeOffset now = _time.GetUtcNow();
@@ -158,7 +175,7 @@ internal sealed class PlayerbotChatSafety
             if (now < _timeoutWarnedUntil)
             {
                 _timeoutsNotWarned++;
-                return verdict;
+                return;
             }
 
             _timeoutWarnedUntil = now + TimeoutWarningInterval;
@@ -167,8 +184,7 @@ internal sealed class PlayerbotChatSafety
         }
 
         _logger.LogWarning("Bot chat safety: {Kind} screening ran out of time on {Pattern} ({Total} so far, {Suppressed} more since the last warning)",
-            kind, verdict.TimedOutOn ?? "a pattern", total, suppressed);
-        return verdict;
+            kind, timedOutOn ?? "a pattern", total, suppressed);
     }
 
     // --- who may reach a model provider -----------------------------------------------------------------------------------
@@ -315,7 +331,7 @@ internal sealed class PlayerbotChatSafety
     /// <summary>At most <see cref="ExcerptLength"/> characters of <paramref name="text"/>, one line, emails and phone numbers removed.</summary>
     internal string Excerpt(string text)
     {
-        string clean = Filter().StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
+        string clean = StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
         return clean.Length <= ExcerptLength ? clean : clean[..(ExcerptLength - 3)] + "...";
     }
 

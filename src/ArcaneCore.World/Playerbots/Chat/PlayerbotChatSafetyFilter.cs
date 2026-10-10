@@ -218,13 +218,21 @@ internal sealed class PlayerbotChatSafetyFilter
         return new SafetyVerdict(null, timedOutOn is not null, timedOutOn);
     }
 
-    /// <summary>Test seam: a pattern for which this returns true times out on every match (a real timeout cannot be forced).</summary>
-    internal Func<Regex, bool>? TimeoutForTest { get; set; }
+    /// <summary>
+    /// Test seam: a match of a pattern on a text for which this returns true times out (a real timeout cannot be forced). Screening
+    /// and personal-data stripping both go through it.
+    /// </summary>
+    internal Func<Regex, string, bool>? TimeoutForTest { get; set; }
 
     private bool IsMatch(Regex pattern, string text)
     {
-        if (TimeoutForTest?.Invoke(pattern) == true) throw new RegexMatchTimeoutException(string.Empty, pattern.ToString(), pattern.MatchTimeout);
+        ThrowIfForcedTimeout(pattern, text);
         return pattern.IsMatch(text);
+    }
+
+    private void ThrowIfForcedTimeout(Regex pattern, string text)
+    {
+        if (TimeoutForTest?.Invoke(pattern, text) == true) throw new RegexMatchTimeoutException(string.Empty, pattern.ToString(), pattern.MatchTimeout);
     }
 
     // --- warm-up ----------------------------------------------------------------------------------------------------------
@@ -390,19 +398,32 @@ internal sealed class PlayerbotChatSafetyFilter
     }
 
     /// <summary>Emails and phone numbers replaced by placeholders (<c>[email]</c>, <c>[phone]</c>), street addresses by <c>[address]</c>.</summary>
-    internal string StripPersonalData(string text)
+    internal string StripPersonalData(string text) => StripPersonalData(text, out _);
+
+    /// <summary>
+    /// As <see cref="StripPersonalData(string)"/>; a pattern out of time removes the whole text (<c>[removed]</c>: fails closed) and is
+    /// named in <paramref name="timedOutOn"/>.
+    /// </summary>
+    internal string StripPersonalData(string text, out string? timedOutOn)
     {
+        timedOutOn = null;
         if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
-        try
+        string result = text;
+        foreach ((Regex pattern, string name, string placeholder) in (ReadOnlySpan<(Regex, string, string)>)[(_email, "email", "[email]"), (_phone, "phone", "[phone]"), (_streetAddress, "street address", "[address]")])
         {
-            string result = _email.Replace(text, "[email]");
-            result = _phone.Replace(result, "[phone]");
-            return _streetAddress.Replace(result, "[address]");
+            try
+            {
+                ThrowIfForcedTimeout(pattern, result);
+                result = pattern.Replace(result, placeholder);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                timedOutOn = $"personal data ({name})";
+                return "[removed]";
+            }
         }
-        catch (RegexMatchTimeoutException)
-        {
-            return "[removed]";
-        }
+
+        return result;
     }
 
     private const RegexOptions Linear = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
