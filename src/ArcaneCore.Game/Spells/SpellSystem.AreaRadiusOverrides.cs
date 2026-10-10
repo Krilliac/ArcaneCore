@@ -21,6 +21,26 @@ public sealed partial class SpellSystem
         }
     }
 
+    private readonly Dictionary<uint, uint> _maxTargetOverrides = [];
+
+    /// <summary>
+    /// Override a spell's MaxAffectedTargets (the <c>unMaxTargets</c> part of vmangos SpellScript::OnSetTargetMap, for example
+    /// EmeraldDragonsDreamFogScript: Dream Fog 24781 hits one target). A spell has one owner, so a duplicate registration fails at startup.
+    /// </summary>
+    public void RegisterSpellMaxTargetsOverride(uint spell, uint maxTargets)
+    {
+        if (spell == 0) throw new ArgumentOutOfRangeException(nameof(spell));
+        if (maxTargets == 0) throw new ArgumentOutOfRangeException(nameof(maxTargets));
+        if (!_maxTargetOverrides.TryAdd(spell, maxTargets))
+        {
+            throw new InvalidOperationException($"Spell {spell} already has a max targets override.");
+        }
+    }
+
+    /// <summary>The spell's MaxAffectedTargets after any <see cref="RegisterSpellMaxTargetsOverride"/> (0 = no cap).</summary>
+    internal uint MaxTargetsOf(SpellInfo spell)
+        => _maxTargetOverrides.TryGetValue(spell.Id, out uint max) ? max : spell.MaxAffectedTargets;
+
     private float TargetMapRadius(SpellInfo spell, SpellEffectInfo effect, int effectIndex)
         => _areaRadiusOverrides.TryGetValue((spell.Id, effectIndex), out float radius) ? radius : effect.Radius;
 }
