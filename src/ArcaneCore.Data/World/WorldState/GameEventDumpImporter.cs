@@ -8,7 +8,14 @@ namespace ArcaneCore.Data.World.WorldState;
 
 /// <summary>What a game-event import read (the counts are rows that would be, or were, written).</summary>
 public sealed record GameEventImportReport(
-    int Events, int Times, int Creatures, int GameObjects, int CreatureData, int Quests, int Mails, int SkippedRows, IReadOnlyList<string> Warnings);
+    int Events, int Times, int Creatures, int GameObjects, int CreatureData, int Quests, int Mails, int SkippedRows, IReadOnlyList<string> Warnings)
+{
+    /// <summary><c>game_event_creature</c> rows dropped because their guid is not in the dump's own <c>creature</c> table.</summary>
+    public int OrphanCreatureRows { get; init; }
+
+    /// <summary><c>game_event_gameobject</c> rows dropped because their guid is not in the dump's own <c>gameobject</c> table.</summary>
+    public int OrphanGameObjectRows { get; init; }
+}
 
 /// <summary>
 /// Maps the game-event tables of a cmangos classic-db or vmangos dump onto <see cref="GameEventDataModule"/>'s rows BY COLUMN NAME
@@ -22,8 +29,14 @@ public sealed record GameEventImportReport(
 /// versioned and the row with the highest <c>patch</c> not above 10 wins per (guid, event) (GameEventMgr.cpp creature data query).</item>
 /// <item><c>game_event_quest</c>: vmangos rows with a <c>patch_min</c> above 10 are skipped (its loader's <c>WHERE patch_min &lt;= patch</c>).</item>
 /// </list>
-/// Rows are not checked against the creature or gameobject tables here (classic-db carries 33 creature and 1126 gameobject event
-/// rows whose spawn is missing; the world's loader skips and logs them). Parsing completes before the database is touched and the
+/// <para>
+/// Orphan rows. When the dump being read also carries the <c>creature</c> (or <c>gameobject</c>) table, a <c>game_event_creature</c>
+/// (or <c>game_event_gameobject</c>) row whose guid is not one of its spawns is dropped and counted (<see cref="GameEventImportReport.OrphanCreatureRows"/>,
+/// <see cref="GameEventImportReport.OrphanGameObjectRows"/>): cmangos GameEventMgr::LoadFromDB skips such a row ("not found in `gameobject` table")
+/// and classic-db's own update <c>Updates/4498_backport_errors.sql</c> deletes exactly these rows from the z2815 snapshot (33 creature
+/// and 1126 gameobject rows: 969 guids that exist in no table, 157 that are creature spawns filed under gameobject).
+/// A dump without the spawn table (an events-only file) keeps every row, since there is nothing to check it against.
+/// </para> Parsing completes before the database is touched and the
 /// write is one transaction, so a mangled dump changes nothing. Nothing is bundled: the operator points the importer at their own dump.
 /// </summary>
 public sealed class GameEventDumpImporter
@@ -47,6 +60,10 @@ public sealed class GameEventDumpImporter
     private readonly Dictionary<(uint, int), GameEventQuestRow> _quests = [];
     private readonly Dictionary<(int, uint, uint), GameEventMailRow> _mails = [];
     private readonly MapDiagnostics _diagnostics = new();
+    private readonly HashSet<uint> _creatureSpawns = [];
+    private readonly HashSet<uint> _gameObjectSpawns = [];
+    private bool _sawCreatureSpawns;
+    private bool _sawGameObjectSpawns;
     private int _skipped;
 
     /// <summary>Read one dump (call again for further files; later rows replace earlier ones with the same key).</summary>
@@ -93,6 +110,22 @@ public sealed class GameEventDumpImporter
                 case GameEventDataModule.QuestTable:
                     ReadQuest(row);
                     break;
+                case "creature":
+                    if (SpawnGuid(row) is { } creatureGuid)
+                    {
+                        _sawCreatureSpawns = true;
+                        _creatureSpawns.Add(creatureGuid);
+                    }
+
+                    break;
+                case "gameobject":
+                    if (SpawnGuid(row) is { } objectGuid)
+                    {
+                        _sawGameObjectSpawns = true;
+                        _gameObjectSpawns.Add(objectGuid);
+                    }
+
+                    break;
                 case GameEventDataModule.MailTable:
                     Require(row, "event");
                     GameEventMailRow mail = s_mails.Map(row, _diagnostics);
@@ -108,16 +141,36 @@ public sealed class GameEventDumpImporter
             r.Entry, r.ScheduleType, r.Occurence, r.Length, r.Holiday, r.LinkedTo, r.Description ?? string.Empty,
             r.StartTime, r.EndTime, r.Hardcoded, r.Disabled, r.PatchMin, r.PatchMax))],
         [.. _times.Values.OrderBy(r => r.Entry).Select(r => new GameEventTimeRecord(r.Entry, r.StartTime, r.EndTime))],
-        [.. _creatures.Values.OrderBy(r => r.Event).ThenBy(r => r.Guid).Select(r => new GameEventSpawnRecord(r.Guid, r.Event))],
-        [.. _gameObjects.Values.OrderBy(r => r.Event).ThenBy(r => r.Guid).Select(r => new GameEventSpawnRecord(r.Guid, r.Event))],
+        [.. KeptCreatures().OrderBy(r => r.Event).ThenBy(r => r.Guid).Select(r => new GameEventSpawnRecord(r.Guid, r.Event))],
+        [.. KeptGameObjects().OrderBy(r => r.Event).ThenBy(r => r.Guid).Select(r => new GameEventSpawnRecord(r.Guid, r.Event))],
         [.. _creatureData.Values.Select(v => v.Row).OrderBy(r => r.Event).ThenBy(r => r.Guid)
             .Select(r => new GameEventCreatureDataRecord(r.Guid, r.Event, r.EntryId, r.ModelId, r.EquipmentId, r.SpellStart, r.SpellEnd))],
         [.. _quests.Values.OrderBy(r => r.Event).ThenBy(r => r.Quest).Select(r => new GameEventQuestRecord(r.Quest, r.Event))],
         [.. _mails.Values.OrderBy(r => r.Event).ThenBy(r => r.RaceMask).ThenBy(r => r.Quest)
             .Select(r => new GameEventMailRecord(r.Event, r.RaceMask, r.Quest, r.MailTemplateId, r.SenderEntry))]);
 
-    public GameEventImportReport BuildReport() => new(
-        _events.Count, _times.Count, _creatures.Count, _gameObjects.Count, _creatureData.Count, _quests.Count, _mails.Count, _skipped, _diagnostics.Samples);
+    public GameEventImportReport BuildReport()
+    {
+        int creatures = KeptCreatures().Count();
+        int gameObjects = KeptGameObjects().Count();
+        return new(_events.Count, _times.Count, creatures, gameObjects, _creatureData.Count, _quests.Count, _mails.Count, _skipped, _diagnostics.Samples)
+        {
+            OrphanCreatureRows = _creatures.Count - creatures,
+            OrphanGameObjectRows = _gameObjects.Count - gameObjects,
+        };
+    }
+
+    private IEnumerable<GameEventCreatureRow> KeptCreatures()
+        => _sawCreatureSpawns ? _creatures.Values.Where(r => _creatureSpawns.Contains(r.Guid)) : _creatures.Values;
+
+    private IEnumerable<GameEventGameObjectRow> KeptGameObjects()
+        => _sawGameObjectSpawns ? _gameObjects.Values.Where(r => _gameObjectSpawns.Contains(r.Guid)) : _gameObjects.Values;
+
+    /// <summary>The guid of a <c>creature</c> / <c>gameobject</c> spawn row; null when the table has no readable guid column.</summary>
+    private static uint? SpawnGuid(DumpRow row)
+        => row.TryGet(out string? raw, "guid") && uint.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out uint guid)
+            ? guid
+            : null;
 
     /// <summary>
     /// Write all seven tables atomically with the contract of <see cref="ImportTransaction"/>: with <paramref name="replace"/> they are
@@ -128,8 +181,8 @@ public sealed class GameEventDumpImporter
         ArgumentNullException.ThrowIfNull(db);
         GameEventRow[] events = [.. _events.Values.OrderBy(r => r.Entry)];
         GameEventTimeRow[] times = [.. _times.Values.OrderBy(r => r.Entry)];
-        GameEventCreatureRow[] creatures = [.. _creatures.Values];
-        GameEventGameObjectRow[] gameObjects = [.. _gameObjects.Values];
+        GameEventCreatureRow[] creatures = [.. KeptCreatures()];
+        GameEventGameObjectRow[] gameObjects = [.. KeptGameObjects()];
         GameEventCreatureDataRow[] creatureData = [.. _creatureData.Values.Select(v => v.Row)];
         GameEventQuestRow[] quests = [.. _quests.Values];
         GameEventMailRow[] mails = [.. _mails.Values];
