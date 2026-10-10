@@ -55,6 +55,9 @@ public sealed class Group
 
     public bool IsRaid => Type == GroupType.Raid;
 
+    /// <summary>The raid a battleground builds for one team (vmangos <c>Group::isBGGroup</c>); never stored, no instance binds.</summary>
+    public bool IsBattlegroundGroup { get; internal set; }
+
     public ObjectGuid LeaderGuid { get; internal set; }
 
     public string LeaderName { get; internal set; } = string.Empty;

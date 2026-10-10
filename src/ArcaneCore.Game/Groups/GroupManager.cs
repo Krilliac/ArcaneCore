@@ -44,7 +44,8 @@ public sealed partial class GroupManager(SocialContext context)
     public Group? GetGroup(ObjectGuid guid) => _memberOf.GetValueOrDefault(guid);
 
     /// <summary>Every created group (members online or not), lowest id first.</summary>
-    public IReadOnlyList<Group> Groups => [.. _memberOf.Values.Distinct().OrderBy(g => g.Id)];
+    /// <remarks>Battleground raids are left out; a group whose members are all in battleground raids still counts (vmangos m_originalGroup).</remarks>
+    public IReadOnlyList<Group> Groups => [.. _memberOf.Values.Concat(_originalOf.Values).Where(g => !g.IsBattlegroundGroup).Distinct().OrderBy(g => g.Id)];
 
     /// <summary>The stored form of a created group (vmangos Group::SaveToDB plus its group_member rows), members in slot order.</summary>
     public static GroupRecord Snapshot(Group group)
@@ -196,6 +197,12 @@ public sealed partial class GroupManager(SocialContext context)
         }
 
         Group? group = GetGroup(inviter.Guid);
+        if (group is { IsBattlegroundGroup: true })
+        {
+            // The battleground fills its own raid; nobody is invited into it (1.12 has no ERR_INVITE_RESTRICTED, so silent).
+            return;
+        }
+
         if (group is not null)
         {
             if (!group.IsLeaderOrAssistant(inviter.Guid))
@@ -407,8 +414,9 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_DISBAND = leave (vmangos HandleGroupDisbandOpcode): PARTY_OP_LEAVE result with the own name, then remove.</summary>
     public void Leave(Player player)
     {
-        if (GetGroup(player.Guid) is not { } group)
+        if (GetGroup(player.Guid) is not { } group || group.IsBattlegroundGroup)
         {
+            // vmangos HandleGroupDisbandOpcode: a battleground raid cannot be left, only the battleground.
             return;
         }
 
@@ -776,7 +784,7 @@ public sealed partial class GroupManager(SocialContext context)
     {
         foreach (GroupMemberSlot member in group.Members)
         {
-            if (member.Guid == ignore || (subGroup >= 0 && member.SubGroup != subGroup))
+            if (member.Guid == ignore || (subGroup >= 0 && member.SubGroup != subGroup) || !IsCurrentGroup(member.Guid, group))
             {
                 continue;
             }
@@ -798,7 +806,7 @@ public sealed partial class GroupManager(SocialContext context)
             => guid == offline ? GroupMemberStatus.Offline : GroupPackets.StatusOf(context.World.FindOnlinePlayer(guid));
         foreach (GroupMemberSlot member in group.Members)
         {
-            if (member.Guid == offline || context.World.FindOnlinePlayer(member.Guid) is not { } player)
+            if (member.Guid == offline || !IsCurrentGroup(member.Guid, group) || context.World.FindOnlinePlayer(member.Guid) is not { } player)
             {
                 continue;
             }
@@ -821,8 +829,9 @@ public sealed partial class GroupManager(SocialContext context)
             return PartyResult.NotInGroup;
         }
 
-        if (group.LeaderGuid == target || !group.IsLeaderOrAssistant(player.Guid))
+        if (group.LeaderGuid == target || !group.IsLeaderOrAssistant(player.Guid) || group.IsBattlegroundGroup)
         {
+            // A battleground raid follows the match's roster; nobody is kicked from it.
             return PartyResult.NotLeader;
         }
 
@@ -866,7 +875,7 @@ public sealed partial class GroupManager(SocialContext context)
 
         GroupMemberSlot slot = group.Find(guid)!;
         group.RemoveMemberSlot(slot);
-        _memberOf.Remove(guid);
+        bool current = ForgetMembership(guid, group);
         _pendingPetName.Remove(guid);
         _pendingPetAuras.Remove(guid);
         _sentStats.Remove(guid);
@@ -876,7 +885,7 @@ public sealed partial class GroupManager(SocialContext context)
             ChooseLeader(group);
         }
 
-        if (context.World.FindOnlinePlayer(guid) is { } player)
+        if (current && context.World.FindOnlinePlayer(guid) is { } player)
         {
             if (kicked)
             {
@@ -910,7 +919,11 @@ public sealed partial class GroupManager(SocialContext context)
         group.Clear();
         foreach (ObjectGuid guid in members)
         {
-            _memberOf.Remove(guid);
+            if (!ForgetMembership(guid, group))
+            {
+                continue;
+            }
+
             _pendingPetName.Remove(guid);
             _pendingPetAuras.Remove(guid);
             _sentStats.Remove(guid);
@@ -976,7 +989,7 @@ public sealed partial class GroupManager(SocialContext context)
             UpdateLeaderFlag(newLeader);
         }
 
-        if (old != slot.Guid)
+        if (old != slot.Guid && !group.IsBattlegroundGroup)
         {
             LeaderChanged?.Invoke(group, old);
         }

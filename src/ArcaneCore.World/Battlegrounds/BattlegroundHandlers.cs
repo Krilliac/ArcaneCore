@@ -148,7 +148,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
 
     /// <summary>
     /// vmangos HandleBattleGroundPlayerPositionsOpcode (BattleGroundHandler.cpp:266-326): the viewer's team (online participants) and the flag
-    /// carrier the match shows that team. The battleground raid group is not modelled, so the team list is always sent.
+    /// carrier the match shows that team. Every participant is in its team's battleground raid, so the team list is the raid.
     /// </summary>
     private static void PlayerPositions(WorldSession session, Player player, byte[] payload)
     {

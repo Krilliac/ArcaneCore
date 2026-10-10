@@ -666,6 +666,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     {
         _feature.Manager.ClearBinding(player);
         _feature.DeleteBinding(player);
+        _feature.LeaveBattlegroundRaid(player);
         if (Online(player) is { } p)
         {
             Spells?.RemoveAuras(p, BattlegroundConstants.SpellWaitingToResurrect);
