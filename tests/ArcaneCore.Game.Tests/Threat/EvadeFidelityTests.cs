@@ -19,12 +19,14 @@ public sealed class EvadeFidelityTests
     private const uint TimedBuff = 940002;
     private const uint PermanentBuff = 940003;
     private const uint OwnBuff = 940004;
+    private const uint Thrash = 8876; // on cMaNGOS IsSpellRemovedOnEvade's keep list
 
     private static ThreatArena Arena() => new(
         Spell(NegativeAura, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with { Duration = new SpellDuration(60000, 0, 60000), SpellVisual = 1 },
         Spell(TimedBuff, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, AuraType.Dummy)) with { Duration = new SpellDuration(60000, 0, 60000), SpellVisual = 1 },
         Spell(PermanentBuff, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, AuraType.Dummy)) with { Duration = new SpellDuration(-1, 0, -1), SpellVisual = 1 },
-        Spell(OwnBuff, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, AuraType.Dummy)) with { Duration = new SpellDuration(60000, 0, 60000), SpellVisual = 1 });
+        Spell(OwnBuff, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, AuraType.Dummy)) with { Duration = new SpellDuration(60000, 0, 60000), SpellVisual = 1 },
+        Spell(Thrash, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, AuraType.Dummy)) with { Duration = new SpellDuration(-1, 0, -1), SpellVisual = 1 });
 
     /// <summary>The development switch that restores the old instant evade snap (<c>Creatures:Movement:EvadeRestoresFullHealth</c>).</summary>
     private static CreatureOptions WithEvadeSnap()
@@ -94,6 +96,34 @@ public sealed class EvadeFidelityTests
         Assert.False(a.Kit.System.HasAura(wolf, PermanentBuff));
         Assert.Equal(1, a.Kit.System.GetAuras(wolf).Count(h => h.Spell.Id == TimedBuff && h.CasterGuid == a.Tank.Guid)); // the player's timed buff stays
         Assert.DoesNotContain(a.Kit.System.GetAuras(wolf), h => h.CasterGuid == wolf.Guid);
+    }
+
+    [Fact]
+    public void AnEvadeKeepsTheAurasCmangosNeverRemovesOnEvade()
+    {
+        using ThreatArena a = Arena();
+        Creature wolf = Hurt(a, 90);
+        a.Kit.System.CastSpell(wolf, Thrash, SpellCastTargets.ForUnit(wolf.Guid), triggered: true); // a spawn passive
+        a.Kit.System.CastSpell(wolf, OwnBuff, SpellCastTargets.ForUnit(wolf.Guid), triggered: true);
+
+        a.Systems[^1].EnterEvadeMode(wolf);
+
+        Assert.True(a.Kit.System.HasAura(wolf, Thrash));
+        Assert.False(a.Kit.System.HasAura(wolf, OwnBuff));
+    }
+
+    [Fact]
+    public void RemoveAllAuras_StripsEveryAura()
+    {
+        using ThreatArena a = Arena();
+        Creature wolf = Hurt(a, 90);
+        a.Cast(a.Tank, wolf, NegativeAura);
+        a.Cast(a.Tank, wolf, TimedBuff);
+        a.Kit.System.CastSpell(wolf, Thrash, SpellCastTargets.ForUnit(wolf.Guid), triggered: true);
+
+        a.Systems[^1].RemoveAllAuras(wolf);
+
+        Assert.DoesNotContain(a.Kit.System.GetAuras(wolf), h => !h.IsRemoved);
     }
 
     [Fact]
