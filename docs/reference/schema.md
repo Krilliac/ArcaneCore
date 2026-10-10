@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 49 | `characters` |
+| `characters` | 51 | `characters` |
 | `world` | 47 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -74,6 +74,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 47 | `Characters.WorldState.ScourgeInvasionCityDataModule` | creates `world_scourge_invasion_city` | yes |
 | 48 | `Characters.WorldState.FishingExtravaganzaDataModule` | creates `world_stv_fishing` | yes |
 | 49 | `Characters.WorldState.ElementalInvasionDataModule` | creates `world_elemental_invasion` | yes |
+| 50 | `Characters.CharacterDrunkDataModule` | adds columns `characters.Drunk`, `characters.LogoutTime` | yes |
+| 51 | `Characters.Pets.PetLoyaltyDataModule` | adds columns `character_pet.Loyalty`, `character_pet.LoyaltyPoints`, `character_pet.TrainingPoints` | yes |
 
 ## `world`
 
