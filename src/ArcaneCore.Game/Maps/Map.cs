@@ -259,10 +259,21 @@ public sealed class Map
         }
     }
 
-    /// <summary>The first attached system of type <typeparamref name="T"/>, if any.</summary>
+    /// <summary>The first attached system of type <typeparamref name="T"/>, if any (called per creature per tick: no LINQ, no enumerator box).</summary>
     public T? FindUpdater<T>()
         where T : class, IMapUpdater
-        => _updaters.OfType<T>().FirstOrDefault();
+    {
+        for (int i = 0; i < _updaters.Count; i++)
+        {
+            if (_updaters[i] is T found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Any object in the map (players included) by GUID.</summary>
     public WorldObject? FindObject(ObjectGuid guid) => _objects.GetValueOrDefault(guid);
 

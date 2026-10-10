@@ -18,7 +18,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Gm.Objects;
 
 /// <summary>
-/// <c>.spawngroup list|info|spawn</c> end to end over loopback, on classic-db z2815 rows moved next to the human start: spawn group 2
+/// <c>.spawngroup list|info|spawn|poolaudit</c> end to end over loopback, on classic-db z2815 rows moved next to the human start: spawn group 2
 /// "Kargath Expeditionary Force" (five creatures 9082-9086, flags 3, formation fanned out behind, spread 4, path 6883) and pool 31225 "The
 /// Barrens (The Merchant Coast) - Chest Pool" (max_limit 1; three of its Battered Chests 300129, 300132, 300141).
 /// </summary>
@@ -98,7 +98,7 @@ public sealed class GmSpawnGroupCommandTests
     public void Levels_AreGameMaster_RetailLevel3()
     {
         CommandTable table = ChatCommands.CreateTable();
-        foreach (string path in new[] { "spawngroup", "spawngroup list", "spawngroup info", "spawngroup spawn" })
+        foreach (string path in new[] { "spawngroup", "spawngroup list", "spawngroup info", "spawngroup spawn", "spawngroup poolaudit" })
         {
             Assert.Null(table.Resolve(path, AccountSecurity.Moderator));
             Assert.Equal(3, table.Resolve(path, AccountSecurity.GameMaster)!.RequiredLevel(table.Gm));
@@ -141,6 +141,11 @@ public sealed class GmSpawnGroupCommandTests
             Assert.Single(await SendAsync(gm, $".spawngroup spawn {outChest}")));
         Assert.Equal($"gameobject spawn {otherChest}: pool 31225 \"The Barrens (The Merchant Coast) - Chest Pool\" (1/1 out); this one is not chosen",
             Assert.Single(await SendAsync(gm, $".spawngroup spawn {otherChest} gameobject")));
+        Assert.Equal(
+            ["creature pools on map 0: 0 checked, 0 spawn(s) out, 0 in the world, clean", "gameobject pools on map 0: 1 checked, 1 spawn(s) out, 1 in the world, clean"],
+            await SendAsync(gm, ".spawngroup poolaudit"));
+        Assert.Equal(["gameobject pools on map 0: 1 checked, 1 spawn(s) out, 1 in the world, clean"], await SendAsync(gm, ".spawngroup poolaudit gameobject"));
+        Assert.StartsWith("Syntax: .spawngroup poolaudit", (await SendAsync(gm, ".spawngroup poolaudit dragons"))[0], StringComparison.Ordinal);
         Assert.Equal(GmSpawnGroupCommands.NotASpawn(1), Assert.Single(await SendAsync(gm, ".spawngroup spawn 1")));
         Assert.StartsWith("Syntax: .spawngroup spawn", (await SendAsync(gm, ".spawngroup spawn 6880 dragons"))[0], StringComparison.Ordinal);
     }

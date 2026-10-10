@@ -156,7 +156,18 @@ internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOpt
         _candidates.Clear();
         _seen.Clear();
         system.Map.Grids.CollectObjects(center.X, center.Y, radius, _candidates);
-        _candidates.RemoveAll(o => o is not (Player or Creature) || !ReferenceEquals(o.Map, system.Map) || !WithinRadius(center, o, radius) || !_seen.Add(o));
+        // In-place compaction in order (what RemoveAll did, without its closure and predicate per notify).
+        int kept = 0;
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            WorldObject o = _candidates[i];
+            if (o is (Player or Creature) && ReferenceEquals(o.Map, system.Map) && WithinRadius(center, o, radius) && _seen.Add(o))
+            {
+                _candidates[kept++] = o;
+            }
+        }
+
+        _candidates.RemoveRange(kept, _candidates.Count - kept);
         _seen.Clear();
         return _candidates;
     }

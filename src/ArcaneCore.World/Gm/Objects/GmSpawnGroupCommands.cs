@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps.Pools;
 using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
@@ -19,6 +20,8 @@ namespace ArcaneCore.World.Gm.Objects;
 /// <item><c>.spawngroup list [creature|gameobject]</c>: the groups of the map with their members in the world and their maximum.</item>
 /// <item><c>.spawngroup info [#group]</c>: a group's definition, condition, formation and every member's state; without an id, the group of the
 /// selected creature.</item>
+/// <item><c>.spawngroup poolaudit [creature|gameobject]</c>: the pool audit of the map (Game PoolAudit): pools checked, members out and in the
+/// world, and each broken invariant (at most <see cref="MaxListRows"/> lines).</item>
 /// <item><c>.spawngroup spawn #guid [creature|gameobject]</c>: the group and the pool a database spawn belongs to, and their state.</item>
 /// </list>
 /// </summary>
@@ -33,6 +36,7 @@ public sealed class GmSpawnGroupCommands : ICommandGroup
         [
             new ChatCommand("list", AccountSecurity.GameMaster, "Syntax: .spawngroup list [creature|gameobject]\nList the spawn groups of your map: id, type, members in the world / maximum, name.", List, RetailLevel: 3),
             new ChatCommand("info", AccountSecurity.GameMaster, "Syntax: .spawngroup info [#group]\nShow a spawn group of your map (the selected creature's without an id): flags, condition, formation and what each member is doing.", Info, RetailLevel: 3),
+            new ChatCommand("poolaudit", AccountSecurity.GameMaster, "Syntax: .spawngroup poolaudit [creature|gameobject]\nCheck every pool of your map against the spawns in the world: no pool over its max_limit, counters that match, nothing pooled in the world that its pool does not have out.", PoolAudit, RetailLevel: 3),
             new ChatCommand("spawn", AccountSecurity.GameMaster, "Syntax: .spawngroup spawn #guid [creature|gameobject]\nShow the spawn group and the pool a database spawn of your map belongs to.", Spawn, RetailLevel: 3),
         ], RetailLevel: 3),
     ];
@@ -89,6 +93,46 @@ public sealed class GmSpawnGroupCommands : ICommandGroup
         }
 
         return true;
+    }
+
+    private static bool PoolAudit(CommandContext context, string text)
+    {
+        if (!TryKind(text.Trim(), out SpawnGroupType? kind))
+        {
+            return false;
+        }
+
+        if (kind is null or SpawnGroupType.Creature)
+        {
+            ReplyAudit(context, "creature", Creatures(context)?.AuditPools());
+        }
+
+        if (kind is null or SpawnGroupType.GameObject)
+        {
+            ReplyAudit(context, "gameobject", Objects(context)?.AuditPools());
+        }
+
+        return true;
+    }
+
+    /// <summary>The first line of <c>.spawngroup poolaudit</c> for one kind.</summary>
+    public static string PoolAuditLine(string kind, PoolAuditReport report)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"{kind} pools on map {report.MapId}: {report.PoolsChecked} checked, {report.SpawnedMembers} spawn(s) out, {report.LiveMembers} in the world, {(report.Clean ? "clean" : $"{report.Issues.Count} issue(s)")}");
+
+    private static void ReplyAudit(CommandContext context, string kind, PoolAuditReport? report)
+    {
+        report ??= PoolAuditReport.None(context.Player.MapId);
+        context.Reply(PoolAuditLine(kind, report));
+        foreach (PoolAuditIssue issue in report.Issues.Take(MaxListRows))
+        {
+            context.Reply(issue.Problem);
+        }
+
+        if (report.Issues.Count > MaxListRows)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"... and {report.Issues.Count - MaxListRows} more."));
+        }
     }
 
     public static string ListLine(SpawnGroupReport row)

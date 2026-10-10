@@ -608,7 +608,12 @@ public sealed record CreatureSpline(
     private (Vector3 Position, int Segment) Locate(float t)
     {
         var start = new Vector3(StartX, StartY, StartZ);
-        IReadOnlyList<Vector3> points = Points;
+        IReadOnlyList<Vector3> points = Path;
+        if (points.Count == 0)
+        {
+            return (Vector3.Lerp(start, new Vector3(EndX, EndY, EndZ), t), 0); // single segment: no Points list per tick
+        }
+
         if (points.Count == 1)
         {
             return (Vector3.Lerp(start, points[0], t), 0);
@@ -616,10 +621,10 @@ public sealed record CreatureSpline(
 
         float total = 0;
         Vector3 previous = start;
-        foreach (Vector3 point in points)
+        for (int i = 0; i < points.Count; i++)
         {
-            total += Vector3.Distance(previous, point);
-            previous = point;
+            total += Vector3.Distance(previous, points[i]);
+            previous = points[i];
         }
 
         float target = total * t;
