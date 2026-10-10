@@ -44,6 +44,7 @@ public sealed partial class TempleOfAhnQirajInstance
     public override void OnAreaTrigger(Player player, uint triggerId)
     {
         if (!player.IsAlive || player.IsGameMaster) return;
+        if (HandleTempleAreaTrigger(player, triggerId)) return;
         if (triggerId == 4034 && _stomach.TryGetValue(player.Guid, out StomachState? state))
         {
             ITeleportSink teleports = Instance.Combat.SpellMitigation?.Teleports ?? new NearTeleportSink();
@@ -74,6 +75,7 @@ public sealed partial class TempleOfAhnQirajInstance
 
     public override void Update(uint diffMs)
     {
+        UpdateTwinsIntro(diffMs);
         foreach ((ObjectGuid guid, StomachState state) in _stomach.ToArray())
         {
             if (Instance.FindObject(guid) is not Player { IsAlive: true } player)
