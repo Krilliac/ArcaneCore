@@ -83,6 +83,14 @@ public sealed partial class CreatureMapSystem
         return _ai.Spells is { } spells ? spells.AddAura(unit, spellId, permanent) : CreatureCastResult.NoSpellSystem;
     }
 
+    /// <summary>vmangos Unit::AddAura(spell, flags, pCaster): the auras of <paramref name="spellId"/> on <paramref name="unit"/>, credited to <paramref name="caster"/>.</summary>
+    public CreatureCastResult AddAuraFrom(Unit unit, uint spellId, Unit caster)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(caster);
+        return _ai.Spells is { } spells ? spells.AddAuraFrom(unit, spellId, caster) : CreatureCastResult.NoSpellSystem;
+    }
+
     /// <summary>A uniform random integer in [min, max] (EventAI chances, timers and choices).</summary>
     public int RandomInt(int min, int max) => min >= max ? min : (int)_random.NextInt64(min, (long)max + 1);
 
