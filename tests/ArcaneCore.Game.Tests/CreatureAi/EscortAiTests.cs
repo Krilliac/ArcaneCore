@@ -289,6 +289,78 @@ public sealed class EscortAiTests
         Assert.Equal([1u, 2u, 3u], rig.Ai.Reached);
     }
 
+    /// <summary>
+    /// An escort's evade is an evade: cMaNGOS npc_escortAI has no EnterEvadeMode of its own, so it takes CreatureAI::EnterEvadeMode →
+    /// UnitAI::EnterEvadeMode, which ends in Unit::TriggerEvadeEvents (mangos-classic AI/BaseAI/UnitAI.cpp:113-130) whether or not the
+    /// creature walks home. <see cref="CreatureMapSystem.Evaded"/> is raised once although the escort runs back to the combat start instead.
+    /// </summary>
+    [Fact]
+    public void AnEscortEvade_RunningBackToTheCombatStart_RaisesEvadedOnce()
+    {
+        using Rig rig = Setup(hostility: new AlwaysHostile());
+        Assert.True(rig.Ai.Start(run: true));
+        RunUntil(rig, () => rig.Ai.Reached.Count == 1);
+        rig.Player.Relocate(rig.Escort.X + 1, 0, Z, 0, 0);
+        rig.Map.Combat.DealDamage(rig.Player, rig.Escort, 1, direct: false);
+        Assert.True(rig.Escort.Combat.IsInCombat);
+        rig.Player.Relocate(150, 0, Z, 0, 0);
+        var seen = new List<Creature>();
+        rig.System.Evaded += seen.Add;
+
+        rig.System.EnterEvadeMode(rig.Escort);
+
+        Assert.True(rig.Ai.HasEscortState(EscortAI.EscortState.Returning)); // the escort's own evade, not the run home
+        Assert.False(rig.Escort.IsInEvadeMode);
+        Assert.Same(rig.Escort, Assert.Single(seen));
+    }
+
+    /// <summary>A following creature's evade (it walks back to where the fight began, FollowerAI::EnterEvadeMode) raises Evaded once.</summary>
+    [Fact]
+    public void AFollowerEvade_WalkingBackToTheCombatStart_RaisesEvadedOnce()
+    {
+        using Rig rig = Setup(withPath: false);
+        rig.System.RegisterEntryAi(OtherEntry, c => new TestFollowerAI(c));
+        Creature follower = Assert.Single(rig.System.Creatures, c => c.Entry == OtherEntry);
+        var ai = Assert.IsType<TestFollowerAI>(follower.AI);
+        ai.StartFollow(rig.Player);
+        Assert.True(ai.HasFollowState(FollowerAI.FollowState.InProgress));
+        var seen = new List<Creature>();
+        rig.System.Evaded += seen.Add;
+        int resets = ai.Resets;
+
+        rig.System.EnterEvadeMode(follower);
+
+        Assert.False(follower.IsInEvadeMode); // no run home
+        Assert.Equal(resets + 1, ai.Resets);
+        Assert.Same(follower, Assert.Single(seen));
+    }
+
+    /// <summary>The guard: an ordinary evade (the creature runs home) still raises Evaded exactly once, not twice.</summary>
+    [Fact]
+    public void AnOrdinaryEvade_RunningHome_RaisesEvadedExactlyOnce()
+    {
+        using Rig rig = Setup(withPath: false);
+        Creature other = Assert.Single(rig.System.Creatures, c => c.Entry == OtherEntry);
+        rig.Escort.Relocate(8, 0, Z, 0, 0); // the escort script without an escort: the ordinary evade, home to its spawn point
+        var seen = new List<Creature>();
+        rig.System.Evaded += seen.Add;
+
+        rig.System.EnterEvadeMode(other);
+        rig.System.EnterEvadeMode(rig.Escort);
+
+        Assert.True(other.IsInEvadeMode);
+        Assert.True(rig.Escort.IsInEvadeMode);
+        Assert.Equal(MovementGeneratorType.Home, rig.Escort.Motion.CurrentType);
+        Assert.Equal([other, rig.Escort], seen);
+    }
+
+    private sealed class TestFollowerAI(Creature creature) : FollowerAI(creature)
+    {
+        public int Resets { get; private set; }
+
+        protected override void Reset() => Resets++;
+    }
+
     private static void RunUntil(Rig rig, Func<bool> condition, uint limitMs = 60_000)
     {
         for (uint done = 0; done < limitMs && !condition(); done += 100)

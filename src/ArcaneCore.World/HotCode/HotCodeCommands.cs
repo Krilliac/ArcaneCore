@@ -29,7 +29,7 @@ public static class HotCodeCommands
             new ChatCommand("refresh", AccountSecurity.Administrator, "Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now.",
                 (context, args) =>
                 {
-                    string who = context.Player.Name;
+                    string who = context.InvokerName;
                     audit.Record("hotcode-command", $"{who} refresh");
                     Task<RefreshResult> task = refresh.RefreshNowAsync($"requested by {who}");
 
@@ -45,7 +45,7 @@ public static class HotCodeCommands
             new ChatCommand("freeze", AccountSecurity.Administrator, "Syntax: .hotcode freeze — stop registry refreshes (applied code edits stay applied).",
                 (context, args) =>
                 {
-                    audit.Record("hotcode-command", $"{context.Player.Name} freeze");
+                    audit.Record("hotcode-command", $"{context.InvokerName} freeze");
                     refresh.State.SetFrozen(true);
                     context.Reply("Hot code refresh is frozen.");
                     return true;
@@ -53,7 +53,7 @@ public static class HotCodeCommands
             new ChatCommand("thaw", AccountSecurity.Administrator, "Syntax: .hotcode thaw — resume registry refreshes.",
                 (context, args) =>
                 {
-                    audit.Record("hotcode-command", $"{context.Player.Name} thaw");
+                    audit.Record("hotcode-command", $"{context.InvokerName} thaw");
                     refresh.State.SetFrozen(false);
                     context.Reply("Hot code refresh is active.");
                     return true;

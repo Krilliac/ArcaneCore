@@ -47,9 +47,15 @@ internal sealed class RecordingSaveQueue : ICharacterSaveQueue
 
 internal static class TestWorld
 {
+    /// <summary>
+    /// A world for tests that drive ticks by hand. The command drain's wall-clock budget
+    /// (<see cref="WorldRuntimeOptions.CommandTimeBudgetMs"/>) is off: a test tick must run every command posted before it
+    /// however long each one takes on a loaded machine, or a command posted second (say a second worldport arrival) runs
+    /// one tick late only when the first one was slow, and the test flakes under CI load.
+    /// </summary>
     public static WorldRuntime CreateRuntime(RecordingSaveQueue? saves = null, int autosaveMs = 0)
         => new(
-            new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = autosaveMs },
+            new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = autosaveMs, CommandTimeBudgetMs = 0 },
             saves ?? new RecordingSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
 

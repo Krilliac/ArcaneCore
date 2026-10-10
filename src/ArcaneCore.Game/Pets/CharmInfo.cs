@@ -192,6 +192,36 @@ public sealed class CharmInfo
         return true;
     }
 
+    /// <summary>
+    /// Pet::AddSpell's rank replacement (Pet.cpp:1887-1975): the higher rank <paramref name="newSpell"/> takes the place of the known lower rank
+    /// <paramref name="oldSpell"/> with its active state and its bar slot (CharmInfo::AddSpellToActionBar matches a chain by its first spell,
+    /// Unit.cpp:8461-8488). A castable rank that was on no slot goes on the first empty one. False when the old rank is not known or the new one is.
+    /// </summary>
+    internal bool ReplaceRank(uint oldSpell, uint newSpell)
+    {
+        if (newSpell == 0 || _spells.ContainsKey(newSpell) || !_spells.Remove(oldSpell, out ActionType state))
+        {
+            return false;
+        }
+
+        _spells.Add(newSpell, state);
+        for (int i = 0; i < ActionBarSize; i++)
+        {
+            if (_bar[i].Action == oldSpell && _bar[i].IsForSpell)
+            {
+                _bar[i] = _bar[i].WithAction(newSpell);
+                return true;
+            }
+        }
+
+        if (state != ActionType.Passive)
+        {
+            AddSpellToActionBar(newSpell, state);
+        }
+
+        return true;
+    }
+
     /// <summary>A castable spell, with autocast off (vmangos ACT_DECIDE) or on.</summary>
     public bool LearnSpell(uint spellId, bool autocast = false) => LearnSpell(spellId, autocast ? ActionType.Enabled : ActionType.Disabled);
 

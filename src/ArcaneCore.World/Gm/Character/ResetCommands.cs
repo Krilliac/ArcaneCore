@@ -98,7 +98,7 @@ public sealed class ResetCommands : ICommandGroup
 
         feature.ResetTalentsNow(target);
         target.SendSystemMessage(TalentFeature.TalentsResetText);
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
             context.Reply(string.Format(ResetOnline, GmStrings.PlayerLink(target.Name)));
         }
@@ -140,7 +140,7 @@ public sealed class ResetCommands : ICommandGroup
         context.World.BroadcastToAll(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(ResetAllText));
         feature.MarkOnlineForLoginReset(context.World.OnlinePlayers);
         Store(context, feature, store => store.FlagAllAsync(), count =>
-            context.Session.Logger.LogInformation("{Gm} requested a talent reset of every character ({Count} newly flagged)", context.Player.Name, count));
+            context.Session.Logger.LogInformation("{Gm} requested a talent reset of every character ({Count} newly flagged)", context.InvokerName, count));
         return true;
     }
 

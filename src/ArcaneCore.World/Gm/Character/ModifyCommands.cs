@@ -106,8 +106,8 @@ public sealed class ModifyExtension : ICommandExtension
         }
 
         string link = GmStrings.PlayerLink(target.Name);
-        bool report = !ReferenceEquals(target, context.Player);
-        string caller = GmStrings.PlayerLink(context.Player.Name);
+        bool report = !context.IsInvoker(target);
+        string caller = GmStrings.PlayerLink(context.InvokerName);
         if (hp)
         {
             context.Reply(GmStrings.YouChangeHp(link, value, max));
@@ -181,8 +181,8 @@ public sealed class ModifyExtension : ICommandExtension
         uint max = displayedMax * factor;
         uint value = requested * factor;
         string link = GmStrings.PlayerLink(target.Name);
-        bool report = !ReferenceEquals(target, context.Player);
-        string caller = GmStrings.PlayerLink(context.Player.Name);
+        bool report = !context.IsInvoker(target);
+        string caller = GmStrings.PlayerLink(context.InvokerName);
 
         target.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power, max);
         SpellSystem.SetPower(target, power, value);
@@ -268,22 +268,30 @@ public sealed class LevelCommands : ICommandGroup
         int oldLevel = target.Level;
         int newLevel = Math.Clamp(oldLevel + addLevel, 1, progression.MaxPlayerLevel);
 
+        ApplyLevel(context, target, progression, newLevel);
+
+        return true;
+    }
+
+    /// <summary>Sets the target's level with the experience cleared and tells a target that is not the invoker, as <c>.levelup</c> does; shared with <c>.character boost</c>.</summary>
+    internal static void ApplyLevel(CommandContext context, Player target, PlayerProgression progression, int newLevel)
+    {
+        int oldLevel = target.Level;
+
         // vmangos GiveLevel, InitTalentForLevel, PLAYER_XP = 0 (HandleCharacterLevel, CharacterCommands.cpp:1853-1855). GiveLevel raises
         // LevelChanged, whose subscribers recompute the talent points (a level-down resets an overspend) and save the
         // character, so the experience is cleared first and the save sees it.
         target.SetUInt32(UpdateFields.PlayerXp, 0);
         progression.GiveLevel(target, (byte)newLevel);
 
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
-            string caller = GmStrings.PlayerLink(context.Player.Name);
+            string caller = GmStrings.PlayerLink(context.InvokerName);
             target.SendSystemMessage(oldLevel == newLevel ? GmStrings.YoursLevelProgressReset(caller)
                 : oldLevel < newLevel ? GmStrings.YoursLevelUp(caller, newLevel)
                 : GmStrings.YoursLevelDown(caller, newLevel));
             context.Reply(GmStrings.YouChangeLevel(GmStrings.PlayerLink(target.Name), newLevel));
         }
-
-        return true;
     }
 
     private static bool Replenish(CommandContext context, string text)

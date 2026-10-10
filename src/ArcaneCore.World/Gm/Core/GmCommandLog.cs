@@ -17,6 +17,9 @@ public static class GmCommandLog
     public static bool ShouldLog(Commands.ChatCommand command, GmOptions options)
         => options.LogCommands && command.RequiredLevel(options) > 0;
 
+    /// <summary>The audit line of a command typed at the server console (no player, no account, no position).</summary>
+    public static string DescribeConsole(string commandText) => $"Command: {commandText} [Console]";
+
     public static string Describe(string commandText, int accountId, string playerName, uint mapId, float x, float y, float z, string selection)
         => string.Create(CultureInfo.InvariantCulture,
             $"Command: {commandText} [Player: {playerName} (Account: {accountId}) X: {x} Y: {y} Z: {z} Map: {mapId} Selected: {selection}]");

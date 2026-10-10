@@ -2,6 +2,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.ServerMail;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.ServerMail;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
@@ -18,7 +19,7 @@ public sealed class ServerMailStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task Templates_load_and_sent_letters_are_recorded_once(DatabaseProvider provider)
+    public async Task Templates_load_and_a_sent_record_is_unique_per_character_and_template(DatabaseProvider provider)
     {
         var connection = await _databases.CreateAsync(provider);
         await using (CharacterDbContext setup = TestContexts.Create<CharacterDbContext>(connection))
@@ -38,8 +39,21 @@ public sealed class ServerMailStoreTests : IAsyncLifetime
         Assert.Equal(new ServerMailConditionRow(1, "Level", 10, 0), Assert.Single(content.Conditions));
 
         Assert.Empty(await store.GetSentAsync(7));
-        await store.MarkSentAsync(7, 1);
-        await store.MarkSentAsync(7, 1);
+
+        // The record is written by the economy transaction that commits the letters (EconomyStoreTests, RecordServerMailSent); the
+        // (guid, mailId) key keeps it unique.
+        await using (CharacterDbContext write = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            write.Add(new ServerMailCharacterEntity { Guid = 7, MailId = 1 });
+            await write.SaveChangesAsync();
+        }
+
+        await using (CharacterDbContext duplicate = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            duplicate.Add(new ServerMailCharacterEntity { Guid = 7, MailId = 1 });
+            await Assert.ThrowsAsync<DbUpdateException>(() => duplicate.SaveChangesAsync());
+        }
+
         Assert.Equal([1u], await store.GetSentAsync(7));
         Assert.Empty(await store.GetSentAsync(8));
     }

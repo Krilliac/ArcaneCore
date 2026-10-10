@@ -159,6 +159,7 @@ phases remain planned and deployment is a separate gate.
 | M15.3 | Complete fenced handoff and static multiple-worker placement | planned — depends on M15.2 |
 | M15.4 | Host supervision, recovery, drain and capacity-aware placement | planned — depends on M15.3 |
 | M15.5 | Existing CLI/build/import/test jobs, content rollout, migration/rollback and cross-host acceptance | planned — depends on M15.4 |
+| M15.6 | Auxiliary services, in value order ([design](CLUSTERING_DESIGN.md#auxiliary-services)): Warden hosted on the gateway (no separate process); an optional Remote playerbot chat/LLM service; an optional Remote playerbot planner; an optional Remote auction house bot planner with custody kept on the auction owner. Every service has a Local (default) or Remote mode. Metrics, AutoBroadcast and server mail get no service | planned — depends on M15.1 for transport; bot chat also depends on M15.2 directory routing; the AH bot depends on M15.0 ID allocation and fencing and on a realm auction owner; the no-bot-host decision depends on M15.3 placement |
 
 Runtime code is introduced only in its bounded implementation phase. The current
 request authorizes research/planning; no deployment or immediate runtime rewrite
@@ -241,11 +242,11 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 - Do **not** merge `grok/w18-respawn` (stale and broken; delete it). `grok/wave17-test-fixes` overlaps `e7fdd74a`/`ac326b41`, so check before reusing it.
 
 ### Open work
-- **World scripts:** about 82 of 186 mangos-classic SD2 scripts are still missing (87 before #89). Next up are Scourge invasion scripts (10), then GO/areatrigger scripts. Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
+- **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). Next up are the 10 area-trigger scripts (`areatrigger_scripts.cpp`). Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
 - **SmartAI slice 3:** slice 2 (conditions via `ConditionId`, GO, areatrigger and timed-action-list sources) is done, see `docs/integration/smartai-slice2-20261010.md`. Open: the events, actions and targets listed there as rejected, AIName for game objects, and ending the area-trigger handler when a script ran.
-- **Pets:** happiness/loyalty gain, training-point costs (SkillLineAbility.dbc), beast training, Far Sight view extension, possess summon limits.
+- **Pets:** happiness/loyalty gain, Far Sight view extension, possess summon limits. Training-point costs and beast training (learn side) are done (`docs/integration/pet-training-20261010.md`); still open: pet untraining (CMSG_PET_UNLEARN), hunters learning abilities from pets, training points on pet level-up.
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
-- **Metrics:** realm packet counters, per-opcode labels. Docker is untested.
+- **Metrics:** done (realm/logon packet counters, per-opcode labels). Docker is untested.
 - **AH bot:** gaps listed in `docs/areas/auction-house-bot.md`.
 - **Outdoor PvP:** verify capture radius and time against the type-29 templates.
 - **Script hooks:** DuelReset pet cooldowns, addon chat.

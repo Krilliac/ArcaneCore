@@ -95,6 +95,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                     chat.UpdateSpeakTime(player);
                 }
 
+                // AzerothCore OnPlayerCanUseChat for LANG_ADDON (docs/integration/script-hooks.md): after the optional mute/flood check, before every feature.
+                if (session.World.Scripts.Player.HasAddonMessage
+                    && !session.World.Scripts.Player.OnAddonMessage(player, Game.Scripting.ScriptAddonMessage.Parse((uint)type, message, target.Length == 0 ? null : target)))
+                {
+                    return;
+                }
+
                 OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
             }
 

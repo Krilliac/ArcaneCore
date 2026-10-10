@@ -380,6 +380,11 @@ public sealed partial class GameObjectMapSystem
                 continue;
             }
 
+            if (AiOf(trap) is { } filter && !filter.AcceptsTrapTarget(this, trap, player))
+            {
+                continue;
+            }
+
             float distance = CentreDistanceSquared(trap, player);
             if (distance < best || (distance == best && target is not null && player.Guid.Value < target.Guid.Value))
             {

@@ -9,7 +9,7 @@ A hook class implements one or more interfaces and overrides only the methods it
 
 | Interface | Hooks | Raised from |
 |---|---|---|
-| `IPlayerHooks` | `OnLogin`, `OnLogout`, `OnLevelChanged(oldLevel)`, `OnKill`, `OnKilled`, `OnChat` (false drops the line), `OnDuelStart`, `OnDuelEnd` | `WorldRuntime.NotifyLoggedIn` / `RemovePlayer`, `PlayerProgression.GiveLevel`, `MapCombat.Kill`, `ChatHandlers` (after commands, before every chat feature; not addon messages), `DuelService.UpdateDuelFlag` / `Complete` |
+| `IPlayerHooks` | `OnLogin`, `OnLogout`, `OnLevelChanged(oldLevel)`, `OnKill`, `OnKilled`, `OnChat` (false drops the line), `OnAddonMessage` (false drops the line), `OnDuelStart`, `OnDuelEnd` | `WorldRuntime.NotifyLoggedIn` / `RemovePlayer`, `PlayerProgression.GiveLevel`, `MapCombat.Kill`, `ChatHandlers` (after commands, before every chat feature; not addon messages), `ChatHandlers` addon branch for `OnAddonMessage` (`AddonChannel` on, after the addon mute/flood check, before the features; `Prefix` and `Text` are split at the first TAB of the client's `"%s\t%s"`, `Prefix` is null without a TAB), `DuelService.UpdateDuelFlag` / `Complete` |
 | `IWorldHooks` | `OnStartup`, `OnUpdate(diff)`, `OnConfigReload` | `WorldRuntime.Run` (before the first tick), `RunTick` (after `WorldTick`, before the maps), `.reload config` commit |
 | `IUnitHooks` | `OnDamage(ref damage)`, `OnDeath` | `MapCombat.DealDamage` (entry), `MapCombat.Kill` |
 | `IItemHooks` | `OnUse` (true takes the use over), `OnEquip`, `OnUnequip` | `ItemUseService.UseItem` (after its checks), `PlayerInventory.EquipmentChanged` (bridged) |
@@ -50,7 +50,7 @@ and `Areas`.
 
 Deviations from the module:
 - No spell cooldown mods in the ten-minute and age checks.
-- Pet cooldowns are not reset.
+- Pet cooldowns are cleared outright (no age or ten-minute filter) at the duel start and again when a won duel ends, and are never saved or restored, as in the TrinityCore original (`duel_reset.cpp`). The owner's client is told per spell with `SMSG_CLEAR_COOLDOWN` carrying the pet's GUID. The pet's global cooldown and school lockouts are not touched.
 - Saved state is dropped at the end of every duel. The module keeps it after a fled duel.
 - Zone or area id 0 never matches, so an unknown position stays outside the whitelist.
 

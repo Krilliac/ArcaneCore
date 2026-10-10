@@ -59,7 +59,7 @@ public sealed class ResetSpellExtension : ICommandExtension
         SpellVariants.LearnDefaults(context, target);
 
         target.SendSystemMessage("Your spells have been reset.");
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
             context.Reply($"Spells of {GmStrings.PlayerLink(target.Name)} reset.");
         }

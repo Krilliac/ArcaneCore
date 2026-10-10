@@ -69,6 +69,12 @@ public static class GmTargets
     /// </summary>
     public static void ActOnOffline(CommandContext context, IReadOnlyCollection<int> accountIds, Action act, bool unknownAccountIsNotFound)
     {
+        if (context.IsConsole)
+        {
+            act(); // the console outranks every account
+            return;
+        }
+
         int[] others = [.. accountIds.Where(id => id != context.Session.AccountId).Distinct()];
         if (others.Length == 0
             || !GmSecurity.HasLowerSecurity(context.Security, AccountSecurity.Administrator, strong: false, context.Commands.Gm))

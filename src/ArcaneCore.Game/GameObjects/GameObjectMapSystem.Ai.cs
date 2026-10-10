@@ -13,6 +13,13 @@ public interface IGameObjectAi
     /// <summary>vmangos GameObjectAI::OnUse for a trap's target: true when the script handled it and the trap must not cast (GameObject.cpp:536).</summary>
     bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target);
 
+    /// <summary>
+    /// Whether an environmental trap may pick <paramref name="candidate"/> as its target: the ScriptDevAI <c>pTrapSearching</c> functor that
+    /// narrows the trap's target search (mangos-classic GameObject.cpp:466-473; go_transpolyporter_bb accepts only a player holding a
+    /// Goblin Transponder, go_scripts.cpp:261-276). True by default, so a trap without a script takes the nearest living player.
+    /// </summary>
+    bool AcceptsTrapTarget(GameObjectMapSystem objects, GameObject go, Unit candidate) => true;
+
     /// <summary>vmangos GameObjectAI::UpdateAI.</summary>
     void Update(GameObjectMapSystem objects, GameObject go, uint diffMs);
 

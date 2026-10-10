@@ -167,7 +167,7 @@ public sealed class AntiCheatCommands : ICommandGroup
         feature.Forget(id);
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
-        logger.LogInformation("AntiCheat: {Gm} cleared the anticheat record of {Character} ({Id})", context.Player.Name, name, id);
+        logger.LogInformation("AntiCheat: {Gm} cleared the anticheat record of {Character} ({Id})", context.InvokerName, name, id);
         _ = Task.Run(async () =>
         {
             try
@@ -267,7 +267,7 @@ public sealed class AntiCheatCommands : ICommandGroup
         }
 
         online.Session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification("[AntiCheat] You have been warned by a GM for suspicious activity."));
-        context.Session.Logger.LogInformation("AntiCheat: {Gm} warned {Character}", context.Player.Name, online.Name);
+        context.Session.Logger.LogInformation("AntiCheat: {Gm} warned {Character}", context.InvokerName, online.Name);
         context.Reply($"AntiCheat: warned {online.Name}.");
         return true;
     }
@@ -344,7 +344,7 @@ public sealed class AntiCheatCommands : ICommandGroup
         }
 
         feature.ApplyOptions(options);
-        context.Session.Logger.LogInformation("AntiCheat: {Gm} set {Field} = {Value} (live until the next .reload config)", context.Player.Name, field, value);
+        context.Session.Logger.LogInformation("AntiCheat: {Gm} set {Field} = {Value} (live until the next .reload config)", context.InvokerName, field, value);
         context.Reply($"AntiCheat: {field} = {value} (live until the next .reload config or restart).");
         return true;
     }

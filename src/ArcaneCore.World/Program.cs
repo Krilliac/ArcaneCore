@@ -8,6 +8,7 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.World;
 using ArcaneCore.World.HotCode;
 using ArcaneCore.World.Ops.Cli;
+using ArcaneCore.World.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -65,6 +66,7 @@ builder.Services.AddCharacterDatabase(builder.Configuration);
 builder.Services.AddWorldDatabase(builder.Configuration);
 builder.Services.AddDatabaseResilience(builder.Configuration); // breakers + bootstrap retry for the three databases (docs/ops/resilience.md)
 builder.Services.AddWorldDaemon(builder.Configuration);
+builder.Services.AddWorldConsole(builder.Configuration); // typed GM commands at the console window, off when stdin is redirected (docs/areas/server-console.md); after the listener so it stops first
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddWorldWatchdog(builder.Configuration);
 builder.Services.AddWorldMetrics(builder.Configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)

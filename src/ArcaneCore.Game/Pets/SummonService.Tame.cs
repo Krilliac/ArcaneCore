@@ -28,6 +28,12 @@ public sealed partial class SummonService
     /// </summary>
     public Func<uint, uint?>? PetFoodMask { get; set; }
 
+    /// <summary>
+    /// Beast-training rules (training-point costs, family skill lines, the four-active-spell limit; see <see cref="PetTraining"/>). Null (no
+    /// SkillLineAbility reqtrainpoints or CreatureFamily skill lines loaded) keeps learning free of cost and of family checks.
+    /// </summary>
+    public PetTraining? Training { get; set; }
+
     private void InstallTaming(SpellSystem spells)
     {
         spells.RegisterEffectCheck(SpellEffectName.Tamecreature, CheckTame);
@@ -40,6 +46,7 @@ public sealed partial class SummonService
         });
         spells.RegisterEffectCheck(SpellEffectName.FeedPet, CheckFeedPet);
         spells.RegisterEffect(SpellEffectName.FeedPet, EffectFeedPet);
+        spells.RegisterEffectCheck(SpellEffectName.LearnPetSpell, CheckLearnPetSpell);
         spells.RegisterEffect(SpellEffectName.LearnPetSpell, EffectLearnPetSpell);
     }
 
@@ -120,6 +127,14 @@ public sealed partial class SummonService
 
         // SpellEffects.cpp:3151-3154: new pets start Rebellious (Pet::CreateBaseAtCreature) and are raised to the configured default loyalty.
         PetLoyalty.InitNew(pet);
+
+        // SpellEffects.cpp:3142 InitPetCreateSpells sets the training points to minus the create spells' cost (Pet.cpp:2103) before the loyalty
+        // raise above adds the pet's level for each level gained.
+        if (Training is { } training)
+        {
+            PetLoyalty.SetTrainingPoints(pet, -training.CreateSpellsCost(Content.GetCreateSpells(target.Entry)));
+        }
+
         PetLoyalty.RaiseTo(pet, _options.DefaultLoyalty);
 
         pet.SetUInt32(UpdateFields.UnitCreatedBySpell, spellId);
@@ -206,8 +221,8 @@ public sealed partial class SummonService
 
     /// <summary>
     /// Pet::InitPetCreateSpells (Pet.cpp:2051-2104) for a tame: the petcreateinfo_spell row of the tamed creature's entry, each "learn" spell
-    /// resolved to the spell it teaches. The owner's beast-training side (learning passives, AddTeachSpell) and the training-point cost
-    /// (SkillLineAbility reqtrainpoints, not loaded) are not modelled, so a tame starts with 0 training points spent.
+    /// resolved to the spell it teaches. The owner's beast-training side (learning passives, AddTeachSpell) is not modelled; the training-point
+    /// cost of these spells is charged by <see cref="TameCreature"/> through <see cref="Training"/>.
     /// </summary>
     internal PersistentPetSpell[] CreateSpellsFor(uint entry)
     {
@@ -235,20 +250,81 @@ public sealed partial class SummonService
     }
 
     /// <summary>
-    /// SPELL_EFFECT_LEARN_PET_SPELL (57; vmangos Spell::EffectLearnPetSpell, SpellEffects.cpp): the caster's live pet learns the trigger spell,
-    /// pays its training points, is saved and the owner gets SMSG_PET_SPELLS again. Pet::CanLearnPetSpell is reduced to "not yet known and
-    /// the pet is at least the spell's level"; family skill lines and training-point costs need SkillLineAbility data that is not loaded.
+    /// The cast check of SPELL_EFFECT_LEARN_PET_SPELL in vmangos order (Spell.cpp:5837-5862): NoPet, NotKnown, TooManySkills, Lowlevel (the
+    /// teach spell's level above the pet's), TrainingPoints. Without <see cref="Training"/> the two training checks are skipped.
+    /// </summary>
+    private SpellCastResult CheckLearnPetSpell(SpellEffectCheckContext context)
+    {
+        if (context.Caster is not Player player || LivePet(player) is not { } pet || pet.Summon?.Charm is not { } charm)
+        {
+            return SpellCastResult.NoPet;
+        }
+
+        uint learned = context.Effect.TriggerSpell;
+        if (context.System.Store.Get(learned) is null)
+        {
+            return SpellCastResult.NotKnown;
+        }
+
+        if (Training is { } training && !training.CanTakeMoreActiveSpells(charm, learned))
+        {
+            return SpellCastResult.TooManySkills;
+        }
+
+        if (context.Spell.SpellLevel > pet.Level)
+        {
+            return SpellCastResult.Lowlevel;
+        }
+
+        return Training is { } costed && !PetTraining.HasPoints(charm.TrainingPoints, costed.Cost(charm, learned))
+            ? SpellCastResult.TrainingPoints
+            : SpellCastResult.CastOk;
+    }
+
+    /// <summary>
+    /// SPELL_EFFECT_LEARN_PET_SPELL (57; vmangos Spell::EffectLearnPetSpell, SpellEffects.cpp:3329-3353): the caster's live pet learns the trigger
+    /// spell, pays its training points (Pet::SetTP before LearnSpell), is saved and the owner gets SMSG_PET_SPELLS again. With
+    /// <see cref="Training"/> the spell must pass Pet::CanLearnPetSpell, a higher rank replaces the known lower rank in its bar slot and a lower
+    /// rank than one already known is ignored (Pet::AddSpell, Pet.cpp:1887-1975).
     /// </summary>
     private void EffectLearnPetSpell(SpellEffectContext context)
     {
         if (context.Caster is not Player player || LivePet(player) is not { IsAlive: true } pet || pet.Summon?.Charm is not { } charm
             || context.System.Store.Get(context.Effect.TriggerSpell) is not { } spell
-            || charm.HasSpell(spell.Id) || spell.SpellLevel > pet.Level)
+            || charm.HasSpell(spell.Id))
         {
             return;
         }
 
-        if (!charm.LearnSpell(spell.Id, spell.IsPassive ? ActionType.Passive : ActionType.Disabled))
+        ActionType state = spell.IsPassive ? ActionType.Passive : ActionType.Disabled;
+        if (Training is { } training)
+        {
+            if (!training.CanLearn(pet, spell.Id))
+            {
+                return;
+            }
+
+            int cost = training.Cost(charm, spell.Id);
+            uint knownRank = training.KnownRankOfChain(charm, spell.Id);
+            if (knownRank != 0 && !training.IsHigherRank(spell.Id, knownRank))
+            {
+                return;
+            }
+
+            PetLoyalty.SetTrainingPoints(pet, charm.TrainingPoints - cost);
+            bool learned = knownRank != 0 ? charm.ReplaceRank(knownRank, spell.Id) : charm.LearnSpell(spell.Id, state);
+            if (!learned)
+            {
+                return;
+            }
+
+            if (knownRank != 0)
+            {
+                // Pet::AddSpell unlearns the replaced rank through RemoveSpell, which runs RemoveAurasDueToSpell (Pet.cpp:2018).
+                context.System.RemoveAuras(pet, knownRank);
+            }
+        }
+        else if (!charm.LearnSpell(spell.Id, state))
         {
             return;
         }

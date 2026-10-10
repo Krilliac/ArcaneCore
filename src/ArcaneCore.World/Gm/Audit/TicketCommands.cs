@@ -130,7 +130,7 @@ public sealed class TicketCommands : ICommandGroup
         string link = GmStrings.PlayerLink(name);
         if (online && context.World.FindOnlinePlayer(name) is { } owner)
         {
-            owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.Player.Name, answer));
+            owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.InvokerName, answer));
             context.Reply(GmAuditStrings.ResponseSent(link));
         }
         else
@@ -148,7 +148,7 @@ public sealed class TicketCommands : ICommandGroup
             return false;
         }
 
-        GmTicketRecord? ticket = Audit(context).CloseTicket(id, context.Player.Name, rest.Length == 0 ? null : AuditCommands.CleanReason(rest));
+        GmTicketRecord? ticket = Audit(context).CloseTicket(id, context.InvokerName, rest.Length == 0 ? null : AuditCommands.CleanReason(rest));
         if (ticket is null)
         {
             context.Reply(GmAuditStrings.TicketNotExist(id));
@@ -158,16 +158,16 @@ public sealed class TicketCommands : ICommandGroup
         (string name, bool online) = Owner(context, ticket.CharacterId);
         if (online && context.World.FindOnlinePlayer(name) is { } owner)
         {
-            owner.SendSystemMessage(GmAuditStrings.YourTicketClosed(context.Player.Name));
+            owner.SendSystemMessage(GmAuditStrings.YourTicketClosed(context.InvokerName));
             if (rest.Length > 0)
             {
-                owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.Player.Name, ticket.Response));
+                owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.InvokerName, ticket.Response));
             }
 
             owner.Session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
         }
 
-        context.Reply(GmAuditStrings.TicketClosedBy(ticket.Id, GmStrings.PlayerLink(name), context.Player.Name));
+        context.Reply(GmAuditStrings.TicketClosedBy(ticket.Id, GmStrings.PlayerLink(name), context.InvokerName));
         return true;
     }
 

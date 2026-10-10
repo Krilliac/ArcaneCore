@@ -121,7 +121,7 @@ public sealed class BanCommands : ICommandGroup
         Run(context, async services =>
         {
             IBanStore bans = services.GetRequiredService<IBanStore>();
-            string author = context.Player.Name;
+            string author = context.InvokerName;
             int authorAccount = context.Session.AccountId;
 
             if (kind == Kind.Ip)
@@ -144,7 +144,7 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
-            if (options.ProtectHigherSecurity && owner.Value.AccountId != authorAccount && owner.Value.Security >= context.Security)
+            if (options.ProtectHigherSecurity && !context.IsConsole && owner.Value.AccountId != authorAccount && owner.Value.Security >= context.Security)
             {
                 context.Reply(BanCommandText.TargetSecurityTooHigh);
                 return;
@@ -186,7 +186,8 @@ public sealed class BanCommands : ICommandGroup
         BanOptions options = OptionsOf(context);
         AccountSecurity invokerSecurity = context.Security;
         int invokerAccount = context.Session.AccountId;
-        string author = context.Player.Name;
+        string author = context.InvokerName;
+        bool isConsole = context.IsConsole; // vmangos SEC_CONSOLE outranks every account
 
         // Live levels are read here, on the world thread; the store work runs off it.
         var onlineLevels = new Dictionary<int, int>();
@@ -233,7 +234,7 @@ public sealed class BanCommands : ICommandGroup
                     continue;
                 }
 
-                if (options.ProtectHigherSecurity
+                if (options.ProtectHigherSecurity && !isConsole
                     && await accounts.FindByUsernameAsync(name).ConfigureAwait(false) is { } account && account.Security >= invokerSecurity)
                 {
                     continue;
@@ -319,7 +320,7 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
-            await bans.UnbanAccountAsync(owner.Value.AccountId, context.Player.Name, message).ConfigureAwait(false);
+            await bans.UnbanAccountAsync(owner.Value.AccountId, context.InvokerName, message).ConfigureAwait(false);
             context.Reply(string.Format(BanCommandText.Unbanned, display));
         });
         return true;

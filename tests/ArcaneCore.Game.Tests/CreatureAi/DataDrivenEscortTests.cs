@@ -1043,7 +1043,17 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
-    public void Windsor_AcceptPlaysHisLines_TheGateScene_ThenWaitsForTheWordToEnterTheKeep()
+    public void Windsor_AcceptPlaysHisLines_TheGateScene_ThenWaitsForTheWordToEnterTheKeep() => RunWindsorMasquerade(evadeMidScene: false);
+
+    /// <summary>
+    /// An evade is ScriptedAI::Reset, which in npc_reginald_windsorAI only rerolls the hammer and cleave timers: the keep word and the
+    /// guard check live from the constructor. A Windsor pulled into the turned guards' fight evades once they fall; that must neither
+    /// take back the keep word nor stop the check that sends Bolvar to him (it did: the quest never completed, on ~5% of combat rolls).
+    /// </summary>
+    [Fact]
+    public void Windsor_AnEvadeMidScene_KeepsTheKeepWord_AndTheGuardCheckThatCompletesTheQuest() => RunWindsorMasquerade(evadeMidScene: true);
+
+    private static void RunWindsorMasquerade(bool evadeMidScene)
     {
         // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
         const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
@@ -1078,6 +1088,13 @@ public sealed class DataDrivenEscortTests
             }
 
             Assert.True(ai.KeepEventReady, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} state paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
+            if (evadeMidScene)
+            {
+                system.EnterEvadeMode(windsor);
+                world.RunTick(100);
+                Assert.True(ai.KeepEventReady); // still waiting for the word, as the gossip flag says
+            }
+
             Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
             Assert.Equal(8, guards); // six gate summons plus the two throne room guards (spawned near the start: their real spot is far off)
             Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
@@ -1107,10 +1124,23 @@ public sealed class DataDrivenEscortTests
             // The throne room: Prestor shows herself, the guards turn and fall, Bolvar kneels and the quest is done.
             Creature bolvar = Assert.Single(system.Creatures, c => c.Entry == 1748);
             string[] all0() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            bool engaged = !evadeMidScene;
+            int windsorEvades = 0;
+            bool windsorFighting = false;
             for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
             {
                 player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
                 world.RunTick(100);
+                windsorEvades += windsorFighting && !windsor.Combat.IsInCombat ? 1 : 0; // he left the fight: the evade (Reset)
+                windsorFighting = windsor.Combat.IsInCombat;
+                if (!engaged && all0().Contains("-1000865"))
+                {
+                    // The guards have turned and the guard check runs: Windsor is drawn into their fight (on some combat rolls he is),
+                    // and evades once he has nobody left to fight.
+                    system.AttackStart(windsor, throneGuards[0]);
+                    engaged = true;
+                }
+
                 // Players kill the guards after Onyxia has gone (a kill in the first seconds cuts her last line, as in the source).
                 if (!all0().Contains("-1000868"))
                 {
@@ -1124,7 +1154,12 @@ public sealed class DataDrivenEscortTests
             }
 
             string[] all = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
-            Assert.True(quests.Completed.Count == 1, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
+            if (evadeMidScene)
+            {
+                Assert.True(windsorEvades > 0, "Windsor never evaded in the throne room: the scene this test is about did not happen");
+            }
+
+            Assert.True(quests.Completed.Count == 1, $"evades {windsorEvades} point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
             Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade), quests.Completed[0]);
             Assert.All(throneGuards, g => Assert.Equal(12739u, g.Entry));
             Assert.Contains("-1000827", all); // SAY_PRESTOR_SIEZE at the start

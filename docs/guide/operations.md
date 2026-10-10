@@ -15,8 +15,7 @@ restarts on 2 reproduces the vmangos run-mangosd loop; a configuration error exi
 [exit codes](../reference/exit-codes.md). Characters are saved every `World:AutosaveIntervalMs` (default 900000 ms; 0 disables),
 and `.saveall` saves everyone at once.
 
-There is no server-console command sender: commands that vmangos can run from its console only run from an in-game account here. For account, password and
-ban work without a game client use the `arcane-account` tool.
+Both daemons accept typed commands at their console window (`World:Console:Enabled`, `Realm:Console:Enabled`, both on by default). The world console runs the GM commands with Administrator authority and no character; the realm console has `help`, `info`, `realmlist`, `online`, `account create|set-password|set-gmlevel` and `quit`. Nothing is read when standard input is redirected (a service, a pipe, a deploy script). Commands that need a character or a selection answer that they need a player. See [the server console](../areas/server-console.md). For account, password and ban work without a running daemon use the `arcane-account` tool.
 
 ## Backups and upgrades
 
@@ -100,9 +99,9 @@ not, the "what to do" column says how to get retail. The defaults in this table 
 | `World:GmCommands:LiveFx` | `true` | **not retail** | vmangos has no `.fx` root: its nearest commands are debug play music, sound and cinematic and debug worldstate, each sent to the invoker only (Chat.cpp:288-323). | On by default: non-retail GM tooling that pushes music, sounds, spell visuals, cinematics, zone-under-attack alerts, world states, client clock speed, screen text, multi-zone weather and event presets to the invoker, the selection, the zone, the map or the server. GameMaster accounts; the map and server scopes and `.fx weather` need an Administrator; every use is in the GM audit log. Set false to leave the root out (restart to change). |
 <!-- register:end -->
 
-Two things that vmangos has and ArcaneCore does not, so they are limits and not options: the **wrong-password throttle** of the logon server (vmangos
+One thing that vmangos has and ArcaneCore does not, so it is among the limits and not options: the **wrong-password throttle** of the logon server (vmangos
 `WrongPass.MaxAttempts = 10` per 60 seconds, realmd.conf.dist.in:208-209), which means a password can be guessed without a delay; put the realm port behind a
-firewall or rate limiter if it is exposed. And the **console command sender** (vmangos marks commands `AllowConsole`, Chat.h:66-70). The other open security items are in the
+firewall or rate limiter if it is exposed. The other open security items are in the
 [hardening notes](../security/hardening.md).
 
 MySQL, PostgreSQL and SQLite are accepted `Provider` values, but the provider test matrix that proves MariaDB and PostgreSQL behaviour runs only on the hosted CI, not on a

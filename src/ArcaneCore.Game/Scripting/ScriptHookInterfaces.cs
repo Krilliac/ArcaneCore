@@ -20,6 +20,24 @@ public interface IScriptHooks;
 /// <summary>A chat line as the player hooks see it: the client's chat type and language, the text, and the whisper target or channel name.</summary>
 public readonly record struct ScriptChatMessage(uint ChatType, uint Language, string Text, string? Target);
 
+/// <summary>
+/// An addon line (CMSG_MESSAGECHAT language 0xFFFFFFFF). Prefix and Text come from the client's "%s\t%s" join (Wow.exe 5875
+/// SendAddonMessage 0x49F9A2, format string 0x844B5C; HermesProxy@841a26f5 ChatHandler.cs:212). Prefix is null when the line has no TAB.
+/// </summary>
+public readonly record struct ScriptAddonMessage(uint ChatType, string? Prefix, string Text, string? Target)
+{
+    /// <summary>
+    /// Split <paramref name="raw"/> at the FIRST TAB, because the client does not stop a prefix from containing one (Wow.exe 0x49F97F-0x49F9A0).
+    /// Without a TAB the prefix is null and the text is the whole line, so a sender cannot skip a filter by leaving the TAB out.
+    /// </summary>
+    public static ScriptAddonMessage Parse(uint chatType, string raw, string? target)
+    {
+        ArgumentNullException.ThrowIfNull(raw);
+        int tab = raw.IndexOf('\t');
+        return tab < 0 ? new(chatType, null, raw, target) : new(chatType, raw[..tab], raw[(tab + 1)..], target);
+    }
+}
+
 /// <summary>AzerothCore <c>PlayerScript</c> (ScriptDefines/PlayerScript.h).</summary>
 public interface IPlayerHooks : IScriptHooks
 {
@@ -40,6 +58,9 @@ public interface IPlayerHooks : IScriptHooks
 
     /// <summary>A chat line before delivery (<c>OnPlayerCanUseChat</c>). Return false to drop it.</summary>
     bool OnChat(Player player, ScriptChatMessage message) => true;
+
+    /// <summary>An addon line before it is offered to the chat features (AzerothCore OnPlayerCanUseChat with LANG_ADDON). Return false to drop it. Raised only while World:Chat:AddonChannel is on, after the optional addon mute/flood check.</summary>
+    bool OnAddonMessage(Player player, ScriptAddonMessage message) => true;
 
     /// <summary>A duel started, after the 3 s countdown (<c>OnPlayerDuelStart</c>).</summary>
     void OnDuelStart(Player first, Player second) { }

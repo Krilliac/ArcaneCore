@@ -86,7 +86,9 @@ public sealed class PetOptions
     public byte DefaultLoyalty { get; set; } = 1;
 
     /// <summary>
-    /// Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food.
+    /// Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food. Its first skill line
+    /// (skillLine[0]) is the family's beast-training line (Pet::CanLearnPetSpell); with a 15-field SkillLineAbility.dbc (NpcServices:SkillLineAbilityDbcPath)
+    /// it turns on training-point costs, the family check and the four-active-spell limit, unset they are off.
     /// </summary>
     public string? CreatureFamilyDbcPath { get; set; }
 }
