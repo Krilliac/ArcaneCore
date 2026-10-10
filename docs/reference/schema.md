@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
 | `characters` | 49 | `characters` |
-| `world` | 47 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 49 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -125,5 +125,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 45 | `World.Creatures.MovementScriptDataModule` | creates `dbscripts_on_creature_movement`, `spell_script_target`, `creature_linking`, `creature_linking_template`; adds columns `creature_movement.ScriptId`, `creature_movement_template.ScriptId` |
 | 46 | `World.Pools.PoolDataModule` | creates `pool_template`, `pool_creature`, `pool_creature_template`, `pool_gameobject`, `pool_gameobject_template`, `pool_pool` |
 | 47 | `Content.Chat.ChatWordFilterWorldDataModule` | creates `chat_word_filter` |
+| 48 | `World.Warden.ReservedWorldSchema48` | no changes |
+| 49 | `World.Warden.WardenDataModule` | creates `warden_checks` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

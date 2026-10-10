@@ -780,10 +780,11 @@ How to read the tables:
 |---|---|---|---|---|
 | `Warden:Action` | `WardenAction` | `Log` | - | Warden:Action, applied when a scan fails (default Log). Values: `Log`, `Kick`, `Ban`. |
 | `Warden:BanSeconds` | `long` | `86400` | - | Warden:BanSeconds for `WardenAction.Ban`; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration). |
-| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: the scans to run. Empty runs the timing scan only. |
+| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: scans added to the table's (a configured id replaces the table row with that id). With neither, the timing scan runs alone. |
 | `Warden:ChunkSize` | `int` | `500` | - | Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500). |
 | `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
 | `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `Warden:LoadFromDatabase` | `bool` | `true` | - | Warden:LoadFromDatabase: also run the scans of the world table `warden_checks` for this build. Default true. |
 | `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`. |
 | `Warden:ResponseTimeoutSeconds` | `uint` | `30` | - | Warden:ResponseTimeoutSeconds: every awaited reply must arrive within this (MaNGOS Zero WardenLimits.deadlineMs 30000). |
 | `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
