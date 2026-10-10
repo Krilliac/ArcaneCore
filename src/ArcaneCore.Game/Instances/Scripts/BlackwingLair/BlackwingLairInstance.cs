@@ -11,6 +11,8 @@ namespace ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 [InstanceScript(469)]
 public sealed partial class BlackwingLairInstance(Map instance) : ScriptedInstance(instance, 13)
 {
+    private SuppressionDeviceAI? _suppression;
+
     public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
 
     public override bool IsEncounterInProgress => Encounters.Take(8).Contains(EncounterState.InProgress);
@@ -79,9 +81,11 @@ public sealed partial class BlackwingLairInstance(Map instance) : ScriptedInstan
             };
             OpenIf(go, gate != uint.MaxValue && GetData(gate) == EncounterState.Done);
         }
-        else if (go.Entry == 179784 && GetData(2) == EncounterState.Done)
+        else if (go.Entry == SuppressionDeviceAI.Entry)
         {
-            go.LootState = GameObjectLootState.JustDeactivated;
+            Instance.FindUpdater<GameObjectMapSystem>()?.RegisterAi(go.Entry, _suppression ??= new SuppressionDeviceAI(this));
+            if (GetData(2) == EncounterState.Done)
+                go.LootState = GameObjectLootState.JustDeactivated;
         }
         TrackEncounterObject(go);
         if (go.Entry == 177808 && GetData(0) != EncounterState.Done)
