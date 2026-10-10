@@ -56,6 +56,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private readonly Dictionary<uint, long> _respawnAt = [];
     private readonly Dictionary<uint, LootBag> _unloadedLoot = [];
     private readonly Dictionary<ObjectGuid, GameObject> _objects = [];
+    private readonly List<GameObject> _updateScratch = [];
+    private bool _updateScratchInUse;
     private readonly Dictionary<ObjectGuid, Dictionary<Player, uint>> _questFlagsSent = [];
     private readonly Dictionary<uint, uint[]> _questLootItems = [];
     private readonly HashSet<uint> _warnedMissingTemplates = [];
@@ -184,8 +186,45 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         _clockMs += diffMs;
         UpdateAis(diffMs);
         UpdateElevators();
-        foreach (GameObject go in _objects.Values.ToArray())
+        // A snapshot (respawns and despawns change the map while it runs) into a reused list, not a new array every tick.
+        bool ownsScratch = !_updateScratchInUse;
+        List<GameObject> snapshot = ownsScratch ? _updateScratch : new List<GameObject>(_objects.Count);
+        _updateScratchInUse = true;
+        snapshot.AddRange(_objects.Values);
+        try
         {
+            UpdateObjects(snapshot);
+        }
+        finally
+        {
+            snapshot.Clear();
+            if (ownsScratch)
+            {
+                _updateScratchInUse = false;
+            }
+        }
+
+        UpdateSpawnGroups();
+        foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
+        {
+            if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+            {
+                Remove(expired);
+            }
+        }
+
+        if (_clockMs >= _nextQuestRefreshMs)
+        {
+            _nextQuestRefreshMs = _clockMs + QuestFlagRefreshMs;
+            RefreshQuestFlags();
+        }
+    }
+
+    private void UpdateObjects(List<GameObject> snapshot)
+    {
+        for (int i = 0; i < snapshot.Count; i++)
+        {
+            GameObject go = snapshot[i];
             if (!go.IsSpawned)
             {
                 if (go.RespawnAtMs > 0 && go.RespawnAtMs <= _clockMs)
@@ -213,21 +252,6 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             UpdateRestock(go);
             UpdateTypeBehaviour(go);
-        }
-
-        UpdateSpawnGroups();
-        foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
-        {
-            if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
-            {
-                Remove(expired);
-            }
-        }
-
-        if (_clockMs >= _nextQuestRefreshMs)
-        {
-            _nextQuestRefreshMs = _clockMs + QuestFlagRefreshMs;
-            RefreshQuestFlags();
         }
     }
 
