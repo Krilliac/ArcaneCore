@@ -196,6 +196,19 @@ public sealed class CreatureAiFactory
         },
         [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
         [SmartAIName] = static (c, content) => new CreatureSmartAI(c, content.Ai),
+        ["guard_stormwind"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Alliance, stormwind: true),
+        ["guard_bluffwatcher"] = static (c, _) => new GuardAI(c),
+        ["guard_contested"] = static (c, _) => new GuardAI(c),
+        ["guard_darnassus"] = static (c, _) => new GuardAI(c),
+        ["guard_dunmorogh"] = static (c, _) => new GuardAI(c),
+        ["guard_durotar"] = static (c, _) => new GuardAI(c),
+        ["guard_elwynnforest"] = static (c, _) => new GuardAI(c),
+        ["guard_ironforge"] = static (c, _) => new GuardAI(c),
+        ["guard_mulgore"] = static (c, _) => new GuardAI(c),
+        ["guard_teldrassil"] = static (c, _) => new GuardAI(c),
+        ["guard_tirisfal"] = static (c, _) => new GuardAI(c),
+        ["guard_undercity"] = static (c, _) => new GuardAI(c),
+        ["guard_orgrimmar"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Horde, stormwind: false),
     };
 
     /// <summary>
@@ -230,6 +243,17 @@ public sealed class CreatureAiFactory
         [Scripts.TapokeSlimJahnAI.Entry] = static c => new Scripts.TapokeSlimJahnAI(c),
         [Scripts.MikhailAI.Entry] = static c => new Scripts.MikhailAI(c),
         [Scripts.PrivateHendelAI.Entry] = static c => new Scripts.PrivateHendelAI(c),
+        [Scripts.StinkyIgnatzAI.Entry] = static c => new Scripts.StinkyIgnatzAI(c),
+        [Scripts.MagramiSpectreAI.Entry] = static c => new Scripts.MagramiSpectreAI(c),
+        [Scripts.PluckyJohnsonAI.Entry] = static c => new Scripts.PluckyJohnsonAI(c),
+        [Scripts.TriageDoctorAI.DoctorAlliance] = static c => new Scripts.TriageDoctorAI(c),
+        [Scripts.TriageDoctorAI.DoctorHorde] = static c => new Scripts.TriageDoctorAI(c),
+        [12923] = static c => new Scripts.InjuredPatientAI(c),
+        [12924] = static c => new Scripts.InjuredPatientAI(c),
+        [12925] = static c => new Scripts.InjuredPatientAI(c),
+        [12936] = static c => new Scripts.InjuredPatientAI(c),
+        [12937] = static c => new Scripts.InjuredPatientAI(c),
+        [12938] = static c => new Scripts.InjuredPatientAI(c),
         [Scripts.ShayLeafrunnerAI.Entry] = static c => new Scripts.ShayLeafrunnerAI(c),
         [Scripts.ThreshwackonatorAI.Entry] = static c => new Scripts.ThreshwackonatorAI(c),
     };
@@ -248,6 +272,10 @@ public sealed class CreatureAiFactory
         Scripts.GrarkLorkrubAI.QuestPrecariousPredicament,
         Scripts.TapokeSlimJahnAI.QuestMissingDiplomat,
         Scripts.PrivateHendelAI.QuestMissingDiplomat16,
+        Scripts.StinkyIgnatzAI.QuestAlliance,
+        Scripts.StinkyIgnatzAI.QuestHorde,
+        Scripts.TriageDoctorAI.QuestTriageA,
+        Scripts.TriageDoctorAI.QuestTriageH,
         Scripts.ShayLeafrunnerAI.QuestWanderingShay];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
