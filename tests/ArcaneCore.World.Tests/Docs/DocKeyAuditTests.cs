@@ -24,6 +24,8 @@ public sealed partial class DocKeyAuditTests
         ["Traps:OneActivePerSlot"] = "docs/areas/hunter.md states that this option does not exist",
         ["Combo:ClearOnSelectionChange"] = "docs/areas/rogue.md: a possible option whose choice is pending; not delivered",
         ["Cluster:Fencing:Enabled"] = "docs/integration/cluster-m15-0.md: a designed switch of the clustering work, not delivered",
+        ["Characters:CrossVersion"] = "docs/design/multi-version.md decision 6: designed, delivered after S5/S7",
+        ["Characters:CrossVersion:FillEmptySlots"] = "docs/design/multi-version.md decision 6: designed, delivered after S5/S7",
         ["Bans:RequireNotHigherSecurityTarget"] = "docs/security/live-bans.md: designed and not delivered (the retail ban commands have no hierarchy check)",
         ["Conditions:Numbering"] = "docs/integration/npc-quest-fidelity.md: a dataset numbering option that is not implemented",
         ["Database:Upgrade:PostgresAtomic"] = "docs/integration/db-upgrade-tooling.md: a designed switch that was not built",
