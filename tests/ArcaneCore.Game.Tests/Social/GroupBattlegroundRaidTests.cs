@@ -91,4 +91,31 @@ public sealed class GroupBattlegroundRaidTests
         Assert.Null(groups.GetGroup(a.Guid));
         Assert.Empty(groups.Groups);
     }
+
+    [Fact]
+    public void Raid_UsesGroupLoot_LikeVmangosGroupCreate()
+    {
+        using var f = new SocialFixture();
+        Group raid = f.Context.Groups.AddToBattlegroundRaid(f.AddPlayer(1), null)!;
+        Assert.Equal(LootMethod.GroupLoot, raid.LootMethod);
+        Assert.Equal(Group.DefaultLootThreshold, raid.LootThreshold);
+    }
+
+    [Fact]
+    public void PartyLeader_TakesTheRaidLead_WhenJoining()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Player c = f.AddPlayer(3);
+        GroupManager groups = f.Context.Groups;
+        groups.Invite(b, c.Name);
+        groups.Accept(c);
+        Group raid = groups.AddToBattlegroundRaid(a, null)!;
+
+        groups.AddToBattlegroundRaid(c, raid);
+        Assert.Equal(a.Guid, raid.LeaderGuid);
+        groups.AddToBattlegroundRaid(b, raid);
+        Assert.Equal(b.Guid, raid.LeaderGuid);
+    }
 }

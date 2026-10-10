@@ -989,7 +989,7 @@ public sealed partial class GroupManager(SocialContext context)
             UpdateLeaderFlag(newLeader);
         }
 
-        if (old != slot.Guid)
+        if (old != slot.Guid && !group.IsBattlegroundGroup)
         {
             LeaderChanged?.Invoke(group, old);
         }

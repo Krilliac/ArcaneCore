@@ -3,11 +3,13 @@ using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
+using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -144,6 +146,33 @@ public sealed class BattlegroundWorldScenarioTests
             await context.PlaceAsync(horde, 1, WarsongGulchTestContent.OrcStartX, WarsongGulchTestContent.OrcStartY, WarsongGulchTestContent.OrcStartZ);
             ScenarioContext.Expect(await context.BattlegroundOfAsync(horde) is null, "still bound to the match");
             ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => wsg.PlayerCount), "players left in the match");
+        });
+    });
+
+    [Fact]
+    public Task Wsg_EnteringTheMatch_JoinsTheTeamRaid_AndLeavingDropsIt() => RunAsync("wsg-raid", async context =>
+    {
+        (ScenarioBot ally, ScenarioBot horde, _) = await WarsongGulchScenario.EnterMatchAsync(context, Start);
+        GroupManager groups = context.Services.GetRequiredService<SocialFeature>().Context.Groups;
+
+        await context.StepAsync("each side is in its own battleground raid, which uses group loot and is not stored", async () =>
+        {
+            Group? allyRaid = await context.ReadAsync(() => groups.GetGroup(ally.Guid));
+            Group? hordeRaid = await context.ReadAsync(() => groups.GetGroup(horde.Guid));
+            ScenarioContext.Expect(allyRaid is { IsBattlegroundGroup: true, IsRaid: true }, "the Alliance bot is not in a battleground raid");
+            ScenarioContext.Expect(hordeRaid is { IsBattlegroundGroup: true }, "the Horde bot is not in a battleground raid");
+            ScenarioContext.Expect(!ReferenceEquals(allyRaid, hordeRaid), "both sides share one raid");
+            ScenarioContext.ExpectEqual(ally.Guid, allyRaid!.LeaderGuid, "Alliance raid leader");
+            ScenarioContext.ExpectEqual(LootMethod.GroupLoot, allyRaid.LootMethod, "raid loot method");
+            ScenarioContext.Expect(await context.ReadAsync(() => groups.Groups.Count == 0), "a battleground raid was listed for storage");
+        });
+
+        await context.StepAsync("leaving the battlefield takes the bot out of the raid", async () =>
+        {
+            ScenarioContext.Expect(await ally.LeaveBattlefieldAsync(489), "leave refused");
+            await context.WaitUntilAsync("the Alliance bot is back on its continent", () => ally.Session!.Player is { IsInWorld: true, MapId: 0 });
+            ScenarioContext.Expect(await context.ReadAsync(() => groups.GetGroup(ally.Guid)) is null, "still grouped after leaving");
+            ScenarioContext.Expect(await context.ReadAsync(() => groups.GetGroup(horde.Guid)) is { IsBattlegroundGroup: true }, "the Horde raid went with it");
         });
     });
 

@@ -34,10 +34,12 @@ public sealed partial class GroupManager
         }
 
         UninviteFromGroup(player.Guid);
+        bool ledOriginal = false;
         if (_memberOf.Remove(player.Guid, out Group? original))
         {
             // vmangos SetBattleGroundRaid: the normal group becomes the original group; the client's party frame is cleared.
             _originalOf[player.Guid] = original;
+            ledOriginal = original.IsLeader(player.Guid);
             player.Session.Send(WorldOpcode.SmsgGroupList, GroupPackets.BuildEmptyGroupList());
         }
 
@@ -52,14 +54,25 @@ public sealed partial class GroupManager
                 LeaderName = player.Name,
                 LeaderLastOnlineUnixSeconds = UnixSecondsClock(),
                 LooterGuid = player.Guid,
-                LootMethod = LootMethod.FreeForAll,
+
+                // vmangos Group::Create (Group.cpp:132-133) sets group loot and the uncommon threshold for every group, battleground raids included.
+                LootMethod = LootMethod.GroupLoot,
+                LootThreshold = Group.DefaultLootThreshold,
             };
             raid.ConvertToRaid();
         }
 
+        bool created = raid.MemberCount == 0;
         raid.AddMemberSlot(player.Guid, player.Name);
         _memberOf[player.Guid] = raid;
         _sentStats.Remove(player.Guid);
+        if (!created && ledOriginal && raid.Find(player.Guid) is { } slot)
+        {
+            // vmangos AddOrSetPlayerToCorrectBgGroup (BattleGround.cpp:1082-1084): the leader of a party takes the raid's lead.
+            ChangeLeader(raid, slot);
+            Broadcast(raid, WorldOpcode.SmsgGroupSetLeader, GroupPackets.BuildName(raid.LeaderName));
+        }
+
         SendUpdate(raid);
         UpdateLeaderFlag(player);
         return raid;
