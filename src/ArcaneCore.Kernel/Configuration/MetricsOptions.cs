@@ -8,6 +8,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// <c>Metric.Interval</c>, <c>Metric.ConnectionInfo</c>, <c>Metric.OverallStatusInterval</c>), which pushes to InfluxDB;
 /// vmangos and cMaNGOS have no equivalent. See docs/ops/metrics.md.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Both)]
 public sealed class MetricsOptions
 {
     public const string SectionName = "Ops:Metrics";

@@ -6,6 +6,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// Realms to seed into an empty realm list on first startup, bound from the "Realms"
 /// section. Lets a fresh dev environment reach the realm-list screen with no manual SQL.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Realm)]
 public sealed class RealmSeedOptions
 {
     public const string SectionName = "Realms";

@@ -12,6 +12,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// does bound a crowd behind one address; it is a deliberate non-retail default, listed as such in
 /// the release-caveat register of docs/guide/operations.md with 0 as the switch that restores retail.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Both)]
 public sealed class NetProtectionOptions
 {
     public const string SectionName = "Net:Protection";

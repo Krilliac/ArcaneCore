@@ -1,6 +1,7 @@
 namespace ArcaneCore.Kernel.Configuration;
 
 /// <summary>Configuration for the realm (logon) daemon's console (docs/areas/server-console.md).</summary>
+[ConfigDaemons(ConfigDaemon.Realm)]
 public sealed class RealmConsoleOptions
 {
     public const string SectionName = "Realm:Console";
