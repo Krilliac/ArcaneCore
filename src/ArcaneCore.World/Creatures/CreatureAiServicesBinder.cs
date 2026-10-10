@@ -72,6 +72,7 @@ public static class CreatureAiServicesBinder
             TeamOf = creature => FactionTeams.Of(creature.FactionTemplate, templates.Value, factions.Value),
             QuestEvents = new EventAiQuestEvents(services),
             ScriptQuests = new ScriptQuestEvents(services),
+            ItemTemplateOf = services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items ? entry => items.Templates.Find(entry) : null,
         };
 
         foreach (PropertyInfo property in Bindable)
