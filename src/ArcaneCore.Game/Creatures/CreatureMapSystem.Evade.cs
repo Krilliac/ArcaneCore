@@ -22,16 +22,17 @@ public sealed partial class CreatureMapSystem
     /// third of its maximum per 5 s tick once out of combat (<c>Creatures:Movement:EvadeRestoresFullHealth</c> restores the old instant snap).
     /// The loot tap is cleared (the tapper, the group of the tap and the tapped dynamic flags; vmangos CreatureAI::EnterEvadeMode →
     /// SetLootRecipient(nullptr)). Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches
-    /// the combo service), a creature's pets and totems are not sent home (creatures have no controlled-unit links), and when the AI's
-    /// evade hook takes the movement over (an escort or follower running back to the combat start) the linked-creature and spawn-group evade
-    /// events (cMaNGOS LINKING_EVENT_EVADE, CREATURE_GROUP_EVENT_EVADE) are not raised.
-    /// <see cref="Evaded"/> is raised once per evade, the escort's and the follower's included. A script's own evade that replaces this
-    /// one (<see cref="AI.CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises it only through a nested call.
+    /// the combo service), a creature's pets and totems are not sent home (creatures have no controlled-unit links).
+    /// <see cref="Evaded"/> is raised once per evade, the escort's and the follower's included. When the AI's evade hook takes the movement
+    /// over (an escort or follower running back to the combat start, an AV rider rejoining its formation), the linked-creature and
+    /// spawn-group evade events (cMaNGOS LINKING_EVENT_EVADE, CREATURE_GROUP_EVENT_EVADE) are raised for an escort and not for a follower,
+    /// as in the sources (<see cref="AI.CreatureAI.TakeOverEvadeRaisesEvadeEvents"/>). A script's own evade that replaces this one
+    /// (<see cref="AI.CreatureAI.OnEnterEvadeMode"/> returning true) is not an engine evade and raises them only through a nested call.
     /// </summary>
     public void EnterEvadeMode(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        if (!creature.IsAlive || creature.IsEvading || !_creatures.ContainsKey(creature.Guid))
+        if (!creature.IsAlive || creature.IsEvading || _takeOverEvadeEvents.Contains(creature) || !_creatures.ContainsKey(creature.Guid))
         {
             return;
         }
@@ -94,13 +95,31 @@ public sealed partial class CreatureMapSystem
         }
 
         // An AI hook that cleared the evade flag took over the movement itself: an escort or a follower runs back to where the fight began
-        // instead of going home (vmangos npc_escortAI::ReturnToCombatStartPosition, mangos-classic FollowerAI::EnterEvadeMode). It is still
-        // an evade: cMaNGOS npc_escortAI has no EnterEvadeMode of its own and ends in Unit::TriggerEvadeEvents (AI/BaseAI/UnitAI.cpp:113-130)
-        // as any creature, so Evaded is raised for it here. The linked and spawn-group evade events are not (see the summary).
+        // instead of going home (vmangos npc_escortAI::ReturnToCombatStartPosition, mangos-classic FollowerAI::EnterEvadeMode), an AV rider
+        // rejoins its formation. It is still an evade, so Evaded is raised. The linked-creature and spawn-group evade events follow the
+        // source of the AI (CreatureAI.TakeOverEvadeRaisesEvadeEvents): an escort raises them, as cMaNGOS npc_escortAI ends in
+        // Unit::TriggerEvadeEvents (AI/BaseAI/UnitAI.cpp:129, Entities/Unit.cpp:591-595); a follower does not (FollowerAI::EnterEvadeMode,
+        // AI/ScriptDevAI/base/follower_ai.cpp:105-131, never calls it).
         bool aiTookOverMovement = !charmed && !creature.IsEvading;
         if (aiTookOverMovement)
         {
             Evaded?.Invoke(creature);
+            if (creature.AI is { TakeOverEvadeRaisesEvadeEvents: true } && _takeOverEvadeEvents.Add(creature))
+            {
+                // The creature is not evading home, so an EVADE_TOGETHER group member's own evade would send it through here again. cMaNGOS
+                // CreatureGroup::TriggerLinkingEvent skips a member that IsEvadingHome (Maps/SpawnGroup.cpp:562-573), which the escort is
+                // there (its evade ran MoveTargetedHome); it is not evaded again while its own events run.
+                try
+                {
+                    DoLinkedEvent(creature, LinkEvent.Evade);
+                    OnGroupMemberEvaded(creature);
+                }
+                finally
+                {
+                    _takeOverEvadeEvents.Remove(creature);
+                }
+            }
+
             return;
         }
 
@@ -129,6 +148,9 @@ public sealed partial class CreatureMapSystem
     public event Action<Creature>? Evaded;
 
     private readonly HashSet<Creature> _customEvades = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Creatures whose take-over evade is raising its linked and group evade events (see <see cref="EnterEvadeMode"/>).</summary>
+    private readonly HashSet<Creature> _takeOverEvadeEvents = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Leave combat where the creature stands, for a script's own evade (<see cref="AI.CreatureAI.OnEnterEvadeMode"/>): the source's
