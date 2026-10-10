@@ -696,16 +696,22 @@ public sealed class DataDrivenEscortTests
         Assert.Equal(27, path.Count);
         CreatureWaypoint first = path[0];
         int[] texts = [.. Enumerable.Range(825, 50).Select(i => -1000000 - i)];
-        CreatureContent content = new([Template(entry), Template(466), Template(1749), Template(1756)],
+        CreatureWaypoint throne = Assert.Single(path, p => p.Point == 26);
+        CreatureContent content = new([Template(entry), Template(466), Template(1749), Template(1756), Template(1747), Template(1748), Template(12739)],
             [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 466, path[1].X + 5, path[1].Y, path[1].Z),
-             Spawn(3, 1749, first.X + 3, first.Y, first.Z)], [], [], [],
+             Spawn(3, 1749, first.X - 5, first.Y, first.Z), Spawn(4, 1747, first.X - 32, first.Y, first.Z),
+             Spawn(5, 1748, first.X - 34, first.Y, first.Z), Spawn(6, 1756, first.X - 36, first.Y, first.Z, respawnSeconds: 3600),
+             Spawn(7, 1756, first.X - 38, first.Y, first.Z, respawnSeconds: 3600)], [], [], [],
             new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
             scriptWaypoints: path.Select(p => (entry, 0u, p)));
-        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
         using (world)
         {
             (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
             Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
+            Creature[] throneGuards = [.. system.Creatures.Where(c => c.Entry == 1756)];
             var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
             ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade);
             int guards = 0; // the gate guards are timed summons (180 s), gone before the keep
@@ -718,13 +724,22 @@ public sealed class DataDrivenEscortTests
 
             Assert.True(ai.KeepEventReady, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} state paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
             Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
-            Assert.Equal(6, guards);
+            Assert.Equal(8, guards); // six gate summons plus the two throne room guards (spawned near the start: their real spot is far off)
             Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
             string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
             Assert.Contains("-1000825", said);
             Assert.Contains("-1000841", said); // the gate scene
             Assert.Contains("-1000849", said); // before the keep
 
+            // The throne room cast stands by (their spawn is far off): Prestor, Wrynn, Bolvar and two royal guards.
+            (uint Entry, float Dx, float Dy)[] cast = [(1749, 4, 0), (1747, 6, 2), (1748, 3, -3)];
+            foreach ((uint castEntry, float dx, float dy) in cast)
+            {
+                system.NearTeleport(Assert.Single(system.Creatures, c => c.Entry == castEntry), throne.X + dx, throne.Y + dy, throne.Z, 0f);
+            }
+
+            system.NearTeleport(throneGuards[0], throne.X + 8, throne.Y + 4, throne.Z, 0f);
+            system.NearTeleport(throneGuards[1], throne.X + 8, throne.Y, throne.Z, 0f);
             ai.StartKeepEvent();
             for (int elapsed = 0; elapsed < 30_000 && ai.HasEscortState(EscortAI.EscortState.Paused); elapsed += 100)
             {
@@ -733,6 +748,36 @@ public sealed class DataDrivenEscortTests
 
             Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
             Assert.Equal(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+
+            // The throne room: Prestor shows herself, the guards turn and fall, Bolvar kneels and the quest is done.
+            Creature bolvar = Assert.Single(system.Creatures, c => c.Entry == 1748);
+            string[] all0() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
+                world.RunTick(100);
+                // Players kill the guards after Onyxia has gone (a kill in the first seconds cuts her last line, as in the source).
+                if (!all0().Contains("-1000868"))
+                {
+                    continue;
+                }
+
+                foreach (Creature turned in throneGuards.Where(g => g.IsAlive && g.Entry == 12739))
+                {
+                    map.Combat.Kill(null, turned);
+                }
+            }
+
+            string[] all = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.True(quests.Completed.Count == 1, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade), quests.Completed[0]);
+            Assert.All(throneGuards, g => Assert.Equal(12739u, g.Entry));
+            Assert.Contains("-1000827", all); // SAY_PRESTOR_SIEZE at the start
+            Assert.Contains("-1000868", all); // SAY_PRESTOR_KEEP_14
+            Assert.Contains("-1000870", all); // SAY_WINDSOR_KEEP_16, with the credit
+            Assert.Equal(StandState.Dead, windsor.StandState);
+            Assert.Equal(StandState.Kneel, bolvar.StandState);
+            Assert.Equal(0u, bolvar.NpcFlags & (uint)NpcFlags.QuestGiver); // reset comes with the next step
         }
     }
 

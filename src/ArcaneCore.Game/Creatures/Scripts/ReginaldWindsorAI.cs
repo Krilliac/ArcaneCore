@@ -362,7 +362,8 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
                     system.SayText(prestor, SayPrestorKeep13);
                 }
 
-                Me.UnitFlags |= UnitFlags.NotSelectable;
+                // He lies as dead (SPELL_WINDSOR_DEATH's feign): nothing can finish him off before Bolvar reaches him.
+                Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToNpc | UnitFlags.ImmuneToPlayer;
                 Me.StandState = StandState.Dead;
                 break;
             case -1000868: // SAY_PRESTOR_KEEP_14: she flies off
