@@ -108,6 +108,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
+    public Population.PlayerbotPopulationOptions Population { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -124,6 +127,7 @@ public sealed class PlayerbotOptions
         // ConfigurationBinder appends array elements to a non-empty initialized array.
         // Explicit maps replace the defaults; missing maps retain the default continents.
         if (section.GetChildren().Any(child => string.Equals(child.Key, nameof(AllowedMaps), StringComparison.OrdinalIgnoreCase))) options.AllowedMaps = [];
+        ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions.PrepareBinding(options.Population, section);
         section.Bind(options);
     }
 
@@ -157,6 +161,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
+        Population.Validate();
     }
 }
 

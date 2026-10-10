@@ -1,0 +1,264 @@
+using Microsoft.Extensions.Configuration;
+
+namespace ArcaneCore.World.Playerbots.Population;
+
+/// <summary>Which factions the population creates bots for (<see cref="PlayerbotPopulationOptions.Factions"/>).</summary>
+public enum PopulationFactions
+{
+    /// <summary>Both, split by <see cref="PlayerbotPopulationOptions.AllianceSharePct"/>.</summary>
+    Both,
+
+    /// <summary>Alliance races only.</summary>
+    Alliance,
+
+    /// <summary>Horde races only.</summary>
+    Horde,
+}
+
+/// <summary>What the population does with a bot that out-levelled its zone (<see cref="PlayerbotPopulationOptions.Relocation"/>).</summary>
+public enum PopulationRelocation
+{
+    /// <summary>Leave it where it is; the bot travels on by its own goals.</summary>
+    Off,
+
+    /// <summary>Teleport it to a graveyard of a zone that fits its level.</summary>
+    Teleport,
+}
+
+/// <summary>One level band of the population (<see cref="PlayerbotPopulationOptions.Bands"/>).</summary>
+public sealed class PopulationBand
+{
+    /// <summary>The lowest level of the band (1..60).</summary>
+    public int MinLevel { get; set; }
+
+    /// <summary>The highest level of the band (the band's MinLevel..60).</summary>
+    public int MaxLevel { get; set; }
+
+    /// <summary>The band's share of the target: its weight over the sum of all weights (0..1000; 0 = no bots).</summary>
+    public int Weight { get; set; }
+
+    public PopulationBand Clone() => new() { MinLevel = MinLevel, MaxLevel = MaxLevel, Weight = Weight };
+
+    public bool SameAs(PopulationBand other) => MinLevel == other.MinLevel && MaxLevel == other.MaxLevel && Weight == other.Weight;
+
+    public bool Contains(int level) => level >= MinLevel && level <= MaxLevel;
+
+    public override string ToString() => $"{MinLevel}-{MaxLevel}x{Weight}";
+}
+
+/// <summary>
+/// <c>World:Playerbots:Population</c>: a target number of bots kept online and spread over the world by level band, held back by the
+/// world's own tick time (docs/areas/playbots-population.md). Off by default. Every key is live through <c>.reload config</c>.
+/// </summary>
+public sealed class PlayerbotPopulationOptions
+{
+    // Private: a public SectionName would make the config catalog treat this nested class as a second root section.
+    private const string SectionName = PlayerbotOptions.SectionName + ":Population";
+
+    /// <summary>The highest level of any band (the 1.12 level cap).</summary>
+    public const int MaxLevel = 60;
+
+    /// <summary>The most bands that may be configured.</summary>
+    public const int MaxBands = 20;
+
+    /// <summary>The most excluded zones that may be configured.</summary>
+    public const int MaxExcludedZones = 256;
+
+    /// <summary>The 1.12 class ids a bot may be created with (warrior, paladin, hunter, rogue, priest, shaman, mage, warlock, druid).</summary>
+    public static readonly IReadOnlyList<uint> ValidClasses = [1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    /// <summary>Run the population manager (off by default). Off: no bot is created, started, parked or moved by it.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// The number of managed bots to keep running (0..1000). The effective target is the lower of this and <c>World:Playerbots:MaxBots</c>.
+    /// Bots an operator created count towards it but are never stopped by the population; above the target only the bots the population
+    /// owns are parked. 0 parks every bot the population owns.
+    /// </summary>
+    public int TargetOnline { get; set; }
+
+    /// <summary>Seconds of world time between two passes of the control loop (2..600).</summary>
+    public int IntervalSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// The world tick time budget in milliseconds (5..1000): the 95th percentile of the tick body duration over the last
+    /// WindowTicks ticks. Above it the population stops adding bots and, with ParkWhenOverBudget, parks some.
+    /// </summary>
+    public int TickP95BudgetMs { get; set; } = 60;
+
+    /// <summary>
+    /// Adding bots resumes only while the tick p95 is below this percentage of TickP95BudgetMs (10..99). Between it and the
+    /// budget the population holds, which keeps it from adding and parking in turns.
+    /// </summary>
+    public int ResumeBelowPct { get; set; } = 80;
+
+    /// <summary>
+    /// The ticks measured after every start, creation, park or relocation before the next decision (20..4096). A pass that finds fewer
+    /// fresh ticks holds, so a decision never reacts to ticks from before the last change.
+    /// </summary>
+    public int WindowTicks { get; set; } = 200;
+
+    /// <summary>Park (stop) the least useful bots the population owns while the tick p95 is over the budget (on by default). Off: only stop adding.</summary>
+    public bool ParkWhenOverBudget { get; set; } = true;
+
+    /// <summary>The most new bot characters created per minute of world time (0..60; 0 creates none and only restarts parked bots).</summary>
+    public int MaxCreatePerMinute { get; set; } = 4;
+
+    /// <summary>The most bots started or created in one pass (1..100).</summary>
+    public int MaxStartsPerInterval { get; set; } = 4;
+
+    /// <summary>The most bots parked in one pass (1..100).</summary>
+    public int MaxParksPerInterval { get; set; } = 2;
+
+    /// <summary>The factions bots are created for (Both by default).</summary>
+    public PopulationFactions Factions { get; set; } = PopulationFactions.Both;
+
+    /// <summary>With Factions Both, the share of new bots that are Alliance (0..100).</summary>
+    public int AllianceSharePct { get; set; } = 50;
+
+    /// <summary>The class ids new bots are created with (1.12 classes: 1 warrior, 2 paladin, 3 hunter, 4 rogue, 5 priest, 7 shaman, 8 mage, 9 warlock, 11 druid; non-empty, no duplicates).</summary>
+    public uint[] Classes { get; set; } = [1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    /// <summary>
+    /// The level bands the target is split over: each has MinLevel, MaxLevel and Weight (at most 20; bands must not overlap and at least one
+    /// weight must be above 0). A configured list replaces the default six bands of ten levels with equal weights. Without the boost
+    /// content (see docs/areas/character-boost.md) only a band that contains level 1 is used.
+    /// </summary>
+    public PopulationBand[] Bands { get; set; } =
+    [
+        new() { MinLevel = 1, MaxLevel = 10, Weight = 1 },
+        new() { MinLevel = 11, MaxLevel = 20, Weight = 1 },
+        new() { MinLevel = 21, MaxLevel = 30, Weight = 1 },
+        new() { MinLevel = 31, MaxLevel = 40, Weight = 1 },
+        new() { MinLevel = 41, MaxLevel = 50, Weight = 1 },
+        new() { MinLevel = 51, MaxLevel = 60, Weight = 1 },
+    ];
+
+    /// <summary>
+    /// How many levels below its lowest sub-area level a zone still accepts a bot (0..10). The area table puts the zone's level on its
+    /// sub-areas, and a starter zone's lowest sub-area is level 4 or 5, so the default 4 lets a level 1 bot start there.
+    /// </summary>
+    public int ZoneLevelSlack { get; set; } = 4;
+
+    /// <summary>How many levels a bot may be above the highest level of its zone before it is relocated (0..10).</summary>
+    public int OutlevelMargin { get; set; } = 2;
+
+    /// <summary>What happens to a bot that out-levelled its zone (Teleport by default).</summary>
+    public PopulationRelocation Relocation { get; set; } = PopulationRelocation.Teleport;
+
+    /// <summary>The most bots relocated in one pass (0..50).</summary>
+    public int MaxRelocationsPerInterval { get; set; } = 2;
+
+    /// <summary>Area table zone ids bots are never placed in (at most 256, no duplicates). Capitals and cities are never used.</summary>
+    public uint[] ExcludedZones { get; set; } = [];
+
+    /// <summary>
+    /// ConfigurationBinder appends array elements to a non-empty initialised array, so a configured list must start from an empty one
+    /// (the same rule as <c>AllowedMaps</c>): the defaults of Classes and Bands are replaced, not extended.
+    /// </summary>
+    internal static void PrepareBinding(PlayerbotPopulationOptions options, IConfigurationSection playerbots)
+    {
+        foreach (IConfigurationSection child in playerbots.GetChildren())
+        {
+            if (!string.Equals(child.Key, "Population", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (IConfigurationSection key in child.GetChildren())
+            {
+                if (string.Equals(key.Key, nameof(Classes), StringComparison.OrdinalIgnoreCase)) options.Classes = [];
+                else if (string.Equals(key.Key, nameof(Bands), StringComparison.OrdinalIgnoreCase)) options.Bands = [];
+                else if (string.Equals(key.Key, nameof(ExcludedZones), StringComparison.OrdinalIgnoreCase)) options.ExcludedZones = [];
+            }
+        }
+    }
+
+    internal static string? CheckTarget(int value) => value is >= 0 and <= PlayerbotOptions.MaxBotsCeiling ? null : $"must be 0..{PlayerbotOptions.MaxBotsCeiling}";
+
+    internal static string? CheckRange(int value, int min, int max) => value >= min && value <= max ? null : $"must be {min}..{max}";
+
+    internal static string? CheckDefined<T>(T value) where T : struct, Enum => Enum.IsDefined(value) ? null : "is not a defined value";
+
+    internal static string? CheckClasses(IReadOnlyCollection<uint>? classes)
+    {
+        if (classes is null || classes.Count == 0) return "must name at least one class";
+        if (classes.Any(c => !ValidClasses.Contains(c))) return "may only hold the 1.12 classes 1, 2, 3, 4, 5, 7, 8, 9 and 11";
+        return classes.Distinct().Count() == classes.Count ? null : "must not repeat a class";
+    }
+
+    internal static string? CheckZones(IReadOnlyCollection<uint>? zones)
+    {
+        if (zones is null) return "is missing";
+        if (zones.Count > MaxExcludedZones) return $"may hold at most {MaxExcludedZones} zones";
+        return zones.Distinct().Count() == zones.Count ? null : "must not repeat a zone";
+    }
+
+    internal static string? CheckBands(IReadOnlyList<PopulationBand>? bands)
+    {
+        if (bands is null || bands.Count == 0) return "must hold at least one band";
+        if (bands.Count > MaxBands) return $"may hold at most {MaxBands} bands";
+        foreach (PopulationBand band in bands)
+        {
+            if (band is null) return "holds an empty band";
+            if (band.MinLevel < 1 || band.MaxLevel > MaxLevel || band.MinLevel > band.MaxLevel)
+                return $"has the band {band.MinLevel}-{band.MaxLevel}: levels must satisfy 1 <= MinLevel <= MaxLevel <= {MaxLevel}";
+            if (band.Weight is < 0 or > 1000) return $"has the band {band.MinLevel}-{band.MaxLevel} with weight {band.Weight}: must be 0..1000";
+        }
+
+        for (int i = 0; i < bands.Count; i++)
+            for (int j = i + 1; j < bands.Count; j++)
+                if (bands[i].MinLevel <= bands[j].MaxLevel && bands[j].MinLevel <= bands[i].MaxLevel)
+                    return $"has overlapping bands {bands[i].MinLevel}-{bands[i].MaxLevel} and {bands[j].MinLevel}-{bands[j].MaxLevel}";
+        return bands.Any(b => b.Weight > 0) ? null : "needs at least one band with a weight above 0";
+    }
+
+    public void Validate()
+    {
+        string? problem =
+            CheckTarget(TargetOnline) is { } t ? $"TargetOnline {t}"
+            : CheckRange(IntervalSeconds, 2, 600) is { } i ? $"IntervalSeconds {i}"
+            : CheckRange(TickP95BudgetMs, 5, 1000) is { } b ? $"TickP95BudgetMs {b}"
+            : CheckRange(ResumeBelowPct, 10, 99) is { } r ? $"ResumeBelowPct {r}"
+            : CheckRange(WindowTicks, 20, 4096) is { } w ? $"WindowTicks {w}"
+            : CheckRange(MaxCreatePerMinute, 0, 60) is { } c ? $"MaxCreatePerMinute {c}"
+            : CheckRange(MaxStartsPerInterval, 1, 100) is { } s ? $"MaxStartsPerInterval {s}"
+            : CheckRange(MaxParksPerInterval, 1, 100) is { } p ? $"MaxParksPerInterval {p}"
+            : CheckDefined(Factions) is { } f ? $"Factions {f}"
+            : CheckRange(AllianceSharePct, 0, 100) is { } a ? $"AllianceSharePct {a}"
+            : CheckClasses(Classes) is { } k ? $"Classes {k}"
+            : CheckBands(Bands) is { } n ? $"Bands {n}"
+            : CheckRange(ZoneLevelSlack, 0, 10) is { } z ? $"ZoneLevelSlack {z}"
+            : CheckRange(OutlevelMargin, 0, 10) is { } o ? $"OutlevelMargin {o}"
+            : CheckDefined(Relocation) is { } l ? $"Relocation {l}"
+            : CheckRange(MaxRelocationsPerInterval, 0, 50) is { } m ? $"MaxRelocationsPerInterval {m}"
+            : CheckZones(ExcludedZones) is { } x ? $"ExcludedZones {x}"
+            : null;
+        if (problem is not null) throw new InvalidOperationException($"{SectionName}: {problem}.");
+    }
+}
+
+/// <summary>A list of ids as one reload value (equal when the sequences are equal), shown as the list.</summary>
+internal sealed class PopulationIdList(uint[] items) : IEquatable<PopulationIdList>
+{
+    public uint[] Items { get; } = items;
+
+    public bool Equals(PopulationIdList? other) => other is not null && Items.AsSpan().SequenceEqual(other.Items);
+
+    public override bool Equals(object? obj) => Equals(obj as PopulationIdList);
+
+    public override int GetHashCode() => Items.Length;
+
+    public override string ToString() => "[" + string.Join(", ", Items) + "]";
+}
+
+/// <summary>The band list as one reload value (equal when every band is), shown as <c>min-maxXweight</c> entries.</summary>
+internal sealed class PopulationBandList(PopulationBand[] items) : IEquatable<PopulationBandList>
+{
+    public PopulationBand[] Items { get; } = items;
+
+    public bool Equals(PopulationBandList? other)
+        => other is not null && Items.Length == other.Items.Length && Items.Zip(other.Items).All(pair => pair.First.SameAs(pair.Second));
+
+    public override bool Equals(object? obj) => Equals(obj as PopulationBandList);
+
+    public override int GetHashCode() => Items.Length;
+
+    public override string ToString() => "[" + string.Join(", ", Items.Select(b => b.ToString())) + "]";
+}
