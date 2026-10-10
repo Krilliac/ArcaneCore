@@ -119,12 +119,15 @@ public sealed class ServerProbeTests : IAsyncLifetime
         }
 
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
-        await SchemaProbe.EnsureCurrentAsync("auth", connection);
         var unpooled = new DatabaseConnectionOptions
         {
             Provider = provider,
             ConnectionString = connection.ConnectionString + ";Pooling=false",
         };
+        // Set the schema up unpooled too: a pooled set-up connection stayed attached to this database, was counted in the
+        // baseline, and the provider's idle pruning could close it before the second count (baseline 1, then 1 instead of 2 on
+        // PostgreSQL, Node1 CI 2026-10-10). With no pooled connection to the database, only the connections this test opens count.
+        await SchemaProbe.EnsureCurrentAsync("auth", unpooled);
         await using AuthDbContext db = TestContexts.Create<AuthDbContext>(unpooled);
         int baseline = await ServerProbe.CountOtherSessionsAsync(db) ?? throw new Xunit.Sdk.XunitException("the server did not answer");
 
