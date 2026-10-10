@@ -374,6 +374,39 @@ public sealed class WarEffortSceneTests
     }
 
     [Fact]
+    public void ColossusSmashFollowsTheVmangosTimersAndEmotesAndTheEvadeStaysPut()
+    {
+        long now = WarStart + 60;
+        using Rig rig = new(War, () => now);
+        rig.World.RunTick(100);
+        Creature colossus = rig.Creatures.SummonForInstance(WarEffortCatalog.ColossusOfAshi, -6545f, 968f, 0.4f, 0)!;
+        var ai = Assert.IsType<WarEffortFeature.SilithusBossAi>(colossus.AI);
+        ai.OnRespawn();
+        Assert.Equal(60_000u, ai.SmashMs); // the first smash a minute in
+        ai.OnUpdate(30_000); // out of combat nothing runs
+        Assert.Equal(60_000u, ai.SmashMs);
+
+        ai.OnSmashCast();
+        Assert.Equal(WarEffortFeature.SilithusBossAi.CastEmote, ai.LastEmote);
+        Assert.Equal(10_000u, ai.SmashMs); // then 10 s
+        Assert.Equal(5_000u, ai.EmoteMs); // the follow-up emote in 5 s
+        ai.OnSmashCast();
+        Assert.Equal(60_000u, ai.SmashMs); // then 60 s, alternating
+        ai.OnSmashCast();
+        Assert.Equal(10_000u, ai.SmashMs);
+
+        colossus.Health = colossus.MaxHealth / 2;
+        (float hx, float hy) = (colossus.Home.X, colossus.Home.Y);
+        Assert.True(ai.OnEnterEvadeMode()); // the script's own evade
+        Assert.Equal(colossus.MaxHealth / 2, colossus.Health); // no heal
+        Assert.Equal(hx, colossus.Home.X);
+        Assert.Equal(10_000u, ai.SmashMs); // the evade does not reset the timers
+
+        ai.OnRespawn(); // Reset on a new spawn
+        Assert.Equal(60_000u, ai.SmashMs);
+    }
+
+    [Fact]
     public void AStaticSaurfangSpawnElsewhereKeepsItsOwnAi()
     {
         long now = WarStart + FinalBattleAfterWarStartSeconds + 10;
@@ -424,7 +457,7 @@ public sealed class WarEffortSceneTests
                 NullLogger<WorldRuntime>.Instance);
             Map kalimdor = World.GetMap(1);
             Creatures = new CreatureMapSystem(kalimdor, new CreatureContent(
-                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Concat(WarEffortFeature.ColossusResearchers).Distinct().Select(Template).ToArray(),
+                WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Concat(WarEffortFeature.ColossusResearchers).Append(WarEffortCatalog.ColossusOfAshi).Distinct().Select(Template).ToArray(),
                 dbSpawns ?? [], [], [], []), random: new Random(3));
             kalimdor.AddUpdater(Creatures);
             var objectContent = new GameObjectContent(

@@ -53,3 +53,11 @@ killed. Their ClassicDB event-123 spawns are kept off the map as script-only spa
 so a researcher still needs event 123 to be running. He leaves when the war ends. Because the flags are saved, a restart brings
 back the researchers whose Colossus is already dead (vmangos forgets them on a crash). The crystal layout is unchanged. Test:
 `EachColossusResearcherAppearsOnlyOnceHisColossusIsDead`.
+
+## Colossus script (vmangos npc_colossus)
+
+`SilithusBossAi` now follows vmangos silithus.cpp `npc_colossusAI`: the spawn line (11424-11426), Colossal Smash (26167) 60 s into
+the fight and then alternately 10 s and 60 s after each successful cast, the text emotes "Colossus begins to cast Colossus Smash"
+at the cast and "Colossus lets loose a massive attack" 5 s later, and the Nostalrius evade that neither heals nor sends the Colossus
+home (threat dropped, stays in place, timers kept). Limit: vmangos also strips all auras on that evade; ArcaneCore's AI services have
+no remove-all-auras call, so auras stay.

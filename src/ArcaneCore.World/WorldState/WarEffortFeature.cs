@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -353,9 +354,26 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     /// <summary>The last world-wide broadcast this feature sent.</summary>
     public string? LastWorldBroadcast { get; private set; }
 
-    private sealed class SilithusBossAi(Creature creature, WarEffortFeature feature) : CreatureAI(creature)
+    /// <summary>
+    /// vmangos silithus.cpp npc_colossusAI. The Colossus announces itself when it appears. In combat it casts Colossal Smash (26167)
+    /// 60 s after the fight starts, then alternately 10 s and 60 s after each successful cast, emoting "Colossus begins to cast Colossus
+    /// Smash" at the cast and "Colossus lets loose a massive attack" 5 s later. Its evade neither heals it nor sends it home: the threat
+    /// list goes and it stays where it stands. The timers are not reset by the evade (the override does not call Reset). Its death
+    /// saves the Colossus flag that starts the researcher's quest event.
+    /// </summary>
+    internal sealed class SilithusBossAi(Creature creature, WarEffortFeature feature) : CreatureAI(creature)
     {
+        public const uint ColossalSmash = 26167;
+        public const uint FirstSmashMs = 60_000, ShortSmashMs = 10_000, LongSmashMs = 60_000, EmoteDelayMs = 5_000;
+        internal const string CastEmote = "Colossus begins to cast Colossus Smash", AttackEmote = "Colossus lets loose a massive attack";
+
+        private uint _smashMs = FirstSmashMs, _emoteMs;
+        private bool _firstSmash = true;
+
         public override bool AggroesOnSight => true;
+        internal uint SmashMs => _smashMs;
+        internal uint EmoteMs => _emoteMs;
+        internal string? LastEmote { get; private set; }
 
         public override void OnRespawn()
         {
@@ -367,6 +385,53 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
                 _ => 0,
             };
             if (textId != 0) System?.SayText(Me, textId);
+            _firstSmash = true; // Reset
+            _smashMs = FirstSmashMs;
+            _emoteMs = 0;
+        }
+
+        public override void OnUpdate(uint diffMs)
+        {
+            if (!Me.Combat.IsInCombat || !UpdateVictim() || Victim is null) return;
+            if (_smashMs <= diffMs)
+            {
+                if (DoCast(Me, ColossalSmash) == CreatureCastResult.Ok) OnSmashCast();
+            }
+            else
+                _smashMs -= diffMs;
+
+            if (_emoteMs > 0)
+            {
+                if (_emoteMs <= diffMs)
+                {
+                    Emote(AttackEmote);
+                    _emoteMs = 0;
+                }
+                else
+                    _emoteMs -= diffMs;
+            }
+        }
+
+        /// <summary>A successful Colossal Smash: the cast emote, the follow-up emote in 5 s and the next timer (10 s, then 60 s, ...).</summary>
+        internal void OnSmashCast()
+        {
+            Emote(CastEmote);
+            _smashMs = _firstSmash ? ShortSmashMs : LongSmashMs;
+            _emoteMs = EmoteDelayMs;
+            _firstSmash = !_firstSmash;
+        }
+
+        private void Emote(string text)
+        {
+            LastEmote = text;
+            System?.Say(Me, new CreatureAiText(0, text, 2, 0, 0), null); // MonsterTextEmote
+        }
+
+        /// <summary>Ustaag (Nostalrius): it neither heals nor walks home on evade; it drops its threat list and stays put.</summary>
+        public override bool OnEnterEvadeMode()
+        {
+            System?.StopCombatInPlace(Me);
+            return true;
         }
 
         public override void OnDeath(Unit? killer) => feature.OnBossDied(Me);
