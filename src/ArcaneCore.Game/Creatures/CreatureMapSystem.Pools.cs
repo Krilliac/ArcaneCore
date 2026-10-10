@@ -82,6 +82,42 @@ public sealed partial class CreatureMapSystem : IPoolHost
         }
     }
 
+    /// <summary>
+    /// Check every creature pool of this map against the creatures in it now (<see cref="PoolAudit"/>: no pool over its <c>max_limit</c>, counters
+    /// that match, nothing pooled in the world that its pool does not have out). GM <c>.spawngroup poolaudit</c>, tests.
+    /// </summary>
+    public PoolAuditReport AuditPools()
+        => _pools is not { } pools
+            ? PoolAuditReport.None(Map.MapId)
+            : PoolAudit.Run(pools, _poolSpawns.Keys, guid => _poolSpawns.TryGetValue(guid, out var spawn) && FindLive(spawn, _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : []) is not null);
+
+    /// <summary>
+    /// Rotate every pool of this map once: each member out reaches its trigger now (cmangos PoolManager::UpdatePool with it as the trigger, as
+    /// a respawn time reached or a node gathered does), so its pool may keep it or switch to another member. Returns how many members were
+    /// rolled. GM and tests (the pool audit after N rotations).
+    /// </summary>
+    public int RotatePools()
+    {
+        if (_pools is not { } pools)
+        {
+            return 0;
+        }
+
+        uint[] members = [.. pools.SpawnedObjects];
+        Array.Sort(members); // deterministic for a seeded random
+        int rolled = 0;
+        foreach (uint guid in members)
+        {
+            if (pools.IsSpawned(guid) && _content.Pools.PoolOf(guid) is var poolId and not 0)
+            {
+                pools.UpdatePool(poolId, guid);
+                rolled++;
+            }
+        }
+
+        return rolled;
+    }
+
     // --- IPoolHost ----------------------------------------------------------------------------------
 
     bool IPoolHost.CanSpawn(uint spawnGuid)

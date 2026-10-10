@@ -82,6 +82,42 @@ public sealed partial class GameObjectMapSystem : IPoolHost
         }
     }
 
+    /// <summary>
+    /// Check every game object pool of this map against the game objects in it now (<see cref="PoolAudit"/>: no pool over its <c>max_limit</c>, counters
+    /// that match, nothing pooled in the world that its pool does not have out). GM <c>.spawngroup poolaudit</c>, tests.
+    /// </summary>
+    public PoolAuditReport AuditPools()
+        => _pools is not { } pools
+            ? PoolAuditReport.None(Map.MapId)
+            : PoolAudit.Run(pools, _poolSpawns.Keys, guid => _poolSpawns.TryGetValue(guid, out var spawn) && FindBySpawn(spawn.Guid) is not null);
+
+    /// <summary>
+    /// Rotate every pool of this map once: each member out reaches its trigger now (cmangos PoolManager::UpdatePool with it as the trigger, as
+    /// a respawn time reached or a node gathered does), so its pool may keep it or switch to another member. Returns how many members were
+    /// rolled. GM and tests (the pool audit after N rotations).
+    /// </summary>
+    public int RotatePools()
+    {
+        if (_pools is not { } pools)
+        {
+            return 0;
+        }
+
+        uint[] members = [.. pools.SpawnedObjects];
+        Array.Sort(members); // deterministic for a seeded random
+        int rolled = 0;
+        foreach (uint guid in members)
+        {
+            if (pools.IsSpawned(guid) && _content.Pools.PoolOf(guid) is var poolId and not 0)
+            {
+                pools.UpdatePool(poolId, guid);
+                rolled++;
+            }
+        }
+
+        return rolled;
+    }
+
     // --- IPoolHost ----------------------------------------------------------------------------------
 
     bool IPoolHost.CanSpawn(uint spawnGuid)
