@@ -1,5 +1,9 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Packets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
@@ -23,12 +27,25 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
     private uint _reloadMs;
     private readonly HashSet<CreatureMapSystem> _bossSystems = [];
     private readonly HashSet<int> _pendingBossDeaths = [];
+    private readonly List<GameObject> _gates = [];
+    private WorldRuntime? _world;
+    private long _announcedRingAtUnix;
+
+    /// <summary>Seconds after the first ring within which the champion broadcast is still sent (vmangos sends it at the ring).</summary>
+    internal const long ChampionAnnounceWindowSeconds = 60;
+
+    /// <summary>Clock seam for tests; Unix seconds.</summary>
+    internal Func<long> UtcNowUnix { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+    /// <summary>The last champion broadcast text sent to the world, for diagnostics and tests.</summary>
+    public string? LastChampionAnnouncement { get; private set; }
 
     public WarEffortSnapshot Snapshot => Volatile.Read(ref _snapshot);
 
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        _world = world;
         using (IServiceScope scope = scopes.CreateScope())
         {
             if (scope.ServiceProvider.GetService<IWarEffortStateStore>() is { } store)
@@ -44,10 +61,12 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
         {
             InstallBossAis(world);
             OnTick(diffMs);
+            ApplyGates();
         };
         world.MapUnloading += map =>
         {
             if (map.FindUpdater<CreatureMapSystem>() is { } system) _bossSystems.Remove(system);
+            _gates.RemoveAll(go => go.Map is null || ReferenceEquals(go.Map, map));
         };
     }
 
@@ -121,13 +140,16 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
                 FlushBossDeaths();
                 Reload();
                 WarEffortSnapshot state = Snapshot;
+                long now = UtcNowUnix();
                 if (state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0
-                    && state.PhaseEndsAtUnix <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                    && state.PhaseEndsAtUnix <= now)
                     SetPhase(WarEffortPhase.Gong, 0);
                 else if (state.Phase == WarEffortPhase.TenHourWar && state.PhaseEndsAtUnix > 0
-                    && state.PhaseEndsAtUnix <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                    && state.PhaseEndsAtUnix <= now)
                     SetPhase(WarEffortPhase.Done, 0);
                 SyncPhaseEvent();
+                FindGates();
+                AnnounceChampion();
             }
             catch (Exception ex)
             {
@@ -182,6 +204,68 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
             if (shouldRun && service.IsValidEvent(eventId) && !service.IsActiveEvent(eventId)) service.StartEvent(eventId);
             else if (!shouldRun && service.IsActiveEvent(eventId)) service.StopEvent(eventId);
         }
+    }
+
+    /// <summary>Cache the gate pieces of the loaded Kalimdor maps (rescanned on the five-second refresh).</summary>
+    private void FindGates()
+    {
+        if (_world is null) return;
+        _gates.RemoveAll(go => !go.IsSpawned);
+        foreach (Map map in _world.Maps.Where(m => m.MapId == 1))
+        {
+            if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) continue;
+            foreach (GameObject go in objects.GameObjects)
+            {
+                if (go.Entry is WarEffortCatalog.GateBarrier or WarEffortCatalog.GateRoots or WarEffortCatalog.GateRunes
+                    && !_gates.Contains(go))
+                    _gates.Add(go);
+            }
+        }
+    }
+
+    /// <summary>Hold each gate piece at the state the saved phase and first-ring time imply.</summary>
+    private void ApplyGates()
+    {
+        if (!_hasStore || _gates.Count == 0) return;
+        WarEffortGateState gate = Snapshot.GateAt(UtcNowUnix());
+        foreach (GameObject go in _gates)
+        {
+            bool open = go.Entry switch
+            {
+                WarEffortCatalog.GateRoots => gate.Roots,
+                WarEffortCatalog.GateRunes => gate.Runes,
+                WarEffortCatalog.GateBarrier => gate.Barrier,
+                _ => false,
+            };
+            GameObjectState desired = open ? GameObjectState.Active : GameObjectState.Ready;
+            if (go.IsSpawned && go.State != desired) go.State = desired;
+        }
+    }
+
+    /// <summary>sWorld.SendBroadcastTextToWorld(GLOBAL_TEXT_CHAMPION) once for the first ring.</summary>
+    private void AnnounceChampion()
+    {
+        WarEffortSnapshot state = Snapshot;
+        long rungAt = state.GongFirstRungAtUnix;
+        if (rungAt <= 0 || rungAt == _announcedRingAtUnix) return;
+        _announcedRingAtUnix = rungAt;
+        if (UtcNowUnix() - rungAt > ChampionAnnounceWindowSeconds || _world is null) return;
+
+        string? name = _world.OnlinePlayers.FirstOrDefault(p => (int)p.Guid.Low == state.GongFirstRingerId)?.Name;
+        string text;
+        using (IServiceScope scope = scopes.CreateScope())
+        {
+            text = scope.ServiceProvider.GetService<CreatureWorldFeature>()?.Content.Ai.BroadcastTexts
+                .Find(WarEffortCatalog.ChampionBroadcastText)?.Text
+                ?? "$N has rung the Scarab Gong.";
+        }
+
+        text = text.Replace("$N", name ?? "champion", StringComparison.Ordinal)
+            .Replace("$n", name ?? "champion", StringComparison.Ordinal);
+        LastChampionAnnouncement = text;
+        byte[] packet = ChatPackets.BuildSystemMessage(text);
+        foreach (Player player in _world.OnlinePlayers.ToArray())
+            player.Session.Send(WorldOpcode.SmsgMessagechat, packet);
     }
 
     private sealed class SilithusBossAi(Creature creature, WarEffortFeature feature) : CreatureAI(creature)
