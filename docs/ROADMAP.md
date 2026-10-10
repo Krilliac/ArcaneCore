@@ -245,7 +245,7 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 - **SmartAI slice 2:** conditions, plus GO, areatrigger and timed-action-list sources.
 - **Pets:** happiness/loyalty gain, training-point costs (SkillLineAbility.dbc), beast training, Far Sight view extension, possess summon limits.
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
-- **Metrics:** realm packet counters, per-opcode labels. Docker is untested.
+- **Metrics:** done (realm/logon packet counters, per-opcode labels). Docker is untested.
 - **AH bot:** gaps listed in `docs/areas/auction-house-bot.md`.
 - **Outdoor PvP:** verify capture radius and time against the type-29 templates.
 - **Script hooks:** DuelReset pet cooldowns, addon chat.
