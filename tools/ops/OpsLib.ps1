@@ -15,9 +15,11 @@ function New-OpsPassword {
     <#
     .SYNOPSIS
       A random password of $Length characters from letters and digits, from the cryptographic generator. Never logged by these scripts.
+      The 1.12.1 logon (and arcane-mock, MockClient ProtocolPackets.NormalizePassword) takes at most 16 characters, so 16 is both the
+      default and the maximum; 12 is the floor (57-letter alphabet: about 70 bits).
     #>
-    param([int]$Length = 24)
-    if ($Length -lt 16 -or $Length -gt 64) { throw "Password length must be 16..64, not $Length." }
+    param([int]$Length = 16)
+    if ($Length -lt 12 -or $Length -gt 16) { throw "Password length must be 12..16 (the logon takes at most 16), not $Length." }
     $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
     $chars = [char[]]::new($Length)
     for ($i = 0; $i -lt $Length; $i++) {
