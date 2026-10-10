@@ -104,6 +104,12 @@ public abstract partial class InstanceData : IMapUpdater
     /// <summary>vmangos <c>IsEncounterInProgress</c>: used by the map's entry check (not consulted yet).</summary>
     public virtual bool IsEncounterInProgress => false;
 
+    /// <summary>
+    /// True when this instance script carries the creature_linking aggro flags (0x1 AGGRO_ON_AGGRO, 0x2 TO_AGGRO_ON_AGGRO) for links whose
+    /// master is <paramref name="masterEntry"/> itself, so the map's generic aggro linking leaves them alone.
+    /// </summary>
+    public virtual bool CarriesAggroLinking(uint masterEntry) => false;
+
     /// <summary>vmangos <c>OnCreatureCreate</c>: a creature was added to the instance map (grid load, summon).</summary>
     public virtual void OnCreatureCreate(Creature creature)
     {

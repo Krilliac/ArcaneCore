@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Creatures.Scripts.WorldBosses;
 /// <summary>
 /// Azuregos (6109, Azshara): mangos-classic ScriptDevAI scripts/kalimdor/boss_azuregos.cpp (vmangos has no core script; its database runs
 /// him). Mana Storm on the nearest attacker, Chill, Frost Breath, Arcane Vacuum with "Come, little ones. Face me!" (broadcast 9071),
-/// Reflection and Cleave on the cmangos timers. Mark of Frost: his aura on aggro, and a player he kills gets the mark (23182). His gossip
+/// Reflection and Cleave on the cmangos timers. Mark of Frost: his aura on aggro, and a player he kills gets the mark (23182), credited to him. His gossip
 /// is off in combat and back on evade.
 /// </summary>
 public sealed class AzuregosAI : RaidBossAI
@@ -61,10 +61,14 @@ public sealed class AzuregosAI : RaidBossAI
         base.OnEvade();
     }
 
-    /// <summary>KilledUnit: the player marks himself (cmangos passes Azuregos as the original caster; here the mark is the player's own).</summary>
+    /// <summary>
+    /// KilledUnit: <c>victim-&gt;CastSpell(victim, SPELL_MARK_OF_FROST_PLAYER, TRIGGERED_OLD_TRIGGERED, nullptr, nullptr, Azuregos)</c>. The
+    /// mark is an aura-only spell, so it is put on the dead player with Azuregos as its caster (the original-caster credit), which a cast
+    /// by the dead player could not carry here.
+    /// </summary>
     public override void OnKilledUnit(Unit victim)
     {
-        if (victim is Player) System?.CastSpellByUnit(victim, SpellMarkOfFrostPlayer, victim, triggered: true);
+        if (victim is Player) System?.AddAuraFrom(victim, SpellMarkOfFrostPlayer, Me);
     }
 }
 

@@ -167,6 +167,7 @@ public static class EscortSpecCatalog
                             && float.IsFinite(action.Radius) && action.Positions.Length == 0,
                         "quest_complete" => action.Id == spec.QuestId && action.Positions.Length == 0,
                         "set_run" => action.Id is 0 or 1 && action.Positions.Length == 0,
+                        "stand_state" => Enum.IsDefined((StandState)action.Id) && action.Positions.Length == 0,
                         "summon" => action.Id > 0 && action.DespawnMs > 0 && action.Positions.Length > 0
                             && !(action.CorpseTimed && action.OocOrCorpse) && (action.SummonSay == 0 || action.Positions.Length == 1)
                             && action.Positions.All(p => p.Length == 4 && p.All(float.IsFinite)),
@@ -400,6 +401,9 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
                     break;
                 case "set_run":
                     SetRun(action.Id == 1);
+                    break;
+                case "stand_state":
+                    Me.StandState = (StandState)action.Id;
                     break;
                 case "summon":
                     if (System is { } system)

@@ -19,9 +19,17 @@ public sealed class ContributingGuideTests
 
     private static string Text => RepoRoot.ReadText(Guide).Replace("\r\n", "\n", StringComparison.Ordinal);
 
-    /// <summary>The <c>run:</c> lines of the CI workflow (comments are not commands).</summary>
+    /// <summary>The per-suite test step of the CI matrix: one solution filter of ArcaneCore.slnx per suite.</summary>
+    private const string CiSuiteFilter = "tests/ci/${{ matrix.suite }}.slnf";
+
+    /// <summary>
+    /// The <c>run:</c> lines of the CI workflow (comments are not commands). The matrix's per-suite filter reads as the whole
+    /// solution, which is what a contributor runs locally; <see cref="TheCiSuiteFilters_CoverEveryTestProjectExactlyOnce"/> holds the
+    /// filters to that.
+    /// </summary>
     private static string[] CiRunLines() => [.. RepoRoot.ReadText(".github/workflows/ci.yml").Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
-        .Select(l => Regex.Match(l, @"^\s+run:\s+(.+?)\s*$")).Where(m => m.Success).Select(m => m.Groups[1].Value)];
+        .Select(l => Regex.Match(l, @"^\s+run:\s+(.+?)\s*$")).Where(m => m.Success)
+        .Select(m => m.Groups[1].Value.Replace(CiSuiteFilter, "ArcaneCore.slnx", StringComparison.Ordinal))];
 
     [Fact]
     public void TheBuildCommands_AreExactlyTheRunLinesOfTheCiWorkflow()
@@ -33,6 +41,27 @@ public sealed class ContributingGuideTests
         Assert.True(fence.Success, "the guide must show the CI commands in a code block");
         string[] guide = [.. fence.Groups[1].Value.Split('\n').Select(l => l.Trim())];
         Assert.Equal(ci, guide);
+    }
+
+    [Fact]
+    public void TheCiSuiteFilters_CoverEveryTestProjectExactlyOnce()
+    {
+        string ci = RepoRoot.ReadText(".github/workflows/ci.yml").Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains("run: dotnet test " + CiSuiteFilter + " ", ci, StringComparison.Ordinal);
+        Match suites = Regex.Match(ci, @"^\s+suite:\s+\[(.+?)\]\s*$", RegexOptions.Multiline);
+        Assert.True(suites.Success, "ci.yml should list the test suites as a matrix");
+        string[] names = [.. suites.Groups[1].Value.Split(',').Select(n => n.Trim())];
+
+        string[] filtered = [.. names.SelectMany(name =>
+        {
+            string filter = RepoRoot.ReadText($"tests/ci/{name}.slnf");
+            Assert.Contains("\"path\": \"../../ArcaneCore.slnx\"", filter, StringComparison.Ordinal);
+            return Regex.Matches(filter, @"""(tests/[^""]+\.csproj)""").Select(m => m.Groups[1].Value);
+        })];
+        string[] solution = [.. Regex.Matches(RepoRoot.ReadText("ArcaneCore.slnx"), @"Path=""(tests/[^""]+\.csproj)""").Select(m => m.Groups[1].Value)];
+
+        Assert.NotEmpty(solution);
+        Assert.Equal(solution.Order(StringComparer.Ordinal), filtered.Order(StringComparer.Ordinal));
     }
 
     [Fact]

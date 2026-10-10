@@ -40,12 +40,13 @@ public sealed class WardenSession
     private bool _transferred;
 
     /// <summary>Create the session's Warden. <paramref name="sessionKey"/> is the 40-byte login key K; it is not retained.</summary>
-    public WardenSession(ReadOnlySpan<byte> sessionKey, WardenOptions options, Action<byte[]> send, Action<WardenVerdict> report, Random? random = null)
-        : this(sessionKey, options, send, report, random, WardenModuleProfile.Module ?? throw new InvalidOperationException("the build 5875 Warden module resource is missing or corrupt"))
+    /// <param name="checks">The scans to run; null runs <c>options.Checks</c>.</param>
+    public WardenSession(ReadOnlySpan<byte> sessionKey, WardenOptions options, Action<byte[]> send, Action<WardenVerdict> report, Random? random = null, IReadOnlyList<WardenCheckOptions>? checks = null)
+        : this(sessionKey, options, send, report, random, checks, WardenModuleProfile.Module ?? throw new InvalidOperationException("the build 5875 Warden module resource is missing or corrupt"))
     {
     }
 
-    private WardenSession(ReadOnlySpan<byte> sessionKey, WardenOptions options, Action<byte[]> send, Action<WardenVerdict> report, Random? random, byte[] module)
+    private WardenSession(ReadOnlySpan<byte> sessionKey, WardenOptions options, Action<byte[]> send, Action<WardenVerdict> report, Random? random, IReadOnlyList<WardenCheckOptions>? configured, byte[] module)
     {
         _crypto = new WardenCryptoContext(sessionKey);
         _options = options;
@@ -54,7 +55,7 @@ public sealed class WardenSession
         _random = random ?? new Random();
         _module = module;
         var checks = new List<WardenCheck>();
-        foreach (WardenCheckOptions check in options.Checks)
+        foreach (WardenCheckOptions check in configured ?? options.Checks)
         {
             if (WardenCheck.TryCreate(check, out WardenCheck? valid) is null)
             {

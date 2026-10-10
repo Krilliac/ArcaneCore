@@ -62,7 +62,8 @@ public static class HotCodeServiceCollectionExtensions
                 {
                     map.ClearUpdaterFaults();
                 }
-            }));
+            },
+            services: sp));
 
         // The fault breaker is part of the dev runner: a hot-patched updater that throws every tick
         // is skipped after N ticks instead of flooding the log. An explicit World value wins.

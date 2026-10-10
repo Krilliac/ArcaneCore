@@ -244,12 +244,12 @@ public sealed partial class EconomyFeature
             Fail(AuctionError.BidIncrement);
             return;
         }
-        else if (auction.BidderId != 0 && price <= auction.Bid)
+        else if (HasAnyBid(auction) && price <= auction.Bid)
         {
             Fail(AuctionError.HigherBid, auction);
             return;
         }
-        else if (auction.BidderId != 0 && price < AuctionHouseRules.MinimumBid(auction))
+        else if (HasAnyBid(auction) && price < AuctionHouseRules.MinimumBid(auction))
         {
             Fail(AuctionError.BidIncrement);
             return;
@@ -336,6 +336,10 @@ public sealed partial class EconomyFeature
             OnlinePlayer(auction.SellerId)?.Session.Send(WorldOpcode.SmsgAuctionOwnerNotification,
                 EconomyPackets.OwnerNotification(updated, sold: buyout, view.Item.RandomPropertyId));
             DeliverAll(letters);
+            if (HasBotBid(auction))
+            {
+                RaiseBotBidSettled(auctionId, won: false);
+            }
         });
     }
 
@@ -361,7 +365,7 @@ public sealed partial class EconomyFeature
         }
 
         AuctionRecord auction = view.Auction;
-        uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut) : 0;
+        uint cut = HasAnyBid(auction) ? AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut) : 0;
         if (player.Money < cut)
         {
             // vmangos AuctionHouseHandler.cpp:592-594: "maybe message needed", but none is sent.
@@ -404,6 +408,10 @@ public sealed partial class EconomyFeature
                 }
 
                 DeliverAll(letters);
+                if (HasBotBid(auction))
+                {
+                    RaiseBotBidSettled(auctionId, won: false);
+                }
             }
             else if (outcome != EconomyOutcome.Unknown)
             {
@@ -428,11 +436,19 @@ public sealed partial class EconomyFeature
             AuctionRecord auction = view.Auction;
             AuctionHouseEntry house = Options.AuctionHouses.FirstOrDefault(h => h.Id == auction.HouseId) ?? new AuctionHouseEntry(auction.HouseId, 0, 0);
             bool sold = auction.BidderId != 0 && CharacterExists(auction.BidderId);
+            bool botWon = HasBotBid(auction);
             var letters = new List<MailView>();
             var changes = new List<EconomyChange> { new DeleteAuction(auction) };
             if (sold)
             {
                 letters.AddRange(SaleLetters(auction, view.Item, house, now));
+            }
+            else if (botWon)
+            {
+                // The bot's bid won (cMaNGOS: the bot is the buyer, the item leaves the economy): the escrow item is destroyed and a
+                // living seller is paid bid + deposit - cut, as for a sale to a character.
+                changes.Add(new DeleteEscrowItem(auction.ItemGuid));
+                letters.AddRange(SaleLetters(auction, view.Item, house, now).Skip(1));
             }
             else if (CharacterExists(auction.SellerId))
             {
@@ -473,10 +489,14 @@ public sealed partial class EconomyFeature
 
                 _expiryBackoff.Remove(auction.Id);
                 _auctions.Remove(auction.Id);
-                if (sold)
+                if (sold || botWon)
                 {
-                    OnlinePlayer(auction.BidderId)?.Session.Send(WorldOpcode.SmsgAuctionBidderNotification,
-                        EconomyPackets.BidderNotification(auction, won: true, view.Item.RandomPropertyId));
+                    if (sold)
+                    {
+                        OnlinePlayer(auction.BidderId)?.Session.Send(WorldOpcode.SmsgAuctionBidderNotification,
+                            EconomyPackets.BidderNotification(auction, won: true, view.Item.RandomPropertyId));
+                    }
+
                     OnlinePlayer(auction.SellerId)?.Session.Send(WorldOpcode.SmsgAuctionOwnerNotification,
                         EconomyPackets.OwnerNotification(auction, sold: true, view.Item.RandomPropertyId));
                 }
@@ -487,6 +507,10 @@ public sealed partial class EconomyFeature
                 }
 
                 DeliverAll(letters);
+                if (botWon)
+                {
+                    RaiseBotBidSettled(auction.Id, won: true);
+                }
             });
             if (refused)
             {
@@ -545,7 +569,7 @@ public sealed partial class EconomyFeature
     }
 
     internal void RunAuctionOperation(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, uint auctionId,
-        Action<EconomyOutcome> finished)
+        Action<EconomyOutcome> finished, Guid? operationId = null)
     {
         if (!_busyAuctions.Add(auctionId))
         {
@@ -568,7 +592,7 @@ public sealed partial class EconomyFeature
                 _busyAuctions.Remove(auctionId);
             }
             finished(outcome);
-        });
+        }, operationId);
         if (!started)
         {
             _busyAuctions.Remove(auctionId);

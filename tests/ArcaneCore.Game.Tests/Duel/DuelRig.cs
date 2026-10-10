@@ -44,9 +44,9 @@ internal sealed class DuelRig : IDisposable
     /// <summary>The service clock: whole Unix seconds.</summary>
     public long Now { get; set; } = 1_800_000_000;
 
-    public DuelRig(DuelOptions? options = null, bool withFlagTemplate = true)
+    public DuelRig(DuelOptions? options = null, bool withFlagTemplate = true, params SpellInfo[] extraSpells)
     {
-        Kit = new Spells.SpellTestKit(
+        Kit = new Spells.SpellTestKit([.. extraSpells,
             // classic-db spell_template 7266: Effect1 83, TargetA 25 (TARGET_UNIT), EffectMiscValue 21680. Range and duration are synthetic: SpellRange/SpellDuration
             // rows are client DBC data that is not on this machine.
             Spell(DuelSpell, Effect(SpellEffectName.Duel, 0, SpellImplicitTarget.Unit, misc: 21680)) with
@@ -96,7 +96,7 @@ internal sealed class DuelRig : IDisposable
                 SpellVisual = 1,
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
-            });
+            }]);
         Map = World.GetMap(0);
         (A, SessionA) = Kit.AddPlayer(1, 10, 10);
         (B, SessionB) = Kit.AddPlayer(2, 12, 10);
