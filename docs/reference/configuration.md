@@ -142,6 +142,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `AuctionHouseBot:BidMaxPercent` | `uint` | `90` | - | Highest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Max, 0-100, default 90). |
 | `AuctionHouseBot:BidMinPercent` | `uint` | `75` | - | Lowest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Min, 0-100, default 75). |
+| `AuctionHouseBot:Bidding` | `bool` | `true` | - | Whether the buyer also bids (cMaNGOS AuctionBotBuyer: an auction whose buyout is above the bot's value, but whose next bid is below it, gets that next bid). Default true. A bot bid stands with no bidding character; if it wins, the item leaves the economy and the seller is paid as for any sale. |
 | `AuctionHouseBot:Blacklist` | `string` | `""` | - | Item entries the bot never lists or buys, comma-separated (cMaNGOS ahbot_items rows with value 0). |
 | `AuctionHouseBot:BuyChance` | `uint` | `10` | - | Percent chance a buy action buys anything (cMaNGOS AuctionHouseBot.Chance.Buy, 0-100, default 10). |
 | `AuctionHouseBot:BuyValuePercent` | `uint` | `80` | - | The most the buyer pays, as a percent of the bot's own value of the item (cMaNGOS AuctionHouseBot.Buy.Value, 0-200, default 80). |
@@ -149,8 +150,18 @@ How to read the tables:
 | `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
 | `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
 | `AuctionHouseBot:Houses` | `string` | `"2,6,7"` | - | The auction houses the bot serves, comma-separated AuctionHouse.dbc ids (2 Alliance, 6 Horde, 7 neutral; cMaNGOS serves all three). |
+| `AuctionHouseBot:LootCreatureElite` | `string` | `"30,34,1,2"` | - | Loot of rank 1 (elite) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureNormal` | `string` | `"30,35,8,12"` | - | Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. |
+| `AuctionHouseBot:LootCreatureRare` | `string` | `"0,10,1,1"` | - | Loot of rank 4 (rare) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureRareElite` | `string` | `"-10,2,1,1"` | - | Loot of rank 2 (rare elite) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `"-20,1,1,1"` | - | Loot of rank 3 (world boss) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootDisenchant` | `string` | `"10,12,1,1"` | - | disenchant_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootFishing` | `string` | `"3,5,30,40"` | - | fishing_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootGameobject` | `string` | `"13,16,7,11"` | - | gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootSkinning` | `string` | `"3,5,50,50"` | - | skinning_loot_template; see `LootCreatureNormal`. |
 | `AuctionHouseBot:MaxAuctionsPerHouse` | `uint` | `2000` | - | Most bot auctions open in one house at once; a sell action never lists past it (ArcaneCore guard, 0 = no listing). |
 | `AuctionHouseBot:MaxRequiredLevel` | `uint` | `60` | - | Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5. |
+| `AuctionHouseBot:RandomProperties` | `bool` | `true` | - | Roll random properties ("of the Bear") for minted items whose template has them (cMaNGOS Item::CreateItem). Default true. |
 | `AuctionHouseBot:SellChance` | `uint` | `10` | - | Percent chance a sell action lists anything (cMaNGOS AuctionHouseBot.Chance.Sell, 0-100, default 10). |
 | `AuctionHouseBot:StackPercentMax` | `uint` | `50` | - | Largest stack as a percent of the item's stack size (cMaNGOS Items.Profession fourth value: 50). |
 | `AuctionHouseBot:StackPercentMin` | `uint` | `0` | - | Smallest stack as a percent of the item's stack size (cMaNGOS Items.Profession third value: 0; at least one item). |
