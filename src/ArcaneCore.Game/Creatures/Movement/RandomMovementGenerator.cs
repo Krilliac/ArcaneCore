@@ -29,6 +29,8 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     private readonly float? _wanderDistance;
     private readonly CreatureHome? _center;
     private readonly bool? _run;
+    private readonly uint _expiryMs;
+    private long _remainingMs;
 
     /// <summary>The spawn's wander, around its spawn point, walking by its template flags (vmangos InitializeMovement for MovementType 1).</summary>
     public RandomMovementGenerator()
@@ -38,13 +40,17 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     /// <summary>
     /// cmangos MotionMaster::MoveRandomAroundPoint (a relay's MOVEMENT command, ScriptMgr.cpp:2338-2356): wander within
     /// <paramref name="wanderDistance"/> of <paramref name="center"/> (the spawn point when null), walking or running as
-    /// <paramref name="run"/> says (by the template flags when null).
+    /// <paramref name="run"/> says (by the template flags when null). A non-zero <paramref name="expiryMs"/> (the relay's <c>datalong3</c>)
+    /// ends the wander after that long: <see cref="Update"/> returns false and the generator beneath resumes (cmangos
+    /// RandomMovementGenerator's duration timer).
     /// </summary>
-    public RandomMovementGenerator(float? wanderDistance, CreatureHome? center, bool? run)
+    public RandomMovementGenerator(float? wanderDistance, CreatureHome? center, bool? run, uint expiryMs = 0)
     {
         _wanderDistance = wanderDistance;
         _center = center;
         _run = run;
+        _expiryMs = expiryMs;
+        _remainingMs = expiryMs;
     }
 
     /// <summary>vmangos RandomMovementGenerator constructor default when the spawn has none.</summary>
@@ -65,6 +71,16 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
+        if (_expiryMs != 0)
+        {
+            // The duration runs from the push, whatever the creature does meanwhile; when it is over the wander ends.
+            _remainingMs -= diffMs;
+            if (_remainingMs <= 0)
+            {
+                return false;
+            }
+        }
+
         if (CreatureMovementGates.CannotMove(creature))
         {
             _nextMoveMs = 0; // i_nextMoveTime.Reset(0): the first free tick moves
