@@ -59,6 +59,7 @@ public sealed partial class SummonService : ISpellSummonSink
         spells.RegisterEffect(SpellEffectName.SummonCritter, EffectSummonCritter);
         spells.RegisterEffect(SpellEffectName.SummonDemon, EffectSummonDemon); // SummonService.SummonDemon.cs
         RegisterSummonPet(spells);
+        InstallTaming(spells);
         Charms.Install(spells);
         spells.RegisterEffect(SpellEffectName.SummonDeadPet, context =>
         {
