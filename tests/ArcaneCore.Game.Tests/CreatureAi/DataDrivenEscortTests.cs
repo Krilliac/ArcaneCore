@@ -26,6 +26,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(11856u, 6523u, 19u)]
     [InlineData(7784u, 648u, 35u)]
     [InlineData(7807u, 2767u, 38u)]
+    [InlineData(12858u, 6544u, 21u)]
     public void ValidatedEscortCatalog_HasTheSourceQuestAndCompletionPoint(uint entry, uint quest, uint completionPoint)
     {
         EscortSpec spec = EscortSpecCatalog.Find(entry)!;
@@ -45,6 +46,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(11856u)]
     [InlineData(7784u)]
     [InlineData(7807u)]
+    [InlineData(12858u)]
     public void ClassicDbPath_FiresEveryDeclaredWaypointAction_ThenCompletes(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -140,6 +142,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(11856u)]
     [InlineData(7784u)]
     [InlineData(7807u)]
+    [InlineData(12858u)]
     public void ClassicDbEscort_FailsItsQuestWhenThePlayerLeaves(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -288,6 +291,50 @@ public sealed class DataDrivenEscortTests
         Assert.False(ai.HasEscortState(EscortAI.EscortState.Escorting));
         Assert.Equal(StandState.Stand, rig.Escort.StandState);
         Assert.Equal(232u, rig.Escort.FactionTemplate);
+    }
+
+    [Theory]
+    [InlineData("\"combatSpells\": [{ \"spell\": 0, \"repeatMs\": 1000 }],", "")]
+    [InlineData("\"combatSpells\": [{ \"spell\": 5, \"repeatMs\": 0 }],", "")]
+    [InlineData("", "{ \"type\": \"summon\", \"id\": 3, \"despawnMs\": 1, \"summonSay\": -1, \"positions\": [[0,0,0,0],[1,1,1,1]] },")]
+    [InlineData("", "{ \"type\": \"say\", \"id\": -1, \"summonSay\": -1 },")]
+    public void TheCatalog_RefusesBadCombatSpellsAndSummonSays(string specField, string action)
+    {
+        string json = "[{ \"entry\": 1, \"questId\": 2, \"source\": \"x\", " + specField
+            + " \"waypoints\": [{ \"point\": 1, \"actions\": [" + action + "{ \"type\": \"quest_complete\", \"id\": 2 }] }] }]";
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        Assert.Throws<InvalidOperationException>(() => EscortSpecCatalog.Parse(stream));
+    }
+
+    [Fact]
+    public void Oox17_DespawnsItsAmbushersWhenItDies_AndTheBanditAnswers()
+    {
+        // npc_oox17tnAI::JustDied (tanaris.cpp): ForcedDespawn every summon; point 29's last Scofflaw says SAY_OOX17_AMBUSH_REPLY.
+        using Rig rig = Setup(7784);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.OnQuestAccept(rig.Player, 648);
+        for (int elapsed = 0; elapsed < 2_400_000 && ai.Summons.Count < 3; elapsed += 100)
+        {
+            rig.Player.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0);
+            rig.World.RunTick(100);
+        }
+
+        Assert.Equal(3, ai.Summons.Count);
+        Creature[] ambush = [.. ai.Summons];
+        Assert.All(ambush, c => Assert.Contains(c, rig.System.Creatures));
+        rig.Map.Combat.Kill(null, rig.Escort);
+        rig.World.RunTick(100);
+        Assert.All(ambush, c => Assert.DoesNotContain(c, rig.System.Creatures));
+        Assert.Contains(EscortSpecCatalog.Find(7784)!.Waypoints.Single(w => w.Point == 29).Actions, a => a.SummonSay == -1000291);
+    }
+
+    [Fact]
+    public void Torek_RunsFromTheStart_AndCarriesRendAndThunderclap()
+    {
+        EscortSpec spec = EscortSpecCatalog.Find(12858)!;
+        Assert.True(spec.StartRun);
+        Assert.Equal([(11977u, false, 5000u, 20000u), (8078u, true, 8000u, 30000u)],
+            spec.CombatSpells.Select(c => (c.Spell, c.Self, c.InitialMs, c.RepeatMs)));
     }
 
     [Fact]
