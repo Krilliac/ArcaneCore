@@ -208,6 +208,9 @@ public sealed class CreatureAiFactory
         [Scripts.ErisHavenfireAI.Entry] = static c => new Scripts.ErisHavenfireAI(c),
         [Scripts.RanshallaAI.Entry] = static c => new Scripts.RanshallaAI(c),
         [Scripts.ReginaldWindsorAI.Entry] = static c => new Scripts.ReginaldWindsorAI(c),
+        [Scripts.TaelanFordringAI.Entry] = static c => new Scripts.TaelanFordringAI(c),
+        [Scripts.IsillienAI.Entry] = static c => new Scripts.IsillienAI(c),
+        [Scripts.TirionFordringAI.Entry] = static c => new Scripts.TirionFordringAI(c),
     };
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
@@ -215,7 +218,8 @@ public sealed class CreatureAiFactory
         Scripts.VolcorAI.QuestEscapeThroughForce, Scripts.VolcorAI.QuestEscapeThroughStealth, Scripts.BartlebyAI.QuestBeat,
         Scripts.DashelStonefistAI.QuestMissingDiploPt8, Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere,
         Scripts.ErisHavenfireAI.QuestBalanceOfLightAndShadow, Scripts.RanshallaAI.QuestGuardiansAltar,
-        Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade];
+        Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade,
+        Scripts.TaelanFordringAI.QuestInDreams];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
     public CreatureAiFactory()

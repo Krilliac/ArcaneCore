@@ -782,6 +782,64 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void InDreams_TaelanRidesOut_IsillienStrikesHimDown_TirionAvengesHim_AndTheEpilogueCredits()
+    {
+        // npc_taelan_fordringAI / npc_isillienAI / npc_tirion_fordringAI (western_plaguelands.cpp at 3e8597afe7) on the z2815 paths.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(57, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(1078, 28).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry), Template(1840, t => t.Faction = 14), Template(12126), Template(12128, t => t.Faction = 14)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: new[] { entry, 1840u, 12126u }.SelectMany(e => RealPath(e).Select(p => (e, 0u, p))));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature taelan = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI>(taelan.AI);
+            world.RunTick(100); // the player sees Taelan before he speaks
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.QuestInDreams);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.FactionEscortNeutralFriendPassive, taelan.FactionTemplate);
+            taelan.FactionTemplate = 35; // the test faction table has no 290; 35 is hostile to the Scarlets' 14 here as 290 is to 67 live
+            string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            bool hurt = false, isillienKilled = false;
+            for (int elapsed = 0; elapsed < 2_400_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(taelan.X, taelan.Y, taelan.Z, 0, 0);
+                world.RunTick(100);
+                string[] said = Said();
+                if (!hurt && ai.Isillien is not null && said.Contains("-1001089"))
+                {
+                    taelan.Health = taelan.MaxHealth / 3; // Isillien's blows, below half
+                    hurt = true;
+                }
+
+                if (!isillienKilled && said.Contains("-1001098") && ai.Isillien is { IsAlive: true } isillien)
+                {
+                    map.Combat.Kill(ai.Tirion, isillien); // Tirion's work
+                    isillienKilled = true;
+                }
+            }
+
+            string[] all = Said();
+            Assert.True(quests.Completed.Count == 1, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} tirion {(ai.Tirion is { } tt ? $"{tt.IsInWorld} {tt.X},{tt.Y} motion {tt.Motion.CurrentType} d {MathF.Sqrt(((tt.X - taelan.X) * (tt.X - taelan.X)) + ((tt.Y - taelan.Y) * (tt.Y - taelan.Y)))}" : "none")} dead {ai.TaelanDead} tevade {taelan.IsEvading} tworld {taelan.IsInWorld} iworld {ai.Isillien?.IsInWorld} hp {taelan.Health}/{taelan.MaxHealth} tflags {taelan.UnitFlags} iflags {ai.Isillien?.UnitFlags} ihp {ai.Isillien?.Health} dist {(ai.Isillien is { } ii ? MathF.Sqrt(((ii.X - taelan.X) * (ii.X - taelan.X)) + ((ii.Y - taelan.Y) * (ii.Y - taelan.Y))) : -1)} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.QuestInDreams), quests.Completed[0]);
+            Assert.True(ai.TaelanDead);
+            Assert.Equal(StandState.Dead, taelan.StandState);
+            Assert.Contains("-1001090", all); // SAY_KILL_TAELAN_1
+            Assert.Contains("-1001094", all); // SAY_TIRION_1
+            Assert.Contains("-1001105", all); // SAY_EPILOG_5
+            Assert.Equal(5, system.Creatures.Count(c => c.Entry == 12128)); // two elites with Isillien, three more at the fight
+            Assert.NotEqual(0u, Assert.IsType<Creature>(ai.Tirion).NpcFlags & (uint)NpcFlags.QuestGiver);
+        }
+    }
+
+    [Fact]
     public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
     {
         // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
