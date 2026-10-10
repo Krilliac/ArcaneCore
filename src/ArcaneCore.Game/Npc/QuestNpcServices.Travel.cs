@@ -221,6 +221,82 @@ public sealed partial class QuestNpcServices
 
     }
 
+    /// <summary>
+    /// SPELL_EFFECT_SEND_TAXI (vmangos Spell::EffectSendTaxi, SpellEffects.cpp:5486-5492 → Player::ActivateTaxiPathTo(path, spell, nocheck),
+    /// Player.cpp:18095 and 17834-17997, the cast case): the TaxiPath.dbc path's two nodes, no known-node or flight-master check, not while
+    /// logging out or in combat, the source node within 2×INTERACTION_DISTANCE (cubed) when it has a position, no discount. This is how
+    /// ClassicDB's scripted flights travel (dbscripts_on_gossip 4041/4042: Moonglade's Silva Fil'naveth and Bunthen Plainswind cast
+    /// 30058/30059 → 27998/28001, SEND_TAXI path 315 and its pair). Dismounting is the flight owner's before-flight step.
+    /// </summary>
+    public bool ActivateTaxiBySpell(Player player, uint pathId)
+    {
+        if (Ready(player) is not { } s || Npcs.PathById(pathId) is not { } path)
+        {
+            return false;
+        }
+
+        if (player.IsLoggingOut || (player.UnitFlags & UnitFlags.InCombat) != 0)
+        {
+            TaxiReply(player, ActivateTaxiReply.PlayerBusy);
+            return false;
+        }
+
+        if ((player.UnitFlags & UnitFlags.RemoveClientControl) != 0 || Deps.Flights?.IsFlying(player) == true)
+        {
+            return false;
+        }
+
+        if (Npcs.Node(path.FromNode) is not { } node)
+        {
+            TaxiReply(player, ActivateTaxiReply.NoSuchPath);
+            return false;
+        }
+
+        if (node.X != 0 || node.Y != 0 || node.Z != 0)
+        {
+            float dx = node.X - player.X;
+            float dy = node.Y - player.Y;
+            float dz = node.Z - player.Z;
+            const float limit = 2 * InteractionDistance;
+            if (node.MapId != player.MapId || (dx * dx) + (dy * dy) + (dz * dz) > limit * limit * limit)
+            {
+                TaxiReply(player, ActivateTaxiReply.TooFarAway);
+                return false;
+            }
+        }
+
+        uint mount = player.Team == Team.Alliance ? node.MountAlliance : node.MountHorde;
+        uint cost = path.Price; // discount 1.0 without a flight master (Player.cpp:17960)
+        if (mount == 0)
+        {
+            TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
+            return false;
+        }
+
+        if (player.Money < cost)
+        {
+            TaxiReply(player, ActivateTaxiReply.NotEnoughMoney);
+            return false;
+        }
+
+        if (Deps.Flights?.StartFlight(player, [path.FromNode, path.ToNode], [path.Id], mount, [cost], (flyingPlayer, legCost) =>
+            {
+                if (legCost != 0)
+                {
+                    ModifyMoney(s, -(long)legCost);
+                    Flush(s);
+                }
+
+                return true;
+            }) != true)
+        {
+            TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>vmangos WorldSession::SendTaxiMenu.</summary>
     internal void SendTaxiMenu(PlayerNpcState s, NpcInfo npc)
     {
