@@ -20,7 +20,7 @@ namespace ArcaneCore.World.WorldState;
 /// in the same transaction as a turn-in; this feature reloads that durable state and keeps the phase's server-side
 /// game event in step. An administrator can start the gathering phase with .event start 120.
 /// </summary>
-public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeature events, ILogger<WarEffortFeature> logger)
+public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeature events, ILogger<WarEffortFeature> logger)
     : IWorldFeature, IGameEventListener, IWorldStateProvider
 {
     private WarEffortSnapshot _snapshot = WarEffortSnapshot.Disabled;
@@ -68,6 +68,7 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
             InstallBossAis(world);
             OnTick(diffMs);
             ApplyGates();
+            if (_hasStore) RunScenes();
         };
         world.MapUnloading += map =>
         {
@@ -327,21 +328,30 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
         if (UtcNowUnix() - rungAt > ChampionAnnounceWindowSeconds || _world is null) return;
 
         string? name = _world.OnlinePlayers.FirstOrDefault(p => (int)p.Guid.Low == state.GongFirstRingerId)?.Name;
+        LastChampionAnnouncement = BroadcastToWorld(WarEffortCatalog.ChampionBroadcastText, "$N has rung the Scarab Gong.", name ?? "champion");
+    }
+
+    /// <summary>sWorld.SendBroadcastTextToWorld: the imported broadcast text (or a fallback) as a system message to every player.</summary>
+    private string BroadcastToWorld(int textId, string fallback, string? name)
+    {
         string text;
         using (IServiceScope scope = scopes.CreateScope())
         {
-            text = scope.ServiceProvider.GetService<CreatureWorldFeature>()?.Content.Ai.BroadcastTexts
-                .Find(WarEffortCatalog.ChampionBroadcastText)?.Text
-                ?? "$N has rung the Scarab Gong.";
+            text = scope.ServiceProvider.GetService<CreatureWorldFeature>()?.Content.Ai.BroadcastTexts.Find((uint)textId)?.Text ?? fallback;
         }
 
-        text = text.Replace("$N", name ?? "champion", StringComparison.Ordinal)
-            .Replace("$n", name ?? "champion", StringComparison.Ordinal);
-        LastChampionAnnouncement = text;
+        if (name is not null)
+            text = text.Replace("$N", name, StringComparison.Ordinal).Replace("$n", name, StringComparison.Ordinal);
+        LastWorldBroadcast = text;
+        if (_world is null) return text;
         byte[] packet = ChatPackets.BuildSystemMessage(text);
         foreach (Player player in _world.OnlinePlayers.ToArray())
             player.Session.Send(WorldOpcode.SmsgMessagechat, packet);
+        return text;
     }
+
+    /// <summary>The last world-wide broadcast this feature sent.</summary>
+    public string? LastWorldBroadcast { get; private set; }
 
     private sealed class SilithusBossAi(Creature creature, WarEffortFeature feature) : CreatureAI(creature)
     {
