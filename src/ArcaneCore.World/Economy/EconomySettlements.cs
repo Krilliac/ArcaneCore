@@ -148,7 +148,10 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
     /// live publication (live = true), or during shutdown without world access (live = false).
     /// Returns false (nothing started, nothing frozen) when capacity, shutdown or an actor refuses.
     /// </summary>
-    public bool TryStart(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome, bool> finished)
+    /// <param name="operationId">The idempotency key; a fresh one when null. A caller that can retry the same logical operation
+    /// (the auction house bot's custody ledger) passes a stable key so a replay is AlreadyCommitted, never a second copy.</param>
+    public bool TryStart(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome, bool> finished,
+        Guid? operationId = null)
     {
         ArgumentNullException.ThrowIfNull(actors);
         ArgumentNullException.ThrowIfNull(changes);
@@ -159,10 +162,10 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             return false;
         }
 
-        Guid operationId = Guid.NewGuid();
-        var request = new EconomyCommitRequest(operationId,
+        Guid id = operationId is { } given && given != Guid.Empty ? given : Guid.NewGuid();
+        var request = new EconomyCommitRequest(id,
             actors.Select(a => new EconomyParticipant(a.Before, a.After, Ended(a, actors))).ToArray(), changes.ToArray());
-        var operation = new Operation(operationId, actors, request, finished);
+        var operation = new Operation(id, actors, request, finished);
         lock (_gate)
         {
             if (_stopping || _operations.Count >= MaxConcurrentOperations)
@@ -175,12 +178,12 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             foreach (EconomyActor actor in actors)
             {
                 saves.HoldCharacter(actor.Id);
-                if (!actor.Player.BeginQuestSettlement(operationId))
+                if (!actor.Player.BeginQuestSettlement(id))
                 {
                     saves.ResumeCharacter(actor.Id);
                     foreach (EconomyActor undo in frozen)
                     {
-                        undo.Player.EndQuestSettlement(operationId);
+                        undo.Player.EndQuestSettlement(id);
                         saves.ResumeCharacter(undo.Id);
                     }
 

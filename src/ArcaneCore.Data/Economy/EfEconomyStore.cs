@@ -385,6 +385,22 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 return true;
             }
 
+            case MintEscrowItem mint:
+            {
+                ItemInstanceData item = mint.Item;
+                if (item.Guid == 0 || item.Entry == 0 || item.Count == 0 || item.Loot is not null
+                    || await db.Set<ItemInstanceRow>().AsNoTracking().AnyAsync(r => r.Guid == item.Guid, cancellationToken).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                var row = new ItemInstanceRow { Guid = item.Guid };
+                row.CopyFrom(0, item);
+                db.Add(row);
+                touched.Add(item.Guid);
+                return true;
+            }
+
             case InsertMail insert:
             {
                 MailRecord mail = insert.Mail;
@@ -581,6 +597,7 @@ public static class EconomyRequestValidation
         Changes = request.Changes.Select(c => c switch
         {
             EscrowFromInventory e => e with { Item = CopyItem(e.Item) },
+            MintEscrowItem m => m with { Item = CopyItem(m.Item) },
             _ => c,
         }).ToArray(),
     };
@@ -619,6 +636,13 @@ public static class EconomyRequestValidation
         if (request.Changes.Count == 0 && request.Participants.Count == 0)
         {
             throw new ArgumentException("An economy operation must change something.", nameof(request));
+        }
+
+        List<uint> minted = [.. request.Changes.OfType<MintEscrowItem>().Select(m => m.Item.Guid)];
+        if (minted.Distinct().Count() != minted.Count
+            || minted.Any(guid => request.Participants.Any(p => p.Before.Inventory!.Items.Concat(p.After.Inventory!.Items).Any(i => i.Item.Guid == guid))))
+        {
+            throw new ArgumentException("A minted escrow item must be minted once and must not appear in any participant's inventory.", nameof(request));
         }
 
         List<uint> held = [.. request.Participants.SelectMany(p => p.After.Inventory!.Items.Select(i => i.Item.Guid))];

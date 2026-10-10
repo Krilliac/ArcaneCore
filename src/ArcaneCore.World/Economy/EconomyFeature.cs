@@ -290,7 +290,8 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     /// World thread: start an economy operation (enabled store required). <paramref name="finished"/>
     /// receives the outcome; its packets and cache updates only run when <c>live</c>.
     /// </summary>
-    private bool Start(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome> finished)
+    private bool Start(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome> finished,
+        Guid? operationId = null)
         => Enabled && !_stopping && Settlements.TryStart(actors, changes, (outcome, live) =>
         {
             if (outcome == EconomyOutcome.Before && changes.Any(c => c is InsertAuction or InsertMail))
@@ -303,7 +304,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             {
                 finished(outcome);
             }
-        });
+        }, operationId);
 
     /// <summary>
     /// World thread: re-read the highest IDs in use and raise (never lower) the allocators. Every
