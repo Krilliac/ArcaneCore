@@ -152,6 +152,9 @@ public sealed class CreatureAiContent
     /// <summary>Quest start/end, gossip and event DB scripts (cmangos ScriptMgr::LoadScripts).</summary>
     public DbScriptCatalog DbScripts { get; init; } = DbScriptCatalog.Empty;
 
+    /// <summary>The creature rows of the AzerothCore-style <c>smart_scripts</c> table that AIName 'SmartAI' runs (docs/integration/smartai-20261010.md).</summary>
+    public SmartScriptCatalog SmartScripts { get; init; } = SmartScriptCatalog.Empty;
+
     /// <summary>The EventAI rows of a creature entry, in id order.</summary>
     public IReadOnlyList<CreatureAiEvent> GetEvents(uint entry) => _events.GetValueOrDefault(entry) ?? [];
 
