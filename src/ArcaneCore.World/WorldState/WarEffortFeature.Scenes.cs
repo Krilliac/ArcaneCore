@@ -41,6 +41,7 @@ public sealed partial class WarEffortFeature
         WarEffortSnapshot state = Snapshot;
         long now = UtcNowUnix();
         RegisterSceneAis(silithus);
+        SyncResearchers(silithus);
 
         int days = TransportDaysActive(state, now);
         WarEffortScene scene = SceneAt(state, now);
