@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Game;
 using ArcaneCore.Game.DebugDraw;
 using ArcaneCore.Game.Entities;
@@ -50,10 +51,18 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         uint entry = reader.ReadUInt32();
         // A .debug vis marker (docs/areas/debug-draw.md) carries a reserved entry no content row may use.
-        session.Send(WorldOpcode.SmsgGameobjectQueryResponse,
-            (DebugMarkerStyles.FindTemplate(entry) ?? Feature(session)?.Content.FindTemplate(entry)) is { } template
-                ? GameObjectPackets.QueryResponse(template)
-                : GameObjectPackets.QueryUnknown(entry));
+        if (DebugMarkerStyles.FindTemplate(entry) is { } marker)
+        {
+            session.Send(WorldOpcode.SmsgGameobjectQueryResponse, GameObjectPackets.QueryResponse(marker));
+            return Task.CompletedTask;
+        }
+
+        // Content templates: the reply built once per template (TrinityCore GameObjectTemplate::InitializeQueryData).
+        GameObjectLootFeature? feature = Feature(session);
+        GameObjectTemplate? template = feature?.Content.FindTemplate(entry);
+        session.Send(WorldOpcode.SmsgGameobjectQueryResponse, feature is null || template is null
+            ? template is null ? GameObjectPackets.QueryUnknown(entry) : GameObjectPackets.QueryResponse(template)
+            : feature.QueryCache.Get(entry, template, static (_, t) => GameObjectPackets.QueryResponse(t!)));
         return Task.CompletedTask;
     }
 
