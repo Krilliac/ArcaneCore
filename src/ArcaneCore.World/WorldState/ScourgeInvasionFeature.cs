@@ -168,6 +168,14 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                     creature => new ScourgeCampSpawnerAi(creature));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.GhoulSkeletonSpawner,
                     creature => new ScourgeCampSpawnerAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.MouthOfKelThuzad,
+                    creature => new ScourgeMouthAi(creature, NearestMouthZone(creature), Random));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.PallidHorror,
+                    creature => new PallidHorrorAi(creature, this, NearestCity(creature)));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.PatchworkTerror,
+                    creature => new PallidHorrorAi(creature, this, NearestCity(creature)));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.Flameshocker,
+                    creature => new FlameshockerAi(creature, Random));
             }
             if (map.FindUpdater<GameObjectMapSystem>() is { } objects && !_circleAis.ContainsKey(objects))
             {
@@ -175,6 +183,35 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 _circleAis.Add(objects, ai);
                 objects.RegisterAi(ScourgeInvasionCatalog.SummonCircle, ai);
             }
+        }
+    }
+
+    private static float Distance2(Creature c, ScourgeInvasionPosition p) => (c.X - p.X) * (c.X - p.X) + (c.Y - p.Y) * (c.Y - p.Y);
+
+    private static uint NearestMouthZone(Creature creature)
+        => ScourgeInvasionCatalog.Zones.Where(z => z.MapId == creature.Map?.MapId)
+            .MinBy(z => Distance2(creature, ScourgeInvasionCatalog.MouthPositions[z.ZoneId]))?.ZoneId ?? 0;
+
+    private static uint NearestCity(Creature creature)
+        => ScourgeInvasionCatalog.Cities.MinBy(c => c.Spawns.Min(p => Distance2(creature, p)))!.ZoneId;
+
+    /// <summary>PallidHorrorAI::JustDied: the capital's next attack is 45-60 minutes after this death.</summary>
+    internal void OnCityAttackerDied(Creature creature, uint zoneId)
+    {
+        if (_cityAttackers.TryGetValue(zoneId, out Creature? tracked) && ReferenceEquals(tracked, creature))
+            _cityAttackers.Remove(zoneId);
+        if (!_hasStore) return;
+        try
+        {
+            using IServiceScope scope = scopes.CreateScope();
+            scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>().CityAttackDefeatedAsync(zoneId, NowUnix(),
+                Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1))
+                .GetAwaiter().GetResult();
+            Reload();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not save the Scourge city attack defeat in zone {Zone}", zoneId);
         }
     }
 
@@ -321,7 +358,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             bool active = attacking && Snapshot.Remaining(zone.ZoneId) > 0;
             if (!active && mouth is not null)
             {
-                Despawn(mouth);
+                if (mouth.AI is ScourgeMouthAi ai) ai.EndAttack();
+                else Despawn(mouth);
                 _mouths.Remove(zone.ZoneId);
             }
             else if (active && mouth is null && Creatures(zone.MapId) is { } creatures
@@ -350,10 +388,16 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             if (attacker is not null) Despawn(attacker);
             _cityAttackers.Remove(city.ZoneId);
-            ScourgeInvasionPosition at = city.Spawns[Random.Next(city.Spawns.Count)];
+            int spawnIndex = Random.Next(city.Spawns.Count);
+            ScourgeInvasionPosition at = city.Spawns[spawnIndex];
             uint entry = Random.Next(2) == 0 ? ScourgeInvasionCatalog.PallidHorror : ScourgeInvasionCatalog.PatchworkTerror;
             if (creatures.SummonInstanceCreature(entry, at.X, at.Y, at.Z, at.O) is { } summoned)
+            {
                 _cityAttackers[city.ZoneId] = summoned;
+                if (!creatures.StartEntryWaypointPath(summoned, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, spawnIndex)))
+                    logger.LogWarning("Scourge city attacker {Entry} in zone {Zone} has no entry path {Path}; it holds its spawn point",
+                        entry, city.ZoneId, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, spawnIndex));
+            }
             else
                 logger.LogWarning("Scourge city attack in zone {Zone}: creature template {Entry} is missing", city.ZoneId, entry);
             Reload();

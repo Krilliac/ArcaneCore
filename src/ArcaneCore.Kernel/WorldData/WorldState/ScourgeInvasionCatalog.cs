@@ -44,6 +44,31 @@ public static class ScourgeInvasionCatalog
     public const uint PatchworkTerror = 16382;
     public const int CityAttackTimerMinSeconds = 45 * 60;
     public const int CityAttackTimerMaxSeconds = 60 * 60;
+    public const uint Flameshocker = 16383;
+    public const uint HighlordBolvar = 1748;
+    public const uint LadySylvanas = 10181;
+    public const uint AuraOfFear = 28313;
+    public const uint DamageVsGuards = 28364;
+    public const uint FlameshockersTouch = 28314;
+    public const uint FlameshockersTouch2 = 28329;
+    public const uint FlameshockersRevenge = 28323;
+    public const uint FlameshockerImmolateVisual = 28330;
+    public const uint MinionSpawnIn = 28234;
+    public const uint SummonCrackedNecroticCrystal = 28424; // Stormwind
+    public const uint SummonFaintNecroticCrystal = 28699; // Undercity
+
+    /// <summary>scourge_invasion.h broadcast texts (all said as CHAT_TYPE_ZONE_YELL).</summary>
+    public static IReadOnlyList<int> PallidYells { get; } = [12329, 12327, 12326, 12342, 12343, 12330, 12328, 12325];
+    public static IReadOnlyList<int> MouthZoneStartYells { get; } = [13121, 13125];
+    public static IReadOnlyList<int> MouthZoneEndYells { get; } = [13165, 13164, 13163];
+    public static IReadOnlyList<int> MouthRandomYells { get; } = [13126, 13124, 13122, 13123];
+    public const int BolvarCastleDefended = 12318;
+    public const int SylvanasCourtDefended = 12331;
+
+    /// <summary>PallidHorrorAI's PATH_FROM_ENTRY path by capital and spawn point (Undercity 0→1, 1→0; Stormwind 0→2, 1→3).</summary>
+    public static uint CityAttackPath(uint zoneId, int spawnIndex)
+        => zoneId == UndercityZone ? (spawnIndex == 0 ? 1u : 0u) : (spawnIndex == 0 ? 2u : 3u);
+
     public const uint UndercityZone = 1497;
     public const uint StormwindZone = 1519;
 
@@ -126,6 +151,10 @@ public interface IScourgeInvasionStateStore
     /// mangos-classic StartNewCityAttackIfTime: claims a due capital attack and saves its next 45-60 minute time. False when the
     /// invasion is off or the attack is not due, so two callers cannot both summon.
     /// </summary>
+    /// <summary>PallidHorrorAI::JustDied: the capital is defended; its next attack is saved 45-60 minutes out.</summary>
+    Task<bool> CityAttackDefeatedAsync(uint zoneId, long nowUnix, int nextAttackSeconds, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
     Task<bool> ClaimCityAttackAsync(uint zoneId, long nowUnix, int nextAttackSeconds, CancellationToken cancellationToken = default)
         => Task.FromResult(false);
 }
