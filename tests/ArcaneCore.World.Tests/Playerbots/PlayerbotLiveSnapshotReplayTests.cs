@@ -81,6 +81,27 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
         File.Copy(Environment.GetEnvironmentVariable(LiveSnapshotReplayFactAttribute.WorldVariable)!, world);
         string[] watched = (Environment.GetEnvironmentVariable(LiveSnapshotReplayFactAttribute.NamesVariable) is { Length: > 0 } names
             ? names : "Ironwander,Graveweaver,Dawnrover,Mirthblade").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        // A name ending in '*' watches every managed bot whose name starts so (the 200 stress bots: "Stressbot*").
+        if (watched.Any(name => name.EndsWith('*')))
+        {
+            using var nameDb = new SqliteConnection($"Data Source={characters};Pooling=False");
+            nameDb.Open();
+            using SqliteCommand read = nameDb.CreateCommand();
+            read.CommandText = "select c.Name from managed_playerbot m join characters c on c.Id = m.CharacterId";
+            var all = new List<string>();
+            using (SqliteDataReader reader = read.ExecuteReader())
+                while (reader.Read()) all.Add(reader.GetString(0));
+            watched = [.. all.Where(name => watched.Any(pattern => pattern.EndsWith('*')
+                ? name.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase)
+                : string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase))).Order(StringComparer.Ordinal)];
+        }
+
+        // Scale mode (ARCANECORE_TEST_BOT_REPLAY_SCALE=1): many bots, a summary of the stalls they reported instead of each bot's lines,
+        // and no assertion on standing still (the stall reports are the measure, compared between builds).
+        bool scale = Environment.GetEnvironmentVariable(ScaleVariable) == "1";
+        uint replayMs = uint.TryParse(Environment.GetEnvironmentVariable(ReplayMsVariable), out uint configured) && configured > 0
+            ? configured : ReplayMs;
+        var stalls = new List<string>();
 
         var builder = new ConfigurationBuilder();
         if (Environment.GetEnvironmentVariable(LiveSnapshotReplayFactAttribute.SettingsVariable) is { Length: > 0 } settings)
@@ -113,7 +134,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             services.AddSingleton<IManagedPlayerbotProvisionStore, NoProvisions>();
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(new PlayerbotOptions
             {
-                Enabled = true, RestoreOnStartup = true, MaxBots = 10, ThinkIntervalMs = 100, MaxActionsPerTick = 12,
+                Enabled = true, RestoreOnStartup = true, MaxBots = Math.Max(10, watched.Length), ThinkIntervalMs = 100, MaxActionsPerTick = 12,
             }));
         });
 
@@ -182,7 +203,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             Dictionary<string, Dictionary<uint, QuestRow>> questsAtStart = await host.OnWorldAsync(() =>
                 watches.ToDictionary(pair => pair.Key, pair => QuestLog(questFeature, bots.FindSession(pair.Value.BotId)?.Player)));
 
-            for (uint elapsed = 0; elapsed < ReplayMs; elapsed += 1_000)
+            for (uint elapsed = 0; elapsed < replayMs; elapsed += 1_000)
             {
                 await host.World.AdvanceClockAsync(1_000);
                 // A quest reward is written to the characters database in the background; on the fast manual clock the bot's 15-second
@@ -195,6 +216,13 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                     foreach ((string name, Watch watch) in watches)
                     {
                         if (bots.FindSession(watch.BotId)?.Player is not { } player) continue;
+                        if (bots.FindBrain(watch.BotId) is { } watchedBrain && watchedBrain.StallCount != watch.Stalls)
+                        {
+                            watch.Stalls = watchedBrain.StallCount;
+                            if ((watchedBrain.StallReport ?? watchedBrain.LastStall) is { } stall)
+                                stalls.Add($"{elapsed / 1000,5}s {name} {stall}");
+                        }
+                        if (scale) continue;
                         watch.Observe(new Vector3(player.X, player.Y, player.Z), player.IsAlive, host.World.NowMs);
                         if (!player.IsAlive && elapsed % 5_000 == 0 && bots.FindBrain(watch.BotId) is { } dead)
                             output.WriteLine($"{elapsed / 1000,4}s {name} recovery: {dead.Recovery.LastStep}/{dead.Recovery.LastSpiritHealerStep} spot={dead.Recovery.ReviveSpot} ({player.X:F1}, {player.Y:F1}, {player.Z:F1})");
@@ -233,6 +261,11 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                 });
             }
 
+            output.WriteLine($"stall reports: {stalls.Count} from {stalls.Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1]).Distinct().Count()} of {watches.Count} bots over {replayMs / 1000} s");
+            foreach (IGrouping<string, string> pattern in stalls.GroupBy(StallPattern).OrderByDescending(group => group.Count()))
+                output.WriteLine($"  {pattern.Count(),4} {pattern.Key}");
+            foreach (string line in stalls) output.WriteLine("stall " + line);
+            if (scale) return;
             foreach ((string name, Watch watch) in watches)
                 output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards, deaths {watch.Deaths}");
             foreach ((string name, Watch watch) in watches)
@@ -264,6 +297,21 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             $" melee[{target.Entry} d2={d2:F1} dz={dz:F1} d3={MathF.Sqrt((d2 * d2) + (dz * dz)):F1} reach={ArcaneCore.Game.Combat.MapCombat.CanReachWithMeleeAutoAttack(player, target)} "
             + $"arc={ArcaneCore.Game.Combat.MapCombat.HasInArc(player, target, ArcaneCore.Game.Combat.CombatConstants.AutoAttackArc)} victim={(player.Combat.Victim as ArcaneCore.Game.Creatures.Creature)?.Entry} "
             + $"err={player.Combat.LastSwingError} moving={(player.Movement.Flags & ArcaneCore.Protocol.MovementFlags.MaskMoving) != 0}]");
+    }
+
+    /// <summary>The replay in scale mode (many bots, stall summary, no assertion).</summary>
+    public const string ScaleVariable = "ARCANECORE_TEST_BOT_REPLAY_SCALE";
+
+    /// <summary>The game time replayed, in milliseconds (default <see cref="ReplayMs"/>).</summary>
+    public const string ReplayMsVariable = "ARCANECORE_TEST_BOT_REPLAY_MS";
+
+    /// <summary>A stall report without its bot, time and position: "goal=Quest target=6747 quest=1656", or "death loop attackers=94".</summary>
+    private static string StallPattern(string line)
+    {
+        System.Text.RegularExpressions.Match goal = System.Text.RegularExpressions.Regex.Match(line, @"goal=\S+ target=\d+ quest=\d+");
+        if (goal.Success) return goal.Value;
+        System.Text.RegularExpressions.Match loop = System.Text.RegularExpressions.Regex.Match(line, @"attackers=\S+");
+        return loop.Success ? "death loop " + loop.Value : line;
     }
 
     private readonly record struct QuestRow(ArcaneCore.Game.Quests.QuestStatus Status, bool Rewarded);
@@ -307,6 +355,9 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
         public bool Healer { get; set; }
 
         public uint LongestStillMs { get; private set; }
+
+        /// <summary>The brain's stall count last seen (a change is a new stall report).</summary>
+        public int Stalls { get; set; }
 
         public float Travelled { get; private set; }
 

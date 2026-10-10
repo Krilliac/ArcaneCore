@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
@@ -64,7 +63,6 @@ internal static class ServerInfoDiagnostics
         int targetMs = Math.Max(1, world.Options.TickIntervalMs);
         int? bots = services.GetService<ManagedPlayerbotFeature>()?.Snapshot()
             .Count(status => status.State == ManagedPlayerbotState.Running);
-        using Process process = Process.GetCurrentProcess();
         return new(targetMs, 1000d / targetMs,
             Finite(stats.FrameSamples > 0 ? stats.EffectiveTicksPerSecond : null),
             stats.FrameSamples,
@@ -75,7 +73,10 @@ internal static class ServerInfoDiagnostics
             stats.Samples > 0 ? stats.Overruns : null,
             stats.FrameSamples > 0 ? stats.FrameOverruns : null,
             world.PendingCommandCount,
-            process.WorkingSet64,
+            // Environment.WorkingSet asks for this process's counters alone; Process.WorkingSet64 snapshots every process on the
+            // machine first (8 ms a call on an idle desktop, 20 to 112 ms under the live stress test, where each `.server info`
+            // was logged as a slow CMSG_MESSAGECHAT on the world thread).
+            Environment.WorkingSet,
             GC.GetTotalMemory(false),
             stats.Samples > 0 ? stats.MeanAllocatedBytes : null,
             bots)

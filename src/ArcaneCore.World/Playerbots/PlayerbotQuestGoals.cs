@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Net;
@@ -85,7 +86,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
-        RefreshObjectiveEntry(services, state);
+        RefreshObjectiveEntry(player, services, state);
         if (_stage == Stage.AcceptConfirmation)
         {
             if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) ClearStage();
@@ -238,7 +239,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return null;
     }
 
-    private void RefreshObjectiveEntry(QuestNpcServices services, PlayerNpcState state)
+    private void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
         PreferredCreatureEntry = 0;
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
@@ -256,13 +257,42 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 uint required = quest.ReqCreatureOrGOCount[index];
                 if (entry > 0 && status.CreatureOrGOCount[index] < required
                     && HeldForGroup?.Invoke(questId, (uint)entry) != true
-                    && Suspensions?.IsEntrySuspended((uint)entry, _session.World.NowMs) != true)
+                    && Suspensions?.IsEntrySuspended((uint)entry, _session.World.NowMs) != true
+                    && IsKillObjective(player, services, (uint)entry))
                 {
                     PreferredCreatureEntry = (uint)entry;
                     return;
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Whether creatures of <paramref name="entry"/> are something the bot can kill for a quest's creature objective: not friendly to
+    /// it. A friendly objective is credited another way, an item or a spell used on it (quest 5441 "Lazy Peons": the Foreman's
+    /// Blackjack on a sleeping peon of the bot's own faction), which the bot does not do; hunted, it walked from peon to peon it could
+    /// not attack (live stress test 2026-10-08: goal Grind/Explore target 10556 in the Valley of Trials, and on out of it to its
+    /// death). An entry whose reaction cannot be resolved stays an objective.
+    /// </summary>
+    internal bool IsKillObjective(Player player, QuestNpcServices services, uint entry)
+        => _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content.FindTemplate(entry) is not { } template
+            || IsKillable(player, template.Faction, _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates,
+                services.Deps.Reputation as ArcaneCore.Game.Reputation.INpcReactionSource);
+
+    /// <summary>
+    /// Whether a creature of faction template <paramref name="npcFactionTemplate"/> is not friendly to <paramref name="player"/>
+    /// (<see cref="IsKillObjective"/>): its reputation reaction below Friendly, or without reputation its template neither resolved
+    /// as friendly. Unresolved: true.
+    /// </summary>
+    internal static bool IsKillable(Player player, uint npcFactionTemplate, FactionTemplateCatalog? factions,
+        ArcaneCore.Game.Reputation.INpcReactionSource? reactions)
+    {
+        if (factions?.Find(npcFactionTemplate) is not { } npc || factions.Find(player.FactionTemplate) is not { } self) return true;
+        if (reactions is not null)
+            return !reactions.TryGetNpcReaction(player, npc, self, out ArcaneCore.Game.Reputation.ReputationRank reaction)
+                || reaction < ArcaneCore.Game.Reputation.ReputationRank.Friendly;
+        return !factions.TryNpcHostility(npcFactionTemplate, player.FactionTemplate, out bool hostile) || hostile
+            || !npc.IsFriendlyTo(self);
     }
 
     /// <summary>

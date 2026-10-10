@@ -193,6 +193,15 @@ public sealed record PathOptions
 
     /// <summary>Upper bound on search work (polygons or grid cells expanded) before the query gives up.</summary>
     public int MaxSearchNodes { get; init; } = DefaultMaxSearchNodes;
+
+    /// <summary>
+    /// Whether the query may read the navigation tiles it needs that no grid holds: the start's and the end's, and each tile the
+    /// search crosses into. vmangos loads navmesh tiles only with the map's grids (round the players), so a search towards a far
+    /// destination stops at the last loaded tile and answers the point nearest the goal there; with this set the search follows
+    /// the mesh to the destination. Bounded (<see cref="MMaps.NavMeshPathfinder.MaxOnDemandTiles"/>). Off by default: creature
+    /// movement keeps vmangos' answers (a straight line to an unloaded tile).
+    /// </summary>
+    public bool LoadTiles { get; init; }
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>

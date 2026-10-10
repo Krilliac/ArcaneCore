@@ -171,9 +171,14 @@ internal sealed class PlayerbotSuspensions
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
 
-    internal bool IsEntrySuspended(uint entry, uint nowMs) => entry != 0 && Active(_entries, entry, nowMs);
+    internal bool IsEntrySuspended(uint entry, uint nowMs)
+        => entry != 0 && (Active(_entries, entry, nowMs) || Shared?.IsEntrySetAside(entry, nowMs) == true);
 
-    internal bool IsQuestSuspended(uint quest, uint nowMs) => quest != 0 && Active(_quests, quest, nowMs);
+    internal bool IsQuestSuspended(uint quest, uint nowMs)
+        => quest != 0 && (Active(_quests, quest, nowMs) || Shared?.IsQuestSetAside(quest, nowMs) == true);
+
+    /// <summary>What every bot of the world sets aside (<see cref="PlayerbotSharedSetAsides"/>), or null.</summary>
+    internal PlayerbotSharedSetAsides? Shared { get; set; }
 
     private uint _trainingUntilMs;
     private bool _training;
@@ -211,5 +216,83 @@ internal sealed class PlayerbotSuspensions
             set.Remove(expired);
         if (set.Count >= Max && !set.ContainsKey(key)) set.Remove(set.OrderBy(entry => entry.Value).First().Key);
         set[key] = unchecked(nowMs + SuspendMs);
+    }
+}
+
+/// <summary>
+/// The goals set aside for every bot of the world: a quest (or a quest giver, vendor or trainer without one) on which
+/// <see cref="BotsToShare"/> different bots stalled within <see cref="WindowMs"/> has a structural cause, the same for the next bot
+/// that picks it, and is skipped by all of them for <see cref="SetAsideMs"/>. Live stress test 2026-10-08: 200 bots, 74 of them
+/// stalled, most on a handful of quests (1656 99 times, 2159 30 times); each bot set its quest aside for ten minutes, picked it again,
+/// stalled again, and the next bot did the same. Bounded (<see cref="MaxKeys"/>, the one reported longest ago goes first); a
+/// set-aside that ends is tried again, and a repeat lasts twice as long (at most <see cref="MaxSetAsideMs"/>).
+/// <para>Thread affinity: world thread.</para>
+/// </summary>
+internal sealed class PlayerbotSharedSetAsides
+{
+    /// <summary>Different bots that must stall on one goal for it to be set aside for all.</summary>
+    internal const int BotsToShare = 3;
+
+    /// <summary>How long a stall counts towards <see cref="BotsToShare"/>.</summary>
+    internal const uint WindowMs = 1_800_000;
+
+    /// <summary>How long the first set-aside of a goal lasts.</summary>
+    internal const uint SetAsideMs = 1_800_000;
+
+    /// <summary>The longest set-aside (repeats double it).</summary>
+    internal const uint MaxSetAsideMs = 7_200_000;
+
+    /// <summary>The most goals remembered.</summary>
+    internal const int MaxKeys = 256;
+
+    private readonly Dictionary<(bool Quest, uint Id), Record> _records = [];
+
+    /// <summary>Goals remembered (bounded by <see cref="MaxKeys"/>).</summary>
+    internal int Count => _records.Count;
+
+    /// <summary>
+    /// Bot <paramref name="bot"/> stalled on <paramref name="goal"/> with target <paramref name="entry"/> for quest
+    /// <paramref name="quest"/>. Returns what is newly set aside for every bot ("quest 1656 for 30 min"), or null.
+    /// </summary>
+    internal string? Report(PlayerbotGoalKind goal, uint entry, uint quest, ulong bot, uint nowMs)
+    {
+        (bool Quest, uint Id) key = goal switch
+        {
+            PlayerbotGoalKind.Quest when quest != 0 => (true, quest),
+            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train when entry != 0 => (false, entry),
+            _ => default,
+        };
+        if (key.Id == 0) return null;
+        if (!_records.TryGetValue(key, out Record? record))
+        {
+            if (_records.Count >= MaxKeys)
+                _records.Remove(_records.OrderBy(pair => pair.Value.LastMs).First().Key);
+            _records[key] = record = new Record();
+        }
+
+        record.LastMs = nowMs;
+        record.Bots.RemoveAll(seen => unchecked(nowMs - seen.AtMs) > WindowMs || seen.Bot == bot);
+        record.Bots.Add((bot, nowMs));
+        if (record.Bots.Count < BotsToShare || Active(record, nowMs)) return null;
+        uint length = (uint)Math.Min((ulong)SetAsideMs << Math.Min(record.Times, 8), MaxSetAsideMs);
+        record.Times++;
+        record.UntilMs = unchecked(nowMs + length);
+        record.Bots.Clear();
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{(key.Quest ? "quest" : "entry")} {key.Id} for {length / 60_000} min");
+    }
+
+    internal bool IsQuestSetAside(uint quest, uint nowMs) => _records.TryGetValue((true, quest), out Record? record) && Active(record, nowMs);
+
+    internal bool IsEntrySetAside(uint entry, uint nowMs) => _records.TryGetValue((false, entry), out Record? record) && Active(record, nowMs);
+
+    private static bool Active(Record record, uint nowMs) => record.UntilMs != 0 && unchecked((int)(record.UntilMs - nowMs)) > 0;
+
+    private sealed class Record
+    {
+        public List<(ulong Bot, uint AtMs)> Bots { get; } = [];
+        public uint UntilMs { get; set; }
+        public int Times { get; set; }
+        public uint LastMs { get; set; }
     }
 }

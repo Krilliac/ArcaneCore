@@ -40,7 +40,7 @@ internal sealed class RealTerrainBotFactAttribute : FactAttribute
 /// route planning and its motion are checked there. Positions are the live characters' and the world database's creature spawns.
 /// Time moves only on the manual world clock; every wait is for a state, bounded by game time.
 /// </summary>
-public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output)
+public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output)
 {
     // Undead start inside the Deathknell crypt (playercreateinfo race 5), where Graveweaver stood for hours.
     private static readonly Vector3 CryptStart = new(1676.35f, 1677.45f, 121.67f);
@@ -281,16 +281,16 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
             return new Terrain(host, session);
         }
 
-        /// <summary>Teleport the bot (eastern kingdoms) and acknowledge like a client until it stands there.</summary>
-        public async Task PlaceAsync(Vector3 at)
+        /// <summary>Teleport the bot (eastern kingdoms unless <paramref name="map"/> says otherwise) and acknowledge like a client until it stands there.</summary>
+        public async Task PlaceAsync(Vector3 at, uint map = 0)
         {
-            Assert.True(await Host.OnWorldAsync(() => Teleports.TeleportTo(Player, 0, at.X, at.Y, at.Z, 0)), "teleport refused");
+            Assert.True(await Host.OnWorldAsync(() => Teleports.TeleportTo(Player, map, at.X, at.Y, at.Z, 0)), "teleport refused");
             for (int tick = 0; tick < 200; tick++)
             {
                 bool there = await Host.OnWorldAsync(() =>
                 {
                     PlayerbotMovementControl.Update(Session, Player);
-                    return Player.IsInWorld && Teleports.StageOf(Player) is null
+                    return Player.IsInWorld && Teleports.StageOf(Player) is null && Player.MapId == map
                         && Vector2.Distance(new(Player.X, Player.Y), new(at.X, at.Y)) < 1f;
                 });
                 if (there) return;

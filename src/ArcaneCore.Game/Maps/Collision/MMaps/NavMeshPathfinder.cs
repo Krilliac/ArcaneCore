@@ -135,9 +135,37 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
     }
 
-    void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY) => LoadTile(mapId, tileX, tileY);
+    void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY)
+    {
+        _gridTiles.Add((mapId, tileX, tileY));
+        _onDemand.Remove((mapId, tileX, tileY)); // the grid holds it now
+        LoadTile(mapId, tileX, tileY);
+    }
 
-    void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY) => UnloadTile(mapId, tileX, tileY);
+    void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY)
+    {
+        _gridTiles.Remove((mapId, tileX, tileY));
+        _onDemand.Remove((mapId, tileX, tileY));
+        UnloadTile(mapId, tileX, tileY);
+    }
+
+    /// <summary>
+    /// The most navigation tiles kept loaded per map for queries with <see cref="PathOptions.LoadTiles"/> beyond those the grids
+    /// hold; the one used longest ago is released first. A tile is about a megabyte on disk.
+    /// </summary>
+    public const int MaxOnDemandTiles = 32;
+
+    /// <summary>The most tiles one query may read (<see cref="PathOptions.LoadTiles"/>).</summary>
+    public const int MaxTilesPerQuery = 12;
+
+    private readonly HashSet<(uint Map, int X, int Y)> _gridTiles = [];
+    private readonly Dictionary<(uint Map, int X, int Y), long> _onDemand = [];
+    private readonly HashSet<(uint Map, int X, int Y)> _noTile = [];
+    private long _queryStamp;
+    private int _queryLoads;
+
+    /// <summary>Tiles loaded for queries and not held by a grid (tests and inspection).</summary>
+    public int OnDemandTileCount => _onDemand.Count;
 
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
@@ -170,6 +198,97 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             return PathResult.StraightLine(start, end, PathType.Normal | PathType.NotUsingPath);
         }
 
+        if (!options.LoadTiles)
+        {
+            return FindPath(mesh, mapId, start, end, options);
+        }
+
+        _queryStamp++;
+        _queryLoads = 0;
+        EnsureTile(mapId, start);
+        EnsureTile(mapId, end);
+        mesh.TileLoader = (x, y) =>
+        {
+            Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
+            return EnsureTile(mapId, center) ? mesh.GetTile(x, y) : null;
+        };
+        try
+        {
+            return FindPath(mesh, mapId, start, end, options);
+        }
+        finally
+        {
+            mesh.TileLoader = null;
+        }
+    }
+
+    /// <summary>
+    /// Make sure the navigation tile under world position <paramref name="at"/> is loaded for this query (<see cref="PathOptions.LoadTiles"/>),
+    /// within <see cref="MaxTilesPerQuery"/> and <see cref="MaxOnDemandTiles"/>. False when it is not (no such tile, or over a bound).
+    /// </summary>
+    private bool EnsureTile(uint mapId, Vector3 at)
+    {
+        if (Terrain.TerrainTile.TileOf(at.X, at.Y) is not { } terrain || GetNavMesh(mapId) is not { } mesh)
+        {
+            return false;
+        }
+
+        (uint, int, int) key = (mapId, terrain.X, terrain.Y);
+        if (mesh.IsTerrainTileLoaded(terrain.X, terrain.Y))
+        {
+            if (_onDemand.ContainsKey(key))
+            {
+                _onDemand[key] = _queryStamp;
+            }
+
+            return true;
+        }
+
+        if (_noTile.Contains(key) || _queryLoads >= MaxTilesPerQuery)
+        {
+            return false;
+        }
+
+        if (_onDemand.Count(entry => entry.Key.Map == mapId) >= MaxOnDemandTiles)
+        {
+            // Release the tile used longest ago, never one this query reached.
+            (uint Map, int X, int Y) oldest = default;
+            long oldestStamp = long.MaxValue;
+            foreach (((uint Map, int X, int Y) tile, long stamp) in _onDemand)
+            {
+                if (tile.Map == mapId && stamp < _queryStamp && stamp < oldestStamp)
+                {
+                    oldest = tile;
+                    oldestStamp = stamp;
+                }
+            }
+
+            if (oldestStamp == long.MaxValue)
+            {
+                return false;
+            }
+
+            _onDemand.Remove(oldest);
+            UnloadTile(oldest.Map, oldest.X, oldest.Y);
+        }
+
+        _queryLoads++;
+        if (!LoadTile(mapId, terrain.X, terrain.Y))
+        {
+            if (_noTile.Count < 16_384)
+            {
+                _noTile.Add(key);
+            }
+
+            return false;
+        }
+
+        _onDemand[key] = _queryStamp;
+        return true;
+    }
+
+    private PathResult FindPath(NavMesh mesh, uint mapId, Vector3 start, Vector3 end, PathOptions options)
+    {
         Vector3 startRc = NavMeshFormat.ToRecast(start);
         Vector3 endRc = NavMeshFormat.ToRecast(end);
         if (!mesh.HaveTileAt(startRc) || !mesh.HaveTileAt(endRc))

@@ -115,6 +115,11 @@ internal static class PlayerbotNavigation
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
+        // The way to the goal itself first: the search reads the navigation tiles it crosses (PathOptions.LoadTiles), so a road
+        // that leaves the loaded tiles is followed. The straight-line steps below are a greedy fallback that stops wherever the
+        // mesh ends nearest a point on the line: on the edge of the Red Cloud Mesa above Bloodhoof Village (live stress test
+        // 2026-10-08, quest 1656, 99 stalls), whose way down runs south through a tile no grid held.
+        if (distance <= options.MaxRouteYards && Plan(player, goal, goal, options, partial: true, out route, out _)) return true;
         float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
         // the mesh then answers a straight line (vmangos PathFinder's HaveTiles shortcut), which the terrain stepper refuses across
@@ -183,7 +188,7 @@ internal static class PlayerbotNavigation
     private static PlayerbotRoute? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
     {
         PathResult path = map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
-            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
+            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true });
         if ((path.Type & PathType.NotUsingPath) != 0)
             return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
                 (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain : null;
@@ -211,9 +216,9 @@ internal static class PlayerbotNavigation
 
         // A moving bot plans from where it is now, not from its last heartbeat.
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
-        // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350). The old 512 polygons ran out on the
-        // real Dun Morogh mesh well inside the route bound: 200 yards from Coldridge Valley to the Rockjaw Raiders (quest 179)
-        // answered no path with 512 and an 18-corner path with 2048, so the bot stood still with that goal for good.
+        // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350) for a near destination, more for a far
+        // one (SearchNodes). The old 512 polygons ran out on the real Dun Morogh mesh well inside the route bound: 200 yards from
+        // Coldridge Valley to the Rockjaw Raiders (quest 179) answered no path with 512 and an 18-corner path with 2048.
         PathResult path = Query(map, start, destination, options, partial, steep: false);
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
@@ -225,44 +230,55 @@ internal static class PlayerbotNavigation
             return !straightRefused;
         }
 
-        if (Usable(player, path, start, destination, goal, partial, options, out float distance))
+        if (Usable(player, path, start, destination, goal, partial, options, out PlayerbotRoute? usable))
         {
             // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
             // collision data. A line of sight at their own height hits the floor model itself inside any building (the Deathknell
             // crypt, the Goldshire inn), and the floor probe finds nothing at some spots the mesh covers (on the crypt's stairs, at
             // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
             // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
-            route = new PlayerbotRoute(path.Points.ToArray(), distance, navigated: true);
+            route = usable;
             return true;
         }
 
         // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
-        // walkable ground among steep slopes only when it ends close by (the patch's edge); any other refusal stays one.
+        // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by; any other refusal stays one.
         if ((path.Type & PathType.NoPath) != 0
                 ? OnWalkableMesh(map, start)
                 : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards)
             return false;
-        return TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route);
+        if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route)) return true;
+
+        // The polygon under the bot is a fragment the mesh does not join to its surroundings (the nearest polygon is chosen as
+        // Detour does, and a sliver on a rock or a root can win over the ground beside it): every query from it ends where it
+        // began. Start a step away instead, on ground the bot can step to (live stress test 2026-10-08: bots in Shadowglen,
+        // Dolanaar and north of Razor Hill stood on such spots for hours, every way out refused).
+        route = FromBeside(player, map, start, destination, options, partial, goal);
+        return route is not null;
     }
 
     /// <summary>
     /// A partial route ending this close to the bot (flat yards) may mean it stands on a patch of walkable ground among steep slopes
-    /// (<see cref="TryLeaveSteepGround"/>); one ending farther away is an ordinary refusal and costs no further query.
+    /// (<see cref="TryLeaveSteepGround"/>) or on a fragment of mesh (<see cref="FromBeside"/>: the ones bots stood on in the live
+    /// stress test reached 3 to 11 yards); one ending farther away is an ordinary refusal and costs no further query.
     /// </summary>
     internal const float SteepPatchYards = 15f;
 
-    /// <summary>One query of the navigation mesh, with steep slopes excluded as for every bot route, or allowed (<paramref name="steep"/>).</summary>
+    /// <summary>
+    /// One query of the navigation mesh, with steep slopes excluded as for every bot route, or allowed (<paramref name="steep"/>);
+    /// navigation tiles are read as needed (<see cref="PathOptions.LoadTiles"/>).
+    /// </summary>
     private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep)
         => map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
             ExcludeFlags = steep ? NavTerrain.Empty : NavTerrain.SteepSlopes, AllowPartial = partial,
-            MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
+            MaxSearchNodes = SearchNodes(from, to), LoadTiles = true });
 
-    /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes, and its length.</summary>
+    /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
     private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
-        PlayerbotOptions options, out float distance)
+        PlayerbotOptions options, out PlayerbotRoute? route)
     {
-        distance = 0;
-        if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards))
+        route = null;
+        if (!IsUsablePath(path, options.MaxPathPoints, float.PositiveInfinity))
             return false;
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
         // place given up after a loop. An end projected from above or below the destination stays at its spot and is exact.
@@ -271,9 +287,78 @@ internal static class PlayerbotNavigation
                 || PlayerbotMotion.IsBlacklisted(player, path.End)))
             return false;
 
-        for (int index = 1; index < path.Points.Count; index++)
-            distance += Vector3.Distance(path.Points[index - 1], path.Points[index]);
-        return float.IsFinite(distance) && distance <= options.MaxRouteYards;
+        route = Bounded(path.Points, options, complete: Reaches(path));
+        return route is not null;
+    }
+
+    /// <summary>
+    /// The route along <paramref name="points"/>, or null when a point is not finite or it is longer than
+    /// <see cref="PlayerbotOptions.MaxRouteYards"/>. A way that reaches its destination is cut there instead: its first part is
+    /// progress along the real way, and the bot plans the rest from where it stops.
+    /// </summary>
+    private static PlayerbotRoute? Bounded(IReadOnlyList<Vector3> points, PlayerbotOptions options, bool complete)
+    {
+        var kept = new List<Vector3>(points.Count);
+        float distance = 0;
+        for (int index = 0; index < points.Count; index++)
+        {
+            Vector3 point = points[index];
+            if (!Finite(point)) return null;
+            if (index > 0)
+            {
+                float leg = Vector3.Distance(points[index - 1], point);
+                if (!float.IsFinite(leg)) return null;
+                if (distance + leg > options.MaxRouteYards)
+                {
+                    if (!complete || kept.Count < 2) return null;
+                    break;
+                }
+
+                distance += leg;
+            }
+
+            kept.Add(point);
+        }
+
+        return kept.Count < 2 ? null : new PlayerbotRoute(kept.ToArray(), distance, navigated: true);
+    }
+
+    /// <summary>Whether a mesh answer reaches its destination (a whole way, or the first part of one cut at the point bound).</summary>
+    private static bool Reaches(PathResult path)
+        => path.HasPath && (path.Type & (PathType.Incomplete | PathType.NotUsingPath | PathType.NoPath)) == 0;
+
+    /// <summary>How far from the bot the starts beside it lie (<see cref="FromBeside"/>), eight directions each.</summary>
+    private static readonly float[] BesideYards = [2.5f, 5f];
+
+    /// <summary>
+    /// A route that steps from <paramref name="start"/> to ground beside it (a stepped terrain leg: floor within a step, in sight)
+    /// and follows the mesh from there to <paramref name="destination"/>, or null. At most sixteen queries.
+    /// </summary>
+    private static PlayerbotRoute? FromBeside(Player player, Map map, Vector3 start, Vector3 destination, PlayerbotOptions options, bool partial, Vector3 goal)
+    {
+        foreach (float yards in BesideYards)
+        {
+            for (int direction = 0; direction < 8; direction++)
+            {
+                float angle = MathF.Atan2(destination.Y - start.Y, destination.X - start.X) + (direction * MathF.PI / 4f);
+                float x = start.X + (MathF.Cos(angle) * yards), y = start.Y + (MathF.Sin(angle) * yards);
+                float floor = map.Collision.GetHeight(x, y, start.Z + 2f);
+                if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
+                Vector3 beside = new(x, y, floor + 0.05f);
+                if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
+                PathResult path = Query(map, beside, destination, options, partial, steep: false);
+                if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0) continue;
+                bool reaches = Reaches(path);
+                if (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
+                    || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards))
+                    continue;
+                if (Bounded([start, .. path.Points], options, reaches) is not { } joined || joined.Points.Count > options.MaxPathPoints + 1) continue;
+                bool[] legs = [false, .. Enumerable.Repeat(true, joined.Points.Count - 2)];
+                return new PlayerbotRoute(joined.Points, joined.Distance, legs);
+            }
+        }
+
+        return null;
     }
 
     private static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
@@ -331,6 +416,25 @@ internal static class PlayerbotNavigation
     private static bool OnWalkableMesh(Map map, Vector3 point)
         => (map.Collision.FindPath(point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
             ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
+
+    /// <summary>
+    /// The search budget of one query: vmangos' 2048 nodes (<see cref="PathOptions.DefaultMaxSearchNodes"/>) within
+    /// <see cref="NearYards"/>, else 48 nodes a yard of straight distance, at most <see cref="MaxSearchNodes"/>. The way down from the
+    /// Red Cloud Mesa to Bloodhoof Village (405 yards apart, a 1,589-yard road) needs more than 8,192 nodes, the way from Stormwind to
+    /// Northshire Abbey (630 yards apart) more than 8,192 and at most 32,768.
+    /// </summary>
+    internal static int SearchNodes(Vector3 start, Vector3 destination)
+    {
+        float distance = Vector3.Distance(start, destination);
+        return distance <= NearYards || !float.IsFinite(distance) ? PathOptions.DefaultMaxSearchNodes
+            : (int)Math.Clamp(distance * 48f, PathOptions.DefaultMaxSearchNodes, MaxSearchNodes);
+    }
+
+    /// <summary>Within this straight distance a query keeps vmangos' search budget (<see cref="SearchNodes"/>).</summary>
+    internal const float NearYards = 100f;
+
+    /// <summary>The largest search budget of one bot route query (<see cref="SearchNodes"/>).</summary>
+    internal const int MaxSearchNodes = 32_768;
 
     /// <summary>
     /// Follow <paramref name="route"/> this think (<see cref="PlayerbotMotion.Follow"/>): start, switch or keep moving.

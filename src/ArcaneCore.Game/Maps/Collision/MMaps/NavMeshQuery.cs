@@ -23,6 +23,16 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     public NavMeshTile? GetTile(int x, int y) => _tiles.GetValueOrDefault((x, y));
 
     /// <summary>
+    /// While set (one query with <see cref="PathOptions.LoadTiles"/>), asked for a Detour tile a search crosses into that is not
+    /// loaded; it loads the tile when it can (<see cref="NavMeshPathfinder"/>) and answers it, or null.
+    /// </summary>
+    internal Func<int, int, NavMeshTile?>? TileLoader { get; set; }
+
+    /// <summary>The centre of Detour tile (<paramref name="x"/>, <paramref name="y"/>) in Recast space (y 0).</summary>
+    internal Vector3 TileCenter(int x, int y)
+        => new(Parameters.Origin.X + ((x + 0.5f) * Parameters.TileWidth), 0, Parameters.Origin.Z + ((y + 0.5f) * Parameters.TileHeight));
+
+    /// <summary>
     /// Whether the Detour tile under a Recast position is loaded (vmangos <c>PathInfo::HaveTiles</c>:
     /// <c>calcTileLoc</c> then <c>getTileAt</c>, PathFinder.cpp:695-706).
     /// </summary>
@@ -106,7 +116,8 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             }
 
             int side = nei & 0xff;
-            if (NavMeshFormat.SideOffset(side) is not { } offset || GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) is not { } other)
+            if (NavMeshFormat.SideOffset(side) is not { } offset
+                || (GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) ?? TileLoader?.Invoke(tile.X + offset.Dx, tile.Y + offset.Dy)) is not { } other)
             {
                 continue;
             }
