@@ -19,6 +19,7 @@ How to read the tables:
 - [`Auras`](#auras)
 - [`Auth`](#auth)
 - [`Auth:AutoPatch`](#authautopatch)
+- [`AutoBroadcast`](#autobroadcast)
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
@@ -56,6 +57,7 @@ How to read the tables:
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
 - [`Rest`](#rest)
+- [`ServerMail`](#servermail)
 - [`Skills`](#skills)
 - [`SpecialLoot`](#specialloot)
 - [`SpellRules`](#spellrules)
@@ -216,6 +218,14 @@ How to read the tables:
 | `Auth:AutoPatch:Enabled` | `bool` | `false` | - | Offer patches at all. Default false: a non-5875 client gets WOW_FAIL_VERSION_INVALID as before. |
 | `Auth:AutoPatch:FileNamePattern` | `string` | `"{build}{locale}.mpq"` | - | The file looked up when no `Patches` entry matches: `{build}` and `{locale}` are replaced (vmangos "%d%s.mpq", e.g. 5464enUS.mpq). Empty disables the fallback so only listed patches are served. |
 | `Auth:AutoPatch:Patches` | `List<AutoPatchEntry>` | `[]` | - | Explicit patches, checked first: an exact build and locale, then the same build with an empty (any) locale. |
+
+## `AutoBroadcast`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AutoBroadcast:Enabled` | `bool` | `false` | - | Off by default: ClassicDB has no autobroadcast table, so the messages come from this section. |
+| `AutoBroadcast:IntervalMs` | `uint` | `1800000` | - | vmangos default 1800000 (30 minutes). |
+| `AutoBroadcast:Messages` | `List<string>` | `[]` | - | The announcements (vmangos autobroadcast.string_id rows; sql/custom/autobroadcast_example.sql has the classic tips). |
 
 ## `Bans`
 
@@ -760,6 +770,12 @@ How to read the tables:
 | `Rest:RateOfflineInTavernOrCity` | `float` | `1` | - | Rate.Rest.Offline.InTavernOrCity: multiplier of the rested experience gained while logged out, when the character logged out resting. |
 | `Rest:RateOfflineInWilderness` | `float` | `1` | - | Rate.Rest.Offline.InWilderness: multiplier of the rested experience gained while logged out, when the character did not log out resting. The gain is a quarter of the resting one at rate 1 (the reference divides it by four). |
 | `Rest:SaveIntervalSeconds` | `uint` | `300` | - | Seconds between the writes of the rested state of every online character (the pool, the time and the resting flag; the time is what offline accrual counts from after a crash). A logout and a shutdown always write. 0 writes only then, so after a crash the stored time is that of the last logout and the whole session counts as offline time. |
+
+## `ServerMail`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ServerMail:Enabled` | `bool` | `true` | - | Send the mail_server_template letters at login (default on; with empty tables nothing is sent). |
 
 ## `Skills`
 
