@@ -41,12 +41,12 @@ public sealed class ServerMailCharacterEntity
 }
 
 /// <summary>
-/// Characters schema 50: AzerothCore's server mail tables (mail_server_template, _items, _conditions, mail_server_character): the
+/// Characters schema 54: AzerothCore's server mail tables (mail_server_template, _items, _conditions, mail_server_character): the
 /// templates, their items and conditions, and which character already got which letter. Deleting a character drops its sent records.
 /// </summary>
 public sealed class ServerMailDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 50;
+    public const int Version = 54;
     public const string Templates = "mail_server_template", Items = "mail_server_template_items",
         Conditions = "mail_server_template_conditions", Sent = "mail_server_character";
 
