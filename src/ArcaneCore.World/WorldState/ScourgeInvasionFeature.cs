@@ -57,6 +57,14 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
         }
         if (_hasStore) WorldStateHooks.For(world).WorldStates.Add(this);
+        // QuestNpcFeature rebuilds its services when it attaches: install the cultist gossip on the first world command.
+        world.Post(() =>
+        {
+            using IServiceScope scope = scopes.CreateScope();
+            var creatureWorld = scope.ServiceProvider.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+            scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.AddGossipScript(new CultistEngineerGossip(
+                id => creatureWorld?.Content.Ai.BroadcastTexts.Find((uint)id)?.Text, Random));
+        });
         events.ServiceCreated += Wire;
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
@@ -174,6 +182,10 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                     creature => new PallidHorrorAi(creature, this, NearestCity(creature)));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.PatchworkTerror,
                     creature => new PallidHorrorAi(creature, this, NearestCity(creature)));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.CultistEngineer,
+                    creature => new CultistEngineerAi(creature));
+                creatures.RegisterEntryAi(ScourgeInvasionCatalog.ShadowOfDoom,
+                    creature => new ShadowOfDoomAi(creature, Random));
                 creatures.RegisterEntryAi(ScourgeInvasionCatalog.Flameshocker,
                     creature => new FlameshockerAi(creature, Random));
             }
