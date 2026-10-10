@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 184 |
-| `Administrator` | 6 | 266 |
+| `GameMaster` | 3 | 188 |
+| `Administrator` | 6 | 270 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -320,6 +320,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
 | `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
 | `.playerbot scenario run` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario run $name Run one scenario with scripted bots and print its report. |
+| `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n]\|show $id\|reset [$id]] The playerbot QA findings: stalls, death loops, faults and missing data the bots ran into, ranked, and the GitHub reporter's state. |
+| `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] List the n (default 10, at most 25) highest-ranked findings with their short ids. |
+| `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
+| `.playerbot qa reset` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa reset [$id] Forget one finding, or all of them. Local only: GitHub issues are not touched. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |
