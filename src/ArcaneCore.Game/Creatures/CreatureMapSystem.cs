@@ -384,7 +384,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     break;
 
                 case CreatureDeathState.Dead:
-                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature))
+                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature) && LinkAllowsSpawn(creature))
                     {
                         Respawn(creature);
                     }

@@ -107,6 +107,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Evaded?.Invoke(creature);
+        DoLinkedEvent(creature, LinkEvent.Evade); // cmangos CreatureAI::EnterEvadeMode → LINKING_EVENT_EVADE
         OnGroupMemberEvaded(creature); // cmangos Unit::TriggerEvadeEvents → CREATURE_GROUP_EVENT_EVADE
     }
 
