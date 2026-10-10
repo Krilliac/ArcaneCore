@@ -1,8 +1,12 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Scripting.Modules;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Duel;
+using ArcaneCore.Protocol;
 using Xunit;
+using static ArcaneCore.Game.Tests.CreatureTestSupport;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Scripting;
@@ -98,6 +102,112 @@ public sealed class DuelResetScriptTests
         Assert.Equal(900u, rig.A.Health);
         Assert.False(script.HasSavedState(rig.A));
         Assert.False(script.HasSavedState(rig.B));
+    }
+
+    /// <summary>A pet owned by A (UNIT_FIELD_SUMMON), standing on map 0 next to its owner.</summary>
+    private static Creature AddPet(DuelRig rig)
+    {
+        const uint entry = 900101;
+        var template = Template(entry, b => b.Faction = 14);
+        var pet = new Creature(entry, template, null, Content([template], []), new Random(1));
+        pet.MapId = 0;
+        pet.Relocate(rig.A.X + 1, rig.A.Y, rig.A.Z, 0, rig.Kit.Now);
+        rig.Map.AddObject(pet);
+        rig.A.SetPetGuid(pet.Guid);
+        Assert.Same(pet, rig.A.GetPet());
+        return pet;
+    }
+
+    private static void StartPetCooldown(DuelRig rig, Creature pet, uint spellId, uint leftMs)
+        => rig.Kit.System.RestoreCooldowns(pet, [new PersistedCooldown(SpellCooldownKind.Spell, spellId, leftMs)], nowUnixMs: 0);
+
+    private static uint PetLeft(DuelRig rig, Creature pet, uint spellId)
+        => rig.Kit.System.GetActiveCooldowns(pet).FirstOrDefault(c => c.SpellId == spellId).CooldownMs;
+
+    /// <summary>The (spell id, GUID) pairs of the SMSG_CLEAR_COOLDOWN packets the owner received.</summary>
+    private static List<(uint SpellId, ulong Guid)> ClearedFor(DuelRig rig)
+        => [.. Packets(rig.SessionA, WorldOpcode.SmsgClearCooldown).Select(payload =>
+        {
+            var reader = new PacketReader(payload);
+            uint spellId = reader.ReadUInt32();
+            return (spellId, reader.ReadUInt64());
+        })];
+
+    [Fact]
+    public void DuelStart_ClearsEveryPetCooldown_AndTellsTheOwner()
+    {
+        using var rig = NewRig();
+        Install(rig, new DuelResetSettings { Zones = "" });
+        Creature pet = AddPet(rig);
+        StartPetCooldown(rig, pet, ShortCooldown, 20_000);
+        StartPetCooldown(rig, pet, LongCooldown, 30 * 60_000); // no ten-minute filter for pets
+        rig.Challenge();
+        rig.SessionA.Clear();
+
+        rig.AcceptAndStart();
+
+        Assert.Equal(0u, PetLeft(rig, pet, ShortCooldown));
+        Assert.Equal(0u, PetLeft(rig, pet, LongCooldown));
+        Assert.Equal(
+            [(ShortCooldown, pet.Guid.Value), (LongCooldown, pet.Guid.Value)],
+            ClearedFor(rig).OrderBy(c => c.SpellId).ToArray());
+    }
+
+    [Fact]
+    public void AWonDuel_ClearsPetCooldownsStartedDuringTheDuel_AndDoesNotRestoreThePreDuelOnes()
+    {
+        using var rig = NewRig();
+        Install(rig, new DuelResetSettings { Zones = "" });
+        Creature pet = AddPet(rig);
+        StartPetCooldown(rig, pet, ShortCooldown, 20_000);
+        rig.Challenge();
+        rig.AcceptAndStart();
+        Assert.Equal(0u, PetLeft(rig, pet, ShortCooldown));
+
+        StartPetCooldown(rig, pet, LongCooldown, 60_000); // started during the duel
+        rig.Kit.Now += 5_000;
+        rig.Service.Cancel(rig.B); // B forfeits: A wins
+
+        Assert.Empty(rig.Kit.System.GetActiveCooldowns(pet));
+    }
+
+    [Fact]
+    public void OutsideTheWhitelist_OrWithCooldownsOff_PetCooldownsAreKept()
+    {
+        foreach (DuelResetSettings settings in new[]
+        {
+            new DuelResetSettings { Zones = "1519", Areas = "" },
+            new DuelResetSettings { Zones = "", Cooldowns = false },
+        })
+        {
+            using var rig = NewRig();
+            Install(rig, settings);
+            Creature pet = AddPet(rig);
+            StartPetCooldown(rig, pet, ShortCooldown, 20_000);
+            rig.Challenge();
+            rig.SessionA.Clear();
+
+            rig.AcceptAndStart();
+            rig.Service.Cancel(rig.B);
+
+            Assert.Equal(20_000u, PetLeft(rig, pet, ShortCooldown));
+            Assert.Empty(ClearedFor(rig));
+        }
+    }
+
+    [Fact]
+    public void AFledDuel_LeavesPetCooldownsStartedDuringTheDuel()
+    {
+        using var rig = NewRig();
+        Install(rig, new DuelResetSettings { Zones = "" });
+        Creature pet = AddPet(rig);
+        rig.Challenge();
+        rig.AcceptAndStart();
+        StartPetCooldown(rig, pet, ShortCooldown, 40_000);
+
+        rig.Service.Complete(rig.A, Combat.DuelCompleteType.Fled);
+
+        Assert.Equal(40_000u, PetLeft(rig, pet, ShortCooldown));
     }
 
     [Fact]

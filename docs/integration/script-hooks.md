@@ -50,7 +50,7 @@ and `Areas`.
 
 Deviations from the module:
 - No spell cooldown mods in the ten-minute and age checks.
-- Pet cooldowns are not reset.
+- Pet cooldowns are cleared outright (no age or ten-minute filter) at the duel start and again when a won duel ends, and are never saved or restored, as in the TrinityCore original (`duel_reset.cpp`). The owner's client is told per spell with `SMSG_CLEAR_COOLDOWN` carrying the pet's GUID. The pet's global cooldown and school lockouts are not touched.
 - Saved state is dropped at the end of every duel. The module keeps it after a fled duel.
 - Zone or area id 0 never matches, so an unknown position stays outside the whitelist.
 
