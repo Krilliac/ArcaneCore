@@ -41,7 +41,14 @@ public sealed class WorldRuntime : IDisposable
         Options = options;
         _saveQueue = saveQueue;
         _logger = logger;
+        Scripts.Logger = logger;
     }
+
+    /// <summary>
+    /// The global script hooks (AzerothCore ScriptMgr; docs/integration/script-hooks.md). Modules register before <see cref="Start"/>;
+    /// a hook nobody registered costs its dispatch site one empty-array check.
+    /// </summary>
+    public Scripting.ScriptHookRegistry Scripts { get; } = new();
 
     public WorldRuntimeOptions Options { get; }
 
@@ -258,7 +265,11 @@ public sealed class WorldRuntime : IDisposable
     public event Action<uint>? WorldTick;
 
     /// <summary>Announce that <paramref name="player"/> finished entering the world (world thread).</summary>
-    public void NotifyLoggedIn(Player player) => Raise(PlayerLoggedIn, player, nameof(PlayerLoggedIn));
+    public void NotifyLoggedIn(Player player)
+    {
+        Raise(PlayerLoggedIn, player, nameof(PlayerLoggedIn));
+        Scripts.Player.OnLogin(player);
+    }
 
     /// <summary>Queue one player's current state for saving (world thread).</summary>
     public void SavePlayer(Player player)
@@ -287,6 +298,7 @@ public sealed class WorldRuntime : IDisposable
         }
 
         _stopped = false;
+        Scripts.Freeze();
         _thread = new Thread(Run) { IsBackground = true, Name = "world" };
         _thread.Start();
     }
@@ -457,6 +469,7 @@ public sealed class WorldRuntime : IDisposable
         }
 
         Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        Scripts.Player.OnLogout(player);
         player.Map?.RemovePlayer(player);
         if (!player.IsQuestSettlementPending)
         {
@@ -502,6 +515,7 @@ public sealed class WorldRuntime : IDisposable
         // World-level services (game events, rest, the tick watchdog) run before the maps. Their time counts as world
         // features, but untimed per handler: the watchdog's handler must stay a few stores at the start of the tick.
         Raise(WorldTick, diffMs, nameof(WorldTick));
+        Scripts.World.OnUpdate(diffMs);
         long worldTickEnd = Stopwatch.GetTimestamp();
         long worldTickBytesEnd = GC.GetAllocatedBytesForCurrentThread();
 
@@ -754,6 +768,7 @@ public sealed class WorldRuntime : IDisposable
         long last = _clock.ElapsedMilliseconds;
         long lastStartTicks = -1;
         _logger.LogInformation("World thread started ({Interval} ms tick, {Timer} timer, late after {Tolerance} ms)", interval, waiter.Mode, tolerance);
+        Scripts.World.OnStartup();
 
         while (!_stopSignal.IsSet)
         {

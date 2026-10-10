@@ -781,6 +781,7 @@ public sealed partial class MapCombat
             return 0;
         }
 
+        damage = _world.Scripts.Unit.OnDamage(attacker, victim, damage);
         if (victim is Player standing && !IsStandingUp(standing))
         {
             standing.SetStandState(StandState.Stand);
@@ -996,6 +997,18 @@ public sealed partial class MapCombat
         }
 
         UnitKilled?.Invoke(killer, victim);
+
+        Scripting.ScriptHookRegistry scripts = _world.Scripts;
+        scripts.Unit.OnDeath(victim, killer);
+        if (playerTap is not null && !ReferenceEquals(playerTap, victim))
+        {
+            scripts.Player.OnKill(playerTap, victim);
+        }
+
+        if (victim is Player killedPlayer)
+        {
+            scripts.Player.OnKilled(killedPlayer, killer);
+        }
     }
 
     /// <summary>vmangos Unit::SetDeathState / Player::SetDeathState for the states combat drives.</summary>
