@@ -151,6 +151,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.NightmareDragonsDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.NightmareDragonsDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.CharacterDrunkDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.CharacterDrunkDataModule.Version),
             (typeof(PetLoyaltyDataModule), DatabaseComponent.Characters, PetLoyaltyDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.SilithystDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.SilithystDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -182,7 +183,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(49, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49)
-        Assert.Equal(52, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52)
+        Assert.Equal(53, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
