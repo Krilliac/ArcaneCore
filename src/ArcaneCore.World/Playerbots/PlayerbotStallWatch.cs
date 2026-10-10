@@ -153,9 +153,12 @@ internal sealed class PlayerbotStallWatch
 
     private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers);
 
-    /// <summary>What counts as progress besides moving.</summary>
+    /// <summary>
+    /// What counts as progress besides moving. <paramref name="RestMark"/>: the most health and mana seen while the bot rests (0
+    /// otherwise), so regeneration is a resting bot's progress.
+    /// </summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
-        uint Objectives, int Spells);
+        uint Objectives, int Spells, ulong RestMark = 0);
 }
 
 /// <summary>
