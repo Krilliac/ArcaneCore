@@ -123,12 +123,16 @@ Risks:
 - **Performance.** An extra indirection per packet and field. Mitigation: per-session cached arrays, no virtual calls in the update-field hot loop (layout arrays indexed by semantic id).
 - **Client data availability.** Each build needs extracted data. Optional data stays optional per version.
 
-## 6. Open decisions for Nate
-1. **Mixed-build realms or one build per realm?** (Recommended: one build per realm first, and mixed later as an opt-in.)
-2. **Which builds?** Only 5875/8606/12340, or also 1.12.2/1.12.3, 2.0.x, 3.0.x? (Recommended: just the three.)
-3. **Spell and aura model:** a logical superset enum (recommended) or per-version enums behind an adapter?
-4. **Content source per expansion:** which TBC and WotLK DBs (cMaNGOS tbc-db/wotlk-db, TC 3.3.5 world, AC)? Licence and schema differ.
-5. **Primary keys:** extend them with `min_build` (recommended for templates) or use separate override tables?
-6. **Characters across versions:** may a 1.12 client log in a character created on 3.3.5 if it's still classic-legal?
-7. **Priority versus the current roadmap:** S0 to S2 also improve the 1.12 code (typed packets), so they can start now. Should S3 and later wait until vanilla is "done"?
-8. **Default `realm.max_expansion`:** 0 (classic). Confirm.
+## 6. Decisions
+
+Decided by Nate on 2026-10-10:
+1. **One build per realm.** Mixed-build realms aren't planned (a realm carries `allowed_builds` with exactly one build).
+2. **Builds:** 5875, 8606 and 12340 only.
+3. **Aura model:** one combined logical aura enum, a superset of all three versions, with a per-build wire mapping.
+5. **Primary keys:** template tables extend their key with `min_build`.
+7. **Priority:** S0 through S2 now. S3 and later are on hold.
+8. **Default `realm.max_expansion`:** 0 (classic).
+
+Still open:
+4. **Content source per expansion:** which TBC and WotLK DBs to import from (cMaNGOS tbc-db/wotlk-db, TC 3.3.5 world, AC). Licence and schema differ.
+6. **Characters across versions:** may a 1.12 client log in a character created on 3.3.5 if it's still classic-legal? This becomes moot within a realm under decision 1, but stays relevant if characters ever move between realms.
