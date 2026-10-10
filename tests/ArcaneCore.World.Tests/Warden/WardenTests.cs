@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using ArcaneCore.Data.World.Warden;
 using ArcaneCore.World.Warden;
 using Xunit;
 
@@ -284,6 +285,84 @@ public sealed class WardenTests
             new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Memory, Expected = "zz" },
             new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Driver });
         Assert.Equal(3, options.Validate().Count);
+    }
+
+    [Fact]
+    public void TheSeed_IsTheVmangos5875Set_AndEveryRunnableRowParses()
+    {
+        Assert.Equal(94, WardenCheckSeed.Rows.Count);
+        var skipped = new List<uint>();
+        List<WardenCheckOptions> checks = WardenCheckRows.Merge(WardenCheckSeed.Rows, [], 5875, (row, _) => skipped.Add(row.Id));
+        Assert.Empty(skipped);
+        Assert.Equal(94, checks.Count);
+        Assert.Equal(80, checks.Count(c => c.Kind == WardenCheckKind.Memory));
+        Assert.Equal(6, checks.Count(c => c.Kind == WardenCheckKind.Mpq));
+        Assert.Equal(4, checks.Count(c => c.Kind == WardenCheckKind.PageA));
+        Assert.Equal(4, checks.Count(c => c.Kind == WardenCheckKind.ModuleByName));
+        WardenCheckOptions gravity = checks.Single(c => c.Id == 8);
+        Assert.Equal((8151666u, "D893FEC0"), (gravity.Address, gravity.Expected));
+    }
+
+    [Fact]
+    public void Rows_AreFilteredByBuild_AndAConfiguredIdReplacesTheRow()
+    {
+        WardenCheckRow[] rows =
+        [
+            new() { Id = 1, Type = 0, Address = 16, Length = 2, Result = "9090", Penalty = 2 },
+            new() { Id = 2, Type = 0, Address = 16, Length = 1, Result = "90", BuildMin = 6141, BuildMax = 6141 },
+            new() { Id = 3, Type = 6, Result = "" },
+            new() { Id = 4, Type = 0, Address = 16, Length = 3, Result = "90" },
+        ];
+        var skipped = new List<uint>();
+        List<WardenCheckOptions> merged = WardenCheckRows.Merge(rows, [new WardenCheckOptions { Id = 9, Kind = WardenCheckKind.Timing }], 5875, (r, _) => skipped.Add(r.Id));
+        Assert.Equal([1u, 9u], merged.Select(c => c.Id));
+        Assert.Equal(WardenAction.Ban, merged[0].Action);
+        Assert.Equal([3u, 4u], skipped);
+
+        List<WardenCheckOptions> replaced = WardenCheckRows.Merge(rows, [new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Timing }], 5875);
+        Assert.Equal(WardenCheckKind.Timing, Assert.Single(replaced).Kind);
+    }
+
+    [Fact]
+    public void MpqLuaAndModuleScans_UseTheModulesFormat_AndTheirRepliesAreChecked()
+    {
+        byte[] hash = [.. Enumerable.Range(1, 20).Select(i => (byte)i)];
+        WardenOptions options = Scans(
+            new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Mpq, Path = "Interface\\x.lua", Expected = Convert.ToHexString(hash) },
+            new WardenCheckOptions { Id = 2, Kind = WardenCheckKind.Mpq, Path = "bad.m2" },
+            new WardenCheckOptions { Id = 3, Kind = WardenCheckKind.Lua, Path = "CheatVar", Wanted = false },
+            new WardenCheckOptions { Id = 4, Kind = WardenCheckKind.Lua, Path = "GetLocale", Expected = "enUS" },
+            new WardenCheckOptions { Id = 5, Kind = WardenCheckKind.ModuleByName, Module = "tamia.dll", Wanted = false });
+        var rig = new Rig(options);
+        rig.Handshake();
+        rig.Warden.Update(10_000);
+        byte[] request = rig.Next();
+        byte x = WardenModuleProfile.XorByte;
+        int p = 1;
+        Assert.Equal("Interface\\x.lua", ReadString(request, ref p));
+        Assert.Equal("bad.m2", ReadString(request, ref p));
+        Assert.Equal("CheatVar", ReadString(request, ref p));
+        Assert.Equal("GetLocale", ReadString(request, ref p));
+        Assert.Equal(0, request[p++]);
+        Assert.Equal([(byte)(WardenModuleProfile.OpMpq ^ x), 1, (byte)(WardenModuleProfile.OpMpq ^ x), 2, (byte)(WardenModuleProfile.OpLua ^ x), 3, (byte)(WardenModuleProfile.OpLua ^ x), 4],
+            request[p..(p + 8)]);
+        p += 8;
+        Assert.Equal(WardenModuleProfile.OpModule ^ x, request[p++]);
+        uint seed = BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(p)); p += 4;
+        Assert.Equal(WardenCheck.Hmac(seed, "TAMIA.DLL"u8), request[p..(p + 20)]); p += 20;
+        Assert.Equal(x, request[p++]);
+        Assert.Equal(request.Length, p);
+
+        // clean: the file hash matches, the bad file is absent, the cheat variable is absent, the locale is enUS, no tamia.dll
+        rig.Warden.Handle(rig.Result([0, .. hash, 1, 1, 0, 4, .. "enUS"u8, 0]));
+        Assert.Empty(rig.Verdicts);
+
+        rig.Warden.Update(10_000);
+        rig.Next();
+        byte[] other = [.. hash];
+        other[0] ^= 0xFF;
+        rig.Warden.Handle(rig.Result([0, .. other, 0, .. hash, 0, 1, (byte)'1', 0, 4, .. "deDE"u8, WardenModuleProfile.Found]));
+        Assert.Equal([1u, 2u, 3u, 4u, 5u], rig.Verdicts.Select(v => v.CheckId!.Value));
     }
 
     private static string ReadString(byte[] data, ref int p)

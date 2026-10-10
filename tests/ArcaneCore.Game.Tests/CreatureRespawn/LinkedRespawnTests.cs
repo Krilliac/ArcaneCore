@@ -211,4 +211,65 @@ public sealed class LinkedRespawnTests
             Assert.Equal(120, DelayAfterDeath(system, c));
         }
     }
+
+    [Fact]
+    public void GridLoad_FiresTheRespawnLink()
+    {
+        // cmangos Creature::LoadFromDB: "Initial load is handled like respawn" - DESPAWN_ON_RESPAWN removes the slave at once.
+        (WorldRuntime world, _, _, Creature trash) = Start(0x100);
+        using (world)
+        {
+            Assert.False(trash.IsAlive);
+        }
+    }
+
+    [Fact]
+    public void AggroOnAggro_TrashJoinsTheBossFight()
+    {
+        (WorldRuntime world, CreatureMapSystem system, Creature boss, Creature trash) = Start(0x1);
+        using (world)
+        {
+            Player player = world.GetMap(0, 0).Players.Single();
+            system.EnterCombatWithTarget(boss, player);
+            Assert.True(boss.Combat.IsInCombat);
+            Assert.True(trash.Combat.IsInCombat);
+        }
+    }
+
+    [Fact]
+    public void ToAggroOnAggro_TrashPullsTheBoss()
+    {
+        (WorldRuntime world, CreatureMapSystem system, Creature boss, Creature trash) = Start(0x2);
+        using (world)
+        {
+            Player player = world.GetMap(0, 0).Players.Single();
+            system.EnterCombatWithTarget(trash, player);
+            Assert.True(boss.Combat.IsInCombat);
+        }
+    }
+
+    [Fact]
+    public void AggroOnAggro_NotWithoutTheFlag()
+    {
+        (WorldRuntime world, CreatureMapSystem system, Creature boss, Creature trash) = Start(0x80);
+        using (world)
+        {
+            system.EnterCombatWithTarget(boss, world.GetMap(0, 0).Players.Single());
+            Assert.False(trash.Combat.IsInCombat);
+        }
+    }
+
+    [Fact]
+    public void InstanceScriptsThatCarryAggroLinksOptOut()
+    {
+        WorldRuntime world = TestWorld.CreateRuntime();
+        using (world)
+        {
+            Map map = world.GetMap(0, 0);
+            Assert.True(new ArcaneCore.Game.Instances.Scripts.MoltenCore.MoltenCoreInstance(map).CarriesAggroLinking(12259));
+            var naxx = new ArcaneCore.Game.Instances.Scripts.Naxxramas.NaxxramasInstance(map);
+            Assert.True(naxx.CarriesAggroLinking(15956));
+            Assert.False(naxx.CarriesAggroLinking(16028));
+        }
+    }
 }

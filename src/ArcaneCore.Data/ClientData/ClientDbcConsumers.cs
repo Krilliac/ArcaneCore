@@ -28,6 +28,7 @@ public static class ClientDbcConsumers
         new("CharacterCreation:CharSectionsDbcPath", "CharSections.dbc", "character creation appearance check", "appearance is not checked", "CharacterCreation"),
         new("CharacterCreation:CharacterFacialHairStylesDbcPath", "CharacterFacialHairStyles.dbc", "character creation appearance check", "appearance is not checked", "CharacterCreation"),
         new("Combat:ShapeshiftFormDbcPath", "SpellShapeshiftForm.dbc", "stances and shapeshift forms", "built-in build-5875 table (ShapeshiftFormCatalog.Retail)"),
+        new("Pets:CreatureFamilyDbcPath", "CreatureFamily.dbc", "hunter pet diets (Feed Pet)", "no diet check: any food is accepted"),
         new("Creatures:CreatureDisplayInfoDbcPath", "CreatureDisplayInfo.dbc", "creature display scale and model", "default creature geometry", "CreatureDisplay"),
         new("Creatures:CreatureModelDataDbcPath", "CreatureModelData.dbc", "creature display scale and model", "default creature geometry", "CreatureDisplay"),
         new("Creatures:FactionTemplateDbcPath", "FactionTemplate.dbc", "creature hostility", "nobody aggroes on sight unless a catalog is registered"),

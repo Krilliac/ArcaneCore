@@ -67,6 +67,7 @@ builder.Services.AddDatabaseResilience(builder.Configuration); // breakers + boo
 builder.Services.AddWorldDaemon(builder.Configuration);
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddWorldWatchdog(builder.Configuration);
+builder.Services.AddWorldMetrics(builder.Configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)
 builder.Services.AddSingleton(clientData);
 
 IHost host = builder.Build();

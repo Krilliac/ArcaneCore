@@ -65,6 +65,17 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(Options.CreatureFamilyDbcPath))
+        {
+            IReadOnlyDictionary<uint, uint> masks = global::ArcaneCore.Data.Content.Pets.CreatureFamilyDbcReader.LoadFoodMasks(Options.CreatureFamilyDbcPath);
+            Service.PetFoodMask = family => masks.TryGetValue(family, out uint mask) ? mask : null;
+            _logger.LogInformation("Loaded {Families} pet diets from {Path}", masks.Count, Options.CreatureFamilyDbcPath);
+        }
+        else
+        {
+            _logger.LogInformation("Pets:CreatureFamilyDbcPath is not set: Feed Pet skips the pet diet check");
+        }
+
         if (_services.GetService<SpellFeature>() is { } spells)
         {
             Service.Install(spells.System);

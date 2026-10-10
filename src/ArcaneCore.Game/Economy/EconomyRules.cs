@@ -233,7 +233,7 @@ public static class AuctionHouseRules
 
     /// <summary>The smallest bid accepted now: the start bid without a bidder, otherwise current + outbid.</summary>
     public static uint MinimumBid(AuctionRecord auction)
-        => auction.BidderId == 0 ? auction.StartBid : (uint)Math.Min(uint.MaxValue, (ulong)auction.Bid + OutBid(auction.Bid));
+        => auction.BidderId == 0 && auction.Bid == 0 ? auction.StartBid : (uint)Math.Min(uint.MaxValue, (ulong)auction.Bid + OutBid(auction.Bid));
 }
 
 /// <summary>vmangos AuctionAction (SMSG_AUCTION_COMMAND_RESULT action).</summary>

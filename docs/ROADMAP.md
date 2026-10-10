@@ -216,3 +216,44 @@ This is a locally verified candidate; CI and client acceptance are separate,
 pending gates. [Item/pet scope and verification](integration/server-item-pets-20261004.md)
 and [next bounded slices](integration/next-slices-20261004.md) supersede earlier
 blanket absence labels without claiming complete vanilla fidelity.
+
+## Current state & next steps (2026-10-10)
+
+**This is the master to-do list for any agent (Claude or otherwise) continuing ArcaneCore.** Follow it top to bottom.
+
+### State
+- `main` = `ecd5b3eb` (wave 18 batch 1: #48–#53, fully gated on Nate's PC with imported content).
+- `integrate/wave17` = `8054e220` (batch 2: #54–#67). **Not yet gated onto main**; the PC went offline mid-gate.
+- The box has no git push credentials. The `main` fast-forward must be done from Nate's PC (`D:\ArcaneCore`).
+- Hosted CI is backed up. **CI is the test gate** (Nate: "let CI handle tests"). Keep builds serialized; never run full suites on the box, only a branch's own new tests.
+
+### Merge queue into `integrate/wave17` (in order)
+**Done 2026-10-10** on `ccr-86ce8cb7-m7iigv` (steps 1-7 except the `main` fast-forward, which needs the PC): every PR below merged in this
+order, four PR defects fixed, local full gate green. Merges, fixes, gate and branch cleanup: [wave 18 report](integration/wave18-20261010.md).
+
+1. **#86** CI speedup. The check names become `test (Game)`, `test (World)`, `test (Data)`, `test (Rest)`, so update branch protection. Drafts get no CI until marked ready.
+2. **#82** polymorph double-heal regen fix (fixes `EvadeFidelityTests.APolymorphedCreatureAPlayerOwns_RegeneratesATenth`).
+3. Clean, any order: #69 script hooks, #70 world scripts 2, #71 autopatcher, #75 aggro linking, #76 perf4 (visibility ~24% faster), #77 metrics **then** #78 docker, #79 playerdump, #81 multi-version S0 (refactor not yet build-verified; byte-exact replay tests must pass).
+4. World schema chain: #72 SmartAI = 48, then #84 Warden checks = 49 (drop `ReservedWorldSchema48` after #72).
+5. Characters chain: #74 world bosses = 50; #73 pets/effects = 51/52 (delete `Reserved74SchemaGap.cs` and its 2 test lines after #74); #80 opvp follow-up = 53; #83 broadcast + server mail = 54; #68 ahbot = world 50 + characters 55 (regenerate `schema.md` and `gm-commands.md` after).
+6. Stacked world scripts: #85 (Windsor, In Dreams, Nightmare Manifests) on #70; #87 FollowerAI + Kerlonian on #85; #88 batch 5 on #87; #89 (Stinky Ignatz, Triage, Magrami spectre, Plucky Johnson, city guards) on #88. Retarget each to `integrate/wave17` as its parent merges.
+7. After all: regenerate docs (`ARCANECORE_UPDATE_DOCS=1`), full gate, fast-forward `main` (from the PC), write the wave 18 report at `docs/integration/wave18-*.md` (the earlier draft was lost).
+- Do **not** merge `grok/w18-respawn` (stale and broken; delete it). `grok/wave17-test-fixes` overlaps `e7fdd74a`/`ac326b41`, so check before reusing it.
+
+### Open work
+- **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). Next up are the 10 area-trigger scripts (`areatrigger_scripts.cpp`). Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
+- **SmartAI slice 2:** conditions, plus GO, areatrigger and timed-action-list sources.
+- **Pets:** happiness/loyalty gain, training-point costs (SkillLineAbility.dbc), beast training, Far Sight view extension, possess summon limits.
+- **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
+- **Metrics:** realm packet counters, per-opcode labels. Docker is untested.
+- **AH bot:** gaps listed in `docs/areas/auction-house-bot.md`.
+- **Outdoor PvP:** verify capture radius and time against the type-29 templates.
+- **Script hooks:** DuelReset pet cooldowns, addon chat.
+- **Multi-version:** S1 after #81 (build info on sessions, expansion columns, the gate, build-column migrations); S2 movement codec and typed serializers. Still undecided: which TBC/WotLK content DBs to use, and cross-version characters (decisions 4 and 6 on #61).
+- **Autopatcher:** done (off by default).
+- Nate has approved Warden module bytes in the repo and the bot-stall pathing change.
+
+### Rules
+- Schema versions stay contiguous; no placeholders left at merge.
+- GPL-3.0; DCO sign-off as the repo does.
+- No full test suites on the box; CI gates.

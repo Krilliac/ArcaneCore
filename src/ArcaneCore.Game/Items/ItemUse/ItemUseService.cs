@@ -109,6 +109,12 @@ public sealed class ItemUseService(SpellSystem spells, Func<Player, Item, bool>?
             return;
         }
 
+        // AzerothCore ItemScript::OnUse / AllItemScript: a module may take the use over (docs/integration/script-hooks.md).
+        if (player.Map?.World.Scripts.Item.OnUse(player, item, targets) == true)
+        {
+            return;
+        }
+
         if ((player.UnitFlags & UnitFlags.InCombat) != 0)
         {
             foreach (Kernel.Items.ItemSpell itemSpell in itemSpells)

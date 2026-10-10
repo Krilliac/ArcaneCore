@@ -102,6 +102,12 @@ public sealed class CharmInfo
 
     public bool RenameAllowed { get; internal set; }
 
+    /// <summary>vmangos Pet::m_loyaltyPoints (hunter pets; see <see cref="PetLoyalty"/>).</summary>
+    public int LoyaltyPoints { get; internal set; }
+
+    /// <summary>vmangos Pet::m_trainingPoints: minus the training points spent, plus those earned (shown through UNIT_TRAINING_POINTS).</summary>
+    public int TrainingPoints { get; internal set; }
+
     /// <summary>vmangos m_commandState: a new pet follows (CharmInfo constructor).</summary>
     public CommandState CommandState { get; internal set; } = CommandState.Follow;
 

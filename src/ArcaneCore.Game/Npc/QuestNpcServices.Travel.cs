@@ -38,14 +38,25 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        BindHome(player, npc.Guid);
+        CloseGossip(player);
+        Flush(s);
+    }
+
+    /// <summary>
+    /// SPELL_EFFECT_BIND (11; vmangos Spell::EffectBind, SpellEffects.cpp): the home bind moves to the player's position and area, then
+    /// SMSG_BINDPOINTUPDATE and SMSG_PLAYERBOUND (the caster as the binder). The innkeeper path above and the spell effect share it.
+    /// </summary>
+    public void BindHome(Player player, ObjectGuid binder)
+    {
+        ArgumentNullException.ThrowIfNull(player);
         uint area = Deps.Maps?.GetAreaId(player.MapId, player.X, player.Y, player.Z) is { } a and not 0 ? a : player.ZoneId;
         player.Home = new HomeBind(player.MapId, area, player.X, player.Y, player.Z);
         _sink.CharacterChanged(player);
         Send(player, WorldOpcode.SmsgBindpointupdate, NpcPackets.BindPointUpdate(player.X, player.Y, player.Z, player.MapId, area));
-        Send(player, WorldOpcode.SmsgPlayerbound, NpcPackets.PlayerBound(npc.Guid, area));
-        CloseGossip(player);
-        Flush(s);
+        Send(player, WorldOpcode.SmsgPlayerbound, NpcPackets.PlayerBound(binder, area));
     }
+
 
     /// <summary>CMSG_TAXINODE_STATUS_QUERY (vmangos SendTaxiStatus: any creature of the map, no interaction checks).</summary>
     public void TaxiNodeStatusQuery(Player player, ObjectGuid guid)

@@ -2,7 +2,10 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.WorldState;
 
 namespace ArcaneCore.World.WorldState;
@@ -136,6 +139,13 @@ internal sealed class ShadowOfDoomAi(Creature creature, Random random) : Creatur
         }
         UpdateVictim();
         if (!Me.Combat.IsInCombat || Victim is not { } victim) return;
+
+        // ScourgeMinion::UpdateAI (scourge_invasion.cpp:1117-1127): Scourge Strike (28265, triggered) at a victim within 30 yd that is
+        // not player-controlled and attackable, so the Shadow of Doom kills every mob near it but not players or their pets.
+        if (InvasionCircleAi.DistanceSquared(Me, victim) <= 30f * 30f && !victim.IsCharmerOrOwnerPlayerOrPlayerItself
+            && Me.Map?.Combat.Hooks.CanAttack(Me, victim) == true)
+            DoCast(victim, ScourgeInvasionCatalog.ScourgeStrike, triggered: true);
+
         if (_flayMs > diffMs) _flayMs -= diffMs;
         else
         {
@@ -148,6 +158,12 @@ internal sealed class ShadowOfDoomAi(Creature creature, Random random) : Creatur
             DoCast(victim, ScourgeInvasionCatalog.Fear);
             _fearMs = 14_500;
         }
+    }
+
+    /// <summary>ScourgeMinion::SpellHit (:1069-1076): Spirit Spawn-out (17680) despawns it 3 s later.</summary>
+    public override void OnSpellHit(Unit caster, SpellInfo spell)
+    {
+        if (spell.Id == ScourgeInvasionCatalog.SpiritSpawnOut) System?.ForcedDespawn(Me, 3_000);
     }
 
     public override void OnDeath(Unit? killer)

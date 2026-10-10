@@ -161,9 +161,11 @@ public sealed class PlayerProgression : IQuestExperience
     public void GiveLevel(Player player, byte level)
     {
         ArgumentNullException.ThrowIfNull(player);
+        byte oldLevel = player.Level;
         if (ApplyLevel(player, level))
         {
             LevelChanged?.Invoke(player);
+            player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
         }
     }
 

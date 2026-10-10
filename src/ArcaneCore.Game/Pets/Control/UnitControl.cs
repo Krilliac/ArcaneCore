@@ -124,6 +124,18 @@ public static class UnitControl
 
     /// <summary>The player whose camera looks from <paramref name="unit"/>: its possessor when that player's farsight is the unit.</summary>
     internal static Player? ViewerOf(WorldObject obj)
-        => obj is Unit unit && Find(unit)?.Possessor is { IsEmpty: false } possessor && unit.Map?.FindPlayer(possessor) is { } player
-            && player.GetUInt64(UpdateFields.PlayerFarsight) == unit.Guid.Value ? player : null;
+    {
+        if (obj is Unit unit && Find(unit)?.Possessor is { IsEmpty: false } possessor && unit.Map?.FindPlayer(possessor) is { } player
+            && player.GetUInt64(UpdateFields.PlayerFarsight) == unit.Guid.Value)
+        {
+            return player;
+        }
+
+        // SPELL_AURA_BIND_SIGHT (Mind Vision) and far sight points: the player who looks from the object.
+        return SightWatchers.TryGetValue(obj, out Player? watcher) && watcher.IsInWorld && ReferenceEquals(watcher.Map, obj.Map)
+            && watcher.GetUInt64(UpdateFields.PlayerFarsight) == obj.Guid.Value ? watcher : null;
+    }
+
+    /// <summary>The player whose camera a bind-sight aura or far sight point moved to the object (vmangos Camera::SetView from a spell).</summary>
+    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldObject, Player> SightWatchers = new();
 }

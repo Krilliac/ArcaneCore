@@ -40,6 +40,7 @@ public sealed partial class SummonService
         });
         spells.RegisterEffectCheck(SpellEffectName.FeedPet, CheckFeedPet);
         spells.RegisterEffect(SpellEffectName.FeedPet, EffectFeedPet);
+        spells.RegisterEffect(SpellEffectName.LearnPetSpell, EffectLearnPetSpell);
     }
 
     /// <summary>vmangos Spell::CheckTamingSpell: the failure reason, or null when the target can be tamed.</summary>
@@ -111,11 +112,15 @@ public sealed partial class SummonService
         }
 
         var snapshot = new PersistentPetSnapshot((int)owner.Guid.Low, NextPetNumber(), target.Entry, (byte)target.Level, 0, uint.MaxValue, uint.MaxValue,
-            TamedHappiness, (byte)ReactState.Defensive, [], []);
+            TamedHappiness, (byte)ReactState.Defensive, [], CreateSpellsFor(target.Entry));
         if (SpawnCached(owner, snapshot, revive: false) is not { } pet)
         {
             return null;
         }
+
+        // SpellEffects.cpp:3151-3154: new pets start Rebellious (Pet::CreateBaseAtCreature) and are raised to the configured default loyalty.
+        PetLoyalty.InitNew(pet);
+        PetLoyalty.RaiseTo(pet, _options.DefaultLoyalty);
 
         pet.SetUInt32(UpdateFields.UnitCreatedBySpell, spellId);
         pet.Health = pet.MaxHealth;
@@ -197,5 +202,63 @@ public sealed partial class SummonService
 
         player.Inventory.DestroyItemCount(food, 1);
         context.System.CastCustomSpell(player, context.Effect.TriggerSpell, SpellCastTargets.ForSelf(), benefit);
+    }
+
+    /// <summary>
+    /// Pet::InitPetCreateSpells (Pet.cpp:2051-2104) for a tame: the petcreateinfo_spell row of the tamed creature's entry, each "learn" spell
+    /// resolved to the spell it teaches. The owner's beast-training side (learning passives, AddTeachSpell) and the training-point cost
+    /// (SkillLineAbility reqtrainpoints, not loaded) are not modelled, so a tame starts with 0 training points spent.
+    /// </summary>
+    internal PersistentPetSpell[] CreateSpellsFor(uint entry)
+    {
+        if (_spells is not { } spells)
+        {
+            return [];
+        }
+
+        var learned = new List<PersistentPetSpell>();
+        foreach (uint spellId in Content.GetCreateSpells(entry))
+        {
+            if (spells.Store.Get(spellId) is not { } learn)
+            {
+                continue;
+            }
+
+            uint petSpell = learn.Effects[0].Effect is SpellEffectName.LearnSpell or SpellEffectName.LearnPetSpell ? learn.Effects[0].TriggerSpell : learn.Id;
+            if (spells.Store.Get(petSpell) is { } spell && learned.All(s => s.SpellId != spell.Id))
+            {
+                learned.Add(new PersistentPetSpell(spell.Id, Autocast: false, Passive: spell.IsPassive));
+            }
+        }
+
+        return [.. learned];
+    }
+
+    /// <summary>
+    /// SPELL_EFFECT_LEARN_PET_SPELL (57; vmangos Spell::EffectLearnPetSpell, SpellEffects.cpp): the caster's live pet learns the trigger spell,
+    /// pays its training points, is saved and the owner gets SMSG_PET_SPELLS again. Pet::CanLearnPetSpell is reduced to "not yet known and
+    /// the pet is at least the spell's level"; family skill lines and training-point costs need SkillLineAbility data that is not loaded.
+    /// </summary>
+    private void EffectLearnPetSpell(SpellEffectContext context)
+    {
+        if (context.Caster is not Player player || LivePet(player) is not { IsAlive: true } pet || pet.Summon?.Charm is not { } charm
+            || context.System.Store.Get(context.Effect.TriggerSpell) is not { } spell
+            || charm.HasSpell(spell.Id) || spell.SpellLevel > pet.Level)
+        {
+            return;
+        }
+
+        if (!charm.LearnSpell(spell.Id, spell.IsPassive ? ActionType.Passive : ActionType.Disabled))
+        {
+            return;
+        }
+
+        if (spell.IsPassive)
+        {
+            context.System.CastSpell(pet, spell.Id, SpellCastTargets.ForSelf(), triggered: true);
+        }
+
+        QueueCurrentPetSave(player);
+        player.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, charm, listSpells: true, context.System.GetActiveCooldowns(pet)));
     }
 }
