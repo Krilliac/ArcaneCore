@@ -17,6 +17,7 @@ How to read the tables:
 - [`AntiCheat`](#anticheat)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
+- [`AutoBroadcast`](#autobroadcast)
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
@@ -52,6 +53,7 @@ How to read the tables:
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
 - [`Rest`](#rest)
+- [`ServerMail`](#servermail)
 - [`Skills`](#skills)
 - [`SpecialLoot`](#specialloot)
 - [`SpellRules`](#spellrules)
@@ -159,6 +161,14 @@ How to read the tables:
 | `Auth:ReadTimeoutSeconds` | `int` | `0` | - | Longest a client may take to deliver the rest of a packet once its command byte has arrived, in seconds; 0 disables. Hardening (no vmangos equivalent, default 0 = retail): a retail client sends each logon packet in one write. |
 | `Auth:StrictUsernameCharset` | `bool` | `false` | - | Reject account names containing anything but printable ASCII (0x21-0x7E). Hardening: vmangos only escapes the name for SQL. A 1.12 client cannot type other characters. Default off (retail). |
 | `Auth:StrictVersionCheck` | `bool` | `false` | - | vmangos StrictVersionCheck, default false. Enabled checks crc_hash against a configured 20-byte hash for the client build/OS/platform. |
+
+## `AutoBroadcast`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AutoBroadcast:Enabled` | `bool` | `false` | - | Off by default: ClassicDB has no autobroadcast table, so the messages come from this section. |
+| `AutoBroadcast:IntervalMs` | `uint` | `1800000` | - | vmangos default 1800000 (30 minutes). |
+| `AutoBroadcast:Messages` | `List<string>` | `[]` | - | The announcements (vmangos autobroadcast.string_id rows; sql/custom/autobroadcast_example.sql has the classic tips). |
 
 ## `Bans`
 
@@ -677,6 +687,12 @@ How to read the tables:
 | `Rest:RateOfflineInTavernOrCity` | `float` | `1` | - | Rate.Rest.Offline.InTavernOrCity: multiplier of the rested experience gained while logged out, when the character logged out resting. |
 | `Rest:RateOfflineInWilderness` | `float` | `1` | - | Rate.Rest.Offline.InWilderness: multiplier of the rested experience gained while logged out, when the character did not log out resting. The gain is a quarter of the resting one at rate 1 (the reference divides it by four). |
 | `Rest:SaveIntervalSeconds` | `uint` | `300` | - | Seconds between the writes of the rested state of every online character (the pool, the time and the resting flag; the time is what offline accrual counts from after a crash). A logout and a shutdown always write. 0 writes only then, so after a crash the stored time is that of the last logout and the whole session counts as offline time. |
+
+## `ServerMail`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ServerMail:Enabled` | `bool` | `true` | - | Send the mail_server_template letters at login (default on; with empty tables nothing is sent). |
 
 ## `Skills`
 
