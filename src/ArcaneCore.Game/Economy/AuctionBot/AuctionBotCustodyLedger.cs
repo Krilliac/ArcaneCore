@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using ArcaneCore.Kernel.Economy;
 
 namespace ArcaneCore.Game.Economy.AuctionBot;
 
@@ -18,6 +19,12 @@ public enum AuctionBotCustodyRole : byte
 
     /// <summary>Copper the bot pays for a player's auction it buys out.</summary>
     Buyout = 1,
+
+    /// <summary>
+    /// Copper the bot bids on a player's auction (cMaNGOS AuctionBotBuyer bid). TerminalOk while the bid stands or after it won;
+    /// <see cref="AuctionBotCustodyLedger.ReleaseBid"/> moves it to TerminalBack when a player outbids it, since no copper left.
+    /// </summary>
+    Bid = 2,
 }
 
 /// <summary>Lifecycle of a custody row (MaNGOS Zero CustodyState).</summary>
@@ -50,6 +57,15 @@ public sealed record AuctionBotCustodyRow(
 {
     /// <summary>The economy operation id of this row's transaction, so a replay is AlreadyCommitted instead of a second copy.</summary>
     public Guid OperationId => AuctionBotCustodyLedger.OperationIdFor(IdemKey);
+
+    public AuctionBotCustodyRecord ToRecord()
+        => new(IdemKey, (byte)Kind, (byte)Role, (byte)State, HouseId, AuctionId, ItemGuid, ItemEntry, ItemCount, Amount, CreatedTime, ResolvedTime);
+
+    /// <summary>The row of a persisted record, or null when its kind, role or state is not one this build knows.</summary>
+    public static AuctionBotCustodyRow? FromRecord(AuctionBotCustodyRecord r)
+        => r is null || r.Kind > 1 || r.Role > 2 || r.State > 2 || string.IsNullOrEmpty(r.IdemKey) ? null
+            : new(r.IdemKey, (AuctionBotCustodyKind)r.Kind, (AuctionBotCustodyRole)r.Role, (AuctionBotCustodyState)r.State, r.HouseId,
+                r.AuctionId, r.ItemGuid, r.ItemEntry, r.ItemCount, r.Amount, r.CreatedTime, r.ResolvedTime);
 }
 
 /// <summary>Totals of the current UTC day and of the open reservations.</summary>
@@ -66,8 +82,9 @@ public readonly record struct AuctionBotCustodyTotals(uint ItemsToday, ulong Cop
 /// auction until <see cref="Reconcile"/> learns the durable outcome;</item>
 /// <item>the daily item and copper budgets bound what the bot can add to the economy even if every other guard failed.</item>
 /// </list>
-/// In memory: after a restart the durable auction rows and the economy operation ledger are the truth, and the World side reconciles
-/// the rows it still holds against them. World thread only.
+/// Every change is also queued for the durable copy (<see cref="TakeChanges"/>, characters <c>ahbot_custody</c>); after a restart
+/// <see cref="Load"/> brings the rows back and the World side rechecks every Reserved one against the economy operation ledger.
+/// World thread only.
 /// </summary>
 public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
 {
@@ -75,10 +92,100 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
 
     private readonly Dictionary<string, AuctionBotCustodyRow> _rows = new(StringComparer.Ordinal);
     private readonly Dictionary<uint, int> _buyoutAttempts = [];
+    private readonly Dictionary<uint, int> _bidAttempts = [];
+    private readonly HashSet<string> _changed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _deleted = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _settledBids = new(StringComparer.Ordinal);
 
     public static string ListingKey(uint auctionId) => $"ahbot:list:{auctionId}";
 
     public static string BuyoutKey(uint auctionId, int attempt) => $"ahbot:buy:{auctionId}:{attempt}";
+
+    public static string BidKey(uint auctionId, int attempt) => $"ahbot:bid:{auctionId}:{attempt}";
+
+    /// <summary>The highest auction id any row names (the auction id allocator must stay above it, so a listing key is never reused).</summary>
+    public uint MaxAuctionId => _rows.Count == 0 ? 0 : _rows.Values.Max(r => r.AuctionId);
+
+    /// <summary>
+    /// Replace the in-memory rows with persisted ones (after a restart). Unknown records are skipped and counted. The attempt counters
+    /// resume above the loaded keys so a new attempt never reuses one.
+    /// </summary>
+    public int Load(IEnumerable<AuctionBotCustodyRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        _rows.Clear();
+        _buyoutAttempts.Clear();
+        _bidAttempts.Clear();
+        _changed.Clear();
+        _deleted.Clear();
+        int skipped = 0;
+        foreach (AuctionBotCustodyRecord record in records)
+        {
+            if (AuctionBotCustodyRow.FromRecord(record) is not { } row)
+            {
+                skipped++;
+                continue;
+            }
+
+            _rows[row.IdemKey] = row;
+            Dictionary<uint, int>? attempts = row.Role switch
+            {
+                AuctionBotCustodyRole.Buyout => _buyoutAttempts,
+                AuctionBotCustodyRole.Bid => _bidAttempts,
+                _ => null,
+            };
+            if (attempts is not null && int.TryParse(row.IdemKey.AsSpan(row.IdemKey.LastIndexOf(':') + 1), out int attempt))
+            {
+                attempts[row.AuctionId] = Math.Max(attempts.GetValueOrDefault(row.AuctionId), attempt);
+            }
+        }
+
+        return skipped;
+    }
+
+    /// <summary>Changed rows and deleted keys since the last call, for the durable copy. Taking them clears the queue.</summary>
+    public (IReadOnlyList<AuctionBotCustodyRecord> Rows, IReadOnlyList<string> Deleted) TakeChanges()
+    {
+        List<AuctionBotCustodyRecord> rows = [.. _changed.Where(_rows.ContainsKey).Select(k => _rows[k].ToRecord())];
+        List<string> deleted = [.. _deleted];
+        _changed.Clear();
+        _deleted.Clear();
+        return (rows, deleted);
+    }
+
+    /// <summary>Put changes that failed to persist back on the queue (a newer change of the same key wins).</summary>
+    public void Requeue(IEnumerable<AuctionBotCustodyRecord> rows, IEnumerable<string> deleted)
+    {
+        foreach (AuctionBotCustodyRecord row in rows)
+        {
+            if (_rows.ContainsKey(row.IdemKey))
+            {
+                _changed.Add(row.IdemKey);
+            }
+        }
+
+        foreach (string key in deleted)
+        {
+            if (!_rows.ContainsKey(key))
+            {
+                _deleted.Add(key);
+            }
+        }
+    }
+
+    /// <summary>The bot won the auction its standing bid named (or it is gone): the bid row is final and may be pruned.</summary>
+    public bool SettleBid(string idemKey)
+        => _rows.TryGetValue(idemKey, out AuctionBotCustodyRow? row) && row.Role == AuctionBotCustodyRole.Bid
+            && row.State == AuctionBotCustodyState.TerminalOk && _settledBids.Add(idemKey);
+
+    public bool HasChanges => _changed.Count > 0 || _deleted.Count > 0;
+
+    private void Put(AuctionBotCustodyRow row)
+    {
+        _rows[row.IdemKey] = row;
+        _changed.Add(row.IdemKey);
+        _deleted.Remove(row.IdemKey);
+    }
 
     /// <summary>A stable operation id for a key (the first 16 bytes of its SHA-256, marked as an RFC 4122 version 8 GUID).</summary>
     public static Guid OperationIdFor(string idemKey)
@@ -124,13 +231,13 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
 
         var row = new AuctionBotCustodyRow(key, AuctionBotCustodyKind.Item, AuctionBotCustodyRole.Listing, AuctionBotCustodyState.Reserved,
             houseId, auctionId, itemGuid, itemEntry, itemCount, 0, now);
-        _rows[key] = row;
+        Put(row);
         return row;
     }
 
     /// <summary>
-    /// Reserve copper for buying out an auction. Refused (null) when the auction already has a live buyout row or was bought by the
-    /// bot, the price is 0, or the day's copper budget cannot cover it.
+    /// Reserve copper for buying out an auction. Refused (null) when the auction already has a live buyout or bid row or was bought
+    /// by the bot, the price is 0, or the day's copper budget cannot cover it.
     /// </summary>
     public AuctionBotCustodyRow? TryReserveBuyout(uint houseId, uint auctionId, uint itemGuid, uint itemEntry, uint itemCount, uint price, long now)
     {
@@ -139,7 +246,7 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
             return null;
         }
 
-        if (_rows.Values.Any(r => r.Role == AuctionBotCustodyRole.Buyout && r.AuctionId == auctionId && r.State != AuctionBotCustodyState.TerminalBack))
+        if (_rows.Values.Any(r => r.Role != AuctionBotCustodyRole.Listing && r.AuctionId == auctionId && r.State != AuctionBotCustodyState.TerminalBack))
         {
             return null;
         }
@@ -155,8 +262,57 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
         string key = BuyoutKey(auctionId, attempt);
         var row = new AuctionBotCustodyRow(key, AuctionBotCustodyKind.Gold, AuctionBotCustodyRole.Buyout, AuctionBotCustodyState.Reserved,
             houseId, auctionId, itemGuid, itemEntry, itemCount, price, now);
-        _rows[key] = row;
+        Put(row);
         return row;
+    }
+
+    /// <summary>
+    /// Reserve copper for a bid on an auction. Refused (null) when the auction already has a live bid or buyout row (the bot never
+    /// bids against itself), the price is 0, or the day's copper budget cannot cover it.
+    /// </summary>
+    public AuctionBotCustodyRow? TryReserveBid(uint houseId, uint auctionId, uint itemGuid, uint itemEntry, uint itemCount, uint price, long now)
+    {
+        if (auctionId == 0 || price == 0)
+        {
+            return null;
+        }
+
+        if (_rows.Values.Any(r => r.Role != AuctionBotCustodyRole.Listing && r.AuctionId == auctionId && r.State != AuctionBotCustodyState.TerminalBack))
+        {
+            return null;
+        }
+
+        if (Totals(now).CopperToday + price > options.DailyBuyBudgetCopper)
+        {
+            return null;
+        }
+
+        int attempt = _bidAttempts.GetValueOrDefault(auctionId) + 1;
+        _bidAttempts[auctionId] = attempt;
+        var row = new AuctionBotCustodyRow(BidKey(auctionId, attempt), AuctionBotCustodyKind.Gold, AuctionBotCustodyRole.Bid,
+            AuctionBotCustodyState.Reserved, houseId, auctionId, itemGuid, itemEntry, itemCount, price, now);
+        Put(row);
+        return row;
+    }
+
+    /// <summary>The standing (committed) bid row on <paramref name="auctionId"/>, or null.</summary>
+    public AuctionBotCustodyRow? StandingBid(uint auctionId)
+        => _rows.Values.FirstOrDefault(r => r.Role == AuctionBotCustodyRole.Bid && r.AuctionId == auctionId && r.State == AuctionBotCustodyState.TerminalOk
+            && r.ResolvedTime >= 0);
+
+    /// <summary>
+    /// A player outbid (or the seller cancelled under) a standing bot bid: no copper left the bot, so the row moves to TerminalBack and
+    /// frees its budget. Only a committed bid row moves; false otherwise.
+    /// </summary>
+    public bool ReleaseBid(string idemKey, long now)
+    {
+        if (!_rows.TryGetValue(idemKey, out AuctionBotCustodyRow? row) || row.Role != AuctionBotCustodyRole.Bid || row.State != AuctionBotCustodyState.TerminalOk)
+        {
+            return false;
+        }
+
+        Put(row with { State = AuctionBotCustodyState.TerminalBack, ResolvedTime = now });
+        return true;
     }
 
     /// <summary>
@@ -170,11 +326,11 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
             return false;
         }
 
-        _rows[idemKey] = row with
+        Put(row with
         {
             State = committed ? AuctionBotCustodyState.TerminalOk : AuctionBotCustodyState.TerminalBack,
             ResolvedTime = now,
-        };
+        });
         return true;
     }
 
@@ -256,6 +412,12 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
             problems.Add($"auction {group.Key} has {group.Count()} live or committed buyouts");
         }
 
+        foreach (var group in _rows.Values.Where(r => r.Role == AuctionBotCustodyRole.Bid && r.State != AuctionBotCustodyState.TerminalBack)
+            .GroupBy(r => r.AuctionId).Where(g => g.Count() > 1))
+        {
+            problems.Add($"auction {group.Key} has {group.Count()} live or standing bot bids");
+        }
+
         foreach (var day in _rows.Values.Where(r => r.State != AuctionBotCustodyState.TerminalBack).GroupBy(r => Day(r.CreatedTime)))
         {
             ulong copper = (ulong)day.Where(r => r.Kind == AuctionBotCustodyKind.Gold).Sum(r => (long)r.Amount);
@@ -277,11 +439,16 @@ public sealed class AuctionBotCustodyLedger(AuctionBotOptions options)
     /// <summary>MaNGOS Zero DeleteTerminalOlderThan: forget terminal rows resolved before <paramref name="cutoff"/>. Reserved rows always stay.</summary>
     public int PruneTerminal(long cutoff)
     {
+        // A standing bid (TerminalOk bid row) still holds its auction; it is kept until the bid is released or the auction is gone.
         List<string> old = [.. _rows.Values.Where(r => r.State != AuctionBotCustodyState.Reserved && r.ResolvedTime < cutoff
-            && Day(r.CreatedTime) < Day(cutoff)).Select(r => r.IdemKey)];
+            && Day(r.CreatedTime) < Day(cutoff) && !(r.Role == AuctionBotCustodyRole.Bid && r.State == AuctionBotCustodyState.TerminalOk && !_settledBids.Contains(r.IdemKey)))
+            .Select(r => r.IdemKey)];
         foreach (string key in old)
         {
             _rows.Remove(key);
+            _changed.Remove(key);
+            _settledBids.Remove(key);
+            _deleted.Add(key);
         }
 
         return old.Count;

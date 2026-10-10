@@ -100,6 +100,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(MovementScriptDataModule), DatabaseComponent.World, MovementScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Pools.PoolDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Pools.PoolDataModule.Version),
             (typeof(ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Economy.AuctionBotItemWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -146,6 +147,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule.Version),
+            (typeof(ArcaneCore.Data.Economy.AuctionBotCustodyDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Economy.AuctionBotCustodyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
