@@ -22,14 +22,27 @@ Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol fail
 
 ## Checks
 
+Scans come from two places:
+
+- **The world table `warden_checks`.** This is world schema version 49, in vmangos's `warden_scans` layout.
+  - It is seeded on an empty table with the 94 vmangos rows that apply to build 5875: 80 memory, 6 MPQ, 4 page A and 4 module-by-name.
+  - vmangos is GPL-2.0-or-later, so the rows can ship under ArcaneCore's GPL-3.0.
+  - Rows whose build range excludes 5875 are skipped. So are API-hook rows (type 6, not ported) and rows that don't parse.
+  - `penalty` -1 uses `Action`; 0, 1 and 2 mean Log, Kick and Ban.
+  - `Warden:LoadFromDatabase` (default true) turns this source off.
+- **`Warden:Checks` in config.** These are added to the table's scans, and a configured `Id` replaces the table row with that id.
+
 ```json
 "Warden": {
   "Enabled": true,
   "Action": "Kick",
   "Checks": [
-    { "Id": 1, "Kind": "Memory", "Address": 4198400, "Expected": "558BEC", "Comment": "main image" },
-    { "Id": 2, "Kind": "PageA", "Address": 0, "Pattern": "DEADBEEF", "Wanted": false, "Comment": "hack signature" },
-    { "Id": 3, "Kind": "Driver", "DriverName": "evil", "DriverPath": "\\Device\\Evil", "Wanted": false, "Action": "Ban" }
+    { "Id": 1001, "Kind": "Memory", "Address": 4198400, "Expected": "558BEC", "Comment": "main image" },
+    { "Id": 1002, "Kind": "PageA", "Address": 0, "Pattern": "DEADBEEF", "Wanted": false },
+    { "Id": 1003, "Kind": "Driver", "DriverName": "evil", "DriverPath": "\\Device\\Evil", "Wanted": false, "Action": "Ban" },
+    { "Id": 1004, "Kind": "ModuleByName", "Module": "tamia.dll", "Wanted": false },
+    { "Id": 1005, "Kind": "Mpq", "Path": "World\\Generic\\x.m2", "Expected": "<40 hex chars, or empty: must be absent>" },
+    { "Id": 1006, "Kind": "Lua", "Path": "SomeGlobal", "Expected": "", "Wanted": false }
   ]
 }
 ```
@@ -39,11 +52,16 @@ Fields by kind:
 - **Memory:** `Module` is optional; empty means the main image. `Expected` is 1-255 hex bytes.
 - **PageA / PageB:** `Pattern` is 1-255 hex bytes, sent as HMAC-SHA1 with a random seed.
 - **Driver:** a name and a path. The path is sent as HMAC-SHA1.
+- **ModuleByName:** the DLL name, upper-cased and sent as HMAC-SHA1.
+- **Mpq:** a file path and the expected SHA-1. An empty `Expected` means the file must not exist.
+- **Lua:** a global variable name and the value a clean client reports. An empty `Expected` means only existence is checked, using `Wanted`.
 
-For page and driver checks, `Wanted` says whether the pattern or driver should be present. When no checks are configured, only the timing scan runs.
+For page, driver and module checks, `Wanted` says whether the pattern, driver or module should be present.
 
 ## Gaps
 
-- No scan list ships. Memory addresses and signatures must be configured; vmangos keeps them in the world DB table `warden_scans`.
-- Only the Windows module exists. The 5875 auth session does not carry the platform, so a Mac client cannot load the module and gets `ProtocolAction`.
-- Not ported: MPQ hash and Lua scans, module-by-name and API-hook scans, the vmangos sysinfo and EndScene scripted scans, and MaNGOS Zero's evidence classes and confirmation rescans.
+- **Not verified against a live 1.12.1 client.** The page, driver and module opcodes (0xB2 / 0xBF / 0x71 / 0xD9) come from TrinityCore's table for this module.
+- **No Lua rows ship.** vmangos's 5875 set has none.
+- **Re-seeding.** An empty table is seeded again at every start. Delete the rows you don't want instead of emptying the table, or set `LoadFromDatabase` to false.
+- **Windows only.** The 5875 auth session does not carry the platform, so a Mac client cannot load the module and gets `ProtocolAction`.
+- **Not ported:** API-hook scans, the vmangos sysinfo and EndScene scripted scans, the `InitialLogin` scan flag, and MaNGOS Zero's evidence classes and confirmation rescans.
