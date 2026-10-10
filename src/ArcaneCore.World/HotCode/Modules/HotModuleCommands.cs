@@ -44,7 +44,7 @@ public static class HotModuleCommands
                 return false;
             }
 
-            string who = context.Player.Name;
+            string who = context.InvokerName;
             audit.Record("hotmodule-command", $"{who} {verb} {name}");
             Task<ModuleResult> task = run(name);
 

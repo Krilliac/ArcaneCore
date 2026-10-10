@@ -121,7 +121,7 @@ public sealed class TeleportCommands : ICommandGroup
                     maps.ReplaceGameTeles(maps.GameTeles.Where(t => t.Id != deleted.Id));
                 }
 
-                if (context.Player.IsInWorld)
+                if (context.CanReplyLater)
                 {
                     context.Reply(deleted is null ? TeleNotFoundText : "Teleport location deleted.");
                 }
@@ -145,7 +145,7 @@ public sealed class TeleportCommands : ICommandGroup
                 context.Session.Logger.LogError(ex, "game_tele edit failed");
                 context.World.Post(() =>
                 {
-                    if (context.Player.IsInWorld)
+                    if (context.CanReplyLater)
                     {
                         context.Reply("The teleport location could not be saved.");
                     }

@@ -113,7 +113,7 @@ public sealed class SpellCommands : ICommandGroup
             return true;
         }
 
-        SpellCastTargets targets = ReferenceEquals(target, context.Player)
+        SpellCastTargets targets = context.IsInvoker(target)
             ? SpellCastTargets.ForSelf()
             : SpellCastTargets.ForUnit(target.Guid);
         SpellCastResult result = Feature(context).System.CastSpell(context.Player, spellId, targets, triggered: true);

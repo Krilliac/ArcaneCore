@@ -66,7 +66,7 @@ public sealed class ExplorationCommands : ICommandGroup
         }
 
         context.Reply(string.Format(CultureInfo.InvariantCulture, flag != 0 ? YouSetExploreAllText : YouSetExploreNothingText, Link(target)));
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
             target.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(
                 string.Format(CultureInfo.InvariantCulture, flag != 0 ? YoursExploreSetAllText : YoursExploreSetNothingText, Link(context.Player))));

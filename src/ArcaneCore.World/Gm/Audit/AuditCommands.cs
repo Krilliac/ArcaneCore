@@ -142,9 +142,9 @@ public sealed class AuditCommands : ICommandGroup
             return true;
         }
 
-        audit.Mute(target.AccountId, seconds, context.Player.Name, context.Security, reason);
+        audit.Mute(target.AccountId, seconds, context.InvokerName, context.Security, reason);
         string duration = GmAuditStrings.Span(seconds);
-        target.SendSystemMessage(GmAuditStrings.YourChatDisabled(duration, context.Player.Name, reason));
+        target.SendSystemMessage(GmAuditStrings.YourChatDisabled(duration, context.InvokerName, reason));
         context.Reply(GmAuditStrings.YouDisableChat(GmStrings.PlayerLink(target.Name), duration));
         return true;
     }
@@ -242,7 +242,7 @@ public sealed class AuditCommands : ICommandGroup
             return false;
         }
 
-        byte[] packet = ChatPackets.BuildSystemMessage(GmAuditStrings.GmAnnouncement(context.Player.Name, text));
+        byte[] packet = ChatPackets.BuildSystemMessage(GmAuditStrings.GmAnnouncement(context.InvokerName, text));
         foreach (Player staff in context.World.OnlinePlayers.Where(p => p.Security > AccountSecurity.Player))
         {
             staff.Session.Send(WorldOpcode.SmsgMessagechat, packet);
