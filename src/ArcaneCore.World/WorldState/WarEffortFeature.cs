@@ -5,6 +5,8 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Packets;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.WorldState;
+using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
@@ -19,7 +21,7 @@ namespace ArcaneCore.World.WorldState;
 /// game event in step. An administrator can start the gathering phase with .event start 120.
 /// </summary>
 public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeature events, ILogger<WarEffortFeature> logger)
-    : IWorldFeature, IGameEventListener
+    : IWorldFeature, IGameEventListener, IWorldStateProvider
 {
     private WarEffortSnapshot _snapshot = WarEffortSnapshot.Disabled;
     private bool _hasStore;
@@ -30,6 +32,8 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
     private readonly List<GameObject> _gates = [];
     private WorldRuntime? _world;
     private long _announcedRingAtUnix;
+    private readonly Dictionary<(Map Map, uint Guid), GameObject> _piles = [];
+    private Dictionary<uint, uint> _sentCapitalStates = [];
 
     /// <summary>Seconds after the first ring within which the champion broadcast is still sent (vmangos sends it at the ring).</summary>
     internal const long ChampionAnnounceWindowSeconds = 60;
@@ -55,6 +59,8 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
             }
         }
 
+        if (_hasStore) WorldStateHooks.For(world).WorldStates.Add(this);
+        _sentCapitalStates = CapitalStateMap();
         events.ServiceCreated += Wire;
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
@@ -67,6 +73,7 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
         {
             if (map.FindUpdater<CreatureMapSystem>() is { } system) _bossSystems.Remove(system);
             _gates.RemoveAll(go => go.Map is null || ReferenceEquals(go.Map, map));
+            foreach ((Map Map, uint Guid) key in _piles.Keys.Where(k => ReferenceEquals(k.Map, map)).ToArray()) _piles.Remove(key);
         };
     }
 
@@ -150,6 +157,8 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
                 SyncPhaseEvent();
                 FindGates();
                 AnnounceChampion();
+                SyncPiles();
+                PublishCapitalStates();
             }
             catch (Exception ex)
             {
@@ -205,6 +214,72 @@ public sealed class WarEffortFeature(IServiceScopeFactory scopes, GameEventFeatu
             else if (!shouldRun && service.IsActiveEvent(eventId)) service.StopEvent(eventId);
         }
     }
+
+    /// <summary>vmangos FillInitialWorldStates for the six capitals: the war-effort counters while gathering, days left while moving.</summary>
+    public void Fill(Player player, uint zoneId, List<WorldStatePair> states)
+    {
+        if (!_hasStore || !WarEffortPileCatalog.CapitalZones.Contains(zoneId)) return;
+        foreach ((uint field, uint value) in WarEffortPileCatalog.CapitalStates(Snapshot, DateTimeOffset.FromUnixTimeSeconds(UtcNowUnix())))
+            states.Add(new WorldStatePair(field, (int)Math.Min(int.MaxValue, value)));
+    }
+
+    private Dictionary<uint, uint> CapitalStateMap()
+        => WarEffortPileCatalog.CapitalStates(Snapshot, DateTimeOffset.FromUnixTimeSeconds(UtcNowUnix()))
+            .ToDictionary(s => s.Field, s => s.Value);
+
+    /// <summary>AddWarEffortProgress / phase transition: SMSG_UPDATE_WORLD_STATE for each changed counter to players in a capital.</summary>
+    private void PublishCapitalStates()
+    {
+        Dictionary<uint, uint> now = CapitalStateMap();
+        Dictionary<uint, uint> before = _sentCapitalStates;
+        _sentCapitalStates = now;
+        if (_world is null) return;
+        List<byte[]> packets = [];
+        foreach ((uint field, uint value) in now)
+            if (!before.TryGetValue(field, out uint old) || old != value)
+                packets.Add(WorldStatePackets.BuildUpdate(field, value));
+        // A state that is no longer sent (phase moved on) is cleared to 0, which hides the client's counter.
+        foreach (uint field in before.Keys.Where(f => !now.ContainsKey(f)))
+            packets.Add(WorldStatePackets.BuildUpdate(field, 0));
+        if (packets.Count == 0) return;
+        foreach (Player player in _world.OnlinePlayers.Where(p => WarEffortPileCatalog.CapitalZones.Contains(p.ZoneId)).ToArray())
+            foreach (byte[] packet in packets)
+                player.Session.Send(WorldOpcode.SmsgUpdateWorldState, packet);
+    }
+
+    /// <summary>
+    /// Keep the classic-db 4498 resource piles of the loaded Eastern Kingdoms/Kalimdor maps at the saved state's tiers
+    /// (mangos-classic ChangeWarEffortGoSpawns / vmangos HandleSupplyObjectSpawn). Runtime objects, so a restart rebuilds them.
+    /// </summary>
+    private void SyncPiles()
+    {
+        if (_world is null) return;
+        HashSet<uint> wanted = WarEffortPileCatalog.Visible(Snapshot, DateTimeOffset.FromUnixTimeSeconds(UtcNowUnix()))
+            .Select(p => p.Guid).ToHashSet();
+        foreach (Map map in _world.Maps.Where(m => m.MapId is 0 or 1 && m.InstanceId == 0).ToArray())
+        {
+            if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) continue;
+            foreach (WarEffortPile pile in WarEffortPileCatalog.Piles)
+            {
+                if (pile.MapId != map.MapId) continue;
+                bool exists = _piles.TryGetValue((map, pile.Guid), out GameObject? go) && go.IsSpawned;
+                if (wanted.Contains(pile.Guid) && !exists)
+                {
+                    if (objects.Summon(pile.Entry, pile.X, pile.Y, pile.Z, pile.Orientation) is { } spawned)
+                        _piles[(map, pile.Guid)] = spawned;
+                }
+                else if (!wanted.Contains(pile.Guid) && go is not null)
+                {
+                    objects.Remove(go);
+                    _piles.Remove((map, pile.Guid));
+                }
+            }
+        }
+    }
+
+    /// <summary>The live pile objects, for diagnostics and tests.</summary>
+    internal IEnumerable<uint> SpawnedPileGuids(Map map)
+        => _piles.Where(kv => ReferenceEquals(kv.Key.Map, map) && kv.Value.IsSpawned).Select(kv => kv.Key.Guid);
 
     /// <summary>Cache the gate pieces of the loaded Kalimdor maps (rescanned on the five-second refresh).</summary>
     private void FindGates()
