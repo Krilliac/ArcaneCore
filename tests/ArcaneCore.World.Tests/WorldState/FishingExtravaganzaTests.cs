@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -61,5 +62,44 @@ public sealed class FishingExtravaganzaTests
         Assert.False(feature.HasWinner);
         Assert.True(feature.AnnounceBegin);
         Assert.False(feature.AnnounceOver);
+    }
+
+    private sealed class MemoryStore : IFishingExtravaganzaStore
+    {
+        public FishingExtravaganzaState? Saved;
+        public Task<FishingExtravaganzaState?> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Saved);
+        public Task SaveAsync(FishingExtravaganzaState state, CancellationToken cancellationToken = default)
+        {
+            Saved = state;
+            return Task.CompletedTask;
+        }
+    }
+
+    private static FishingExtravaganzaFeature Create(MemoryStore store, Func<bool> active)
+    {
+        ServiceProvider provider = new ServiceCollection().AddSingleton<IFishingExtravaganzaStore>(store).BuildServiceProvider();
+        return new FishingExtravaganzaFeature(provider.GetRequiredService<IServiceScopeFactory>(),
+            new GameEventFeature(provider, NullLogger<GameEventFeature>.Instance)) { TournamentActive = active };
+    }
+
+    [Fact]
+    public void A_restart_keeps_the_announced_start_and_the_winner()
+    {
+        var store = new MemoryStore();
+        FishingExtravaganzaFeature before = Create(store, () => true);
+        before.Load();
+        Assert.Equal((true, FishingExtravaganzaFeature.YellBegin), before.Step());
+        before.HasWinner = true;
+        before.PreviousWinTime = before.NowUnix();
+        before.ResetIfStale(); // not stale: nothing changes
+        Assert.Equal(new FishingExtravaganzaState(false, true, false, 0), store.Saved);
+
+        // the winner is saved by the quest reward; simulate that save
+        store.Saved = before.State;
+        FishingExtravaganzaFeature after = Create(store, () => true);
+        after.Load();
+        after.ResetIfStale();
+        Assert.Equal((false, 0), after.Step()); // no repeated start yell, no quest offered again
+        Assert.True(after.HasWinner);
     }
 }
