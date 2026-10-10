@@ -86,7 +86,9 @@ public sealed partial class SpellSystem
         try
         {
             ulong eventId = CurrentProcEvent;
-            var triggered = new List<TriggeredProc>();
+            // The outermost event reuses one list; a nested event (a proc inside HandleTriggers) gets its own.
+            List<TriggeredProc> triggered = _procDepth == 1 ? _triggeredScratch ??= [] : [];
+            triggered.Clear();
             if (procEvent.AttackerFlags != ProcFlags.None)
             {
                 CollectProcs(actor, isVictim: false, procEvent.Victim, procEvent, eventId, triggered);
@@ -98,6 +100,7 @@ public sealed partial class SpellSystem
             }
 
             HandleTriggers(procEvent, triggered);
+            triggered.Clear();
         }
         finally
         {
@@ -142,6 +145,8 @@ public sealed partial class SpellSystem
         }
     }
 
+    private List<TriggeredProc>? _triggeredScratch;
+
     private readonly record struct TriggeredProc(SpellProcEventRecord? Entry, SpellAuraHolder Holder, Unit Owner, Unit? Target, ProcFlags ProcFlag, bool IsVictim, ProcFlagsEx Extra);
 
     /// <summary>vmangos <c>Unit::ProcDamageAndSpellFor</c> (Unit.cpp:8917-9002): the auras of <paramref name="owner"/> the event can proc.</summary>
@@ -152,49 +157,66 @@ public sealed partial class SpellSystem
         ProcFlagsEx extra = isVictim && e.ProcSpell is null && e.Victim is { } sitting && !ProcFlagRules.IsStandingUp(sitting)
             ? e.Extra & ~ProcFlagsEx.CriticalHit
             : e.Extra;
-        foreach (SpellAuraHolder holder in GetAuras(owner).ToArray())
+        IReadOnlyList<SpellAuraHolder> auras = GetAuras(owner);
+        int count = auras.Count;
+        SpellAuraHolder[] snapshot = System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Rent(Math.Max(count, 1));
+        for (int n = 0; n < count; n++)
         {
-            // "Can not proc on self", and skip deleted auras.
-            if (holder.IsRemoved || (e.ProcSpell is { } procSpell && procSpell.Id == holder.Spell.Id))
-            {
-                continue;
-            }
+            snapshot[n] = auras[n];
+        }
 
-            // "don't reroll chance for each target in this case"
-            if (((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0 && !IsProcSpellReady(owner, holder.Spell))
+        try
+        {
+            for (int n = 0; n < count; n++)
             {
-                continue;
-            }
+                SpellAuraHolder holder = snapshot[n];
 
-            // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
-            // an aura of the event's own actor applied or refreshed at or after the event's time does not proc from it (Unit.cpp:8958 compares
-            // with >=). The engine is synchronous, so that is an aura applied or refreshed inside the current event (a nested triggered cast in
-            // the effect handlers): the holder carries the event's sequence number (BeginProcEvent), never a wrapping clock reading.
-            if (holder.AppliedInProcEvent == eventId && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
-            {
-                continue;
-            }
-
-            // An aura that carries a charged spell modifier spends its charges on the casts that use it, not on procs (Unit.cpp:8956-8974).
-            if (holder.Charges > 0 && holder.Auras.Any(a => a is { Type: AuraType.AddFlatModifier or AuraType.AddPctModifier }))
-            {
-                continue;
-            }
-
-            ProcTriggerCheck result = IsTriggeredAtSpellProcEvent(owner, target, holder, e.ProcSpell, procFlag, extra, e.AttackType, isVictim,
-                out SpellProcEventRecord? entry, e.SpellTriggeredByAuraOrItem);
-            if (result != ProcTriggerCheck.Ok)
-            {
-                if (result == ProcTriggerCheck.RollFailed && ((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0
-                    && entry is { Cooldown: > 0 } failed)
+                // "Can not proc on self", and skip deleted auras.
+                if (holder.IsRemoved || (e.ProcSpell is { } procSpell && procSpell.Id == holder.Spell.Id))
                 {
-                    AddProcCooldown(owner, holder.Spell, failed.Cooldown);
+                    continue;
                 }
 
-                continue;
-            }
+                // "don't reroll chance for each target in this case"
+                if (((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0 && !IsProcSpellReady(owner, holder.Spell))
+                {
+                    continue;
+                }
 
-            triggered.Add(new TriggeredProc(entry, holder, owner, target, procFlag, isVictim, extra));
+                // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
+                // an aura of the event's own actor applied or refreshed at or after the event's time does not proc from it (Unit.cpp:8958 compares
+                // with >=). The engine is synchronous, so that is an aura applied or refreshed inside the current event (a nested triggered cast in
+                // the effect handlers): the holder carries the event's sequence number (BeginProcEvent), never a wrapping clock reading.
+                if (holder.AppliedInProcEvent == eventId && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
+                {
+                    continue;
+                }
+
+                // An aura that carries a charged spell modifier spends its charges on the casts that use it, not on procs (Unit.cpp:8956-8974).
+                if (holder.Charges > 0 && holder.Auras.Any(a => a is { Type: AuraType.AddFlatModifier or AuraType.AddPctModifier }))
+                {
+                    continue;
+                }
+
+                ProcTriggerCheck result = IsTriggeredAtSpellProcEvent(owner, target, holder, e.ProcSpell, procFlag, extra, e.AttackType, isVictim,
+                    out SpellProcEventRecord? entry, e.SpellTriggeredByAuraOrItem);
+                if (result != ProcTriggerCheck.Ok)
+                {
+                    if (result == ProcTriggerCheck.RollFailed && ((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0
+                        && entry is { Cooldown: > 0 } failed)
+                    {
+                        AddProcCooldown(owner, holder.Spell, failed.Cooldown);
+                    }
+
+                    continue;
+                }
+
+                triggered.Add(new TriggeredProc(entry, holder, owner, target, procFlag, isVictim, extra));
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Return(snapshot, clearArray: true);
         }
     }
 
@@ -470,7 +492,7 @@ public sealed partial class SpellSystem
     /// </summary>
     private void HandleTriggers(in ProcEvent e, List<TriggeredProc> triggered)
     {
-        var removed = new List<(Unit Unit, uint SpellId)>();
+        List<(Unit Unit, uint SpellId)>? removed = null; // made on the first charge that runs out
         foreach (TriggeredProc proc in triggered)
         {
             SpellAuraHolder holder = proc.Holder;
@@ -550,8 +572,13 @@ public sealed partial class SpellSystem
 
             if (useCharges && anyAuraProc && !holder.IsRemoved && DropAuraCharge(holder))
             {
-                removed.Add((proc.Owner, holder.Spell.Id));
+                (removed ??= []).Add((proc.Owner, holder.Spell.Id));
             }
+        }
+
+        if (removed is null)
+        {
+            return;
         }
 
         foreach ((Unit unit, uint spellId) in removed.Distinct())

@@ -58,7 +58,7 @@ public sealed class LifeTapScript : ISpellScript
                     continue;
                 }
 
-                foreach (SpellAura? aura in holder.Auras)
+                foreach (SpellAura? aura in holder.AuraSpan)
                 {
                     if (aura is { Type: AuraType.Dummy })
                     {

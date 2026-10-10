@@ -446,7 +446,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// </summary>
     private void CaptureNewObservers()
     {
-        foreach (Player player in Map.Players)
+        foreach (Player player in Map.PlayerValues)
         {
             if (!_seen.TryGetValue(player, out SeenCreatures? seen))
             {

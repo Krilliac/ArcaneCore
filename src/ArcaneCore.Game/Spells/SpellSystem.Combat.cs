@@ -40,7 +40,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == type && (filter is null || filter(aura)))
                 {

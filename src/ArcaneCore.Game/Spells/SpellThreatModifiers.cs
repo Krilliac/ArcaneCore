@@ -31,7 +31,7 @@ public sealed class SpellThreatModifiers(SpellSystem system) : IThreatModifierSo
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == AuraType.ModCriticalThreat && ((uint)aura.MiscValue & schoolMask) != 0)
                 {
@@ -58,7 +58,7 @@ public sealed class SpellThreatModifiers(SpellSystem system) : IThreatModifierSo
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is null || aura.Type != AuraType.ModThreat || ((uint)aura.MiscValue & (1u << school)) == 0)
                 {

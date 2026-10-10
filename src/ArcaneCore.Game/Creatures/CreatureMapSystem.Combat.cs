@@ -270,7 +270,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// </summary>
     private bool CheckHardLeash(Creature creature, uint diffMs)
     {
-        if (!creature.Combat.IsInCombat || _options.LeashCheckIntervalMs == 0 || _clockMs % _options.LeashCheckIntervalMs > diffMs)
+        // UnitCombat.IsInCombat is this flag; reading it directly does not create a UnitCombat for every idle creature.
+        if ((creature.UnitFlags & UnitFlags.InCombat) == 0 || _options.LeashCheckIntervalMs == 0 || _clockMs % _options.LeashCheckIntervalMs > diffMs)
         {
             return false;
         }

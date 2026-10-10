@@ -198,12 +198,21 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
-        foreach (Player player in _map.Players.ToArray())
+        Player[] players = _map.RentPlayerSnapshot(out int playerCount);
+        try
         {
-            if (ReferenceEquals(player.Map, _map))
+            for (int i = 0; i < playerCount; i++)
             {
-                UpdateUnit(player, diffMs);
+                Player player = players[i];
+                if (ReferenceEquals(player.Map, _map))
+                {
+                    UpdateUnit(player, diffMs);
+                }
             }
+        }
+        finally
+        {
+            Map.ReturnPlayerSnapshot(players);
         }
 
         foreach (Unit unit in _units.ToArray())

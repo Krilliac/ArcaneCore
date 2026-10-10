@@ -39,7 +39,7 @@ public static class BlessingOfLightRules
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not { Type: AuraType.Dummy })
                 {

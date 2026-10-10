@@ -124,6 +124,23 @@ public sealed class Map
 
     public IReadOnlyCollection<Player> Players => _players.Values;
 
+    /// <summary>The players as the dictionary's own value collection: a struct enumerator, for per-tick loops that do not mutate.</summary>
+    internal Dictionary<ObjectGuid, Player>.ValueCollection PlayerValues => _players.Values;
+
+    /// <summary>
+    /// A snapshot of the players in a pooled array (for per-tick loops that may add or remove players). Return it with
+    /// <see cref="ReturnPlayerSnapshot"/>; only the first <paramref name="count"/> entries are players.
+    /// </summary>
+    internal Player[] RentPlayerSnapshot(out int count)
+    {
+        count = _players.Count;
+        Player[] snapshot = System.Buffers.ArrayPool<Player>.Shared.Rent(Math.Max(count, 1));
+        _players.Values.CopyTo(snapshot, 0);
+        return snapshot;
+    }
+
+    internal static void ReturnPlayerSnapshot(Player[] snapshot) => System.Buffers.ArrayPool<Player>.Shared.Return(snapshot, clearArray: true);
+
     /// <summary>Every object in the map, players included.</summary>
     public int ObjectCount => _objects.Count;
 
@@ -1223,7 +1240,7 @@ public sealed class Map
     }
 
     private void FlushPlayer(Player player)
-        => player.PendingUpdates.Flush(player.PendingUpdatesSend, _world.Options.UpdateCompressionThreshold);
+        => player.PendingUpdates.FlushTo(player.PendingUpdatesSend, _world.Options.UpdateCompressionThreshold);
 
     internal void EnsureWorldThread()
     {

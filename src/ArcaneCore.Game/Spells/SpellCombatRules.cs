@@ -421,7 +421,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == AuraType.ModCritPercentVersus && ((uint)aura.MiscValue & typeMask) != 0)
                 {

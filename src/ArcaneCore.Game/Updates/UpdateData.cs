@@ -4,6 +4,9 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Updates;
 
+/// <summary>Receives one packet; the payload span is only valid during the call.</summary>
+public delegate void PacketSink(WorldOpcode opcode, ReadOnlySpan<byte> payload);
+
 /// <summary>
 /// The update blocks and out-of-range GUIDs queued for one client during a tick, turned into
 /// SMSG_UPDATE_OBJECT / SMSG_COMPRESSED_UPDATE_OBJECT packets on flush.
@@ -26,6 +29,7 @@ public sealed class UpdateData
 
     private readonly PacketWriter _blocks = new(1024);
     private readonly List<int> _blockEnds = [];
+    private PacketWriter? _body; // reused packet body; the sent bytes are still a fresh exact-size array
     private readonly List<ObjectGuid> _outOfRange = [];
     private int _openBlockStart = -1;
 
@@ -84,8 +88,17 @@ public sealed class UpdateData
 
     public void AddOutOfRange(ObjectGuid guid) => _outOfRange.Add(guid);
 
-    /// <summary>Build the queued data into packets, hand them to <paramref name="send"/>, and clear.</summary>
+    /// <summary>
+    /// <see cref="FlushTo"/> for a sink that keeps the payload array (the bytes are copied once per packet).
+    /// </summary>
     public void Flush(Action<WorldOpcode, byte[]> send, int compressionThreshold)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        FlushTo((opcode, payload) => send(opcode, payload.ToArray()), compressionThreshold);
+    }
+
+    /// <summary>Build the queued data into packets, hand them to <paramref name="send"/>, and clear.</summary>
+    public void FlushTo(PacketSink send, int compressionThreshold)
     {
         if (_openBlockStart >= 0)
         {
@@ -105,7 +118,8 @@ public sealed class UpdateData
 
         while (outOfRangePending || blockIndex < _blockEnds.Count)
         {
-            var body = new PacketWriter(Math.Min(MaxBodySize, all.Length - blockStart + 64));
+            PacketWriter body = _body ??= new PacketWriter(1024);
+            body.Reset();
             body.WriteUInt32(0); // block count, patched below
             body.WriteByte(HasTransport ? (byte)1 : (byte)0);
             uint count = 0;
@@ -138,7 +152,11 @@ public sealed class UpdateData
             }
 
             body.PatchUInt32(0, count);
-            Send(body, send, compressionThreshold);
+            SendTo(body, send, compressionThreshold);
+            if (body.Length > 16 * 1024)
+            {
+                _body = null; // do not keep a near-60 KB body alive per player after a burst
+            }
         }
 
         Clear();
@@ -155,10 +173,17 @@ public sealed class UpdateData
 
     /// <summary>Send one finished update body, compressed above <paramref name="compressionThreshold"/> (also used for the ship packets).</summary>
     internal static void Send(PacketWriter body, Action<WorldOpcode, byte[]> send, int compressionThreshold)
+        => SendTo(body, (opcode, payload) => send(opcode, payload.ToArray()), compressionThreshold);
+
+    /// <summary>
+    /// Send one SMSG_UPDATE_OBJECT body, compressed above the threshold. The sink sees a span that is only valid during the
+    /// call (sessions copy it into their frame), so no intermediate array is made.
+    /// </summary>
+    internal static void SendTo(PacketWriter body, PacketSink send, int compressionThreshold)
     {
         if (compressionThreshold <= 0 || body.Length <= compressionThreshold)
         {
-            send(WorldOpcode.SmsgUpdateObject, body.ToArray());
+            send(WorldOpcode.SmsgUpdateObject, body.AsSpan());
             return;
         }
 
@@ -171,6 +196,6 @@ public sealed class UpdateData
             zlib.Write(body.AsSpan());
         }
 
-        send(WorldOpcode.SmsgCompressedUpdateObject, compressed.ToArray());
+        send(WorldOpcode.SmsgCompressedUpdateObject, compressed.GetBuffer().AsSpan(0, (int)compressed.Length));
     }
 }

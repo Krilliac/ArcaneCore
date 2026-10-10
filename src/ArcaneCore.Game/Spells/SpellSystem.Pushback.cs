@@ -139,7 +139,7 @@ public sealed partial class SpellSystem
 
                 // vmangos Unit::DelaySpellAuraHolder: "push down the tick timer with the delay, otherwise we can still get max
                 // ticks even with pushback" (RefreshAuraPeriodicTimers).
-                foreach (SpellAura? aura in holder.Auras)
+                foreach (SpellAura? aura in holder.AuraSpan)
                 {
                     if (aura is not null)
                     {

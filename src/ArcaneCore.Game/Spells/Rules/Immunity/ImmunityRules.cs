@@ -55,7 +55,7 @@ public static class ImmunityRules
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == type && test(aura) && Applies(holder.Spell, incomingPositive))
                 {
@@ -159,7 +159,7 @@ public static class ImmunityRules
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.SchoolImmunity } && ((uint)aura.MiscValue & schoolMask) != 0 && Applies(holder.Spell, incomingPositive))
                 {

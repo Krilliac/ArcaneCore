@@ -234,44 +234,59 @@ public sealed partial class SpellSystem
         }
 
         uint now = NowMs;
-        foreach (UnitSpellState state in _states.Values.ToArray())
+        int stateCount = _states.Count;
+        UnitSpellState[] states = System.Buffers.ArrayPool<UnitSpellState>.Shared.Rent(stateCount);
+        _states.Values.CopyTo(states, 0);
+        try
         {
-            if (!state.Unit.IsInWorld)
+            for (int i = 0; i < stateCount; i++)
             {
-                if (IsInTransit(state.Unit))
-                {
-                    continue;
-                }
+                UpdateState(states[i], diffMs, now);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<UnitSpellState>.Shared.Return(states, clearArray: true);
+        }
+    }
 
-                Forget(state);
-                continue;
+    private void UpdateState(UnitSpellState state, uint diffMs, uint now)
+    {
+        if (!state.Unit.IsInWorld)
+        {
+            if (IsInTransit(state.Unit))
+            {
+                return;
             }
 
-            if (IsQuestSettlementPending(state.Unit))
-            {
-                continue;
-            }
+            Forget(state);
+            return;
+        }
 
-            // vmangos Unit::Update runs the unit's events (ChannelResetEvent) before _UpdateSpells.
-            UpdatePendingChannelReset(state, diffMs);
+        if (IsQuestSettlementPending(state.Unit))
+        {
+            return;
+        }
 
-            if (state.AutoRepeatCast is { } autoRepeat)
-            {
-                UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
-            }
+        // vmangos Unit::Update runs the unit's events (ChannelResetEvent) before _UpdateSpells.
+        UpdatePendingChannelReset(state, diffMs);
 
-            if (state.CurrentCast is { } cast)
-            {
-                UpdateCast(cast, diffMs);
-            }
+        if (state.AutoRepeatCast is { } autoRepeat)
+        {
+            UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
+        }
 
-            UpdateAuras(state, diffMs);
-            UpdateAreaAuras(state);
-            ExpireCooldowns(state, now);
-            if (state.IsIdle)
-            {
-                _states.Remove(state.Unit.Guid);
-            }
+        if (state.CurrentCast is { } cast)
+        {
+            UpdateCast(cast, diffMs);
+        }
+
+        UpdateAuras(state, diffMs);
+        UpdateAreaAuras(state);
+        ExpireCooldowns(state, now);
+        if (state.IsIdle)
+        {
+            _states.Remove(state.Unit.Guid);
         }
     }
 

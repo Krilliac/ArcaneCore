@@ -42,7 +42,7 @@ public sealed class ResistanceExclusiveAuras : ISpellHandlerModule
                     continue;
                 }
 
-                foreach (SpellAura? candidate in other.Auras)
+                foreach (SpellAura? candidate in other.AuraSpan)
                 {
                     if (candidate is null || ReferenceEquals(candidate, aura) || candidate.Type != AuraType.ModResistanceExclusive
                         || ((uint)candidate.MiscValue & (1u << school)) == 0)

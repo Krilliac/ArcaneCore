@@ -136,7 +136,7 @@ public sealed class CombatStatAuras : ISpellHandlerModule
         bool attackPower = false;
         bool disarm = false;
         bool creatureDamage = false;
-        foreach (SpellAura? aura in holder.Auras)
+        foreach (SpellAura? aura in holder.AuraSpan)
         {
             switch (aura?.Type)
             {
