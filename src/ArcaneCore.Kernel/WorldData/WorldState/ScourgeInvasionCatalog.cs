@@ -2,11 +2,15 @@ namespace ArcaneCore.Kernel.WorldData.WorldState;
 
 /// <summary>mangos-classic WorldState's six invasion zones and the matching ClassicDB world-script fields/events.</summary>
 public sealed record ScourgeInvasionZone(int Index, uint ZoneId, uint MapId, uint WorldStateField,
-    ushort EventId, int Necropolises);
+    ushort EventId, int Necropolises)
+{
+    public uint NecropolisCountField => (uint)(2279 + Index);
+}
 
 public static class ScourgeInvasionCatalog
 {
     public const ushort MainEvent = 17;
+    public const uint BattlesWonField = 2219;
     public const uint NecropolisHealth = 16421;
     public const uint ZapNecropolis = 28386;
     public const uint CampDeathCommunique = 28351;

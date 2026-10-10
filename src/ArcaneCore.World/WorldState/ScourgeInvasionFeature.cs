@@ -3,7 +3,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,8 +15,9 @@ namespace ArcaneCore.World.WorldState;
 
 /// <summary>Owns the six persisted Necropolis counts and the matching ClassicDB zone events/conditions.</summary>
 public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEventFeature events,
-    ILogger<ScourgeInvasionFeature> logger) : IWorldFeature, IGameEventListener
+    ILogger<ScourgeInvasionFeature> logger) : IWorldFeature, IGameEventListener, IWorldStateProvider
 {
+    private WorldRuntime? _world;
     private ScourgeInvasionSnapshot _snapshot = ScourgeInvasionSnapshot.Disabled;
     private bool _hasStore;
     private GameEventService? _events;
@@ -29,6 +32,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
 
     public void Attach(WorldRuntime world)
     {
+        _world = world;
         using (IServiceScope scope = scopes.CreateScope())
         {
             if (scope.ServiceProvider.GetService<IScourgeInvasionStateStore>() is { } store)
@@ -37,6 +41,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 Volatile.Write(ref _snapshot, store.LoadAsync().GetAwaiter().GetResult());
             }
         }
+        if (_hasStore) WorldStateHooks.For(world).WorldStates.Add(this);
         events.ServiceCreated += Wire;
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
@@ -53,6 +58,40 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
 
     public bool? WorldScriptCondition(uint field, uint state)
         => !_hasStore ? null : Snapshot.WorldScriptCondition(field);
+
+    public void Fill(Player player, uint zoneId, List<WorldStatePair> states)
+    {
+        if (Snapshot.State == ScourgeInvasionState.Enabled)
+            states.AddRange(WorldStatePairs(Snapshot));
+    }
+
+    private static IReadOnlyList<WorldStatePair> WorldStatePairs(ScourgeInvasionSnapshot snapshot)
+    {
+        List<WorldStatePair> pairs = [];
+        foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
+            pairs.Add(new WorldStatePair(zone.WorldStateField, snapshot.Remaining(zone.ZoneId) > 0 ? 1 : 0));
+        pairs.Add(new WorldStatePair(ScourgeInvasionCatalog.BattlesWonField, snapshot.BattlesWon));
+        foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
+            pairs.Add(new WorldStatePair(zone.NecropolisCountField, snapshot.Remaining(zone.ZoneId)));
+        return pairs;
+    }
+
+    private void PublishWorldStates(ScourgeInvasionSnapshot previous, ScourgeInvasionSnapshot current)
+    {
+        if (_world is null || previous.State == ScourgeInvasionState.Disabled
+            && current.State == ScourgeInvasionState.Disabled) return;
+
+        IReadOnlyList<WorldStatePair> before = WorldStatePairs(previous);
+        IReadOnlyList<WorldStatePair> after = WorldStatePairs(current);
+        for (int i = 0; i < after.Count; i++)
+        {
+            if (previous.State == ScourgeInvasionState.Enabled && before[i].Value == after[i].Value
+                && current.State == ScourgeInvasionState.Enabled) continue;
+            byte[] packet = WorldStatePackets.BuildUpdate(after[i].State, (uint)after[i].Value);
+            foreach (Player player in _world.OnlinePlayers)
+                player.Session.Send(ArcaneCore.Protocol.WorldOpcode.SmsgUpdateWorldState, packet);
+        }
+    }
 
     public void OnEventChanged(ushort eventId, bool active, bool resume)
     {
@@ -191,8 +230,11 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private void Reload()
     {
         using IServiceScope scope = scopes.CreateScope();
-        Volatile.Write(ref _snapshot,
-            scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>().LoadAsync().GetAwaiter().GetResult());
+        ScourgeInvasionSnapshot previous = Snapshot;
+        ScourgeInvasionSnapshot current = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>()
+            .LoadAsync().GetAwaiter().GetResult();
+        Volatile.Write(ref _snapshot, current);
+        PublishWorldStates(previous, current);
     }
 
     private void SyncEvents()

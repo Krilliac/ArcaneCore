@@ -78,6 +78,18 @@ public sealed class ScourgeInvasionImportedRuntimeTests
             });
             await using WorldTestClient client = await host.EnterWorldAsync("SCOURGER", "Scourger", AccountSecurity.Administrator)
                 .WaitAsync(TimeSpan.FromSeconds(20));
+            var initial = new PacketReader(client.LoginPacket(WorldOpcode.SmsgInitWorldStates));
+            initial.ReadUInt32(); // map
+            initial.ReadUInt32(); // zone
+            ushort stateCount = initial.ReadUInt16();
+            var initialStates = new Dictionary<uint, int>();
+            for (int i = 0; i < stateCount; i++) initialStates.Add(initial.ReadUInt32(), initial.ReadInt32());
+            foreach (ScourgeInvasionZone zone in ScourgeInvasionCatalog.Zones)
+            {
+                Assert.Equal(zone.Necropolises, initialStates[zone.NecropolisCountField]);
+                Assert.Equal(1, initialStates[zone.WorldStateField]);
+            }
+            Assert.Equal(0, initialStates[ScourgeInvasionCatalog.BattlesWonField]);
             GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();
             await host.WaitForWorldAsync(() => events.IsActiveEvent(92), "Azshara invasion event")
                 .WaitAsync(TimeSpan.FromSeconds(15));
@@ -114,10 +126,23 @@ public sealed class ScourgeInvasionImportedRuntimeTests
             }).WaitAsync(TimeSpan.FromSeconds(5));
             await host.WaitForWorldAsync(() => host.WorldServices.GetRequiredService<ScourgeInvasionFeature>()
                 .Snapshot.Remaining(16) == 1, "Azshara Necropolis count").WaitAsync(TimeSpan.FromSeconds(10));
+            var updated = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgUpdateWorldState));
+            Assert.Equal((2279u, 1u), (updated.ReadUInt32(), updated.ReadUInt32()));
             Assert.True(events.IsActiveEvent(92));
             Assert.Equal(true, await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<ConditionFeature>()
                 .Current.EvaluateWithoutSubjects(2149)));
             Assert.Equal(1, (await state.LoadAsync()).Remaining(16));
+
+            Assert.True(await host.OnWorldAsync(() => events.Service!.StopEvent(17)));
+            var cleared = new Dictionary<uint, uint>();
+            for (int i = 0; i < 13; i++)
+            {
+                var packet = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgUpdateWorldState));
+                cleared.Add(packet.ReadUInt32(), packet.ReadUInt32());
+            }
+            Assert.Equal(0u, cleared[2260]);
+            Assert.Equal(0u, cleared[2279]);
+            Assert.Equal(0u, cleared[ScourgeInvasionCatalog.BattlesWonField]);
         }
         finally
         {
