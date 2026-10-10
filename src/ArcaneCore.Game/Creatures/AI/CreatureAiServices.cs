@@ -214,6 +214,9 @@ public sealed class CreatureAiFactory
         [Scripts.KeeperRemulosAI.Entry] = static c => new Scripts.KeeperRemulosAI(c),
         [Scripts.EranikusAI.Entry] = static c => new Scripts.EranikusAI(c),
         [Scripts.KerlonianAI.Entry] = static c => new Scripts.KerlonianAI(c),
+        [Scripts.MistAI.Entry] = static c => new Scripts.MistAI(c),
+        [Scripts.ShayLeafrunnerAI.Entry] = static c => new Scripts.ShayLeafrunnerAI(c),
+        [Scripts.ThreshwackonatorAI.Entry] = static c => new Scripts.ThreshwackonatorAI(c),
     };
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
@@ -224,7 +227,9 @@ public sealed class CreatureAiFactory
         Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade,
         Scripts.TaelanFordringAI.QuestInDreams,
         Scripts.KeeperRemulosAI.QuestNightmareManifests,
-        Scripts.KerlonianAI.QuestSleeperAwakened];
+        Scripts.KerlonianAI.QuestSleeperAwakened,
+        Scripts.MistAI.QuestMist,
+        Scripts.ShayLeafrunnerAI.QuestWanderingShay];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
     public CreatureAiFactory()

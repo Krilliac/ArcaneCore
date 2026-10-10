@@ -967,6 +967,100 @@ public sealed class DataDrivenEscortTests
         }
     }
 
+    [Theory]
+    [InlineData(3568u, 3519u, 938u)]  // Mist, Sentinel Arynia
+    [InlineData(7774u, 7765u, 2845u)] // Shay Leafrunner, Rockbiter
+    public void ArrivalFollower_FollowsThePlayer_AndCreditsNextToTheirTarget(uint entry, uint target, uint quest)
+    {
+        // npc_mist (teldrassil.cpp) and npc_shay_leafrunner (feralas.cpp) at 8ec338a.
+        int[] texts = [-1000323, -1000324, .. Enumerable.Range(1106, 11).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(target)],
+            [Spawn(1, entry, 0, 0), Spawn(2, target, 60, 0)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, 2, 0);
+            world.RunTick(100);
+            Creature follower = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsAssignableFrom<IQuestScriptAI>(follower.AI);
+            ai.OnQuestAccept(player, quest);
+            var fai = Assert.IsAssignableFrom<FollowerAI>(follower.AI);
+            Assert.True(fai.HasFollowState(FollowerAI.FollowState.InProgress));
+            Assert.Equal(MovementGeneratorType.Follow, follower.Motion.CurrentType);
+            for (int elapsed = 0; elapsed < 120_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                if (follower.AI is ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI { Wandering: true } shay)
+                {
+                    shay.Recall(); // Shay's Bell
+                }
+
+                player.Relocate(Math.Min(56f, player.X + 0.3f), 0, follower.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.True(quests.Completed.Count == 1, $"x {follower.X} faction {follower.FactionTemplate} victim {follower.Combat.Victim?.Guid} motion {follower.Motion.CurrentType} state {fai.HasFollowState(FollowerAI.FollowState.InProgress)}");
+            Assert.Equal((player, quest), Assert.Single(quests.Completed));
+            Assert.True(fai.HasFollowState(FollowerAI.FollowState.Complete));
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains(entry == 3568 ? "-1000324" : "-1001115", said);
+        }
+    }
+
+    [Fact]
+    public void Shay_WandersOffAfterThirtySeconds_AndTheBellCallsHerBack()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI.Entry;
+        int[] texts = [.. Enumerable.Range(1106, 11).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature shay = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI>(shay.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ShayLeafrunnerAI.QuestWanderingShay);
+            Run(world, 29_000);
+            Assert.False(ai.Wandering);
+            Run(world, 2_000);
+            Assert.True(ai.Wandering);
+            Assert.NotEqual(MovementGeneratorType.Follow, shay.Motion.CurrentType);
+            ai.Recall();
+            Assert.False(ai.Wandering);
+            Assert.Equal(MovementGeneratorType.Follow, shay.Motion.CurrentType);
+        }
+    }
+
+    [Fact]
+    public void Threshwackonator_FollowsOnceTheKeyTurns_AndAttacksItsHolderAtGelkak()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.Entry;
+        CreatureContent content = new([Template(entry), Template(6667)], [Spawn(1, entry, 0, 0), Spawn(2, 6667, 40, 0)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000325, "start", 0, 0, 0), new CreatureAiText(-1000326, "close", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature machine = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI>(machine.AI);
+            ai.TurnKey(player);
+            Assert.Equal(MovementGeneratorType.Follow, machine.Motion.CurrentType);
+            for (int elapsed = 0; elapsed < 60_000 && !ai.HasFollowState(FollowerAI.FollowState.Complete); elapsed += 100)
+            {
+                player.Relocate(Math.Min(32f, player.X + 0.3f), 0, machine.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.True(ai.HasFollowState(FollowerAI.FollowState.Complete));
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.ThreshwackonatorAI.FactionHostile, machine.FactionTemplate);
+        }
+    }
+
     [Fact]
     public void Follower_DiesAndFailsTheQuest_OrDespawnsWhenTheLeaderIsTooFar()
     {
