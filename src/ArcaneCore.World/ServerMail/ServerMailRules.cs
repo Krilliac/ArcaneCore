@@ -204,6 +204,8 @@ public static class ServerMailRules
 
     /// <summary>The letter of a template for a team (moneyA / itemsA for the Alliance, moneyH / itemsH for the Horde).</summary>
     public static ServerMailRequest Letter(ServerMailTemplate template, int receiverId, Team team) => team == Team.Alliance
-        ? new ServerMailRequest(receiverId, template.SenderEntry, template.Subject, template.Body, template.MoneyAlliance, template.ItemsAlliance)
-        : new ServerMailRequest(receiverId, template.SenderEntry, template.Subject, template.Body, template.MoneyHorde, template.ItemsHorde);
+        ? new ServerMailRequest(receiverId, template.SenderEntry, template.Subject, template.Body, template.MoneyAlliance, template.ItemsAlliance,
+            template.Id)
+        : new ServerMailRequest(receiverId, template.SenderEntry, template.Subject, template.Body, template.MoneyHorde, template.ItemsHorde,
+            template.Id);
 }

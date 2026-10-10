@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.ServerMail;
 using ArcaneCore.Data.Economy;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
@@ -97,6 +98,109 @@ public sealed class EconomyStoreTests : IAsyncLifetime
         await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(seed.Connection);
         Assert.Single(await new EfEconomyStore(check).GetMailsAsync(seed.B.Id));
         Assert.False(await check.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 501));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RecordServerMailSent_CommitsWithEveryLetter_AndASecondRecordRefusesTheWholeOperation(DatabaseProvider provider)
+    {
+        // Server mail: the mail_server_character record rides in the letters' transaction, so a template's reward commits once.
+        Seed seed = await CreateAsync(provider);
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+        [
+            new CreateEscrowItem(Item(500, 117, 1)), new InsertMail(Letter(1, 15077u, seed.B.Id, itemGuid: 500, itemEntry: 117, money: 25), null),
+            new CreateEscrowItem(Item(501, 117, 1)), new InsertMail(Letter(2, 15077u, seed.B.Id, itemGuid: 501, itemEntry: 117), null),
+            new RecordServerMailSent(seed.B.Id, 9),
+        ])));
+
+        // The same template again (a retry with a fresh operation id, a second login): refused, and none of its letters or items land.
+        Assert.Equal(EconomyCommitResult.Conflict, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+        [
+            new CreateEscrowItem(Item(502, 117, 1)), new InsertMail(Letter(3, 15077u, seed.B.Id, itemGuid: 502, itemEntry: 117, money: 25), null),
+            new RecordServerMailSent(seed.B.Id, 9),
+        ])));
+
+        await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.Equal([1u, 2u], (await new EfEconomyStore(check).GetMailsAsync(seed.B.Id)).Select(m => m.Id).Order());
+        Assert.False(await check.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 502));
+        Assert.Equal([9u], await new EfServerMailStore(check).GetSentAsync(seed.B.Id));
+        Assert.Empty(await new EfServerMailStore(check).GetSentAsync(seed.A.Id));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RecordServerMailSent_IsNotWritten_WhenAnyLetterOfItsOperationIsRefused(DatabaseProvider provider)
+    {
+        // A multi-letter template whose second letter is refused (its id is taken) commits nothing: no first letter, no record, so the
+        // template stays owed and a later retry sends every letter once.
+        Seed seed = await CreateAsync(provider);
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(Letter(7, 15077u, seed.A.Id), null)])));
+        Assert.Equal(EconomyCommitResult.Conflict, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+        [
+            new CreateEscrowItem(Item(500, 117, 1)), new InsertMail(Letter(1, 15077u, seed.B.Id, itemGuid: 500, itemEntry: 117, money: 25), null),
+            new CreateEscrowItem(Item(501, 117, 1)), new InsertMail(Letter(7, 15077u, seed.B.Id, itemGuid: 501, itemEntry: 117), null),
+            new RecordServerMailSent(seed.B.Id, 9),
+        ])));
+
+        await using (CharacterDbContext check = TestContexts.Create<CharacterDbContext>(seed.Connection))
+        {
+            Assert.Empty(await new EfEconomyStore(check).GetMailsAsync(seed.B.Id));
+            Assert.False(await check.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 500 || r.Guid == 501));
+            Assert.Empty(await new EfServerMailStore(check).GetSentAsync(seed.B.Id));
+        }
+
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+        [
+            new CreateEscrowItem(Item(500, 117, 1)), new InsertMail(Letter(1, 15077u, seed.B.Id, itemGuid: 500, itemEntry: 117, money: 25), null),
+            new CreateEscrowItem(Item(501, 117, 1)), new InsertMail(Letter(2, 15077u, seed.B.Id, itemGuid: 501, itemEntry: 117), null),
+            new RecordServerMailSent(seed.B.Id, 9),
+        ])));
+        await using CharacterDbContext after = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.Equal(2, (await new EfEconomyStore(after).GetMailsAsync(seed.B.Id)).Count);
+        Assert.Equal([9u], await new EfServerMailStore(after).GetSentAsync(seed.B.Id));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RecordServerMailSent_KeyRefusesARecordThatAppearsAfterTheExistenceCheck(DatabaseProvider provider)
+    {
+        // Two deliveries of one template that both pass the existence check (a concurrent relog): the other writer's row lands between
+        // the check and this transaction's save. The (guid, mailId) key fails the save, the transaction rolls back, and none of this
+        // operation's letters, items or ledger row are written.
+        Seed seed = await CreateAsync(provider);
+        var request = new EconomyCommitRequest(Guid.NewGuid(), [],
+        [
+            new CreateEscrowItem(Item(500, 117, 1)), new InsertMail(Letter(1, 15077u, seed.B.Id, itemGuid: 500, itemEntry: 117, money: 25), null),
+            new RecordServerMailSent(seed.B.Id, 9),
+        ]);
+        await using (CharacterDbContext db = Context(seed.Connection, new ConcurrentSentRecord(seed.B.Id, 9)))
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(() => new EfEconomyStore(db).CommitAsync(request));
+            Assert.Empty(db.ChangeTracker.Entries());
+            Assert.Null(db.Database.CurrentTransaction);
+        }
+
+        await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        var store = new EfEconomyStore(check);
+        Assert.False(await store.IsCommittedAsync(request.OperationId));
+        Assert.Empty(await store.GetMailsAsync(seed.B.Id));
+        Assert.False(await check.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 500));
+    }
+
+    [Fact]
+    public void RecordServerMailSent_MustBeUnique_AndAccompanyALetterToItsCharacter()
+    {
+        MailRecord letter = Letter(1, 15077u, 5);
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new RecordServerMailSent(5, 9)])));
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(letter, null), new RecordServerMailSent(6, 9)])));
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(letter, null), new RecordServerMailSent(5, 9), new RecordServerMailSent(5, 9)])));
+        Assert.Throws<ArgumentException>(() => EconomyRequestValidation.Validate(new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(letter, null), new RecordServerMailSent(5, 0)])));
+        EconomyRequestValidation.Validate(new EconomyCommitRequest(Guid.NewGuid(), [], [new InsertMail(letter, null), new RecordServerMailSent(5, 9)]));
     }
 
     [Theory]
@@ -581,6 +685,27 @@ public sealed class EconomyStoreTests : IAsyncLifetime
             .AddInterceptors(interceptor).Options);
 
     private sealed record Seed(DatabaseConnectionOptions Connection, CharacterState A, CharacterState B);
+
+    /// <summary>
+    /// Writes the server mail record in the economy transaction just before its save, as a concurrent delivery of the same template
+    /// that passed the existence check first would have.
+    /// </summary>
+    private sealed class ConcurrentSentRecord(int characterId, uint templateId) : SaveChangesInterceptor
+    {
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            DbContext db = eventData.Context!;
+            if (db.ChangeTracker.Entries<ServerMailCharacterEntity>().Any())
+            {
+                string sql = $"INSERT INTO {TestContexts.Quote(db, ServerMailDataModule.Sent)} ({TestContexts.Quote(db, "guid")}, "
+                    + $"{TestContexts.Quote(db, "mailId")}) VALUES ({{0}}, {{1}})";
+                await db.Database.ExecuteSqlRawAsync(sql, [characterId, (long)templateId], cancellationToken);
+            }
+
+            return result;
+        }
+    }
 
     /// <summary>Fails the economy SaveChanges after every row change has been staged.</summary>
     private sealed class FailingSave : SaveChangesInterceptor

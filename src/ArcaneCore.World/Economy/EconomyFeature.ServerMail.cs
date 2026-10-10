@@ -11,17 +11,22 @@ public readonly record struct ServerMailItem(uint Entry, uint Count);
 
 /// <summary>
 /// A letter the server sends (AzerothCore ServerMailMgr::SendServerMail): from a creature when <see cref="SenderEntry"/> is set (MAIL_CREATURE,
-/// default stationery), otherwise from the receiver with GM stationery, as AzerothCore does.
+/// default stationery), otherwise from the receiver with GM stationery, as AzerothCore does. <see cref="TemplateId"/> is the
+/// mail_server_template the letters come from; its sent record commits with them.
 /// </summary>
-public sealed record ServerMailRequest(int ReceiverId, uint SenderEntry, string Subject, string Body, uint Money, IReadOnlyList<ServerMailItem> Items);
+public sealed record ServerMailRequest(int ReceiverId, uint SenderEntry, string Subject, string Body, uint Money, IReadOnlyList<ServerMailItem> Items,
+    uint TemplateId);
 
 public sealed partial class EconomyFeature
 {
     /// <summary>
     /// World thread: send <paramref name="request"/> in one economy operation. The 1.12 client shows one item per letter, so every item
     /// goes in a letter of its own with the same subject and body; the money rides on the first. The items are created new, straight into
-    /// escrow under their letter. <paramref name="finished"/> gets true once the letters are committed (and delivered to an online
-    /// receiver); false when the economy store is off or the commit was refused.
+    /// escrow under their letter. The template's mail_server_character record (<see cref="RecordServerMailSent"/>) is written in the same
+    /// transaction, and the store refuses the whole operation when that record already exists: every letter of a template commits
+    /// together, at most once per character, whatever crash, failed write or second login comes between. <paramref name="finished"/>
+    /// gets true once the letters are committed (and delivered to an online receiver); false when the economy store is off, the commit
+    /// was refused (the template was already sent) or its outcome is unknown.
     /// </summary>
     public void SendServerMail(ServerMailRequest request, Action<bool>? finished = null)
     {
@@ -40,6 +45,8 @@ public sealed partial class EconomyFeature
             changes.Add(new InsertMail(letter.Mail, letter.Body));
         }
 
+        changes.Add(new RecordServerMailSent(request.ReceiverId, request.TemplateId));
+
         if (!Start([], changes, outcome =>
             {
                 bool ok = outcome == EconomyOutcome.After;
@@ -53,7 +60,7 @@ public sealed partial class EconomyFeature
 
     private List<MailView>? BuildServerLetters(ServerMailRequest request)
     {
-        if (request.ReceiverId <= 0 || (request.Items.Count > 0 && _items is null)) return null;
+        if (request.ReceiverId <= 0 || request.TemplateId == 0 || (request.Items.Count > 0 && _items is null)) return null;
         var items = new List<ItemInstanceData?>();
         foreach (ServerMailItem wanted in request.Items)
         {
