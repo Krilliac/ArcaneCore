@@ -1149,6 +1149,24 @@ How to read the tables:
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
 | `World:Playerbots:FaultWindowSeconds` | `int` | `3600` | - | How far back faults count towards `MaxFaults`, in seconds of world time (1..604800). |
+| `World:Playerbots:Groups:DungeonRuns:BandAboveBoss` | `int` | `3` | live | Levels above the strongest boss the level band ends (0..20). |
+| `World:Playerbots:Groups:DungeonRuns:BandBelowBoss` | `int` | `3` | live | Levels below the weakest boss the level band starts (0..20): the band's lower end is the higher of the entrance level and the weakest boss's level minus this. |
+| `World:Playerbots:Groups:DungeonRuns:Enabled` | `bool` | `true` | live | Let free bots start dungeon runs (on by default). Off: no new run starts; running ones finish. Raid runs also need `PlayerbotRaidRunOptions.Enabled`. |
+| `World:Playerbots:Groups:DungeonRuns:LevelBandOverrides` | `Dictionary<string, string>` | `{}` | live | Level bands that replace the derived ones. Keys are a map id (`36`) or a map id and segment (`189:2`, the third wing of Scarlet Monastery, counting from 0); values `min-max` (1..63). Example: `"36": "15-22"`. |
+| `World:Playerbots:Groups:DungeonRuns:MaxConcurrentRuns` | `int` | `2` | live | The most dungeon runs at once (0..16; 0 starts none). |
+| `World:Playerbots:Groups:DungeonRuns:MaxRunMinutes` | `int` | `90` | live | The longest a dungeon run lasts, in minutes, from the moment the group forms (10..720). |
+| `World:Playerbots:Groups:DungeonRuns:MaxTravelYards` | `float` | `6000` | live | A bot farther than this from the entrance (yards, 3-D) is not matched for the run (500..20000). |
+| `World:Playerbots:Groups:DungeonRuns:MaxWipes` | `int` | `3` | live | Wipes a dungeon run survives; the run is given up at this many (1..20). |
+| `World:Playerbots:Groups:DungeonRuns:Raids:Enabled` | `bool` | `true` | live | Let free bots start raid runs (on by default; needs `PlayerbotRunOptions.Enabled` too). |
+| `World:Playerbots:Groups:DungeonRuns:Raids:HealerPercent` | `int` | `25` | live | Healers as a percentage of the raid (10..50): a raid of 40 takes 10 at 25. |
+| `World:Playerbots:Groups:DungeonRuns:Raids:MaxConcurrentRaids` | `int` | `1` | live | The most raid runs at once (0..4; 0 starts none). |
+| `World:Playerbots:Groups:DungeonRuns:Raids:MaxRunMinutes` | `int` | `240` | live | The longest a raid run lasts, in minutes, from the moment the raid forms (10..1440). |
+| `World:Playerbots:Groups:DungeonRuns:Raids:MaxWipes` | `int` | `5` | live | Wipes a raid run survives; the run is given up at this many (1..20). |
+| `World:Playerbots:Groups:DungeonRuns:Raids:SkipPrerequisites` | `bool` | `false` | live | Skip the raids' key item, attunement quest and condition requirements (off by default). On, bots are matched without them and the server lets the members of a bot raid run through the entrance without them. Only managed bots in a bot raid run, only through that raid's own entrance and never the entrance level: a real player, a bot outside a run and a dungeon run are checked as always. |
+| `World:Playerbots:Groups:DungeonRuns:Raids:TanksPerTen` | `int` | `1` | live | Tanks per ten raid members (1..5): a raid of 40 takes 4 at 1, 8 at 2. |
+| `World:Playerbots:Groups:DungeonRuns:StartChancePerMinute` | `double` | `0.5` | live | The chance per minute (0..1) that a scan which finds enough fitting bots starts a run. 0 starts none; 1 starts one at once. |
+| `World:Playerbots:Groups:DungeonRuns:TeleportToEntrance` | `bool` | `false` | live | Teleport the group to the approach point of the entrance instead of walking there (off by default: the group travels together, fighting what is in the way). The run never teleports otherwise. |
+| `World:Playerbots:Groups:DungeonRuns:TravelTimeoutMinutes` | `int` | `30` | live | The longest the group takes to gather and walk to the entrance, in minutes (5..240). |
 | `World:Playerbots:Groups:Enabled` | `bool` | `true` | live | Let bots form groups for group content (on by default). Off: no new group forms; running ones finish. |
 | `World:Playerbots:Groups:FormationTimeoutSeconds` | `int` | `300` | live | Seconds a bot waits for partners for one group goal (30..86400). With none by then, the goal is set aside and the bot goes on with what it can do alone; invitations not answered within this are given up too. |
 | `World:Playerbots:Groups:InvitePlayers` | `bool` | `false` | live | A bot group short of a role or a member may invite a nearby real player of a fitting level and class through the ordinary invitation (off by default). A real player never becomes the group's master: the bots keep their goal. |

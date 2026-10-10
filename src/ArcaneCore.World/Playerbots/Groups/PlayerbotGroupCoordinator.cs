@@ -88,8 +88,13 @@ internal enum PlayerbotGroupState : byte
 /// through the exit, and disbands. A wipe (half the group or more dead in a fight) retreats, regroups and tries again; after
 /// <see cref="MaxFailures"/> failures (or <see cref="GoalTimeoutMs"/>) the goal is set aside for every member and the group disbands.
 /// </para>
+/// <para>
+/// <b>Runs</b> (<c>PlayerbotGroupCoordinator.Runs.cs</c>): besides quests, free bots of a fitting level group up on their own to run a
+/// dungeon or raid wing (<see cref="PlayerbotRunCatalogue"/>); the group carries a <see cref="PlayerbotRunMachine"/> and ends after the
+/// last boss, at <c>MaxWipes</c> or when it cannot go on.
+/// </para>
 /// </summary>
-public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger<PlayerbotGroupCoordinator> logger) : IWorldFeature
+public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services, ILogger<PlayerbotGroupCoordinator> logger) : IWorldFeature, IAreaTriggerWaiver
 {
     /// <summary>How often free bots are looked over for group goals and matched.</summary>
     internal const uint ScanMs = 2_000;
@@ -141,7 +146,11 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     /// <summary>What happened last to bot groups, newest last (at most 32 lines; status and tests).</summary>
     internal List<string> Events { get; } = [];
 
-    public void Attach(WorldRuntime world) => _world = world;
+    public void Attach(WorldRuntime world)
+    {
+        _world = world;
+        LoadEncounters();
+    }
 
     internal PlayerbotGroupOptions Options => _options.Groups;
 
@@ -231,7 +240,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     {
         if (_memberOf.TryGetValue(botId, out BotGroup? group) && group.Find(botId) is { } member)
             return string.Create(CultureInfo.InvariantCulture,
-                $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}");
+                $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}{(group.Run is not null ? ":run" : string.Empty)}");
         if (_waiting.TryGetValue(botId, out Waiting? waiting))
             return string.Create(CultureInfo.InvariantCulture,
                 $"group=waiting:{waiting.Goal.Kind.ToString().ToLowerInvariant()}:{waiting.Goal.Key.Value}:size{waiting.Goal.Size}");
@@ -250,12 +259,15 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         {
             var text = new StringBuilder();
             text.Append(CultureInfo.InvariantCulture, $"group {group.Id} {group.Goal} state={group.State.ToString().ToLowerInvariant()}");
-            text.Append(CultureInfo.InvariantCulture, $" {(group.Raid ? "raid" : "party")} failures={group.Failures} age={unchecked(Now - group.FormedMs) / 1000}s members=");
+            text.Append(CultureInfo.InvariantCulture, $" {(group.Raid ? "raid" : "party")} failures={group.Failures} age={unchecked(Now - group.FormedMs) / 1000}s");
+            if (group.Run is { } reported) text.Append(' ').Append(DescribeRun(reported));
+            text.Append(" members=");
             text.AppendJoin(',', group.Members.Select(m =>
                 $"{m.Name}({m.Role.ToString().ToLowerInvariant()}{(m.Guid == group.LeaderGuid ? ",leader" : string.Empty)}{(m.Real ? ",player" : string.Empty)}{(m.Joined ? string.Empty : ",invited")}{(group.Raid ? $",g{m.SubGroup + 1}" : string.Empty)})"));
             lines.Add(text.ToString());
         }
 
+        if (RunSummary() is { } runSummary) lines.Add(runSummary);
         foreach ((Guid _, Waiting waiting) in _waiting.OrderBy(w => w.Value.SinceMs))
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"waiting {waiting.Name} {waiting.Goal} for {unchecked(Now - waiting.SinceMs) / 1000}s"));
         foreach (string line in Events.TakeLast(5)) lines.Add("last: " + line);
@@ -334,6 +346,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         }
 
         if (_options.Groups.Enabled) Match();
+        if (_options.Groups.Enabled) StartRuns();
     }
 
     /// <summary>The objective of <paramref name="goal"/> is still unfinished for the bot (or, without a quest, still wanted).</summary>
@@ -353,7 +366,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     /// </summary>
     private void ShareQuests(BotGroup group)
     {
-        if (services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
+        if (group.Run is not null || services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
         var joined = new List<(Member Member, Player Player)>();
         foreach (Member member in group.Members.Where(m => m.Joined))
             if (_world!.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
@@ -631,9 +644,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         return null;
     }
 
-    private void Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan)
+    private void Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
     {
-        var group = new BotGroup(_nextId++, goal, plan.Leader.BotId, new ObjectGuid(plan.Leader.Guid), Now);
+        var group = new BotGroup(_nextId++, goal, plan.Leader.BotId, new ObjectGuid(plan.Leader.Guid), Now) { Run = run };
         foreach ((PlayerbotGroupCandidate bot, PlayerbotGroupRole role, byte subGroup) in plan.Members)
         {
             bool real = bot.BotId == Guid.Empty;
@@ -653,8 +666,8 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             group.Members.Add(member);
         }
 
-        group.HadQuest = goal.QuestId != 0 || group.Members.Any(m => !m.Real && _world?.FindOnlinePlayer(m.Guid) is { } p
-            && QuestFor(p, goal.ObjectiveEntry) != 0);
+        group.HadQuest = run is null && (goal.QuestId != 0 || group.Members.Any(m => !m.Real && _world?.FindOnlinePlayer(m.Guid) is { } p
+            && QuestFor(p, goal.ObjectiveEntry) != 0));
         group.Approach = ApproachPoint(goal, plan.Leader.Position);
         _groups.Add(group);
         Totals = (Totals.Formed + 1, Totals.Completed, Totals.Failed);
@@ -693,10 +706,19 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             }
         }
 
+        SyncRun(group);
         if (group.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding or PlayerbotGroupState.Leaving)
-            && unchecked(now - group.FormedMs) > GoalTimeoutMs)
+            && unchecked(now - group.FormedMs) > GoalTimeoutOf(group))
         {
-            Finish(group, success: false, "timeout");
+            if (group.Run is { } timedOut) timedOut.Apply(PlayerbotRunSignal.Timeout("run"));
+            Finish(group, success: false, group.Run is null ? "timeout" : "run-timeout");
+            return;
+        }
+
+        if (group.Run is { } faulty && group.RunFault is { } fault && !faulty.Finished)
+        {
+            faulty.Apply(PlayerbotRunSignal.NoPath(fault));
+            Finish(group, success: false, fault);
             return;
         }
 
@@ -705,6 +727,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         if (group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging && !group.InFight(now))
             ShareQuests(group);
+        uint stepLimit = StepLimitOf(group);
 
         switch (group.State)
         {
@@ -713,21 +736,33 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                 break;
             case PlayerbotGroupState.Gathering:
                 if (Gathered(group, leader)) Enter(group, PlayerbotGroupState.Travelling);
-                else if (group.StepTimedOut(now)) Finish(group, success: false, "gather-timeout");
+                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "gather-timeout");
                 break;
             case PlayerbotGroupState.Travelling:
                 if (CheckWipe(group, leader)) break;
                 if (leader.MapId == group.Goal.MeetingMap && Arrived(leader, group.Approach, 5f) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
+                {
+                    group.Run?.Apply(PlayerbotRunSignal.Arrived);
                     Enter(group, group.Goal.InInstance ? PlayerbotGroupState.Entering : PlayerbotGroupState.Engaging);
-                else if (group.StepTimedOut(now)) Finish(group, success: false, "travel-timeout");
+                }
+                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "travel-timeout");
                 break;
             case PlayerbotGroupState.Entering:
                 if (CheckWipe(group, leader)) break;
                 if (group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || p.MapId == group.Goal.MapId || m.Real))
+                {
+                    group.Run?.Apply(PlayerbotRunSignal.AllInside);
                     Enter(group, PlayerbotGroupState.Engaging);
-                else if (group.StepTimedOut(now)) Finish(group, success: false, "enter-timeout");
+                }
+                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, group.Run is null ? "enter-timeout" : "enter-refused-or-timeout");
                 break;
             case PlayerbotGroupState.Engaging:
+                if (group.Run is { } run)
+                {
+                    AdvanceRun(group, leader, run, now);
+                    break;
+                }
+
                 if (Complete(group))
                 {
                     Note($"group {group.Id} completed {group.Goal}");
@@ -744,6 +779,15 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                 // The survivors get a moment to turn and run (the killer turns on its next victim at its next update).
                 if (unchecked(now - group.StateSinceMs) >= WipeSettleMs && group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || !p.IsAlive || !p.Combat.IsInCombat))
                 {
+                    if (group.Run is { } wiped)
+                    {
+                        group.Failures = wiped.Wipes;
+                        Note($"group {group.Id} wiped ({wiped.Wipes}/{wiped.MaxWipes})");
+                        if (wiped.Step == PlayerbotRunStep.GiveUp) Finish(group, success: false, wiped.Reason ?? "wiped");
+                        else Enter(group, PlayerbotGroupState.Regrouping);
+                        break;
+                    }
+
                     group.Failures++;
                     Note($"group {group.Id} wiped ({group.Failures}/{MaxFailures})");
                     if (group.Failures >= MaxFailures) Finish(group, success: false, "wiped");
@@ -754,14 +798,20 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             case PlayerbotGroupState.Regrouping:
                 if (group.Members.Where(m => m.Joined && !m.Real).All(m => _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && !p.Combat.IsInCombat)
                     && !group.AnyResting(_world!))
+                {
+                    group.Run?.Apply(PlayerbotRunSignal.Regrouped);
                     Enter(group, PlayerbotGroupState.Gathering);
-                else if (group.StepTimedOut(now)) Finish(group, success: false, "regroup-timeout");
+                }
+                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "regroup-timeout");
                 break;
             case PlayerbotGroupState.Leaving:
                 if (group.Members.Where(m => m.Joined && !m.Real).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p
                         || WorldMaps.Of(_world!).Registry.Find(p.MapId) is not { IsDungeon: true }))
+                {
+                    group.Run?.Apply(PlayerbotRunSignal.Left);
                     Enter(group, PlayerbotGroupState.Disbanding);
-                else if (group.StepTimedOut(now)) BringOut(group);
+                }
+                else if (group.StepTimedOut(now, stepLimit)) BringOut(group);
                 break;
             case PlayerbotGroupState.Disbanding:
                 Disband(group);
@@ -880,6 +930,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         fighting |= group.InFight(Now);
         if (alive > 0 && (!fighting || dead * 2 < alive + dead)) return false;
         Note($"group {group.Id} is wiping: {dead} dead, {alive} alive");
+        group.Run?.Apply(PlayerbotRunSignal.Wipe);
         Enter(group, PlayerbotGroupState.Wiped);
         return true;
     }
@@ -911,13 +962,19 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     /// <summary>How long the group waits at an objective's spawn with none of it alive in sight before it gives the goal up.</summary>
     internal const uint ObjectiveMissingMs = 120_000;
 
-    /// <summary>The leader stands at the objective's spawn and no living objective creature is in sight, for <see cref="ObjectiveMissingMs"/>.</summary>
-    private bool ObjectiveMissing(BotGroup group, Player leader, uint now)
+    /// <summary>
+    /// The leader stands at the objective's spawn and no living objective creature is in sight, for <see cref="ObjectiveMissingMs"/>. For a
+    /// run's boss "in sight" is "alive on the map": a boss that patrols away from its spawn is not missing, one that is dead or was never
+    /// spawned (a saved instance) is (see <see cref="FindLivingOnMap"/>).
+    /// </summary>
+    internal bool ObjectiveMissing(BotGroup group, Player leader, uint now)
     {
         bool there = leader.MapId == group.Goal.MapId
-            && Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Goal.Objective) <= 15f;
-        bool seen = group.Goal.ObjectiveEntry != 0 && leader.Map is { } map && leader.VisibleObjects.Any(guid =>
-            map.FindObject(guid) is Game.Creatures.Creature { IsAlive: true } creature && creature.Entry == group.Goal.ObjectiveEntry);
+            && Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.ObjectivePosition) <= 15f;
+        bool seen = group.ObjectiveEntry != 0 && leader.Map is { } map && leader.VisibleObjects.Any(guid =>
+            map.FindObject(guid) is Game.Creatures.Creature { IsAlive: true } creature && creature.Entry == group.ObjectiveEntry);
+        if (!seen && there && group.Run is not null && group.ObjectiveEntry != 0)
+            seen = FindLivingOnMap(leader, group.ObjectiveEntry) is not null || !GridLoadedAt(leader, group.ObjectivePosition);
         if (!there || seen || leader.Combat.IsInCombat)
         {
             group.MissingSinceMs = 0;
@@ -928,11 +985,29 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         return unchecked(now - group.MissingSinceMs) > ObjectiveMissingMs;
     }
 
+    /// <summary>
+    /// The living creature with <paramref name="entry"/> anywhere on <paramref name="player"/>'s map (the grids that are loaded: the
+    /// creature system holds a spawn alive, as a corpse or hidden until its respawn), or null: none is alive, or it never spawned.
+    /// </summary>
+    internal static Game.Creatures.Creature? FindLivingOnMap(Player player, uint entry)
+    {
+        if (entry == 0 || player.Map?.FindUpdater<Game.Creatures.CreatureMapSystem>() is not { } system) return null;
+        foreach (Game.Creatures.Creature creature in system.Creatures)
+            if (creature.Entry == entry && creature.IsAlive) return creature;
+        return null;
+    }
+
+    /// <summary>Whether the grid at <paramref name="at"/> is loaded on the player's map (a creature in an unloaded grid is not in the creature system: absent says nothing).</summary>
+    private static bool GridLoadedAt(Player player, Vector3 at)
+        => player.Map?.FindUpdater<Game.Creatures.CreatureMapSystem>() is { } system && system.IsGridLoaded(at.X, at.Y);
+
     private void Enter(BotGroup group, PlayerbotGroupState state)
     {
         group.State = state;
         group.StateSinceMs = Now;
         if (state == PlayerbotGroupState.Gathering) group.ObjectiveKilled = false;
+        if (state == PlayerbotGroupState.Wiped && group.Run is not null) group.ClearObjective();
+        if (state == PlayerbotGroupState.Travelling) TeleportToEntranceIfConfigured(group);
     }
 
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
@@ -940,7 +1015,12 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     {
         if (!success && setAside)
             foreach (Member member in group.Members.Where(m => !m.Real))
-                SetAside(member.BotId, group.Goal, suspendInBrain: true);
+            {
+                if (group.Run is { } run) SetRunAside(member.BotId, run, reason);
+                else SetAside(member.BotId, group.Goal, suspendInBrain: true);
+            }
+
+        if (!success) group.Run?.Apply(PlayerbotRunSignal.Abort(reason));
         if (!success) Totals = (Totals.Formed, Totals.Completed, Totals.Failed + 1);
         if (!success) Note($"group {group.Id} gave up {group.Goal}: {reason}");
         group.Succeeded = success;
@@ -963,6 +1043,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         foreach (Member member in group.Members.Where(m => !m.Real).ToArray()) Release(group, member);
         _groups.Remove(group);
+        NoteRunEnded(group);
         Note($"group {group.Id} disbanded ({group.Reason})");
         logger.LogInformation("Playerbot group {Group} disbanded ({Reason})", group.Id, group.Reason);
     }
@@ -1132,6 +1213,21 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         public bool Solo { get; init; }
         public bool HadQuest { get; set; }
 
+        /// <summary>The dungeon or raid run this group is on (null for a quest group).</summary>
+        public PlayerbotRunMachine? Run { get; set; }
+
+        /// <summary>A reason the group AI found that the run cannot go on (no path to the boss or the entrance); the coordinator gives the run up.</summary>
+        public string? RunFault { get; set; }
+
+        /// <summary>When the last boss died and the group began to wait for its loot (0: not yet).</summary>
+        public uint RunDoneMs { get; set; }
+
+        /// <summary>The creature the group is after now: the run's current boss, else the goal's objective.</summary>
+        public uint ObjectiveEntry => Run is { } run ? run.CurrentBoss?.Entry ?? 0 : Goal.ObjectiveEntry;
+
+        /// <summary>Where that creature stands.</summary>
+        public Vector3 ObjectivePosition => Run is { } run ? run.CurrentBoss?.Position ?? Goal.Objective : Goal.Objective;
+
         /// <summary>The quests a member already pushed to the group (<see cref="ShareQuests"/>).</summary>
         public HashSet<uint> Shared { get; } = [];
 
@@ -1158,10 +1254,29 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         public Player? LeaderPlayer(WorldRuntime world) => world.FindOnlinePlayer(LeaderGuid);
 
-        public bool StepTimedOut(uint now) => unchecked(now - StateSinceMs) > StepTimeoutMs;
+        public bool StepTimedOut(uint now) => StepTimedOut(now, StepTimeoutMs);
+
+        /// <summary>The state has lasted more than <paramref name="limitMs"/>.</summary>
+        public bool StepTimedOut(uint now, uint limitMs) => unchecked(now - StateSinceMs) > limitMs;
 
         /// <summary>The leader engaged an objective creature: its death (seen by <see cref="ObjectiveKilled"/>) completes a goal without a quest.</summary>
-        public void NoteObjective(Game.Creatures.Creature creature) => Objective = creature.Guid;
+        public void NoteObjective(Game.Creatures.Creature creature)
+        {
+            Objective = creature.Guid;
+            ObjectiveCreature = creature.Entry;
+        }
+
+        /// <summary>The entry of the creature <see cref="Objective"/> names.</summary>
+        public uint ObjectiveCreature { get; private set; }
+
+        /// <summary>Forget the engaged objective (a run goes on to its next boss).</summary>
+        public void ClearObjective()
+        {
+            Objective = default;
+            ObjectiveCreature = 0;
+            ObjectiveKilled = false;
+            MissingSinceMs = 0;
+        }
 
         /// <summary>Whether a bot member is eating or drinking now (the leader waits).</summary>
         public bool AnyResting(WorldRuntime world) => Members.Any(m => m.AI is { Resting: true });

@@ -40,6 +40,9 @@ public sealed class PlayerbotGroupOptions
     /// </summary>
     public bool InvitePlayers { get; set; }
 
+    /// <summary>Dungeon and raid runs: free bots group up on their own for instances that fit them (<c>World:Playerbots:Groups:DungeonRuns</c>; live).</summary>
+    public PlayerbotRunOptions DungeonRuns { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Groups";
@@ -47,5 +50,7 @@ public sealed class PlayerbotGroupOptions
         if (LevelRange is < 0 or > 60) throw new InvalidOperationException($"{section}: LevelRange must be 0..60.");
         if (MinTank is < 0 or > 5 || MinHealer is < 0 or > 5) throw new InvalidOperationException($"{section}: MinTank and MinHealer must be 0..5.");
         if (FormationTimeoutSeconds is < 30 or > 86_400) throw new InvalidOperationException($"{section}: FormationTimeoutSeconds must be 30..86400.");
+        if (DungeonRuns is null) throw new InvalidOperationException($"{section}:DungeonRuns is missing.");
+        DungeonRuns.Validate();
     }
 }
