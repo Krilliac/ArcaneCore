@@ -688,6 +688,55 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Windsor_AcceptPlaysHisLines_TheGateScene_ThenWaitsForTheWordToEnterTheKeep()
+    {
+        // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(27, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(825, 50).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry), Template(466), Template(1749), Template(1756)],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 466, path[1].X + 5, path[1].Y, path[1].Z),
+             Spawn(3, 1749, first.X + 3, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade);
+            int guards = 0; // the gate guards are timed summons (180 s), gone before the keep
+            for (int elapsed = 0; elapsed < 1_200_000 && !ai.KeepEventReady; elapsed += 100)
+            {
+                player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
+                world.RunTick(100);
+                guards = Math.Max(guards, system.Creatures.Count(c => c.Entry == 1756));
+            }
+
+            Assert.True(ai.KeepEventReady, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} state paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
+            Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
+            Assert.Equal(6, guards);
+            Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains("-1000825", said);
+            Assert.Contains("-1000841", said); // the gate scene
+            Assert.Contains("-1000849", said); // before the keep
+
+            ai.StartKeepEvent();
+            for (int elapsed = 0; elapsed < 30_000 && ai.HasEscortState(EscortAI.EscortState.Paused); elapsed += 100)
+            {
+                world.RunTick(100);
+            }
+
+            Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
+            Assert.Equal(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+        }
+    }
+
+    [Fact]
     public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
     {
         // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
