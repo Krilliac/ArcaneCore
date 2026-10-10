@@ -33,6 +33,13 @@ public sealed class PlayerbotOptions
     /// </summary>
     public int MaxRegisteredBots { get; set; } = 1000;
 
+    /// <summary>
+    /// The most bots one bulk command (<c>.playerbot summon|send|start|stop ... all</c> or a prefix) moves or starts without
+    /// <c>force</c> (1..<see cref="MaxBotsCeiling"/>). A selection larger than this, with no smaller count, is refused. Live through
+    /// <c>.reload config</c>.
+    /// </summary>
+    public int MaxBulkCommand { get; set; } = 50;
+
     /// <summary>Milliseconds between two decisions of a bot (50..60000).</summary>
     public int ThinkIntervalMs { get; set; } = 500;
 
@@ -132,6 +139,7 @@ public sealed class PlayerbotOptions
         if (MaxBots is < 0 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBots must be 0..{MaxBotsCeiling}.");
         if (MaxRegisteredBots is < 0 or > MaxRegisteredBotsCeiling)
             throw new InvalidOperationException($"{SectionName}: MaxRegisteredBots must be 0..{MaxRegisteredBotsCeiling}.");
+        if (MaxBulkCommand is < 1 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBulkCommand must be 1..{MaxBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");

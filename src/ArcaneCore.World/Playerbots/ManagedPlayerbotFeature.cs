@@ -346,6 +346,49 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     internal WorldSession? FindSession(Guid botId)
         => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;
 
+    /// <summary>
+    /// <c>.playerbot follow|stay</c> (world thread): leash the running autonomous bot to <paramref name="master"/>, a real player, with
+    /// no group (<see cref="PlayerbotPartyAI.Leash"/>). A member of a bot-led group leaves it first, exactly as when a controller takes
+    /// the bot over (<see cref="SetControllerAsync"/>). The bot is marked party-driven at once, so the bot-led group matching of the
+    /// same tick cannot take it back before its next think.
+    /// </summary>
+    internal PlayerbotOperationResult Leash(Guid botId, Player master, bool stay)
+    {
+        ArgumentNullException.ThrowIfNull(master);
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-leash-thread");
+        if (!_active.TryGetValue(botId, out ActiveBot? bot) || bot.Paused || bot.Session.State != SessionState.InWorld
+            || bot.Session.Player is not { } player)
+            return new(false, "bot-not-running", botId);
+        if (bot.Controller is not null) return new(false, "bot-scripted", botId, player.Name);
+        if (ReferenceEquals(player, master)) return new(false, "leash-refused", botId, player.Name);
+        if (bot.GroupDriven)
+        {
+            coordinator?.Forget(botId);
+            bot.GroupDriven = false;
+            bot.Brain.ResumeAfterGroup();
+        }
+
+        bot.Session.ManagedBudget = null;
+        bot.Party.Leash(player, master, stay);
+        bot.PartyDriven = true;
+        return new(true, stay ? "staying" : "following", botId, player.Name);
+    }
+
+    /// <summary>
+    /// <c>.playerbot dismiss</c> (world thread): end a leash. The party AI lets go now; the bot's next think finds it neither
+    /// grouped nor leashed and gives it a fresh brain (<see cref="UpdateAutonomous"/>).
+    /// </summary>
+    internal PlayerbotOperationResult Unleash(Guid botId)
+    {
+        if (_world is not { } world || !world.IsWorldThread) throw new InvalidOperationException("playerbot-leash-thread");
+        if (!_active.TryGetValue(botId, out ActiveBot? bot) || bot.Paused || bot.Session.State != SessionState.InWorld
+            || bot.Session.Player is not { } player)
+            return new(false, "bot-not-running", botId);
+        if (!bot.Party.IsLeashed) return new(false, "not-leashed", botId, player.Name);
+        bot.Party.Unleash(player);
+        return new(true, "dismissed", botId, player.Name);
+    }
+
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
 
