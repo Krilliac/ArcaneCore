@@ -30,6 +30,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
     private bool _leaderWasMoving;
     private int _recheckMs;
     private CreatureHome? _resetPoint;
+    private bool _following;
 
     public MovementGeneratorType Type => MovementGeneratorType.Formation;
 
@@ -40,6 +41,7 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         _leaderSplineId = uint.MaxValue;
         _recheckMs = 0;
         _resetPoint = null;
+        _following = true;
         Step(creature, mover, force: true);
     }
 
@@ -47,12 +49,19 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
     {
         _leaderSplineId = uint.MaxValue;
         _recheckMs = 0;
+        _following = true;
         Step(creature, mover, force: true);
     }
 
     /// <summary>cmangos FormationMovementGenerator::Interrupt: the spot it was at when a fight took it is where evade returns it.</summary>
     public void Interrupt(Creature creature, ICreatureMover mover)
-        => _resetPoint = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
+    {
+        if (_following)
+        {
+            _resetPoint = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
+            _following = false;
+        }
+    }
 
     public CreatureHome? GetResetPosition(Creature creature) => _resetPoint;
 

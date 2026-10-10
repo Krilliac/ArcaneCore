@@ -136,6 +136,29 @@ public sealed class FormationTests
         Assert.True(Distance2D(next, PathPoints[6].X + ShiftX, PathPoints[6].Y + ShiftY) < 1f, $"the new leader is at {next.X},{next.Y}"); // waiting at point 7
     }
 
+    [Fact]
+    public void Kargath_AFollowerSwitchesVictims_EvadeStillReturnsItToWhereTheFightTookIt()
+    {
+        // cmangos FormationMovementGenerator::Interrupt saves the reset point only while UNIT_STAT_FOLLOW_MOVE is set (first interrupt).
+        (WorldRuntime w, CreatureMapSystem system) = Start();
+        using WorldRuntime world = w;
+        Creature follower = Member(system, 6886);
+        (Player a, _) = AddPlayer(world, 2, follower.X + 5, follower.Y);
+        (Player b, _) = AddPlayer(world, 3, follower.X - 5, follower.Y);
+        (float startX, float startY) = (follower.X, follower.Y);
+
+        follower.Motion.MoveChase(a);                          // the fight takes it here
+        system.StopMoving(follower);
+        follower.SetPosition(startX + 20, startY + 20, Z, 0f); // it chased somewhere else
+        Assert.True(Distance2D(follower, startX, startY) > 20f);
+        follower.Motion.MoveChase(b);                          // victim switch
+
+        CreatureHome? reset = follower.Motion.Default.GetResetPosition(follower);
+        Assert.NotNull(reset);
+        Assert.True(MathF.Abs(reset!.Value.X - startX) < 0.1f && MathF.Abs(reset.Value.Y - startY) < 0.1f,
+            $"evade would send it to {reset.Value.X},{reset.Value.Y}, not where the fight took it ({startX},{startY})");
+    }
+
     private static void AssertInSlots(CreatureMapSystem system, Creature leader, FormationState formation, float leeway)
     {
         foreach (FormationSlot slot in formation.Slots.Where(s => s.SlotId != 0))
