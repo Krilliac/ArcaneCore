@@ -375,6 +375,46 @@ public sealed class InstanceManagerTests
         Assert.Same(map, gm.Map);
     }
 
+    /// <summary>
+    /// Regression (the PlayerCap flake on a loaded CI node): both worldport acks post their arrival as world commands, and
+    /// the production command drain stops once <see cref="WorldRuntimeOptions.CommandTimeBudgetMs"/> of wall time has
+    /// passed. When c's arrival ran past that budget, d's arrival waited for the next tick and d had no map after the
+    /// one tick the test allows. Test worlds advance by ticks, not by wall time, so a slow command must not change
+    /// what one tick does: here c's arrival is made deliberately slower than the production budget.
+    /// </summary>
+    [Fact]
+    public void PlayerCap_LateArrivalIsEjectedInTheSameTick_EvenWhenTheFirstArrivalIsSlow()
+    {
+        using var f = new InstanceFixture(); // dungeon player limit 3
+        Player a = f.AddPlayer(1), b = f.AddPlayer(2), c = f.AddPlayer(3), d = f.AddPlayer(4);
+        f.Party(a, b, c, d);
+        f.EnterDungeon(a);
+        f.EnterDungeon(b);
+        Map map = a.Map!;
+
+        int slowMs = new WorldRuntimeOptions().CommandTimeBudgetMs + 10;
+        f.Teleports.TeleportCompleted += player =>
+        {
+            if (ReferenceEquals(player, c))
+            {
+                Thread.Sleep(slowMs); // c's arrival outlasts the production per-tick command budget
+            }
+        };
+
+        Assert.True(f.Teleports.TeleportTo(c, Dungeon, -16.4f, -383.07f, 61.78f, 0));
+        Assert.True(f.Teleports.TeleportTo(d, Dungeon, -16.4f, -383.07f, 61.78f, 0));
+        f.Tick();
+        f.Teleports.HandleWorldportAck(c);
+        f.Teleports.HandleWorldportAck(d);
+        f.ClearAll();
+        f.Tick();
+        Assert.Same(map, c.Map);
+        Assert.NotNull(d.Map); // d's arrival ran in the same tick, after c's
+        Assert.Equal(0u, d.Map.MapId);
+        Assert.Equal([(byte)1], Assert.Single(f.Sent(d, WorldOpcode.SmsgTransferAborted))); // TRANSFER_ABORT_MAX_PLAYERS
+        Assert.Equal(3, map.PlayerCount);
+    }
+
     [Fact]
     public void LeavingTheGroupInside_StartsTheHomebindTimer_RejoiningCancelsIt()
     {
