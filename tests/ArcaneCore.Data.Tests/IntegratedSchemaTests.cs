@@ -100,6 +100,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(MovementScriptDataModule), DatabaseComponent.World, MovementScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Pools.PoolDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Pools.PoolDataModule.Version),
             (typeof(ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule.Version),
+            (typeof(SmartScriptDataModule), DatabaseComponent.World, SmartScriptDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -174,7 +175,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(47, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47)
+        Assert.Equal(48, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48)
         Assert.Equal(49, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 

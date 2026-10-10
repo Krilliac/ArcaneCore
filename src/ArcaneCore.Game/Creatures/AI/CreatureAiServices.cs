@@ -167,6 +167,9 @@ public sealed class CreatureAiFactory
 
     public const string GuardAIName = "GuardAI";
 
+    /// <summary>AzerothCore SmartAI: the creature runs its <c>smart_scripts</c> rows (<see cref="CreatureSmartAI"/>).</summary>
+    public const string SmartAIName = "SmartAI";
+
     /// <summary>vmangos GuardEventAI: EventAI with the guard on-sight rules (AI/CreatureAIRegistry.cpp:50).</summary>
     public const string GuardEventAIName = "GuardEventAI";
 
@@ -186,6 +189,7 @@ public sealed class CreatureAiFactory
             UsesGuardSightRules = (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0, // vmangos GuardEventAI::Permissible
         },
         [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
+        [SmartAIName] = static (c, content) => new CreatureSmartAI(c, content.Ai),
     };
 
     /// <summary>
