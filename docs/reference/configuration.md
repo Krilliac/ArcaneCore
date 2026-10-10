@@ -40,6 +40,7 @@ How to read the tables:
 - [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
+- [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
@@ -525,6 +526,19 @@ How to read the tables:
 | `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
 | `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
+
+## `Ops:Metrics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Metrics:Enabled` | `bool` | `false` | - | The master switch. `false`: no listener is attached, so every instrument stays disabled and costs one branch. Default false (TrinityCore `Metric.Enable = 0`). |
+| `Ops:Metrics:Exporter` | `MetricsExporter` | `Prometheus` | - | Where the metrics go. Default Prometheus. Values: `Prometheus` (scrape endpoint), `Otlp` (push to an OpenTelemetry collector), `Both`. Values: `Prometheus`, `Otlp`, `Both`. |
+| `Ops:Metrics:MapSampleIntervalSeconds` | `int` | `10` | - | Seconds between per-map samples (players, creatures, objects, update time) taken on the world thread. 1-3600. Default 10 (TrinityCore `Metric.OverallStatusInterval = 10`). |
+| `Ops:Metrics:OtlpEndpoint` | `string` | `"http://localhost:4318/v1/metrics"` | - | The OTLP/HTTP metrics endpoint the push exporter posts JSON to. Default `http://localhost:4318/v1/metrics`. |
+| `Ops:Metrics:OtlpIntervalSeconds` | `int` | `15` | - | Seconds between OTLP pushes. 1-3600. Default 15 (TrinityCore `Metric.Interval = 1` pushes every second to InfluxDB; a collector batches, so a longer period suffices). |
+| `Ops:Metrics:PerMapMetrics` | `bool` | `true` | - | `false`: no per-map series, only the world totals (bounds the label cardinality on a server with many instances). Default true. |
+| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). Default `http://localhost:9464/metrics/`. |
+| `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
 
 ## `Ops:Watchdog`
 
