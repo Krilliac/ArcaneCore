@@ -506,23 +506,34 @@ public sealed class WorldRuntime : IDisposable
         long worldTickBytesEnd = GC.GetAllocatedBytesForCurrentThread();
 
         // A snapshot: a map system may create another map (an instance) during its update.
-        foreach (Map map in _maps.Values.ToArray())
+        int mapCount = _maps.Count;
+        Map[] maps = System.Buffers.ArrayPool<Map>.Shared.Rent(Math.Max(mapCount, 1));
+        _maps.Values.CopyTo(maps, 0);
+        try
         {
-            long mapStart = Stopwatch.GetTimestamp();
-            MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
-                ? map.ReusableDiagnostics()
-                : null;
-            try
+            for (int mapIndex = 0; mapIndex < mapCount; mapIndex++)
             {
-                map.Update(diffMs, diagnostics);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "map {MapId} update failed", map.MapId);
-            }
+                Map map = maps[mapIndex];
+                long mapStart = Stopwatch.GetTimestamp();
+                MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
+                    ? map.ReusableDiagnostics()
+                    : null;
+                try
+                {
+                    map.Update(diffMs, diagnostics);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "map {MapId} update failed", map.MapId);
+                }
 
-            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
-            if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
+                LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
+                if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<Map>.Shared.Return(maps, clearArray: true);
         }
 
         UnloadRequestedMaps();
