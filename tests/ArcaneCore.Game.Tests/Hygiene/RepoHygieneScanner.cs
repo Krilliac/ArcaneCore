@@ -12,7 +12,7 @@ internal sealed record HygieneViolation(string Path, string Rule);
 
 internal static class RepoHygieneScanner
 {
-    /// <summary>Walks up from the test binary to the directory holding <c>ArcaneCore.slnx</c>
+    /// <summary>Finds the compiling checkout holding <c>ArcaneCore.slnx</c>
     /// (override with <c>ARCANECORE_HYGIENE_ROOT</c>, used to point the guard at a scratch copy).</summary>
     public static string FindRepoRoot()
     {
@@ -22,15 +22,7 @@ internal static class RepoHygieneScanner
             return Path.GetFullPath(overridden);
         }
 
-        for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "ArcaneCore.slnx")))
-            {
-                return dir.FullName;
-            }
-        }
-
-        throw new InvalidOperationException("ArcaneCore.slnx not found above " + AppContext.BaseDirectory);
+        return RepositorySource.RequireRoot();
     }
 
     /// <summary>Repo-relative, '/'-separated paths of every file git would track or show as untracked

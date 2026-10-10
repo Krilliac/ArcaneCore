@@ -60,6 +60,9 @@ public abstract partial class InstanceData
     /// <summary>mangos-classic <c>Map::GetVariableManager().GetVariable(id)</c>: 0 when never set.</summary>
     public int GetVariable(uint variableId) => _variables.GetValueOrDefault(variableId);
 
+    /// <summary>Whether this script has explicitly published a map variable, including an explicit zero.</summary>
+    public bool TryGetVariable(uint variableId, out int value) => _variables.TryGetValue(variableId, out value);
+
     /// <summary>
     /// mangos-classic <c>Map::GetVariableManager().SetVariable(id, value)</c>: the map's variable changes and every spawn gated on it with
     /// <see cref="GateCreatureSpawnOnVariable"/> is brought in line (spawned when its grid is loaded and the condition now holds, removed

@@ -80,6 +80,11 @@ public static class ImmunityRules
             return false;
         }
 
+        if (system.CreatureImmunities is { } creatures && (creatures.SchoolImmuneMask(unit) & schoolMask) != 0)
+        {
+            return true;
+        }
+
         foreach (SpellAura aura in LiveAuras(system, unit, AuraType.SchoolImmunity))
         {
             if (((uint)aura.MiscValue & schoolMask) != 0)

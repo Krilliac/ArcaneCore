@@ -1,10 +1,17 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Conditions;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Instances.Scripts.Uldaman;
+using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
+using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.Configuration;
@@ -35,6 +42,16 @@ public sealed class ConditionFeatureTests
             ]);
     }
 
+    private sealed class MapConditionStore : IConditionContentStore
+    {
+        public Task<IReadOnlyList<ConditionRecord>> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ConditionRecord>>(
+            [
+                new(700001, 42, UldamanInstance.VariableSpawnAnnora, 1, 1, 0, 0),
+                new(5310010, 42, 4823, 1, 0, 0, 0),
+            ]);
+    }
+
     private static ServiceProvider Services(bool withStore, params (string Key, string Value)[] settings)
     {
         var services = new ServiceCollection();
@@ -54,6 +71,14 @@ public sealed class ConditionFeatureTests
         => new(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
             new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
             NullLogger<WorldRuntime>.Instance);
+
+    private static ServiceProvider MapServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConditionContentStore, MapConditionStore>();
+        services.AddSingleton(sp => new ConditionFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<ConditionFeature>.Instance));
+        return services.BuildServiceProvider();
+    }
 
     [Fact]
     public void FeatureIsDiscoveredAsAWorldFeature()
@@ -78,8 +103,10 @@ public sealed class ConditionFeatureTests
         Assert.False(feature.IsSatisfied(LevelFive, CreatePlayer(level: 4), null));
         Assert.True(feature.IsSatisfied(EventSeven, player, null));    // configured active
         Assert.False(feature.IsSatisfied(Holiday, player, null));      // default: no holiday active
-        Assert.False(feature.IsSatisfied(Script, player, null));       // unsupported: hidden
-        Assert.Equal(1, feature.Current.Summarize().UnavailableByType[(int)ConditionType.WorldScript]);
+        Assert.False(feature.IsSatisfied(Script, player, null));       // no world-script producer yet: unknown, hidden
+        Assert.Equal(1, feature.Current.Unavailable[(int)ConditionType.WorldScript]);
+        ConditionRuntimeState.For(world).SetWorldScriptCondition(0, 0, true);
+        Assert.True(feature.IsSatisfied(Script, player, null));
     }
 
     [Fact]
@@ -91,6 +118,157 @@ public sealed class ConditionFeatureTests
         feature.Attach(world);
         Assert.Equal(0, feature.Current.Table.Count);
         Assert.False(feature.IsSatisfied(LevelFive, CreatePlayer(level: 60), null));
+    }
+
+    [Fact]
+    public void WorldStateConditionReadsThePlayersMapVariable()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Player player = CreatePlayer(level: 1);
+        world.AddPlayer(player);
+        var runtime = ConditionRuntimeState.For(world);
+        runtime.SetMapVariable(player.Map!, 4811, -2);
+        var table = ConditionTable.Build([new ConditionRecord(1, 42, 4811, 1, unchecked((uint)-2), 0, 0)]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.True(evaluator.IsSatisfied(1, player, null));
+        runtime.SetMapVariable(player.Map!, 4811, 0);
+        Assert.False(evaluator.IsSatisfied(1, player, null));
+    }
+
+    [Fact]
+    public void SpawnGroupWorldStateReadsTheOwningMapAndUldamanInstanceVariable()
+    {
+        using ServiceProvider services = MapServices();
+        using WorldRuntime world = NewWorld(services);
+        Map uldamanMap = world.GetMap(UldamanInstance.MapId);
+        var uldaman = new UldamanInstance(uldamanMap);
+        uldamanMap.AddUpdater(uldaman);
+        uldaman.Initialize();
+        var uldamanCreatures = new CreatureMapSystem(uldamanMap, new CreatureContent([], [], [], [], []));
+        uldamanMap.AddUpdater(uldamanCreatures);
+        Map aqMap = world.GetMap(531);
+        var aqRaid = new TempleOfAhnQirajInstance(aqMap);
+        aqMap.AddUpdater(aqRaid);
+        var aqCreatures = new CreatureMapSystem(aqMap, new CreatureContent([], [], [], [], []));
+        aqMap.AddUpdater(aqCreatures);
+
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        world.RunTick(50);
+        var annoraGroup = new SpawnGroupDefinition
+        {
+            Id = 7000001, Type = SpawnGroupType.Creature, WorldStateCondition = 700001,
+        };
+        var sarturaTrash = new SpawnGroupDefinition
+        {
+            Id = 5310014, Type = SpawnGroupType.Creature, WorldStateCondition = 5310010,
+        };
+
+        Assert.False(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
+        Assert.True(aqCreatures.SpawnGroupCondition!(sarturaTrash));
+        Assert.False(aqCreatures.SpawnGroupCondition!(annoraGroup));
+        aqRaid.SetData(TempleOfAhnQirajInstance.Sartura, EncounterState.Done);
+        Assert.False(aqCreatures.SpawnGroupCondition!(sarturaTrash));
+        uldaman.SetVariable(UldamanInstance.VariableSpawnAnnora, 1);
+        Assert.True(uldamanCreatures.SpawnGroupCondition!(annoraGroup));
+    }
+
+    [Fact]
+    public void RuinsBossCompletionChangesTheSixContentMapVariableConditions_AndSurvivesLoad()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(509);
+        var raid = new RuinsOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 509);
+        world.AddPlayer(player);
+        uint[] variables = [4811, 2174, 4812, 4813, 4814, 4815];
+        var table = ConditionTable.Build(variables.Select((id, slot) =>
+            new ConditionRecord((uint)(6500 + slot), 42, id, 1, 0, 0, 0)));
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.True(evaluator.IsSatisfied(6500 + slot, player, null));
+        for (uint slot = 0; slot < variables.Length; slot++)
+            raid.SetData(slot, EncounterState.Done);
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.False(evaluator.IsSatisfied(6500 + slot, player, null));
+
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.True(evaluator.IsSatisfied(6500 + slot, player, null));
+        raid.Load(saved);
+        for (uint slot = 0; slot < variables.Length; slot++)
+            Assert.False(evaluator.IsSatisfied(6500 + slot, player, null));
+    }
+
+    [Fact]
+    public void TempleEncounterConditionsReadTwinsAndOuroFromTheInstanceSave()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(531);
+        var raid = new TempleOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 531);
+        world.AddPlayer(player);
+        var table = ConditionTable.Build(
+        [
+            new ConditionRecord(717, 31, 715, 0, 0, 0, 0),
+            new ConditionRecord(718, 31, 716, 0, 0, 0, 0),
+        ]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.False(evaluator.IsSatisfied(717, player, null));
+        Assert.False(evaluator.IsSatisfied(718, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Twins, EncounterState.Done);
+        Assert.True(evaluator.IsSatisfied(717, player, null));
+        Assert.False(evaluator.IsSatisfied(718, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Ouro, EncounterState.Done);
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        Assert.False(evaluator.IsSatisfied(717, player, null));
+        raid.Load(saved);
+        Assert.True(evaluator.IsSatisfied(717, player, null));
+        Assert.True(evaluator.IsSatisfied(718, player, null));
+    }
+
+    [Fact]
+    public void SarturaCompletionTurnsOffHerImportedTrashGroupCondition_AfterReloadToo()
+    {
+        using ServiceProvider services = Services(false);
+        using WorldRuntime world = NewWorld(services);
+        ConditionFeature feature = services.GetRequiredService<ConditionFeature>();
+        feature.Attach(world);
+        Map map = world.GetMap(531);
+        var raid = new TempleOfAhnQirajInstance(map);
+        map.AddUpdater(raid);
+        Player player = CreatePlayer(1, mapId: 531);
+        world.AddPlayer(player);
+        var table = ConditionTable.Build([new ConditionRecord(5310010, 42, 4823, 1, 0, 0, 0)]);
+        var evaluator = new ConditionEvaluator(table, feature.Current.Context);
+
+        Assert.True(evaluator.EvaluateOnMap(5310010, map));
+        Assert.True(evaluator.IsSatisfied(5310010, player, null));
+        raid.SetData(TempleOfAhnQirajInstance.Sartura, EncounterState.Done);
+        Assert.False(evaluator.EvaluateOnMap(5310010, map));
+        Assert.False(evaluator.IsSatisfied(5310010, player, null));
+
+        string saved = raid.GetSaveData()!;
+        raid.Initialize();
+        Assert.True(evaluator.EvaluateOnMap(5310010, map));
+        raid.Load(saved);
+        Assert.False(evaluator.EvaluateOnMap(5310010, map));
     }
 
     [Fact]
@@ -121,12 +299,12 @@ public sealed class ConditionFeatureTests
         Assert.True(early.IsSatisfied(LevelFive, player, null));
     }
 
-    private static Player CreatePlayer(byte level)
+    private static Player CreatePlayer(byte level, uint mapId = 0)
     {
         var character = new CharacterRecord
         {
             Id = 1, AccountId = 1, Name = "Cond", Race = 1, Class = 1, Gender = 0, Level = level,
-            MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
+            MapId = mapId, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
         };
         var appearance = new PlayerAppearance(
             DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,

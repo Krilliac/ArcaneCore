@@ -17,6 +17,50 @@ public sealed class CreatureAiHostTests
 {
     private const uint OtherFactionEntry = 300;
 
+    private sealed class MeleeProbeAI(Creature creature) : AggressorAI(creature)
+    {
+        public List<MeleeDamageInfo> Hits { get; } = [];
+        public uint HealthAtHit { get; private set; }
+        public override void OnMeleeHitReceived(MeleeDamageInfo hit)
+        {
+            HealthAtHit = Me.Health;
+            Hits.Add(hit);
+        }
+    }
+
+    [Fact]
+    public void CreatureAiReceivesLandedMeleeHitsBeforeDamage_ButNotMisses()
+    {
+        var factory = new CreatureAiFactory();
+        factory.RegisterEntryScript(WolfEntry, c => new MeleeProbeAI(c));
+        CreatureContent content = Content([Template(configure: t => t.MinLevelHealth = t.MaxLevelHealth = 1000)],
+            [Spawn(1, WolfEntry, 2, 0)]);
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { Factory = factory, Hostility = new AlwaysHostile() });
+        using WorldRuntime world = runtime;
+        (Player attacker, _) = AddPlayer(world, 1, 0, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<MeleeProbeAI>(wolf.AI);
+        attacker.SetFloat(UpdateFields.UnitFieldMindamage, 10);
+        attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 10);
+        var random = new ScriptedRandom();
+        map.Combat.Random = random;
+        random.Ints.Enqueue(5000);
+
+        MeleeDamageInfo landed = map.Combat.AttackerStateUpdate(attacker, wolf, WeaponAttackType.BaseAttack)!;
+
+        Assert.DoesNotContain(landed.Outcome, new[] { MeleeHitOutcome.Miss, MeleeHitOutcome.Evade,
+            MeleeHitOutcome.Dodge, MeleeHitOutcome.Parry, MeleeHitOutcome.Resist });
+        Assert.Same(landed, Assert.Single(ai.Hits));
+        Assert.Equal(1000u, ai.HealthAtHit);
+        Assert.True(wolf.Health < ai.HealthAtHit);
+
+        random.Ints.Enqueue(0);
+        MeleeDamageInfo missed = map.Combat.AttackerStateUpdate(attacker, wolf, WeaponAttackType.BaseAttack)!;
+        Assert.Equal(MeleeHitOutcome.Miss, missed.Outcome);
+        Assert.Single(ai.Hits);
+    }
+
     // vmangos Creature::GetAttackDistance (Objects/Creature.cpp:2193-2240): the template detection range (18, not 20) minus the
     // level difference, at most 25 levels below, never under min(detection, 5).
     [Theory]

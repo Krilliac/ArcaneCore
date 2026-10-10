@@ -39,7 +39,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
     them first (Spell.cpp:3463-3469).
 - Cooldowns: per spell, per category, and GCD by StartRecoveryCategory. Also SMSG_SPELL_COOLDOWN, SMSG_CLEAR_COOLDOWN, and running cooldowns in SMSG_INITIAL_SPELLS.
 - Targets: `SpellCastTargets` reads and writes every 1.12 flag. Selection covers caster, explicit unit, self-cast and none.
-- Effects: school damage, heal, apply aura, energize, teleport units (database position, home bind, caster destination), learn spell, trigger spell and dummy, each with its combat-log packet (SPELLNONMELEEDAMAGELOG, SPELLHEALLOG, SPELLENERGIZELOG). `RegisterEffect` lets other areas add more.
+- Effects: school damage, heal, apply aura, energize, teleport units (database position, home bind, caster destination), learn spell, trigger spell and dummy, each with its combat-log packet (SPELLNONMELEEDAMAGELOG, SPELLHEALLOG, SPELLENERGIZELOG). `RegisterEffect` lets other areas add more. Effect 86 activates script-selected game objects; see [the object-effect follow-up](../integration/activate-object-effect-20261009.md).
 - Auras:
   - Holders with durations (minimum 300 ms), permanent and passive auras, stacking up to StackAmount, and replacement rules.
   - Visible slots (positive 0–31, negative 32–47) and the update fields UNIT_FIELD_AURA, AURAFLAGS (a nibble per slot), AURALEVELS and AURAAPPLICATIONS (`charges * stacks - 1`, clamped, rewritten on every stack or charge change).

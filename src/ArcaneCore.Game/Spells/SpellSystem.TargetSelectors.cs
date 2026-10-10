@@ -22,6 +22,17 @@ public sealed partial class SpellSystem
     private readonly Dictionary<SpellImplicitTarget, TargetSelectorEntry> _targetSelectors = CreateDefaultTargetSelectors();
 
     private readonly Dictionary<(uint Spell, SpellImplicitTarget Target), SpellTargetSelectorHandler> _spellTargetSelectors = [];
+    private readonly HashSet<uint> _closestAreaTargetSpells = [];
+
+    /// <summary>
+    /// Choose the closest units before applying MaxAffectedTargets for this spell's area effects
+    /// (vmangos SpellScript::OnSetTargetMap selectClosestTargets). A duplicate registration is an error.
+    /// </summary>
+    public void RegisterClosestAreaTargets(uint spellId)
+    {
+        if (!_closestAreaTargetSpells.Add(spellId))
+            throw new InvalidOperationException($"Spell {spellId} already selects closest area targets.");
+    }
 
     /// <summary>
     /// Register the selector of an implicit target the built-in switch does not know. A location-only

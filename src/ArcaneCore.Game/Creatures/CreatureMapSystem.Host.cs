@@ -48,6 +48,21 @@ public sealed partial class CreatureMapSystem
         return creature.IsAlive || triggered ? spells.Cast(creature, spellId, target, triggered) : CreatureCastResult.Failed;
     }
 
+    /// <summary>
+    /// A script cast with another unit as the caster (ScriptDev2 <c>target->CastSpell(target, spell, true)</c>); a dead unit casts nothing
+    /// (cmangos Spell::CheckCast refuses a dead player caster).
+    /// </summary>
+    public CreatureCastResult CastSpellByUnit(Unit caster, uint spellId, Unit? target, bool triggered)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        if (_ai.Spells is not { } spells)
+        {
+            return CreatureCastResult.NoSpellSystem;
+        }
+
+        return caster.IsAlive ? spells.CastByUnit(caster, spellId, target, triggered) : CreatureCastResult.Failed;
+    }
+
     /// <summary>A creature spell targeted at a world position (SpellCastTargets DEST_LOCATION).</summary>
     public CreatureCastResult CastSpellAtDestination(Creature creature, uint spellId, float x, float y, float z, bool triggered)
         => _ai.Spells is { } spells && (creature.IsAlive || triggered)
@@ -124,6 +139,7 @@ public sealed partial class CreatureMapSystem
         }
 
         combat.UnitKilled += OnUnitKilled;
+        combat.MeleeSwingResolved += OnMeleeSwingResolved;
         _combatSubscribed = true;
     }
 
@@ -297,6 +313,14 @@ public sealed partial class CreatureMapSystem
         }
 
         NotifySpellHitTarget(caster, target, spell);
+    }
+
+    private void OnMeleeSwingResolved(MeleeDamageInfo hit)
+    {
+        if (hit.Target is Creature creature && ReferenceEquals(creature.System, this) && creature.IsAlive
+            && hit.Outcome is not (MeleeHitOutcome.Evade or MeleeHitOutcome.Miss or MeleeHitOutcome.Dodge
+                or MeleeHitOutcome.Parry or MeleeHitOutcome.Resist))
+            creature.AI?.OnMeleeHitReceived(hit);
     }
 
     /// <summary>vmangos IsWithinLOSInMap through the map's <see cref="ILineOfSight"/> (<c>map.Collision</c>, eye height; open without vmaps).</summary>

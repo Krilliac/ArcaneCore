@@ -18,7 +18,7 @@ storage. No reference source code was copied.
   `src/game/DBScripts/ScriptMgr.cpp::ScriptAction::ExecuteDbscriptCommand` do. Relay `datalong3 & 0x1` passes its target
   to waypoint script execution.
 * Spell target 38 (`SpellImplicitTarget.UnitScriptNearCaster`) selects one unit: a matching explicit target, else the
-  nearest listed living creature/player or dead creature; target 7 (`EnumUnitsScriptAoeAtSrcLoc`) filters units in the source area by entry, type and inverse effect mask (or selects
+  nearest listed living creature/player or dead creature. A creature caster can select itself when its entry is listed (C'Thun Vulnerable 26235); target 7 (`EnumUnitsScriptAoeAtSrcLoc`) still excludes the caster and filters units in the source area by entry, type and inverse effect mask (or selects
   all eligible units when no rows exist). vmangos `src/game/Spells/Spell.cpp::CheckScriptTargeting` and
   `Spell::SetTargetMap`, cases `TARGET_UNIT_SCRIPT_NEAR_CASTER` and `TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC`.
   Snufflenose spell 8283 now acts on its selected gopher in `OnEffectExecute` (mangos-classic

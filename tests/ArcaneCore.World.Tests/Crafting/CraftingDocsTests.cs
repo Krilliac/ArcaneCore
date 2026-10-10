@@ -13,16 +13,7 @@ public sealed partial class CraftingDocsTests
     [GeneratedRegex(@"`((?:Crafting|Enchanting):[A-Za-z]+)`")]
     private static partial Regex KeyPattern();
 
-    private static string RepoRoot()
-    {
-        string? dir = AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "ArcaneCore.slnx")))
-        {
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        return dir ?? throw new InvalidOperationException("ArcaneCore.slnx not found above the test binary");
-    }
+    private static string RepoRoot() => RepositorySource.RequireRoot();
 
     private static IReadOnlySet<string> RealKeys()
     {

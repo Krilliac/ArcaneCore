@@ -10,10 +10,10 @@ namespace ArcaneCore.Game.GameObjects;
 public sealed partial class GameObjectMapSystem
 {
     /// <summary>
-    /// GameObject::Use by a unit that need not be a player, for the types whose behaviour does not need one: a door toggles, a button toggles
-    /// and fires its linked trap, a trap casts its spell at the user (its cooldown and charges counted), a spell focus fires its linked trap.
-    /// None of these check a lock, as GameObject::Use itself does not. Other types are <see cref="GameObjectUseResult.Unsupported"/> (the
-    /// player-only behaviours: loot, gossip, quests, chairs). The object must be spawned in this map.
+    /// GameObject::Use by a unit that need not be a player: a door toggles, a button toggles and fires its linked trap, a trap casts its
+    /// spell at the user (its cooldown and charges counted), a spell focus fires its linked trap, and a goober activates. A player using
+    /// a goober also gets its player-only gossip and quest path. None of these check a lock, as GameObject::Use itself does not.
+    /// Other types are <see cref="GameObjectUseResult.Unsupported"/> (loot, chairs). The object must be spawned in this map.
     /// </summary>
     public GameObjectUseResult UseByUnit(Unit user, GameObject go)
     {
@@ -22,6 +22,11 @@ public sealed partial class GameObjectMapSystem
         if (!go.IsSpawned || !Tracks(go))
         {
             return GameObjectUseResult.NotFound;
+        }
+
+        if (AiOf(go)?.OnUse(this, go, user) == true)
+        {
+            return GameObjectUseResult.Ok;
         }
 
         switch (go.Type)
@@ -41,6 +46,8 @@ public sealed partial class GameObjectMapSystem
             case GameObjectType.SpellFocus:
                 TriggerLinkedTrap(go, user);
                 return GameObjectUseResult.Ok;
+            case GameObjectType.Goober:
+                return UseGooberByUnit(user, go);
             default:
                 return GameObjectUseResult.Unsupported;
         }

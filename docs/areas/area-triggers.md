@@ -26,7 +26,10 @@ destination row, evaluated by `Game/Teleport/AreaTriggerRequirements.Evaluate` o
    An item without a loaded template is named by its entry number instead of crashing (the reference dereferences the template).
 4. Every `IAreaTriggerGate` the world features register. `QuestNpcFeature` is one: `required_quest_done` must be a quest the
    player has turned in (`QuestNpcServices.IsRewarded`: a repeatable quest never counts, a player whose journal is not loaded is
-   refused). The first refusal wins.
+   refused). `InstanceFeature` is another: it asks the instance script of the map the player stands in
+   (`InstanceData.BlocksAreaTriggerTeleport`, the ScriptDev2 AreaTrigger script that returns true to stop the database teleport;
+   Naxxramas holds trigger 4156 until its four wings are cleared, mangos-classic `naxxramas.cpp` `DoHandleAreaTrigger`). The first
+   refusal wins.
 5. `condition_id` / `required_condition`: a row of the conditions table, evaluated by the world's `IConditionEvaluator`
    (`ConditionFeature`, with `source = null`). No evaluator, an unknown id or a failing condition refuse (fail closed).
 

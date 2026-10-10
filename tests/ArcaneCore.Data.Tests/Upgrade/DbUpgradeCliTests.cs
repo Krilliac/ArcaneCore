@@ -583,15 +583,5 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
     }
 
     private static string? FindWorkTreeRoot()
-    {
-        for (string? current = AppContext.BaseDirectory; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
-        {
-            if (Directory.Exists(Path.Combine(current, ".git")) || File.Exists(Path.Combine(current, ".git")))
-            {
-                return current;
-            }
-        }
-
-        return null;
-    }
+        => RepositorySource.FindRoot(requireGit: true);
 }

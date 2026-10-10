@@ -50,6 +50,10 @@ not a content source to commit.
   key admits a player and a missing pair reports the first key. Reference: mangos-classic
   `Entities/Player.cpp`, `Player::GetAreaTriggerLockStatus` (the `requiredItem` branch).
 
+## 2026-10-09 portal refresh on an older world copy
+
+The preserved wave12 rehearsal world was imported before the portal requirement columns were populated. It has 103 portal rows, but trigger 2848 stores `RequiredItem=0` and trigger 3528 stores `RequiredQuestDone=0`, despite ClassicDB z2815 carrying 16309 and 7848. The optional real-content World suite therefore fails its Onyxia entrance check against that unmodified snapshot. The scoped `arcane-content-importer refresh-portals` command reads the same dump and replaces only `areatrigger_teleport` in an existing current-schema world. A dry run found 103 rows; a fresh SQLite backup of the wave12 world gained the two requirements while its unrelated table counts and database integrity stayed intact. The full optional-content World suite passed against that refreshed copy. The preserved rehearsal world and any live world were not modified.
+
 ## Fixture limits
 
 The supplied DBC directory has no `FactionTemplate.dbc`, so the tests add neutral reaction

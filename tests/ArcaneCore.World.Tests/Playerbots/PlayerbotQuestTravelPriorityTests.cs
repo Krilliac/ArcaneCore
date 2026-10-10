@@ -200,10 +200,12 @@ public sealed class PlayerbotQuestTravelPriorityTests
                 Player player = session.Player!;
                 destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
                 Assert.True(destinations.HasQuestCandidate(player));
+                // One plan attempt: the route query; then, as every answer is no path, whether the bot stands on walkable ground,
+                // and the way off steep ground (PlayerbotNavigation.TryLeaveSteepGround).
                 Assert.False(destinations.Update(player, 0, 500));
-                Assert.Equal(1, pathfinder.Calls);
+                Assert.Equal(3, pathfinder.Calls);
                 Assert.False(destinations.HasQuestCandidate(player));
-                Assert.Equal(1, pathfinder.Calls);
+                Assert.Equal(3, pathfinder.Calls);
                 return true;
             });
             uint failedAt = host.World.NowMs;
@@ -213,7 +215,7 @@ public sealed class PlayerbotQuestTravelPriorityTests
             {
                 Assert.True(destinations.HasQuestCandidate(session.Player!));
                 Assert.False(destinations.Update(session.Player!, 0, 500));
-                Assert.Equal(2, pathfinder.Calls);
+                Assert.Equal(6, pathfinder.Calls);
                 return true;
             });
         }

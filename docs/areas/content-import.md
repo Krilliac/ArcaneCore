@@ -237,6 +237,7 @@ were copied into the implementation.
 | `plan <dump>...` | reads the dumps and prints, per table an importer reads, dialect, rows, keys, duplicates, mapped and not-imported columns; then the tables no importer reads yet and the statements not applied. Writes no database. |
 | `import <dump>...` | the scan above, then `CreatureDumpImporter`, `GameObjectLootDumpImporter` and `ItemQuestDumpImporter` inside one `ImportTransaction`. `--replace` empties the importers' tables first; without it a key conflict fails and nothing changes. `--dry-run` reads and counts, writes nothing. `--dbc-dir <DBFilesClient>` also reads `Lock.dbc` (game object locks). `--quest-xp derived|none` (default derived, see below). |
 | `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). |
+| `refresh-portals <dump>...` | Replace only `areatrigger_teleport` in an existing current-schema world, including required item, quest and condition fields. It leaves `game_tele`, area-trigger quest relations and other content untouched. The source must contain portal rows; `--dry-run` counts them without writing. |
 | `verify` | table counts and spawns whose template does not exist (entry 0 is reported as a note, see Limits). |
 
 Targets: `--database <file>` (SQLite) or `--provider sqlite|mariadb|mysql|postgresql --connection-string <cs>` (or the
@@ -381,9 +382,12 @@ feature reads:
 
 `areatrigger_teleport` (dungeon and instance portals) -> `AreaTriggerTeleportRow` and `game_tele` (GM `.tele` names) ->
 `GameTeleRow`, both into the existing map-data tables. cmangos' `status_failed_text` is the row's `Message` (vmangos:
-`message`); vmangos rows take the highest `patch` not above 10 (`ObjectMgr.cpp:7712-7717`). The row carries no item, quest or
-heroic-key requirement, so cmangos' `required_item`, `required_item2`, `required_quest_done` and `condition_id` are not
-enforced (`plan` lists them as not imported). The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
+`message`); vmangos rows take the highest `patch` not above 10 (`ObjectMgr.cpp:7712-7717`). The current importer reads
+`required_item`, `required_item2`, `required_quest_done` and `condition_id` into the portal requirement fields. A world imported
+before those schema columns existed retains zeroes until its portal rows are reimported. `refresh-portals <dump>... --database <file>`
+replaces only `areatrigger_teleport` in an existing current-schema world; `--dry-run` reports the row count first. The replacement
+removes portal rows absent from the dump, so inspect custom rows and run against a backup before applying it to a live world.
+The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
 `refresh --dbc-dir` (above) and `map_template`/`area_template` through `refresh --dbc-dir` or `import-map-dbc` (below); a portal row
 cannot fire until its trigger exists and its target map is in `map_template`. Verified: 103 portals and 269 GM teleports imported; the
 daemon logged "103 area trigger teleports, 269 teleport locations".

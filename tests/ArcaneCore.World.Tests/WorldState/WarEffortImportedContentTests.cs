@@ -1,0 +1,68 @@
+using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.World.Tests.Playerbots.Scenarios;
+using Microsoft.Data.Sqlite;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.WorldState;
+
+public sealed class WarEffortImportedContentTests
+{
+    [RealWorldContentFact]
+    public void ImportedClassicDbConditionsAndTurnInsMatchTheWarEffortCatalog()
+    {
+        string path = Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!;
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        db.Open();
+
+        Assert.Equal(WarEffortCatalog.ResourceCount, WarEffortCatalog.Resources.Count);
+        foreach (WarEffortResource resource in WarEffortCatalog.Resources)
+        {
+            using SqliteCommand condition = db.CreateCommand();
+            condition.CommandText = "SELECT COUNT(*) FROM conditions WHERE type=40 AND value1=$field AND value2=0";
+            condition.Parameters.AddWithValue("$field", resource.WorldStateField);
+            Assert.Equal(1L, (long)condition.ExecuteScalar()!);
+
+            foreach (uint questId in new[] { resource.FirstQuest, resource.RepeatQuest })
+            {
+                using SqliteCommand quest = db.CreateCommand();
+                quest.CommandText = "SELECT ReqItemId1,ReqItemCount1 FROM quest_template WHERE entry=$quest";
+                quest.Parameters.AddWithValue("$quest", questId);
+                using SqliteDataReader row = quest.ExecuteReader();
+                Assert.True(row.Read(), $"missing war-effort quest {questId}");
+                Assert.True(row.GetInt64(0) > 0 && row.GetInt64(1) > 0, $"quest {questId} must turn in an item");
+            }
+        }
+
+        using SqliteCommand days = db.CreateCommand();
+        days.CommandText = "SELECT COUNT(*) FROM conditions WHERE type=40 AND value1=$field AND value2=0";
+        days.Parameters.AddWithValue("$field", WarEffortCatalog.DaysLeftCondition);
+        Assert.Equal(1L, (long)days.ExecuteScalar()!);
+
+        using SqliteCommand gong = db.CreateCommand();
+        gong.CommandText = "SELECT COUNT(*) FROM gameobject_involvedrelation WHERE Id=$object AND Quest=$quest";
+        gong.Parameters.AddWithValue("$object", WarEffortCatalog.GongObject);
+        gong.Parameters.AddWithValue("$quest", WarEffortCatalog.GongQuest);
+        Assert.Equal(1L, (long)gong.ExecuteScalar()!);
+        using SqliteCommand phases = db.CreateCommand();
+        phases.CommandText = "SELECT COUNT(*) FROM game_event WHERE entry BETWEEN 120 AND 124 AND schedule_type=0";
+        Assert.Equal(5L, (long)phases.ExecuteScalar()!);
+
+        foreach (uint entry in new[] { WarEffortCatalog.ColossusOfAshi, WarEffortCatalog.ColossusOfRegal,
+            WarEffortCatalog.ColossusOfZora })
+        {
+            using SqliteCommand boss = db.CreateCommand();
+            boss.CommandText = "SELECT COUNT(*) FROM creature_template WHERE Entry=$entry AND ScriptName='npc_silithus_boss'";
+            boss.Parameters.AddWithValue("$entry", entry);
+            Assert.Equal(1L, (long)boss.ExecuteScalar()!);
+            boss.CommandText = "SELECT COUNT(*) FROM creature_spawn WHERE Entry=$entry AND MapId=1";
+            Assert.Equal(1L, (long)boss.ExecuteScalar()!);
+        }
+
+        using SqliteCommand deathEvents = db.CreateCommand();
+        deathEvents.CommandText = "SELECT COUNT(*) FROM game_event_quest WHERE event BETWEEN 125 AND 127";
+        Assert.Equal(3L, (long)deathEvents.ExecuteScalar()!);
+    }
+}

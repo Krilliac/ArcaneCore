@@ -156,7 +156,20 @@ public sealed partial class SummonService
         }
 
         SpellCastTargets targets = context.Cast.Targets;
-        (float centerX, float centerY, float centerZ) = targets.HasDest ? targets.Dest : (caster.X, caster.Y, caster.Z);
+        bool hasDest = targets.HasDest;
+        (float centerX, float centerY, float centerZ) = hasDest ? targets.Dest : (caster.X, caster.Y, caster.Z);
+        if (context.Effect.TargetA == SpellImplicitTarget.LocationDatabase
+            || context.Effect.TargetB == SpellImplicitTarget.LocationDatabase)
+        {
+            if (context.System.Store.GetTargetPosition(spell.Id) is not { } position || position.MapId != caster.MapId)
+            {
+                Warn($"wild-position:{spell.Id}", "database summon position missing or on another map for spell {Spell}", spell.Id);
+                return;
+            }
+
+            (centerX, centerY, centerZ) = (position.X, position.Y, position.Z);
+            hasDest = true;
+        }
         float radius = context.Effect.Radius;
         int duration = spell.GetDuration();
         int amount = context.Value > 0 ? context.Value : 1;
@@ -165,7 +178,7 @@ public sealed partial class SummonService
             float x;
             float y;
             float z;
-            if (targets.HasDest)
+            if (hasDest)
             {
                 if (count == 0)
                 {

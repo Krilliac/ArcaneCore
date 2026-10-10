@@ -22,6 +22,9 @@ public interface IGameObjectAi
     /// </summary>
     bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user) => false;
 
+    /// <summary>vmangos GameObjectAI::OnActivateBySpell: true when the object script handled effect 86 before its generic action.</summary>
+    bool OnActivateBySpell(GameObjectMapSystem objects, GameObject go, Unit caster, uint spellId, uint action) => false;
+
     /// <summary>
     /// The open-lock path (Spell::SendLoot after the lock check passed, SpellEffects.cpp): true when the script handled the opening and the
     /// object does nothing more. Defaults to false so existing scripts keep their behaviour on the spell path; a script whose plain click

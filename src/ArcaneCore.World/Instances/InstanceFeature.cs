@@ -3,8 +3,10 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -32,7 +34,7 @@ namespace ArcaneCore.World.Instances;
 /// last instance are dropped and a purge of its rows is queued after any later write.</para>
 /// <para>Options come from the <c>World:Instances</c> configuration section (<see cref="InstanceOptions"/>).</para>
 /// </summary>
-public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAsyncDisposable
+public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable
 {
     /// <summary>How often the reset schedule runs (vmangos checks it every world update; resets are minute-granular).</summary>
     public const int ScheduleIntervalMs = 5000;
@@ -40,6 +42,15 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>A spatially verified client area trigger goes on to the map's instance script (ScriptDev2 AreaTrigger_at_* scripts).</summary>
     public void OnAreaTrigger(Player player, uint triggerId)
         => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.OnAreaTrigger(player, triggerId);
+
+    /// <summary>
+    /// The player's instance script may stop a trigger's database teleport (ScriptDev2 AreaTrigger scripts returning true;
+    /// <see cref="Game.Instances.Scripts.InstanceData.BlocksAreaTriggerTeleport"/>). A silent refusal, as in the reference.
+    /// </summary>
+    public AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport)
+        => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.BlocksAreaTriggerTeleport(player, teleport.Id) == true
+            ? AreaTriggerVerdict.Refuse(null)
+            : AreaTriggerVerdict.Allow;
 
     /// <summary>Upper bound for draining the write queue or one world-thread round trip during a character deletion.</summary>
     public static readonly TimeSpan DeleteTimeout = TimeSpan.FromSeconds(10);

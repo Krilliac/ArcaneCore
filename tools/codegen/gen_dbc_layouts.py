@@ -91,7 +91,8 @@ def parse(path):
             if name not in columns:
                 raise ValueError(f"{path.name}: missing COLUMNS entry for {name}")
             kind, foreign = columns[name]
-            fields.append((name, kind, int(array or 1), int(re.sub(r'\D', '', width)) if width else 32, foreign))
+            fields.append((name, kind, int(array or 1), int(re.sub(r'\D', '', width)) if width else 32,
+                           kind == 'int' and not (width or '').startswith('u'), foreign))
 
     if len(selected) != 1:
         raise ValueError(f"{path.name}: expected one build-5875 block, found {len(selected)}")
@@ -113,8 +114,8 @@ def generate(definitions, layouts, dbc_names):
         if not path.is_file():
             raise ValueError(f"no WoWDBDefs definition for {name}")
         fields = parse(path)
-        fields = tuple((field, kind, array, width, FOREIGN_OVERRIDES.get((name, field), foreign))
-                       for field, kind, array, width, foreign in fields)
+        fields = tuple((field, kind, array, width, signed, FOREIGN_OVERRIDES.get((name, field), foreign))
+                       for field, kind, array, width, signed, foreign in fields)
         count = sum(field[2] * (9 if field[1] == 'locstring' else 1) for field in fields)
         size = sum(field[2] * (32 if field[1] in ('locstring', 'string') else field[3]) // 8 * (9 if field[1] == 'locstring' else 1) for field in fields)
         expected = primary.get((name + '.dbc').lower())
@@ -129,7 +130,7 @@ def generate(definitions, layouts, dbc_names):
         'namespace ArcaneCore.Data.ClientData;',
         '',
         '/// <summary>A WoWDBDefs field in physical record order. ArrayLength counts logical values; locstring has eight strings and a flags slot.</summary>',
-        'public sealed record DbdField(string Name, string Type, int ArrayLength, int WidthBits, int Offset, string? ForeignTable, string? ForeignColumn);',
+        'public sealed record DbdField(string Name, string Type, int ArrayLength, int WidthBits, int Offset, bool IsSigned, string? ForeignTable, string? ForeignColumn);',
         '',
         '/// <summary>One build-5875 DBC definition.</summary>',
         'public sealed record DbdLayout(string File, int Fields, int RecordSize, IReadOnlyList<DbdField> Columns);',
@@ -143,9 +144,9 @@ def generate(definitions, layouts, dbc_names):
         out.append(f'        new({quote(name + ".dbc")}, {count}, {size}, new DbdField[]')
         out.append('        {')
         offset = 0
-        for field, kind, array, width, foreign in fields:
+        for field, kind, array, width, signed, foreign in fields:
             table, _, column = foreign.partition('::') if foreign else ('', '', '')
-            out.append(f'            new({quote(field)}, {quote(kind)}, {array}, {width}, {offset}, {quote(table) if table else "null"}, {quote(column) if column else "null"}),')
+            out.append(f'            new({quote(field)}, {quote(kind)}, {array}, {width}, {offset}, {str(signed).lower()}, {quote(table) if table else "null"}, {quote(column) if column else "null"}),')
             offset += array * (9 if kind == 'locstring' else 1) * (32 if kind in ('locstring', 'string') else width) // 8
         out.append('        }),')
     out += ['    }.ToDictionary(l => l.File, StringComparer.OrdinalIgnoreCase);', '}']

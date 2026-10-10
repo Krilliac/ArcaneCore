@@ -8,15 +8,7 @@ namespace ArcaneCore.Game.Tests.Duel;
 public sealed class DuelDocsTests
 {
     private static string RepoRoot()
-    {
-        string? dir = AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "ArcaneCore.slnx")))
-        {
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        return dir ?? throw new InvalidOperationException("repository root not found");
-    }
+        => RepositorySource.RequireRoot();
 
     [Fact]
     public void TheAreaDoc_NamesEveryDuelOption()

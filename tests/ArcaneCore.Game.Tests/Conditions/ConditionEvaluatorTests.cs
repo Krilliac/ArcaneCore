@@ -445,4 +445,26 @@ public sealed class ConditionEvaluatorTests
         Assert.Same(ConditionTable.Empty, ConditionTable.Empty);
         Assert.Equal(0, ConditionTable.Empty.Count);
     }
+
+    [Fact]
+    public void SpawnGroupWorldState_UsesItsMapThroughCompositeConditions()
+    {
+        using var world = TestWorld.CreateRuntime();
+        var map = world.GetMap(70);
+        var other = world.GetMap(531);
+        int variable = 0;
+        ConditionEvaluator e = Evaluator(new ConditionContext
+        {
+            MapWorldState = (candidate, id) => ReferenceEquals(candidate, map) && id == 700001 ? variable : null,
+        },
+            Row(1, ConditionType.WorldState, 700001, 1, 1),
+            Row(2, ConditionType.None),
+            Row(3, ConditionType.And, 1, 2));
+
+        Assert.Null(e.EvaluateWithoutSubjects(1));
+        Assert.False(e.EvaluateOnMap(3, map));
+        variable = 1;
+        Assert.True(e.EvaluateOnMap(3, map));
+        Assert.Null(e.EvaluateOnMap(3, other));
+    }
 }

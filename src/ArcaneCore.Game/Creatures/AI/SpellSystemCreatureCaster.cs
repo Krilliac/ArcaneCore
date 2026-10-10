@@ -92,6 +92,23 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
             : CreatureCastResult.Failed;
     }
 
+    public CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is null)
+        {
+            return CreatureCastResult.UnknownSpell;
+        }
+
+        SpellCastTargets targets = target is null || ReferenceEquals(target, caster)
+            ? SpellCastTargets.ForSelf()
+            : SpellCastTargets.ForUnit(target.Guid);
+        return spells.CastSpell(caster, spellId, targets, triggered) == SpellCastResult.CastOk
+            ? CreatureCastResult.Ok
+            : CreatureCastResult.Failed;
+    }
+
     public CreatureCastResult CastAtDestination(Creature caster, uint spellId, float x, float y, float z, bool triggered)
     {
         ArgumentNullException.ThrowIfNull(caster);

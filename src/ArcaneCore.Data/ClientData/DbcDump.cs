@@ -77,10 +77,19 @@ public static class DbcDump
                     {
                         ReadOnlySpan<byte> cell = row.AsSpan(field.Offset + n * width, width);
                         uint value = width switch { 1 => cell[0], 2 => BinaryPrimitives.ReadUInt16LittleEndian(cell), _ => BinaryPrimitives.ReadUInt32LittleEndian(cell) };
-                        items[n] = field.Type is "string" or "locstring" && !(field.Type == "locstring" && n == 8)
-                            ? ReadString(strings, value)
-                            : field.Type == "float" ? BitConverter.Int32BitsToSingle(unchecked((int)value))
-                            : value;
+                        if (field.Type is "string" or "locstring" && !(field.Type == "locstring" && n == 8))
+                            items[n] = ReadString(strings, value);
+                        else if (field.Type == "float")
+                            items[n] = BitConverter.Int32BitsToSingle(unchecked((int)value));
+                        else if (field.Type == "int" && field.IsSigned)
+                            items[n] = width switch
+                            {
+                                1 => unchecked((sbyte)value),
+                                2 => unchecked((short)value),
+                                _ => unchecked((int)value),
+                            };
+                        else
+                            items[n] = value;
                     }
                     values[field.Name] = count == 1 ? items[0] : items;
                 }

@@ -58,7 +58,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private int _builtCount = -1;
     private WorldRuntime? _world;
     private bool _stopping;
-    private int _cursor;
+    private readonly PlayerbotThinkRotation _rotation = new();
     private uint _checkpointMs;
     private Task _checkpoint = Task.CompletedTask;
 
@@ -575,59 +575,65 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         long started = Stopwatch.GetTimestamp();
-        for (int i = 0; i < bots.Length && budget.Remaining > 0; i++)
+        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for.
+        _rotation.Tick(bots.Length, index =>
         {
-            ActiveBot active = bots[(_cursor + i) % bots.Length];
-            if (Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 8) break;
-            if (!active.Paused && active.Session.State == SessionState.InWorld)
-            {
-                uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
-                active.LastUpdateMs = _world.NowMs;
-                try
-                {
-                    if (active.Controller is { } controller)
-                    {
-                        // Scripted mode: the brain is suppressed and the shared action budget does not apply.
-                        active.Session.ManagedBudget = null;
-                        controller.Tick(active.ControllerContext, sinceLast);
-                    }
-                    else if (active.Session.Player is { } driven)
-                    {
-                        active.Session.ManagedBudget = budget;
-                        // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
-                        // quests and memories (its routes and targets belong to another place).
-                        if (coordinator?.Drives(active.Record.BotId) == true)
-                        {
-                            if (active.PartyDriven)
-                            {
-                                active.Party.Disengage(driven);
-                                active.PartyDriven = false;
-                            }
-
-                            active.GroupDriven = true;
-                            coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
-                        }
-                        else
-                        {
-                            if (active.GroupDriven)
-                            {
-                                active.GroupDriven = false;
-                                active.Brain.ResumeAfterGroup();
-                            }
-
-                            UpdateAutonomous(active, driven, sinceLast);
-                        }
-                    }
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
-            }
-            if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
-        }
-        if (bots.Length > 0) _cursor = (_cursor + 1) % bots.Length;
+            if (budget.Remaining <= 0 || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 8) return false;
+            Think(bots[index], budget);
+            return true;
+        });
         PublishSnapshot(bots);
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         { _checkpointMs = 0; _checkpoint = Task.Run(CheckpointAsync); }
+    }
+
+    /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain.</summary>
+    private void Think(ActiveBot active, ManagedActionBudget budget)
+    {
+        if (!active.Paused && active.Session.State == SessionState.InWorld)
+        {
+            uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
+            active.LastUpdateMs = _world.NowMs;
+            try
+            {
+                if (active.Controller is { } controller)
+                {
+                    // Scripted mode: the brain is suppressed and the shared action budget does not apply.
+                    active.Session.ManagedBudget = null;
+                    controller.Tick(active.ControllerContext, sinceLast);
+                }
+                else if (active.Session.Player is { } driven)
+                {
+                    active.Session.ManagedBudget = budget;
+                    // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
+                    // quests and memories (its routes and targets belong to another place).
+                    if (coordinator?.Drives(active.Record.BotId) == true)
+                    {
+                        if (active.PartyDriven)
+                        {
+                            active.Party.Disengage(driven);
+                            active.PartyDriven = false;
+                        }
+
+                        active.GroupDriven = true;
+                        coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                    }
+                    else
+                    {
+                        if (active.GroupDriven)
+                        {
+                            active.GroupDriven = false;
+                            active.Brain.ResumeAfterGroup();
+                        }
+
+                        UpdateAutonomous(active, driven, sinceLast);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
+        }
+        if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
     }
 
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>

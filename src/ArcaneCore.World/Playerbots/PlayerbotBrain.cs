@@ -106,6 +106,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
+    /// <summary>Goals given up for stalls so far (<see cref="PlayerbotStallWatch.GiveUps"/>).</summary>
+    internal int StallGiveUps => _stall.GiveUps;
+
     /// <summary>
     /// The quest objectives (quest, creature entry) this bot leaves to a group while it waits for partners or does them with its group
     /// (<see cref="Groups.PlayerbotGroupCoordinator"/>): the brain does not hunt them alone.
