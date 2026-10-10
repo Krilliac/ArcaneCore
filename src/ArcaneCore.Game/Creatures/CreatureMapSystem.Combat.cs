@@ -71,6 +71,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 return true;
             }
 
+            DoLinkedAggro(creature, target);
+
             CallAssistance(creature, target);
             OnGroupMemberAggro(creature, target); // cmangos Unit::TriggerAggroLinkingEvent → CREATURE_GROUP_EVENT_AGGRO
         }

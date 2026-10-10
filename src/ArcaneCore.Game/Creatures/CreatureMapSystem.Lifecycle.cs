@@ -64,7 +64,7 @@ public sealed partial class CreatureMapSystem
             : creature.CorpseDecaySeconds(_options) * 1000;
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
-        uint respawnDelay = creature.TakeRespawnDelaySeconds(); // a script's one-shot delay first (cmangos SetRespawnDelay(d, true))
+        uint respawnDelay = ScaleRespawnDelay(creature, creature.TakeRespawnDelaySeconds()); // a script's one-shot delay first (cmangos SetRespawnDelay(d, true))
         creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
         SaveRespawnOnDeath(creature);
         // Capture the current pet while its corpse still belongs to the map.
@@ -73,6 +73,8 @@ public sealed partial class CreatureMapSystem
         {
             Map.Pets?.SaveCurrentPet(owner);
         }
+
+        DoLinkedEvent(creature, LinkEvent.Die); // cmangos Creature::SetDeathState(JUST_DIED) → LINKING_EVENT_DIE
     }
 
     /// <summary>Respawn a dead creature now (GM command / script).</summary>
@@ -200,6 +202,7 @@ public sealed partial class CreatureMapSystem
     /// <summary>Create the creatures of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
     private void LoadSpawns(LoadedGrid grid, IEnumerable<CreatureSpawn> spawns)
     {
+        List<Creature> loadedAlive = [];
         foreach (CreatureSpawn spawn in spawns)
         {
             if (_scriptOnlySpawns.Contains(spawn.Guid) && !_activatingScriptSpawns.Contains(spawn.Guid))
@@ -274,7 +277,24 @@ public sealed partial class CreatureMapSystem
                 }
             }
 
+            if (creature.DeathState == CreatureDeathState.Alive && !LinkAllowsSpawn(creature))
+            {
+                // cmangos Creature::LoadFromDB (Entities/Creature.cpp:1720-1726): a linked spawn that may not spawn yet loads dead.
+                creature.Health = 0;
+                creature.NpcFlags = 0;
+                creature.DeathState = CreatureDeathState.Dead;
+                creature.Combat.DeathState = DeathState.Dead;
+                creature.RespawnAtMs = _clockMs;
+            }
+
             AddToWorld(creature, grid);
+            if (creature.DeathState == CreatureDeathState.Alive) loadedAlive.Add(creature);
+        }
+
+        // cmangos Creature::LoadFromDB (Entities/Creature.cpp:1745-1747): "Initial load is handled like respawn".
+        foreach (Creature loaded in loadedAlive)
+        {
+            if (loaded.IsAlive && _creatures.ContainsKey(loaded.Guid)) DoLinkedEvent(loaded, LinkEvent.Respawn);
         }
     }
 
@@ -401,6 +421,7 @@ public sealed partial class CreatureMapSystem
         creature.Combat.DeathState = DeathState.Dead;
         Map.Combat.Untrack(creature);
         CorpseRemoving?.Invoke(creature);
+        DoLinkedEvent(creature, LinkEvent.Despawn); // cmangos Creature::RemoveCorpse → LINKING_EVENT_DESPAWN (Creature.cpp:284-285)
         // mangos-classic Creature::RemoveCorpse -> InstanceData::OnCreatureDespawn (Creature.cpp:287-288): still on the map, so a triggered
         // cast at the corpse (The Beast's Finkle is Einhorn) works.
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDespawn(creature);
@@ -496,6 +517,8 @@ public sealed partial class CreatureMapSystem
             respawnData.OnCreatureRespawn(creature);
             respawnData.NotifyCreatureAlive(creature);
         }
+
+        DoLinkedEvent(creature, LinkEvent.Respawn); // cmangos Creature::Respawn → LINKING_EVENT_RESPAWN
     }
 
     private void ForgetObservers(Creature creature)
