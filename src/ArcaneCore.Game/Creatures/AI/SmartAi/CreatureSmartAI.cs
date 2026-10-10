@@ -15,7 +15,7 @@ public sealed class CreatureSmartAI : AggressorAI
     public CreatureSmartAI(Creature creature, CreatureAiContent content) : base(creature)
     {
         ArgumentNullException.ThrowIfNull(content);
-        Script = new SmartScript(this, content.SmartScripts.For(creature.Template.Entry, creature.Spawn?.Guid ?? 0));
+        Script = new SmartScript(this, content.SmartScripts.For(creature.Template.Entry, creature.Spawn?.Guid ?? 0), content.SmartScripts);
     }
 
     public SmartScript Script { get; }

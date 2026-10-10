@@ -41,6 +41,8 @@ public sealed class SmartScriptDbRow
     public float TargetY { get; set; }
     public float TargetZ { get; set; }
     public float TargetO { get; set; }
+    /// <summary>World 51: the cmangos <c>conditions</c> row that gates the event (0 = none).</summary>
+    public uint ConditionId { get; set; }
     public string Comment { get; set; } = string.Empty;
 }
 
@@ -81,6 +83,6 @@ public sealed class SmartScriptDataModule : IDataModule
         ActionParam4 = r.ActionParam4, ActionParam5 = r.ActionParam5, ActionParam6 = r.ActionParam6,
         TargetType = r.TargetType, TargetParam1 = r.TargetParam1, TargetParam2 = r.TargetParam2,
         TargetParam3 = r.TargetParam3, TargetParam4 = r.TargetParam4,
-        TargetX = r.TargetX, TargetY = r.TargetY, TargetZ = r.TargetZ, TargetO = r.TargetO, Comment = r.Comment,
+        TargetX = r.TargetX, TargetY = r.TargetY, TargetZ = r.TargetZ, TargetO = r.TargetO, ConditionId = r.ConditionId, Comment = r.Comment,
     };
 }

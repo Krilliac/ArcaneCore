@@ -1,6 +1,6 @@
 namespace ArcaneCore.Game.Creatures;
 
-/// <summary>AzerothCore SmartScriptMgr.h SMART_EVENT values that slice 1 runs (the numbering is AzerothCore's, so rows port unchanged).</summary>
+/// <summary>AzerothCore SmartScriptMgr.h SMART_EVENT values that slices 1 and 2 run (the numbering is AzerothCore's, so rows port unchanged).</summary>
 public enum SmartEvent : byte
 {
     UpdateInCombat = 0,
@@ -12,9 +12,13 @@ public enum SmartEvent : byte
     SpellHit = 8,
     ReachedHome = 21,
     Reset = 25,
+    AiInit = 37,
+    AreaTriggerOnTrigger = 46,
     TimedEventTriggered = 59,
     Update = 60,
     Link = 61,
+    JustCreated = 63,
+    GossipHello = 64,
 }
 
 /// <summary>AzerothCore SMART_ACTION values that slice 1 runs.</summary>
@@ -32,6 +36,9 @@ public enum SmartAction : byte
     MoveToPos = 69,
     TriggerTimedEvent = 73,
     RemoveTimedEvent = 74,
+    CallTimedActionList = 80,
+    CallRandomTimedActionList = 87,
+    CallRandomRangeTimedActionList = 88,
 }
 
 /// <summary>AzerothCore SMART_TARGET values that slice 1 resolves.</summary>
