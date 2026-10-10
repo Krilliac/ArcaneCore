@@ -54,7 +54,7 @@ public sealed class XpRateCommand : ICommandExtension
             return false;
         }
 
-        if (!ReferenceEquals(target, context.Player) && !context.CanActOn(target))
+        if (!context.IsInvoker(target) && !context.CanActOn(target))
         {
             return true;
         }
@@ -75,7 +75,7 @@ public sealed class XpRateCommand : ICommandExtension
         }
 
         target.PersonalXpRate = rate;
-        context.Reply(RateSet(ReferenceEquals(target, context.Player) ? "your" : target.Name + "'s", rate));
+        context.Reply(RateSet(context.IsInvoker(target) ? "your" : target.Name + "'s", rate));
         return true;
     }
 }

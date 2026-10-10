@@ -26,6 +26,7 @@ unfinished parts documented as limits).
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
+| [Server console](areas/server-console.md) | Typed commands at the World and Realm console windows and the `World:Console:Enabled` and `Realm:Console:Enabled` options. |
 | [Live reload](areas/hot-reload.md) | The `.reload` command tree and which configuration is applied live. |
 | [Code hot reload](areas/code-hot-reload.md) | The development runner and the `.hotcode` / `.hotmodule` commands. |
 

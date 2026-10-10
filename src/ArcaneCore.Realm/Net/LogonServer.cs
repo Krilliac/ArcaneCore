@@ -32,6 +32,11 @@ public sealed class LogonServer(
     /// <summary>The auto-patcher's catalog (Auth:AutoPatch, off by default).</summary>
     public PatchCatalog Patches => patches;
 
+    private int _activeSessions;
+
+    /// <summary>Logon connections currently being served (admitted and not yet disconnected). Thread-safe.</summary>
+    public int ActiveSessions => Volatile.Read(ref _activeSessions);
+
     /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
     public NetGuard? Guard { get; private set; }
 
@@ -96,6 +101,7 @@ public sealed class LogonServer(
     private async Task HandleClientAsync(TcpClient client, AuthOptions config, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
         string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+        Interlocked.Increment(ref _activeSessions);
         logger.LogInformation("[{Endpoint}] connected", endpoint);
 
         try
@@ -135,6 +141,7 @@ public sealed class LogonServer(
         {
             client.Dispose();
             lease?.Dispose();
+            Interlocked.Decrement(ref _activeSessions);
             logger.LogInformation("[{Endpoint}] disconnected", endpoint);
         }
     }

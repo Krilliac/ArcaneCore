@@ -3,9 +3,12 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Realm.Net;
+using ArcaneCore.Realm.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
@@ -18,7 +21,12 @@ builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(Re
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
-builder.Services.AddHostedService<LogonServer>();
+builder.Services.AddSingleton<LogonServer>(); // one instance: the hosted service and the console (its session count) share it
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LogonServer>());
+builder.Services.Configure<RealmConsoleOptions>(builder.Configuration.GetSection(RealmConsoleOptions.SectionName));
+builder.Services.TryAddSingleton(_ => ConsoleInputSource.Default());
+builder.Services.TryAddSingleton(TimeProvider.System);
+builder.Services.AddHostedService<RealmConsole>(); // typed commands at the console window, off when stdin is redirected (docs/areas/server-console.md)
 builder.Services.AddRealmWatchdog(builder.Configuration);
 builder.Services.Configure<ArcaneCore.Kernel.Configuration.MetricsOptions>(builder.Configuration.GetSection(ArcaneCore.Kernel.Configuration.MetricsOptions.SectionName));
 ArcaneCore.Kernel.Ops.Metrics.MetricsServiceCollectionExtensions.AddOpsMetrics(builder.Services, "arcanecore-realm"); // Ops:Metrics, off by default (docs/ops/metrics.md)

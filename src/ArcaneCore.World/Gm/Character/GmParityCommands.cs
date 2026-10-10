@@ -117,7 +117,7 @@ public sealed class GmParityCommands : ICommandGroup
         if (target.Map is { } map)
         {
             uint dealt = map.Combat.DealDamage(context.Player, target, (uint)amount, durabilityLoss: false);
-            if (!ReferenceEquals(target, context.Player) && dealt > 0)
+            if (!context.IsInvoker(target) && dealt > 0)
             {
                 context.Session.Send(WorldOpcode.SmsgAttackerstateupdate,
                     CombatPackets.AttackerStateUpdate(HitInfo.AffectsVictim, context.Player.Guid, target.Guid, dealt,
@@ -178,7 +178,7 @@ public sealed class GmParityCommands : ICommandGroup
             }
 
             Item item = target.Inventory.StoreNewItem(destinations, template, 1);
-            if (ReferenceEquals(target, context.Player))
+            if (context.IsInvoker(target))
             {
                 foreach (ItemPosCount position in destinations)
                 {
@@ -188,7 +188,7 @@ public sealed class GmParityCommands : ICommandGroup
 
             context.Player.Session.Send(WorldOpcode.SmsgItemPushResult,
                 ItemPackets.ItemPushResult(context.Player.Guid, item, 1, received: false, created: true, showInChat: true));
-            if (!ReferenceEquals(target, context.Player))
+            if (!context.IsInvoker(target))
             {
                 target.Session.Send(WorldOpcode.SmsgItemPushResult,
                     ItemPackets.ItemPushResult(target.Guid, item, 1, received: true, created: false, showInChat: true));
@@ -263,10 +263,10 @@ public sealed class GmParityModifyExtension : ICommandExtension
         }
 
         context.Reply(string.Create(CultureInfo.InvariantCulture, $"You set the speed to {rate:0.00} from normal of {link}."));
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
             target.SendSystemMessage(string.Create(CultureInfo.InvariantCulture,
-                $"{GmStrings.PlayerLink(context.Player.Name)} set your speed to {rate:0.00} from normal."));
+                $"{GmStrings.PlayerLink(context.InvokerName)} set your speed to {rate:0.00} from normal."));
         }
 
         UnitSpeed.SetRate(target, MoveType.Run, rate);
@@ -300,10 +300,10 @@ public sealed class GmParityModifyExtension : ICommandExtension
         {
             // LANG_YOU_CHANGE_SIZE (147) / LANG_YOURS_SIZE_CHANGED (148), mangos-classic mangos.sql:3533-3534; players only, as vmangos.
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"You set the size {scale:0.00} of {GmStrings.PlayerLink(subject.Name)}."));
-            if (!ReferenceEquals(subject, context.Player))
+            if (!context.IsInvoker(subject))
             {
                 subject.SendSystemMessage(string.Create(CultureInfo.InvariantCulture,
-                    $"{GmStrings.PlayerLink(context.Player.Name)} set your size to {scale:0.00}."));
+                    $"{GmStrings.PlayerLink(context.InvokerName)} set your size to {scale:0.00}."));
             }
         }
 

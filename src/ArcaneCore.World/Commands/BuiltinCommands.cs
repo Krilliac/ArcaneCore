@@ -224,7 +224,7 @@ public static class BuiltinCommands
             return true;
         }
 
-        if (ReferenceEquals(target, context.Player))
+        if (context.IsInvoker(target))
         {
             context.Reply(GmStrings.CommandKickSelf);
             return true;
@@ -278,8 +278,8 @@ public static class BuiltinCommands
         }
 
         string link = GmStrings.PlayerLink(target.Name);
-        string caller = GmStrings.PlayerLink(context.Player.Name);
-        bool report = !ReferenceEquals(target, context.Player);
+        string caller = GmStrings.PlayerLink(context.InvokerName);
+        bool report = !context.IsInvoker(target);
         long money = target.Money;
         if (add < 0)
         {

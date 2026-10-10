@@ -186,6 +186,9 @@ public static class GmStrings
     /// <summary>LANG_YOURS_SECURITY_IS_LOW (403; mangos.sql:3756).</summary>
     public const string SecurityTooLow = "You have low security level for this.";
 
+    /// <summary>Not a vmangos text: the reply when a console command needs the invoker's own character or selection.</summary>
+    public const string ConsoleNeedsPlayer = "This command acts on your own character or your selection, which the console does not have; name a player instead (e.g. 'levelup Name 5').";
+
     /// <summary>LANG_USE_BOL (259; mangos.sql:3628).</summary>
     public const string UseOnOff = "Incorrect value, use on or off";
 

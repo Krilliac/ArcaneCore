@@ -99,7 +99,7 @@ public sealed class MovementRateCommands : ICommandGroup
         int refreshed = SpeedRates.ApplyToAll(context.World, options);
         context.Session.Logger.LogWarning(
             "{Player} (account {Account}) set movement rate {Field} from {Old} to {New}; speeds of {Count} online player(s) re-sent",
-            context.Player.Name, context.Session.AccountId, name, old, value, refreshed);
+            context.InvokerName, context.Session.AccountId, name, old, value, refreshed);
         context.Reply(string.Create(CultureInfo.InvariantCulture,
             $"Movement: {name} {old:0.###} -> {value:0.###} (until .reload config or restart); speeds of {refreshed} online player(s) re-sent."));
         return true;

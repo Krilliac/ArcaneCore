@@ -174,9 +174,9 @@ public sealed class TeleNameExtension : ICommandExtension
         }
 
         context.Reply(GmStrings.TeleportingTo(link, string.Empty, tele.Name));
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
-            target.SendSystemMessage(GmStrings.TeleportedToBy(GmStrings.PlayerLink(context.Player.Name)));
+            target.SendSystemMessage(GmStrings.TeleportedToBy(GmStrings.PlayerLink(context.InvokerName)));
         }
 
         return TeleportCommands.GoHelper(context, target, tele.MapId, tele.X, tele.Y, tele.Z, tele.Orientation);

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
@@ -38,31 +39,94 @@ public sealed record ChatCommand(
     public int RequiredLevel(GmOptions options) => RetailLevel ?? options.LevelOf(Security);
 }
 
-/// <summary>The invoker of a chat command (world thread).</summary>
-public sealed class CommandContext(WorldSession session, Player player, CommandTable commands)
+/// <summary>
+/// The reply of a console command that needs the invoker's own character or selection, which the console does not have
+/// (<see cref="GmStrings.ConsoleNeedsPlayer"/>). Thrown by <see cref="CommandContext.Player"/> in console mode and caught by
+/// the console executor, so such a command fails closed instead of dereferencing a missing player.
+/// </summary>
+public sealed class ConsoleInvokerException() : InvalidOperationException(GmStrings.ConsoleNeedsPlayer);
+
+/// <summary>
+/// The invoker of a chat command (world thread): a player, or the server console
+/// (<see cref="ForConsole"/>: Administrator authority, no player, replies to a text sink).
+/// </summary>
+public sealed class CommandContext
 {
-    public WorldSession Session { get; } = session;
+    /// <summary>The name the console runs commands under (audit lines, ban authors).</summary>
+    public const string ConsoleName = "Console";
 
-    public Player Player { get; } = player;
+    private readonly Player? _player;
+    private readonly Action<string>? _output;
 
-    public CommandTable Commands { get; } = commands;
+    public CommandContext(WorldSession session, Player player, CommandTable commands)
+    {
+        Session = session;
+        _player = player;
+        Commands = commands;
+    }
+
+    private CommandContext(WorldSession session, CommandTable commands, Action<string> output)
+    {
+        Session = session;
+        Commands = commands;
+        _output = output;
+    }
+
+    /// <summary>
+    /// A console invoker: <paramref name="consoleSession"/> is the socketless console session (account 0, Administrator),
+    /// every reply line goes to <paramref name="output"/> (which must be thread-safe: async handlers reply later).
+    /// </summary>
+    public static CommandContext ForConsole(WorldSession consoleSession, CommandTable commands, Action<string> output)
+    {
+        ArgumentNullException.ThrowIfNull(consoleSession);
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(output);
+        return new CommandContext(consoleSession, commands, output);
+    }
+
+    public WorldSession Session { get; }
+
+    /// <summary>Whether the invoker is the server console.</summary>
+    public bool IsConsole => _output is not null;
+
+    /// <summary>The invoking player; in console mode throws <see cref="ConsoleInvokerException"/> (the console has no character).</summary>
+    public Player Player => _player ?? throw new ConsoleInvokerException();
+
+    /// <summary>The invoker's name for audit lines and authorship: the player, or <see cref="ConsoleName"/>.</summary>
+    public string InvokerName => _player?.Name ?? ConsoleName;
+
+    /// <summary>Whether a reply sent later (after an asynchronous step) still has a recipient: the console always, a player while in the world.</summary>
+    public bool CanReplyLater => _player is null || _player.IsInWorld;
+
+    /// <summary>Whether <paramref name="unit"/> is the invoking player (always false for the console); never throws.</summary>
+    public bool IsInvoker(Unit? unit) => unit is not null && ReferenceEquals(unit, _player);
+
+    public CommandTable Commands { get; }
 
     public WorldRuntime World => Session.World;
 
-    public AccountSecurity Security => Session.Security;
+    public AccountSecurity Security => IsConsole ? AccountSecurity.Administrator : Session.Security;
 
-    /// <summary>Send CHAT_MSG_SYSTEM lines to the invoker ('\n' separates lines).</summary>
+    /// <summary>Send CHAT_MSG_SYSTEM lines to the invoker ('\n' separates lines); the console prints them.</summary>
     public void Reply(string text)
     {
         foreach (string line in text.Split('\n'))
         {
-            Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(line));
+            if (_output is not null)
+            {
+                _output(line);
+            }
+            else
+            {
+                Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(line));
+            }
         }
     }
 
     /// <summary>
     /// The selected player, or the invoker when nothing is selected (vmangos
-    /// ChatHandler::GetSelectedPlayer); null when the selection is not an online player.
+    /// ChatHandler::GetSelectedPlayer); null when the selection is not an online player. The console has neither
+    /// (throws <see cref="ConsoleInvokerException"/>).
     /// </summary>
     public Player? SelectedPlayerOrSelf()
         => Player.Selection.IsEmpty ? Player : World.FindOnlinePlayer(Player.Selection);
@@ -71,11 +135,12 @@ public sealed class CommandContext(WorldSession session, Player player, CommandT
     /// Whether the invoker may act on <paramref name="target"/>: always on itself, otherwise the
     /// vmangos HasLowerSecurity rule (<see cref="GmSecurity.HasLowerSecurity"/>); <paramref name="strong"/>
     /// also refuses accounts of equal security (mute/unmute). <see cref="GmOptions.LowerSecurity"/>
-    /// defaults to on, stricter than the vmangos default (see docs/integration/gm-commands.md).
+    /// defaults to on, stricter than the vmangos default (see docs/integration/gm-commands.md). The console
+    /// outranks every account (vmangos SEC_CONSOLE) and may act on anyone.
     /// </summary>
     public bool CanActOn(Player target, bool strong = false)
     {
-        if (ReferenceEquals(target, Player) || !GmSecurity.HasLowerSecurity(Security, target.Security, strong, Commands.Gm))
+        if (IsConsole || IsInvoker(target) || !GmSecurity.HasLowerSecurity(Security, target.Security, strong, Commands.Gm))
         {
             return true;
         }
@@ -199,13 +264,24 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
 
         if (GmCommandLog.ShouldLog(command, Gm))
         {
-            Player invoker = context.Player;
-            string selection = invoker.Selection.IsEmpty ? "none" : invoker.Selection.ToString();
-            ILogger log = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? context.Session.Logger;
             string commandLine = found.Rest.Length == 0 ? found.Path : $"{found.Path} {found.Rest}";
-            string line = GmCommandLog.Describe(commandLine, context.Session.AccountId, invoker.Name, invoker.MapId, invoker.X, invoker.Y, invoker.Z, selection);
-            log.LogInformation("{Line}", line);
-            context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(context.Session.AccountId, invoker.Name, commandLine, line);
+            ILogger log = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? context.Session.Logger;
+            string line;
+            if (context.IsConsole)
+            {
+                commandLine = ConsoleCommandRedactor.Redact(commandLine);
+                line = GmCommandLog.DescribeConsole(commandLine);
+                log.LogInformation("{Line}", line);
+                context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(0, CommandContext.ConsoleName, commandLine, line);
+            }
+            else
+            {
+                Player invoker = context.Player;
+                string selection = invoker.Selection.IsEmpty ? "none" : invoker.Selection.ToString();
+                line = GmCommandLog.Describe(commandLine, context.Session.AccountId, invoker.Name, invoker.MapId, invoker.X, invoker.Y, invoker.Z, selection);
+                log.LogInformation("{Line}", line);
+                context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(context.Session.AccountId, invoker.Name, commandLine, line);
+            }
         }
 
         if (!command.Handler!(context, found.Rest))

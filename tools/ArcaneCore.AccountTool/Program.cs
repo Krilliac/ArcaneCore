@@ -1,4 +1,3 @@
-using System.Numerics;
 using ArcaneCore.AccountTool;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Data;
@@ -92,7 +91,7 @@ async Task<int> CreateAsync()
         return 1;
     }
 
-    (byte[] salt, byte[] verifier) = MakeCredentials(username, password);
+    (byte[] salt, byte[] verifier) = WowSrp6.CreateCredentials(username, password);
     await accounts.CreateAsync(new Account
     {
         Username = username,
@@ -118,7 +117,7 @@ async Task<int> SetPasswordAsync()
         return 1;
     }
 
-    (byte[] salt, byte[] verifier) = MakeCredentials(username, password);
+    (byte[] salt, byte[] verifier) = WowSrp6.CreateCredentials(username, password);
     await accounts.UpdateCredentialsAsync(username, salt, verifier).ConfigureAwait(false);
 
     Console.WriteLine($"updated password for '{username}'");
@@ -127,7 +126,7 @@ async Task<int> SetPasswordAsync()
 
 async Task<int> SetGmLevelAsync()
 {
-    if (args.Length != 3 || !TryParseSecurity(args[2], out AccountSecurity security))
+    if (args.Length != 3 || !AccountSecurityText.TryParse(args[2], out AccountSecurity security))
     {
         Console.Error.WriteLine("usage: arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
         return 1;
@@ -404,24 +403,6 @@ async Task<int> BanListAsync()
     }
 
     return 0;
-}
-
-static (byte[] Salt, byte[] Verifier) MakeCredentials(string username, string password)
-{
-    byte[] salt = WowSrp6.GenerateSalt();
-    BigInteger verifier = WowSrp6.ComputeVerifier(salt, username, password);
-    return (salt, WowSrp6.ToFixedLittleEndian(verifier, WowSrp6.KeyLength));
-}
-
-static bool TryParseSecurity(string text, out AccountSecurity security)
-{
-    if (byte.TryParse(text, out byte level) && Enum.IsDefined((AccountSecurity)level))
-    {
-        security = (AccountSecurity)level;
-        return true;
-    }
-
-    return Enum.TryParse(text, ignoreCase: true, out security) && Enum.IsDefined(security);
 }
 
 static void PrintUsage()

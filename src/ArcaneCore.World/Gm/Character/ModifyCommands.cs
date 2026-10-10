@@ -106,8 +106,8 @@ public sealed class ModifyExtension : ICommandExtension
         }
 
         string link = GmStrings.PlayerLink(target.Name);
-        bool report = !ReferenceEquals(target, context.Player);
-        string caller = GmStrings.PlayerLink(context.Player.Name);
+        bool report = !context.IsInvoker(target);
+        string caller = GmStrings.PlayerLink(context.InvokerName);
         if (hp)
         {
             context.Reply(GmStrings.YouChangeHp(link, value, max));
@@ -181,8 +181,8 @@ public sealed class ModifyExtension : ICommandExtension
         uint max = displayedMax * factor;
         uint value = requested * factor;
         string link = GmStrings.PlayerLink(target.Name);
-        bool report = !ReferenceEquals(target, context.Player);
-        string caller = GmStrings.PlayerLink(context.Player.Name);
+        bool report = !context.IsInvoker(target);
+        string caller = GmStrings.PlayerLink(context.InvokerName);
 
         target.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power, max);
         SpellSystem.SetPower(target, power, value);
@@ -284,9 +284,9 @@ public sealed class LevelCommands : ICommandGroup
         target.SetUInt32(UpdateFields.PlayerXp, 0);
         progression.GiveLevel(target, (byte)newLevel);
 
-        if (!ReferenceEquals(target, context.Player))
+        if (!context.IsInvoker(target))
         {
-            string caller = GmStrings.PlayerLink(context.Player.Name);
+            string caller = GmStrings.PlayerLink(context.InvokerName);
             target.SendSystemMessage(oldLevel == newLevel ? GmStrings.YoursLevelProgressReset(caller)
                 : oldLevel < newLevel ? GmStrings.YoursLevelUp(caller, newLevel)
                 : GmStrings.YoursLevelDown(caller, newLevel));

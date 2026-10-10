@@ -89,6 +89,17 @@ public static class WowSrp6
         return salt;
     }
 
+    /// <summary>
+    /// A fresh salt and the fixed-width little-endian verifier for <paramref name="username"/> and
+    /// <paramref name="password"/>, ready to store (account creation and password changes).
+    /// </summary>
+    public static (byte[] Salt, byte[] Verifier) CreateCredentials(string username, string password)
+    {
+        byte[] salt = GenerateSalt();
+        BigInteger verifier = ComputeVerifier(salt, username, password);
+        return (salt, ToFixedLittleEndian(verifier, KeyLength));
+    }
+
     // --- Byte-order helpers ------------------------------------------------------
 
     /// <summary>Interpret raw bytes as a non-negative little-endian integer.</summary>
