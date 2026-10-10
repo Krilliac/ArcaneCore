@@ -840,6 +840,72 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void NightmareManifests_RemulosConjuresEranikus_TenShadeWaves_ThenTheRedemptionCredits()
+    {
+        // npc_keeper_remulosAI / boss_eranikusAI (moonglade.cpp at 3e8597afe7) on the z2815 path (19 points).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(19, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(669, 38).Select(i => -1000000 - i)];
+        CreatureContent content = new(
+            [Template(entry), Template(15491, t => t.Faction = 14), Template(15628, t => t.Faction = 35), Template(15629, t => t.Faction = 14),
+             Template(15495), Template(15633), Template(15634)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature remulos = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI>(remulos.AI);
+            world.RunTick(100);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.QuestNightmareManifests);
+            string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            int shades = 0, maxTurns = 0;
+            var seen = new HashSet<Creature>(ReferenceEqualityComparer.Instance);
+            for (int elapsed = 0; elapsed < 1_800_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(remulos.X, remulos.Y, remulos.Z, 0, 0);
+                world.RunTick(100);
+                maxTurns = Math.Max(maxTurns, ai.SummonTurns);
+                foreach (Creature shade in system.Creatures.Where(c => c.Entry == 15629 && c.IsAlive).ToArray())
+                {
+                    if (seen.Add(shade))
+                    {
+                        shades++;
+                    }
+
+                    map.Combat.Kill(null, shade); // the players and the defenders deal with the shades
+                }
+
+                // The players beat Eranikus down once he has landed.
+                if (ai.Eranikus is { IsAlive: true } eranikus && eranikus.AI is ArcaneCore.Game.Creatures.Scripts.EranikusAI boss
+                    && !boss.Redeemed && boss.HealthCheck > 0 && (eranikus.UnitFlags & UnitFlags.ImmuneToPlayer) == 0)
+                {
+                    eranikus.Health = Math.Max(1u, (uint)((ulong)eranikus.MaxHealth * (uint)(boss.HealthCheck - 1) / 100));
+                }
+            }
+
+            Run(world, 7_000); // his two outro lines, three seconds apart
+            string[] all = Said();
+            Assert.True(quests.Completed.Count == 1,
+                $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} turns {maxTurns} eranikus {(ai.Eranikus is { } e ? $"{e.Entry} {e.IsAlive} {e.IsInWorld} {e.UnitFlags} {e.X},{e.Y} hc {(e.AI as ArcaneCore.Game.Creatures.Scripts.EranikusAI)?.HealthCheck}" : "none")} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.QuestNightmareManifests), quests.Completed[0]);
+            Assert.Equal(10, maxTurns);
+            Assert.Equal(30, shades); // three in the houses, then three per turn for nine more turns
+            Assert.Contains("-1000676", all); // SAY_REMULOS_TAUNT_1 (Eranikus speaks from above the lake, out of the test player's range)
+            Assert.Contains("-1000685", all); // SAY_REMULOS_DEFEND_3
+            Assert.Equal(15628u, Assert.IsType<Creature>(ai.Eranikus).Entry); // redeemed (his lines are out of the test player's range)
+            Assert.Contains("-1000704", all); // SAY_REMULOS_OUTRO_1 follows the credit
+            Assert.Equal((UnitFlags)0, remulos.UnitFlags & UnitFlags.Pvp);
+        }
+    }
+
+    [Fact]
     public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
     {
         // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
