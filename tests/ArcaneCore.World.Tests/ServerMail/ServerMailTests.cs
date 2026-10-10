@@ -99,7 +99,7 @@ public sealed class ServerMailTests
         var facts = new Facts { Team = Team.Horde, Race = Race.Orc };
         Assert.Equal([1u], ServerMailRules.Owed(templates, [2u], facts).Select(t => t.Id));
         ServerMailRequest letter = ServerMailRules.Letter(templates.Single(t => t.Id == 1), 42, Team.Horde);
-        Assert.Equal((42, 700u), (letter.ReceiverId, letter.Money));
+        Assert.Equal((42, 700u, 1u), (letter.ReceiverId, letter.Money, letter.TemplateId));
         Assert.Equal([new ServerMailItem(2589, 5)], letter.Items);
         Assert.Empty(ServerMailRules.Letter(templates.Single(t => t.Id == 1), 42, Team.Alliance).Items);
     }

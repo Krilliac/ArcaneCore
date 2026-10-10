@@ -106,6 +106,14 @@ public sealed record CreateEscrowItem(ItemInstanceData Item) : EconomyChange;
 /// </summary>
 public sealed record MintEscrowItem(ItemInstanceData Item) : EconomyChange;
 
+/// <summary>
+/// Server mail template <paramref name="TemplateId"/> was sent to <paramref name="CharacterId"/> (AzerothCore mail_server_character),
+/// written in the same transaction as the template's letters. The store refuses the whole operation when the record already exists,
+/// so a template's reward commits at most once per character: a retry after a crash, a lost acknowledgement or a second login is
+/// refused instead of sending a second copy. The request must also insert at least one letter to that character.
+/// </summary>
+public sealed record RecordServerMailSent(int CharacterId, uint TemplateId) : EconomyChange;
+
 /// <summary>A new letter; <paramref name="Body"/> creates <c>item_text</c> row <see cref="MailRecord.ItemTextId"/>.</summary>
 public sealed record InsertMail(MailRecord Mail, string? Body, int RecipientCap = 0) : EconomyChange;
 

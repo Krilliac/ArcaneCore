@@ -42,7 +42,9 @@ public sealed class ServerMailCharacterEntity
 
 /// <summary>
 /// Characters schema 54: AzerothCore's server mail tables (mail_server_template, _items, _conditions, mail_server_character): the
-/// templates, their items and conditions, and which character already got which letter. Deleting a character drops its sent records.
+/// templates, their items and conditions, and which character already got which letter. The (guid, mailId) key makes a sent record
+/// unique; it is written only with the letters, in the economy transaction (<c>RecordServerMailSent</c>). Deleting a character drops its
+/// sent records.
 /// </summary>
 public sealed class ServerMailDataModule : IDataModule, ICharacterDataCleanup
 {
@@ -127,11 +129,4 @@ public sealed class EfServerMailStore(CharacterDbContext db) : IServerMailStore
     public async Task<IReadOnlyCollection<uint>> GetSentAsync(int characterId, CancellationToken cancellationToken = default)
         => await db.Set<ServerMailCharacterEntity>().AsNoTracking().Where(r => r.Guid == characterId).Select(r => r.MailId)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-    public async Task MarkSentAsync(int characterId, uint templateId, CancellationToken cancellationToken = default)
-    {
-        if (await db.Set<ServerMailCharacterEntity>().AnyAsync(r => r.Guid == characterId && r.MailId == templateId, cancellationToken).ConfigureAwait(false)) return;
-        db.Add(new ServerMailCharacterEntity { Guid = characterId, MailId = templateId });
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-    }
 }

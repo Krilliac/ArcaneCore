@@ -2,6 +2,7 @@ using System.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Characters.ServerMail;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
@@ -563,6 +564,20 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 return true;
             }
 
+            case RecordServerMailSent record:
+            {
+                // The (guid, mailId) primary key backs this check against a concurrent writer of the same record.
+                if (await db.Set<ServerMailCharacterEntity>().AsNoTracking()
+                        .AnyAsync(r => r.Guid == record.CharacterId && r.MailId == record.TemplateId, cancellationToken).ConfigureAwait(false)
+                    || !await db.Characters.AsNoTracking().AnyAsync(c => c.Id == record.CharacterId, cancellationToken).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                db.Add(new ServerMailCharacterEntity { Guid = record.CharacterId, MailId = record.TemplateId });
+                return true;
+            }
+
             default:
                 throw new ArgumentException($"unsupported economy change {change.GetType().Name}", nameof(request));
         }
@@ -664,6 +679,15 @@ public static class EconomyRequestValidation
             || minted.Any(guid => request.Participants.Any(p => p.Before.Inventory!.Items.Concat(p.After.Inventory!.Items).Any(i => i.Item.Guid == guid))))
         {
             throw new ArgumentException("An item created into escrow must be created once and must not appear in any participant's inventory.", nameof(request));
+        }
+
+        // A server mail record rides with its template's letters: once per (character, template), and never without a letter to it.
+        List<RecordServerMailSent> records = [.. request.Changes.OfType<RecordServerMailSent>()];
+        if (records.Distinct().Count() != records.Count
+            || records.Any(r => r.CharacterId <= 0 || r.TemplateId == 0
+                || !request.Changes.OfType<InsertMail>().Any(i => i.Mail.ReceiverId == r.CharacterId)))
+        {
+            throw new ArgumentException("A server mail record must be unique in its request and accompany a letter to its character.", nameof(request));
         }
 
         List<uint> held = [.. request.Participants.SelectMany(p => p.After.Inventory!.Items.Select(i => i.Item.Guid))];

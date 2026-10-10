@@ -78,6 +78,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | World state and exploration | [world-state](areas/world-state.md) |
 | Instances and bosses | [instances](areas/instances.md) |
 | Items and inventory | [items](areas/items.md) |
+| Server mail (login reward letters, exactly-once delivery) | [server-mail](areas/server-mail.md) |
 | Group loot and group experience | [group-loot-xp](areas/group-loot-xp.md) |
 | Fishing and special loot | [fishing-special-loot](areas/fishing-special-loot.md) |
 | Quest and NPC adapters | [quests-npc](areas/quests-npc.md) (NPC services: [npc-services](integration/npc-services.md)) |

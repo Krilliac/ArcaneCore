@@ -26,8 +26,10 @@ public sealed class ServerMailOptions
 
 /// <summary>
 /// AzerothCore's server mail (ServerMailMgr + scripts/World/server_mail.cpp ServerMailReward::OnPlayerLogin): at every login, each active
-/// template the character has not had yet and whose every condition it meets is mailed to it once (the faction's money and items), and
-/// mail_server_character records it. A letter whose conditions fail stays owed for a later login. The templates load at start.
+/// template the character has not had yet and whose every condition it meets is mailed to it once (the faction's money and items).
+/// The mail_server_character record commits in the same economy transaction as the letters and the store refuses a second one, so a
+/// reward is delivered exactly once per (template, character) even across crashes, failed writes and relogs (AzerothCore writes the
+/// record after the letters). A letter whose conditions fail stays owed for a later login. The templates load at start.
 /// </summary>
 public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ServerMailFeature> logger) : IWorldFeature
 {
@@ -97,30 +99,22 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
         // AzerothCore's callback: only while the same character is still in the world.
         if (world.FindOnlinePlayer(player.Guid) is not { } online || !ReferenceEquals(online, player)) return;
         if (services.GetService<EconomyFeature>() is not { } economy) return;
-        int id = (int)player.Guid.Low;
-        foreach (ServerMailTemplate template in ServerMailRules.Owed(Templates, sent, new Facts(player, world, services)).ToList())
+        Send(economy, (int)player.Guid.Low, player.Team, ServerMailRules.Owed(Templates, sent, new Facts(player, world, services)).ToList());
+    }
+
+    /// <summary>World thread: mail each owed template to the character.</summary>
+    internal void Send(EconomyFeature economy, int id, Team team, IEnumerable<ServerMailTemplate> owed)
+    {
+        foreach (ServerMailTemplate template in owed)
         {
-            economy.SendServerMail(ServerMailRules.Letter(template, id, player.Team), ok =>
+            // The letters and the mail_server_character record commit in one transaction; nothing is written afterwards.
+            economy.SendServerMail(ServerMailRules.Letter(template, id, team), ok =>
             {
                 if (!ok)
                 {
-                    logger.LogWarning("server mail {Template} to character {Id} was not sent; it stays owed", template.Id, id);
-                    return;
+                    logger.LogWarning("server mail {Template} to character {Id} is not confirmed: refused (already sent), failed, or its outcome "
+                        + "is unknown; the next login sends it only if its sent record did not commit", template.Id, id);
                 }
-
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        using IServiceScope scope = scopes.CreateScope();
-                        if (scope.ServiceProvider.GetService<IServerMailStore>() is { } store)
-                            await store.MarkSentAsync(id, template.Id).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "could not record server mail {Template} sent to character {Id}", template.Id, id);
-                    }
-                });
             });
         }
     }

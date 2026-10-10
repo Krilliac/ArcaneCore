@@ -13,14 +13,14 @@ public sealed record ServerMailConditionRow(uint TemplateId, string ConditionTyp
 public sealed record ServerMailContent(IReadOnlyList<ServerMailTemplateRow> Templates, IReadOnlyList<ServerMailItemRow> Items,
     IReadOnlyList<ServerMailConditionRow> Conditions);
 
-/// <summary>The server mail tables and the per-character record of letters sent (AzerothCore mail_server_character).</summary>
+/// <summary>
+/// The server mail tables and the per-character record of letters sent (AzerothCore mail_server_character). The record is only written
+/// by the economy transaction that commits the letters (<see cref="Economy.RecordServerMailSent"/>), never on its own.
+/// </summary>
 public interface IServerMailStore
 {
     Task<ServerMailContent> LoadAsync(CancellationToken cancellationToken = default);
 
     /// <summary>The template ids already sent to a character.</summary>
     Task<IReadOnlyCollection<uint>> GetSentAsync(int characterId, CancellationToken cancellationToken = default);
-
-    /// <summary>AzerothCore CHAR_REP_MAIL_SERVER_CHARACTER.</summary>
-    Task MarkSentAsync(int characterId, uint templateId, CancellationToken cancellationToken = default);
 }
