@@ -56,8 +56,14 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var locomotion = new LocomotionOptions();
         var antiCheat = new AntiCheatOptions();
         IConfigurationRoot snapshot = fresh.Build();
+        IConfiguration modules;
         try
         {
+            // The script modules' section, copied out before the snapshot is disposed (docs/integration/script-hooks.md).
+            string modulesSection = Scripting.ScriptModuleContext.ModulesSectionName;
+            modules = new ConfigurationBuilder()
+                .AddInMemoryCollection(snapshot.GetSection(modulesSection).AsEnumerable())
+                .Build();
             IConfigurationSection section = snapshot.GetSection(WorldOptions.SectionName);
             section.Bind(runtime);
             section.Bind(listener);
@@ -101,12 +107,14 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
         PlayerbotOptions? livePlayerbots = services.GetService<IOptions<PlayerbotOptions>>()?.Value;
         AntiCheatFeature? liveAntiCheat = services.GetService<AntiCheatFeature>();
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions, antiCheat, liveAntiCheat));
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions, antiCheat, liveAntiCheat,
+            services.GetService<Scripting.ScriptHooksFeature>(), modules));
     }
 
     private sealed class ConfigCandidate(
         WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, PlayerbotOptions? livePlayerbots,
-        IReadOnlyList<string> substitutions, AntiCheatOptions antiCheat, AntiCheatFeature? liveAntiCheat) : ContentCandidate
+        IReadOnlyList<string> substitutions, AntiCheatOptions antiCheat, AntiCheatFeature? liveAntiCheat,
+        Scripting.ScriptHooksFeature? scripts, IConfiguration modules) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -180,6 +188,12 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             {
                 AntiCheatOptions previous = liveAntiCheat.Options;
                 transaction.Step(AntiCheatOptions.SectionName, () => liveAntiCheat.ApplyOptions(antiCheat), () => liveAntiCheat.ApplyOptions(previous));
+            }
+
+            if (scripts is not null)
+            {
+                // AzerothCore WorldScript::OnAfterConfigLoad(reload: true): after the options above. Not undone on a rollback.
+                transaction.Step("script modules", () => scripts.ReloadConfig(modules), static () => { });
             }
 
             _summary = changed == 0 ? "no changes" : $"{changed} option(s) changed";
