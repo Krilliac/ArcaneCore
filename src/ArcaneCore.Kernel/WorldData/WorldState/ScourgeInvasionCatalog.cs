@@ -45,6 +45,24 @@ public static class ScourgeInvasionCatalog
     public const int CityAttackTimerMinSeconds = 45 * 60;
     public const int CityAttackTimerMaxSeconds = 60 * 60;
     public const uint Flameshocker = 16383;
+    public const uint CultistEngineer = 16230;
+    public const uint ShadowOfDoom = 16143;
+    public const uint SummonerShield = 181142;
+    public const uint NecroticRune = 22484;
+    public const uint NecroticRunesForBoss = 8;
+    public const uint ButtressChannel = 28078;
+    public const uint DamageCrystal = 28041;
+    public const uint ZapCrystalCorpse = 28056;
+    public const uint SpawnSmoke = 10389;
+    public const uint MindFlay = 16568;
+    public const uint Fear = 12542;
+    public const int CultistGossipText = 8436;
+    public const int CultistGossipOption = 12112;
+    public static IReadOnlyList<int> ShadowOfDoomTexts { get; } = [12420, 12421, 12422, 12243];
+
+    /// <summary>IsGuardOrBoss: the capital defenders that join a fight against a city attacker or Flameshocker.</summary>
+    public static IReadOnlySet<uint> CityDefenders { get; } = new HashSet<uint> { 13839, 1756, 16432, 5624, 7980, 68, 1748, 10181, 2425 };
+
     public const uint HighlordBolvar = 1748;
     public const uint LadySylvanas = 10181;
     public const uint AuraOfFear = 28313;

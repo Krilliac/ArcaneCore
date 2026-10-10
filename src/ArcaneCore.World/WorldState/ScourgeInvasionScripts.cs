@@ -74,12 +74,14 @@ internal sealed class NecroticShardAi(Creature creature) : CreatureAI(creature)
     private uint _minionMs = 5_000;
     private int _finderCapacity;
     private int _campType = Random.Shared.Next(3);
+    private uint _buttressMs = 5_000;
 
     public override void OnRespawn()
     {
         _checkMs = 25_000;
         _minionMs = 5_000;
         _finderCapacity = 0;
+        _buttressMs = 5_000;
     }
 
     private void AdoptCampType(int campType) => _campType = campType;
@@ -97,6 +99,16 @@ internal sealed class NecroticShardAi(Creature creature) : CreatureAI(creature)
             {
                 System?.ForcedDespawn(Me, 0);
                 return;
+            }
+        }
+
+        if (Me.Entry == ScourgeInvasionCatalog.DamagedNecroticShard && System is { } system)
+        {
+            _buttressMs = _buttressMs > diffMs ? _buttressMs - diffMs : 0;
+            if (_buttressMs == 0)
+            {
+                _buttressMs = 3_600_000; // EVENT_SHARD_MINION_SPAWNER_BUTTRESS: first after 5 s, then hourly
+                ScourgeButtress.Run(Me, system);
             }
         }
 
