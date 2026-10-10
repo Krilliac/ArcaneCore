@@ -69,4 +69,21 @@ public sealed class TeleportHonorlessTargetTests
             Assert.Equal([true], due);
         }
     }
+
+    [Fact]
+    public void NearTeleport_StopsCombat_UnlessItKeepsCombat()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _) = Rig();
+        using (world)
+        {
+            var session = (FakeSession)player.Session;
+            session.Clear();
+            Assert.True(teleports.TeleportTo(player, 0, 500, 0, 90, 0f, TeleportOptions.NotLeaveCombat));
+            Assert.DoesNotContain(session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgCancelCombat);
+            Assert.True(teleports.HandleTeleportAck(player, player.Guid.Value));
+            session.Clear();
+            Assert.True(teleports.TeleportTo(player, 0, 0, 0, 90, 0f));
+            Assert.Contains(session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgCancelCombat);
+        }
+    }
 }

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.WorldData;
@@ -157,5 +158,25 @@ public sealed class PvpAreaRulesTests
         locator.Position = (12, 9);
         world.RunTick(1000);
         Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.FfaPvp));
+    }
+
+    [Fact]
+    public void AnUnownedZoneOnABattlegroundMap_IsEnforced_OnAPveRealm()
+    {
+        WorldRuntime world = TestWorld.CreateRuntime();
+        using (world)
+        {
+            WorldMaps.Of(world).Load(new MapContent(
+                [new MapTemplate(489, 0, MapType.Battleground, 0, 10, 0, -1, 0, 0, "Warsong Gulch", "")],
+                [], [], [], []));
+            WorldStateHooks hooks = WorldStateHooks.For(world);
+            var locator = new Locator { Position = (9, 9) };
+            hooks.Locator = locator;
+            hooks.AddLocationListener(new PvpAreaTracker(hooks));
+            Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(), mapId: 489);
+            world.AddPlayer(player);
+            world.RunTick(50);
+            Assert.True(PvpAreaState.IsInEnforcedArea(player));
+        }
     }
 }
