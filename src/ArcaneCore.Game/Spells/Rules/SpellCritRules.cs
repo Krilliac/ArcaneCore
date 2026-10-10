@@ -84,7 +84,7 @@ public static class SpellCritRules
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.OverrideClassScripts } && ShatterBonuses.TryGetValue(aura.MiscValue, out float shatter)
                     && (frozen ??= IsFrozen(system, victim)))
