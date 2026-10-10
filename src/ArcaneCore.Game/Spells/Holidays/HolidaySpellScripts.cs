@@ -157,3 +157,74 @@ public sealed class RibbonPoleTriggerScript : ISpellScript
             HolidayCasts.Self(context, target, Channels[context.System.Random.Next(Channels.Length)], triggered: false);
     }
 }
+
+/// <summary>
+/// Snowball Knockdown 21343 (vmangos SpellEffects.cpp:1346-1356, EffectDummy): a player's snowball knocks down a player of the same raid or
+/// party (21167) unless the target has Snowball Resistant (21354).
+/// </summary>
+[SpellScript(21343)]
+public sealed class SnowballKnockdownScript : ISpellScript
+{
+    public const uint SnowballResistant = 21354;
+    public const uint Knockdown = 21167;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Caster is not Player caster || context.Target is not Player target) return;
+        if (context.System.HasAura(target, SnowballResistant)) return;
+        if (!context.System.Groups.GetGroupMembers(target, raid: true).Contains(caster.Guid)) return;
+        HolidayCasts.Self(context, target, Knockdown);
+    }
+}
+
+/// <summary>
+/// Reindeer Transformation 25860 (vmangos SpellEffects.cpp:1183-1202, EffectDummy): a mounted caster loses the mount and becomes a reindeer
+/// of the same speed, 25859 at 100% (run speed rate 2.0 or more) or 25858 at 60%. Not mounted, nothing happens.
+/// </summary>
+[SpellScript(25860)]
+public sealed class ReindeerTransformationScript : ISpellScript
+{
+    public const uint ReindeerFast = 25859;
+    public const uint ReindeerSlow = 25858;
+
+    internal static uint ReindeerFor(float runSpeed) => runSpeed / Unit.BaseRunSpeed >= 2.0f ? ReindeerFast : ReindeerSlow;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        Unit caster = context.Caster;
+        if (!context.System.GetAuras(caster).Any(h => h.HasAura(AuraType.Mounted))) return;
+        float speed = caster.RunSpeed; // read before the mount goes
+        context.System.RemoveSpellsCausingAura(caster, AuraType.Mounted);
+        HolidayCasts.Self(context, caster, ReindeerFor(speed));
+    }
+}
+
+/// <summary>
+/// The Midsummer ribbon pole channels 29705 / 29726 / 29727 (vmangos SpellAuras.cpp:1776-1782 makes their DUMMY aura tick every three seconds;
+/// Aura::PeriodicDummyTick, SpellAuras.cpp:6509-6534): on each tick, a target holding two or more of the three ribbons casts the Midsummer Pole
+/// Buff 29175 on the channel's caster.
+/// </summary>
+public sealed class RibbonPoleDanceModule : ISpellHandlerModule
+{
+    public const uint PoleBuff = 29175;
+    public const uint TickMs = 3000;
+
+    internal static bool Dancing(IEnumerable<uint> auraSpellIds) => auraSpellIds.Count(id => RibbonPoleTriggerScript.Channels.Contains(id)) > 1;
+
+    public void Register(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        foreach (uint channel in RibbonPoleTriggerScript.Channels)
+        {
+            system.RegisterPeriodicDummyAura(channel, TickMs, static (spells, holder, _) =>
+            {
+                Unit target = holder.Target;
+                if (!Dancing(spells.GetAuras(target).Select(h => h.Spell.Id))) return;
+                if (target.Map?.FindObject(holder.CasterGuid) is not Unit caster) return;
+                spells.CastSpell(target, PoleBuff, SpellCastTargets.ForUnit(caster.Guid), triggered: true);
+            });
+        }
+    }
+}
