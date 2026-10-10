@@ -47,6 +47,8 @@ public sealed class RanshallaAI(Creature creature) : EscortAI(creature), IQuestS
         (5518.51f, -4917.56f, 845.23f, 0f), (5514.40f, -4921.16f, 845.49f, 0f),
     ];
 
+    protected override bool HoldAtEndWhilePaused => true;
+
     private uint _delayMs, _currentWaypoint, _stepMs;
     private int _step = -1;
     private bool _waitingForPriestess;
@@ -142,7 +144,7 @@ public sealed class RanshallaAI(Creature creature) : EscortAI(creature), IQuestS
     private Creature? SummonAndMove(uint entry, int at, int to, uint despawnMs = 0)
     {
         (float x, float y, float z, float o) = s_locs[at];
-        if (System?.SummonAt(Me, entry, x, y, z, o, null, despawnMs) is not { } summoned)
+        if (System?.SummonCorpseTimedDespawn(Me, entry, x, y, z, o, null, despawnMs) is not { } summoned)
         {
             return null;
         }

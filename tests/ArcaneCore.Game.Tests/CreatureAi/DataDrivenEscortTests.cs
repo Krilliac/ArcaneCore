@@ -679,7 +679,7 @@ public sealed class DataDrivenEscortTests
             }
 
             Creature windsor = Assert.IsType<Creature>(ai.Windsor);
-            Assert.True(ai.EventInProgress);
+            Assert.True(ai.EventInProgress, $"windsor at {windsor.X},{windsor.Y} paused {ai.HasEscortState(EscortAI.EscortState.Paused)} rowe {rowe.X},{rowe.Y} motion {windsor.Motion.CurrentType}");
             Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.QuestGiver);
             Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
             string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
@@ -694,11 +694,11 @@ public sealed class DataDrivenEscortTests
         const uint entry = ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.Entry;
         IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
         CreatureWaypoint first = path[0];
-        CreatureWaypoint last = path[^1];
+        CreatureWaypoint last = Assert.Single(path, p => p.Point == 19); // Hornizz waits where her scene ends
         int[] texts = [-1000784, -1000785, -1000786, -1000787, -1000788, -1010030, -1010031];
         CreatureContent content = new(
             [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(4659), Template(4660), Template(4655), Template(6019)],
-            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 6019, last.X + 3, last.Y, last.Z)], [], [], [],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 6019, first.X + 2, first.Y, first.Z)], [], [], [],
             new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
             scriptWaypoints: path.Select(p => (entry, 0u, p)));
         var quests = new EscortQuests();
@@ -709,11 +709,13 @@ public sealed class DataDrivenEscortTests
             (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
             Creature melizza = Assert.Single(system.Creatures, c => c.Entry == entry);
             var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI>(melizza.AI);
+            Creature hornizzSpawn = Assert.Single(system.Creatures, c => c.Entry == 6019);
             ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere);
             string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
             for (int elapsed = 0; elapsed < 2_400_000 && !Said().Contains("-1010031"); elapsed += 100)
             {
                 player.Relocate(melizza.X, melizza.Y, melizza.Z, 0, 0);
+                system.NearTeleport(hornizzSpawn, melizza.X + 3, melizza.Y, melizza.Z, 0f); // Hornizz stands by (his spawn is far off)
                 world.RunTick(100);
                 foreach (Creature summoned in ai.Summoned.Where(c => c.IsAlive))
                 {
@@ -723,6 +725,8 @@ public sealed class DataDrivenEscortTests
 
             Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere)], quests.Completed);
             Assert.Equal(10, ai.Summoned.Count);
+            Creature hornizz = Assert.Single(system.Creatures, c => c.Entry == 6019);
+            Assert.True(Said().Contains("-1010031"), $"hornizz alive {hornizz.IsAlive} at {hornizz.X},{hornizz.Y} melizza {melizza.X},{melizza.Y} escorting {ai.HasEscortState(EscortAI.EscortState.Escorting)} wp {ai.CurrentWaypointIndex}");
             Assert.Equal(["-1000784", "-1000785", "-1000786", "-1000787", "-1000788", "-1010030", "-1010031"], Said());
         }
     }
@@ -815,6 +819,7 @@ public sealed class DataDrivenEscortTests
                 }
             }
 
+            Assert.True(quests.Completed.Count == 1, $"lit {lit} step {ai.DialogueStep} wp {ai.CurrentWaypointIndex} paused {ai.HasEscortState(EscortAI.EscortState.Paused)} escorting {ai.HasEscortState(EscortAI.EscortState.Escorting)} summons {string.Join(',', system.Creatures.Select(c => c.Entry + "@" + c.X.ToString("F0", CultureInfo.InvariantCulture) + "," + c.Y.ToString("F0", CultureInfo.InvariantCulture)))}");
             Assert.Equal(6, lit); // five torches and the altar
             Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.RanshallaAI.QuestGuardiansAltar)], quests.Completed);
             Assert.Equal(StandState.Kneel, ranshalla.StandState);

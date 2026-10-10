@@ -19,6 +19,8 @@ public sealed class SquireRoweAI(Creature creature) : EscortAI(creature)
     private static readonly (float X, float Y, float Z) s_windsorSpawn = (-9145.68f, 373.79f, 90.64f);
     private static readonly (float X, float Y, float Z) s_windsorMove = (-9050.39f, 443.55f, 93.05f);
 
+    protected override bool HoldAtEndWhilePaused => true;
+
     private Creature? _windsor;
     private int _dialogueStep = -1;
     private uint _dialogueMs;
@@ -42,7 +44,7 @@ public sealed class SquireRoweAI(Creature creature) : EscortAI(creature)
                 DoCast(Me, SpellBlueFirework, triggered: true);
                 Me.StandState = StandState.Stand;
                 // TEMPSPAWN_CORPSE_DESPAWN; JustSummoned: run to the gate.
-                if (System?.SummonAt(Me, NpcWindsor, s_windsorSpawn.X, s_windsorSpawn.Y, s_windsorSpawn.Z, 0f, null, 0) is { } windsor)
+                if (System?.SummonCorpseTimedDespawn(Me, NpcWindsor, s_windsorSpawn.X, s_windsorSpawn.Y, s_windsorSpawn.Z, 0f, null, 0) is { } windsor)
                 {
                     _windsor = windsor;
                     _dialogueStep = -1;
