@@ -3,6 +3,7 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.World;
@@ -14,13 +15,26 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+// The command line is read before anything is built: --help, a mistyped command and a mistyped option are answered here (exit 64) instead of
+// starting a live server against the live profile, because the host's command-line provider drops them silently (docs/guide/configuration.md).
+DaemonCommand command = DaemonCommandLine.Parse(args, ConfigDaemon.World, ConfCatalog.Embedded);
+if (ConfStartup.TryAnswerEarly(command, ConfigDaemon.World, Console.Out, Console.Error, out int earlyExit))
+{
+    return earlyExit;
+}
+
+HostApplicationBuilder builder = Host.CreateApplicationBuilder([.. command.HostArgs]);
+ConfAttachment? conf = ConfStartup.TryAttach(builder, ConfigDaemon.World, command, Console.Error, out int confExit);
+if (conf is null)
+{
+    return confExit;
+}
 
 // Client data (docs/areas/client-data.md): fill every unset per-file DBC key from ClientData:DbcDirectory before anything binds, so
 // check-config, the validation below and every feature see the same effective configuration.
 ArcaneCore.Data.ClientData.ClientDataReport clientData = ArcaneCore.World.ClientData.ClientDataStartup.Apply(builder.Configuration);
 
-// Operations verbs (check-config) run instead of the daemon: nothing binds, no schema is touched.
+// Operations verbs (check-config, write-config) run instead of the daemon: nothing binds, no schema is touched.
 if (OpsCli.TryRun(args, builder.Configuration, Console.Out, out int verbExitCode))
 {
     return verbExitCode;
@@ -73,6 +87,7 @@ builder.Services.AddWorldMetrics(builder.Configuration); // Ops:Metrics, off by 
 builder.Services.AddSingleton(clientData);
 
 IHost host = builder.Build();
+conf.Reporter.Attach(host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.Config"));
 ArcaneCore.World.ClientData.ClientDataStartup.Log(
     clientData, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger(ArcaneCore.World.ClientData.ClientDataStartup.LogCategory));
 

@@ -39,6 +39,7 @@ public sealed class DatabaseConnectionOptions
 /// component without one falls back to the section's own Provider/ConnectionString, which is
 /// the single-database layout M1–M4 configurations use.
 /// </summary>
+[Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.Both)]
 public sealed class DatabaseOptions
 {
     public const string SectionName = "Database";
@@ -49,8 +50,10 @@ public sealed class DatabaseOptions
 
     public DatabaseConnectionOptions? Auth { get; set; }
 
+    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]
     public DatabaseConnectionOptions? Characters { get; set; }
 
+    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]
     public DatabaseConnectionOptions? World { get; set; }
 
     /// <summary>What start-up may do to the schema (<c>Database:Upgrade</c>); the historic create-and-upgrade by default.</summary>

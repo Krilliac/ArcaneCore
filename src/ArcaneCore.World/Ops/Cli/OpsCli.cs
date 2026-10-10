@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
@@ -8,12 +10,12 @@ using Microsoft.Extensions.Configuration;
 namespace ArcaneCore.World.Ops.Cli;
 
 /// <summary>
-/// Operations verbs run instead of the daemon: <c>ArcaneCore.World check-config</c>. They run
+/// Operations verbs run instead of the daemon: <c>ArcaneCore.World check-config</c> and <c>write-config</c>. They run
 /// before the host is built, so no listener binds and no schema is touched.
 /// </summary>
 public static class OpsCli
 {
-    public static IReadOnlyList<string> Verbs { get; } = ["check-config"];
+    public static IReadOnlyList<string> Verbs { get; } = [DaemonCommandLine.CheckConfig, DaemonCommandLine.WriteConfig];
 
     /// <summary>
     /// Run the verb named by the first argument, if it is one. A bare first word that is not a
@@ -28,9 +30,24 @@ public static class OpsCli
             return false;
         }
 
-        if (args[0] == "check-config")
+        if (args[0] == DaemonCommandLine.CheckConfig)
         {
             exitCode = CheckConfig(configuration, output);
+            return true;
+        }
+
+        if (args[0] == DaemonCommandLine.WriteConfig)
+        {
+            DaemonCommand command = DaemonCommandLine.Parse(args, ConfigDaemon.World, ConfCatalog.Embedded);
+            if (command.Kind != DaemonCommandKind.Verb)
+            {
+                output.WriteLine(command.Message);
+                exitCode = ExitCodes.Usage;
+                return true;
+            }
+
+            IConfigurationRoot root = configuration as IConfigurationRoot ?? new ConfigurationBuilder().AddConfiguration(configuration).Build();
+            exitCode = WriteConfigVerb.Run(command, ConfigDaemon.World, ConfCatalog.Embedded, root, output, output);
             return true;
         }
 
@@ -50,6 +67,7 @@ public static class OpsCli
     public static ConfigReport Validate(IConfiguration configuration)
         => ConfigReport.Run(configuration,
         [
+            new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.World),
             new WorldConfigChecks(),
             new DiagnosticsConfigChecks(),
             new LoggingConfigChecks(),

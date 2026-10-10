@@ -1,14 +1,32 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>A configuration section and the options class bound from it.</summary>
 internal sealed record ConfigSection(string Path, Type Type);
 
-/// <summary>One documented configuration key.</summary>
-internal sealed record ConfigEntry(string Section, string Path, string TypeText, string Default, string Meaning, string Reload);
+/// <summary>
+/// One documented configuration key. <see cref="Default"/> is the display text of the reference page; the remaining members feed the
+/// .conf catalog: which daemon(s) read it, whether it is a scalar, a sequence or a map, the scalar type of its value(s), the enum
+/// names, the default in .conf form (<see cref="RawDefault"/>, null = unset) and the default entries of a sequence or map.
+/// </summary>
+internal sealed record ConfigEntry(
+    string Section,
+    string Path,
+    string TypeText,
+    string Default,
+    string Meaning,
+    string Reload,
+    ConfigDaemon Daemons = ConfigDaemon.World,
+    string Kind = ConfKey.Scalar,
+    string ElementType = "string",
+    IReadOnlyList<string>? EnumValues = null,
+    string? RawDefault = null,
+    IReadOnlyList<ConfDefaultEntry>? DefaultEntries = null);
 
 /// <summary>The catalog and every reason it could not be built cleanly (an empty list means complete).</summary>
 internal sealed record ConfigCatalogResult(IReadOnlyList<ConfigEntry> Entries, IReadOnlyList<string> Problems);
@@ -36,7 +54,7 @@ internal static class ConfigCatalog
             object? instance = TryCreate(section.Type, section.Path, problems);
             if (instance is not null)
             {
-                Walk(section.Type, instance, section.Path, section.Path, 0, sourceSummary, overrides, skippedProperties, reload, entries, problems);
+                Walk(section.Type, instance, section.Path, section.Path, 0, section.Type.GetCustomAttribute<ConfigDaemonsAttribute>()?.Daemons ?? ConfigDaemon.World, sourceSummary, overrides, skippedProperties, reload, entries, problems);
             }
         }
 
@@ -75,6 +93,7 @@ internal static class ConfigCatalog
         string prefix,
         string section,
         int depth,
+        ConfigDaemon daemons,
         Func<Type, string, string?> sourceSummary,
         IReadOnlyDictionary<string, string> overrides,
         IReadOnlyDictionary<string, string> skipped,
@@ -102,6 +121,7 @@ internal static class ConfigCatalog
             }
 
             Type propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            ConfigDaemon propertyDaemons = property.GetCustomAttribute<ConfigDaemonsAttribute>(inherit: false)?.Daemons ?? daemons;
             bool settable = property.SetMethod?.IsPublic == true;
             if (IsLeaf(propertyType))
             {
@@ -117,17 +137,140 @@ internal static class ConfigCatalog
                     meaning += (meaning.Length > 0 ? " " : string.Empty) + "Values: " + string.Join(", ", Enum.GetNames(propertyType).Select(n => "`" + n + "`")) + ".";
                 }
 
-                entries.Add(new ConfigEntry(section, path, TypeText(property.PropertyType), FormatValue(value), meaning, reload(path) ?? "-"));
+                entries.Add(Leaf(section, path, property.PropertyType, propertyType, value, meaning, reload(path) ?? "-", propertyDaemons, problems));
                 continue;
             }
 
             object? child = property.GetValue(instance) ?? TryCreate(propertyType, path, problems);
             if (child is not null)
             {
-                Walk(propertyType, child, path, section, depth + 1, sourceSummary, overrides, skipped, reload, entries, problems);
+                Walk(propertyType, child, path, section, depth + 1, propertyDaemons, sourceSummary, overrides, skipped, reload, entries, problems);
             }
         }
     }
+
+    private static ConfigEntry Leaf(string section, string path, Type declaredType, Type propertyType, object? value, string meaning, string reload, ConfigDaemon daemons, List<string> problems)
+    {
+        string display = FormatValue(value);
+        string typeText = TypeText(declaredType);
+        if (!IsCollection(propertyType))
+        {
+            string[]? names = propertyType.IsEnum ? Enum.GetNames(propertyType) : null;
+            string? raw = value is null ? null : RawText(value);
+            return new ConfigEntry(section, path, typeText, display, meaning, reload, daemons, ConfKey.Scalar, typeText, names, raw, []);
+        }
+
+        bool isMap = typeof(IDictionary).IsAssignableFrom(propertyType)
+            || propertyType.GetInterfaces().Append(propertyType).Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>));
+        Type? element = ElementTypeOf(propertyType, isMap);
+        Type? scalarElement = element is null ? null : Nullable.GetUnderlyingType(element) ?? element;
+        bool scalar = scalarElement is not null && IsLeaf(scalarElement) && !IsCollection(scalarElement);
+        string elementType = scalar ? TypeText(element!) : "object";
+        IReadOnlyList<string>? elementNames = scalar && scalarElement!.IsEnum ? Enum.GetNames(scalarElement) : null;
+        var defaults = new List<ConfDefaultEntry>();
+        if (value is not null)
+        {
+            Flatten(value, string.Empty, 0, defaults, path, problems);
+        }
+
+        return new ConfigEntry(section, path, typeText, display, meaning, reload, daemons, isMap ? ConfKey.Map : ConfKey.Sequence, elementType, elementNames, null, defaults);
+    }
+
+    private static Type? ElementTypeOf(Type type, bool isMap)
+    {
+        if (type.IsArray)
+        {
+            return type.GetElementType();
+        }
+
+        foreach (Type candidate in type.GetInterfaces().Append(type).Where(t => t.IsGenericType))
+        {
+            Type definition = candidate.GetGenericTypeDefinition();
+            if (isMap && (definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>)))
+            {
+                return candidate.GetGenericArguments()[1];
+            }
+
+            if (!isMap && definition == typeof(IEnumerable<>))
+            {
+                return candidate.GetGenericArguments()[0];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Flattens a default sequence or map into .conf entries: a sequence element is its index, a map element its key, a nested member is joined with ':'.</summary>
+    private static void Flatten(object value, string prefix, int depth, List<ConfDefaultEntry> entries, string path, List<string> problems)
+    {
+        if (depth > MaxDepth)
+        {
+            problems.Add($"{path}: default value nested deeper than {MaxDepth} levels");
+            return;
+        }
+
+        string Join(string name) => prefix.Length == 0 ? name : prefix + ":" + name;
+        if (value is IDictionary dictionary)
+        {
+            foreach (DictionaryEntry pair in dictionary)
+            {
+                FlattenMember(pair.Value, Join(Convert.ToString(pair.Key, CultureInfo.InvariantCulture) ?? string.Empty), depth, entries, path, problems);
+            }
+
+            return;
+        }
+
+        if (value is IEnumerable sequence && value is not string)
+        {
+            int index = 0;
+            foreach (object? item in sequence)
+            {
+                FlattenMember(item, Join(index.ToString(CultureInfo.InvariantCulture)), depth, entries, path, problems);
+                index++;
+            }
+
+            return;
+        }
+
+        foreach (PropertyInfo property in value.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            if (property.GetIndexParameters().Length == 0 && property.GetMethod?.IsPublic == true && property.SetMethod?.IsPublic == true)
+            {
+                FlattenMember(property.GetValue(value), Join(property.Name), depth, entries, path, problems);
+            }
+        }
+    }
+
+    private static void FlattenMember(object? member, string key, int depth, List<ConfDefaultEntry> entries, string path, List<string> problems)
+    {
+        if (member is null)
+        {
+            return;
+        }
+
+        Type type = member.GetType();
+        if (IsLeaf(type) && !IsCollection(type))
+        {
+            entries.Add(new ConfDefaultEntry(key, RawText(member), ConfValue.IsTextType(TypeText(type), type.IsEnum ? Enum.GetNames(type) : null)));
+            return;
+        }
+
+        Flatten(member, key, depth + 1, entries, path, problems);
+    }
+
+    /// <summary>A scalar in the form a .conf file (and the configuration binder) reads: invariant culture, booleans in lower case, round-trip floats.</summary>
+    private static string RawText(object value) => value switch
+    {
+        bool flag => flag ? "true" : "false",
+        TimeSpan span => span.ToString("c", CultureInfo.InvariantCulture),
+        DateTime date => date.ToString("O", CultureInfo.InvariantCulture),
+        DateTimeOffset date => date.ToString("O", CultureInfo.InvariantCulture),
+        float f => f.ToString("R", CultureInfo.InvariantCulture),
+        double d => d.ToString("R", CultureInfo.InvariantCulture),
+        Enum e => e.ToString(),
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? string.Empty,
+    };
 
     private static string MeaningOf(PropertyInfo property, string path, Func<Type, string, string?> sourceSummary, IReadOnlyDictionary<string, string> overrides, List<string> problems)
     {

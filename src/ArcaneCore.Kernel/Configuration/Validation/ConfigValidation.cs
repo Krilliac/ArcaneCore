@@ -17,8 +17,11 @@ public sealed record ConfigIssue(ConfigSeverity Severity, string Key, string Pro
     /// <summary>The environment-variable spelling of <see cref="Key"/> (<c>World:Port</c> becomes <c>World__Port</c>).</summary>
     public string EnvironmentVariable => Key.Replace(":", "__", StringComparison.Ordinal);
 
+    /// <summary>The spelling of <see cref="Key"/> in a .conf file (<c>World:Port</c> becomes <c>World.Port</c>).</summary>
+    public string ConfKey => Conf.ConfCatalog.Display(Key);
+
     public override string ToString()
-        => $"{Severity.ToString().ToUpperInvariant()} {Key}: {Problem} Fix: {Fix} (appsettings key {Key} or environment variable {EnvironmentVariable}).";
+        => $"{Severity.ToString().ToUpperInvariant()} {Key}: {Problem} Fix: {Fix} (appsettings key {Key}, .conf key {ConfKey} or environment variable {EnvironmentVariable}).";
 }
 
 /// <summary>A pure check of a configuration (no I/O beyond the file system, no secrets in messages). Discovered by reflection per daemon.</summary>

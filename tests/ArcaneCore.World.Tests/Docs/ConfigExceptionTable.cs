@@ -12,8 +12,8 @@ using ArcaneCore.World.Social;
 
 namespace ArcaneCore.World.Tests.Docs;
 
-/// <summary>A configuration key that is read directly by name (not through an options class).</summary>
-internal sealed record AdHocKey(string Path, string TypeText, string Default, string Meaning);
+/// <summary>A configuration key that is read directly by name (not through an options class); <paramref name="Daemons"/> says which daemon reads it.</summary>
+internal sealed record AdHocKey(string Path, string TypeText, string Default, string Meaning, ConfigDaemon Daemons = ConfigDaemon.World);
 
 /// <summary>
 /// Everything about how configuration is bound that a walk over "options class with a SectionName constant" cannot see.
@@ -59,7 +59,7 @@ internal static class ConfigExceptionTable
     };
 
     /// <summary>Configuration sections of the host framework, not of ArcaneCore (the appsettings files carry them).</summary>
-    public static readonly IReadOnlyList<string> FrameworkSections = ["Logging", "HostOptions"];
+    public static readonly IReadOnlyList<string> FrameworkSections = ["Logging", "HostOptions", "hostBuilder"];
 
     /// <summary>Options types the host framework binds that the source scan may see.</summary>
     public static readonly IReadOnlySet<string> FrameworkTypes = new HashSet<string>(StringComparer.Ordinal) { "HostOptions" };
@@ -70,7 +70,11 @@ internal static class ConfigExceptionTable
         new("Spells:RequireSpellFocus", "bool", "true",
             "`false` stops enforcing `SpellInfo.RequiresSpellFocus` on casts (read once by `SpellFocusFeature`); `true` is the retail behaviour."),
         new("Startup:Strict", "bool", "false",
-            "`true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigValidation.Run`."),
+            "`true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigReport.Run` in both daemons.", ConfigDaemon.Both),
+        new("Crafting:Enabled", "bool", "true",
+            "`false` leaves crafting (reagent check, tool check and the CREATE_ITEM effect) and profession-specialization gossip unregistered (read once by `CraftingFeature`); unset or unparsable keeps crafting enabled, the retail behaviour."),
+        new("Forms:ResetFistAttackTimeOnFormLoss", "bool", "false",
+            "`true` gives a weapon-less hand the 2.0 s base attack time when a shapeshift form ends (read once by `FormStatFeature`); `false` keeps the retail 1.0 / 2.5 s of an unarmed hand."),
         new("Items:CharStartOutfitDbcPath", "string", "null",
             "Build-5875 CharStartOutfit.dbc: a new character's starting items by race, class and gender, then the SQL starting items "
             + "(read once by `ItemsFeature`). Unset keeps the SQL starting items only; a configured file that is unreadable or has another layout fails the item load (no silent fallback)."),

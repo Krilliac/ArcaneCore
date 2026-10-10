@@ -1,6 +1,7 @@
 namespace ArcaneCore.Kernel.Configuration;
 
 /// <summary>Configuration for the logon/realm daemon.</summary>
+[ConfigDaemons(ConfigDaemon.Realm)]
 public sealed class AuthOptions
 {
     public const string SectionName = "Auth";

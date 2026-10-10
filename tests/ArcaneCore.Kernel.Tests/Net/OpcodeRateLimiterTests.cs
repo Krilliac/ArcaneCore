@@ -67,7 +67,7 @@ public sealed class OpcodeRateLimiterTests
     [Fact]
     public void ARetailClientCadence_IsNeverLimitedByTheDefaults()
     {
-        var defaults = new Configuration.NetProtectionOptions();
+        var defaults = new ArcaneCore.Kernel.Configuration.NetProtectionOptions();
         var limiter = new OpcodeRateLimiter(defaults.WorldOpcodeBurst, defaults.WorldOpcodeRefillPerSecond, defaults.WorldPacketsPerSecond, defaults.WorldFloodPacketsPerSecond);
 
         // A login into a crowded city with an empty client cache: hundreds of creature queries in a few milliseconds,

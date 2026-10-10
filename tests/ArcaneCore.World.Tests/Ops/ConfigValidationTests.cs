@@ -193,7 +193,6 @@ public sealed class ConfigValidationTests
     [Theory]
     [InlineData("--World:Port=1")]
     [InlineData("World:Port=1")]
-    [InlineData("/x")]
     public void HostOptions_AreNotVerbs(string arg)
         => Assert.False(OpsCli.TryRun([arg], Config(), new StringWriter(), out _));
 }

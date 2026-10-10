@@ -23,7 +23,7 @@ public static class ExitCodes
     /// </summary>
     public const int InvalidConfiguration = 78;
 
-    /// <summary>Unknown operations verb or bad verb arguments (sysexits EX_USAGE). Never 2: that means restart.</summary>
+    /// <summary>Unknown verb or option, --help, or bad verb arguments (sysexits EX_USAGE); also write-config refusing to overwrite a file without --force. Never 2: that means restart.</summary>
     public const int Usage = 64;
 
     /// <summary>

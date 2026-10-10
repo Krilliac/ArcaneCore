@@ -6,6 +6,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// default. Every field is read again on each challenge, so an edited appsettings file (reloadOnChange) takes effect for the next
 /// connection without a restart.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Realm)]
 public sealed class AutoPatchOptions
 {
     public const string SectionName = "Auth:AutoPatch";

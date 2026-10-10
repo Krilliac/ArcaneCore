@@ -7,6 +7,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// the daemon starts (restart-only; it is not part of <c>.reload config</c>). No vmangos
 /// equivalent: vmangos has the per-frame "Slow world update" log only (WorldRunnable.cpp:60-74).
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Both)]
 public sealed class WatchdogOptions
 {
     public const string SectionName = "Ops:Watchdog";

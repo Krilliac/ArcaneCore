@@ -7,6 +7,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// Every key is restart-only; <c>.reload config</c> does not touch this section. ArcaneCore-specific: vmangos has no
 /// equivalent (a dead database there makes every query fail and log until the server is restarted).
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Both)]
 public sealed class ResilienceOptions
 {
     public const string SectionName = "Resilience";
