@@ -134,6 +134,7 @@ public sealed partial class NaxxramasInstance
     {
         StoreCreature(creature);
         OnLivingPoisonTriggerCreated(creature);
+        OnFaerlinaFollowerCreated(creature);
         // vmangos instance_naxxramas::OnCreatureCreate: a horseman created dead while the encounter is not done respawns, so the
         // four distinct deaths (counted in memory only, like vmangos m_horsemenDeathCounter) stay reachable after a restart or a
         // grid reload. Deferred to the next instance update: the creature is still being added to the map here.
@@ -190,6 +191,7 @@ public sealed partial class NaxxramasInstance
     {
         // mangos-classic naxxramas.cpp AreaTrigger_at_naxxramas: game masters and the dead trigger nothing.
         if (player.IsGameMaster || !player.IsAlive) return;
+        if (HandleFaerlinaIntroTrigger(triggerId)) return;
         // mangos-classic naxxramas.cpp instance_naxxramas::DoHandleAreaTrigger: Kel'Thuzad's trigger only sets the encounter
         // in progress; SetData starts the channel (KelThuzadAI.BeginPhaseOne). He enters combat in phase two, not here.
         if (triggerId == 4112 && GetData(KelThuzad) is EncounterState.NotStarted or EncounterState.Fail)
