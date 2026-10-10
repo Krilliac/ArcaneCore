@@ -226,6 +226,7 @@ table or catalog from the database).
 | `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
 | `spell_proc_item_enchant` (901) | yes, via all_spell (:972-981) | `spell_proc_item_enchant` (in `all` when its SQL store is registered; see below) | delivered |
 | `spell_enchant_charges` (no vmangos reload command) | - | `spell_enchant_charges`, an ArcaneCore addition (in `all` when its SQL store is registered; see below) | delivered |
+| `chat_word_filter` (no vmangos counterpart) | - | `chat_word_filter` (world schema 47), an ArcaneCore addition after AscEmu WordFilter.cpp: chat censor/block and name rules. In `all` only when `World:Chat:WordFilter` is on and its SQL store is registered | delivered |
 | `spell_area`, `spell_chain`, `spell_elixir`, `spell_learn_spell`, `spell_proc_event`, `spell_script_target`, `spell_target_position`, `spell_threats`, `spell_pet_auras` (891-906) | yes, via all_spell (:972-981) | none | owner lane (spell-modifier-engine, aura-engine-completeness, threat-and-aggro) |
 | `spell_mod` (898), `spell_group` (895), `spell_group_stack_rules` (896), `spell_disabled` (893) | no | none | owner lane (spell-modifier-engine, aura-engine-completeness) |
 | `*_scripts` (829, 832, 844, 846, 849, 881, 883, 903), `all_scripts` (804) | not in `all` (:946-967) | none | no store (DB scripts are not interpreted) |

@@ -32,7 +32,7 @@ public sealed class NameCatalogFeature(IServiceProvider services) : IWorldFeatur
         }
         if (string.IsNullOrWhiteSpace(options.NamesProfanityDbcPath) && string.IsNullOrWhiteSpace(options.NamesReservedDbcPath))
         {
-            Publish(new NameCatalog([], [], [], reservedExact));
+            Publish(WithWordFilter(new NameCatalog([], [], [], reservedExact)));
             InstallVeto(services);
             return;
         }
@@ -41,7 +41,7 @@ public sealed class NameCatalogFeature(IServiceProvider services) : IWorldFeatur
 
         NameCatalogSource profanitySource = NamesDbcReader.Read(options.NamesProfanityDbcPath, "NamesProfanity.dbc", out var profanity);
         NameCatalogSource reservedSource = NamesDbcReader.Read(options.NamesReservedDbcPath, "NamesReserved.dbc", out var reserved);
-        Publish(new NameCatalog(profanity, reserved, [profanitySource, reservedSource], reservedExact));
+        Publish(WithWordFilter(new NameCatalog(profanity, reserved, [profanitySource, reservedSource], reservedExact)));
         InstallVeto(services);
     }
 
@@ -53,11 +53,24 @@ public sealed class NameCatalogFeature(IServiceProvider services) : IWorldFeatur
         Publish(current.WithReservedExact(reservedExact));
     }
 
+    /// <summary>Publishes a complete replacement with new <c>chat_word_filter</c> name patterns, keeping every other rule.</summary>
+    public void ReplaceFilterPatterns(IReadOnlyList<System.Text.RegularExpressions.Regex> patterns)
+    {
+        ArgumentNullException.ThrowIfNull(patterns);
+        Publish(Catalog.WithFilterProfane(patterns));
+    }
+
     internal void RestoreCatalog(NameCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         Publish(catalog);
     }
+
+    // The chat feature attaches first (features attach by full type name); its name-scope rows join the startup catalog.
+    private NameCatalog WithWordFilter(NameCatalog catalog)
+        => services.GetService<Chat.ChatWordFilterFeature>() is { } filter && filter.Filter.NamePatterns.Length > 0
+            ? catalog.WithFilterProfane(filter.Filter.NamePatterns)
+            : catalog;
 
     private void Publish(NameCatalog catalog) => Interlocked.Exchange(ref _catalog, catalog);
 

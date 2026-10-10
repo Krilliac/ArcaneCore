@@ -84,6 +84,9 @@ public sealed class ReloadAllMembershipTests
         // all_spell calls HandleReloadSpellProcEventCommand (ServerCommands.cpp:976, proc-engine lane); it joins all only when its SQL store is
         // registered, which the test host has not.
         ["spell_proc_event"] = false,
+
+        // chat_word_filter (world schema 47) is an ArcaneCore table; it joins all only when World:Chat:WordFilter is on and a store is registered.
+        ["chat_word_filter"] = false,
     };
 
     /// <summary>
@@ -101,7 +104,7 @@ public sealed class ReloadAllMembershipTests
     };
 
     /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
-    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges" };
+    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter" };
 
     private static ReloadCoordinator Coordinator(WorldTestHost host) => host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator;
 
