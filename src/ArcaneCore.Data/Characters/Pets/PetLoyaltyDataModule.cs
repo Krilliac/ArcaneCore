@@ -11,7 +11,7 @@ namespace ArcaneCore.Data.Characters.Pets;
 public sealed class PetLoyaltyDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>Characters schema version (renumbered by the integrator when other characters steps merge first).</summary>
-    public const int Version = 51;
+    public const int Version = 52;
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 

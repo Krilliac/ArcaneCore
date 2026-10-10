@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Characters;
 public sealed class CharacterDrunkDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>Characters schema version (renumbered by the integrator when other characters steps merge first).</summary>
-    public const int Version = 50;
+    public const int Version = 51;
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
