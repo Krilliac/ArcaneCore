@@ -315,7 +315,7 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == type)
                 {
@@ -338,7 +338,7 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.ModPowerRegenPercent } && aura.MiscValue == (int)power)
                 {
@@ -373,7 +373,7 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == type)
                 {

@@ -61,7 +61,7 @@ public static class SelfResurrection
         uint spellId = 0;
         foreach (SpellAuraHolder holder in system.GetAuras(player))
         {
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not { Type: AuraType.Dummy })
                 {

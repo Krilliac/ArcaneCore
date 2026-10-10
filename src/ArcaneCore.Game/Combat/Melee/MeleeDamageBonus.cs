@@ -137,7 +137,7 @@ public static class MeleeDamageBonus
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not null && aura.Type == type && (mask is not { } m || ((uint)aura.MiscValue & m) != 0))
                 {
