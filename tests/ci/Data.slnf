@@ -1,0 +1,8 @@
+{
+  "solution": {
+    "path": "../../ArcaneCore.slnx",
+    "projects": [
+      "tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj"
+    ]
+  }
+}

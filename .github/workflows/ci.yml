@@ -20,19 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - suite: Game
-            projects: tests/ArcaneCore.Game.Tests/ArcaneCore.Game.Tests.csproj
-          - suite: World
-            projects: tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj
-          - suite: Data
-            projects: tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj
-          - suite: Rest
-            projects: >-
-              tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj
-              tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj
-              tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj
-              tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj
+        # Each suite's test projects are a solution filter of ArcaneCore.slnx (tests/ci/*.slnf). Together they cover every
+        # test project in the solution exactly once; ContributingGuideTests fails when a project is left out or doubled.
+        suite: [Game, World, Data, Rest]
 
     name: test (${{ matrix.suite }})
 
@@ -88,10 +78,7 @@ jobs:
       - name: Test
         # Projects within a job run serially: first-time EF fixture startup has a bounded
         # deadline and must not compete with the crypto suite and provider matrix.
-        run: |
-          for p in ${{ matrix.projects }}; do
-            dotnet test "$p" -c Release --no-build -m:1 --verbosity normal
-          done
+        run: dotnet test tests/ci/${{ matrix.suite }}.slnf -c Release --no-build -m:1 --verbosity normal
 
       - name: Native mock-client scenario
         if: matrix.suite == 'Rest'
