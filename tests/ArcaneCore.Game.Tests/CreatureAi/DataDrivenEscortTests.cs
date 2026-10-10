@@ -803,6 +803,36 @@ public sealed class DataDrivenEscortTests
         }
     }
 
+    [Theory]
+    [InlineData("guard_stormwind", true)]
+    [InlineData("guard_orgrimmar", true)]
+    [InlineData("guard_ironforge", false)]
+    public void CityGuards_RunTheirScriptName(string scriptName, bool city)
+    {
+        CreatureContent content = new([Template(68) with { ScriptName = scriptName }], [Spawn(1, 68, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            AddPlayer(world, 1, 2, 0);
+            Creature guard = Assert.Single(system.Creatures);
+            Assert.IsAssignableFrom<GuardAI>(guard.AI);
+            Assert.Equal(city, guard.AI is ArcaneCore.Game.Creatures.Scripts.CityGuardAI);
+        }
+    }
+
+    [Theory]
+    [InlineData(58u, 2u)]
+    [InlineData(101u, 3u)]
+    [InlineData(78u, 66u)]
+    [InlineData(84u, 23u)]
+    [InlineData(77u, 25u)]
+    [InlineData(22u, 25u)]
+    [InlineData(7u, 0u)]
+    public void CityGuards_ReplyToTextEmotes(uint textEmote, uint emote)
+    {
+        Assert.Equal(emote, ArcaneCore.Game.Creatures.Scripts.CityGuardAI.ReplyTo(textEmote));
+    }
+
     [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {

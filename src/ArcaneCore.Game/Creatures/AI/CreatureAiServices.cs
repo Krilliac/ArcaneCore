@@ -186,6 +186,19 @@ public sealed class CreatureAiFactory
             UsesGuardSightRules = (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0, // vmangos GuardEventAI::Permissible
         },
         [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
+        ["guard_stormwind"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Alliance, stormwind: true),
+        ["guard_bluffwatcher"] = static (c, _) => new GuardAI(c),
+        ["guard_contested"] = static (c, _) => new GuardAI(c),
+        ["guard_darnassus"] = static (c, _) => new GuardAI(c),
+        ["guard_dunmorogh"] = static (c, _) => new GuardAI(c),
+        ["guard_durotar"] = static (c, _) => new GuardAI(c),
+        ["guard_elwynnforest"] = static (c, _) => new GuardAI(c),
+        ["guard_ironforge"] = static (c, _) => new GuardAI(c),
+        ["guard_mulgore"] = static (c, _) => new GuardAI(c),
+        ["guard_teldrassil"] = static (c, _) => new GuardAI(c),
+        ["guard_tirisfal"] = static (c, _) => new GuardAI(c),
+        ["guard_undercity"] = static (c, _) => new GuardAI(c),
+        ["guard_orgrimmar"] = static (c, _) => new Scripts.CityGuardAI(c, Team.Horde, stormwind: false),
     };
 
     /// <summary>
