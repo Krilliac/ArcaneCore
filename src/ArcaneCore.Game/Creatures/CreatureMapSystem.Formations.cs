@@ -100,7 +100,10 @@ public sealed partial class CreatureMapSystem
                 if (!ReferenceEquals(formation.MovingLeader, member))
                 {
                     formation.MovingLeader = member;
-                    member.Motion.Initialize(LeaderMovement(formation, member), this, start: true);
+                    if (!formation.IsDynamic) // a scripted formation leaves the leader's movement to the script (TrySetNewMaster)
+                    {
+                        member.Motion.Initialize(LeaderMovement(formation, member), this, start: true);
+                    }
                 }
             }
             else if (member.Motion.Default is not FormationMovementGenerator current || !ReferenceEquals(current.Slot, slot))

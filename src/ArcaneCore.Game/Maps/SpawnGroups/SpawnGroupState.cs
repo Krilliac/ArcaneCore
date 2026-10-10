@@ -56,6 +56,12 @@ internal sealed class SpawnGroupState
     private readonly SpawnGroupRandomEntry[] _equallyChanced;
     private readonly SpawnGroupRandomEntry[] _explicitlyChanced;
 
+    // Spawn's scratch (wave 17 allocation leftover: it built these anew on every call).
+    private readonly List<SpawnGroupMember> _eligible = [];
+    private readonly Dictionary<uint, uint> _valid = [];
+    private readonly SortedDictionary<uint, uint> _minimum = [];
+    private SpawnGroupRandomEntry[]? _order;
+
     /// <param name="definition">The group as loaded.</param>
     /// <param name="members">The members that are spawns of this map (cmangos drops a guid without spawn data).</param>
     /// <param name="randomEntries">The group entries that have a template (cmangos drops the others at load).</param>
@@ -180,20 +186,36 @@ internal sealed class SpawnGroupState
             return []; // the per-update cost of a group waiting for respawn times: one pass, no allocation
         }
 
-        var eligible = new List<SpawnGroupMember>(Members.Count);
-        if (ChoosesEntriesOnce && _chosenEntries.Count == MaxCount)
+        return Choose(host, random, ignoreRespawnTime);
+    }
+
+    /// <summary>
+    /// The body of <see cref="Spawn"/> once a member can come back. It works in the group's scratch collections (cleared on entry; world
+    /// thread only, never re-entered), so a group spawning members does not build new lists and dictionaries each time; only a non-empty
+    /// result is allocated, and the caller keeps it.
+    /// </summary>
+    private IReadOnlyList<(uint Guid, uint Entry)> Choose(ISpawnGroupHost host, Random random, bool ignoreRespawnTime)
+    {
+        List<SpawnGroupMember> eligible = _eligible;
+        Dictionary<uint, uint> valid = _valid;
+        SortedDictionary<uint, uint> minimum = _minimum;
+        eligible.Clear();
+        valid.Clear();
+        minimum.Clear();
+        bool reuseOnly = ChoosesEntriesOnce && _chosenEntries.Count == MaxCount; // once picked, only reuse
+        for (int i = 0; i < Members.Count; i++)
         {
-            eligible.AddRange(Members.Where(m => _chosenEntries.ContainsKey(m.Guid))); // once picked, only reuse
-        }
-        else
-        {
-            eligible.AddRange(Members);
+            // The members already in the world are left out here (cmangos erases them from the eligible list).
+            SpawnGroupMember member = Members[i];
+            if ((!reuseOnly || _chosenEntries.ContainsKey(member.Guid)) && !_objects.ContainsKey(member.Guid))
+            {
+                eligible.Add(member);
+            }
         }
 
-        var valid = new Dictionary<uint, uint>();
-        var minimum = new SortedDictionary<uint, uint>();
-        foreach (SpawnGroupRandomEntry entry in RandomEntries)
+        for (int i = 0; i < RandomEntries.Count; i++)
         {
+            SpawnGroupRandomEntry entry = RandomEntries[i];
             valid[entry.Entry] = entry.MaxCount > 0 ? entry.MaxCount : uint.MaxValue;
             if (entry.MinCount > 0)
             {
@@ -201,9 +223,8 @@ internal sealed class SpawnGroupState
             }
         }
 
-        foreach ((uint guid, uint entry) in _objects)
+        foreach ((uint _, uint entry) in _objects)
         {
-            eligible.RemoveAll(m => m.Guid == guid);
             if (valid.Count > 0)
             {
                 valid[entry] = valid.GetValueOrDefault(entry) is > 0 and var count ? count - 1 : 0;
@@ -271,20 +292,26 @@ internal sealed class SpawnGroupState
         if (ChoosesEntriesOnce)
         {
             // Static and self-contained random entries first, so the group entries are shared out among the rest (SpawnGroup.cpp:369-390).
-            foreach (SpawnGroupMember member in eligible.Where(m => host.HasSpawnEntries(m.Guid) || host.OwnEntry(m.Guid) != 0))
+            for (int pass = 0; pass < 2; pass++)
             {
-                Choose(member.Guid);
-            }
-
-            foreach (SpawnGroupMember member in eligible.Where(m => !host.HasSpawnEntries(m.Guid) && host.OwnEntry(m.Guid) == 0))
-            {
-                Choose(member.Guid);
+                for (int i = 0; i < eligible.Count; i++)
+                {
+                    uint guid = eligible[i].Guid;
+                    bool own = host.HasSpawnEntries(guid) || host.OwnEntry(guid) != 0;
+                    if (own == (pass == 0))
+                    {
+                        uint chosen = PickEntry(host, guid, random);
+                        _chosenEntries[guid] = chosen;
+                        Erase(chosen);
+                    }
+                }
             }
         }
 
-        var spawned = new List<(uint Guid, uint Entry)>(eligible.Count);
-        foreach (SpawnGroupMember member in eligible)
+        List<(uint Guid, uint Entry)>? spawned = null;
+        for (int i = 0; i < eligible.Count; i++)
         {
+            SpawnGroupMember member = eligible[i];
             uint entry;
             if (ChoosesEntriesOnce)
             {
@@ -292,7 +319,7 @@ internal sealed class SpawnGroupState
             }
             else
             {
-                entry = PickEntry(member.Guid);
+                entry = PickEntry(host, member.Guid, random);
                 Erase(entry);
             }
 
@@ -302,43 +329,37 @@ internal sealed class SpawnGroupState
             }
 
             _objects[member.Guid] = entry;
-            spawned.Add((member.Guid, entry));
+            (spawned ??= new List<(uint Guid, uint Entry)>(eligible.Count)).Add((member.Guid, entry));
         }
 
-        return spawned;
+        eligible.Clear(); // hold no members between updates
+        return spawned is null ? [] : spawned;
+    }
 
-        void Choose(uint guid)
+    private uint PickEntry(ISpawnGroupHost host, uint guid, Random random)
+    {
+        if (host.HasSpawnEntries(guid))
         {
-            uint chosen = PickEntry(guid);
-            _chosenEntries[guid] = chosen;
-            Erase(chosen);
+            return host.RandomSpawnEntry(guid);
         }
 
-        uint PickEntry(uint guid)
+        uint own = host.OwnEntry(guid);
+        return own != 0 ? own : EligibleEntry(_valid, _minimum, random);
+    }
+
+    private void Erase(uint entry)
+    {
+        if (entry == 0)
         {
-            if (host.HasSpawnEntries(guid))
-            {
-                return host.RandomSpawnEntry(guid);
-            }
-
-            uint own = host.OwnEntry(guid);
-            return own != 0 ? own : EligibleEntry(valid, minimum, random);
+            return;
         }
 
-        void Erase(uint entry)
+        if (_valid.TryGetValue(entry, out uint count) && count > 0)
         {
-            if (entry == 0)
-            {
-                return;
-            }
-
-            if (valid.TryGetValue(entry, out uint count) && count > 0)
-            {
-                valid[entry] = count - 1;
-            }
-
-            Consume(minimum, entry);
+            _valid[entry] = count - 1;
         }
+
+        Consume(_minimum, entry);
     }
 
     /// <summary>
@@ -348,8 +369,9 @@ internal sealed class SpawnGroupState
     private bool AnyMemberReady(ISpawnGroupHost host)
     {
         bool ready = false;
-        foreach (SpawnGroupMember member in Members)
+        for (int i = 0; i < Members.Count; i++) // indexed: a foreach over the IReadOnlyList boxes its enumerator on every update
         {
+            SpawnGroupMember member = Members[i];
             if (_objects.ContainsKey(member.Guid))
             {
                 continue;
@@ -403,7 +425,8 @@ internal sealed class SpawnGroupState
             return 0;
         }
 
-        SpawnGroupRandomEntry[] order = [.. _equallyChanced];
+        SpawnGroupRandomEntry[] order = _order ??= new SpawnGroupRandomEntry[_equallyChanced.Length];
+        Array.Copy(_equallyChanced, order, order.Length);
         Shuffle(order, random);
         foreach (SpawnGroupRandomEntry entry in order)
         {

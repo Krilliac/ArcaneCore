@@ -84,6 +84,48 @@ public sealed class SpawnGroupStateTests
     }
 
     [Fact]
+    public void Spawn_OfAFullOrWaitingGroup_AllocatesNothing_AndARespawnOnlyItsResult()
+    {
+        // SpawnGroupState.Spawn runs for every group of a map every update (wave 17 allocation leftover: it captured its arguments in a
+        // closure on every call, and rebuilt its eligible list and entry dictionaries for each respawn).
+        SpawnGroupState group = State(MustyTome);
+        var host = new Host();
+        var random = new Random(5);
+        group.Spawn(host, random);
+        uint real = group.Objects.Single(o => o.Value == RealTome).Key;
+        group.Remove(real, host);
+        Assert.Single(group.Spawn(host, random)); // warm the scratch collections
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int returned = 0;
+        for (int i = 0; i < 1000; i++)
+        {
+            returned += group.Spawn(host, random).Count; // full (counted, not asserted per call: Assert.Empty boxes an enumerator)
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, returned);
+
+        group.Remove(real, host);
+        host.Pending.Add(real); // waiting for its respawn time
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++)
+        {
+            returned += group.Spawn(host, random).Count;
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, returned);
+
+        host.Pending.Clear();
+        before = GC.GetAllocatedBytesForCurrentThread();
+        IReadOnlyList<(uint Guid, uint Entry)> back = group.Spawn(host, random);
+        long respawn = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal((real, RealTome), Assert.Single(back));
+        Assert.True(respawn <= 128, $"a respawn allocates only the list it returns ({respawn} B)");
+    }
+
+    [Fact]
     public void MustyTome_TheRealTomeMovesWhenItsSpotIsTaken_AndNeverDoubles()
     {
         SpawnGroupState group = State(MustyTome);

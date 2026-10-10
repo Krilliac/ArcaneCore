@@ -784,6 +784,9 @@ public sealed partial class CreatureMapSystem
                 RelaySetGossipMenu(step, target);
                 return false;
 
+            case 51: // SCRIPT_COMMAND_SPAWN_GROUP (the formation subcommands; CreatureMapSystem.RelayFormation.cs).
+                return RelaySpawnGroup(step, source, target);
+
             default:
                 ReportRelay(step, $"command {step.Command}");
                 return false;

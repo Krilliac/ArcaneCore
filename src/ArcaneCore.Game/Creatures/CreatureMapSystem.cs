@@ -64,6 +64,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     private long _clockMs;
     private uint _splineCounter;
+
+    /// <summary>MoveTo's one-point path: read by StartSpline and the packet builder and not kept (a one-point spline stores no Path).</summary>
+    private readonly Vector3[] _onePoint = new Vector3[1];
     private uint _nextTemporaryCounter;
 
     public CreatureMapSystem(
@@ -205,7 +208,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     /// <summary>Launch a spline from the creature's current position and tell its observers.</summary>
     public void MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
-        => MovePath(creature, [new Vector3(x, y, z)], run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None);
+    {
+        _onePoint[0] = new Vector3(x, y, z); // no list per move (wave 17 allocation leftover)
+        MovePath(creature, _onePoint, run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None);
+    }
 
     /// <summary>
     /// Launch a linear spline through <paramref name="path"/> (every point after the current
@@ -223,7 +229,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         uint id = ++_splineCounter;
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         CreatureSpline spline = creature.StartSpline(path, run, facing, id, _clockMs);
-        byte[] packet = CreatureMovePackets.BuildPath(creature.Guid, start, id, facing, run, spline.DurationMs, spline.Points, _options.Movement.MonsterMoveOffsetBase);
+        byte[] packet = CreatureMovePackets.BuildPath(creature.Guid, start, id, facing, run, spline.DurationMs, path, _options.Movement.MonsterMoveOffsetBase); // path == spline.Points, without its one-point list
         SyncWalkMode(creature, run);
         Map.BroadcastToObservers(creature, WorldOpcode.SmsgMonsterMove, packet);
     }
