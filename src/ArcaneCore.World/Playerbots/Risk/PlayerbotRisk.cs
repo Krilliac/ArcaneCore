@@ -32,6 +32,16 @@ internal sealed class PlayerbotRisk
     /// <summary>The longest wait to recover (out of combat) after a retreat or before a pull.</summary>
     internal const uint MaxWaitMs = 90_000;
 
+    /// <summary>
+    /// A wait in which neither health nor mana rose for this long recovers nothing (ten of vmangos' two-second regeneration ticks,
+    /// Player::RegenerateAll): it ends, and no new wait begins for <see cref="MaxWaitMs"/> unless health or mana rises meanwhile. Under
+    /// resurrection sickness (spell 15007, every stat -75%) a warrior, rogue, hunter or shaman regenerates no health at all out of
+    /// combat (GetRegenHPPerSpirit goes below zero), and a wait for <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> could only
+    /// run out; the next pull verdict began it again, and the bot stood with goal Rest until the stall watch reported it (live
+    /// 2026-10-10: Wfbotcx at the Darkshire graveyard after a spirit-healer revive at level 14).
+    /// </summary>
+    internal const uint FruitlessWaitMs = 20_000;
+
     /// <summary>Non-objectives at most this many levels above the bot are weighed at all (a red creature is not).</summary>
     internal const int MaxLevelsAbove = 3;
 
@@ -41,6 +51,12 @@ internal sealed class PlayerbotRisk
     private readonly PlayerbotCombatSpells _spells;
     private readonly Dictionary<(ObjectGuid Creature, bool Quest), (PlayerbotEngagement Verdict, uint UntilMs)> _verdicts = [];
     private uint _waitUntilMs;
+    private uint _waitGainMs;
+    private ulong _waitHealth;
+    private ulong _waitMana;
+    private uint _noWaitUntilMs;
+    private ulong _fruitlessHealth;
+    private ulong _fruitlessMana;
     private bool _cornered;
     private (ObjectGuid Guid, uint Entry)[] _fledFrom = [];
     private (uint MapId, Vector3 Where) _fledAt;
@@ -193,22 +209,54 @@ internal sealed class PlayerbotRisk
         }
 
         LastEngagement = rest ?? first ?? LastEngagement;
-        if (rest is not null) BeginWait();
+        if (rest is not null) BeginWait(player);
         return null;
     }
 
-    /// <summary>Start waiting to recover (at most <see cref="MaxWaitMs"/>).</summary>
-    internal void BeginWait() => _waitUntilMs = Math.Max(1u, unchecked(_session.World.NowMs + MaxWaitMs));
+    /// <summary>
+    /// Start waiting to recover (at most <see cref="MaxWaitMs"/>), unless the last wait recovered nothing (<see cref="FruitlessWaitMs"/>)
+    /// less than <see cref="MaxWaitMs"/> ago and health and mana have not risen since. A wait already running goes on.
+    /// </summary>
+    internal void BeginWait(Player player)
+    {
+        if (_waitUntilMs != 0) return;
+        uint now = _session.World.NowMs;
+        (ulong health, ulong mana) = Vitals(player);
+        if (unchecked((int)(_noWaitUntilMs - now)) > 0 && health <= _fruitlessHealth && mana <= _fruitlessMana) return;
+        _noWaitUntilMs = now;
+        _waitUntilMs = Math.Max(1u, unchecked(now + MaxWaitMs));
+        _waitGainMs = now;
+        (_waitHealth, _waitMana) = (health, mana);
+    }
 
-    /// <summary>Still waiting: below the recovery threshold and within the wait. False ends the wait.</summary>
+    /// <summary>
+    /// Still waiting: below the recovery threshold, within the wait, and health or mana rose within <see cref="FruitlessWaitMs"/>.
+    /// False ends the wait.
+    /// </summary>
     internal bool KeepWaiting(Player player)
     {
         if (_waitUntilMs == 0) return false;
-        bool timeLeft = unchecked((int)(_waitUntilMs - _session.World.NowMs)) > 0;
-        if (Enabled && timeLeft && !Recovered(player)) return true;
+        uint now = _session.World.NowMs;
+        bool timeLeft = unchecked((int)(_waitUntilMs - now)) > 0;
+        (ulong health, ulong mana) = Vitals(player);
+        if (health > _waitHealth || mana > _waitMana) _waitGainMs = now;
+        (_waitHealth, _waitMana) = (Math.Max(health, _waitHealth), Math.Max(mana, _waitMana));
+        bool recovered = Recovered(player);
+        bool fruitless = unchecked(now - _waitGainMs) >= FruitlessWaitMs;
+        if (Enabled && timeLeft && !recovered && !fruitless) return true;
+        if (fruitless && !recovered)
+        {
+            _noWaitUntilMs = unchecked(now + MaxWaitMs);
+            (_fruitlessHealth, _fruitlessMana) = (health, mana);
+        }
+
         _waitUntilMs = 0;
         return false;
     }
+
+    /// <summary>Health and mana now (mana 0 for a bot without it).</summary>
+    private static (ulong Health, ulong Mana) Vitals(Player player)
+        => (player.Health, player.PowerType == PowerType.Mana ? SpellSystem.GetPower(player, PowerType.Mana) : 0UL);
 
     /// <summary>Health and mana at or above <see cref="PlayerbotRiskOptions.RecoverHealthPct"/>.</summary>
     internal bool Recovered(Player player)
@@ -502,7 +550,7 @@ internal sealed class PlayerbotRisk
             Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
         }
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
-        if (Retreat.Outcome == "safe") BeginWait();
+        if (Retreat.Outcome == "safe") BeginWait(player);
         else if (Retreat.Outcome == "cornered") _cornered = true;
         return false;
     }

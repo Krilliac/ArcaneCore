@@ -443,7 +443,9 @@ public sealed class PlayerbotRecoveryDecisionTests
     /// A body that was never released (no ghost) and whose recovery counts as stalled faults with <see cref="PlayerbotRecovery.Stalled"/>
     /// (<see cref="Step.Fault"/>); the spirit-healer fallback is for ghosts only. Here the bot walked as a ghost and lost the ghost
     /// flag, so the stuck bound of the walk (<see cref="PlayerbotRecovery.StuckMs"/>) runs out well before the release bound
-    /// (<see cref="PlayerbotRecovery.NoProgressMs"/>). Before, the Fault step fell through to the spirit-healer fallback.
+    /// (<see cref="PlayerbotRecovery.NoProgressMs"/>). Before, the Fault step fell through to the spirit-healer fallback. The walk is
+    /// thought for more than <see cref="PlayerbotRecovery.MinBoundThinks"/> times without closing (the motion is not pumped, so the
+    /// ghost does not move): a bound is judged on attempts, not on world time alone.
     /// </summary>
     [Fact]
     public async Task AStalledBodyThatIsNoGhost_FaultsStalled_AndNeverTakesTheSpiritHealer()
@@ -456,11 +458,19 @@ public sealed class PlayerbotRecoveryDecisionTests
         {
             Corpse corpse = host.Player.Combat.Corpse!;
             corpse.SetPosition(host.Player.X + 60, host.Player.Y, host.Player.Z, 0);
-            host.Session.ManagedBudget = new ManagedActionBudget(4);
-            Assert.True(recovery.Update(host.Player, 500));
-            Assert.Equal(Step.WalkToCorpse, recovery.LastStep);
-            PlayerbotMovementControl.Stop(host.Session, host.Player);
         });
+        for (int think = 0; think <= PlayerbotRecovery.MinBoundThinks; think++)
+        {
+            await host.OnWorldAsync(() =>
+            {
+                host.Session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(host.Player, 500);
+                Assert.Equal(Step.WalkToCorpse, recovery.LastStep);
+                PlayerbotMovementControl.Stop(host.Session, host.Player);
+            });
+            await host.AdvanceAsync(500);
+        }
+
         await host.AdvanceAsync((uint)PlayerbotRecovery.StuckMs + 1_000);
 
         InvalidOperationException fault = await host.OnWorldAsync(() =>

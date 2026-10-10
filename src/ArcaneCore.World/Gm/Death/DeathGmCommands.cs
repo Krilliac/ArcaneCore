@@ -59,15 +59,21 @@ public sealed class DeathGmCommands : ICommandGroup
             return true;
         }
 
-        if (target.Map is { } map)
-        {
-            // vmangos revives whoever is selected, an alive player included (health then goes to half).
-            map.Combat.ResurrectPlayer(target, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
-            map.Combat.SpawnCorpseBones(target);
-        }
-
+        ReviveInPlace(target);
         context.Reply(Revived(GmStrings.PlayerLink(target.Name)));
         return true;
+    }
+
+    /// <summary>
+    /// The effect of <c>.revive</c> (also <c>.playerbot revive</c>): resurrect in place at the corpse-reclaim health, no sickness, and
+    /// turn the corpse into bones. vmangos revives whoever is selected, an alive player included (health then goes to half).
+    /// World thread; a player in no map is left alone.
+    /// </summary>
+    internal static void ReviveInPlace(Player target)
+    {
+        if (target.Map is not { } map) return;
+        map.Combat.ResurrectPlayer(target, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        map.Combat.SpawnCorpseBones(target);
     }
 
     private static bool GoCorpse(CommandContext context, string text)

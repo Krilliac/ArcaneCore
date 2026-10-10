@@ -84,6 +84,7 @@ How to read the tables:
 - [`World:HotCode`](#worldhotcode)
 - [`World:Instances`](#worldinstances)
 - [`World:Playerbots`](#worldplayerbots)
+- [`World:Playerbots:Qa`](#worldplayerbotsqa)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
 - [`World:Stealth`](#worldstealth)
@@ -1163,6 +1164,7 @@ How to read the tables:
 | `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |
 | `World:Playerbots:MaxActionsPerTick` | `int` | `4` | - | The most managed client actions all bots may send in one world tick (1..64). |
 | `World:Playerbots:MaxBots` | `int` | `8` | live | The most managed bots running at once (0..1000, `MaxBotsCeiling`). Only running bots take a slot: a stopped, faulted or quarantined bot does not, and a start beyond the cap is refused with "playerbot-capacity" (a quarantine retry or startup restore that finds no slot waits for one). Live through `.reload config`: raising it lets more bots start at once; lowering it below the running count stops nobody, it only refuses new starts until enough bots are stopped. |
+| `World:Playerbots:MaxBulkCommand` | `int` | `50` | live | The most bots one bulk command (`.playerbot summon\|send\|start\|stop ... all` or a prefix) moves or starts without `force` (1..`MaxBotsCeiling`). A selection larger than this, with no smaller count, is refused. Live through `.reload config`. |
 | `World:Playerbots:MaxFaults` | `int` | `3` | - | The faults within `FaultWindowSeconds` that disable a bot for good (DesiredEnabled off; 1..100). |
 | `World:Playerbots:MaxPathPoints` | `int` | `128` | - | The most points of one bot route (1..4096). |
 | `World:Playerbots:MaxRegisteredBots` | `int` | `1000` | live | The most managed bots registered (running or not; 0..10000, `MaxRegisteredBotsCeiling`): `.playerbot create` is refused with "playerbot-registry-full" beyond it. Each one is a real account and character. Live through `.reload config`. |
@@ -1188,6 +1190,33 @@ How to read the tables:
 | `World:Playerbots:Scenarios:StepTimeoutSeconds` | `int` | `20` | - | Default bound of one WaitUntil step in seconds (1..300). |
 | `World:Playerbots:StallSeconds` | `int` | `120` | - | Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400). |
 | `World:Playerbots:ThinkIntervalMs` | `int` | `500` | - | Milliseconds between two decisions of a bot (50..60000). |
+
+## `World:Playerbots:Qa`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Playerbots:Qa:Directory` | `string` | `"qa"` | - | The folder of the findings file, the exports (`report.md`, `report.json`) and the dry-run issues (`pending-issues/`): relative to the profile folder, or absolute. |
+| `World:Playerbots:Qa:Enabled` | `bool` | `true` | - | Aggregate the bot stall, death-loop, fault and missing-data warnings into findings (on by default; it is cheap and never touches the world thread). |
+| `World:Playerbots:Qa:ExportIntervalSeconds` | `int` | `300` | - | Seconds between two passes that save the findings, write the exports and publish (10..86400). |
+| `World:Playerbots:Qa:GitHub:CommentIntervalHours` | `int` | `24` | - | At most one comment per finding in this many hours (1..720). |
+| `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
+| `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
+| `World:Playerbots:Qa:GitHub:GhPath` | `string` | `"gh"` | - | The `gh` executable for `Transport` = `GhCli`: a file name looked up on PATH (`gh`) or a full path (1..260 characters). |
+| `World:Playerbots:Qa:GitHub:Labels` | `string[]` | `["bot-qa"]` | - | The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default). |
+| `World:Playerbots:Qa:GitHub:MaxCommentsPerHour` | `int` | `10` | - | The most comments added per rolling hour (0..1000; 0 adds none). |
+| `World:Playerbots:Qa:GitHub:MaxIssuesPerHour` | `int` | `5` | - | The most issues created per rolling hour (0..1000; 0 creates none); the rest stay pending. |
+| `World:Playerbots:Qa:GitHub:MaxListPages` | `int` | `10` | - | The most 100-issue pages read when looking for an existing issue (1..100). |
+| `World:Playerbots:Qa:GitHub:MinDistinctBots` | `int` | `2` | - | A finding caused by bots is reported once this many different bots met it (1..10000); data findings of creature scripts are exempt. |
+| `World:Playerbots:Qa:GitHub:MinOccurrences` | `int` | `3` | - | A finding is reported once it was seen this many times (1..1000000). |
+| `World:Playerbots:Qa:GitHub:Publish` | `bool` | `false` | - | Really create issues and comments (off by default = dry run: the would-be issues are written to `qa/pending-issues/` and logged, nothing is sent). |
+| `World:Playerbots:Qa:GitHub:ReopenClosed` | `bool` | `false` | - | Reopen a finding's issue when it was closed and the finding keeps happening (off by default: a closed issue is recorded as known and left alone). |
+| `World:Playerbots:Qa:GitHub:Repository` | `string` | `""` | - | The repository, `owner/repo` (required while enabled). |
+| `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
+| `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |
+| `World:Playerbots:Qa:GitHub:Transport` | `PlayerbotQaGitHubTransport` | `Rest` | - | How issues are read and written: `Rest` (default; the GitHub REST API with the token from `TokenEnvironmentVariable`) or `GhCli` (runs the `gh` tool with an argument list and no shell, using the login of the user the server runs as; the token variable is not needed). Values: `Rest`, `GhCli`. |
+| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped. |
+| `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
+| `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 
 ## `World:Social`
 

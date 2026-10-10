@@ -499,6 +499,7 @@ public sealed class ConfigReloadTests : IDisposable
         // (the rest are read once at start; the chat provider list is one key).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxBots)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxRegisteredBots)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxBulkCommand)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
