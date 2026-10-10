@@ -148,16 +148,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         UnitCombat combat = creature.Combat;
         bool noThreatList = (creature.Template.Behaviour & CreatureBehaviourFlags.NoThreatList) != 0;
 
-        Unit? target = combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u));
-        if (target is null && combat.HasThreatList)
-        {
-            target = combat.Threat.SelectVictim(
-                u => IsValidHostileTarget(creature, u),
-                u => MapCombat.CanReachWithMeleeAutoAttack(creature, u),
-                u => IsOutOfThreatArea(creature, u),
-                static u => (u.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) != 0);
-        }
-
+        // Most creatures of a map have neither a taunter nor a threat list: they skip the lambdas (and their closure) every update.
+        Unit? target = combat.Threat.HasTauntCasters || combat.HasThreatList ? PickHostileTarget(creature, combat) : null;
         if (target is null && noThreatList)
         {
             target = combat.Victim;
@@ -201,6 +193,22 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
         EnterEvadeMode(creature);
         return false;
+    }
+
+    /// <summary>The taunter (vmangos Unit::GetTauntTarget), else the threat list's pick (ThreatContainer::selectNextVictim).</summary>
+    private Unit? PickHostileTarget(Creature creature, UnitCombat combat)
+    {
+        Unit? target = combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u));
+        if (target is null && combat.HasThreatList)
+        {
+            target = combat.Threat.SelectVictim(
+                u => IsValidHostileTarget(creature, u),
+                u => MapCombat.CanReachWithMeleeAutoAttack(creature, u),
+                u => IsOutOfThreatArea(creature, u),
+                static u => (u.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) != 0);
+        }
+
+        return target;
     }
 
     /// <summary>
