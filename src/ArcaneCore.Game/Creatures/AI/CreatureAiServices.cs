@@ -144,6 +144,12 @@ public interface ICreatureSpellCaster
     /// </summary>
     CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent) => CreatureCastResult.NoSpellSystem;
 
+    /// <summary>
+    /// <see cref="AddAura(Unit, uint, bool)"/> with <paramref name="caster"/> as the aura's caster (vmangos Unit::AddAura's pCaster; the
+    /// cmangos <c>victim-&gt;CastSpell(victim, spell, TRIGGERED, nullptr, nullptr, originalCaster)</c> credit).
+    /// </summary>
+    CreatureCastResult AddAuraFrom(Unit unit, uint spellId, Unit caster) => CreatureCastResult.NoSpellSystem;
+
     /// <summary>Stop the cast or channel in progress (evade, death).</summary>
     void Interrupt(Creature caster);
 

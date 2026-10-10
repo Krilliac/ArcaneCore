@@ -70,6 +70,19 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         return spells.AddAura(unit, spellId, permanent) ? CreatureCastResult.Ok : CreatureCastResult.Failed;
     }
 
+    public CreatureCastResult AddAuraFrom(Unit unit, uint spellId, Unit caster)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is null)
+        {
+            return CreatureCastResult.UnknownSpell;
+        }
+
+        return spells.AddAura(unit, spellId, permanent: false, caster) ? CreatureCastResult.Ok : CreatureCastResult.Failed;
+    }
+
     public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered)
     {
         ArgumentNullException.ThrowIfNull(caster);
