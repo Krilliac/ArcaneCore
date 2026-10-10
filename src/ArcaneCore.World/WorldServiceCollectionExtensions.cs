@@ -9,6 +9,7 @@ using ArcaneCore.World.HotCode;
 using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -52,6 +53,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         services.Configure<Playerbots.PlayerbotOptions>(options => Playerbots.PlayerbotOptions.ApplyConfiguration(options, configuration));
         services.AddSingleton<Playerbots.IPlayerbotService>(sp => sp.GetRequiredService<Playerbots.ManagedPlayerbotFeature>());
+        services.AddPlayerbotQa(configuration); // bot QA: findings from the bots' warnings (docs/areas/playbots-qa.md)
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(sp => ChatCommands.CreateTable(configuration, sp));

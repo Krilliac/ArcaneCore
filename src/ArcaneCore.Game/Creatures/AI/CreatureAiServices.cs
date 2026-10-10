@@ -289,6 +289,14 @@ public sealed class CreatureAiFactory
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
 
+    /// <summary>
+    /// Whether the host can run the script a template names: a registered named AI for <paramref name="scriptName"/>, or an entry script for
+    /// <paramref name="entry"/> (the two lookups <see cref="Create(Creature, CreatureContent, out bool)"/> makes first). Read-only; the registries
+    /// are filled at start-up and read afterwards.
+    /// </summary>
+    public bool HasScript(uint entry, string scriptName)
+        => (!string.IsNullOrEmpty(scriptName) && _factories.ContainsKey(scriptName)) || _entryScripts.ContainsKey(entry);
+
     /// <summary>The exploration/event quests the entry scripts complete (what lets the quest service offer them).</summary>
     public IReadOnlyCollection<uint> ScriptedEventQuests => _entryScriptQuests;
 
