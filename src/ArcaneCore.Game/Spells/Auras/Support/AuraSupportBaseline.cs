@@ -129,7 +129,7 @@ public static partial class AuraSupport
         new(AuraType.ModHealingPct, AuraSupportLevel.Referenced, "HandleNoImmediateEffect", 183, "DirectCombatEffects.cs, SpellBonusModule.cs", ""),
         new(AuraType.SharePetTracking, AuraSupportLevel.Unsupported, "HandleUnused", 184, "", ""),
         new(AuraType.Untrackable, AuraSupportLevel.Unsupported, "HandleAuraUntrackable", 185, "", ""),
-        new(AuraType.Empathy, AuraSupportLevel.Unsupported, "HandleAuraEmpathy", 186, "", ""),
+        new(AuraType.Empathy, AuraSupportLevel.Handler, "HandleAuraEmpathy", 186, "SpellSystem.Auras.cs", ""),
         new(AuraType.ModOffhandDamagePct, AuraSupportLevel.Handler, "HandleModOffhandDamagePercent", 187, "CombatStatAuras.cs, PlayerStatSystem.cs", ""),
         new(AuraType.ModTargetResistance, AuraSupportLevel.Referenced, "HandleNoImmediateEffect", 188, "SpellCombatRules.cs", ""),
         new(AuraType.ModRangedAttackPower, AuraSupportLevel.Handler, "HandleAuraModRangedAttackPower", 189, "StatAuras.cs", ""),

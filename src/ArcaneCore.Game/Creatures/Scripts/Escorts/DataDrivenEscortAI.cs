@@ -34,6 +34,15 @@ public sealed class EscortSpec
     public byte? ReactState { get; init; }
 
     public EscortAggroSpec? Aggro { get; init; }
+
+    /// <summary>QuestAccept's Start(true, ...): the escort runs from the first point.</summary>
+    public bool StartRun { get; init; }
+
+    /// <summary>The script's JustDied ForcedDespawn of every creature it summoned (the OOX m_lSummonsList).</summary>
+    public bool DespawnSummonsOnDeath { get; init; }
+
+    /// <summary>UpdateEscortAI's DoCastSpellIfCan timers, reset by Reset (evade and respawn).</summary>
+    public EscortCombatSpellSpec[] CombatSpells { get; init; } = [];
     public string Source { get; init; } = "";
     public EscortWaypointSpec[] Waypoints { get; init; } = [];
 }
@@ -48,6 +57,16 @@ public sealed class EscortAggroSpec
     public bool ToTarget { get; init; }
 
     public int[] TextIds { get; init; } = [];
+}
+
+public sealed class EscortCombatSpellSpec
+{
+    public uint Spell { get; init; }
+
+    /// <summary>Cast on the escort itself; false is the current victim.</summary>
+    public bool Self { get; init; }
+    public uint InitialMs { get; init; }
+    public uint RepeatMs { get; init; }
 }
 
 public sealed class EscortWaypointSpec
@@ -73,6 +92,9 @@ public sealed class EscortActionSpec
     public uint SpeakerEntry { get; init; }
     public float Radius { get; init; }
     public float[][] Positions { get; init; } = [];
+
+    /// <summary>A summon's own DoScriptText(text, pSummoned) right after it appears (OOX-17's bandit reply); one position only.</summary>
+    public int SummonSay { get; init; }
 }
 
 public static class EscortSpecCatalog
@@ -123,6 +145,11 @@ public static class EscortSpecCatalog
                 throw new InvalidOperationException($"invalid escort react state {react} for entry {spec.Entry}");
             }
 
+            if (spec.CombatSpells.Any(c => c.Spell == 0 || c.RepeatMs == 0))
+            {
+                throw new InvalidOperationException($"invalid escort combat spell for entry {spec.Entry}");
+            }
+
             var points = new HashSet<uint>();
             foreach (EscortWaypointSpec waypoint in spec.Waypoints)
             {
@@ -141,10 +168,10 @@ public static class EscortSpecCatalog
                         "quest_complete" => action.Id == spec.QuestId && action.Positions.Length == 0,
                         "set_run" => action.Id is 0 or 1 && action.Positions.Length == 0,
                         "summon" => action.Id > 0 && action.DespawnMs > 0 && action.Positions.Length > 0
-                            && !(action.CorpseTimed && action.OocOrCorpse)
+                            && !(action.CorpseTimed && action.OocOrCorpse) && (action.SummonSay == 0 || action.Positions.Length == 1)
                             && action.Positions.All(p => p.Length == 4 && p.All(float.IsFinite)),
                         _ => false,
-                    };
+                    } && (action.SummonSay == 0 || action.Type == "summon");
                     if (!valid)
                     {
                         throw new InvalidOperationException($"invalid escort action {spec.Entry}:{waypoint.Point}:{action.Type}");
@@ -164,6 +191,54 @@ public static class EscortSpecCatalog
 public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : EscortAI(creature), IQuestScriptAI
 {
     public EscortSpec Spec { get; } = spec;
+    private readonly List<Creature> _summons = [];
+    private uint[] _spellTimers = [];
+
+    /// <summary>The creatures this escort summoned (for inspection).</summary>
+    public IReadOnlyList<Creature> Summons => _summons;
+
+    protected override void Reset() => _spellTimers = [.. Spec.CombatSpells.Select(c => c.InitialMs)];
+
+    protected override void UpdateEscortAI(uint diffMs)
+    {
+        if (!UpdateVictim() || Victim is not { } victim)
+        {
+            return;
+        }
+
+        if (_spellTimers.Length != Spec.CombatSpells.Length)
+        {
+            Reset();
+        }
+
+        for (int i = 0; i < Spec.CombatSpells.Length; i++)
+        {
+            EscortCombatSpellSpec spell = Spec.CombatSpells[i];
+            if (_spellTimers[i] < diffMs)
+            {
+                DoCast(spell.Self ? Me : victim, spell.Spell);
+                _spellTimers[i] = spell.RepeatMs; // SD2 resets these timers whether or not the cast went off
+            }
+            else
+            {
+                _spellTimers[i] -= diffMs;
+            }
+        }
+    }
+
+    public override void OnDeath(Unit? killer)
+    {
+        if (Spec.DespawnSummonsOnDeath && System is { } system)
+        {
+            foreach (Creature summoned in _summons.Where(c => c.IsAlive))
+            {
+                system.ForcedDespawn(summoned, 0);
+            }
+        }
+
+        _summons.Clear();
+        base.OnDeath(killer);
+    }
 
     public void OnQuestAccept(Player player, uint questId)
     {
@@ -177,7 +252,7 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
         // Start (Phizzlethorpe, Dalinda, Gilthares, Kaya; Erland, with no faction change, is text then Start).
         if (Spec.FactionAfterStart)
         {
-            Start(player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
+            Start(run: Spec.StartRun, player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
         }
 
         if (Spec.StartTextBeforeFaction)
@@ -206,7 +281,7 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
 
         if (!Spec.FactionAfterStart)
         {
-            Start(player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
+            Start(run: Spec.StartRun, player: player, questId: questId, instantRespawn: Spec.InstantRespawn);
         }
     }
 
@@ -331,15 +406,25 @@ public sealed class DataDrivenEscortAI(Creature creature, EscortSpec spec) : Esc
                     {
                         foreach (float[] position in action.Positions)
                         {
+                            Creature? summoned;
                             if (action.CorpseTimed)
                             {
-                                system.SummonCorpseTimedDespawn(Me, (uint)action.Id, position[0], position[1], position[2], position[3],
+                                summoned = system.SummonCorpseTimedDespawn(Me, (uint)action.Id, position[0], position[1], position[2], position[3],
                                     action.AttackEscort ? Me : null, action.DespawnMs);
                             }
                             else
                             {
-                                system.SummonAt(Me, (uint)action.Id, position[0], position[1], position[2], position[3],
+                                summoned = system.SummonAt(Me, (uint)action.Id, position[0], position[1], position[2], position[3],
                                     action.AttackEscort ? Me : null, action.DespawnMs, action.OocOrCorpse);
+                            }
+
+                            if (summoned is not null)
+                            {
+                                _summons.Add(summoned);
+                                if (action.SummonSay != 0)
+                                {
+                                    system.SayText(summoned, action.SummonSay);
+                                }
                             }
                         }
                     }

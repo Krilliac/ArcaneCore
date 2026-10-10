@@ -61,6 +61,7 @@ How to read the tables:
 - [`Stats`](#stats)
 - [`Talents`](#talents)
 - [`Totems`](#totems)
+- [`Warden`](#warden)
 - [`World`](#world)
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
@@ -321,7 +322,10 @@ How to read the tables:
 | `Creatures:Rates:WorldBossSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.SpellDamage (default 1). |
 | `Creatures:Respawn:AlternateEntries` | `bool` | `true` | - | `Creatures:Respawn:AlternateEntries`: a spawn with `creature_spawn_entry` rows (vmangos `id2` ... `id5`) becomes one of those entries when it loads and again at every respawn (cmangos Creature::LoadFromDB / ResetEntry; vmangos Creature.cpp:830-841, :1936-1944). False ignores the rows: a spawn whose `id` is 0 then never spawns (the earlier behaviour). |
 | `Creatures:Respawn:DrawDelayAtLoad` | `bool` | `true` | - | `Creatures:Respawn:DrawDelayAtLoad`: a spawn's respawn delay (`urand(spawntimesecsmin, spawntimesecsmax)`) is drawn once when the creature object is created and reused at every death (vmangos Creature::LoadFromDB, Objects/Creature.cpp:1963; SetDeathState reads `m_respawnDelay`, :2246). False draws again at every death (the earlier ArcaneCore behaviour). |
+| `Creatures:Respawn:DynamicMinimumSeconds` | `uint` | `10` | - | `Creatures:Respawn:DynamicMinimumSeconds`: TrinityCore Respawn.DynamicMinimumCreature (default 10 s). |
+| `Creatures:Respawn:DynamicRate` | `float` | `0` | - | `Creatures:Respawn:DynamicRate`: TrinityCore Respawn.DynamicRateCreature (Map::ApplyDynamicModeRespawnScaling, Maps/Map.cpp:3312-3354). A dying open-world spawn's respawn delay is multiplied by `DynamicRate / players in its zone` when that is below 1, never under `DynamicMinimumSeconds`. 0 (the default) is off, which is retail 1.12.1; TrinityCore's suggested value is 10. Dungeons, raids, battlegrounds, rares and world bosses are never scaled. |
 | `Creatures:Respawn:HonorTemplateCorpseDecay` | `bool` | `false` | - | `Creatures:Respawn:HonorTemplateCorpseDecay`: let a template's `CorpseDecay` column override the rank delay. It is a cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail. |
+| `Creatures:Respawn:Linked` | `bool` | `true` | - | `Creatures:Respawn:Linked`: carry the creature_linking respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave, Entities/CreatureLinkingMgr.cpp:555-612, and CanSpawn, :699-751): a boss's trash respawns, despawns or dies with it, and a slave with FLAG_CANT_SPAWN_IF_BOSS_DEAD / ALIVE waits on its master. Retail; false keeps only FLAG_FOLLOW and the instance scripts' own handling. |
 | `Creatures:Respawn:Persist` | `bool` | `true` | - | `Creatures:Respawn:Persist`: dead spawns keep their respawn time across restarts (vmangos `creature_respawn`, characters database). False keeps the timers in memory only, as before. |
 | `Creatures:Respawn:SaveImmediately` | `bool` | `true` | - | `Creatures:Respawn:SaveImmediately`: every database spawn saves its respawn time at death (vmangos SaveRespawnTimeImmediately = 1, mangosd.conf.dist.in:397, World.cpp:729). False saves a normal creature only when it leaves the map or at shutdown; a world boss is always saved at death (Creature.cpp:2262-2263). |
 | `Creatures:RespawnPacifyMs` | `uint` | `5000` | - | Milliseconds a creature cannot initiate attacks after it respawns (vmangos Creature::SetTempPacified(5000) on respawn, Objects/Creature.cpp:877-878). 0 disables. |
@@ -804,6 +808,22 @@ How to read the tables:
 | `Totems:OwnerLeash` | `bool` | `true` | - | vmangos Totem::Update unsummons a totem whose owner left its visibility distance (Objects/Totem.cpp:66-76). false (developer only) lets it persist. |
 | `Totems:PlacementDistance` | `float` | `2` | - | Base distance from the caster at which a totem is placed (vmangos Spell::EffectSummonTotem builds `CreatureCreatePos(caster, orientation, 2.0f, angle)`, SpellEffects.cpp:4952-4957). The caster's and the totem's bounding radii are added to it, as GetClosePoint does (Object.cpp:2728-2729, 2748). |
 
+## `Warden`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Warden:Action` | `WardenAction` | `Log` | - | Warden:Action, applied when a scan fails (default Log). Values: `Log`, `Kick`, `Ban`. |
+| `Warden:BanSeconds` | `long` | `86400` | - | Warden:BanSeconds for `WardenAction.Ban`; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration). |
+| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: the scans to run. Empty runs the timing scan only. |
+| `Warden:ChunkSize` | `int` | `500` | - | Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500). |
+| `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
+| `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`. |
+| `Warden:ResponseTimeoutSeconds` | `uint` | `30` | - | Warden:ResponseTimeoutSeconds: every awaited reply must arrive within this (MaNGOS Zero WardenLimits.deadlineMs 30000). |
+| `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
+| `Warden:ScanIntervalMinSeconds` | `uint` | `30` | - | Warden:ScanIntervalMinSeconds: the shortest random gap between scan requests (MaNGOS Zero normal interval 30-60 s). |
+| `Warden:ScansPerRequest` | `int` | `3` | - | Warden:ScansPerRequest (vmangos Warden.NumScans). Default 3. |
+
 ## `World`
 
 | Key | Type | Default | Reload | Meaning |
@@ -860,6 +880,7 @@ How to read the tables:
 | `World:Chat:GmWhisperingTo` | `int` | `0` | - | GM.WhisperingTo (vmangos mangosd.conf.dist.in:2531, World.cpp:672, Player.cpp:15132): whether a game master accepts whispers from plain players at login. 0 = no, 1 = yes. vmangos' default 2 means "the state saved at the last logout"; persisting it needs a Characters schema change that no lane has made, so 2 is not offered and the retail first-login state (0) is the default. |
 | `World:Chat:StrictLinkKick` | `bool` | `false` | - | ChatStrictLinkChecking.Kick (vmangos mangosd.conf.dist.in:1665, default off): disconnect a player whose message fails the link check instead of just dropping it. |
 | `World:Chat:StrictLinkSeverity` | `int` | `0` | - | ChatStrictLinkChecking.Severity (vmangos mangosd.conf.dist.in:1664, World.cpp:758, vmangos default 2, mangos-classic World.cpp:683 and this option default 0; opt in with 2): 0 off, 1 only the pipe commands c/H/h/r and escaped pipes are allowed, 2 they must also come in the order c, H, h, h, r (vmangos ChatHandler::isValidChatMessage, Chat.cpp:2165-2208). vmangos' level 3 also checks every item, enchant and spell link against the DBC and item catalogs; those are not available to the chat handlers, so 3 behaves as 2. A message over 255 bytes or with a bad link is dropped. |
+| `World:Chat:WordFilter` | `bool` | `false` | - | ArcaneCore extension after AscEmu Management/WordFilter.cpp: apply the world `chat_word_filter` rows (schema 47) to player chat (censor or block) and to new character and pet names. Off by default: neither retail 1.12 nor vmangos/cMaNGOS filter chat text. The rows are reloaded with `.reload chat_word_filter`. |
 
 ## `World:Collision`
 

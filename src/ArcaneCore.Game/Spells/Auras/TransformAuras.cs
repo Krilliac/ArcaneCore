@@ -195,7 +195,7 @@ public sealed class TransformAuras : ISpellHandlerModule
                 continue;
             }
 
-            foreach (SpellAura? candidate in other.Auras)
+            foreach (SpellAura? candidate in other.AuraSpan)
             {
                 if (candidate is null || candidate.Type != AuraType.Transform)
                 {

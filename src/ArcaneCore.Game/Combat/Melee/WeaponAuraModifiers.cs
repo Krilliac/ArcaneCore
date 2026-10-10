@@ -29,7 +29,7 @@ public static class WeaponAuraModifiers
             }
 
             bool? fits = null;
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is null || aura.Type != type)
                 {

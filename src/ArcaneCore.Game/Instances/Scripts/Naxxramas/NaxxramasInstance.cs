@@ -172,6 +172,7 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
     {
         UpdatePartTwo(diffMs);
         UpdateLivingPoison(diffMs);
+        UpdateFaerlinaIntro(diffMs);
         if (GetData(AnubRekhan) != EncounterState.InProgress) return;
         foreach (Player player in Instance.Players)
         {

@@ -121,7 +121,7 @@ public static class PetAreaAura
         {
             AreaParent = source,
         };
-        foreach (SpellAura? aura in source.Auras)
+        foreach (SpellAura? aura in source.AuraSpan)
         {
             if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect == SpellEffectName.ApplyAreaAuraPet)
             {

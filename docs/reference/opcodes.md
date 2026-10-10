@@ -747,7 +747,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_AREA_SPIRIT_HEALER_TIME` | `0x02E4` | — | 0 | — |
 | `CMSG_GM_UNTEACH` | `0x02E5` | unhandled | — | — |
 | `SMSG_WARDEN_DATA` | `0x02E6` | — | 0 | — |
-| `CMSG_WARDEN_DATA` | `0x02E7` | unhandled | — | — |
+| `CMSG_WARDEN_DATA` | `0x02E7` | handled | — | — |
 | `SMSG_GROUP_JOINED_BATTLEGROUND` | `0x02E8` | — | 0 | — |
 | `MSG_BATTLEGROUND_PLAYER_POSITIONS` | `0x02E9` | handled | 1 | decoded |
 | `CMSG_PET_STOP_ATTACK` | `0x02EA` | handled | — | — |

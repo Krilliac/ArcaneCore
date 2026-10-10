@@ -49,6 +49,7 @@ public static class WorldServiceCollectionExtensions
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
         services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
+        services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         services.Configure<Playerbots.PlayerbotOptions>(options => Playerbots.PlayerbotOptions.ApplyConfiguration(options, configuration));
         services.AddSingleton<Playerbots.IPlayerbotService>(sp => sp.GetRequiredService<Playerbots.ManagedPlayerbotFeature>());
 

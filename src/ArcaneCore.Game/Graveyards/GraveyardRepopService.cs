@@ -19,12 +19,20 @@ namespace ArcaneCore.Game.Graveyards;
 public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportService?> teleports) : IGraveyardRepop
 {
     private readonly List<IGraveyardOverride> _overrides = [];
+    private readonly List<IGraveyardLinkSource> _linkSources = [];
 
     /// <summary>Add an <see cref="IGraveyardOverride"/> (battlegrounds), asked in registration order.</summary>
     public void AddOverride(IGraveyardOverride graveyardOverride)
     {
         ArgumentNullException.ThrowIfNull(graveyardOverride);
         _overrides.Add(graveyardOverride);
+    }
+
+    /// <summary>Add an <see cref="IGraveyardLinkSource"/> (outdoor PvP run-time links).</summary>
+    public void AddLinkSource(IGraveyardLinkSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        _linkSources.Add(source);
     }
 
     /// <inheritdoc />
@@ -130,10 +138,33 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
 
         (uint zoneId, uint areaId) = map.GetZoneAndAreaId(x, y, z);
         uint team = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
-        return DeathHooks.For(world).Options.GraveyardFallbackToDefaults
+        WorldSafeLoc? picked = DeathHooks.For(world).Options.GraveyardFallbackToDefaults
             ? GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, map.MapId, x, y, z, zoneId, areaId, team)
             : GraveyardSelector.FindClosest(catalog, maps.Registry, map.MapId, x, y, z, zoneId, areaId, team);
+        return _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, map.MapId, x, y, z, zoneId, areaId);
     }
+
+    /// <summary>The closest of the chosen graveyard and the run-time links on the spirit's map (vmangos GetClosestGraveYard's distance pick).</summary>
+    private WorldSafeLoc? WithExtraLinks(WorldSafeLoc? chosen, GraveyardCatalog catalog, Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId)
+    {
+        float best = chosen is not null && chosen.MapId == mapId ? DistanceSquared(chosen, x, y, z) : float.MaxValue;
+        foreach (IGraveyardLinkSource source in _linkSources)
+        {
+            foreach (uint id in source.ExtraLinks(player, zoneId, areaId))
+            {
+                if (catalog.Find(id) is { } loc && loc.MapId == mapId && DistanceSquared(loc, x, y, z) is var d && d < best)
+                {
+                    best = d;
+                    chosen = loc;
+                }
+            }
+        }
+
+        return chosen;
+    }
+
+    private static float DistanceSquared(WorldSafeLoc loc, float x, float y, float z)
+        => ((loc.X - x) * (loc.X - x)) + ((loc.Y - y) * (loc.Y - y)) + ((loc.Z - z) * (loc.Z - z));
 
     private static void MarkVisibility(Player player)
     {

@@ -64,7 +64,8 @@ public static class PvpAreaRules
 /// Applies the zone's PvP rules when a player enters a zone or an area (vmangos Player.cpp:6566-6580,
 /// :6612-6636): the enforced-area flag, <c>UpdatePvP(true)</c> on entering a hostile area (the flag
 /// timer then stays frozen while inside, <see cref="MapCombat"/>), FFA on FFA realms and in arenas.
-/// Not delivered: battlegrounds (no <c>InBattleGround</c>), taxi flights (no taxi system), capture points
+/// A battleground is a player on a battleground map (vmangos <c>InBattleGround</c>: the map is open only to its match's players).
+/// Not delivered: taxi flights (no taxi system), capture points
 /// and flag carriers (the other two terms of the vmangos timer freeze), and the capital rest type, which the
 /// rest lane takes from <see cref="PvpAreaState.IsInEnforcedArea"/> (<c>CAPITAL &amp;&amp; !enforced</c>, :6639).
 /// </summary>
@@ -78,7 +79,7 @@ public sealed class PvpAreaTracker(WorldStateHooks hooks) : IPlayerLocationListe
         }
 
         PvpRealmMode realm = hooks.Zones.PvpRealmMode;
-        bool enforced = PvpAreaRules.IsEnforced(zoneEntry.Team, (AreaFlags)zoneEntry.Flags, player.Team, realm, inBattleground: false);
+        bool enforced = PvpAreaRules.IsEnforced(zoneEntry.Team, (AreaFlags)zoneEntry.Flags, player.Team, realm, inBattleground: player.Map?.Template?.IsBattleground == true);
         PvpAreaState.Set(player, enforced);
 
         if (enforced)

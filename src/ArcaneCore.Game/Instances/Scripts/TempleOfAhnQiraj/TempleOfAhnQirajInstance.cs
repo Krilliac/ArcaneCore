@@ -83,6 +83,7 @@ public sealed partial class TempleOfAhnQirajInstance(Map map) : ScriptedInstance
             || creature.Entry == 15263 && creature.System?.SummonerOf(creature) is null
             || creature.Entry is 15275 or 15276 or 15589 or 15727)
             StoreCreature(creature);
+        OnTempleCreatureCreate(creature);
         if (creature.Entry is 15275 or 15276 && !_twinsDamageSubscribed)
         {
             _twinsDamageSubscribed = true;

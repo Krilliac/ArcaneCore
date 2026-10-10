@@ -239,9 +239,9 @@ public sealed partial class Player : Unit
     /// The send callback of this player's update flush, made once (world thread): a lambda per flush cost a closure and a delegate
     /// per player per tick (docs/integration/perf-limits-20261008.md). It reads <see cref="Session"/> at each send.
     /// </summary>
-    internal Action<WorldOpcode, byte[]> PendingUpdatesSend => _pendingUpdatesSend ??= (opcode, payload) => Session.Send(opcode, payload);
+    internal Updates.PacketSink PendingUpdatesSend => _pendingUpdatesSend ??= (opcode, payload) => Session.Send(opcode, payload);
 
-    private Action<WorldOpcode, byte[]>? _pendingUpdatesSend;
+    private Updates.PacketSink? _pendingUpdatesSend;
 
     /// <summary>Set when the player moved and its visibility must be recomputed this tick.</summary>
     internal bool NeedsVisibilityUpdate { get; set; }

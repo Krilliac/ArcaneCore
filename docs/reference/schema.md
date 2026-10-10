@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 48 | `characters` |
-| `world` | 46 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 49 | `characters` |
+| `world` | 47 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -73,6 +73,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 46 | `Characters.WorldState.WarEffortGongDataModule` | creates `world_war_effort_gong` | yes |
 | 47 | `Characters.WorldState.ScourgeInvasionCityDataModule` | creates `world_scourge_invasion_city` | yes |
 | 48 | `Characters.WorldState.FishingExtravaganzaDataModule` | creates `world_stv_fishing` | yes |
+| 49 | `Characters.WorldState.ElementalInvasionDataModule` | creates `world_elemental_invasion` | yes |
 
 ## `world`
 
@@ -123,5 +124,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 44 | `World.SpawnGroups.SpawnGroupDataModule` | creates `gameobject_spawn_entry`, `spawn_group`, `spawn_group_spawn`, `spawn_group_entry`, `spawn_group_formation`, `spawn_group_linked_group` |
 | 45 | `World.Creatures.MovementScriptDataModule` | creates `dbscripts_on_creature_movement`, `spell_script_target`, `creature_linking`, `creature_linking_template`; adds columns `creature_movement.ScriptId`, `creature_movement_template.ScriptId` |
 | 46 | `World.Pools.PoolDataModule` | creates `pool_template`, `pool_creature`, `pool_creature_template`, `pool_gameobject`, `pool_gameobject_template`, `pool_pool` |
+| 47 | `Content.Chat.ChatWordFilterWorldDataModule` | creates `chat_word_filter` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

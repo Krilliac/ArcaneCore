@@ -650,7 +650,7 @@ public sealed partial class PlayerInventory
     {
         if (item.SentToClient && Player is { IsInWorld: true } player)
         {
-            player.PendingUpdates.Flush((opcode, payload) => player.Session.Send(opcode, payload), 0);
+            player.PendingUpdates.FlushTo(player.PendingUpdatesSend, 0);
             var writer = new PacketWriter(8);
             writer.WriteUInt64(item.Guid.Value);
             player.Session.Send(WorldOpcode.SmsgDestroyObject, writer.ToArray());

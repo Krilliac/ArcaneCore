@@ -54,7 +54,7 @@ public sealed class VisualAuras : ISpellHandlerModule
         foreach (SpellAuraHolder holder in system.GetAuras(target))
         {
             if (holder.IsRemoved) continue;
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.ModScale })
                 {

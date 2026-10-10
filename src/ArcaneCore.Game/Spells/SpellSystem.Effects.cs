@@ -322,7 +322,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (!Teleports.Teleport(context.Target, d.MapId, d.X, d.Y, d.Z, d.Orientation))
+        if (!Teleports.Teleport(context.Target, d.MapId, d.X, d.Y, d.Z, d.Orientation, keepCombat: context.Effect.TargetB != SpellImplicitTarget.LocationCasterHomeBind))
         {
             ReportUnsupported("teleport to map", d.MapId, context.Spell.Id);
         }

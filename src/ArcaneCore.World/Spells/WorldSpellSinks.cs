@@ -27,7 +27,10 @@ internal sealed class WorldSpellTeleportSink(Func<TeleportService> teleports) : 
             : _near.CanTeleport(unit, mapId, x, y, z, orientation);
 
     public bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
+        => Teleport(unit, mapId, x, y, z, orientation, keepCombat: true);
+
+    public bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation, bool keepCombat)
         => unit is Player player
-            ? teleports().TeleportTo(player, mapId, x, y, z, orientation)
+            ? teleports().TeleportTo(player, mapId, x, y, z, orientation, keepCombat && player.MapId == mapId ? TeleportOptions.NotLeaveCombat : TeleportOptions.None)
             : _near.Teleport(unit, mapId, x, y, z, orientation);
 }

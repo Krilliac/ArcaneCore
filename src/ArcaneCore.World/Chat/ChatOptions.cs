@@ -21,6 +21,13 @@ public sealed class ChatOptions
     public bool AddonChannel { get; set; } = true;
 
     /// <summary>
+    /// ArcaneCore extension after AscEmu Management/WordFilter.cpp: apply the world <c>chat_word_filter</c> rows (schema 47) to player chat
+    /// (censor or block) and to new character and pet names. Off by default: neither retail 1.12 nor vmangos/cMaNGOS filter chat text.
+    /// The rows are reloaded with <c>.reload chat_word_filter</c>.
+    /// </summary>
+    public bool WordFilter { get; set; }
+
+    /// <summary>
     /// ArcaneCore extension: apply the existing mute and flood gates to addon traffic before
     /// offering it to chat features. Uses the same counter, limits and staff exemption as spoken
     /// chat. Off by default: vmangos ChatHandler.cpp:165-236 explicitly exempts LANG_ADDON from

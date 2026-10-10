@@ -572,4 +572,34 @@ public sealed class NpcTravelServiceTests
         Assert.True(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
         Assert.Equal(0u, rig.Player.Combat.ExtraAttacks);
     }
+
+    [Fact]
+    public void ActivateTaxiBySpell_FliesAnUnknownPathWithoutAFlightMasterAndPaysFullPrice()
+    {
+        using var rig = new TaxiRig(learnAll: false, discount: 0.5f);
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 150;
+        Assert.True(kit.Services.ActivateTaxiBySpell(kit.Player, 10));
+        Assert.True(rig.Flights.IsFlying(kit.Player));
+        Assert.Equal(50u, kit.Player.Money); // no reputation discount on the cast case (vmangos Player.cpp:17960)
+        Assert.Equal(0u, kit.State.TaxiMask[0]); // nodes need not be known (nocheck)
+    }
+
+    [Fact]
+    public void ActivateTaxiBySpell_RejectsUnknownPathsCombatAndDistantSourceNodes()
+    {
+        using var rig = new TaxiRig();
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 1000;
+        Assert.False(kit.Services.ActivateTaxiBySpell(kit.Player, 999));
+        Assert.Empty(kit.Drain());
+
+        Assert.False(kit.Services.ActivateTaxiBySpell(kit.Player, 13)); // source node 5 is 500 yards away
+        Assert.Equal((uint)ActivateTaxiReply.TooFarAway, Reply(kit));
+
+        kit.Player.UnitFlags |= UnitFlags.InCombat;
+        Assert.False(kit.Services.ActivateTaxiBySpell(kit.Player, 10));
+        Assert.Equal((uint)ActivateTaxiReply.PlayerBusy, Reply(kit));
+        Assert.False(rig.Flights.IsFlying(kit.Player));
+    }
 }

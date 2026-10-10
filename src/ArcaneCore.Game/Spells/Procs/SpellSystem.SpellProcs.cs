@@ -196,7 +196,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is not { Type: AuraType.AddTargetTrigger } || (AffectMask(holder.Spell, aura.EffectIndex) & spell.SpellFamilyFlags) == 0)
                 {

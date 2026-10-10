@@ -289,9 +289,32 @@ public sealed partial record SpellInfo
     /// <summary>vmangos SpellEntry::IsChanneledSpell: AttributesEx IS_CHANNELED or IS_SELF_CHANNELED.</summary>
     public bool IsChanneled => HasAttribute(SpellAttributesEx.IsChanneled | SpellAttributesEx.IsSelfChanneled);
 
-    public bool HasEffect(SpellEffectName effect) => _effects.Any(e => e.Effect == effect);
+    public bool HasEffect(SpellEffectName effect)
+    {
+        // A loop, not LINQ: aura updates ask this of every holder on every tick (IsAreaSource).
+        foreach (SpellEffectInfo e in _effects)
+        {
+            if (e.Effect == effect)
+            {
+                return true;
+            }
+        }
 
-    public bool HasAura(AuraType aura) => _effects.Any(e => e.Effect == SpellEffectName.ApplyAura && e.AuraType == aura);
+        return false;
+    }
+
+    public bool HasAura(AuraType aura)
+    {
+        foreach (SpellEffectInfo e in _effects)
+        {
+            if (e.Effect == SpellEffectName.ApplyAura && e.AuraType == aura)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Whether the spell is beneficial: vmangos SpellEntry::IsPositiveSpell without a triggered-spell lookup or a

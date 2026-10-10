@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 
@@ -155,9 +156,11 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Creature::RegenerateAll every 5 s (src/game/Objects/Creature.cpp): out of combat
-    /// health and mana return a third of their maximum per tick (Creature::RegenerateHealth / RegenerateMana); in-combat mana
-    /// regeneration needs creature stats and is left to the creatures area.
+    /// vmangos Creature::RegenerateAll every 5 s (Objects/Creature.cpp:1087-1100). Health returns out of combat, while polymorphed and in the
+    /// unreachable-target soft evade (RegenerateHealth :1127-1162): a third of the maximum, or a tenth for a polymorphed creature a player
+    /// charms or owns. Mana returns on every tick (RegenerateMana :1102-1125): a third of the maximum out of combat, else (in combat, the soft
+    /// evade included, or player controlled) <see cref="CreatureManaRegenPerTick"/> unless mana was spent in the last five seconds.
+    /// Not delivered: a player-controlled creature's health out of polymorph still returns a third, not GetRegenHPPerSpirit x 4.
     /// </summary>
     private void UpdateCreatureRegen(Unit unit, uint diff)
     {
@@ -174,9 +177,23 @@ public sealed partial class MapCombat
         }
 
         c.RegenTimer = CombatConstants.CreatureRegenIntervalMs; // vmangos sets, not adds
+        CombatEnvironment environment = CombatEnvironment.For(_world);
+        bool inCombat = c.IsInCombat;
+        bool polymorphed = environment.IsPolymorphed(unit);
+        bool playerControlled = unit.CharmerOrOwnerGuid.IsPlayer;
+
         // vmangos RegenerateAll(diff, IsEvadeBecauseTargetNotReachable()) skips the in-combat check (Creature.cpp:1057, :1094): a creature
-        // that has not reached its victim for 3 s regenerates as if out of combat.
-        if (c.IsInCombat && unit is not ICombatCreature { IsInEvadeMode: true })
+        // that has not reached its victim for 3 s regenerates health as if out of combat.
+        bool softEvade = inCombat && unit is ICombatCreature { IsInEvadeMode: true };
+        if ((!inCombat || polymorphed || softEvade) && (unit is not ICombatCreature creature || creature.RegeneratesHealth))
+        {
+            uint heal = playerControlled && polymorphed ? unit.MaxHealth / 10 : unit.MaxHealth / 3;
+            unit.Health = Math.Min(unit.MaxHealth, unit.Health + heal);
+        }
+
+        uint maxMana = GetMaxPower(unit, PowerType.Mana);
+        uint mana = GetPower(unit, PowerType.Mana);
+        if (maxMana == 0 || mana >= maxMana)
         {
             // vmangos Creature::RegenerateAll (Creature.cpp:1094): a polymorphed creature heals in combat too, a third of its maximum per
             // tick (RegenerateHealth :1155-1158). In-combat mana is still left out.
@@ -188,15 +205,39 @@ public sealed partial class MapCombat
             return;
         }
 
-        if (unit is not ICombatCreature creature || creature.RegeneratesHealth)
+        uint add;
+        if (inCombat || playerControlled)
         {
-            unit.Health = Math.Min(unit.MaxHealth, unit.Health + (unit.MaxHealth / 3));
+            add = c.LastManaUseTimer != 0 ? 0u : RoundFloatChance(CreatureManaRegenPerTick(unit, environment), _regenRandom);
+        }
+        else
+        {
+            add = maxMana / 3;
         }
 
-        uint maxMana = GetMaxPower(unit, PowerType.Mana);
-        if (maxMana > 0)
-        {
-            SetPower(unit, PowerType.Mana, Math.Min(maxMana, GetPower(unit, PowerType.Mana) + (maxMana / 3)));
-        }
+        SetPower(unit, PowerType.Mana, Math.Min(maxMana, mana + add));
+    }
+
+    private readonly Random _regenRandom = new();
+
+    /// <summary>
+    /// vmangos Creature::UpdateManaRegen (StatSystem.cpp:808-818), the mana a creature gains per 5 s tick in combat:
+    /// (GetRegenMPPerSpirit x MOD_POWER_REGEN_PERCENT + MOD_POWER_REGEN(mana) / 5 + 0.6 x sqrt(max(1, intellect)) / 5) x rate x 5.
+    /// </summary>
+    internal static float CreatureManaRegenPerTick(Unit unit, CombatEnvironment environment)
+    {
+        float spirit = unit.GetUInt32(UpdateFields.UnitFieldStat0 + 4);
+        float intellect = Math.Max(1f, unit.GetUInt32(UpdateFields.UnitFieldStat0 + 3));
+        float percent = environment.GetPowerRegenFactor(unit, PowerType.Mana);
+        float mp5 = environment.GetTotalAuraModifierByMisc(unit, AuraType.ModPowerRegen, (int)PowerType.Mana) / 5.0f;
+        float perSecond = (RegenManaPerSpirit(unit.Class, spirit) * percent) + mp5 + (0.6f * MathF.Sqrt(intellect) / 5.0f);
+        return Math.Max(0f, perSecond * environment.Options.RateMana * 5.0f);
+    }
+
+    /// <summary>vmangos round_float_chance: the whole part, plus one with the probability of the fraction.</summary>
+    internal static uint RoundFloatChance(float value, Random random)
+    {
+        float floor = MathF.Floor(value);
+        return (uint)floor + (random.NextDouble() < value - floor ? 1u : 0u);
     }
 }

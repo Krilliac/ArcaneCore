@@ -66,7 +66,7 @@ public static class TransportPackets
         ArgumentNullException.ThrowIfNull(player);
         if (body is not null)
         {
-            UpdateData.Send(body, (opcode, payload) => player.Session.Send(opcode, payload), compressionThreshold);
+            UpdateData.SendTo(body, (opcode, payload) => player.Session.Send(opcode, payload), compressionThreshold);
         }
     }
 }

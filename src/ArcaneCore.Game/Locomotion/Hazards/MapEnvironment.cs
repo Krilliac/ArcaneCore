@@ -55,16 +55,25 @@ internal sealed class MapEnvironment : IMapUpdater
 
     public void Update(Map map, uint diffMs)
     {
-        foreach (Player player in map.Players.ToArray())
+        Player[] players = map.RentPlayerSnapshot(out int count);
+        try
         {
-            LocomotionState state = player.Locomotion;
-            if (state.LastEnvironmentSample is not { } sample || !ReferenceEquals(sample.Map, map)
-                || sample.X != player.X || sample.Y != player.Y || sample.Z != player.Z)
+            for (int i = 0; i < count; i++)
             {
-                LiquidEnvironment.UpdateTerrainFlags(player);
-            }
+                Player player = players[i];
+                LocomotionState state = player.Locomotion;
+                if (state.LastEnvironmentSample is not { } sample || !ReferenceEquals(sample.Map, map)
+                    || sample.X != player.X || sample.Y != player.Y || sample.Z != player.Z)
+                {
+                    LiquidEnvironment.UpdateTerrainFlags(player);
+                }
 
-            UpdateMirrorTimers(map, player, diffMs);
+                UpdateMirrorTimers(map, player, diffMs);
+            }
+        }
+        finally
+        {
+            Map.ReturnPlayerSnapshot(players);
         }
     }
 

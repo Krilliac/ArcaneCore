@@ -283,7 +283,7 @@ public sealed partial class SpellSystem
             }
 
             holder.StackAmount = (byte)Math.Clamp((int)saved.StackAmount, 1, Math.Max(1, (int)spell.StackAmount));
-            foreach (SpellAura? restoredAura in holder.Auras)
+            foreach (SpellAura? restoredAura in holder.AuraSpan)
             {
                 // The saved amount is the stacked total; the one-stack value is recovered by division (exact for every stack the engine itself produced).
                 if (restoredAura is not null)

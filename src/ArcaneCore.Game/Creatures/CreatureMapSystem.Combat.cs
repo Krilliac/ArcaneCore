@@ -262,6 +262,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// <summary>vmangos Creature::UpdateLeashExtensionTime: a crowd-controlled creature cannot leash.</summary>
     private void RefreshLeashExtension(Creature creature) => (creature.LeashClock ??= new LeashExtensionClock()).Seconds = _clockMs / 1000;
 
+    /// <summary>vmangos Creature::UpdateLeashExtensionTime for scripts (boss_taerar.cpp while banished): the creature cannot leash for now.</summary>
+    public void ExtendLeash(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        RefreshLeashExtension(creature);
+    }
+
     /// <summary>
     /// The creature's periodic combat checks (vmangos Creature::Update, Objects/Creature.cpp:976-993): every
     /// <see cref="CreatureOptions.LeashCheckIntervalMs"/> of world time, a crowd-controlled creature refreshes its leash extension
@@ -270,7 +277,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// </summary>
     private bool CheckHardLeash(Creature creature, uint diffMs)
     {
-        if (!creature.Combat.IsInCombat || _options.LeashCheckIntervalMs == 0 || _clockMs % _options.LeashCheckIntervalMs > diffMs)
+        // UnitCombat.IsInCombat is this flag; reading it directly does not create a UnitCombat for every idle creature.
+        if ((creature.UnitFlags & UnitFlags.InCombat) == 0 || _options.LeashCheckIntervalMs == 0 || _clockMs % _options.LeashCheckIntervalMs > diffMs)
         {
             return false;
         }

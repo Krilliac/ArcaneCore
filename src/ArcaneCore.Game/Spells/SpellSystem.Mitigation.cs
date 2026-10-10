@@ -62,7 +62,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is null || aura.Type != AuraType.SchoolAbsorb || ((uint)aura.MiscValue & schoolMask) == 0 || remaining <= 0)
                 {
@@ -116,7 +116,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is null || aura.Type != AuraType.ManaShield || ((uint)aura.MiscValue & schoolMask) == 0 || remaining <= 0)
                 {
@@ -154,7 +154,7 @@ public sealed partial class SpellSystem
     {
         foreach (SpellAuraHolder holder in GetAuras(target).ToArray())
         {
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is null || holder.IsRemoved || remaining < 0 || ((uint)aura.MiscValue & schoolMask) == 0
                     || aura.Type is not (AuraType.SplitDamageFlat or AuraType.SplitDamagePct)

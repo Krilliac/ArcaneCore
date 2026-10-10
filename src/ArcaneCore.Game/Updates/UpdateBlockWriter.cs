@@ -74,13 +74,18 @@ public static class UpdateBlockWriter
         UpdateMask changed = obj.ChangedFields;
         ReadOnlySpan<ushort> fieldFlags = obj.FieldFlags;
 
-        var mask = new UpdateMask(obj.ValuesCount);
+        // The visible subset of the changed fields, on the stack: this runs once per changed object per viewer per tick,
+        // and a heap UpdateMask here was the update builder's largest allocation. Same bytes as WriteValues(mask).
+        int blockCount = (obj.ValuesCount + 31) / 32;
+        Span<uint> blocks = blockCount <= 128 ? stackalloc uint[128] : new uint[blockCount];
+        blocks = blocks[..blockCount];
+        blocks.Clear();
         bool any = false;
         for (int index = changed.NextSetBit(0); index >= 0; index = changed.NextSetBit(index + 1))
         {
             if (((UpdateFieldFlags)fieldFlags[index] & visible) != 0)
             {
-                mask.SetBit(index);
+                blocks[index >> 5] |= 1u << (index & 31);
                 any = true;
             }
         }
@@ -92,7 +97,20 @@ public static class UpdateBlockWriter
 
         writer.WriteByte((byte)ObjectUpdateType.Values);
         writer.WritePackedGuid(obj.Guid.Value);
-        WriteValues(writer, obj, viewer, mask);
+        writer.WriteByte((byte)blockCount);
+        foreach (uint block in blocks)
+        {
+            writer.WriteUInt32(block);
+        }
+
+        for (int b = 0; b < blocks.Length; b++)
+        {
+            for (uint bits = blocks[b]; bits != 0; bits &= bits - 1)
+            {
+                writer.WriteUInt32(obj.GetValueFor((b << 5) + System.Numerics.BitOperations.TrailingZeroCount(bits), viewer));
+            }
+        }
+
         return true;
     }
 

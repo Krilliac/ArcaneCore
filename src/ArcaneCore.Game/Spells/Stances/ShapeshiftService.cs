@@ -505,7 +505,7 @@ public sealed class ShapeshiftService
     {
         foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
         {
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.OverrideClassScripts })
                 {

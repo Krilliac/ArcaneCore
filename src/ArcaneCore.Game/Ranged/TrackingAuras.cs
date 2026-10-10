@@ -11,6 +11,9 @@ public static class UnitDynFlags
 
     /// <summary>UNIT_DYNFLAG_DEAD: the unit appears dead (Feign Death).</summary>
     public const uint Dead = 0x0020;
+
+    /// <summary>UNIT_DYNFLAG_SPECIALINFO: the client shows the unit's beast info (Beast Lore, SPELL_AURA_EMPATHY).</summary>
+    public const uint SpecialInfo = 0x0010;
 }
 
 /// <summary>

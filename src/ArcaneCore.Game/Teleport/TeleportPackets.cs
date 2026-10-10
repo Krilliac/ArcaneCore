@@ -31,6 +31,12 @@ public enum TeleportOptions
 
     /// <summary><c>TELE_TO_NOT_LEAVE_TRANSPORT</c> (0x02): a passenger stays on its ship (a ship changing maps).</summary>
     NotLeaveTransport = 0x02,
+
+    /// <summary>
+    /// <c>TELE_TO_NOT_LEAVE_COMBAT</c> (0x04): a same-map teleport that keeps combat and gives no Honorless Target (vmangos spell teleports,
+    /// SpellEffects.cpp EffectTeleportUnits / EffectLeapForward / EffectKnockBack; Player::TeleportTo, Player.cpp:1923-1927).
+    /// </summary>
+    NotLeaveCombat = 0x04,
 }
 
 /// <summary>Teleport and area-trigger packet layouts (1.12.1 build 5875).</summary>

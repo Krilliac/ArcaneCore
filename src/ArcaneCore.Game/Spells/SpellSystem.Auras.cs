@@ -38,7 +38,19 @@ public sealed partial class SpellSystem
     private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
         // vmangos Aura::HandleAuraDummy (SpellAuras.cpp:1700-2215) is a switch on the spell id: RegisterDummyAuraHandler adds a case.
-        [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), null),
+        [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), static (s, h, a) => s.TickDummyAura(h, a)),
+        // vmangos Aura::HandleAuraEmpathy (SpellAuras.cpp:5599-5615): Beast Lore marks the target so the client shows its beast info.
+        [AuraType.Empathy] = new AuraHandler(static (_, h, _, apply) =>
+        {
+            if (apply)
+            {
+                h.Target.SetFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.SpecialInfo);
+            }
+            else
+            {
+                h.Target.RemoveFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.SpecialInfo);
+            }
+        }, null),
         // Threat reads installed modifiers by school when damage/healing is resolved.
         [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
@@ -80,6 +92,31 @@ public sealed partial class SpellSystem
     public bool HasDummyAuraHandler(uint spellId) => _dummyAuraHandlers.ContainsKey(spellId);
 
     private readonly Dictionary<uint, Action<SpellSystem, SpellAuraHolder, SpellAura, bool>> _dummyAuraHandlers = [];
+
+    /// <summary>
+    /// A periodic SPELL_AURA_DUMMY (vmangos Aura::Aura's switch that sets m_isPeriodic and periodictime for a few dummy spells, SpellAuras.cpp
+    /// ~1760-1790, with its Aura::PeriodicDummyTick case): the aura ticks every <paramref name="periodMs"/> and each tick runs <paramref name="tick"/>.
+    /// A second registration for the same spell is a startup error.
+    /// </summary>
+    public void RegisterPeriodicDummyAura(uint spellId, uint periodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> tick)
+    {
+        ArgumentNullException.ThrowIfNull(tick);
+        ArgumentOutOfRangeException.ThrowIfZero(periodMs);
+        if (!_periodicDummyAuras.TryAdd(spellId, (periodMs, tick)))
+        {
+            throw new InvalidOperationException($"spell {spellId} already has a periodic dummy aura");
+        }
+    }
+
+    private readonly Dictionary<uint, (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick)> _periodicDummyAuras = [];
+
+    private void TickDummyAura(SpellAuraHolder holder, SpellAura aura)
+    {
+        if (_periodicDummyAuras.TryGetValue(holder.Spell.Id, out (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick) dummy))
+        {
+            dummy.Tick(this, holder, aura);
+        }
+    }
 
     private void ApplyDummyAura(SpellAuraHolder holder, SpellAura aura, bool apply)
     {
@@ -185,6 +222,11 @@ public sealed partial class SpellSystem
             : SnapshotAuraAmount(context);
         var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, ModifiedAmplitude(context.Caster, context.Spell, effect), effect.MiscValue,
             context.Target.PowerType);
+        if (aura.Type == AuraType.Dummy && _periodicDummyAuras.TryGetValue(context.Spell.Id, out (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick) dummy))
+        {
+            aura.Amplitude = dummy.PeriodMs; // vmangos Aura::Aura: m_isPeriodic = true, m_modifier.periodictime for the scripted dummy
+        }
+
         aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
         context.PendingHolder.SetAura(aura);
     }
@@ -318,71 +360,88 @@ public sealed partial class SpellSystem
             return;
         }
 
-        foreach (SpellAuraHolder holder in state.Auras.ToArray())
+        // A pooled snapshot (handlers may add or remove holders); reentrant, unlike a shared list.
+        int count = state.Auras.Count;
+        SpellAuraHolder[] snapshot = System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Rent(count);
+        state.Auras.CopyTo(snapshot);
+        try
         {
+            for (int i = 0; i < count; i++)
+            {
+                UpdateAuraHolder(state, snapshot[i], diffMs);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Return(snapshot, clearArray: true);
+        }
+    }
+
+    private void UpdateAuraHolder(UnitSpellState state, SpellAuraHolder holder, uint diffMs)
+    {
+        if (holder.IsRemoved)
+        {
+            return;
+        }
+
+        if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
+        {
+            // vmangos AreaAura::Update: the aura goes with its source or when the owner left the map.
+            RemoveHolder(state, holder);
+            return;
+        }
+
+        if (IsQuestSettlementPending(holder.Target)
+            || IsQuestSettlementPending(ResolveAuraCaster(holder)))
+        {
+            return;
+        }
+
+        // vmangos Unit::SetStandState (Unit.cpp:9302-9310): standing up removes STANDING_CANCELS auras (food, drink).
+        if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
+            && holder.Target.StandState is StandState.Stand or StandState.Dead)
+        {
+            RemoveHolder(state, holder);
+            return;
+        }
+
+        bool runs = !holder.IsPermanent && holder.Duration > 0;
+        if (!holder.IsPermanent)
+        {
+            holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);
+        }
+
+        // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
+        if (runs)
+        {
+            ChargePerSecondCost(holder, diffMs);
             if (holder.IsRemoved)
             {
-                continue;
+                return;
             }
+        }
 
-            if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
-            {
-                // vmangos AreaAura::Update: the aura goes with its source or when the owner left the map.
-                RemoveHolder(state, holder);
-                continue;
-            }
-
-            if (IsQuestSettlementPending(holder.Target)
-                || IsQuestSettlementPending(ResolveAuraCaster(holder)))
+        IReadOnlyList<SpellAura?> auras = holder.Auras;
+        for (int a = 0; a < auras.Count; a++)
+        {
+            if (auras[a] is not { } aura || !aura.IsPeriodic)
             {
                 continue;
             }
 
-            // vmangos Unit::SetStandState (Unit.cpp:9302-9310): standing up removes STANDING_CANCELS auras (food, drink).
-            if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
-                && holder.Target.StandState is StandState.Stand or StandState.Dead)
+            // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
+            int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
+            for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
             {
-                RemoveHolder(state, holder);
-                continue;
+                aura.TickCount++;
+                using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
+                AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
             }
+        }
 
-            bool runs = !holder.IsPermanent && holder.Duration > 0;
-            if (!holder.IsPermanent)
-            {
-                holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);
-            }
-
-            // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
-            if (runs)
-            {
-                ChargePerSecondCost(holder, diffMs);
-                if (holder.IsRemoved)
-                {
-                    continue;
-                }
-            }
-
-            foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
-            {
-                if (!aura.IsPeriodic)
-                {
-                    continue;
-                }
-
-                // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
-                int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
-                for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
-                {
-                    aura.TickCount++;
-                    using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
-                    AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
-                }
-            }
-
-            if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
-            {
-                RemoveHolder(state, holder, AuraRemoveMode.Expire);
-            }
+        if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
+        {
+            RemoveHolder(state, holder, AuraRemoveMode.Expire);
         }
     }
 

@@ -44,4 +44,22 @@ public sealed class CreatureRespawnOptions
     /// always saved at death (Creature.cpp:2262-2263).
     /// </summary>
     public bool SaveImmediately { get; set; } = true;
+
+    /// <summary>
+    /// <c>Creatures:Respawn:Linked</c>: carry the creature_linking respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave,
+    /// Entities/CreatureLinkingMgr.cpp:555-612, and CanSpawn, :699-751): a boss's trash respawns, despawns or dies with it, and a slave with
+    /// FLAG_CANT_SPAWN_IF_BOSS_DEAD / ALIVE waits on its master. Retail; false keeps only FLAG_FOLLOW and the instance scripts' own handling.
+    /// </summary>
+    public bool Linked { get; set; } = true;
+
+    /// <summary>
+    /// <c>Creatures:Respawn:DynamicRate</c>: TrinityCore Respawn.DynamicRateCreature (Map::ApplyDynamicModeRespawnScaling, Maps/Map.cpp:3312-3354).
+    /// A dying open-world spawn's respawn delay is multiplied by <c>DynamicRate / players in its zone</c> when that is below 1, never under
+    /// <see cref="DynamicMinimumSeconds"/>. 0 (the default) is off, which is retail 1.12.1; TrinityCore's suggested value is 10.
+    /// Dungeons, raids, battlegrounds, rares and world bosses are never scaled.
+    /// </summary>
+    public float DynamicRate { get; set; }
+
+    /// <summary><c>Creatures:Respawn:DynamicMinimumSeconds</c>: TrinityCore Respawn.DynamicMinimumCreature (default 10 s).</summary>
+    public uint DynamicMinimumSeconds { get; set; } = 10;
 }
