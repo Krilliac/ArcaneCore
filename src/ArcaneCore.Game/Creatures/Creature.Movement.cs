@@ -57,10 +57,10 @@ public sealed partial class Creature : Unit, ICombatCreature
         var start = new Vector3(X, Y, Z);
         float length = 0;
         Vector3 previous = start;
-        foreach (Vector3 point in path)
+        for (int i = 0; i < path.Count; i++) // indexed: no boxed enumerator over the IReadOnlyList
         {
-            length += Vector3.Distance(previous, point);
-            previous = point;
+            length += Vector3.Distance(previous, path[i]);
+            previous = path[i];
         }
 
         uint duration = Math.Max(1u, (uint)MathF.Round(length / speed * 1000f));
