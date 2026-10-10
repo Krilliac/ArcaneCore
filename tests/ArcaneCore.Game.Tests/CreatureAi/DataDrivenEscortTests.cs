@@ -654,6 +654,32 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Hendel_AndHisSentriesAttack_BelowTwentyPercentHeSurrenders_AndJainasPartyArrives()
+    {
+        // npc_private_hendelAI + QuestAccept_npc_private_hendel (dustwallow_marsh.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        CreatureContent content = new([Template(entry), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346), Spawn(3, 5184, -2882, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Creature[] sentries = [.. system.Creatures.Where(c => c.Entry == 5184)];
+            Assert.All(sentries.Append(hendel), c => Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, c.FactionTemplate));
+            hendel.Health = hendel.MaxHealth / 10;
+            world.RunTick(100);
+            Assert.True(ai.Surrendered);
+            Assert.Equal(3, system.Creatures.Count(c => c.Entry is 4967 or 4968 or 4965));
+            Run(world, 5_000);
+            Assert.All(sentries, s => Assert.DoesNotContain(s, system.Creatures.Where(c => c.IsInWorld && c.IsAlive)));
+        }
+    }
+
+    [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {
         // npc_muglashAI + GOUse_go_naga_brazier (ashenvale.cpp at e27966cec7): pause at 25, waves 10 s apart once the brazier is out.
