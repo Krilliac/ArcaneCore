@@ -617,6 +617,165 @@ public sealed class DataDrivenEscortTests
         }
     }
 
+    [Fact]
+    public void Dashel_AttacksWithTwoThugsAfterThreeSeconds_GivesUpAt15Percent_AndCreditsFiveSecondsLater()
+    {
+        // npc_dashel_stonefistAI (stormwind_city.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.DashelStonefistAI.Entry;
+        int[] texts = [-1001274, -1001275, -1001276];
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(4969)], [Spawn(1, entry, 0, 0, 0)],
+            [], [], [], new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 1, 0);
+            Creature dashel = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.DashelStonefistAI>(dashel.AI);
+            Assert.Equal(CreatureReactState.Passive, dashel.ReactState);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.DashelStonefistAI.QuestMissingDiploPt8);
+            Assert.Equal(168u, dashel.FactionTemplate);
+            Assert.Equal(0u, dashel.NpcFlags & (uint)NpcFlags.QuestGiver);
+            world.RunTick(2900);
+            Assert.Empty(ai.Thugs);
+            world.RunTick(200);
+            Assert.Equal(2, ai.Thugs.Count);
+            Assert.Same(player, dashel.Combat.Victim);
+            map.Combat.DealDamage(player, dashel, dashel.Health);
+            Assert.True(dashel.IsAlive);
+            world.RunTick(100);
+            Assert.Empty(quests.Completed);
+            Assert.Equal(CreatureReactState.Passive, dashel.ReactState);
+            world.RunTick(5000);
+            world.RunTick(100);
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.DashelStonefistAI.QuestMissingDiploPt8)], quests.Completed);
+        }
+    }
+
+    [Fact]
+    public void SquireRowe_SignalsWindsor_WhoDismountsWelcomesAndBecomesAQuestGiver()
+    {
+        // npc_squire_roweAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (7 points).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.SquireRoweAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(7, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000822, -1000823, -1000824];
+        CreatureContent content = new([Template(entry), Template(12580)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature rowe = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.SquireRoweAI>(rowe.AI);
+            Assert.True(ai.StartFromGossip(player));
+            for (int elapsed = 0; elapsed < 300_000 && (ai.Windsor is null || (ai.Windsor.NpcFlags & (uint)NpcFlags.QuestGiver) == 0); elapsed += 100)
+            {
+                player.Relocate(rowe.X, rowe.Y, rowe.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Creature windsor = Assert.IsType<Creature>(ai.Windsor);
+            Assert.True(ai.EventInProgress);
+            Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.QuestGiver);
+            Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Equal(["-1000822", "-1000823", "-1000824"], said);
+        }
+    }
+
+    [Fact]
+    public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
+    {
+        // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        CreatureWaypoint last = path[^1];
+        int[] texts = [-1000784, -1000785, -1000786, -1000787, -1000788, -1010030, -1010031];
+        CreatureContent content = new(
+            [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(4659), Template(4660), Template(4655), Template(6019)],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 6019, last.X + 3, last.Y, last.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature melizza = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI>(melizza.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere);
+            string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            for (int elapsed = 0; elapsed < 2_400_000 && !Said().Contains("-1010031"); elapsed += 100)
+            {
+                player.Relocate(melizza.X, melizza.Y, melizza.Z, 0, 0);
+                world.RunTick(100);
+                foreach (Creature summoned in ai.Summoned.Where(c => c.IsAlive))
+                {
+                    map.Combat.Kill(null, summoned);
+                }
+            }
+
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere)], quests.Completed);
+            Assert.Equal(10, ai.Summoned.Count);
+            Assert.Equal(["-1000784", "-1000785", "-1000786", "-1000787", "-1000788", "-1010030", "-1010031"], Said());
+        }
+    }
+
+    [Fact]
+    public void Eris_ArchersThenWaves_AWaveEndsWhenItsPeasantsAreDone_AndFifteenDeadFails()
+    {
+        // npc_eris_havenfireAI (eastern_plaguelands.cpp).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ErisHavenfireAI.Entry;
+        int[] texts = [-1000815, -1000816, -1000817, -1000818, -1000819, -1000820, -1000821];
+        CreatureContent content = new(
+            [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(14484), Template(14485), Template(14489), Template(14486)],
+            [Spawn(1, entry, 3340f, -3000f, 162f)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 3341f, -3000f);
+            Creature eris = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ErisHavenfireAI>(eris.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ErisHavenfireAI.QuestBalanceOfLightAndShadow);
+            Assert.Equal(0u, eris.NpcFlags & (uint)NpcFlags.QuestGiver);
+            world.RunTick(5000);
+            world.RunTick(100);
+            Assert.Equal(8, ai.Summons.Count(c => c.Entry == 14489));
+            world.RunTick(5000);
+            world.RunTick(100);
+            Creature[] wave1 = [.. ai.Summons.Where(c => c.Entry is 14484 or 14485)];
+            Assert.Equal(11, wave1.Length);
+            Assert.Equal(1, ai.Wave);
+            foreach (Creature peasant in wave1)
+            {
+                map.Combat.Kill(null, peasant);
+            }
+
+            world.RunTick(100);
+            Assert.Equal(11, ai.Killed);
+            Assert.Equal(2, ai.Wave); // the wave ended: the next one is out
+            Creature[] wave2 = [.. ai.Summons.Where(c => c.Entry is 14484 or 14485).Except(wave1)];
+            Assert.Equal(12, wave2.Length);
+            Assert.Empty(quests.Failed);
+            foreach (Creature peasant in wave2.Take(4))
+            {
+                map.Combat.Kill(null, peasant);
+            }
+
+            world.RunTick(100);
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.ErisHavenfireAI.QuestBalanceOfLightAndShadow)], quests.Failed);
+        }
+    }
+
     private static IReadOnlyList<CreatureWaypoint> RealPath(uint entry) => File.ReadLines(Path.Combine(AppContext.BaseDirectory, "validated-escort-waypoints.csv"))
         .Where(line => line.StartsWith($"{entry},", StringComparison.Ordinal))
         .Select(line => line.Split(','))
