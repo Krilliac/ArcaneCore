@@ -29,6 +29,12 @@ public sealed class TalentProcScriptsModule : ISpellHandlerModule
         system.RegisterProcScript(RetaliationProc.Spell, new RetaliationProc());
         system.RegisterProcScript(VampiricEmbraceProc.Spell, new VampiricEmbraceProc());
         system.RegisterProcScript(BladeFlurryProc.Spell, new BladeFlurryProc());
+        var itemDummy = new ItemDummyProc();
+        foreach (uint spell in ItemDummyProc.Spells)
+        {
+            system.RegisterProcScript(spell, itemDummy);
+        }
+
         system.RegisterIconProcScript(FamilyMage, MagicAbsorptionProc.Icon, new MagicAbsorptionProc());
         system.RegisterIconProcScript(FamilyMage, MasterOfElementsProc.Icon, new MasterOfElementsProc());
     }
