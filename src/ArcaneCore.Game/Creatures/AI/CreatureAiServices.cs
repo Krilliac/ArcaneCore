@@ -202,11 +202,17 @@ public sealed class CreatureAiFactory
         [Scripts.MuglashAI.Entry] = static c => new Scripts.MuglashAI(c),
         [Scripts.VolcorAI.Entry] = static c => new Scripts.VolcorAI(c),
         [Scripts.BartlebyAI.Entry] = static c => new Scripts.BartlebyAI(c),
+        [Scripts.DashelStonefistAI.Entry] = static c => new Scripts.DashelStonefistAI(c),
+        [Scripts.SquireRoweAI.Entry] = static c => new Scripts.SquireRoweAI(c),
+        [Scripts.MelizzaBrimbuzzleAI.Entry] = static c => new Scripts.MelizzaBrimbuzzleAI(c),
+        [Scripts.ErisHavenfireAI.Entry] = static c => new Scripts.ErisHavenfireAI(c),
     };
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
     private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul, Scripts.AMe01AI.QuestChasingAMe, Scripts.RinjiAI.QuestRinjiTrapped, Scripts.MuglashAI.QuestVorsha,
-        Scripts.VolcorAI.QuestEscapeThroughForce, Scripts.VolcorAI.QuestEscapeThroughStealth, Scripts.BartlebyAI.QuestBeat];
+        Scripts.VolcorAI.QuestEscapeThroughForce, Scripts.VolcorAI.QuestEscapeThroughStealth, Scripts.BartlebyAI.QuestBeat,
+        Scripts.DashelStonefistAI.QuestMissingDiploPt8, Scripts.MelizzaBrimbuzzleAI.QuestGetMeOutOfHere,
+        Scripts.ErisHavenfireAI.QuestBalanceOfLightAndShadow];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
     public CreatureAiFactory()
