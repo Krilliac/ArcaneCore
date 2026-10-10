@@ -76,6 +76,14 @@ public sealed class TeleportService
     public event Action<Player, TeleportDestination>? NearTeleportStarting;
 
     /// <summary>
+    /// Raised on the world thread after <see cref="TeleportCompleted"/> when the teleport scheduled vmangos' DELAYED_CAST_HONORLESS_TARGET:
+    /// every far teleport (Player::ExecuteTeleportFar, Player.cpp:2083) and a same-map teleport without
+    /// <see cref="TeleportOptions.NotLeaveCombat"/> (Player.cpp:1923-1927). The flag says which; a far arrival casts only into a PvP-enforced
+    /// area (HandleMoveWorldportAckOpcode, MovementHandler.cpp:193-195), which the listener decides.
+    /// </summary>
+    public event Action<Player, bool>? HonorlessTargetDue;
+
+    /// <summary>
     /// Raised on the world thread when a far teleport is carried out, while the player is still in its old map (vmangos
     /// Player::ExecuteTeleportFar: "remove pet on map change", UnsummonPetTemporaryIfAny, Player.cpp:2045-2048, before the old map's
     /// Remove).
@@ -199,7 +207,10 @@ public sealed class TeleportService
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
         if (current.MapId == mapId && !staysAboard)
         {
-            _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default);
+            _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default)
+            {
+                HonorlessTarget = (options & TeleportOptions.NotLeaveCombat) == 0,
+            };
             NearTeleportStarting?.Invoke(player, destination);
             MovementInfo moved = player.Movement;
             moved.X = x;
@@ -273,6 +284,11 @@ public sealed class TeleportService
 
         player.NeedsVisibilityUpdate = true;
         TeleportCompleted?.Invoke(player);
+        if (pending.HonorlessTarget)
+        {
+            HonorlessTargetDue?.Invoke(player, false);
+        }
+
         return true;
     }
 
@@ -389,7 +405,11 @@ public sealed class TeleportService
             dest = new TeleportDestination(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
         }
 
-        if (!TryEnterMap(player, dest))
+        if (TryEnterMap(player, dest))
+        {
+            HonorlessTargetDue?.Invoke(player, true);
+        }
+        else
         {
             // vmangos HandleReturnOnTeleportFail: back to where the teleport started.
             TeleportDestination origin = pending.Origin;
@@ -522,5 +542,8 @@ public sealed class TeleportService
         public Map SourceMap { get; } = sourceMap;
 
         public TeleportDestination Origin { get; } = origin;
+
+        /// <summary>vmangos DELAYED_CAST_HONORLESS_TARGET scheduled by a same-map teleport.</summary>
+        public bool HonorlessTarget { get; init; }
     }
 }
