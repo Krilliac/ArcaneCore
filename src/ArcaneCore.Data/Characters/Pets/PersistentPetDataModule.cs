@@ -25,6 +25,9 @@ public sealed class PersistentPetRow
     public string Name { get; set; } = "";
     public uint NameTimestamp { get; set; }
     public bool RenameAllowed { get; set; } = true;
+    public byte Loyalty { get; set; } = 1;
+    public int LoyaltyPoints { get; set; } = 1000;
+    public int TrainingPoints { get; set; }
 }
 
 /// <summary>
@@ -49,6 +52,9 @@ public sealed class PersistentPetDataModule : IDataModule, ICharacterDataCleanup
             entity.Property(r => r.SpellsJson).IsRequired();
             entity.Property(r => r.Name).HasMaxLength(100).IsRequired().HasDefaultValue("");
             entity.Property(r => r.RenameAllowed).HasDefaultValue(true);
+            entity.Property(r => r.Loyalty).HasDefaultValue((byte)1);
+            entity.Property(r => r.LoyaltyPoints).HasDefaultValue(1000);
+            entity.Property(r => r.TrainingPoints).HasDefaultValue(0);
         });
     }
 
@@ -104,6 +110,9 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             row.Name = snapshot.Name;
             row.NameTimestamp = snapshot.NameTimestamp;
             row.RenameAllowed = snapshot.RenameAllowed;
+            row.Loyalty = snapshot.LoyaltyLevel;
+            row.LoyaltyPoints = snapshot.LoyaltyPoints;
+            row.TrainingPoints = snapshot.TrainingPoints;
             await db.Set<PersistentPetCooldownRow>().Where(r => r.CharacterId == snapshot.CharacterId)
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             if (snapshot.Cooldowns is { Count: > 0 })
@@ -165,5 +174,5 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             JsonSerializer.Deserialize<uint[]>(row.ActionBarJson) ?? [],
             JsonSerializer.Deserialize<PersistentPetSpell[]>(row.SpellsJson) ?? [], row.IsCurrent,
             cooldowns.Select(c => new PersistentPetCooldown(c.Kind, c.SpellId, c.Category, c.EndsAtUnixMs)).ToArray(),
-            row.Name, row.NameTimestamp, row.RenameAllowed);
+            row.Name, row.NameTimestamp, row.RenameAllowed, row.Loyalty, row.LoyaltyPoints, row.TrainingPoints);
 }

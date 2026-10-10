@@ -319,6 +319,101 @@ public sealed class GridContainer
         }
     }
 
+    private readonly List<List<WorldObject>> _orderedObjectSources = [];
+    private readonly List<List<Player>> _orderedPlayerSources = [];
+
+    /// <summary>
+    /// <see cref="CollectObjects"/> in map-join order without a sort: the area's join-ordered cells are merged into the
+    /// empty <paramref name="results"/>, which comes out ordered and distinct. Unplaced objects (non-finite positions)
+    /// go to <paramref name="extras"/> unordered. False, with nothing added, for the cases <see cref="CollectObjects"/>
+    /// answers by walking everything (a non-finite query or an oversized area); the caller then collects and sorts.
+    /// </summary>
+    internal bool TryCollectObjectsInJoinOrder(float x, float y, float radius, List<WorldObject> results, List<WorldObject> extras, out CellArea area)
+    {
+        area = default;
+        if (results.Count != 0 || !float.IsFinite(radius) || !float.IsFinite(x) || !float.IsFinite(y))
+        {
+            return false;
+        }
+
+        area = GridDefines.CalculateCellArea(x, y, radius);
+        if ((long)(area.High.X - area.Low.X + 1) * (area.High.Y - area.Low.Y + 1) > MaxCellsPerQuery)
+        {
+            return false;
+        }
+
+        // Not reentrant, and need not be: nothing runs between gathering the cells and merging them.
+        List<List<WorldObject>> sources = _orderedObjectSources;
+        sources.Clear();
+        for (int cx = area.Low.X; cx <= area.High.X; cx++)
+        {
+            int gx = cx / GridDefines.MaxNumberOfCells;
+            for (int cy = area.Low.Y; cy <= area.High.Y; cy++)
+            {
+                Grid? grid = _grids[(gx * GridDefines.MaxNumberOfGrids) + (cy / GridDefines.MaxNumberOfCells)];
+                if (grid?.OrderedObjects(cx % GridDefines.MaxNumberOfCells, cy % GridDefines.MaxNumberOfCells) is { Count: > 0 } cell)
+                {
+                    sources.Add(cell);
+                }
+            }
+        }
+
+        JoinOrder.Merge(sources, results);
+        sources.Clear();
+        extras.AddRange(_unplaced);
+        return true;
+    }
+
+    /// <summary><see cref="TryCollectObjectsInJoinOrder"/> for <see cref="CollectPlayers"/>.</summary>
+    internal bool TryCollectPlayersInJoinOrder(float x, float y, float radius, List<Player> results, List<Player> extras, out CellArea area)
+    {
+        area = default;
+        if (results.Count != 0 || !float.IsFinite(radius) || !float.IsFinite(x) || !float.IsFinite(y))
+        {
+            return false;
+        }
+
+        area = GridDefines.CalculateCellArea(x, y, radius);
+        if ((long)(area.High.X - area.Low.X + 1) * (area.High.Y - area.Low.Y + 1) > MaxCellsPerQuery)
+        {
+            return false;
+        }
+
+        List<List<Player>> sources = _orderedPlayerSources;
+        sources.Clear();
+        for (int cx = area.Low.X; cx <= area.High.X; cx++)
+        {
+            int gx = cx / GridDefines.MaxNumberOfCells;
+            for (int cy = area.Low.Y; cy <= area.High.Y; cy++)
+            {
+                Grid? grid = _grids[(gx * GridDefines.MaxNumberOfGrids) + (cy / GridDefines.MaxNumberOfCells)];
+                if (grid?.OrderedPlayers(cx % GridDefines.MaxNumberOfCells, cy % GridDefines.MaxNumberOfCells) is { Count: > 0 } cell)
+                {
+                    sources.Add(cell);
+                }
+            }
+        }
+
+        JoinOrder.Merge(sources, results);
+        sources.Clear();
+        foreach (WorldObject obj in _unplaced)
+        {
+            if (obj is Player player)
+            {
+                extras.Add(player);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a join-ordered collect over <paramref name="area"/> already returned <paramref name="obj"/>: it is indexed
+    /// in a cell of the area whose grid exists. False means it may be missing and must be added as an extra.
+    /// </summary>
+    internal bool IsCollectedIn(WorldObject obj, CellArea area)
+        => _cells.TryGetValue(obj, out CellCoord cell) && area.Contains(cell) && _grids[cell.Grid.Id] is not null;
+
     /// <summary>
     /// Append every player in the cells a circle touches to <paramref name="results"/> — the
     /// players-only visit vmangos <c>Map::UpdateObjectVisibility</c> (Map.cpp) makes with a

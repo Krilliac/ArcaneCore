@@ -78,4 +78,17 @@ public sealed class PetOptions
     /// already has more than this many guardians of it (SpellEffects.cpp:2806). Retail 15.
     /// </summary>
     public int MaxNpcGuardiansPerEntry { get; set; } = 15;
+
+    /// <summary>
+    /// vmangos CONFIG_UINT32_PET_DEFAULT_LOYALTY (mangosd.conf <c>PetDefaultLoyalty</c>, 1 = Rebellious … 6 = Best Friend): the loyalty a newly tamed
+    /// pet is raised to (Spell::EffectTameCreature, SpellEffects.cpp:3151-3154).
+    /// </summary>
+    public byte DefaultLoyalty { get; set; } = 1;
+
+    /// <summary>
+    /// Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food. Its first skill line
+    /// (skillLine[0]) is the family's beast-training line (Pet::CanLearnPetSpell); with a 15-field SkillLineAbility.dbc (NpcServices:SkillLineAbilityDbcPath)
+    /// it turns on training-point costs, the family check and the four-active-spell limit, unset they are off.
+    /// </summary>
+    public string? CreatureFamilyDbcPath { get; set; }
 }

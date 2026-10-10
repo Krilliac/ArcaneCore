@@ -176,6 +176,7 @@ public abstract partial class Battleground
     {
         StartTimeMs = 0;
         AddToFreeSlotQueue();
+        Ports.Scripts?.Battleground.OnStart(this);
     }
 
     /// <summary>
@@ -683,6 +684,8 @@ public abstract partial class Battleground
         {
             Ports.Lifecycle.ScheduleQueueUpdate(this);
         }
+
+        Ports.Scripts?.Battleground.OnEnd(this, winner);
     }
 
     /// <summary>The scoreboard now (vmangos <c>BuildPvpLogDataPacket</c>): at most 80 rows in guid order.</summary>

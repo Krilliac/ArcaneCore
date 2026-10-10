@@ -213,6 +213,26 @@ public sealed partial class CreatureMapSystem
         }
     }
 
+    /// <summary>
+    /// A player's possessed minion (vmangos Player::SummonPossessedMinion, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN): a temporary creature that
+    /// goes after <paramref name="lifetimeMs"/> (0: no timer). Null when the template is missing.
+    /// </summary>
+    public Creature? SummonPossessedMinion(uint entry, float x, float y, float z, float orientation, uint lifetimeMs)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        if (lifetimeMs > 0)
+        {
+            AddTimedSummon(creature, lifetimeMs, SummonTimer.Absolute);
+        }
+
+        return creature;
+    }
+
     /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer.</summary>
     public Creature? SummonFromGameObject(uint entry, float x, float y, float z, float orientation, uint lifetimeMs)
     {

@@ -43,7 +43,8 @@ public interface IOutdoorPvPHost
     CapturePointTemplate? CapturePoint(uint entry);
 
     /// <summary>vmangos <c>Map::SummonGameObject</c> (no despawn). Null when the template is missing or the map is not loaded.</summary>
-    ObjectGuid? SummonObject(OutdoorPvPSpawn spawn);
+    /// <remarks><paramref name="spawnedByDefault"/>: vmangos <c>SetSpawnedByDefault(true)</c>, so a use resets it instead of deleting it.</remarks>
+    ObjectGuid? SummonObject(OutdoorPvPSpawn spawn, bool spawnedByDefault = false);
 
     void RemoveObject(ObjectGuid guid);
 
@@ -60,6 +61,20 @@ public interface IOutdoorPvPHost
     ObjectGuid? SummonCreature(OutdoorPvPSpawn spawn, uint faction = 0, uint aura = 0);
 
     void RemoveCreature(ObjectGuid guid);
+
+    /// <summary>
+    /// vmangos <c>Creature::JoinCreatureGroup(leader, ATTACK_DISTANCE, leader-&gt;GetAngle(member) - member-&gt;GetOrientation(),
+    /// OPTION_FORMATION_MOVE | OPTION_AGGRO_TOGETHER | OPTION_EVADE_TOGETHER)</c>: the member follows the leader at that slot and fights
+    /// and evades with the group. Nothing when either is gone.
+    /// </summary>
+    void JoinCreatureGroup(ObjectGuid member, ObjectGuid leader);
+
+    /// <summary>
+    /// vmangos <c>MotionMaster::Clear(false, true)</c> then <c>MoveWaypoint(0, PATH_FROM_SPECIAL, 1000, 0, pathId, false)</c>. ArcaneCore keeps
+    /// no creature_movement_special table; the path is looked up as the creature entry's own path 0 (creature_movement_template), which is
+    /// where cmangos-format data keeps it. False when the creature or the path is missing.
+    /// </summary>
+    bool StartSpecialPath(ObjectGuid creature, uint pathId);
 
     /// <summary>vmangos <c>pCreature-&gt;CastSpell(pCreature, spell, false)</c>.</summary>
     void CreatureCastOnSelf(ObjectGuid creature, uint spellId);

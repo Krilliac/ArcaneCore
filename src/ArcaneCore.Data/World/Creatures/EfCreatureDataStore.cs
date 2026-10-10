@@ -35,6 +35,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
         List<CreatureLinkRow> links = await db.Set<CreatureLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<SmartScriptDbRow> smartScripts = await db.Set<SmartScriptDbRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureTemplateLinkRow> templateLinks = await db.Set<CreatureTemplateLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         Kernel.WorldData.Pools.PoolCatalog pools = await PoolStore.LoadAsync(
             db, PoolSpawnKind.Creature, spawns.GroupBy(s => s.Guid).ToDictionary(g => g.Key, g => (g.Last().Entry, g.Last().MapId)), cancellationToken).ConfigureAwait(false);
@@ -70,6 +71,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                     relaySteps.Select(RelayScriptDataModule.ToStep),
                     relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
                 DbScripts = new DbScriptCatalog(dbScripts.Select(row => (DbScriptDataModule.KindOf(row), DbScriptDataModule.ToStep(row)))),
+                SmartScripts = new SmartScriptCatalog(smartScripts.Select(SmartScriptDataModule.ToRow)),
             },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs) { ScriptId = p.ScriptId })),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),

@@ -32,6 +32,12 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal void RewardGroupEventExplored(Player player, uint questId, Creature source) => _ai.QuestEvents?.EventHappened(player, questId, source, rewardGroup: true);
 
+    /// <summary>mangos-classic Player::AreaExploredOrEventHappens from a script: the quest's event objective is done for this player only.</summary>
+    internal void QuestEventHappened(Player player, uint questId) => _ai.ScriptQuests?.AreaExploredOrEventHappens(player, questId);
+
+    /// <summary>mangos-classic Player::FailQuest from a script, for this player only.</summary>
+    internal void QuestFailed(Player player, uint questId) => _ai.ScriptQuests?.FailQuest(player, questId);
+
     /// <summary>The online members of an escort player's group (vmangos npc_escortAI::IsPlayerOrGroupInRange); empty when not grouped.</summary>
     internal IReadOnlyList<Player> EscortGroupMembers(Player player) => _ai.ScriptQuests?.GroupMembersOf(player) ?? [];
 

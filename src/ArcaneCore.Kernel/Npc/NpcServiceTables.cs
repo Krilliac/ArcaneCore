@@ -29,12 +29,12 @@ public sealed class TaxiPathNodeCatalog
 }
 
 /// <summary>
-/// One SkillLineAbility.dbc row (build 5875, fifteen fields, a fourteen-field image is read too; the two "not" masks and
-/// the character points are unused: vmangos DBCStructure.h SkillLineAbilityEntry, fmt "niiiixxiiiiixxi").
+/// One SkillLineAbility.dbc row (build 5875, fifteen fields, a fourteen-field image is read too; the two "not" masks are
+/// unused, field 14 is the pet training-point cost reqtrainpoints: vmangos DBCStructure.h SkillLineAbilityEntry, fmt "niiiixxiiiiixxi").
 /// </summary>
 public sealed record SkillLineAbilityRecord(
     uint Id, uint SkillId, uint SpellId, uint RaceMask, uint ClassMask,
-    uint ReqSkillValue, uint ForwardSpellId, uint LearnOnGetSkill, uint MaxValue, uint MinValue);
+    uint ReqSkillValue, uint ForwardSpellId, uint LearnOnGetSkill, uint MaxValue, uint MinValue, uint ReqTrainPoints = 0);
 
 /// <summary>
 /// Spell ranks and race/class restrictions derived from SkillLineAbility.dbc (vmangos
@@ -45,7 +45,9 @@ public sealed class SkillLineAbilityCatalog
     private readonly FrozenDictionary<uint, SkillLineAbilityRecord[]> _bySpell;
     private readonly FrozenDictionary<uint, uint> _previousRank;
 
-    public SkillLineAbilityCatalog(IEnumerable<SkillLineAbilityRecord> rows)
+    /// <param name="rows">The ability rows.</param>
+    /// <param name="hasTrainingPoints">True when the rows were read from the fifteen-field image that carries reqtrainpoints.</param>
+    public SkillLineAbilityCatalog(IEnumerable<SkillLineAbilityRecord> rows, bool hasTrainingPoints = false)
     {
         ArgumentNullException.ThrowIfNull(rows);
         SkillLineAbilityRecord[] all = rows.ToArray();
@@ -56,17 +58,60 @@ public sealed class SkillLineAbilityCatalog
             previous.TryAdd(row.ForwardSpellId, row.SpellId);
         }
 
+        foreach ((uint rank, uint before) in PreviousRankSupplement)
+        {
+            previous.TryAdd(rank, before);
+        }
+
         _previousRank = previous.ToFrozenDictionary();
+        HasTrainingPoints = hasTrainingPoints;
     }
+
+    /// <summary>
+    /// Rank links the client DBC lacks: Boar Charge rank 6 (27685, 25 training points) has no forward_spellid link from rank 5 (26201), so
+    /// the DBC chain 7371 -> 26177 -> 26178 -> 26179 -> 26201 stops one short. The reference servers keep the link in spell_chain
+    /// (mangos-classic sql/archive/0.8/4096_pet.sql:116 <c>('27685','26201','7371','6')</c>; vmangos sql/old_migrations/20181119025556_world.sql:23 sets spell_chain build_min=5302 for 27685).
+    /// A link the DBC does provide always wins. Charge is the only multi-chain name among the costed pet abilities of the build-5875 image.
+    /// </summary>
+    private static readonly (uint Rank, uint Previous)[] PreviousRankSupplement = [(27685, 26201)];
 
     public static SkillLineAbilityCatalog Empty { get; } = new([]);
 
     public int Count => _bySpell.Count;
 
+    /// <summary>True when the rows carry reqtrainpoints (the fifteen-field image); a fourteen-field image reports 0 for every spell.</summary>
+    public bool HasTrainingPoints { get; }
+
     public IReadOnlyList<SkillLineAbilityRecord> Abilities(uint spellId) => _bySpell.GetValueOrDefault(spellId) ?? [];
 
     /// <summary>The previous rank of <paramref name="spellId"/> (the ability whose forward_spellid it is), 0 when none.</summary>
     public uint PreviousRank(uint spellId) => _previousRank.GetValueOrDefault(spellId);
+
+    /// <summary>
+    /// The pet training-point cost of <paramref name="spellId"/>: the first ability row's reqtrainpoints, 0 when the spell has no row
+    /// (vmangos Pet::GetTPForSpell breaks on the first row; the real build-5875 image has one value per spell across all its rows).
+    /// </summary>
+    public uint TrainingPoints(uint spellId) => _bySpell.TryGetValue(spellId, out SkillLineAbilityRecord[]? rows) ? rows[0].ReqTrainPoints : 0;
+
+    /// <summary>The lowest rank of the chain <paramref name="spellId"/> belongs to (itself when it has no previous rank); the walk is bounded.</summary>
+    public uint FirstInChain(uint spellId)
+    {
+        uint current = spellId;
+        for (int hop = 0; hop < MaxChainLength; hop++)
+        {
+            uint previous = PreviousRank(current);
+            if (previous == 0)
+            {
+                break;
+            }
+
+            current = previous;
+        }
+
+        return current;
+    }
+
+    private const int MaxChainLength = 32;
 
     /// <summary>
     /// vmangos Player::IsSpellFitByClassAndRace: a spell without abilities fits everyone; otherwise

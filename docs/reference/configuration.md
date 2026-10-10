@@ -15,8 +15,11 @@ How to read the tables:
 ## Sections
 
 - [`AntiCheat`](#anticheat)
+- [`AuctionHouseBot`](#auctionhousebot)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
+- [`Auth:AutoPatch`](#authautopatch)
+- [`AutoBroadcast`](#autobroadcast)
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
@@ -37,9 +40,11 @@ How to read the tables:
 - [`Locomotion`](#locomotion)
 - [`Logging:ArcaneCore`](#loggingarcanecore)
 - [`Loot`](#loot)
+- [`Modules:DuelReset`](#modulesduelreset)
 - [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
+- [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
@@ -52,6 +57,7 @@ How to read the tables:
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
 - [`Rest`](#rest)
+- [`ServerMail`](#servermail)
 - [`Skills`](#skills)
 - [`SpecialLoot`](#specialloot)
 - [`SpellRules`](#spellrules)
@@ -135,6 +141,50 @@ How to read the tables:
 | `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
 | `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
 
+## `AuctionHouseBot`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AuctionHouseBot:BidMaxPercent` | `uint` | `90` | - | Highest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Max, 0-100, default 90). |
+| `AuctionHouseBot:BidMinPercent` | `uint` | `75` | - | Lowest starting bid as a percent of the buyout (cMaNGOS AuctionHouseBot.Bid.Min, 0-100, default 75). |
+| `AuctionHouseBot:Bidding` | `bool` | `true` | - | Whether the buyer also bids (cMaNGOS AuctionBotBuyer: an auction whose buyout is above the bot's value, but whose next bid is below it, gets that next bid). Default true. A bot bid stands with no bidding character; if it wins, the item leaves the economy and the seller is paid as for any sale. |
+| `AuctionHouseBot:Blacklist` | `string` | `""` | - | Item entries the bot never lists or buys, comma-separated (cMaNGOS ahbot_items rows with value 0). |
+| `AuctionHouseBot:BuyChance` | `uint` | `10` | - | Percent chance a buy action buys anything (cMaNGOS AuctionHouseBot.Chance.Buy, 0-100, default 10). |
+| `AuctionHouseBot:BuyValuePercent` | `uint` | `80` | - | The most the buyer pays, as a percent of the bot's own value of the item (cMaNGOS AuctionHouseBot.Buy.Value, 0-200, default 80). |
+| `AuctionHouseBot:DailyBuyBudgetCopper` | `uint` | `10000000` | - | Custody limit: most copper the buyer may pay out per UTC day, all houses together (MaNGOS Zero custody; 0 = the buyer never buys). |
+| `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
+| `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
+| `AuctionHouseBot:Houses` | `string` | `"2,6,7"` | - | The auction houses the bot serves, comma-separated AuctionHouse.dbc ids (2 Alliance, 6 Horde, 7 neutral; cMaNGOS serves all three). |
+| `AuctionHouseBot:LootCreatureElite` | `string` | `"30,34,1,2"` | - | Loot of rank 1 (elite) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureNormal` | `string` | `"30,35,8,12"` | - | Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. |
+| `AuctionHouseBot:LootCreatureRare` | `string` | `"0,10,1,1"` | - | Loot of rank 4 (rare) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureRareElite` | `string` | `"-10,2,1,1"` | - | Loot of rank 2 (rare elite) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `"-20,1,1,1"` | - | Loot of rank 3 (world boss) creatures; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootDisenchant` | `string` | `"10,12,1,1"` | - | disenchant_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootFishing` | `string` | `"3,5,30,40"` | - | fishing_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootGameobject` | `string` | `"13,16,7,11"` | - | gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootSkinning` | `string` | `"3,5,50,50"` | - | skinning_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:MaxAuctionsPerHouse` | `uint` | `2000` | - | Most bot auctions open in one house at once; a sell action never lists past it (ArcaneCore guard, 0 = no listing). |
+| `AuctionHouseBot:MaxRequiredLevel` | `uint` | `60` | - | Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5. |
+| `AuctionHouseBot:RandomProperties` | `bool` | `true` | - | Roll random properties ("of the Bear") for minted items whose template has them (cMaNGOS Item::CreateItem). Default true. |
+| `AuctionHouseBot:SellChance` | `uint` | `10` | - | Percent chance a sell action lists anything (cMaNGOS AuctionHouseBot.Chance.Sell, 0-100, default 10). |
+| `AuctionHouseBot:StackPercentMax` | `uint` | `50` | - | Largest stack as a percent of the item's stack size (cMaNGOS Items.Profession fourth value: 50). |
+| `AuctionHouseBot:StackPercentMin` | `uint` | `0` | - | Smallest stack as a percent of the item's stack size (cMaNGOS Items.Profession third value: 0; at least one item). |
+| `AuctionHouseBot:TemplatesPerSellMax` | `int` | `90` | - | Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90). |
+| `AuctionHouseBot:TemplatesPerSellMin` | `int` | `80` | - | Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80). |
+| `AuctionHouseBot:TimeMaxHours` | `uint` | `24` | - | Longest listing in hours (cMaNGOS AuctionHouseBot.Time.Max, 1-72, default 24). |
+| `AuctionHouseBot:TimeMinHours` | `uint` | `2` | - | Shortest listing in hours (cMaNGOS AuctionHouseBot.Time.Min, 1-72, default 2). |
+| `AuctionHouseBot:UpdateIntervalSeconds` | `uint` | `20` | - | Seconds between bot actions. Each action handles one house, alternating the sell then the buy pass over the houses (cMaNGOS AuctionHouseBot::Update m_houseAction). |
+| `AuctionHouseBot:ValueArtifact` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of artifact items per item class (cMaNGOS AuctionHouseBot.Value.Artifact; all 0 by default). |
+| `AuctionHouseBot:ValueEpic` | `string` | `"800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"` | - | Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic). |
+| `AuctionHouseBot:ValueLegendary` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of legendary items per item class (cMaNGOS AuctionHouseBot.Value.Legendary; all 0 by default). |
+| `AuctionHouseBot:ValueNormal` | `string` | `"100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"` | - | Price of common (white) items per item class (cMaNGOS AuctionHouseBot.Value.Normal). |
+| `AuctionHouseBot:ValuePoor` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). |
+| `AuctionHouseBot:ValueRare` | `string` | `"400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"` | - | Price of rare (blue) items per item class (cMaNGOS AuctionHouseBot.Value.Rare). |
+| `AuctionHouseBot:ValueUncommon` | `string` | `"200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"` | - | Price of uncommon (green) items per item class (cMaNGOS AuctionHouseBot.Value.Uncommon). |
+| `AuctionHouseBot:ValueVariance` | `uint` | `10` | - | Random price spread in percent (cMaNGOS AuctionHouseBot.Value.Variance, 0-100, default 10). |
+| `AuctionHouseBot:VendorValue` | `bool` | `true` | - | Price an item that a vendor sells at 100 % of the vendor price, so it cannot be bought and resold for profit (cMaNGOS AuctionHouseBot.Value.Vendor, default true). |
+
 ## `Auras`
 
 | Key | Type | Default | Reload | Meaning |
@@ -159,6 +209,23 @@ How to read the tables:
 | `Auth:ReadTimeoutSeconds` | `int` | `0` | - | Longest a client may take to deliver the rest of a packet once its command byte has arrived, in seconds; 0 disables. Hardening (no vmangos equivalent, default 0 = retail): a retail client sends each logon packet in one write. |
 | `Auth:StrictUsernameCharset` | `bool` | `false` | - | Reject account names containing anything but printable ASCII (0x21-0x7E). Hardening: vmangos only escapes the name for SQL. A 1.12 client cannot type other characters. Default off (retail). |
 | `Auth:StrictVersionCheck` | `bool` | `false` | - | vmangos StrictVersionCheck, default false. Enabled checks crc_hash against a configured 20-byte hash for the client build/OS/platform. |
+
+## `Auth:AutoPatch`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Auth:AutoPatch:Directory` | `string` | `"patches"` | - | The folder patches are read from (vmangos PatchesDir, default "./patches"); relative paths are from the working directory. |
+| `Auth:AutoPatch:Enabled` | `bool` | `false` | - | Offer patches at all. Default false: a non-5875 client gets WOW_FAIL_VERSION_INVALID as before. |
+| `Auth:AutoPatch:FileNamePattern` | `string` | `"{build}{locale}.mpq"` | - | The file looked up when no `Patches` entry matches: `{build}` and `{locale}` are replaced (vmangos "%d%s.mpq", e.g. 5464enUS.mpq). Empty disables the fallback so only listed patches are served. |
+| `Auth:AutoPatch:Patches` | `List<AutoPatchEntry>` | `[]` | - | Explicit patches, checked first: an exact build and locale, then the same build with an empty (any) locale. |
+
+## `AutoBroadcast`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AutoBroadcast:Enabled` | `bool` | `false` | - | Off by default: ClassicDB has no autobroadcast table, so the messages come from this section. |
+| `AutoBroadcast:IntervalMs` | `uint` | `1800000` | - | vmangos default 1800000 (30 minutes). |
+| `AutoBroadcast:Messages` | `List<string>` | `[]` | - | The announcements (vmangos autobroadcast.string_id rows; sql/custom/autobroadcast_example.sql has the classic tips). |
 
 ## `Bans`
 
@@ -291,7 +358,7 @@ How to read the tables:
 | `Creatures:Respawn:DynamicMinimumSeconds` | `uint` | `10` | - | `Creatures:Respawn:DynamicMinimumSeconds`: TrinityCore Respawn.DynamicMinimumCreature (default 10 s). |
 | `Creatures:Respawn:DynamicRate` | `float` | `0` | - | `Creatures:Respawn:DynamicRate`: TrinityCore Respawn.DynamicRateCreature (Map::ApplyDynamicModeRespawnScaling, Maps/Map.cpp:3312-3354). A dying open-world spawn's respawn delay is multiplied by `DynamicRate / players in its zone` when that is below 1, never under `DynamicMinimumSeconds`. 0 (the default) is off, which is retail 1.12.1; TrinityCore's suggested value is 10. Dungeons, raids, battlegrounds, rares and world bosses are never scaled. |
 | `Creatures:Respawn:HonorTemplateCorpseDecay` | `bool` | `false` | - | `Creatures:Respawn:HonorTemplateCorpseDecay`: let a template's `CorpseDecay` column override the rank delay. It is a cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail. |
-| `Creatures:Respawn:Linked` | `bool` | `true` | - | `Creatures:Respawn:Linked`: carry the creature_linking respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave, Entities/CreatureLinkingMgr.cpp:555-612, and CanSpawn, :699-751): a boss's trash respawns, despawns or dies with it, and a slave with FLAG_CANT_SPAWN_IF_BOSS_DEAD / ALIVE waits on its master. Retail; false keeps only FLAG_FOLLOW and the instance scripts' own handling. |
+| `Creatures:Respawn:Linked` | `bool` | `true` | - | `Creatures:Respawn:Linked`: carry the creature_linking aggro, respawn and despawn events (cmangos CreatureLinkingHolder::ProcessSlave, Entities/CreatureLinkingMgr.cpp:555-612, and CanSpawn, :699-751): a boss's trash respawns, despawns or dies with it, and a slave with FLAG_CANT_SPAWN_IF_BOSS_DEAD / ALIVE waits on its master. Retail; false keeps only FLAG_FOLLOW and the instance scripts' own handling. |
 | `Creatures:Respawn:Persist` | `bool` | `true` | - | `Creatures:Respawn:Persist`: dead spawns keep their respawn time across restarts (vmangos `creature_respawn`, characters database). False keeps the timers in memory only, as before. |
 | `Creatures:Respawn:SaveImmediately` | `bool` | `true` | - | `Creatures:Respawn:SaveImmediately`: every database spawn saves its respawn time at death (vmangos SaveRespawnTimeImmediately = 1, mangosd.conf.dist.in:397, World.cpp:729). False saves a normal creature only when it leaves the map or at shutdown; a world boss is always saved at death (Creature.cpp:2262-2263). |
 | `Creatures:RespawnPacifyMs` | `uint` | `5000` | - | Milliseconds a creature cannot initiate attacks after it respawns (vmangos Creature::SetTempPacified(5000) on respawn, Objects/Creature.cpp:877-878). 0 disables. |
@@ -485,6 +552,17 @@ How to read the tables:
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
 | `Loot:RollTimeoutMs` | `uint` | `60000` | - | How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown). |
 
+## `Modules:DuelReset`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Modules:DuelReset:Areas` | `string` | `"12;14;809"` | - | `DuelReset.Areas`: area ids separated by ';' (default Elwynn Forest, Durotar, Gates of Ironforge); "" or "0" means none. |
+| `Modules:DuelReset:CooldownAge` | `uint` | `30` | - | `DuelReset.CooldownAge`: seconds a cooldown must have run before the start resets it. |
+| `Modules:DuelReset:Cooldowns` | `bool` | `true` | - | `DuelReset.Cooldowns`: reset cooldowns when the duel starts and restore them when it is won. |
+| `Modules:DuelReset:Enabled` | `bool` | `false` | - | Load the module at all. Off by default: it changes duels in Elwynn Forest, Durotar and the Gates of Ironforge. |
+| `Modules:DuelReset:HealthMana` | `bool` | `true` | - | `DuelReset.HealthMana`: fill health and power when the duel starts and restore them when it is won. |
+| `Modules:DuelReset:Zones` | `string` | `"0"` | - | `DuelReset.Zones`: zone ids separated by ';'. "" means any zone (areas then do not matter); "0" means none. |
+
 ## `Names`
 
 | Key | Type | Default | Reload | Meaning |
@@ -525,6 +603,19 @@ How to read the tables:
 | `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
 | `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
+
+## `Ops:Metrics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Metrics:Enabled` | `bool` | `false` | - | The master switch. `false`: no listener is attached, so every instrument stays disabled and costs one branch. Default false (TrinityCore `Metric.Enable = 0`). |
+| `Ops:Metrics:Exporter` | `MetricsExporter` | `Prometheus` | - | Where the metrics go. Default Prometheus. Values: `Prometheus` (scrape endpoint), `Otlp` (push to an OpenTelemetry collector), `Both`. Values: `Prometheus`, `Otlp`, `Both`. |
+| `Ops:Metrics:MapSampleIntervalSeconds` | `int` | `10` | - | Seconds between per-map samples (players, creatures, objects, update time) taken on the world thread. 1-3600. Default 10 (TrinityCore `Metric.OverallStatusInterval = 10`). |
+| `Ops:Metrics:OtlpEndpoint` | `string` | `"http://localhost:4318/v1/metrics"` | - | The OTLP/HTTP metrics endpoint the push exporter posts JSON to. Default `http://localhost:4318/v1/metrics`. |
+| `Ops:Metrics:OtlpIntervalSeconds` | `int` | `15` | - | Seconds between OTLP pushes. 1-3600. Default 15 (TrinityCore `Metric.Interval = 1` pushes every second to InfluxDB; a collector batches, so a longer period suffices). |
+| `Ops:Metrics:PerMapMetrics` | `bool` | `true` | - | `false`: no per-map series, only the world totals (bounds the label cardinality on a server with many instances). Default true. |
+| `Ops:Metrics:PrometheusPrefix` | `string` | `"http://localhost:9464/metrics/"` | - | The Prometheus scrape listener prefix (an `HttpListener` prefix ending in `/`). Use `http://+:9464/metrics/` to listen on every interface (a container). Default `http://localhost:9464/metrics/`. |
+| `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
 
 ## `Ops:Watchdog`
 
@@ -580,6 +671,8 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Pets:CreatureFamilyDbcPath` | `string` | `null` | - | Path of the build-5875 CreatureFamily.dbc. Its petFoodMask column is the pet diet (Pet::HaveInDiet); unset, Feed Pet accepts any food. Its first skill line (skillLine[0]) is the family's beast-training line (Pet::CanLearnPetSpell); with a 15-field SkillLineAbility.dbc (NpcServices:SkillLineAbilityDbcPath) it turns on training-point costs, the family check and the four-active-spell limit, unset they are off. |
+| `Pets:DefaultLoyalty` | `byte` | `1` | - | vmangos CONFIG_UINT32_PET_DEFAULT_LOYALTY (mangosd.conf `PetDefaultLoyalty`, 1 = Rebellious … 6 = Best Friend): the loyalty a newly tamed pet is raised to (Spell::EffectTameCreature, SpellEffects.cpp:3151-3154). |
 | `Pets:MaxNpcGuardiansPerEntry` | `int` | `15` | - | vmangos Spell::EffectSummonGuardian: a non-player caster stops summoning an entry once it already has more than this many guardians of it (SpellEffects.cpp:2806). Retail 15. |
 | `Pets:PetLeashDistance` | `float` | `120` | - | vmangos Pet::Update: a pet farther than this from its owner is unsummoned (`IsWithinDistInMap(owner, 120.0f)`, Pet.cpp:662-690). |
 
@@ -677,6 +770,12 @@ How to read the tables:
 | `Rest:RateOfflineInTavernOrCity` | `float` | `1` | - | Rate.Rest.Offline.InTavernOrCity: multiplier of the rested experience gained while logged out, when the character logged out resting. |
 | `Rest:RateOfflineInWilderness` | `float` | `1` | - | Rate.Rest.Offline.InWilderness: multiplier of the rested experience gained while logged out, when the character did not log out resting. The gain is a quarter of the resting one at rate 1 (the reference divides it by four). |
 | `Rest:SaveIntervalSeconds` | `uint` | `300` | - | Seconds between the writes of the rested state of every online character (the pool, the time and the resting flag; the time is what offline accrual counts from after a crash). A logout and a shutdown always write. 0 writes only then, so after a crash the stored time is that of the last logout and the whole session counts as offline time. |
+
+## `ServerMail`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ServerMail:Enabled` | `bool` | `true` | - | Send the mail_server_template letters at login (default on; with empty tables nothing is sent). |
 
 ## `Skills`
 
@@ -780,10 +879,11 @@ How to read the tables:
 |---|---|---|---|---|
 | `Warden:Action` | `WardenAction` | `Log` | - | Warden:Action, applied when a scan fails (default Log). Values: `Log`, `Kick`, `Ban`. |
 | `Warden:BanSeconds` | `long` | `86400` | - | Warden:BanSeconds for `WardenAction.Ban`; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration). |
-| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: the scans to run. Empty runs the timing scan only. |
+| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: scans added to the table's (a configured id replaces the table row with that id). With neither, the timing scan runs alone. |
 | `Warden:ChunkSize` | `int` | `500` | - | Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500). |
 | `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
 | `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `Warden:LoadFromDatabase` | `bool` | `true` | - | Warden:LoadFromDatabase: also run the scans of the world table `warden_checks` for this build. Default true. |
 | `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`. |
 | `Warden:ResponseTimeoutSeconds` | `uint` | `30` | - | Warden:ResponseTimeoutSeconds: every awaited reply must arrive within this (MaNGOS Zero WardenLimits.deadlineMs 30000). |
 | `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |

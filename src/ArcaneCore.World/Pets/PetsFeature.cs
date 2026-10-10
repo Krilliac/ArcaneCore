@@ -1,7 +1,10 @@
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -65,9 +68,23 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
             }
         }
 
+        IReadOnlyDictionary<uint, uint>? familySkillLines = null;
+        if (!string.IsNullOrWhiteSpace(Options.CreatureFamilyDbcPath))
+        {
+            familySkillLines = global::ArcaneCore.Data.Content.Pets.CreatureFamilyDbcReader.LoadSkillLines(Options.CreatureFamilyDbcPath);
+            IReadOnlyDictionary<uint, uint> masks = global::ArcaneCore.Data.Content.Pets.CreatureFamilyDbcReader.LoadFoodMasks(Options.CreatureFamilyDbcPath);
+            Service.PetFoodMask = family => masks.TryGetValue(family, out uint mask) ? mask : null;
+            _logger.LogInformation("Loaded {Families} pet diets from {Path}", masks.Count, Options.CreatureFamilyDbcPath);
+        }
+        else
+        {
+            _logger.LogInformation("Pets:CreatureFamilyDbcPath is not set: Feed Pet skips the pet diet check");
+        }
+
         if (_services.GetService<SpellFeature>() is { } spells)
         {
             Service.Install(spells.System);
+            Service.Training = BuildTraining(familySkillLines, spells.System);
         }
 
         world.MapCreated += ApplyOptions;
@@ -88,6 +105,29 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
                 TeleportFollow = new PetTeleportFollow(Service, teleports.Teleports, world);
             }
         });
+    }
+
+    /// <summary>
+    /// Beast training: the SkillLineAbility catalog (DI, else NpcServices:SkillLineAbilityDbcPath, as TalentFeature.BuildRankChain; the NpcServices
+    /// options bind lazily so the section is read directly) with its reqtrainpoints, and the family skill lines. Null, logged once, when either is missing.
+    /// </summary>
+    private PetTraining? BuildTraining(IReadOnlyDictionary<uint, uint>? familySkillLines, SpellSystem spells)
+    {
+        SkillLineAbilityCatalog? abilities = _services.GetService<SkillLineAbilityCatalog>();
+        if (abilities is null && _services.GetService<IConfiguration>()?[NpcServiceOptions.SectionName + ":" + nameof(NpcServiceOptions.SkillLineAbilityDbcPath)]
+            is { Length: > 0 } path)
+        {
+            abilities = NpcServiceDbcReaders.LoadSkillLineAbilities(path);
+        }
+
+        if (abilities is not { HasTrainingPoints: true } || familySkillLines is null)
+        {
+            _logger.LogInformation("Pet training-point costs and family checks are off: needs Pets:CreatureFamilyDbcPath and a 15-field SkillLineAbility.dbc");
+            return null;
+        }
+
+        _logger.LogInformation("Pet training enabled: {Abilities} skill line spells, {Families} families", abilities.Count, familySkillLines.Count);
+        return new PetTraining(abilities, familySkillLines, id => spells.Store.Get(id));
     }
 
     /// <summary>The teleport hook of the pets (after the world's first tick; null without a teleport feature).</summary>

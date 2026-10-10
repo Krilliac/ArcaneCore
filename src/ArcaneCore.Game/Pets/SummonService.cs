@@ -250,6 +250,13 @@ public sealed partial class SummonService : ISpellSummonSink
     /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
     internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);
 
+    /// <summary>A fresh pet number above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (vmangos PlayerDumpReader).</summary>
+    public uint ReservePetNumberAbove(uint atLeast)
+    {
+        ReservePetNumber(atLeast);
+        return NextPetNumber();
+    }
+
     /// <summary>Keep subsequently generated pet GUID counters above a loaded durable pet.</summary>
     internal void ReservePetNumber(uint petNumber)
     {

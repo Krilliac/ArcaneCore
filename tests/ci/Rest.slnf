@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "../../ArcaneCore.slnx",
+    "projects": [
+      "tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj",
+      "tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj",
+      "tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj",
+      "tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj"
+    ]
+  }
+}

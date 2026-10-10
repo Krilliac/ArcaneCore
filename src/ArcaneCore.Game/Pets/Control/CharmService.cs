@@ -81,6 +81,7 @@ public sealed partial class CharmService
         spells.RegisterAura(AuraType.ModPossessPet, new AuraHandler(OnPossessPetAura, null));
         spells.RegisterAura(AuraType.AoeCharm, new AuraHandler(OnAoeCharmAura, null));
         spells.RegisterCastCheck(new CharmCastCheck(this));
+        spells.RegisterEffect(SpellEffectName.SummonPossessed, EffectSummonPossessed);
         spells.UnitDied += OnUnitDied;
         spells.HolderAdded += OnHolderChanged;
         spells.HolderRemoved += OnHolderChanged;

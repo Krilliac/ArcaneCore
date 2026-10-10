@@ -46,6 +46,21 @@ public sealed class SilithusTests
     }
 
     [Fact]
+    public void Every_world_state_update_saves_the_totals_and_a_saved_maximum_is_used()
+    {
+        var host = new FakeOutdoorPvPHost();
+        List<(uint A, uint H, uint Max)> saved = [];
+        var zone = new SilithusZone(host, 40) { AreaTriggerPosition = _ => (-7140f, 1400f, 5f), Saved = (a, h, m) => saved.Add((a, h, m)) };
+        zone.Setup();
+        ObjectGuid player = Carrier(host, zone, 1, Team.Alliance);
+
+        zone.HandleAreaTrigger(host.P(player), S.AreaTriggerAlliance);
+
+        Assert.Equal(40u, zone.MaxResources);
+        Assert.Equal((1u, 0u, 40u), saved[^1]);                             // vmangos SetSavedVariable in UpdateWorldState
+    }
+
+    [Fact]
     public void No_flag_or_the_enemy_camp_does_nothing()
     {
         (FakeOutdoorPvPHost host, SilithusZone zone) = Setup();

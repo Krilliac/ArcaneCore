@@ -17,7 +17,7 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Thread affinity: world thread, like every <see cref="CreatureAI"/>.
 /// </summary>
-public sealed class GuardAI(Creature creature) : CreatureAI(creature)
+public class GuardAI(Creature creature) : CreatureAI(creature)
 {
     public override bool AggroesOnSight => true;
 

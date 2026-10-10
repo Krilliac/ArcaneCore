@@ -210,7 +210,9 @@ public sealed class WorldBossScriptTests
         Assert.Equal(0u, field.Boss.NpcFlags & (uint)NpcFlags.Gossip);
         Assert.Contains(field.Caster.Casts, c => c.Spell == AzuregosAI.SpellMarkOfFrostAura);
         field.Boss.AI.OnKilledUnit(field.Tank);
-        Assert.Contains(field.Caster.UnitCasts, c => c.Spell == AzuregosAI.SpellMarkOfFrostPlayer && ReferenceEquals(c.Caster, field.Tank));
+        // victim->CastSpell(victim, 23182, ..., Azuregos): the mark is the player's, credited to Azuregos.
+        Assert.Contains(field.Caster.AddedAurasFrom, a => a.Spell == AzuregosAI.SpellMarkOfFrostPlayer
+            && ReferenceEquals(a.Unit, field.Tank) && ReferenceEquals(a.Caster, field.Boss));
         field.Boss.AI.OnEvade();
         Assert.Equal((uint)NpcFlags.Gossip, field.Boss.NpcFlags & (uint)NpcFlags.Gossip);
     }
@@ -263,4 +265,8 @@ public sealed class WorldBossScriptTests
         Assert.Contains(field.Caster.UnitCasts, c => c.Spell == KazzakAI.SpellMarkOfKazzakExplode && ReferenceEquals(c.Caster, field.Tank));
         Assert.Contains(field.Caster.RemovedAuras, r => r.Spell == KazzakAI.SpellMarkOfKazzak);
     }
+
+    [Fact]
+    public void Kazzak_TwistedReflection_IsTheItemDummyProcOf52()
+        => Assert.Contains(KazzakAI.SpellTwistedReflection, ArcaneCore.Game.Spells.Procs.Talents.ItemDummyProc.Spells);
 }
