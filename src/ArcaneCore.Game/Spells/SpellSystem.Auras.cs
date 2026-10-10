@@ -39,6 +39,18 @@ public sealed partial class SpellSystem
     {
         // vmangos Aura::HandleAuraDummy (SpellAuras.cpp:1700-2215) is a switch on the spell id: RegisterDummyAuraHandler adds a case.
         [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), null),
+        // vmangos Aura::HandleAuraEmpathy (SpellAuras.cpp:5599-5615): Beast Lore marks the target so the client shows its beast info.
+        [AuraType.Empathy] = new AuraHandler(static (_, h, _, apply) =>
+        {
+            if (apply)
+            {
+                h.Target.SetFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.SpecialInfo);
+            }
+            else
+            {
+                h.Target.RemoveFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.SpecialInfo);
+            }
+        }, null),
         // Threat reads installed modifiers by school when damage/healing is resolved.
         [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),

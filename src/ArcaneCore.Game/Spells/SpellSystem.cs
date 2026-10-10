@@ -52,6 +52,8 @@ public sealed partial class SpellSystem
         _logger = logger ?? NullLogger.Instance;
         ItemEnchantments = itemEnchantments ?? new EmptyItemEnchantmentCatalog();
         EffectHandlers = CreateEffectHandlers();
+        InstallInebriate();
+        InstallTriggerMissile();
         _builtInEffectHandlers = new Dictionary<SpellEffectName, SpellEffectHandler>(EffectHandlers);
         AuraHandlers = CreateAuraHandlers();
         RegisterModules(SpellHandlerModules.BuiltIn);
@@ -227,6 +229,7 @@ public sealed partial class SpellSystem
     public void Update(uint diffMs)
     {
         ProcessDeathAuraRemovals();
+        UpdateSobering(diffMs);
         UpdateDynamicObjects(diffMs); // persistent area auras (PersistentAreaAuras/SpellSystem.PersistentAreaAuras.cs)
         if (_states.Count == 0)
         {
