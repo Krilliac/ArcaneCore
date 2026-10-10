@@ -1,5 +1,7 @@
 # AQ war effort: Cenarion Hold attack and Saurfang scenes — 2026-10-10
 
+> Superseded in part by `aq-war-effort-saurfang-20261010.md`: the vmangos core schedule puts the attack and the final battle 4 h and 8 h into the ten-hour war, not at the end of the transport.
+
 This depends on `aq-war-effort-piles-20261010.md` (PR #39) and `aq-war-effort-phases-20261010.md` (PR #38). It needs no schema change.
 
 ## Reference and scheduling

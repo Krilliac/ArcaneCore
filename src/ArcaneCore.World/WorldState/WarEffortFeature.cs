@@ -170,7 +170,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
     }
 
-    private void Reload()
+    internal void Reload()
     {
         using IServiceScope scope = scopes.CreateScope();
         IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
