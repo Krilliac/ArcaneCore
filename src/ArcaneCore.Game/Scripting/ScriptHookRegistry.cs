@@ -133,7 +133,7 @@ public sealed class ScriptHookRegistry
 /// <summary>Dispatch of <see cref="IPlayerHooks"/>.</summary>
 public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
 {
-    private IPlayerHooks[] _login = [], _logout = [], _level = [], _kill = [], _killed = [], _chat = [], _duelStart = [], _duelEnd = [];
+    private IPlayerHooks[] _login = [], _logout = [], _level = [], _kill = [], _killed = [], _chat = [], _addon = [], _duelStart = [], _duelEnd = [];
 
     internal int Add(IPlayerHooks h, HashSet<string> o)
         => ScriptHookRegistry.AddIf(ref _login, h, o, nameof(IPlayerHooks.OnLogin))
@@ -142,6 +142,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
             + ScriptHookRegistry.AddIf(ref _kill, h, o, nameof(IPlayerHooks.OnKill))
             + ScriptHookRegistry.AddIf(ref _killed, h, o, nameof(IPlayerHooks.OnKilled))
             + ScriptHookRegistry.AddIf(ref _chat, h, o, nameof(IPlayerHooks.OnChat))
+            + ScriptHookRegistry.AddIf(ref _addon, h, o, nameof(IPlayerHooks.OnAddonMessage))
             + ScriptHookRegistry.AddIf(ref _duelStart, h, o, nameof(IPlayerHooks.OnDuelStart))
             + ScriptHookRegistry.AddIf(ref _duelEnd, h, o, nameof(IPlayerHooks.OnDuelEnd));
 
@@ -150,6 +151,8 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     public bool HasLogout => _logout.Length != 0;
 
     public bool HasChat => _chat.Length != 0;
+
+    public bool HasAddonMessage => _addon.Length != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void OnLogin(Player player)
@@ -184,6 +187,10 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     /// <summary>False when a hook dropped the line.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool OnChat(Player player, ScriptChatMessage message) => _chat.Length == 0 || Chat(player, message);
+
+    /// <summary>False when a hook dropped the addon line.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool OnAddonMessage(Player player, ScriptAddonMessage message) => _addon.Length == 0 || AddonMessage(player, message);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void OnDuelStart(Player first, Player second)
@@ -244,6 +251,18 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
         foreach (IPlayerHooks h in _chat)
         {
             try { allowed &= h.OnChat(player, message); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnChat)); }
+        }
+
+        return allowed;
+    }
+
+    private bool AddonMessage(Player player, ScriptAddonMessage message)
+    {
+        // Every hook sees the line; any false drops it.
+        bool allowed = true;
+        foreach (IPlayerHooks h in _addon)
+        {
+            try { allowed &= h.OnAddonMessage(player, message); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnAddonMessage)); }
         }
 
         return allowed;

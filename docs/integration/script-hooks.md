@@ -9,7 +9,7 @@ A hook class implements one or more interfaces and overrides only the methods it
 
 | Interface | Hooks | Raised from |
 |---|---|---|
-| `IPlayerHooks` | `OnLogin`, `OnLogout`, `OnLevelChanged(oldLevel)`, `OnKill`, `OnKilled`, `OnChat` (false drops the line), `OnDuelStart`, `OnDuelEnd` | `WorldRuntime.NotifyLoggedIn` / `RemovePlayer`, `PlayerProgression.GiveLevel`, `MapCombat.Kill`, `ChatHandlers` (after commands, before every chat feature; not addon messages), `DuelService.UpdateDuelFlag` / `Complete` |
+| `IPlayerHooks` | `OnLogin`, `OnLogout`, `OnLevelChanged(oldLevel)`, `OnKill`, `OnKilled`, `OnChat` (false drops the line), `OnAddonMessage` (false drops the line), `OnDuelStart`, `OnDuelEnd` | `WorldRuntime.NotifyLoggedIn` / `RemovePlayer`, `PlayerProgression.GiveLevel`, `MapCombat.Kill`, `ChatHandlers` (after commands, before every chat feature; not addon messages), `ChatHandlers` addon branch for `OnAddonMessage` (`AddonChannel` on, after the addon mute/flood check, before the features; `Prefix` and `Text` are split at the first TAB of the client's `"%s\t%s"`, `Prefix` is null without a TAB), `DuelService.UpdateDuelFlag` / `Complete` |
 | `IWorldHooks` | `OnStartup`, `OnUpdate(diff)`, `OnConfigReload` | `WorldRuntime.Run` (before the first tick), `RunTick` (after `WorldTick`, before the maps), `.reload config` commit |
 | `IUnitHooks` | `OnDamage(ref damage)`, `OnDeath` | `MapCombat.DealDamage` (entry), `MapCombat.Kill` |
 | `IItemHooks` | `OnUse` (true takes the use over), `OnEquip`, `OnUnequip` | `ItemUseService.UseItem` (after its checks), `PlayerInventory.EquipmentChanged` (bridged) |
