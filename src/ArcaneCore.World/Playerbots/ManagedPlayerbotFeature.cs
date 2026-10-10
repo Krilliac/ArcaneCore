@@ -342,6 +342,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             : new(false, "accept-refused", bot.Record.BotId, player.Name);
     }
 
+    /// <summary>
+    /// The party AI of a running bot whether or not it drives the bot (null when not running): the persona and the chat delivery of the
+    /// bot's own announcements (<see cref="BotSocial.PlayerbotSocialFeature"/>).
+    /// </summary>
+    internal PlayerbotPartyAI? FindPartyAI(Guid botId)
+        => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Party : null;
+
     /// <summary>The ordinary session of a running bot (scenario harness; null when not running).</summary>
     internal WorldSession? FindSession(Guid botId)
         => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;

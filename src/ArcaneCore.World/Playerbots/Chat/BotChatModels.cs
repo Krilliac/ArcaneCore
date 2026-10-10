@@ -23,8 +23,17 @@ internal sealed record BotChatPersona(
     IReadOnlyList<string> RecentEvents);
 
 /// <summary>
+/// What a bot is asked to say on its own, with nobody having spoken to it (a guild announcement,
+/// <see cref="PlayerbotChat.TryAnnounce"/>): <see cref="TemplateKey"/> picks the built-in lines, <see cref="Instruction"/> tells a
+/// model what the line is about, <see cref="Values"/> fill the topic placeholders (<c>{guild}</c>, <c>{who}</c>, <c>{newlevel}</c>,
+/// <c>{boss}</c>, <c>{instance}</c>, <c>{battleground}</c>) and <see cref="GuildName"/> names the guild. Nothing here is a GUID or an account.
+/// </summary>
+internal sealed record BotChatTopic(string TemplateKey, string Instruction, IReadOnlyDictionary<string, string> Values, string GuildName);
+
+/// <summary>
 /// One line a player said to a bot, with everything a provider needs to answer it. <see cref="SenderAccountId"/> is for the safety
-/// records and the automatic mute only (0 when unknown); it never reaches a provider, and neither do the GUIDs.
+/// records and the automatic mute only (0 when unknown); it never reaches a provider, and neither do the GUIDs. A <see cref="Topic"/>
+/// makes it an announcement the bot starts itself: <see cref="Text"/> is then a plain sentence of what happened.
 /// </summary>
 internal sealed record BotChatAsk(
     Guid BotId,
@@ -36,9 +45,13 @@ internal sealed record BotChatAsk(
     string Text,
     bool FromMaster,
     bool InviteAllowed,
-    int SenderAccountId = 0);
+    int SenderAccountId = 0,
+    BotChatTopic? Topic = null);
 
-/// <summary>A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.</summary>
+/// <summary>
+/// A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.
+/// <see cref="Guild"/> is the guild a guild-chat announcement is for (null otherwise): it is not said in another one.
+/// </summary>
 internal sealed record BotChatReply(
     Guid BotId,
     ObjectGuid SenderGuid,
@@ -47,7 +60,8 @@ internal sealed record BotChatReply(
     string? Text,
     PlayerbotPartyCommand? Command,
     bool AcknowledgeCommand,
-    string Provider);
+    string Provider,
+    string? Guild = null);
 
 /// <summary>One earlier line of a conversation: the player's (<see cref="FromPlayer"/>) or the bot's.</summary>
 public sealed record BotChatTurn(bool FromPlayer, string Text);
