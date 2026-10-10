@@ -74,7 +74,9 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
 
             (int orphaned, string entries) = OrphanedSpawns(current);
             CreatureDefinitions? previous = null;
-            transaction.Step("creature definitions", () => previous = current.SwapDefinitions(fresh), () => current.RestoreDefinitions(previous!));
+            transaction.Step("creature definitions",
+                () => { previous = current.SwapDefinitions(fresh); feature.QueryCache.Clear(); },
+                () => { current.RestoreDefinitions(previous!); feature.QueryCache.Clear(); });
             if (orphaned > 0)
             {
                 transaction.Note($"{orphaned} spawn(s) use creature_template entries that are no longer defined ({entries}); they keep their last known template.");
