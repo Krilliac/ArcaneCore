@@ -60,6 +60,7 @@ How to read the tables:
 - [`Stats`](#stats)
 - [`Talents`](#talents)
 - [`Totems`](#totems)
+- [`Warden`](#warden)
 - [`World`](#world)
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
@@ -769,6 +770,22 @@ How to read the tables:
 | `Totems:Enabled` | `bool` | `true` | - | false leaves the totem effects unregistered, so they report "not implemented" (fail closed). |
 | `Totems:OwnerLeash` | `bool` | `true` | - | vmangos Totem::Update unsummons a totem whose owner left its visibility distance (Objects/Totem.cpp:66-76). false (developer only) lets it persist. |
 | `Totems:PlacementDistance` | `float` | `2` | - | Base distance from the caster at which a totem is placed (vmangos Spell::EffectSummonTotem builds `CreatureCreatePos(caster, orientation, 2.0f, angle)`, SpellEffects.cpp:4952-4957). The caster's and the totem's bounding radii are added to it, as GetClosePoint does (Object.cpp:2728-2729, 2748). |
+
+## `Warden`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Warden:Action` | `WardenAction` | `Log` | - | Warden:Action, applied when a scan fails (default Log). Values: `Log`, `Kick`, `Ban`. |
+| `Warden:BanSeconds` | `long` | `86400` | - | Warden:BanSeconds for `WardenAction.Ban`; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration). |
+| `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: the scans to run. Empty runs the timing scan only. |
+| `Warden:ChunkSize` | `int` | `500` | - | Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500). |
+| `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
+| `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`. |
+| `Warden:ResponseTimeoutSeconds` | `uint` | `30` | - | Warden:ResponseTimeoutSeconds: every awaited reply must arrive within this (MaNGOS Zero WardenLimits.deadlineMs 30000). |
+| `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
+| `Warden:ScanIntervalMinSeconds` | `uint` | `30` | - | Warden:ScanIntervalMinSeconds: the shortest random gap between scan requests (MaNGOS Zero normal interval 30-60 s). |
+| `Warden:ScansPerRequest` | `int` | `3` | - | Warden:ScansPerRequest (vmangos Warden.NumScans). Default 3. |
 
 ## `World`
 
