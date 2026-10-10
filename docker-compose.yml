@@ -4,6 +4,9 @@
 #
 # Don't edit this file for local changes: put them in docker-compose.override.yml or .env (see apps/docker/.env.example).
 # Every ArcaneCore key can be set as an environment variable with ':' written as '__' (docs/reference/configuration.md).
+#
+# The database credentials have no defaults: compose refuses to start until .env sets them. The database, Prometheus and
+# Grafana listen on 127.0.0.1 only unless DOCKER_*_EXTERNAL_BIND says otherwise; only the realm and world ports face players.
 
 x-arcane-db: &arcane-db
   Database__Provider: MariaDb
@@ -14,11 +17,11 @@ services:
     image: mariadb:11.4
     networks: [arcane-network]
     ports:
-      - ${DOCKER_DB_EXTERNAL_PORT:-3306}:3306
+      - ${DOCKER_DB_EXTERNAL_BIND:-127.0.0.1}:${DOCKER_DB_EXTERNAL_PORT:-3306}:3306
     environment:
-      MARIADB_ROOT_PASSWORD: ${DOCKER_DB_ROOT_PASSWORD:-password}
-      MARIADB_USER: ${DOCKER_DB_USER:-arcane}
-      MARIADB_PASSWORD: ${DOCKER_DB_PASSWORD:-arcane}
+      MARIADB_ROOT_PASSWORD: ${DOCKER_DB_ROOT_PASSWORD:?set DOCKER_DB_ROOT_PASSWORD in .env (apps/docker/.env.example)}
+      MARIADB_USER: ${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)}
+      MARIADB_PASSWORD: ${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)}
     volumes:
       - ${DOCKER_VOL_DB:-arcane-database}:/var/lib/mysql
       - ./apps/docker/db-init:/docker-entrypoint-initdb.d:ro
@@ -43,7 +46,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *arcane-db
-      Database__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      Database__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
       # The address the client is sent to for the world: must be reachable from the player's machine.
       Realms__Seed__0__Name: ${ARCANE_REALM_NAME:-ArcaneCore}
       Realms__Seed__0__Address: ${ARCANE_REALM_ADDRESS:-127.0.0.1:8085}
@@ -75,9 +78,9 @@ services:
     stop_grace_period: 90s # the save drain (HostOptions:ShutdownTimeout is 60 s)
     environment:
       <<: *arcane-db
-      Database__Auth__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
-      Database__Characters__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_characters;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
-      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      Database__Auth__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
+      Database__Characters__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_characters;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
+      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
       # Client data extracted by you (nothing ships): dbc/, maps/, vmaps/, mmaps/ under ./env/data.
       ClientData__DbcDirectory: /arcanecore/data/dbc
       World__Maps__DataDirectory: /arcanecore/data
@@ -108,7 +111,7 @@ services:
     networks: [arcane-network]
     environment:
       <<: *arcane-db
-      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:-arcane};Password=${DOCKER_DB_PASSWORD:-arcane};"
+      Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
     volumes:
       - ${DOCKER_VOL_IMPORT:-./env/import}:/arcanecore/import
     depends_on:
@@ -123,7 +126,7 @@ services:
     volumes:
       - ./apps/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - ${DOCKER_PROMETHEUS_EXTERNAL_PORT:-9090}:9090
+      - ${DOCKER_PROMETHEUS_EXTERNAL_BIND:-127.0.0.1}:${DOCKER_PROMETHEUS_EXTERNAL_PORT:-9090}:9090
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -135,7 +138,7 @@ services:
       - ./apps/docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docs/ops/grafana:/var/lib/grafana/dashboards:ro
     ports:
-      - ${DOCKER_GRAFANA_EXTERNAL_PORT:-3000}:3000
+      - ${DOCKER_GRAFANA_EXTERNAL_BIND:-127.0.0.1}:${DOCKER_GRAFANA_EXTERNAL_PORT:-3000}:3000
 
 volumes:
   arcane-database:
