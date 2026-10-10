@@ -1,3 +1,4 @@
+using ArcaneCore.Protocol;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -142,6 +143,22 @@ public sealed class LeashTests
 
         f.Wolf.Relocate(5 + 40, 0, 83.5f, 0, 0);
         Run(f.World, 3100); // the next 3 s boundary falls inside this window
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    [Fact]
+    public void TheHardLeash_AddsTheCreaturesBoundingRadius()
+    {
+        // vmangos IsWithinDist3d (Object.cpp:1712-1721) defaults to SizeFactor::BoundingRadius: a 3 yd creature leashes past 33 yd.
+        using Fight f = Start(Template() with { Leash = 30f });
+        f.Wolf.SetFloat(UpdateFields.UnitFieldBoundingradius, 3f);
+
+        f.Wolf.Relocate(5 + 32, 0, 83.5f, 0, 0);
+        Run(f.World, 3100);
+        Assert.False(f.Wolf.IsInEvadeMode);
+
+        f.Wolf.Relocate(5 + 34, 0, 83.5f, 0, 0);
+        Run(f.World, 3100);
         Assert.True(f.Wolf.IsInEvadeMode);
     }
 
