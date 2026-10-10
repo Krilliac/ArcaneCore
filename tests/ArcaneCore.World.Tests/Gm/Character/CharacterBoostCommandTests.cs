@@ -19,6 +19,7 @@ using ArcaneCore.World.Gm.Character.Boost;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Progression;
+using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Progression;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -270,6 +271,116 @@ public sealed class CharacterBoostCommandTests
         }
     }
 
+    /// <summary>The skill catalog plus an in-memory quest store, so the quest log loads and its changes are saved.</summary>
+    private static void ConfigureSkillsAndQuestStore(IServiceCollection services)
+    {
+        ConfigureSkills(services);
+        services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
+    }
+
+    private const uint GrayQuest = 9101;        // quest level 3: gray at level 14 (GrayLevel(14) = 8)
+    private const uint GrayDoneQuest = 9102;    // quest level 2, completed: kept so its reward can be turned in
+    private const uint CurrentQuest = 9103;     // quest level 12: not gray
+    private const uint LevelZeroQuest = 9104;   // quest level 0 stands for the player's own level: never gray
+    private const uint LastGrayQuest = 9105;    // quest level 8 = GrayLevel(14): gray
+    private const uint FirstLiveQuest = 9106;   // quest level 9 = GrayLevel(14) + 1: not gray
+
+    /// <summary>Gives the quest store the gray-quest fixtures (keeping the two class quests) and puts them in the log, the last two as listed.</summary>
+    private static Task AddQuestsAsync(WorldTestHost host, Player player, params uint[] ids) => host.OnWorldAsync(() =>
+    {
+        QuestNpcServices quests = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+        quests.ReplaceQuests(new QuestStore(new QuestContent(
+        [
+            new QuestTemplate { Entry = 9001, MinLevel = 10, RequiredClasses = WarriorClassMask, RewSpellCast = QuestTeachNear },
+            new QuestTemplate { Entry = 9002, MinLevel = 30, RequiredClasses = WarriorClassMask, RewSpellCast = QuestTeachFar },
+            new QuestTemplate { Entry = GrayQuest, QuestLevel = 3, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+            new QuestTemplate { Entry = GrayDoneQuest, QuestLevel = 2, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+            new QuestTemplate { Entry = CurrentQuest, QuestLevel = 12, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+            new QuestTemplate { Entry = LevelZeroQuest, QuestLevel = 0, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+            new QuestTemplate { Entry = LastGrayQuest, QuestLevel = 8, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+            new QuestTemplate { Entry = FirstLiveQuest, QuestLevel = 9, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
+        ], [], [])));
+        foreach (uint id in ids)
+        {
+            Assert.Equal(GmQuestAddResult.Added, quests.GmAddQuest(player, quests.Quests.Get(id)!));
+        }
+    });
+
+    private static Task<QuestStatus> QuestStatusOf(WorldTestHost host, Player player, uint id) => host.OnWorldAsync(() =>
+        host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.Quests.GetStatus(id));
+
+    [Fact]
+    public async Task Boost_DropsTheIncompleteGrayQuests_KeepsTheRest_AndReportsTheCount()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: ConfigureSkillsAndQuestStore);
+        await using WorldTestClient gm = await EnterAsync(host, "BSTQUEST", "Bstquest");
+        Player player = await InstallAsync(host, "Bstquest");
+        await AddQuestsAsync(host, player, GrayQuest, GrayDoneQuest, CurrentQuest, LevelZeroQuest, LastGrayQuest, FirstLiveQuest);
+        await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.Quests.Get(GrayDoneQuest)!.Status = QuestStatus.Complete);
+        Assert.Equal(QuestStatus.Incomplete, await QuestStatusOf(host, player, GrayQuest));
+        await gm.CollectAsync();
+
+        (List<string> lines, _) = await RunAsync(gm, ".character boost 14");
+
+        Assert.Equal(QuestStatus.None, await QuestStatusOf(host, player, GrayQuest));          // level 3 <= 8: dropped
+        Assert.Equal(QuestStatus.None, await QuestStatusOf(host, player, LastGrayQuest));      // level 8 = GrayLevel(14): dropped
+        Assert.Equal(QuestStatus.Complete, await QuestStatusOf(host, player, GrayDoneQuest));  // completed: kept for its reward
+        Assert.Equal(QuestStatus.Incomplete, await QuestStatusOf(host, player, CurrentQuest));
+        Assert.Equal(QuestStatus.Incomplete, await QuestStatusOf(host, player, LevelZeroQuest));
+        Assert.Equal(QuestStatus.Incomplete, await QuestStatusOf(host, player, FirstLiveQuest)); // level 9 > 8: kept
+        Assert.Contains(lines, l => l.StartsWith("Boost Bstquest: level 1->14,", StringComparison.Ordinal) && l.Contains(", 2 gray quests dropped,", StringComparison.Ordinal));
+
+        // The dropped quests left their log slots (slot 0 held the first gray quest).
+        Assert.DoesNotContain(GrayQuest, await host.OnWorldAsync(() => Enumerable.Range(0, QuestConstants.MaxQuestLogSize)
+            .Select(i => player.GetUInt32(UpdateFields.PlayerQuestLog11 + (i * QuestConstants.FieldsPerSlot))).ToArray()));
+    }
+
+    [Fact]
+    public async Task ALevelUpByTheLevelupCommand_DropsNoQuest()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: ConfigureSkillsAndQuestStore);
+        await using WorldTestClient gm = await EnterAsync(host, "BSTLVLUP", "Bstlvlup");
+        Player player = await InstallAsync(host, "Bstlvlup");
+        await AddQuestsAsync(host, player, GrayQuest);
+        await gm.CollectAsync();
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".levelup 13");
+        await Task.Delay(400);
+        await gm.CollectAsync();
+
+        Assert.Equal((byte)14, await host.PlayerStateAsync("Bstlvlup", p => p.Level));
+        Assert.Equal(QuestStatus.Incomplete, await QuestStatusOf(host, player, GrayQuest));   // only a boost prunes the log
+    }
+
+    /// <summary>
+    /// mangos-classic XP::GetGrayLevel (Formulas.h): to 5 zero; to 39 the level minus 5 minus level/10; from 40 the level minus 1
+    /// minus level/5. The boost's gray rule is that table (<see cref="BoostQuestPruner.IsGray"/>), so the two agree at every level
+    /// and a quest one level above the table is never gray. The expected values are worked by hand: 14 -> 14-5-1 = 8, 39 -> 39-5-3 = 31,
+    /// 40 -> 40-1-8 = 31, 60 -> 60-1-12 = 47.
+    /// </summary>
+    [Theory]
+    [InlineData(1u, 0u)]
+    [InlineData(5u, 0u)]
+    [InlineData(6u, 1u)]
+    [InlineData(10u, 4u)]
+    [InlineData(14u, 8u)]
+    [InlineData(39u, 31u)]
+    [InlineData(40u, 31u)]
+    [InlineData(60u, 47u)]
+    public void GrayRule_IsTheMangosClassicGrayLevel(uint playerLevel, uint gray)
+    {
+        Assert.Equal(gray, ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(playerLevel));
+        if (gray > 0)
+        {
+            Assert.True(BoostQuestPruner.IsGray(playerLevel, (int)gray));
+            Assert.True(BoostQuestPruner.IsGray(playerLevel, 1));
+        }
+
+        Assert.False(BoostQuestPruner.IsGray(playerLevel, (int)gray + 1));
+        Assert.False(BoostQuestPruner.IsGray(playerLevel, 0));    // level 0 means the player's own level
+        Assert.False(BoostQuestPruner.IsGray(playerLevel, -1));
+    }
+
     [Fact]
     public async Task Boost_RunTwice_ChangesNothingTheSecondTime_AndKeepsAnyLargerPurse()
     {
@@ -293,7 +404,7 @@ public sealed class CharacterBoostCommandTests
         (List<string> second, _) = await RunAsync(gm, ".character boost 14");
 
         string secondLine = Assert.Single(second, l => l.StartsWith("Boost Bsttwice: level", StringComparison.Ordinal));
-        Assert.Contains($"level 14->14, 0 spells learned, {total} items equipped ({total} kept, 0 moved to bags), 0 action buttons set, money 25000.", secondLine);
+        Assert.Contains($"level 14->14, 0 spells learned, {total} items equipped ({total} kept, 0 moved to bags), 0 action buttons set, 0 gray quests dropped, money 25000.", secondLine);
         Assert.Equal(barsBefore, await host.PlayerStateAsync("Bsttwice", p => p.ActionButtons.ToArray()));
         Assert.Equal(worn, await host.OnWorldAsync(() => Enumerable.Range(0, InventorySlots.EquipmentEnd)
             .Select(s => player.Inventory.GetItem(InventorySlots.Bag0, (byte)s)?.Template.Entry ?? 0u).ToArray()));

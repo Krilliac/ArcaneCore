@@ -120,7 +120,7 @@ if (-not $AccountTool) { $AccountTool = Join-Path $BinDirectory "arcane-account$
 if (-not $MockTool) { $MockTool = Join-Path $BinDirectory "arcane-mock$exeSuffix" }
 
 $waitSeconds = 0
-foreach ($line in $lines) { if ($line -match '^#wait\s+(\d+)$') { $waitSeconds += [int]$Matches[1] } }
+foreach ($line in $lines) { if ($line -match '^#wait(?:for)?\s+(\d+)(?:\s|$)') { $waitSeconds += [int]$Matches[1] } }
 $estimateSeconds = [int]([math]::Ceiling($sendable.Count * ($PaceMilliseconds / 1000.0)) + $waitSeconds + $LoginTimeoutSeconds + 120)
 $estimateSeconds = [math]::Min($estimateSeconds, 86400)
 
@@ -243,10 +243,25 @@ try {
     if (-not $inWorld -and -not $stopRequested) { throw "the session did not reach the world (see $LogPath)." }
 
     $sent = 0
+    $lastSendOffset = $null
     foreach ($line in $lines) {
         if ($stopRequested -or (Test-Path -LiteralPath $StopFile)) { $stopRequested = $true; break }
         if ($job.State -ne 'Running') { throw "the session ended early after $sent commands (see $LogPath)." }
         if ($line.StartsWith('#')) {
+            if ($line -match '^#waitfor\s+(\d+)\s+(.+)$') {
+                # Wait for a reply: only log text written from here on counts. Fails closed: a timeout ends the run with exit 1.
+                $waitSpan = [int]$Matches[1]; $waitPattern = $Matches[2]
+                # The offset is the log length taken just before the last command was appended to the script file, not the length now:
+                # the pace sleep after that command can outlast the reply, and a reply already in the log must still count.
+                $offset = if ($null -ne $lastSendOffset) { $lastSendOffset } else { (Get-Item -LiteralPath $LogPath).Length }
+                $found = Wait-OpsLogMatch -Path $LogPath -Pattern $waitPattern -TimeoutSeconds $waitSpan -StartOffset $offset `
+                    -IsAlive { $job.State -eq 'Running' -and -not (Test-Path -LiteralPath $StopFile) }
+                if (-not $found -and -not (Test-Path -LiteralPath $StopFile)) {
+                    if ($job.State -ne 'Running') { throw "the session ended during '$line' (see $LogPath)." }
+                    throw "no log line matched '$waitPattern' within $waitSpan s (see $LogPath)."
+                }
+                continue
+            }
             if ($line -match '^#wait\s+(\d+)$') {
                 $until = [DateTime]::UtcNow.AddSeconds([int]$Matches[1])
                 while ([DateTime]::UtcNow -lt $until) {
@@ -257,6 +272,7 @@ try {
             }
             continue
         }
+        $lastSendOffset = (Get-Item -LiteralPath $LogPath).Length
         [System.IO.File]::AppendAllText($scriptFile, "$line`n")
         $sent++
         Start-Sleep -Milliseconds $PaceMilliseconds
