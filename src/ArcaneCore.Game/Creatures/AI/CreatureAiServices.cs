@@ -216,6 +216,7 @@ public sealed class CreatureAiFactory
         [Scripts.KerlonianAI.Entry] = static c => new Scripts.KerlonianAI(c),
         [Scripts.MistAI.Entry] = static c => new Scripts.MistAI(c),
         [Scripts.DaphneStilwellAI.Entry] = static c => new Scripts.DaphneStilwellAI(c),
+        [Scripts.GrarkLorkrubAI.Entry] = static c => new Scripts.GrarkLorkrubAI(c),
         [Scripts.ShayLeafrunnerAI.Entry] = static c => new Scripts.ShayLeafrunnerAI(c),
         [Scripts.ThreshwackonatorAI.Entry] = static c => new Scripts.ThreshwackonatorAI(c),
     };
@@ -231,6 +232,7 @@ public sealed class CreatureAiFactory
         Scripts.KerlonianAI.QuestSleeperAwakened,
         Scripts.MistAI.QuestMist,
         Scripts.DaphneStilwellAI.QuestTomeOfValor,
+        Scripts.GrarkLorkrubAI.QuestPrecariousPredicament,
         Scripts.ShayLeafrunnerAI.QuestWanderingShay];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
