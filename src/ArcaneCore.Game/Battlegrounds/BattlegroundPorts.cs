@@ -262,6 +262,9 @@ public sealed class BattlegroundPorts
 
     public IBattlegroundLifecycle Lifecycle { get; init; } = InertBattlegroundPorts.Instance;
 
+    /// <summary>The world's global script hooks (match start and end); null outside a world.</summary>
+    public Scripting.ScriptHookRegistry? Scripts { get; init; }
+
     /// <summary>The random source of the rules that roll (vmangos <c>urand</c>: the Arathi Basin buff type, the Alterac Valley captain buff timer).</summary>
     public Random Random { get; init; } = Random.Shared;
 }
