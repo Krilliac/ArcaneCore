@@ -33,17 +33,21 @@ internal sealed class FleetConsoleRig : IAsyncDisposable
     /// <summary>Every line printed since the last <see cref="RunAsync"/>, without the console prefix.</summary>
     public string[] Lines => [.. _output.Snapshot().Select(l => l.StartsWith(WorldConsoleExecutor.Prefix, StringComparison.Ordinal) ? l[WorldConsoleExecutor.Prefix.Length..] : l)];
 
-    /// <summary>Run <paramref name="line"/> on the world thread (after <paramref name="before"/>, same turn) and return what it printed at once.</summary>
+    /// <summary>
+    /// Run <paramref name="line"/> on the world thread (after <paramref name="before"/>, same turn) and return what it printed at once.
+    /// The lines are taken on the world thread right after the command returns: a bulk start/stop replies again later from a
+    /// worker (<see cref="WaitForLineAsync"/>), and a snapshot taken after this method's await resumed could already hold that
+    /// later summary when the continuation is scheduled late (a loaded machine).
+    /// </summary>
     public async Task<string[]> RunAsync(string line, Action? before = null)
     {
         _output.Clear();
-        await _host.World.InvokeAsync(() =>
+        return await _host.World.InvokeAsync(() =>
         {
             before?.Invoke();
             Executor.Execute(line);
-            return 0;
+            return Lines;
         });
-        return Lines;
     }
 
     /// <summary>Wait (up to 20 s) for a line a worker replies with later (bulk start/stop); returns all lines then.</summary>
