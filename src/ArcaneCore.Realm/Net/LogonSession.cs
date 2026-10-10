@@ -68,7 +68,8 @@ public sealed class LogonSession(
     private CancellationTokenSource? _unauthenticatedLifetime;
     private ReadDeadline? _deadline;
     private ClientPatch? _offeredPatch; // chosen at the challenge of a non-5875 build, sent at its proof
-    private ClientPatch? _xferPatch;    // offered by XFER_INITIATE; XFER_ACCEPT/RESUME stream it
+    private ClientPatch? _xferPatch;
+    private CancellationTokenSource? _sessionCap; // Auth:MaxSessionDurationSeconds; re-armed per patch chunk so only an idle transfer hits it    // offered by XFER_INITIATE; XFER_ACCEPT/RESUME stream it
 
     /// <summary>XFER_DATA payload size (vmangos XFER_DATA_CHUNK::data[4096], AuthPackets.h:135-140).</summary>
     public const int XferChunkSize = 4096;
@@ -113,6 +114,7 @@ public sealed class LogonSession(
         }
 
         _unauthenticatedLifetime = unauthenticated;
+        _sessionCap = session;
 
         // Net:Protection:FrameReadTimeout (Auth:ReadTimeoutSeconds, when set, wins): one deadline per
         // connection, re-armed per packet, so no timer or token source is allocated per read.
@@ -157,6 +159,7 @@ public sealed class LogonSession(
         {
             _deadline = null;
             _unauthenticatedLifetime = null;
+            _sessionCap = null;
         }
     }
 
@@ -900,11 +903,25 @@ public sealed class LogonSession(
         while ((read = await file.ReadAsync(chunk.AsMemory(3, XferChunkSize), cancellationToken).ConfigureAwait(false)) > 0)
         {
             BinaryPrimitives.WriteUInt16LittleEndian(chunk.AsSpan(1, 2), (ushort)read);
+            ExtendSessionCap(); // bytes are flowing: the cap counts from the last chunk, so a stalled download still closes
             await stream.WriteAsync(chunk.AsMemory(0, 3 + read), cancellationToken).ConfigureAwait(false);
         }
 
+        ExtendSessionCap(); // the idle cap runs again from the end of the transfer
         logger.LogInformation("[{Endpoint}] patch sent from byte {Offset}", remoteEndpoint, offset);
         return true;
+    }
+
+    /// <summary>
+    /// An active patch download is exempt from the absolute session cap: each chunk restarts the
+    /// <c>Auth:MaxSessionDurationSeconds</c> timer, so the cap becomes an idle limit while the transfer runs (0 keeps it off).
+    /// </summary>
+    private void ExtendSessionCap()
+    {
+        if (options.MaxSessionDurationSeconds > 0)
+        {
+            _sessionCap?.CancelAfter(TimeSpan.FromSeconds(options.MaxSessionDurationSeconds));
+        }
     }
 
     private void ResetChallengeState()

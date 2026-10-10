@@ -104,7 +104,43 @@ public sealed class AutoPatchTests : IDisposable
         Assert.Equal((byte)AuthResult.VersionInvalid, head[2]);
     }
 
-    private static async Task<NetworkStream> StartAsync(IAccountStore accounts, PatchCatalog catalog)
+    [Fact]
+    public async Task ActivePatchDownload_ExtendsTheSessionCap_ButAnIdleConnectionStillCloses()
+    {
+        byte[] data = RandomNumberGenerator.GetBytes(100);
+        File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), data);
+        var catalog = new PatchCatalog(() => new AutoPatchOptions { Enabled = true, Directory = _dir });
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = WowSrp6.GenerateSalt();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username, Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, "X"), WowSrp6.KeyLength),
+        });
+
+        await using NetworkStream client = await StartAsync(accounts, catalog, new AuthOptions { MaxSessionDurationSeconds = 2 });
+        await client.WriteAsync(Challenge(5464));
+        await Read(client, 3 + 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
+        byte[] proof = new byte[1 + 32 + 20 + 20 + 1 + 1];
+        proof[0] = (byte)AuthCommand.LogonProof;
+        await client.WriteAsync(proof);
+        await Read(client, 2 + 1 + 1 + 5 + 8 + 16);
+
+        await Task.Delay(1500); // most of the 2 s cap is used before the download starts
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.XferAccept });
+        byte[] chunkHead = await Read(client, 3);
+        Assert.Equal(data, await Read(client, BinaryPrimitives.ReadUInt16LittleEndian(chunkHead.AsSpan(1))));
+
+        await Task.Delay(1000); // past the original cap: the chunk restarted it, so the connection is still open
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.XferResume, 0, 0, 0, 0, 0, 0, 0, 0 });
+        Assert.Equal(0x31, (await Read(client, 3))[0]);
+        await Read(client, data.Length);
+
+        // Idle afterwards: the cap closes the connection.
+        Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    private static async Task<NetworkStream> StartAsync(IAccountStore accounts, PatchCatalog catalog, AuthOptions? options = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -114,7 +150,7 @@ public sealed class AutoPatchTests : IDisposable
             using TcpClient server = await listener.AcceptTcpClientAsync();
             listener.Stop();
             await using NetworkStream stream = server.GetStream();
-            var session = new LogonSession(stream, accounts, new InMemoryRealmStore([]), new AuthOptions(),
+            var session = new LogonSession(stream, accounts, new InMemoryRealmStore([]), options ?? new AuthOptions(),
                 NullLogger.Instance, "test", patches: catalog);
             await session.RunAsync(CancellationToken.None);
         });
