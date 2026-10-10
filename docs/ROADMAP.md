@@ -159,6 +159,7 @@ phases remain planned and deployment is a separate gate.
 | M15.3 | Complete fenced handoff and static multiple-worker placement | planned — depends on M15.2 |
 | M15.4 | Host supervision, recovery, drain and capacity-aware placement | planned — depends on M15.3 |
 | M15.5 | Existing CLI/build/import/test jobs, content rollout, migration/rollback and cross-host acceptance | planned — depends on M15.4 |
+| M15.6 | Auxiliary services, in value order ([design](CLUSTERING_DESIGN.md#auxiliary-services)): Warden hosted on the gateway (no separate process); an optional Remote playerbot chat/LLM service; an optional Remote playerbot planner; an optional Remote auction house bot planner with custody kept on the auction owner. Every service has a Local (default) or Remote mode. Metrics, AutoBroadcast and server mail get no service | planned — depends on M15.1 for transport; bot chat also depends on M15.2 directory routing; the AH bot depends on M15.0 ID allocation and fencing and on a realm auction owner; the no-bot-host decision depends on M15.3 placement |
 
 Runtime code is introduced only in its bounded implementation phase. The current
 request authorizes research/planning; no deployment or immediate runtime rewrite

@@ -129,10 +129,68 @@ Decided by Nate on 2026-10-10:
 1. **One build per realm.** Mixed-build realms aren't planned (a realm carries `allowed_builds` with exactly one build).
 2. **Builds:** 5875, 8606 and 12340 only.
 3. **Aura model:** one combined logical aura enum, a superset of all three versions, with a per-build wire mapping.
+4. **Content source per expansion:** TBC from cMaNGOS tbc-db. WotLK from cMaNGOS wotlk-db, with AzerothCore as the gap-fill source. See [6.1](#61-content-source-per-expansion-decision-4).
 5. **Primary keys:** template tables extend their key with `min_build`.
+6. **Characters across versions:** an operator option, off by default. See [6.2](#62-characters-across-versions-decision-6).
 7. **Priority:** S0 through S2 now. S3 and later are on hold.
 8. **Default `realm.max_expansion`:** 0 (classic).
 
-Still open:
-4. **Content source per expansion:** which TBC and WotLK DBs to import from (cMaNGOS tbc-db/wotlk-db, TC 3.3.5 world, AC). Licence and schema differ.
-6. **Characters across versions:** may a 1.12 client log in a character created on 3.3.5 if it's still classic-legal? This becomes moot within a realm under decision 1, but stays relevant if characters ever move between realms.
+Decisions 4 and 6 were written on 2026-10-10, from the survey below and Nate's go-ahead.
+
+### 6.1 Content source per expansion (decision 4)
+
+Survey of 2026-10-10. Repository activity was measured with the GitHub API over the 12 months before that date. Content counts were measured from local clones where marked; the rest are reported.
+
+| Source | Expansion | Activity (12 months) | Schema family | Licence | Content |
+|---|---|---|---|---|---|
+| cMaNGOS classic-db z2815 (today's source) | 1.12 | 92 commits | cMaNGOS | GPL-3.0 | measured: 66,310 creature spawns, 47,827 gameobject spawns, 4,245 quests, 10,843 EventAI rows |
+| **cMaNGOS tbc-db** | 2.4.3 | 326 commits; paired core mangos-tbc 378 | cMaNGOS | GPL-3.0 | not measured; 18.2 MB compressed dump |
+| **cMaNGOS wotlk-db** | 3.3.5a | 118 commits, 625 open issues; core mangos-wotlk 440 | cMaNGOS | GPL-3.0 | not measured; 30.0 MB compressed dump |
+| **AzerothCore** | 3.3.5a | 2,340 commits touching `data/sql` | TrinityCore (SmartAI) | GPL-2.0-or-later; 15 files AGPL-3.0-or-later | measured (base snapshot, before 944 update files): 149,879 creature spawns, 96,624 gameobject spawns, 9,464 quests, 52,768 SmartAI rows, 18,591 `creature_text` rows |
+| TrinityCore 3.3.5 TDB | 3.3.5a | 147 commits touching `sql/` | TrinityCore (SmartAI) | GPL-2.0-or-later | not measured; 47.4 MB compressed dump |
+| TrinityTBC, TBC-DB, OregonCore | 2.4.3 | archived or inactive since 2016–2021 | – | – | rejected |
+
+Decision:
+- **TBC: cMaNGOS tbc-db, as the only source.** It is the only maintained 2.4.3 database. Its schema is the classic-db lineage the importer already reads (EventAI, `dbscripts_on_*`, `creature_movement`, `spawn_group`, the cMaNGOS `conditions` table), so S5 needs one more `ContentDialect`, not a new importer. AzerothCore's Outland content is in its 3.3.5 state, so it is not a TBC source.
+- **WotLK: cMaNGOS wotlk-db as the primary import.** It keeps classic → TBC → WotLK in one lineage, so the per-build `min_build` merge can treat "identical to the earlier row" as a no-op. Rows from a different lineage never compare equal, and most of the classic world would come out as "changed".
+- **AzerothCore as the WotLK gap-fill source, not a second full import.** Its world is clearly fuller: about 2.3 times the spawns of classic-db across four maps, and 52,768 SmartAI rows. S7 diffs coverage per zone and per map against wotlk-db and imports what wotlk-db lacks: spawns, waypoints and SmartAI scripts. The SmartAI engine (slices 1–2, smart_scripts world 48/51) runs the imported scripts, and the gap-fill rows carry their source in the import report. Port no AzerothCore AGPL-3.0 file (`src/server/game/TC9Sidecar`, `Trainer.cpp/.h`, `NPCPackets`, two scripts): they would add AGPL's network-source obligation.
+- **TrinityCore 3.3.5 is not used.** It has the same schema family as AzerothCore with less activity.
+- **Revisit when S7 starts.** If wotlk-db's gaps turn out to be most of Northrend, make AzerothCore the WotLK primary instead. That costs a TrinityCore-schema dialect (conditions, `waypoint_data` and its loot reference model) and same-lineage merging for 12340.
+- **Before S5/S7, measure the cMaNGOS dumps** (`Full_DB/TBCDB_1.11.0_Vengeance_One_A_Cmangos_Story.sql.gz`, 18.2 MB; `Full_DB/WoTLKDB_1_9_14092.sql.gz`, 30.0 MB) with the same counter, and fill in the "not measured" cells above.
+
+### 6.2 Characters across versions (decision 6)
+
+Under decision 1 a realm serves exactly one build, so this question only arises when a character moves between realms of different builds. One live character shared across versions would need merge rules for every progression system: experience, quests, loot, reputation, cooldowns, mail and auctions. Each of those rules is a place to lose data. So characters never cross builds live. They move by **transfer** (upward) or by **copy** (downward), and only when the operator enables it.
+
+`Characters:CrossVersion`, set on the realm the character moves to:
+
+| Value | Meaning |
+|---|---|
+| `Off` (default) | A character belongs to its build's realm. Nothing crosses. |
+| `UpwardOnly` | A character may transfer to a realm of a higher build (5875 to 8606 to 12340). |
+| `UpwardAndLegacyCopy` | Upward transfers as above, plus downward **legacy copies**. |
+
+**Upward transfer** (e.g. 1.12 to 3.3.5) moves the character. Each later expansion is mostly a superset of the earlier one, so little is lost:
+- Kept: level, experience, money, reputation, known spells, items, bank and mail. Items and spells map by id through build-ranged template data (decision 5's `min_build` keys). A per-pair mapping table names the ids whose meaning changed (see the spell id collision risk above). An id with no mapping fails closed: the transfer is refused, with a report, rather than guessing.
+- Reset: talents, because the trees changed between versions. The points are refunded for the new tree.
+- Dropped: quests that do not exist in the target build. A dropped quest-only item is moved to the version vault (below).
+
+**Legacy copy** (e.g. a level-80 character to a 1.12 realm) never moves or changes the source character, which stays authoritative on its home realm. The target realm gets a new, independent character. After the copy the two progress separately, with no sync, so they cannot conflict.
+
+| Part | Rule on the copy |
+|---|---|
+| Race/class | A combination the target build does not have (Blood Elf, Draenei, Death Knight in 1.12) is refused, with the reason. |
+| Level | Clamped to the target's level cap (60 or 70). Experience restarts at the clamped level. |
+| Spells | Rebuilt the way a fresh character of that class and level would have them: from the target build's trainer data, plus the class defaults. Spells from the source are not carried over one by one, because ranks and ids differ between builds. |
+| Talents | Reset; the points are refunded for the target tree. |
+| Equipped and carried items | Items that do not exist in the target build, or whose id means something else there, go to the **version vault**. Items that exist but need a higher level than the clamped one move from the equipment slots to the bags. When `Characters:CrossVersion:FillEmptySlots` is on (off by default), each empty equipment slot is filled with a level-appropriate item for the class, chosen by `.character boost`'s gear selection. |
+| Money | Copied, then capped at the target's money cap. |
+| Reputation, skills | Copied for factions and skill lines that exist in the target. Skill values are capped at the target's level maximum. |
+| Currencies, achievements, glyphs, other expansion-only systems | Not copied. The target build has no place for them. |
+| Quests | Not copied. The copy starts with an empty quest log. |
+
+The **version vault** is a per-character store of items the current build cannot represent. The server keeps them and never sends them to the client. They come back when the character, or a later copy of it, lands on a build that can represent them. Nothing is ever deleted in a transfer or a copy.
+
+Not planned: moving a character down for real (as opposed to copying it), and syncing progress between a source and its copies. Both would bring back the shared-character merge problem above.
+
+When: this needs a target build's character data and templates, so it comes after S5 (TBC) and S7 (WotLK). Before then, `Characters:CrossVersion` stays `Off`, and the transfer code is not written.

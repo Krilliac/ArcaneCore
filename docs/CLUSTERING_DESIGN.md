@@ -10,7 +10,9 @@ maps and instances, ID allocators, write queues and far transfer were re-read
 against `c3dea16292756e146df0ddd0783f97fee734dd5c` for M15.0 (see the
 [M15.0 scope record](integration/cluster-m15-0.md) and the
 [transfer-state inventory](integration/cluster-transfer-state.md)); the rest remain at
-the older pin.
+the older pin. The [auxiliary services](#auxiliary-services) section (requested
+2026-10-10) and the importer row of the component table were checked against
+`db9df29420b7ddf844b48ee7d459a8912e8924da`.
 
 ## Decision and reference comparison
 
@@ -67,7 +69,7 @@ of the same semantic contracts.
 | `tools/spell-import` | Short-lived DBC-to-world replacement operation | Exclusive content-maintenance job that publishes an immutable content revision |
 | `ArcaneCore.MockClient` | Synthetic owned-loopback acceptance executable using actual realm/world services | Test/job role; extend to launch and validate owned subprocesses as cluster phases land |
 | `tools/codegen/gen_wow_tables.py` | Offline generated protocol/update-field tables | Build job producing reviewed, versioned artifacts; never a live simulation service |
-| `CreatureDumpImporter` | Data library currently exercised by tests | Use the same coordinated maintenance job rules when an actual importer executable is introduced; the roadmap's ContentImporter path is aspirational today |
+| `arcane-content-importer` (`tools/ArcaneCore.ContentImporter`) | Short-lived `plan`/`import`/`refresh`/`verify` operations against the world database (`ContentImporterCli.cs:38-39`); `CreatureDumpImporter` and the other dump importers are its data libraries | Exclusive content-maintenance job under the same rules as `tools/spell-import`; never a long-running service |
 
 Relevant existing boundaries are [world session](../src/ArcaneCore.World/Net/WorldSession.cs),
 [player session seam](../src/ArcaneCore.Game/Maps/IPlayerSession.cs),
@@ -160,6 +162,8 @@ visibility; it is outside the first clustering phases.
 Combat, movement, AI, spells and visibility stay together inside the map owner.
 Do not create an RPC per gameplay subsystem or per object. Additional economy
 services need a real consumer and custody/transaction design before extraction.
+The services that do qualify (Warden placement, bot chat, bot planning, the
+auction house bot) are decided in [auxiliary services](#auxiliary-services).
 
 ### Subsystem separation and alternatives
 
@@ -308,6 +312,248 @@ resolve transfers; evacuate supported residents or perform normal logout; flush
 all feature queues; release leases; acknowledge drain; then terminate the owned
 process. A launch, heartbeat, or signal alone is not readiness or completed drain.
 
+## Auxiliary services
+
+Status: planned design, requested 2026-10-10; nothing in this section is built.
+It decides which subsystems outside the map simulation may run as separate server
+processes. Current-state claims cite `db9df29420b7ddf844b48ee7d459a8912e8924da`;
+paths are under `src/ArcaneCore.World/` unless they say otherwise.
+
+Every auxiliary service follows the compute-worker rule above: it owns no world
+state, it sends intents, proposals or verdicts, and the authoritative owner
+validates and applies them on its own tick. Common rules (planned):
+
+- **Switch.** `Cluster:Services:<Service>:Mode` is `Local` (the default) or `Remote`.
+  `<Service>` is `BotChat`, `BotPlanner` or `AuctionHouseBot`, with an endpoint key
+  beside it. These keys are planned and not in the configuration catalog. Local
+  mode keeps today's in-process code behind the same contract interface, as the
+  charter's seam rule requires (`ARCANECORE_CHARTER.md:135-139`). The combined
+  World executable always runs Local.
+- **Transport.** The M15.1 gRPC transport, with the membership/readiness family:
+  versioned registration, a unique service incarnation, mutual authentication
+  scoped to realm and role, deadlines, and bounded in-flight requests on both sides.
+  Retry only requests that carry an idempotency key.
+- **Fail closed.** The world never waits on a service inside a tick. When a
+  service is down or not ready, its feature pauses: no new intents are applied
+  and nothing is sent outside the process. Work already started settles on the
+  world side. The host daemon (M15.4) restarts the service with capped backoff,
+  as server-Zero's `WorkerSupervisor` does (`src/ipc/WorkerSupervisor.h:51-53`
+  at the pinned reference: 1 to 60 s).
+- **Not a database writer.** A service never writes the characters or world
+  databases. Item, money and ban effects go through the owner's existing
+  transactional paths.
+
+| Candidate | Decision | Rank by value |
+|---|---|---|
+| Warden | Runs on the connection owner (the gateway in cluster mode); not a separate process | 1: needed for Warden under M15.1 without shipping session keys |
+| Playerbot chat / LLM | Optional `Remote` service | 2 |
+| Playerbot planning | Optional `Remote` proposal worker; the bots themselves stay on their map worker | 3 |
+| Auction house bot | Optional `Remote` planner; custody stays with the auction owner | 4 |
+| Metrics exporter | No service: every role exports its own metrics | n/a |
+| Broadcast and server mail | No service: fixed placement on existing roles | n/a |
+| Content importer and other CLIs | M15.5 jobs, not services | n/a |
+
+### Warden: placed on the connection owner
+
+1. **Boundary.** Warden is per connection and reads no world state. The session's
+   two RC4 streams are derived from the 40-byte session key K
+   (`Warden/WardenSession.cs:44-66`, `Warden/WardenCrypto.cs`). The handshake
+   state machine, deadlines, scan batches and checksum checks
+   (`WardenSession.cs:4-13`, `:173-245`) run where the client connection and K
+   already live: the World session today (`Net/WorldSession.cs:833-841`), and the
+   gateway in cluster mode (the gateway owns the cipher, above). A separate Warden
+   process would need K or both RC4 states, and every CMSG/SMSG_WARDEN_DATA body,
+   on a second process. That widens the session-key exposure without any payoff:
+   a scan is one request every 30-60 s with up to 3 checks
+   (`Warden/WardenOptions.cs:113-119`). Decision: there is no `Remote` mode.
+   Managed playerbots have no client connection and are exempt by construction
+   (`Warden/WardenFeature.cs:106`).
+2. **Contract.** The gateway hosts Warden and keeps the `warden_checks` set loaded
+   from the world database (`WardenFeature.cs:81-98`). A verdict is advisory to
+   the game: the gateway applies it through existing authorities. Log stays
+   local. Kick requests the normal session close from the worker, so logout and
+   saves keep their order, and then closes the client. Ban writes through
+   `IBanStore` to shared auth storage, as today (`WardenFeature.cs:151-168`),
+   then kicks. The gateway reports `WardenVerdict(session generation, account,
+   reason, action, check id)` to operators. Idempotency: a verdict belongs to
+   one session generation, so a stale generation is ignored.
+3. **Failure.** A Warden failure is the session's protocol failure, and
+   `ProtocolAction` applies (never above Kick, `WardenSession.cs:247-252`).
+   Today, Warden enabled with a missing or corrupt module logs an error and runs
+   unscanned (`WardenFeature.cs:47-51`). In cluster mode (planned), a gateway with
+   `Warden:Enabled` true reports not ready unless its module is usable. All
+   gateways of a realm must publish the same Warden manifest (module digest,
+   options, check revision), so a client cannot pick an unscanned gateway. The
+   check-catalogue load failure keeps today's fallback to the configured checks
+   (`WardenFeature.cs:94-97`). Admission is as today: play is not held for the
+   handshake. Gating world entry on a completed handshake is a separate decision.
+4. **Value and cost.** Nothing to scale: the CPU per session is negligible at
+   the default cadence. The value is correctness: Warden keeps working under
+   M15.1 without sending K to map workers.
+5. **Dependencies.** M15.1 (the gateway owns world auth, K and the cipher; the
+   session close contract). There is no M15.2 dependency.
+
+### Playerbot chat / LLM service (optional Remote)
+
+1. **Boundary.** Today the world thread hands a line to `PlayerbotChat.TryAsk`.
+   That method does cheap checks and a bounded queue, never I/O
+   (`Playerbots/Chat/PlayerbotChat.cs:116-145`). Two background workers call the
+   providers (`:59`, `:228-233`), and the world thread drains replies and mutes
+   (`ManagedPlayerbotFeature.cs:705-712`). The Remote service takes the worker
+   side: provider calls, keys read from its own environment
+   (`PlayerbotChat.cs:48`), moderation, the safety filter and its strike, cut-off
+   and choice state, spend and hourly caps, and conversation memory. The world
+   keeps the bot, the act of saying a reply through the bot's own CMSG_MESSAGECHAT,
+   applying mutes, and the built-in template provider.
+2. **Contract.** World to service: `Ask(ask_id, realm, bot_id, bot guid, persona,
+   sender guid/name/account, channel, text, from_master, invite_allowed, login_id)`
+   (today's `BotChatAsk`, `Playerbots/Chat/BotChatModels.cs:29-39`). The service
+   answers `Accepted(ask_id, disclosure?)` or `Declined(ask_id, reason)`, using
+   today's `BotChatAdmission` reasons (`PlayerbotChat.cs:10-31`). It sends
+   `Reply(ask_id, bot_id, sender, channel, text, provider)` and an advisory
+   `Mute(account, player, minutes)` that the world applies or ignores. The world
+   owns bots and presence. The service owns its ledgers and never sees an object
+   reference. `ask_id` is the world incarnation, bot and a sequence. The service
+   deduplicates by `ask_id`, and the world says a reply at most once. A reply for
+   a bot that stopped or left the world is dropped, as today
+   (`ManagedPlayerbotFeature.cs:709-711`). At-most-once is correct here: a lost
+   reply only means no reply (`PlayerbotChat.cs:45-46`).
+3. **Failure.** When the service is unavailable, the world falls back to the
+   built-in provider, the existing last link of the provider chain
+   (`Playerbots/Chat/PlayerbotChatOptions.cs:23-26`). No line leaves the realm
+   unscreened, because screening runs before any provider (playbots.md, Safety
+   and provider policies). Strikes and cut-offs are memory-only today: a restart
+   clears them (`Playerbots/Chat/PlayerbotChatSafety.cs:36-39`). A service
+   restart keeps that semantics unless a durable table is added.
+4. **Value and cost.** Provider API keys and outbound internet egress leave the
+   world and gateway hosts. Provider latency and moderation I/O get their own
+   process. With bots on several workers (M15.3), each in-process chat would keep
+   its own spend cap and safety state. The `MaxDailySpendUsd` default of $1
+   (playbots.md, Cost control) would multiply, and a player could avoid strikes by
+   talking to bots on another worker. One service per realm keeps one ledger.
+   The CPU saving is small (two workers, at most 256 queued asks, `PlayerbotChat.cs:231`).
+   Cost: one more role, and the service must be realm-scoped.
+5. **Dependencies.** M15.1 (transport and membership). M15.2 directory routing
+   (a reply goes to the worker that owns the bot; a player sender may be on
+   another worker or gateway).
+
+### Playerbot planning (optional Remote) and the bot host decision
+
+1. **Boundary.** A managed bot is a Player with a socketless
+   `ManagedWorldSession` on a map, and every action is a real CMSG through the
+   world handler (playbots.md, Managed playerbots; `Net/ManagedWorldSession.cs:87`).
+   Movement pumping, party intake, the group coordinator and the think rotation
+   run on the world tick (`Playerbots/ManagedPlayerbotFeature.cs:544-596`), and
+   the brain reads live Map and Player references
+   (for example `Playerbots/PlayerbotBrain.cs:302`, `:437`). All of that stays on
+   the map worker that owns the bot. Only the optional local-model planner can
+   move. It already selects one id from at most 16 closed candidates, off the
+   world thread, every 5 s (`PlayerbotBrain.cs:827-848`,
+   `Playerbots/PlayerbotLocalPlanner.cs:3-8`).
+2. **Contract.** `SelectPlan(request_id, realm, worker incarnation, bot_id,
+   map/instance, owner epoch, facts, candidates, deadline)` returns
+   `PlanChoice(request_id, candidate_id | none)`. The facts are today's
+   `PlayerbotPlannerFacts`: level, health, combat, map, spell count and food. They
+   carry no names or chat. The worker discards a choice that is late, has a stale
+   epoch or names an id it did not offer. The world owns every goal and action;
+   the service owns only the model call. The idempotency key is `request_id`.
+   A choice is a read-only proposal, so a retry is safe.
+3. **Failure.** With no answer, the deterministic brain decides, as it does
+   today when no planner is configured (`PlayerbotBrain.cs:829`).
+4. **Value and cost.** The value is small: inference can run on a GPU host
+   instead of the world host. The model runner is the memory cost (one recorded
+   run of the larger MockClient model committed about 11.8 GiB, playbots.md:597-598).
+   The managed default is a 0.6B model (`Playerbots/PlayerbotOptions.cs:85`).
+   Today's endpoint is hard-coded to loopback (`PlayerbotLocalPlanner.cs:9`) as a
+   deliberate local-only rule. A Remote planner is a policy change that needs an
+   explicit approval.
+   **No separate playerbot host.** A process that runs bots away from their maps
+   would need a replica of map state, or an RPC per decision. The subsystem table
+   above rejects both. The measured cost does not justify it: think time is
+   already capped at 8 ms and `MaxActionsPerTick` per tick
+   (`ManagedPlayerbotFeature.cs:582-590`). The bot feature averaged 9.6 ms per tick
+   (EMA) at 1000 running bots in a fixture with no terrain, creatures or clients
+   ([perf limits](integration/perf-limits-20261008.md), measurement table). Bots
+   scale out with their maps when M15.3 places maps on several workers. That
+   requires transfer participation for managed sessions and brain state (or a
+   documented stop and restart of the bot on transfer). Out-of-process bots
+   already exist as protocol clients for load tests (`arcane-mock playbot`).
+5. **Dependencies.** M15.1 (transport), and M15.0 owner epochs for discarding
+   stale choices. The bot-host decision depends on M15.3.
+
+### Auction house bot (optional Remote planner)
+
+1. **Boundary.** Today a timer posts one bot action to the world thread every
+   `UpdateIntervalSeconds` (default 20, `src/ArcaneCore.Game/Economy/AuctionBot/AuctionBotOptions.cs:24`;
+   `Economy/AuctionBotFeature.cs:115`). The pure part can move: the item pool, loot
+   source rolls, pricing and sell/buy planning (`AuctionBotPlanner.PlanSell` and
+   `PlanBuy`, `src/ArcaneCore.Game/Economy/AuctionBot/AuctionBotPlanner.cs:66`, `:185`).
+   Custody stays with the auction owner (the world today): auction id and item
+   GUID allocation (`AuctionBotFeature.cs:404-405`), the custody ledger and its
+   durable `ahbot_custody` rows (areas/auction-house-bot.md, Custody), minting
+   only inside the listing transaction (`Economy/EconomyFeature.AuctionBot.cs:62`),
+   reconciliation of Reserved rows, standing-bid review, daily budgets, and the
+   audit that halts the bot (`AuctionBotFeature.cs:596-645`). The `.ahbot`
+   commands stay on the world. `reload` and `rebuild` push options or a refill
+   request to the service.
+2. **Contract.** This follows server-Zero's intent channel (`src/ipc/AuctionIntents.h:64-68`
+   and `src/ipc/IpcOpcodes.h:50-54` at the pinned reference). Service to owner:
+   `ProposeListing(intent_id, house, entry, count, start_bid, buyout, hours)` and
+   `ProposeBuy(intent_id, house, auction_id, bid|buyout, price, observed bid)`.
+   Owner to service: `IntentResult(intent_id, Ok | Rejected(reason) | Duplicate,
+   ledger key)`, `QueueFull`, and a read-only `MarketSnapshot(house, version,
+   open auctions)` for buy planning. `intent_id` is the service incarnation and a
+   sequence. The owner records it durably with the custody row it reserved
+   (planned column), so a retried intent returns `Duplicate` and the original
+   outcome. Buys are also protected by today's one-live-row rule per auction.
+   The owner revalidates every intent against current state: price bounds
+   (`EconomyFeature.AuctionBot.cs:41-46`), the overrides and blacklist, and the
+   daily budgets enforced by the ledger. A faulty service can therefore spend at
+   most the daily budgets, and it never mints, moves or deletes an item itself.
+3. **Failure.** When the service is down, no new intents arrive. In-flight
+   economy operations settle, and Reserved rows are reconciled against
+   `economy_operation` on the owner, so no item or copper is lost or duplicated.
+   After reconnect, the service asks the owner for the results of its
+   outstanding `intent_id`s before it plans again. An audit failure still halts
+   the bot on the owner.
+4. **Value and cost.** The value is low. One action per 20 s, with an item pool
+   rebuilt only when the content changes (`AuctionBotFeature.cs:647-680`), costs
+   little world CPU. The gains are crash isolation of planner bugs and, later,
+   colocating the planner with a realm economy owner. Cost: a durable intent
+   mapping, a market snapshot stream and one more role. Recommendation: stay
+   Local until a realm economy owner exists.
+5. **Dependencies.** M15.0 (durable auction and item ID allocation, and custody
+   writes fenced by owner epoch). M15.1 (transport). It also needs one fenced
+   auction and mail owner per realm once more than one worker runs. No phase from
+   M15.0 to M15.4 assigns that owner yet, so the open item is part of M15.6.
+
+### Considered and kept in existing roles
+
+- **Metrics exporter.** No service. Each daemon already runs its own
+  `MetricsHost` (`src/ArcaneCore.Kernel/Ops/Metrics/MetricsHost.cs:14`) with
+  Prometheus pull and/or OTLP push, and an exporter failure never stops the daemon
+  ([metrics](ops/metrics.md)). In a cluster every role exports its own series,
+  and aggregation belongs to the operator's collector. Planned: `role`, node and
+  incarnation labels next to `realm`. Metrics never feed readiness.
+- **AutoBroadcast.** No service, but one owner. It is a world-tick timer that
+  sends to every player (`ServerMail/AutoBroadcastFeature.cs:51-54`). Run on
+  every worker, it would send each message once per worker. In cluster mode it
+  runs on the realm social and directory authority (M15.2), which already owns
+  realm-wide routed output. GM announcements route the same way.
+- **Server mail.** No service. Delivery starts at login (`ServerMail/ServerMailFeature.cs:53`)
+  and its conditions read the live Player (`:128-142`), so it stays with the
+  player's map owner. Current gap: the letters commit in an economy operation
+  with no operation id (`Economy/EconomyFeature.ServerMail.cs:43`). The
+  `mail_server_character` record is written afterwards, in a separate write
+  (`ServerMailFeature.cs:111-121`). A crash or a failed record between the two,
+  or a relog before the record lands, sends the reward again. Make them one
+  transaction, or derive the operation id from character and template, before
+  M15.3 makes a relog on another worker routine.
+- **Movement anticheat.** It stays on the map worker: it scores every movement
+  packet against authoritative position ([anticheat](areas/anticheat.md)).
+- **Content importer, `arcane-db`, `arcane-account`, `arcane-spell-import`.** These
+  are short-lived jobs under M15.5 (component table above), not services.
+
 ## Phased implementation and acceptance
 
 The roadmap owns phase status. The technical closure criteria are:
@@ -320,6 +566,7 @@ The roadmap owns phase status. The technical closure criteria are:
 | M15.3 — transfer/game/data owners | Complete feature state capture/install, durable transfer decisions, fenced residency, deadlines and acknowledgement routing; static multiple-worker map placement | Seamless 5875 TCP connection across workers; quests/timers, inventory, casts/auras/cooldowns and corpse semantics preserved; duplicate/lost/reordered/late messages and crashes at every handoff stage cannot activate two owners |
 | M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/social/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
 | M15.5 — tooling/compatibility owner | Job contracts for existing CLIs/import/codegen/mock, content revision rollout, mixed-version policy, upgrade/rollback runbook and cluster diagnostics | Offline tools retain CLI use; live content replacement is refused or coordinated; Windows/Linux and private cross-host tests; deterministic output artifacts; compatible rollout and safe local-mode rollback |
+| M15.6 — auxiliary services owner | In value order: Warden hosted on the gateway with a realm-wide Warden manifest; the optional Remote bot chat service; the optional Remote bot planner; the optional Remote auction house bot planner with durable intent ids, plus one fenced auction and mail owner per realm. Also the AutoBroadcast placement, cluster metrics labels and the server-mail idempotency fix ([auxiliary services](#auxiliary-services)) | Every Remote service runs as a real owned subprocess and is also tested in Local mode; Local mode stays equivalent to today. Killing a service at each intent stage leaves the custody audit clean, with no lost or duplicated item or copper; a replayed intent returns Duplicate. A down chat service sends nothing to providers and the built-in replies continue. A gateway with Warden enabled and an unusable module is not ready. Stale-epoch plans and verdicts are discarded |
 
 An integrator owns the shared contract/schema changes and final candidate.
 Workers own bounded domains and submit reviewable commits; no concurrent edits
