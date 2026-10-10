@@ -385,6 +385,23 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 return true;
             }
 
+            case CreateEscrowItem create:
+            {
+                uint guid = create.Item.Guid;
+                if (guid == 0
+                    || await db.Set<ItemInstanceRow>().AsNoTracking().AnyAsync(r => r.Guid == guid, cancellationToken).ConfigureAwait(false)
+                    || !request.Changes.OfType<InsertMail>().Any(i => i.Mail.ItemGuid == guid))
+                {
+                    return false;
+                }
+
+                var row = new ItemInstanceRow { Guid = guid };
+                row.CopyFrom(0, create.Item);
+                db.Add(row);
+                touched.Add(guid);
+                return true;
+            }
+
             case InsertMail insert:
             {
                 MailRecord mail = insert.Mail;
@@ -581,6 +598,7 @@ public static class EconomyRequestValidation
         Changes = request.Changes.Select(c => c switch
         {
             EscrowFromInventory e => e with { Item = CopyItem(e.Item) },
+            CreateEscrowItem e => e with { Item = CopyItem(e.Item) },
             _ => c,
         }).ToArray(),
     };
