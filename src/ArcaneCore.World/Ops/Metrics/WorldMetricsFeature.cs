@@ -57,6 +57,7 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => sessions?.Count ?? 0, "{session}", "Authenticated world sessions.");
         _meter.CreateObservableGauge("arcanecore.world.players_online", () => world.OnlinePlayerCount, "{player}", "Characters in the world.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_depth", () => saves?.Pending ?? 0, "{snapshot}", "Character snapshots queued or being written.");
+        _meter.CreateObservableGauge("arcanecore.db.save_queue_oldest_age", () => saves is null ? 0d : saves.OldestPendingAge.TotalMilliseconds, "ms", "How long the longest-waiting character snapshot has been queued or in its write (0 when none).");
         _meter.CreateObservableGauge("arcanecore.world.maps_loaded", () => _samples.Length, "{map}", "Maps (and instances) loaded at the last sample.");
         if (_perMap)
         {

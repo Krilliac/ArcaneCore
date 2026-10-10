@@ -47,6 +47,8 @@ public sealed class WorldConfigChecks : IConfigCheck
 
         Range(issues, configuration, "World:CharactersPerRealm", 10, 1, 10, "1-10 (vmangos CharactersPerRealm allows at most 10)");
         Range(issues, configuration, "World:AutosaveIntervalMs", 900000, 0, int.MaxValue, "0 to disable, or a positive number of milliseconds (vmangos PlayerSave.Interval 900000)");
+        Range(issues, configuration, "World:SaveQueueWarnDepth", 1000, 0, int.MaxValue, "0 to disable, or the number of characters with a waiting snapshot at which the save queue warns (default 1000)");
+        Range(issues, configuration, "World:SaveQueueWarnAgeMs", 5000, 0, int.MaxValue, "0 to disable, or the age in milliseconds of the oldest waiting snapshot at which the save queue warns (default 5000)");
         Range(issues, configuration, "World:UpdateCompressionThreshold", 128, 0, int.MaxValue, "0 to disable, or a byte count (vmangos Compression.Update.Size 128)");
         foreach (string key in new[] { "Quests:SettlementBudgetSeconds", "Economy:SettlementBudgetSeconds", "GameObjects:LootSettlementBudgetSeconds" })
         {

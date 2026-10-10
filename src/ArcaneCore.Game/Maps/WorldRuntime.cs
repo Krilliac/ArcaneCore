@@ -29,6 +29,17 @@ public sealed class WorldRuntime : IDisposable
     private int _worldThreadId = -1;
     private uint _sinceAutosaveMs;
 
+    // The world thread's position and the slowest features of the tick in progress (docs/ops/watchdog.md). Written by the
+    // world thread only; the position is read by the watchdog thread, so it is published with volatile stores.
+    private volatile int _phase;
+    private volatile object? _currentWork;
+    private long _currentWorkSince;
+    private readonly string?[] _topNames = new string?[TickStats.TopFeatureCount];
+    private readonly long[] _topMicros = new long[TickStats.TopFeatureCount];
+    private int _topCount;
+    private int _commandsRun;
+    private readonly Dictionary<Type, string> _worldTickNames = [];
+
     // Manual clock (test seam, see UseManualClock): game time advances only through AdvanceClockAsync.
     private bool _manualClock;
     private uint _manualStepMs;
@@ -509,15 +520,20 @@ public sealed class WorldRuntime : IDisposable
 
         long phaseStart = Stopwatch.GetTimestamp();
         long bytesStart = GC.GetAllocatedBytesForCurrentThread();
+        _topCount = 0;
+        SetPosition(TickPhase.Commands, null, phaseStart);
         RunCommands();
         long commandsEnd = Stopwatch.GetTimestamp();
         long commandsBytesEnd = GC.GetAllocatedBytesForCurrentThread();
         // World-level services (game events, rest, the tick watchdog) run before the maps. Their time counts as world
-        // features, but untimed per handler: the watchdog's handler must stay a few stores at the start of the tick.
-        Raise(WorldTick, diffMs, nameof(WorldTick));
+        // features and is also timed per handler ("WorldTick:<Type>"); the watchdog's handler stays first and is a few stores.
+        SetPosition(TickPhase.WorldTick, null, commandsEnd);
+        RaiseWorldTick(diffMs);
         Scripts.World.OnUpdate(diffMs);
         long worldTickEnd = Stopwatch.GetTimestamp();
         long worldTickBytesEnd = GC.GetAllocatedBytesForCurrentThread();
+
+        SetPosition(TickPhase.Maps, null, worldTickEnd);
 
         // A snapshot: a map system may create another map (an instance) during its update.
         int mapCount = _maps.Count;
@@ -529,6 +545,7 @@ public sealed class WorldRuntime : IDisposable
             {
                 Map map = maps[mapIndex];
                 long mapStart = Stopwatch.GetTimestamp();
+                SetPosition(TickPhase.Maps, map, mapStart);
                 MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
                     ? map.ReusableDiagnostics()
                     : null;
@@ -558,26 +575,79 @@ public sealed class WorldRuntime : IDisposable
         UnloadRequestedMaps();
         long mapsEnd = Stopwatch.GetTimestamp();
         long mapsBytesEnd = GC.GetAllocatedBytesForCurrentThread();
+        SetPosition(TickPhase.Features, null, mapsEnd);
         RaiseTimed(Updated, diffMs);
         long featuresEnd = Stopwatch.GetTimestamp();
         long featuresBytesEnd = GC.GetAllocatedBytesForCurrentThread();
-        LastTickPhases = new TickPhases(Micros(commandsEnd - phaseStart), Micros(mapsEnd - worldTickEnd),
-            Micros((worldTickEnd - commandsEnd) + (featuresEnd - mapsEnd)))
-        {
-            CommandsBytes = commandsBytesEnd - bytesStart,
-            MapsBytes = mapsBytesEnd - worldTickBytesEnd,
-            FeaturesBytes = (worldTickBytesEnd - commandsBytesEnd) + (featuresBytesEnd - mapsBytesEnd),
-        };
 
+        long autosaveMicros = 0;
+        int autosaveSnapshots = 0;
         if (Options.AutosaveIntervalMs > 0)
         {
             _sinceAutosaveMs += diffMs;
             if (_sinceAutosaveMs >= Options.AutosaveIntervalMs)
             {
                 _sinceAutosaveMs = 0;
-                SaveAll();
+                SetPosition(TickPhase.Autosave, null, featuresEnd);
+                autosaveSnapshots = Autosave();
+                autosaveMicros = Micros(Stopwatch.GetTimestamp() - featuresEnd);
             }
         }
+
+        // Assigned after the autosave so the split accounts for every part of the tick body.
+        LastTickPhases = new TickPhases(Micros(commandsEnd - phaseStart), Micros(mapsEnd - worldTickEnd),
+            Micros((worldTickEnd - commandsEnd) + (featuresEnd - mapsEnd)))
+        {
+            CommandsBytes = commandsBytesEnd - bytesStart,
+            MapsBytes = mapsBytesEnd - worldTickBytesEnd,
+            FeaturesBytes = (worldTickBytesEnd - commandsBytesEnd) + (featuresBytesEnd - mapsBytesEnd),
+            WorldTickMicros = Micros(worldTickEnd - commandsEnd),
+            AutosaveMicros = autosaveMicros,
+            AutosaveSnapshots = autosaveSnapshots,
+            CommandsRun = _commandsRun,
+        };
+        SetPosition(TickPhase.Idle, null, 0);
+    }
+
+    /// <summary>
+    /// Where the world thread is now (any thread; the watchdog's hang log): the tick phase and the feature, command or map running in it.
+    /// <see cref="TickPhase.Idle"/> between ticks.
+    /// </summary>
+    public TickPosition CurrentPosition => new((TickPhase)_phase, _currentWork, Volatile.Read(ref _currentWorkSince));
+
+    private void SetPosition(TickPhase phase, object? work, long since)
+    {
+        _currentWork = work;
+        Volatile.Write(ref _currentWorkSince, since);
+        _phase = (int)phase;
+    }
+
+    /// <summary>Keep the slowest <see cref="TickStats.TopFeatureCount"/> features of the tick in progress (no allocation).</summary>
+    private void NoteSlowest(string name, long micros)
+    {
+        int index;
+        if (_topCount < _topNames.Length)
+        {
+            index = _topCount++;
+        }
+        else if (micros > _topMicros[^1])
+        {
+            index = _topNames.Length - 1;
+        }
+        else
+        {
+            return;
+        }
+
+        while (index > 0 && _topMicros[index - 1] < micros)
+        {
+            _topNames[index] = _topNames[index - 1];
+            _topMicros[index] = _topMicros[index - 1];
+            index--;
+        }
+
+        _topNames[index] = name;
+        _topMicros[index] = micros;
     }
 
     public void Dispose()
@@ -649,6 +719,7 @@ public sealed class WorldRuntime : IDisposable
         {
             long start = Stopwatch.GetTimestamp();
             long startBytes = GC.GetAllocatedBytesForCurrentThread();
+            SetPosition(TickPhase.Features, handler, start);
             try
             {
                 handler(diffMs);
@@ -658,11 +729,56 @@ public sealed class WorldRuntime : IDisposable
                 _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
             }
 
-            string name = handler.Method.DeclaringType?.Name ?? handler.Method.Name;
+            string name = TickWorkNames.Of(handler);
             long micros = Micros(Stopwatch.GetTimestamp() - start);
             long bytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
             Stats.RecordFeature(name, micros, bytes);
+            NoteSlowest(name, micros);
             FeatureObserver?.Invoke(name, micros, bytes);
+        }
+    }
+
+    /// <summary>Raise <see cref="WorldTick"/>, timing each handler as the feature "WorldTick:&lt;Type&gt;" in the tick statistics.</summary>
+    private void RaiseWorldTick(uint diffMs)
+    {
+        Action<uint>? handlers = WorldTick;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<uint> handler in handlers.GetInvocationList().Cast<Action<uint>>())
+        {
+            long start = Stopwatch.GetTimestamp();
+            long startBytes = GC.GetAllocatedBytesForCurrentThread();
+            SetPosition(TickPhase.WorldTick, handler, start);
+            try
+            {
+                handler(diffMs);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(WorldTick), diffMs);
+            }
+
+            Type? type = handler.Method.DeclaringType;
+            string name;
+            if (type is null)
+            {
+                name = "WorldTick:" + handler.Method.Name;
+            }
+            else if (!_worldTickNames.TryGetValue(type, out string? cached))
+            {
+                name = _worldTickNames[type] = "WorldTick:" + TickWorkNames.Of(handler);
+            }
+            else
+            {
+                name = cached;
+            }
+
+            long micros = Micros(Stopwatch.GetTimestamp() - start);
+            Stats.RecordFeature(name, micros, GC.GetAllocatedBytesForCurrentThread() - startBytes);
+            NoteSlowest(name, micros);
         }
     }
 
@@ -728,6 +844,7 @@ public sealed class WorldRuntime : IDisposable
     private void RunCommands(bool drainAll = false)
     {
         int admitted = 0;
+        int run = 0;
         long started = Stopwatch.GetTimestamp();
         int maxCommands = Math.Max(1, Options.MaxCommandsPerTick);
         long budgetTicks = Options.CommandTimeBudgetMs > 0
@@ -735,6 +852,8 @@ public sealed class WorldRuntime : IDisposable
             : 0;
         while (_commands.TryDequeue(out Action? command))
         {
+            run++;
+            SetPosition(TickPhase.Commands, command, Stopwatch.GetTimestamp());
             try
             {
                 command();
@@ -756,6 +875,8 @@ public sealed class WorldRuntime : IDisposable
                 break;
             }
         }
+
+        _commandsRun = run;
     }
 
     /// <summary>Queue every online character for saving (world thread, or after <see cref="Stop"/>).</summary>
@@ -769,6 +890,28 @@ public sealed class WorldRuntime : IDisposable
                 _saveQueue.Enqueue(player.CreateSnapshot(now));
             }
         }
+    }
+
+    /// <summary>
+    /// The periodic save: like <see cref="SaveAll"/> but a character whose previous snapshot is still waiting in the queue is skipped
+    /// (the queue is behind; another snapshot would only supersede the waiting one and cost a copy). Returns the snapshots queued.
+    /// </summary>
+    private int Autosave()
+    {
+        uint now = NowMs;
+        int queued = 0;
+        foreach (Player player in _online.Values)
+        {
+            if (player.IsQuestSettlementPending || _saveQueue.IsPending(unchecked((int)player.Guid.Low)))
+            {
+                continue;
+            }
+
+            _saveQueue.Enqueue(player.CreateSnapshot(now));
+            queued++;
+        }
+
+        return queued;
     }
 
     private void Run()
@@ -813,13 +956,18 @@ public sealed class WorldRuntime : IDisposable
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
             long tickBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
             Stats.Record(durationMicros, tickBytes, interval * 1000L, frameMicros, LastTickPhases);
+            if (durationMicros > interval * 1000L)
+            {
+                Stats.RecordSlowTick(LastTickPhases, _topNames, _topMicros, _topCount, durationMicros);
+            }
+
             TickObserver?.Invoke(durationMicros, tickBytes, LastTickPhases);
             TickCompleted?.Invoke(durationMicros, tickBytes, LastTickPhases);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {
-                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs} ms (interval {IntervalMs} ms)",
-                    durationMicros / 1000, interval);
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs} ms (interval {IntervalMs} ms): {Phases}",
+                    durationMicros / 1000, interval, LastTickPhases.Format());
             }
 
             if (_manualClock)

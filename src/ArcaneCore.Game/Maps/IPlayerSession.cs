@@ -36,4 +36,10 @@ public interface IPlayerSession
 public interface ICharacterSaveQueue
 {
     void Enqueue(CharacterState state);
+
+    /// <summary>
+    /// True while a snapshot of this character is waiting to be written (not merely being written), so another snapshot of
+    /// it would only supersede that one. Queues that do not coalesce return false.
+    /// </summary>
+    bool IsPending(int characterId) => false;
 }

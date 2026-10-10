@@ -141,6 +141,103 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
+    public void Hang_WithHangDetail_AppendsTheDetailToBothHangLines()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 2000);
+        var asked = new List<bool>();
+        monitor.HangDetail = inProgress =>
+        {
+            asked.Add(inProgress);
+            return inProgress ? "phase=Features, running=SyntheticSlowFeature for 2500 ms" : "slowest tick body 9000 ms: maps 3 ms";
+        };
+        Tick(monitor, 5, 50);
+        monitor.OnTick(_clock.NowMicros); // this tick never ends
+        _clock.AdvanceMs(2_500);
+        monitor.Check(_clock.NowMicros);
+
+        LogLine live = Assert.Single(_log.Of(WatchdogEvents.TickHang));
+        Assert.EndsWith("); phase=Features, running=SyntheticSlowFeature for 2500 ms", live.Message);
+        Assert.Equal([true], asked);
+
+        monitor.OnTick(_clock.NowMicros); // the tick ends, the next starts
+        monitor.Check(_clock.NowMicros);
+        LogLine done = _log.Of(WatchdogEvents.TickHang).Last();
+        Assert.Equal(2, _log.CountOf(WatchdogEvents.TickHang));
+        Assert.EndsWith("since start; slowest tick body 9000 ms: maps 3 ms", done.Message);
+        // The completed hang also counts as an overrun, so the same Check logs the overrun warning, which asks after the fact too.
+        LogLine overrun = Assert.Single(_log.Of(WatchdogEvents.TickOverrun));
+        Assert.EndsWith("; slowest tick body 9000 ms: maps 3 ms", overrun.Message);
+        Assert.Equal([true, false, false], asked);
+    }
+
+    [Fact]
+    public void Hang_WithoutHangDetail_OrAnEmptyOne_LeavesTheLinesUnchanged()
+    {
+        TickMonitor plain = Create(o => o.HangMs = 2000);
+        Tick(plain, 5, 50);
+        plain.OnTick(_clock.NowMicros);
+        _clock.AdvanceMs(2_500);
+        plain.Check(_clock.NowMicros);
+        Assert.EndsWith("interval 50 ms)", Assert.Single(_log.Of(WatchdogEvents.TickHang)).Message);
+
+        var log = new RecordingLogger<TickMonitor>();
+        var empty = new TickMonitor(new TickMonitorOptions { HangMs = 2000 }, _clock, WatchdogTestSupport.NewRegistry(), log);
+        empty.StartTicking(50);
+        empty.HangDetail = _ => string.Empty;
+        empty.OnTick(_clock.NowMicros);
+        _clock.AdvanceMs(2_500);
+        empty.Check(_clock.NowMicros);
+        Assert.EndsWith("interval 50 ms)", Assert.Single(log.Of(WatchdogEvents.TickHang)).Message);
+    }
+
+    [Fact]
+    public void Hang_WithAThrowingHangDetail_StillLogsTheLine_NamingTheFailure()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 2000);
+        monitor.HangDetail = _ => throw new InvalidOperationException("boom");
+        Tick(monitor, 3, 50);
+        monitor.OnTick(_clock.NowMicros);
+        _clock.AdvanceMs(2_500);
+        monitor.Check(_clock.NowMicros);
+        LogLine line = Assert.Single(_log.Of(WatchdogEvents.TickHang));
+        Assert.Equal(LogLevel.Critical, line.Level);
+        Assert.Contains("running for 2500 ms", line.Message);
+        Assert.EndsWith("; hang detail unavailable (InvalidOperationException)", line.Message);
+        Assert.True(monitor.HangDetail is not null); // the watchdog keeps checking afterwards
+    }
+
+    [Fact]
+    public void Overrun_WithHangDetail_AppendsTheSlowestFrameBreakdown()
+    {
+        TickMonitor monitor = Create();
+        bool? askedInProgress = null;
+        monitor.HangDetail = inProgress =>
+        {
+            askedInProgress = inProgress;
+            return "slowest tick body 130 ms: commands 0 ms (0 run), maps 2 ms";
+        };
+        Tick(monitor, 2, 50);
+        Tick(monitor, 1, 130);
+        Tick(monitor, 1, 50);
+        monitor.Check(_clock.NowMicros);
+        LogLine warning = Assert.Single(_log.Of(WatchdogEvents.TickOverrun));
+        Assert.EndsWith("; slowest tick body 130 ms: commands 0 ms (0 run), maps 2 ms", warning.Message);
+        Assert.False(askedInProgress); // an overrun is after the fact
+    }
+
+    [Fact]
+    public void HangDetail_IsNotCalledWhenNoLineIsLogged()
+    {
+        TickMonitor monitor = Create();
+        int calls = 0;
+        monitor.HangDetail = _ => { calls++; return "x"; };
+        Tick(monitor, 200, 50);
+        monitor.Check(_clock.NowMicros);
+        Assert.Equal(0, calls);
+        Assert.Empty(_log.Lines);
+    }
+
+    [Fact]
     public void HangDetection_Off_NeverReportsOrWithholds()
     {
         TickMonitor monitor = Create(o => o.HangMs = 0);

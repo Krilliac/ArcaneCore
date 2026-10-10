@@ -46,7 +46,8 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_world_sessions` | gauge | authenticated world sessions |
 | `arcanecore_world_players_online` | gauge | characters in the world (TC `online_players`) |
 | `arcanecore_world_maps_loaded` | gauge | maps and instances at the last sample |
-| `arcanecore_db_save_queue_depth` | gauge | character snapshots queued or being written (TC `db_queue_*`) |
+| `arcanecore_db_save_queue_depth` | gauge | characters with a snapshot queued or being written; the queue keeps one per character (TC `db_queue_*`) |
+| `arcanecore_db_save_queue_oldest_age_milliseconds` | gauge | age of the longest-waiting character snapshot, queued or in its write; 0 when none (the `World:SaveQueueWarnAgeMs` check, [persistence](../areas/persistence.md)) |
 | `arcanecore_map_players` / `_creatures` / `_objects` `{map,instance}` | gauge | per map, sampled every `MapSampleIntervalSeconds` on the world thread (TC `map_creatures`, `map_players`) |
 | `arcanecore_map_update_time_mean_milliseconds` / `_max_` `{map,instance}` | gauge | per map over the sample period (TC `map_update_time`) |
 | `arcanecore_net_packets_in_total` / `_out_total` | counter | world and logon socket packets |

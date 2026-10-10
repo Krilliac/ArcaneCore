@@ -2,6 +2,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Metrics;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -63,6 +64,47 @@ public sealed class WorldMetricsFeatureTests
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.ticks" && m.Series.Any(s => s.Value >= 20));
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.sessions");
         Assert.Contains(metrics, m => m.Name == "arcanecore.db.save_queue_depth");
+        Assert.Contains(metrics, m => m.Name == "arcanecore.db.save_queue_oldest_age" && m.Unit == "ms");
         Assert.Contains(metrics, m => m.Name == "arcanecore.map.creatures" && m.Series.Any(s => s.Tags.Any(t => t.Key == "map")));
+    }
+
+    /// <summary>A scope factory whose scopes cannot be created until released: the queue consumer parks in front of the store.</summary>
+    private sealed class GatedScopeFactory(IServiceScopeFactory inner, ManualResetEventSlim gate) : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope()
+        {
+            gate.Wait(TimeSpan.FromSeconds(30));
+            return inner.CreateScope();
+        }
+    }
+
+    [Fact]
+    public async Task SaveQueueOldestAgeGauge_GrowsWhileASnapshotIsStuck_AndReturnsToZeroWhenItDrains()
+    {
+        using var gate = new ManualResetEventSlim(false);
+        using var store = new MetricsStore();
+        store.Start();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            s.AddSingleton(new MetricsOptions { Enabled = true, MapSampleIntervalSeconds = 1 });
+            s.AddSingleton(sp => new CharacterSaveQueue(
+                new GatedScopeFactory(sp.GetRequiredService<IServiceScopeFactory>(), gate),
+                NullLogger<CharacterSaveQueue>.Instance));
+        });
+        double Age() => store.Collect().Single(m => m.Name == "arcanecore.db.save_queue_oldest_age").Series.Single().Value;
+        double Depth() => store.Collect().Single(m => m.Name == "arcanecore.db.save_queue_depth").Series.Single().Value;
+
+        await WorldTestHost.WaitForAsync(() => store.Collect().Any(m => m.Name == "arcanecore.db.save_queue_oldest_age"), "the gauge");
+        Assert.Equal(0, Age()); // nothing queued: zero, not a stale or negative age
+        Assert.Equal(0, Depth());
+
+        host.SaveQueue.Enqueue(new ArcaneCore.Kernel.Characters.CharacterState(1, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: 5));
+        await Task.Delay(120);
+        Assert.Equal(1, Depth());
+        Assert.True(Age() >= 100, $"oldest age {Age()} ms while the only snapshot is stuck");
+
+        gate.Set();
+        await WorldTestHost.WaitForAsync(() => host.SaveQueue.Pending == 0, "the queue draining");
+        Assert.Equal(0, Age());
     }
 }

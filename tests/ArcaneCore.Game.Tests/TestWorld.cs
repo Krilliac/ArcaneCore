@@ -42,7 +42,12 @@ internal sealed class RecordingSaveQueue : ICharacterSaveQueue
 {
     public List<CharacterState> Saved { get; } = [];
 
+    /// <summary>Character ids reported as having a snapshot waiting (<see cref="IsPending"/>).</summary>
+    public HashSet<int> PendingIds { get; } = [];
+
     public void Enqueue(CharacterState state) => Saved.Add(state);
+
+    public bool IsPending(int characterId) => PendingIds.Contains(characterId);
 }
 
 internal static class TestWorld

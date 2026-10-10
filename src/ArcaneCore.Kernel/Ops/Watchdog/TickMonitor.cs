@@ -77,6 +77,13 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// <summary>Set by the host of the simulation to add tick-body percentiles (its own recorder) to the frame lines. Called on the watchdog thread.</summary>
     public Func<TickBodySummary>? BodyStats { get; set; }
 
+    /// <summary>
+    /// Set by the host of the simulation to say <em>where</em> a slow tick went, appended to the hang and overrun lines (called on the
+    /// watchdog thread, only when a line is about to be logged). The argument is true while the hung tick is still running (name what
+    /// it is running now) and false after the fact (break down the slowest recent tick). A throwing callback is reported in the line.
+    /// </summary>
+    public Func<bool, string>? HangDetail { get; set; }
+
     /// <summary>The frame ring (for diagnostics and tests).</summary>
     public TickRing Ring => _ring;
 
@@ -169,8 +176,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
             if (_hangLimiter.TryAcquire(nowMicros, out _))
             {
-                _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms)",
-                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros));
+                _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}",
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), DetailText(inProgress: true));
             }
         }
 
@@ -179,8 +186,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (hangs > _hangsReported)
         {
             RingStats stats = Stats(out long[] buffer);
-            _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start",
-                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs);
+            _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}",
+                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, DetailText(inProgress: false));
             ArrayPool<long>.Shared.Return(buffer);
             _hangCounter.Add(hangs - _hangsReported);
             _hangsReported = hangs;
@@ -192,9 +199,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         {
             RingStats stats = Stats(out long[] buffer);
             long sinceMs = _lastOverrunReportMicros == NoTick ? 0 : Micros.ToMillis(nowMicros - _lastOverrunReportMicros);
-            _logger.LogWarning(WatchdogEvents.TickOverrun, "world tick overran its {BudgetMs} ms budget {New} time(s){Window}: frame p50 {P50Ms} ms, p99 {P99Ms} ms, slowest {MaxMs} ms over {Samples} frames{Body}",
+            _logger.LogWarning(WatchdogEvents.TickOverrun, "world tick overran its {BudgetMs} ms budget {New} time(s){Window}: frame p50 {P50Ms} ms, p99 {P99Ms} ms, slowest {MaxMs} ms over {Samples} frames{Body}{Detail}",
                 Micros.ToMillis(_budgetMicros), overruns - _overrunsReported, sinceMs > 0 ? $" in the last {sinceMs / 1000} s" : string.Empty,
-                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText());
+                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText(), DetailText(inProgress: false));
             ArrayPool<long>.Shared.Return(buffer);
             _overrunCounter.Add(overruns - _overrunsReported);
             _overrunsReported = overruns;
@@ -258,6 +265,24 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         _frameP99.Set(stats.P99);
         _frameMax.Set(stats.Max);
         return stats;
+    }
+
+    private string DetailText(bool inProgress)
+    {
+        if (HangDetail is not { } detail)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string text = detail(inProgress);
+            return string.IsNullOrEmpty(text) ? string.Empty : "; " + text;
+        }
+        catch (Exception ex)
+        {
+            return $"; hang detail unavailable ({ex.GetType().Name})";
+        }
     }
 
     private string BodyText()

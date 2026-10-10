@@ -142,7 +142,7 @@ public sealed partial class QuestNpcFeature
             await operation.Saves.SaveForSettlementAsync(operation.Request.Before, budget.Token).ConfigureAwait(false);
             savedMs = clock.ElapsedMilliseconds;
             budget.Token.ThrowIfCancellationRequested();
-            await Persistence.FlushCharacterAsync(id).ConfigureAwait(false);
+            await Persistence.FlushCharacterAsync(id).WaitAsync(budget.Token).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
             // Drain the owners whose rows the reward transaction also writes. Anything queued for this
             // character is behind us, and the hold guards keep new writes out. A failed spellbook

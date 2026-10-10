@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
@@ -13,7 +12,10 @@ namespace ArcaneCore.World.Spells;
 /// once at startup (like the character name cache, WorldHost), then refreshed by the character
 /// loading hook. Changes are queued and written in order on a background task, so the world
 /// thread never waits for the database
-/// (docs/integration/spells.md § Spellbook persistence). Thread-safe.
+/// (docs/integration/spells.md § Spellbook persistence). Spells learned for one character while their
+/// write has not been taken by the writer yet share one store call (one transaction), as long as nothing
+/// else for the queue sits between them; a forget, a delete or a flush is never reordered
+/// (docs/areas/persistence.md). Thread-safe.
 /// </summary>
 public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 {
@@ -22,8 +24,10 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
     private readonly Lock _lock = new();
     private readonly IServiceScopeFactory? _scopes;
     private readonly ILogger _logger;
-    private readonly Channel<PendingWrite> _writes =
-        Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly LinkedList<PendingWrite> _writes = new();
+    private readonly Lock _writesLock = new();
+    private readonly SemaphoreSlim _writesSignal = new(0);
+    private bool _writesCompleted;
 
     private Task? _writer;
     private bool _warnedNoStore;
@@ -58,7 +62,16 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
     }
 
     /// <summary>Writes queued and not yet finished.</summary>
-    public int PendingWrites => _writes.Reader.Count;
+    public int PendingWrites
+    {
+        get
+        {
+            lock (_writesLock)
+            {
+                return _writes.Count;
+            }
+        }
+    }
 
     /// <summary>Fill the cache (startup, before the world thread runs).</summary>
     public void Load(IEnumerable<CharacterSpellRow> rows)
@@ -122,7 +135,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
         }
 
-        Enqueue(id, store => store.AddAsync(id, [spellId]));
+        EnqueueAdd(id, [spellId]);
         SpellLearned?.Invoke(player, spellId);
         return true;
     }
@@ -202,8 +215,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 
         if (defaults.Count > 0)
         {
-            uint[] spells = [.. defaults];
-            Enqueue(id, store => store.AddAsync(id, spells));
+            EnqueueAdd(id, [.. defaults]);
         }
 
         return true;
@@ -229,7 +241,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
 
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_writes.Writer.TryWrite(new PendingWrite(null, static _ => Task.CompletedTask, done)))
+        if (!TryAppend(new PendingWrite(null, static _ => Task.CompletedTask, done)))
         {
             return;
         }
@@ -249,7 +261,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
 
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_writes.Writer.TryWrite(new PendingWrite(characterId, store => RetryFailedCharacterAsync(store, characterId), done)))
+        if (!TryAppend(new PendingWrite(characterId, store => RetryFailedCharacterAsync(store, characterId), done)))
         {
             throw new InvalidOperationException("The spellbook writer has stopped");
         }
@@ -259,7 +271,12 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _writes.Writer.TryComplete();
+        lock (_writesLock)
+        {
+            _writesCompleted = true;
+        }
+
+        _writesSignal.Release();
         if (_writer is not null)
         {
             await _writer.ConfigureAwait(false);
@@ -284,7 +301,73 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             return;
         }
 
-        _writes.Writer.TryWrite(new PendingWrite(characterId, write));
+        TryAppend(new PendingWrite(characterId, write));
+    }
+
+    /// <summary>
+    /// Queue spells for one character. They join the entry at the tail of the queue when that is an Add of the same character the writer has
+    /// not taken yet (so the learns of one tick reach the store as one call whenever the writer is busy or behind); otherwise they start
+    /// an entry. Never merged across any other entry, so every write keeps its position relative to forgets, deletes and flushes.
+    /// </summary>
+    private void EnqueueAdd(int characterId, uint[] spells)
+    {
+        if (_scopes is null)
+        {
+            return;
+        }
+
+        lock (_writesLock)
+        {
+            if (_writesCompleted)
+            {
+                return;
+            }
+
+            if (_writes.Last?.Value is { Spells: { } tail, Taken: false, CharacterId: { } owner } && owner == characterId)
+            {
+                tail.AddRange(spells);
+                return;
+            }
+
+            var entry = new PendingWrite(characterId, null!) { Spells = [.. spells] };
+            entry.Write = store => store.AddAsync(characterId, entry.Spells!);
+            _writes.AddLast(entry);
+        }
+
+        _writesSignal.Release();
+    }
+
+    private bool TryAppend(PendingWrite entry)
+    {
+        lock (_writesLock)
+        {
+            if (_writesCompleted)
+            {
+                return false;
+            }
+
+            _writes.AddLast(entry);
+        }
+
+        _writesSignal.Release();
+        return true;
+    }
+
+    /// <summary>The oldest queued write, marked taken so nothing is appended to it; null when the queue is empty.</summary>
+    private PendingWrite? TakeNext(out bool completed)
+    {
+        lock (_writesLock)
+        {
+            completed = _writesCompleted;
+            if (_writes.First is not { } first)
+            {
+                return null;
+            }
+
+            _writes.RemoveFirst();
+            first.Value.Taken = true;
+            return first.Value;
+        }
     }
 
     private async Task RetryFailedCharacterAsync(ICharacterSpellStore store, int characterId)
@@ -357,8 +440,21 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 
     private async Task WriteLoopAsync()
     {
-        await foreach (PendingWrite pending in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
+        while (true)
         {
+            await _writesSignal.WaitAsync().ConfigureAwait(false);
+            PendingWrite? next = TakeNext(out bool completed);
+            if (next is null)
+            {
+                if (completed)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            PendingWrite pending = next;
             try
             {
                 await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
@@ -396,7 +492,20 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
     }
 
-    private readonly record struct PendingWrite(int? CharacterId, Func<ICharacterSpellStore, Task> Write, TaskCompletionSource? Done = null);
+    private sealed class PendingWrite(int? characterId, Func<ICharacterSpellStore, Task> write, TaskCompletionSource? done = null)
+    {
+        public int? CharacterId { get; } = characterId;
+
+        public Func<ICharacterSpellStore, Task> Write { get; set; } = write;
+
+        public TaskCompletionSource? Done { get; } = done;
+
+        /// <summary>The spells of an Add entry, appended to under the writes lock until the writer takes the entry.</summary>
+        public List<uint>? Spells { get; init; }
+
+        /// <summary>Set under the writes lock when the writer dequeues the entry.</summary>
+        public bool Taken { get; set; }
+    }
 
     private sealed class NullCharacterSpellStore : ICharacterSpellStore
     {
