@@ -76,6 +76,8 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         _baronWarnings = 0;
         _slaughterDoorOpen = _ramsteinSummoned = _announcerChosen = false;
         _acolyteAnnouncer = default;
+        _postboxesUsed = 0;
+        _usedPostboxes.Clear();
     }
 
     // The original Save()/Load() serializes the first eight fields, even though MAX_ENCOUNTER is ten.
@@ -117,8 +119,53 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         {
             SetData(TypeBarthilasRun, EncounterState.InProgress);
         }
+        else if (Array.IndexOf(GoPostboxes, go.Entry) >= 0)
+        {
+            if (_usedPostboxes.Add(go.Guid))
+            {
+                UsePostbox(player);
+            }
+        }
 
         return false;
+    }
+
+    /// <summary>The six ClassicDB postboxes with ScriptName go_stratholme_postbox (z2815 gameobject_template).</summary>
+    public static readonly uint[] GoPostboxes = [176346, 176349, 176350, 176351, 176352, 176353];
+    public const uint NpcUndeadPostman = 11142, SpellSummonPostmaster = 24627;
+    private int _postboxesUsed;
+    private readonly HashSet<ObjectGuid> _usedPostboxes = [];
+
+    /// <summary>Postboxes the Postmaster event has counted in this instance (instance_stratholme::m_postboxesUsed).</summary>
+    public int PostboxesUsed => _postboxesUsed;
+
+    /// <summary>GOUse_go_stratholme_postbox (stratholmeScripts.cpp:95-124): every box brings three Undead Postmen; after two boxes the
+    /// third one summons Postmaster Malown through spell 24627 and the event is done. Each box object counts once (the key unlocks it
+    /// and SD2 relies on the box not being usable again).</summary>
+    private void UsePostbox(Player player)
+    {
+        if (Encounters[TypePostmaster] == EncounterState.Done)
+        {
+            return;
+        }
+
+        if (Encounters[TypePostmaster] == EncounterState.Special)
+        {
+            CastPlayerSpell?.Invoke(player, SpellSummonPostmaster);
+            SetData(TypePostmaster, EncounterState.Done);
+        }
+        else
+        {
+            SetData(TypePostmaster, EncounterState.InProgress);
+        }
+
+        // SummonCreature(NPC_UNDEAD_POSTMAN, random point within 3 yards, TEMPSPAWN_DEAD_DESPAWN) x3.
+        CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+        for (int i = 0; i < 3; i++)
+        {
+            float angle = i * (2f * MathF.PI / 3f);
+            creatures?.SummonForInstance(NpcUndeadPostman, player.X + (2f * MathF.Cos(angle)), player.Y + (2f * MathF.Sin(angle)), player.Z, 0f);
+        }
     }
 
     /// <summary>instance_stratholme::OnCreatureRespawn (stratholme.cpp:761-768): once the run has begun, Barthilas comes back in the slaughterhouse.</summary>
@@ -351,7 +398,13 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 Encounters[type] = data;
                 return; // SD2 does not save this event.
             case TypePostmaster:
+                // instance_stratholme::SetData (stratholme.cpp:463-474): after the second box, prepare the Postmaster.
                 Encounters[type] = data;
+                if (data == EncounterState.InProgress && ++_postboxesUsed == 2)
+                {
+                    Encounters[type] = EncounterState.Special;
+                }
+
                 return;
         }
 
