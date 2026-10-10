@@ -336,8 +336,11 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
      Patterns are compiled with `RegexOptions.NonBacktracking` (matching time linear in the line, whatever the pattern: an
      operator's pattern with a back-reference or lookaround is skipped with a warning) and a 100 ms timeout; a line the filter
      cannot judge in time goes to no model (the built-in provider answers) but costs no strike. The timeout is wall-clock time, so a
-     process pause during a match (a garbage collection, a starved CPU), most likely on a pattern's first match after start, can
-     trip it on a harmless line; that line gets a built-in reply.
+     process pause during a match (a garbage collection, a starved CPU) can trip it on a harmless line. A pattern's first match is
+     the slow one (its matcher is built then), so every pattern is run once on the thread pool when the filter is loaded, at start
+     and after a reload, and a line waits for that warm-up rather than paying it. A timed-out screening is counted
+     (`timed-out=` in the status, metric `arcanecore_playerbot_chat_screening_timeouts_total{kind}`) and logged as a warning at
+     most once a minute, naming the pattern (`Harassment pattern #2`, `personal data (phone)`), never the line.
   2. each provider's optional **moderation step** (`Moderation` on the provider entry, `None` by default): `Endpoint` posts the
      line to an OpenAI-compatible `/moderations` endpoint (`ModerationBaseUrl`, default the provider's own `BaseUrl`;
      `ModerationModel`, default `omni-moderation-latest`; `ModerationApiKeyEnvironmentVariable`, default the provider's key), so an
@@ -365,7 +368,7 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **GM.** `.playerbot chat flags [player]` lists the newest 15 flag records (one player's when named, after a line with their
   strikes, remaining cut-off and AI choice); `.playerbot chat pardon <player>` clears a player's strikes and cut-off (not a mute).
   `.playerbot chat status` ends with `Bot chat safety: screening=on screened=.. flagged=.. moderation-flagged=..
-  output-flagged=.. builtin-only=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
+  output-flagged=.. builtin-only=.. timed-out=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
   filter's size.
 - **Disclosure and choice.** While a model provider is configured, a player who talks to a bot gets, once per login and before
   the first reply, a system message: `DisclosureText` ("Bot replies on this server may be written by an AI service, which

@@ -5,8 +5,11 @@ using System.Text.RegularExpressions;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
-/// <summary>What the local filter found in a line: the first category hit (null: clean), or that a pattern ran out of time.</summary>
-internal readonly record struct SafetyVerdict(PlayerbotChatSafetyCategories? Category, bool TimedOut)
+/// <summary>
+/// What the local filter found in a line: the first category hit (null: clean), or that a pattern ran out of time
+/// (<paramref name="TimedOutOn"/> names the first such pattern, e.g. "Harassment pattern #2" or "personal data (phone)"; never the line).
+/// </summary>
+internal readonly record struct SafetyVerdict(PlayerbotChatSafetyCategories? Category, bool TimedOut, string? TimedOutOn = null)
 {
     public static readonly SafetyVerdict Clean = new(null, false);
 
@@ -186,32 +189,97 @@ internal sealed class PlayerbotChatSafetyFilter
         if (string.IsNullOrWhiteSpace(text) || categories == PlayerbotChatSafetyCategories.None) return SafetyVerdict.Clean;
         string line = text.Length > MaxScreenedLength ? text[..MaxScreenedLength] : text;
         SafetyForms forms = Normalize(line);
-        bool timedOut = false;
+        string? timedOutOn = null;
         foreach (PlayerbotChatSafetyCategories category in Order)
         {
             if ((categories & category) == 0) continue;
             if (category == PlayerbotChatSafetyCategories.PersonalData)
             {
-                if (HasPersonalData(line)) return new SafetyVerdict(category, false);
+                if (HasPersonalData(line, out string? personal)) return new SafetyVerdict(category, personal is not null, personal ?? timedOutOn);
                 continue;
             }
 
             if (!_rules.TryGetValue(category, out CategoryRules? rule)) continue;
-            if (rule.MatchesTerm(forms)) return new SafetyVerdict(category, false);
-            foreach (Regex pattern in rule.Patterns)
+            if (rule.MatchesTerm(forms)) return new SafetyVerdict(category, timedOutOn is not null, timedOutOn);
+            for (int index = 0; index < rule.Patterns.Count; index++)
             {
+                Regex pattern = rule.Patterns[index];
                 try
                 {
-                    if (pattern.IsMatch(forms.Plain) || pattern.IsMatch(forms.Leet)) return new SafetyVerdict(category, false);
+                    if (IsMatch(pattern, forms.Plain) || IsMatch(pattern, forms.Leet)) return new SafetyVerdict(category, timedOutOn is not null, timedOutOn);
                 }
                 catch (RegexMatchTimeoutException)
                 {
-                    timedOut = true;
+                    timedOutOn ??= $"{category} pattern #{index + 1}";
                 }
             }
         }
 
-        return new SafetyVerdict(null, timedOut);
+        return new SafetyVerdict(null, timedOutOn is not null, timedOutOn);
+    }
+
+    /// <summary>Test seam: a pattern for which this returns true times out on every match (a real timeout cannot be forced).</summary>
+    internal Func<Regex, bool>? TimeoutForTest { get; set; }
+
+    private bool IsMatch(Regex pattern, string text)
+    {
+        if (TimeoutForTest?.Invoke(pattern) == true) throw new RegexMatchTimeoutException(string.Empty, pattern.ToString(), pattern.MatchTimeout);
+        return pattern.IsMatch(text);
+    }
+
+    // --- warm-up ----------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A line for the warm-up: letters of both cases, digits and the punctuation the patterns read (personal data included), so
+    /// the lazily built matcher states a real line needs exist before one arrives.
+    /// </summary>
+    internal const string WarmUpLine = "Warm up: the quick brown fox jumps over the lazy dog, THE QUICK BROWN FOX! 0123456789 k y s "
+        + "kiiill k1ll y0urs3lf mail a.b-c_d+e@example.co.uk (at) [dot] call +1 (555) 123-4567 or 555.123.4567, 221 Baker Street ?#$&*";
+
+    private Task? _warmed;
+    private int _warmedPatterns;
+
+    /// <summary>
+    /// Every pattern of this filter (the personal-data ones included) run once over <see cref="WarmUpLine"/>, on the thread pool;
+    /// started at the first call, the same task after. A pattern's first match builds its matcher (the one-time cost behind a
+    /// "not judged in time" on a harmless first line); the warm-up pays it instead of a player's line.
+    /// </summary>
+    internal Task Warmed
+    {
+        get
+        {
+            if (Volatile.Read(ref _warmed) is { } started) return started;
+            var task = new Task(WarmUp);
+            if (Interlocked.CompareExchange(ref _warmed, task, null) is { } other) return other;
+            task.Start(TaskScheduler.Default);
+            return task;
+        }
+    }
+
+    /// <summary>Whether the warm-up has been started (reading this does not start it, unlike <see cref="Warmed"/>).</summary>
+    internal bool WarmUpStarted => Volatile.Read(ref _warmed) is not null;
+
+    /// <summary>How many patterns the warm-up has run (each pattern once; the count of <see cref="AllPatterns"/> when done).</summary>
+    internal int WarmedPatterns => Volatile.Read(ref _warmedPatterns);
+
+    private void WarmUp()
+    {
+        SafetyForms forms = Normalize(WarmUpLine);
+        foreach (Regex pattern in AllPatterns)
+        {
+            try
+            {
+                pattern.IsMatch(WarmUpLine);
+                pattern.IsMatch(forms.Plain);
+                pattern.IsMatch(forms.Leet);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                // A cold match ran out of time here instead of on a player's line: the next one is warm.
+            }
+
+            Interlocked.Increment(ref _warmedPatterns);
+        }
     }
 
     // --- normalization ----------------------------------------------------------------------------------------------------
@@ -298,17 +366,27 @@ internal sealed class PlayerbotChatSafetyFilter
 
     // --- personal data ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Whether <paramref name="text"/> holds an email address, a phone number or a street address.</summary>
-    internal bool HasPersonalData(string text)
+    /// <summary>
+    /// Whether <paramref name="text"/> holds an email address, a phone number or a street address. A pattern out of time counts as a
+    /// hit (unreadable in time: treated as personal data), named in <paramref name="timedOutOn"/>.
+    /// </summary>
+    internal bool HasPersonalData(string text, out string? timedOutOn)
     {
-        try
+        timedOutOn = null;
+        foreach ((Regex pattern, string name) in (ReadOnlySpan<(Regex, string)>)[(_email, "email"), (_phone, "phone"), (_streetAddress, "street address")])
         {
-            return _email.IsMatch(text) || _phone.IsMatch(text) || _streetAddress.IsMatch(text);
+            try
+            {
+                if (IsMatch(pattern, text)) return true;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                timedOutOn = $"personal data ({name})";
+                return true;
+            }
         }
-        catch (RegexMatchTimeoutException)
-        {
-            return true; // unreadable in time: treated as personal data
-        }
+
+        return false;
     }
 
     /// <summary>Emails and phone numbers replaced by placeholders (<c>[email]</c>, <c>[phone]</c>), street addresses by <c>[address]</c>.</summary>

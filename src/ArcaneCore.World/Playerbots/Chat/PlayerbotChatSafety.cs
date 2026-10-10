@@ -29,8 +29,8 @@ internal sealed record BotChatPlayerSafety(ulong PlayerGuid, string PlayerName, 
 
 /// <summary>The safety line of <c>.playerbot chat status</c>.</summary>
 internal sealed record BotChatSafetyStatus(
-    bool Screening, long Screened, long Flagged, long ModerationFlagged, long OutputFlagged, long BuiltinOnly, long Cutoffs, int CutOffNow,
-    long AutoMutes, int OptedOut, int OptedIn, long Disclosed, int Terms, int Patterns);
+    bool Screening, long Screened, long Flagged, long ModerationFlagged, long OutputFlagged, long BuiltinOnly, long TimedOut, long Cutoffs,
+    int CutOffNow, long AutoMutes, int OptedOut, int OptedIn, long Disclosed, int Terms, int Patterns);
 
 /// <summary>
 /// The state of bot chat safety (docs/areas/playbots.md, Safety and provider policies): the local filter (the shipped list and the
@@ -72,12 +72,16 @@ internal sealed class PlayerbotChatSafety
     private long _cutoffs;
     private long _autoMutes;
     private long _disclosures;
+    private long _timedOut;
+    private long _timeoutsNotWarned;
+    private DateTimeOffset _timeoutWarnedUntil = DateTimeOffset.MinValue;
 
     internal PlayerbotChatSafety(Func<PlayerbotChatOptions> options, TimeProvider time, ILogger logger)
     {
         _options = options;
         _time = time;
         _logger = logger;
+        _ = _filter.Warmed; // on the thread pool: the first player line after start does not pay the patterns' first-match cost
     }
 
     private PlayerbotChatSafetyOptions Options => _options().Safety;
@@ -113,6 +117,7 @@ internal sealed class PlayerbotChatSafety
                 _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
                     filter.Size.Terms, filter.Size.Patterns, replace ? file : "the shipped list and " + file);
             _filter = filter;
+            _ = filter.Warmed; // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
             _filterSource = (file, replace, written);
             return filter;
         }
@@ -128,11 +133,43 @@ internal sealed class PlayerbotChatSafety
     internal SafetyVerdict ScreenInput(string text)
     {
         Interlocked.Increment(ref _screened);
-        return Filter().Screen(text, Options.Categories);
+        return Counted(Filter().Screen(text, Options.Categories), "input");
     }
 
     /// <summary>Screen a model's reply.</summary>
-    internal SafetyVerdict ScreenOutput(string text) => Filter().Screen(text, Options.Categories);
+    internal SafetyVerdict ScreenOutput(string text) => Counted(Filter().Screen(text, Options.Categories), "output");
+
+    /// <summary>How long a "screening ran out of time" warning silences the next ones (they are counted, and the next warning says how many).</summary>
+    internal static readonly TimeSpan TimeoutWarningInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// A screening that ran out of time: counted (status <c>timed-out=</c>, metric <c>arcanecore.playerbot.chat.screening_timeouts</c>)
+    /// and logged at most once per <see cref="TimeoutWarningInterval"/>, naming the pattern and never the line.
+    /// </summary>
+    private SafetyVerdict Counted(SafetyVerdict verdict, string kind)
+    {
+        if (!verdict.TimedOut) return verdict;
+        long total = Interlocked.Increment(ref _timedOut);
+        PlayerbotChatMeters.CountScreeningTimeout(kind);
+        DateTimeOffset now = _time.GetUtcNow();
+        long suppressed;
+        lock (_gate)
+        {
+            if (now < _timeoutWarnedUntil)
+            {
+                _timeoutsNotWarned++;
+                return verdict;
+            }
+
+            _timeoutWarnedUntil = now + TimeoutWarningInterval;
+            suppressed = _timeoutsNotWarned;
+            _timeoutsNotWarned = 0;
+        }
+
+        _logger.LogWarning("Bot chat safety: {Kind} screening ran out of time on {Pattern} ({Total} so far, {Suppressed} more since the last warning)",
+            kind, verdict.TimedOutOn ?? "a pattern", total, suppressed);
+        return verdict;
+    }
 
     // --- who may reach a model provider -----------------------------------------------------------------------------------
 
@@ -346,7 +383,7 @@ internal sealed class PlayerbotChatSafety
         lock (_gate)
         {
             return new BotChatSafetyStatus(options.Enabled, Interlocked.Read(ref _screened), Interlocked.Read(ref _flagged),
-                Interlocked.Read(ref _moderationFlagged), Interlocked.Read(ref _outputFlagged), Interlocked.Read(ref _builtinOnly), _cutoffs,
+                Interlocked.Read(ref _moderationFlagged), Interlocked.Read(ref _outputFlagged), Interlocked.Read(ref _builtinOnly), Interlocked.Read(ref _timedOut), _cutoffs,
                 _players.Values.Count(state => state.CutoffUntil > now), _autoMutes, _players.Values.Count(state => state.AiReplies == false),
                 _players.Values.Count(state => state.AiReplies == true), Interlocked.Read(ref _disclosures), terms, patterns);
         }

@@ -282,6 +282,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         bool modelAllowed = true;
         if (screening)
         {
+            await _safety.Filter().Warmed.ConfigureAwait(false); // a worker thread: never a cold first match on a player's line
             SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
             if (verdict.Category is { } category)
             {
