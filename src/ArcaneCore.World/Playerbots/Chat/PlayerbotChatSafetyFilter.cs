@@ -6,14 +6,19 @@ using System.Text.RegularExpressions;
 namespace ArcaneCore.World.Playerbots.Chat;
 
 /// <summary>
-/// What the local filter found in a line: the first category hit (null: clean), or that a pattern ran out of time
+/// What the local filter found in a line: the first category hit (null: clean), and whether a pattern ran out of time
 /// (<paramref name="TimedOutOn"/> names the first such pattern, e.g. "Harassment pattern #2" or "personal data (phone)"; never the line).
+/// <paramref name="CategoryFromTimeout"/>: the category is not a finding but a timeout's (a personal-data pattern out of time counts
+/// as personal data), so nothing was found to record.
 /// </summary>
-internal readonly record struct SafetyVerdict(PlayerbotChatSafetyCategories? Category, bool TimedOut, string? TimedOutOn = null)
+internal readonly record struct SafetyVerdict(PlayerbotChatSafetyCategories? Category, string? TimedOutOn = null, bool CategoryFromTimeout = false)
 {
-    public static readonly SafetyVerdict Clean = new(null, false);
+    public static readonly SafetyVerdict Clean = new(null);
 
     public bool Flagged => Category is not null;
+
+    /// <summary>Whether any pattern ran out of time (whatever else was found).</summary>
+    public bool TimedOut => TimedOutOn is not null;
 }
 
 /// <summary>
@@ -195,18 +200,18 @@ internal sealed class PlayerbotChatSafetyFilter
             if ((categories & category) == 0) continue;
             if (category == PlayerbotChatSafetyCategories.PersonalData)
             {
-                if (HasPersonalData(line, out string? personal)) return new SafetyVerdict(category, personal is not null, personal ?? timedOutOn);
+                if (HasPersonalData(line, out string? personal)) return new SafetyVerdict(category, timedOutOn ?? personal, CategoryFromTimeout: personal is not null);
                 continue;
             }
 
             if (!_rules.TryGetValue(category, out CategoryRules? rule)) continue;
-            if (rule.MatchesTerm(forms)) return new SafetyVerdict(category, timedOutOn is not null, timedOutOn);
+            if (rule.MatchesTerm(forms)) return new SafetyVerdict(category, timedOutOn);
             for (int index = 0; index < rule.Patterns.Count; index++)
             {
                 Regex pattern = rule.Patterns[index];
                 try
                 {
-                    if (IsMatch(pattern, forms.Plain) || IsMatch(pattern, forms.Leet)) return new SafetyVerdict(category, timedOutOn is not null, timedOutOn);
+                    if (IsMatch(pattern, forms.Plain) || IsMatch(pattern, forms.Leet)) return new SafetyVerdict(category, timedOutOn);
                 }
                 catch (RegexMatchTimeoutException)
                 {
@@ -215,7 +220,7 @@ internal sealed class PlayerbotChatSafetyFilter
             }
         }
 
-        return new SafetyVerdict(null, timedOutOn is not null, timedOutOn);
+        return new SafetyVerdict(null, timedOutOn);
     }
 
     /// <summary>
@@ -270,20 +275,49 @@ internal sealed class PlayerbotChatSafetyFilter
     /// <summary>How many patterns the warm-up has run (each pattern once; the count of <see cref="AllPatterns"/> when done).</summary>
     internal int WarmedPatterns => Volatile.Read(ref _warmedPatterns);
 
+    private string? _warmUpError;
+
+    /// <summary>
+    /// The type of the first unexpected error of the warm-up (null: none). The warm-up still completes (<see cref="Warmed"/> never
+    /// faults, or every line would wait on it forever): lines are then screened with those patterns cold.
+    /// </summary>
+    internal string? WarmUpError => Volatile.Read(ref _warmUpError);
+
+    /// <summary>Test seam: called before each pattern's warm-up match (a test throws from it).</summary>
+    internal Action<Regex>? WarmUpHookForTest { get; set; }
+
+    /// <summary>Test seam: <see cref="Warmed"/> becomes <paramref name="warmed"/> (a test holds it pending).</summary>
+    internal void SetWarmedForTest(Task warmed) => Volatile.Write(ref _warmed, warmed);
+
     private void WarmUp()
     {
-        SafetyForms forms = Normalize(WarmUpLine);
+        string plain = WarmUpLine, leet = WarmUpLine;
+        try
+        {
+            SafetyForms forms = Normalize(WarmUpLine);
+            (plain, leet) = (forms.Plain, forms.Leet);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            Interlocked.CompareExchange(ref _warmUpError, error.GetType().Name, null);
+        }
+
         foreach (Regex pattern in AllPatterns)
         {
             try
             {
+                WarmUpHookForTest?.Invoke(pattern);
                 pattern.IsMatch(WarmUpLine);
-                pattern.IsMatch(forms.Plain);
-                pattern.IsMatch(forms.Leet);
+                pattern.IsMatch(plain);
+                pattern.IsMatch(leet);
             }
             catch (RegexMatchTimeoutException)
             {
                 // A cold match ran out of time here instead of on a player's line: the next one is warm.
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                Interlocked.CompareExchange(ref _warmUpError, error.GetType().Name, null);
             }
 
             Interlocked.Increment(ref _warmedPatterns);

@@ -355,8 +355,10 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **Screening what a model says** (`ScreenOutput`, on). A model's reply is run through the same local filter before the bot says
   it; a hit is never said: the built-in provider answers the player's line instead (`OnOutputFlagged`: `BuiltinReply`) or nothing
   (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player. A reply the filter cannot judge in
-  time fails closed: it is never said either and takes the same path (`OnOutputFlagged`), with no flag record (nothing was found)
-  and no strike; it is counted and warned as an `output` timeout.
+  time fails closed: it is never said either and takes the same path (`OnOutputFlagged`), with no flag record (nothing was found,
+  even when a personal-data pattern ran out of time, which on a player's line counts as personal data) and no strike; it is
+  counted and warned as an `output` timeout. If the filter's warm-up meets an unexpected error, one warning names the error's
+  type and lines are screened without it.
 - **Flags, strikes and cut-off.** Every flag is kept in an in-memory ring of `FlagLogSize` (200) records and logged as a warning:
   the character's name and GUID, the account id, the bot, the category, the source (local filter, moderation or output
   screening), the time, and, while `StoreExcerpt` is on, at most 60 characters of the line with emails, phone numbers and addresses
@@ -383,7 +385,7 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
   addresses, phone numbers and street addresses in the line and the memory are replaced by `[email]`, `[phone]` and `[address]`
   (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far). If
   one of those patterns runs out of time, the whole text is sent as `[removed]` (fails closed), counted and warned as a `strip`
-  timeout.
+  timeout. The excerpt of a flag record is stripped the same way, and its timeouts count as `strip` too.
 
 **Operator responsibilities.** Read and follow the usage policies of every provider you configure, and keep the server's own
 rules in line with them. Keep `Enabled` on whenever a model provider is configured (the start log warns when it is off). Review

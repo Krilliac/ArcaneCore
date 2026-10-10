@@ -282,8 +282,9 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         bool modelAllowed = true;
         if (screening)
         {
-            await _safety.Filter().Warmed.ConfigureAwait(false); // a worker thread: never a cold first match on a player's line
-            SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
+            PlayerbotChatSafetyFilter filter = _safety.Filter();
+            await filter.Warmed.ConfigureAwait(false); // a worker thread: never a cold first match on a player's line
+            SafetyVerdict verdict = _safety.ScreenInput(ask.Text, filter);
             if (verdict.Category is { } category)
             {
                 _safety.Flag(ask, category.ToString(), BotChatFlagSource.Local, Strikes(category), ask.Text);
@@ -353,7 +354,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             if (screening && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
             {
                 // Flagged, or not judged in time (fails closed: an unjudged reply is never said, nothing is flagged): the blocked-reply path.
-                if (verdict.Category is { } said) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                // A personal-data category from a timeout is no finding: no flag record, no excerpt of the model's text.
+                if (verdict.Category is { } said && !verdict.CategoryFromTimeout) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
                 if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
                 modelAllowed = false; // the built-in provider answers the (clean) line instead
                 continue;

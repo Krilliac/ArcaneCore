@@ -81,8 +81,18 @@ internal sealed class PlayerbotChatSafety
         _options = options;
         _time = time;
         _logger = logger;
-        _ = _filter.Warmed; // on the thread pool: the first player line after start does not pay the patterns' first-match cost
+        _ = Warm(_filter); // on the thread pool: the first player line after start does not pay the patterns' first-match cost
     }
+
+    /// <summary>
+    /// Start <paramref name="filter"/>'s warm-up (on the thread pool, never the caller's thread) and, when it is done, log one warning
+    /// if it met an unexpected error (the error's type only). The returned task is that check, for tests.
+    /// </summary>
+    internal Task Warm(PlayerbotChatSafetyFilter filter) => filter.Warmed.ContinueWith(_ =>
+    {
+        if (filter.WarmUpError is { } error)
+            _logger.LogWarning("Bot chat safety: the filter warm-up failed ({Error}); lines are screened without it (slower first matches)", error);
+    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
     private PlayerbotChatSafetyOptions Options => _options().Safety;
 
@@ -117,7 +127,7 @@ internal sealed class PlayerbotChatSafety
                 _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
                     filter.Size.Terms, filter.Size.Patterns, replace ? file : "the shipped list and " + file);
             _filter = filter;
-            _ = filter.Warmed; // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
+            _ = Warm(filter); // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
             _filterSource = (file, replace, written);
             return filter;
         }
@@ -130,10 +140,13 @@ internal sealed class PlayerbotChatSafety
     }
 
     /// <summary>Screen a player's line (counted in the status).</summary>
-    internal SafetyVerdict ScreenInput(string text)
+    internal SafetyVerdict ScreenInput(string text) => ScreenInput(text, Filter());
+
+    /// <summary>Screen a player's line with <paramref name="filter"/> (the one a worker awaited the warm-up of).</summary>
+    internal SafetyVerdict ScreenInput(string text, PlayerbotChatSafetyFilter filter)
     {
         Interlocked.Increment(ref _screened);
-        return Counted(Filter().Screen(text, Options.Categories), "input");
+        return Counted(filter.Screen(text, Options.Categories), "input");
     }
 
     /// <summary>Screen a model's reply.</summary>
