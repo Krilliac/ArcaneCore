@@ -776,6 +776,51 @@ public sealed class DataDrivenEscortTests
         }
     }
 
+    [Fact]
+    public void Ranshalla_WaitsAtEachTorch_ThenTheAltarScene_AndCredit()
+    {
+        // npc_ranshallaAI (winterspring.cpp at a57aa7f074) on the z2815 path; the torches are lit through ContinueEscort (go_elune_fire).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.RanshallaAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(707, 33).Select(i => -1000000 - i)];
+        CreatureContent content = new(
+            [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(12116), Template(12152), Template(12140)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, first.X, first.Y);
+            Creature ranshalla = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.RanshallaAI>(ranshalla.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.RanshallaAI.QuestGuardiansAltar);
+            int lit = 0;
+            for (int elapsed = 0; elapsed < 3_600_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(ranshalla.X, ranshalla.Y, ranshalla.Z, 0, 0);
+                world.RunTick(100);
+                if (ai.HasEscortState(EscortAI.EscortState.Paused) && ai.DialogueStep < 0 && lit < 6)
+                {
+                    world.RunTick(1000);
+                    if (ai.HasEscortState(EscortAI.EscortState.Paused) && ai.DialogueStep < 0)
+                    {
+                        ai.ContinueEscort(altar: lit == 5);
+                        lit++;
+                        world.RunTick(2100);
+                    }
+                }
+            }
+
+            Assert.Equal(6, lit); // five torches and the altar
+            Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.RanshallaAI.QuestGuardiansAltar)], quests.Completed);
+            Assert.Equal(StandState.Kneel, ranshalla.StandState);
+        }
+    }
+
     private static IReadOnlyList<CreatureWaypoint> RealPath(uint entry) => File.ReadLines(Path.Combine(AppContext.BaseDirectory, "validated-escort-waypoints.csv"))
         .Where(line => line.StartsWith($"{entry},", StringComparison.Ordinal))
         .Select(line => line.Split(','))
