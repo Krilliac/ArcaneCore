@@ -21,6 +21,7 @@ public sealed class NpcStore
     private readonly FrozenDictionary<uint, TrainerSpell[]> _trainer;
     private readonly FrozenDictionary<uint, TaxiNode> _nodes;
     private readonly FrozenDictionary<(uint From, uint To), TaxiPath> _paths;
+    private readonly FrozenDictionary<uint, TaxiPath> _pathsById;
     private readonly FrozenDictionary<byte, uint> _raceTaxi;
     private readonly FrozenDictionary<uint, PointOfInterest> _pois;
     private readonly uint[] _taxiNodesMask = new uint[TaxiMaskSize];
@@ -48,6 +49,7 @@ public sealed class NpcStore
         _nodes = content.TaxiNodes.Where(n => n.Id is > 0 and <= TaxiMaskSize * 32)
             .GroupBy(n => n.Id).ToFrozenDictionary(g => g.Key, g => g.First());
         _paths = content.TaxiPaths.GroupBy(p => (p.FromNode, p.ToNode)).ToFrozenDictionary(g => g.Key, g => g.First());
+        _pathsById = content.TaxiPaths.GroupBy(p => p.Id).ToFrozenDictionary(g => g.Key, g => g.First());
         _raceTaxi = content.RaceTaxiStarts.GroupBy(r => r.Race).ToFrozenDictionary(g => g.Key, g => g.First().Mask);
         _pois = content.PointsOfInterest.GroupBy(p => p.Entry).ToFrozenDictionary(g => g.Key, g => g.First());
 
@@ -102,6 +104,9 @@ public sealed class NpcStore
 
     /// <summary>vmangos ObjectMgr::GetTaxiPath (null when no direct path).</summary>
     public TaxiPath? Path(uint from, uint to) => _paths.GetValueOrDefault((from, to));
+
+    /// <summary>sTaxiPathStore.LookupEntry: the path with this TaxiPath.dbc id, null when none.</summary>
+    public TaxiPath? PathById(uint id) => _pathsById.GetValueOrDefault(id);
 
     /// <summary>ChrRaces startingTaxiMask (0 when not configured).</summary>
     public uint RaceStartingTaxiMask(byte race) => _raceTaxi.GetValueOrDefault(race);

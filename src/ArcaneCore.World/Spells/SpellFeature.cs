@@ -141,6 +141,13 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             // QuestNpcFeature attaches earlier; its taxi network needs SEND_TAXI path IDs
             // from the now-loaded spell table (vmangos DBCStores.cpp:366-405).
             scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.RefreshTaxiNetwork(System.Store);
+            // SPELL_EFFECT_SEND_TAXI (vmangos Spell::EffectSendTaxi): a player target flies the effect's TaxiPath.dbc path.
+            ArcaneCore.World.Npc.QuestNpcFeature? taxiNpcs = scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>();
+            System.RegisterEffect(SpellEffectName.SendTaxi, context =>
+            {
+                if (context.Target is Player taxiPlayer && context.Effect.MiscValue > 0)
+                    taxiNpcs?.Services.ActivateTaxiBySpell(taxiPlayer, (uint)context.Effect.MiscValue);
+            });
 
             // The enchantments are the enchanting feature's SpellItemEnchantment.dbc catalog (Enchanting:SpellItemEnchantmentDbcPath; that feature
             // attaches before this one); item combat procs and trade enchant planning read them through this catalog, layered with the SQL
