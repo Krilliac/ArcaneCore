@@ -108,7 +108,7 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
 
     /// <summary>
     /// vmangos <c>sObjectMgr.SetSavedVariable</c> of the three Silithyst states at every <c>UpdateWorldState</c>: called with
-    /// (gathered Alliance, gathered Horde, maximum). The world feature writes them to the characters database (schema 52).
+    /// (gathered Alliance, gathered Horde, maximum). The world feature writes them to the characters database (schema 53).
     /// </summary>
     public Action<uint, uint, uint>? Saved { get; init; }
 

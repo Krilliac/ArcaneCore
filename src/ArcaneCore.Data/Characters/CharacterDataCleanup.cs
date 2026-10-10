@@ -35,8 +35,7 @@ public static class CharacterDataCleanups
     public static IReadOnlyList<ICharacterDataCleanup> All { get; } =
         [.. DataModules.For(DatabaseComponent.Characters).OfType<ICharacterDataCleanup>()];
 
-    /// <summary>Characters modules that do not implement <see cref="ICharacterDataCleanup"/> (should be none). A reserved-gap
-    /// placeholder holds no rows, so it needs none.</summary>
+    /// <summary>Characters modules that do not implement <see cref="ICharacterDataCleanup"/> (should be none).</summary>
     public static IReadOnlyList<IDataModule> Missing { get; } =
-        [.. DataModules.For(DatabaseComponent.Characters).Where(m => m is not ICharacterDataCleanup and not IReservedSchemaGap)];
+        [.. DataModules.For(DatabaseComponent.Characters).Where(m => m is not ICharacterDataCleanup)];
 }
