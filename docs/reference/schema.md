@@ -79,7 +79,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 52 | `Characters.Pets.PetLoyaltyDataModule` | adds columns `character_pet.Loyalty`, `character_pet.LoyaltyPoints`, `character_pet.TrainingPoints` | yes |
 | 53 | `Characters.WorldState.SilithystDataModule` | creates `world_silithyst` | yes |
 | 54 | `Characters.ServerMail.ServerMailDataModule` | creates `mail_server_template`, `mail_server_template_items`, `mail_server_template_conditions`, `mail_server_character` | yes |
-| 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | no |
+| 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | yes |
 
 ## `world`
 

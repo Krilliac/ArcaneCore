@@ -28,7 +28,7 @@ public sealed class AhBotCustodyRow
 /// Characters schema 55 (wave 18): the auction house bot custody ledger, so a reservation whose outcome was unknown at shutdown is
 /// rechecked against the economy operation ledger after a restart, and the daily budgets survive it.
 /// </summary>
-public sealed class AuctionBotCustodyDataModule : IDataModule
+public sealed class AuctionBotCustodyDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 55;
     public const string Table = "ahbot_custody";
@@ -60,6 +60,9 @@ public sealed class AuctionBotCustodyDataModule : IDataModule
         });
 
     public void AddServices(IServiceCollection services) => services.AddScoped<IAuctionBotCustodyStore, EfAuctionBotCustodyStore>();
+
+    /// <summary>The ledger holds the bot's own listings and budgets, keyed by operation, not by character: nothing to delete.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 public sealed class EfAuctionBotCustodyStore(CharacterDbContext db) : IAuctionBotCustodyStore
@@ -73,7 +76,7 @@ public sealed class EfAuctionBotCustodyStore(CharacterDbContext db) : IAuctionBo
     {
         ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(deletedKeys);
-        string[] keys = [.. rows.Select(r => r.IdemKey).Concat(deletedKeys).Distinct(StringComparer.Ordinal)];
+        List<string> keys = [.. rows.Select(r => r.IdemKey).Concat(deletedKeys).Distinct(StringComparer.Ordinal)];
         Dictionary<string, AhBotCustodyRow> existing = await db.Set<AhBotCustodyRow>().Where(r => keys.Contains(r.IdemKey))
             .ToDictionaryAsync(r => r.IdemKey, StringComparer.Ordinal, cancellationToken).ConfigureAwait(false);
         foreach (string key in deletedKeys)
