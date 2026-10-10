@@ -20,6 +20,8 @@ public static class DungeonBossAis
         (229, 9568) => new OverlordWyrmthalakAI(creature),
         (289, 1853) => new DarkmasterGandlingAI(creature),
         (289, 10503) => new JandiceBarovAI(creature),
+        (289, 10498) => new SpectralTutorAI(creature),
+        (329, 10384) or (329, 10385) => new SpectralGhostlyCitizenAI(creature),
         (329, 10436) => new BaronessAnastariAI(creature),
         (329, 10438) => new MalekiThePallidAI(creature),
         (329, 10997) => new CannonMasterWilleyAI(creature),
