@@ -228,6 +228,9 @@ blanket absence labels without claiming complete vanilla fidelity.
 - Hosted CI is backed up. **CI is the test gate** (Nate: "let CI handle tests"). Keep builds serialized; never run full suites on the box, only a branch's own new tests.
 
 ### Merge queue into `integrate/wave17` (in order)
+**Done 2026-10-10** on `ccr-86ce8cb7-m7iigv` (steps 1-7 except the `main` fast-forward, which needs the PC): every PR below merged in this
+order, four PR defects fixed, local full gate green. Merges, fixes, gate and branch cleanup: [wave 18 report](integration/wave18-20261010.md).
+
 1. **#86** CI speedup. The check names become `test (Game)`, `test (World)`, `test (Data)`, `test (Rest)`, so update branch protection. Drafts get no CI until marked ready.
 2. **#82** polymorph double-heal regen fix (fixes `EvadeFidelityTests.APolymorphedCreatureAPlayerOwns_RegeneratesATenth`).
 3. Clean, any order: #69 script hooks, #70 world scripts 2, #71 autopatcher, #75 aggro linking, #76 perf4 (visibility ~24% faster), #77 metrics **then** #78 docker, #79 playerdump, #81 multi-version S0 (refactor not yet build-verified; byte-exact replay tests must pass).
