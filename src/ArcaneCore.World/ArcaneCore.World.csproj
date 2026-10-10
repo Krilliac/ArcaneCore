@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <!-- The bot chat local filter's shipped term list (docs/areas/playbots.md, Safety and provider policies). -->
+    <!-- The delivered Warden module for build 5875 (MaNGOS Zero src/game/Warden/WardenModuleWin5875Data.cpp, MD5 79C0768D..., stored as base64 text). -->
+    <EmbeddedResource Include="Warden\WardenModuleWin5875.b64" LogicalName="ArcaneCore.World.Warden.WardenModuleWin5875.b64" />
     <EmbeddedResource Include="Playerbots\Chat\PlayerbotChatSafetyTerms.json" LogicalName="ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyTerms.json" />
   </ItemGroup>
 

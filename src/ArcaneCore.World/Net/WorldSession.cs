@@ -827,6 +827,7 @@ public sealed partial class WorldSession : IPlayerSession
 
         SendAuthResponse(AuthResponseCode.Ok);
         Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(request.AddonBlock.Span));
+        Services.GetService<Warden.WardenFeature>()?.OnAuthenticated(this, request.Build, stored.SessionKey); // vmangos WorldSession::InitWarden
         return true;
     }
 
