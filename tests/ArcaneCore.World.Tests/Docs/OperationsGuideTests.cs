@@ -125,18 +125,40 @@ public sealed class OperationsGuideTests
     }
 
     [Fact]
-    public void TheMissingThrottleAndConsoleSender_AreStatedAsLimits_NotClaimedDelivered()
+    public void TheMissingThrottle_IsStatedAsALimit_NotClaimedDelivered()
     {
         string text = Text;
         Assert.Contains("wrong-password throttle", text, StringComparison.Ordinal);
-        Assert.Contains("console command sender", text, StringComparison.Ordinal);
         Assert.Contains("limits and not options", text, StringComparison.Ordinal);
         Assert.Contains("realmd.conf.dist.in:208-209", text, StringComparison.Ordinal);
-        Assert.Contains("Chat.h:66-70", text, StringComparison.Ordinal);
 
-        // No option for either exists: if one is added, the guide must stop calling it a limit.
+        // No option for it exists: if one is added, the guide must stop calling it a limit.
         string[] keys = [.. ConfigProduction.Catalog.Entries.Select(e => e.Path)];
         Assert.DoesNotContain(keys, k => k.Contains("WrongPass", StringComparison.OrdinalIgnoreCase) || k.Contains("Throttle", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void TheServerConsole_IsDocumentedWithItsOptions_AndNoLongerClaimedMissing()
+    {
+        string text = Text;
+        Assert.Contains("World:Console:Enabled", text, StringComparison.Ordinal);
+        Assert.Contains("Realm:Console:Enabled", text, StringComparison.Ordinal);
+        Assert.Contains("areas/server-console.md", text, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(RepoRoot.Find(), "docs", "areas", "server-console.md")), "the guide links docs/areas/server-console.md");
+
+        // The old limit text must be gone: the console exists now.
+        Assert.DoesNotContain("There is no server-console command sender", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("console command sender** (vmangos marks", text, StringComparison.Ordinal);
+
+        // Both switches are real options (a documented key that is not in the catalog would be a lie), on by default.
+        Dictionary<string, ConfigEntry> catalog = ConfigProduction.Catalog.Entries.ToDictionary(e => e.Path, StringComparer.Ordinal);
+        foreach (string key in new[] { "World:Console:Enabled", "Realm:Console:Enabled" })
+        {
+            Assert.True(catalog.TryGetValue(key, out ConfigEntry? entry), key + " is not in the option catalog");
+            Assert.Equal("true", entry.Default.Trim('"'));
+        }
+
+        // Console input is not a chat command: the command table gained no 'console' root.
         Assert.DoesNotContain(CommandReferenceRenderer.Nodes(reloadEnabled: false), n => n.Path.StartsWith("console", StringComparison.OrdinalIgnoreCase));
     }
 

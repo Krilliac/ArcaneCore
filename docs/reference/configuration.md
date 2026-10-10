@@ -53,6 +53,7 @@ How to read the tables:
 - [`Progression`](#progression)
 - [`Quests`](#quests)
 - [`Ranged`](#ranged)
+- [`Realm:Console`](#realmconsole)
 - [`Realms`](#realms)
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
@@ -70,6 +71,7 @@ How to read the tables:
 - [`World`](#world)
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
+- [`World:Console`](#worldconsole)
 - [`World:Death`](#worlddeath)
 - [`World:Duel`](#worldduel)
 - [`World:Exploration`](#worldexploration)
@@ -724,6 +726,12 @@ How to read the tables:
 | `Ranged:Traps:Hostility` | `TrapHostilityRule` | `Faction` | - | How a trap decides a unit is hostile. `Faction` (default) is the retail faction reaction; `AttackTarget` also accepts neutral creatures (a deviation). Values: `Faction`, `AttackTarget`. |
 | `Ranged:Traps:RadiusSource` | `TrapRadiusSource` | `Vmangos` | - | Where a hunter trap takes its trigger radius from. `Vmangos` (default) is the retail value as vmangos ships it; `Template` always uses the template radius (a deviation). Values: `Vmangos`, `Template`. |
 
+## `Realm:Console`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Realm:Console:Enabled` | `bool` | `true` | - | Accept typed console commands (help, info, realmlist, online, account ..., quit) when standard input is an interactive console. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
 ## `Realms`
 
 | Key | Type | Default | Reload | Meaning |
@@ -957,6 +965,12 @@ How to read the tables:
 | `World:Collision:EnablePathfinding` | `bool` | `true` | - | Use navmeshes for paths (vmangos `mmap.enabled`, default on). |
 | `World:Collision:MMapDirectory` | `string` | `""` | - | Directory of the generated navmeshes (`NNN.mmap`, `NNNXXYY.mmtile`). Empty: `mmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/mmaps`). |
 | `World:Collision:VMapDirectory` | `string` | `""` | - | Directory of the extracted vmaps (`NNN.vmtree`, `NNN_YY_XX.vmtile`, `*.vmo`). Empty: `vmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/vmaps`). |
+
+## `World:Console`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Console:Enabled` | `bool` | `true` | - | Accept typed GM commands at the daemon's console window when standard input is an interactive console. The commands run on the world thread with Administrator authority and no character. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
 
 ## `World:Death`
 
