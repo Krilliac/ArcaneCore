@@ -112,7 +112,7 @@ public abstract class RaidBossAI(Creature creature, uint? encounter) : Aggressor
             (NaxxramasInstance, 15989) => new SapphironAI(creature),
             (NaxxramasInstance, 15990) => new KelThuzadAI(creature),
             (NaxxramasInstance, LivingPoisonAI.Entry) => new LivingPoisonAI(creature),
-            _ => null,
+            _ => Creatures.Scripts.WorldBosses.WorldBossScripts.Create(creature),
         };
     }
 
