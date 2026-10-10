@@ -50,7 +50,9 @@ internal sealed class FormationState
 {
     private readonly SortedDictionary<int, FormationSlot> _slots = [];
 
-    public FormationState(uint groupId, SpawnGroupFormation entry, IEnumerable<SpawnGroupMember> members)
+    /// <param name="isDynamic">Made by a script (dbscript 51 subcommand 150, cmangos FormationEntry::IsDynamic): the leader's movement is the
+    /// script's business, never set by the formation.</param>
+    public FormationState(uint groupId, SpawnGroupFormation entry, IEnumerable<SpawnGroupMember> members, bool isDynamic = false)
     {
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(members);
@@ -58,6 +60,10 @@ internal sealed class FormationState
         Entry = entry;
         Shape = Enum.IsDefined((FormationShape)entry.FormationType) ? (FormationShape)entry.FormationType : FormationShape.Random;
         Spread = entry.Spread > 0 ? entry.Spread : 3.0f; // FormationEntry default
+        Options = entry.Options;
+        MovementType = entry.MovementType;
+        PathId = entry.PathId;
+        IsDynamic = isDynamic;
         foreach (SpawnGroupMember member in members.Where(m => m.SlotId >= 0))
         {
             _slots.TryAdd(member.SlotId, new FormationSlot(member.SlotId, member.Guid));
@@ -68,14 +74,23 @@ internal sealed class FormationState
 
     public SpawnGroupFormation Entry { get; }
 
-    public FormationShape Shape { get; }
+    /// <summary>The current shape (cmangos m_currentFormationShape; dbscript 51 subcommand 100 switches it).</summary>
+    public FormationShape Shape { get; set; }
 
-    public float Spread { get; }
+    /// <summary>The current spread (m_currentSpread; subcommand 101).</summary>
+    public float Spread { get; set; }
 
-    /// <summary>The leader's movement: 1 random, 2 waypoint (looping), 4 linear waypoint (back and forth); anything else stands.</summary>
-    public byte MovementType => Entry.MovementType;
+    /// <summary>The current options (m_currentOptions; subcommand 102). Stored only: no option is modelled (see above).</summary>
+    public uint Options { get; set; }
 
-    public uint PathId => Entry.PathId;
+    /// <summary>Made by a script: the leader keeps whatever movement it has (cmangos FormationEntry::IsDynamic).</summary>
+    public bool IsDynamic { get; }
+
+    /// <summary>The leader's movement: 1 random, 2 waypoint (looping), 4 linear waypoint (back and forth); anything else stands. A dbscript
+    /// MOVEMENT on the leader replaces it (cmangos FormationData::SetMovementInfo).</summary>
+    public byte MovementType { get; set; }
+
+    public uint PathId { get; set; }
 
     /// <summary>The index of the last path node the previous leader reached (-1 none): a new leader resumes after it.</summary>
     public int LastWaypointIndex { get; set; } = -1;
