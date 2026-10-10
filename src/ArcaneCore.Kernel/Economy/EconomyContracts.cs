@@ -96,6 +96,9 @@ public sealed record ReleaseFromEscrow(int CharacterId, uint ItemGuid) : Economy
 /// <summary>An escrowed item is destroyed (an auction of a deleted owner, an expired letter with no living sender).</summary>
 public sealed record DeleteEscrowItem(uint ItemGuid) : EconomyChange;
 
+/// <summary>A brand-new item created straight into escrow (owner 0) to be attached to a letter of the same operation (server mail).</summary>
+public sealed record CreateEscrowItem(ItemInstanceData Item) : EconomyChange;
+
 /// <summary>A new letter; <paramref name="Body"/> creates <c>item_text</c> row <see cref="MailRecord.ItemTextId"/>.</summary>
 public sealed record InsertMail(MailRecord Mail, string? Body, int RecipientCap = 0) : EconomyChange;
 
