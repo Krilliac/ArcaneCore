@@ -596,6 +596,63 @@ public sealed class DataDrivenEscortTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Slim_TurnsHostileAtThree_GivesUpBelowTwentyPercentForCredit_OrEscapesAndFails(bool beaten)
+    {
+        // npc_tapoke_slim_jahnAI + QuestAccept_npc_mikhail (wetlands.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000977, -1000978, -1000979, -1000980];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new([Template(entry), Template(4963, b => b.NpcFlags = (uint)NpcFlags.QuestGiver)],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 4963, first.X + 3, first.Y, first.Z)], [], [], [], aiContent,
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature slim = Assert.Single(system.Creatures, c => c.Entry == entry);
+            player.Relocate(slim.X, slim.Y, slim.Z, 0, 0);
+            world.RunTick(100);
+            var mikhail = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.MikhailAI>(Assert.Single(system.Creatures, c => c.Entry == 4963).AI);
+            mikhail.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI>(slim.AI);
+            Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+            for (int elapsed = 0; elapsed < 300_000 && quests.Completed.Count == 0 && quests.Failed.Count == 0; elapsed += 100)
+            {
+                if (slim.IsInWorld)
+                {
+                    player.Relocate(slim.X, slim.Y, slim.Z, 0, 0);
+                }
+
+                if (beaten && slim.FactionTemplate == ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.FactionEnemy && !ai.EventComplete)
+                {
+                    slim.Health = slim.MaxHealth / 10;
+                }
+
+                world.RunTick(100);
+            }
+
+            if (beaten)
+            {
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat)], quests.Completed);
+                string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+                Assert.Contains("-1000978", said);
+                Assert.Contains("-1000980", said);
+            }
+            else
+            {
+                Assert.Empty(quests.Completed);
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TapokeSlimJahnAI.QuestMissingDiplomat)], quests.Failed);
+            }
+        }
+    }
+
     [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {
