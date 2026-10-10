@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
@@ -18,6 +19,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
@@ -440,6 +442,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         if (bg.PlayerTeam(player.Guid) is null && Manager.EnterBattleground(player.Guid))
         {
+            JoinBattlegroundRaid(player, bg);
             SendInitialWorldStates(player, map);
             PersistBinding(player, bg, bg.PlayerTeam(player.Guid) ?? player.Team);
         }
@@ -466,6 +469,36 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         bg.RemovePlayerAtLeave(player.Guid, teleportToEntryPoint, sendStatus: true);
     }
 
+    // ------------------------------------------------------------------ the battleground raid
+
+    /// <summary>
+    /// vmangos <c>BattleGround::AddOrSetPlayerToCorrectBgGroup</c> (from AddPlayer): the team's raid is the one a teammate is already in; the
+    /// first of a team creates it and leads.
+    /// </summary>
+    private void JoinBattlegroundRaid(Player player, Battleground bg)
+    {
+        if (services.GetService<SocialFeature>()?.Context.Groups is not { } groups || bg.PlayerTeam(player.Guid) is not { } team)
+        {
+            return;
+        }
+
+        Group? raid = null;
+        foreach (ObjectGuid mate in bg.TeamMembers(team))
+        {
+            if (mate != player.Guid && groups.GetGroup(mate) is { IsBattlegroundGroup: true, IsFull: false } found)
+            {
+                raid = found;
+                break;
+            }
+        }
+
+        groups.AddToBattlegroundRaid(player, raid);
+    }
+
+    /// <summary>vmangos <c>RemovePlayerAtLeave</c> → <c>Player::RemoveFromBattleGroundRaid</c>: out of the raid, the original group back.</summary>
+    internal void LeaveBattlegroundRaid(ObjectGuid player)
+        => services.GetService<SocialFeature>()?.Context.Groups.RemoveFromBattlegroundRaid(player);
+
     // ------------------------------------------------------------------ logout and login
 
     private void OnPlayerLoggingOut(Player player)
@@ -480,6 +513,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         {
             bg.RemovePlayerAtLeave(player.Guid, teleportToEntryPoint: false, sendStatus: false, online: false);
             manager.ClearBinding(player.Guid);
+            LeaveBattlegroundRaid(player.Guid);
         }
 
         manager.PlayerLoggedOut(player.Guid);
