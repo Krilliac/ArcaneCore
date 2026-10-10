@@ -100,6 +100,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(MovementScriptDataModule), DatabaseComponent.World, MovementScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Pools.PoolDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Pools.PoolDataModule.Version),
             (typeof(ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Chat.ChatWordFilterWorldDataModule.Version),
+            (typeof(ArcaneCore.Data.World.Warden.ReservedWorldSchema48), DatabaseComponent.World, 48),
+            (typeof(ArcaneCore.Data.World.Warden.WardenDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Warden.WardenDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -171,10 +173,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // Realm-wide AQ war-effort state is characters 43.
         // World 42 is the wave-7 quest-scripts lane's DB script step (DbScriptDataModule); world 43 the script-engine lane's
         // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule and world 45 the movement-scripts lane's MovementScriptDataModule (both allocated as 43, renumbered in wave 10); world 46 the pools lane's PoolDataModule (its v45 placeholder was removed at integration).
-        Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
+        // World 48 is PR #72's; this branch holds it with ReservedWorldSchema48 until that merges.
+        Assert.Equal([typeof(ArcaneCore.Data.World.Warden.ReservedWorldSchema48)], DataModules.All.OfType<IReservedSchemaGap>().Select(m => m.GetType()));
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
-        Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(47, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47)
+        Assert.Equal([48], WorldDbContext.Schema.ReservedGapVersions);
+        Assert.Equal(49, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), #72 (48), warden_checks (49)
         Assert.Equal(49, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
