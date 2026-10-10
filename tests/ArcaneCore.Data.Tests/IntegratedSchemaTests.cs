@@ -146,6 +146,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ScourgeInvasionCityDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.FishingExtravaganzaDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ElementalInvasionDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.CharacterDrunkDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.CharacterDrunkDataModule.Version),
+            (typeof(PetLoyaltyDataModule), DatabaseComponent.Characters, PetLoyaltyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -175,7 +177,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(47, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47)
-        Assert.Equal(49, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49)
+        Assert.Equal(51, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), drunk state (50), pet loyalty (51)
         Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
