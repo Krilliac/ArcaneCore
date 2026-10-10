@@ -680,6 +680,91 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Stinky_WalksToTheBogbeanAndBack_AndCreditsTheTeamQuestAt40()
+    {
+        // npc_stinky_ignatzAI (dustwallow_marsh.cpp at 3e8597afe7).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.StinkyIgnatzAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [-1000958, -1000959, -1001141, -1001142, -1001143, -1001144, -1001145, -1000962, -1010032, -1000960, -1000961, -1001146, -1001147];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new([Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature stinky = Assert.Single(system.Creatures, c => c.Entry == entry);
+            player.Relocate(stinky.X, stinky.Y, stinky.Z, 0, 0);
+            world.RunTick(100);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.StinkyIgnatzAI>(stinky.AI);
+            uint quest = player.Team == Team.Alliance ? ArcaneCore.Game.Creatures.Scripts.StinkyIgnatzAI.QuestAlliance : ArcaneCore.Game.Creatures.Scripts.StinkyIgnatzAI.QuestHorde;
+            ai.OnQuestAccept(player, quest);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.StinkyIgnatzAI.FactionEscortNeutralPassive, stinky.FactionTemplate);
+            for (int elapsed = 0; elapsed < 1_200_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(stinky.X, stinky.Y, stinky.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.Equal([(player, quest)], quests.Completed);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            foreach (string id in new[] { "-1000958", "-1000959", "-1001141", "-1001142", "-1001145", "-1000962" })
+            {
+                Assert.Contains(id, said);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Triage_FifteenSavedCredits_SixDeadFails(bool save)
+    {
+        // npc_doctorAI + npc_injured_patientAI (npcs_special.cpp at 3e8597afe7), Horde side: Gregory Victor's six bunks.
+        const uint doctor = ArcaneCore.Game.Creatures.Scripts.TriageDoctorAI.DoctorHorde;
+        CreatureContent content = new([Template(doctor), Template(12923), Template(12924), Template(12925)],
+            [Spawn(1, doctor, -1016, -3505)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000201, "a", 0, 0, 0), new CreatureAiText(-1000202, "b", 0, 0, 0), new CreatureAiText(-1000203, "c", 0, 0, 0)]));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -1016, -3500);
+            Creature doc = Assert.Single(system.Creatures, c => c.Entry == doctor);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TriageDoctorAI>(doc.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TriageDoctorAI.QuestTriageH);
+            Assert.True(ai.InProgress);
+            for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0 && quests.Failed.Count == 0; elapsed += 100)
+            {
+                world.RunTick(100);
+                if (save)
+                {
+                    foreach (Creature patient in system.Creatures.Where(c => c.IsAlive && c.AI is ArcaneCore.Game.Creatures.Scripts.InjuredPatientAI { IsSaved: false }).ToList())
+                    {
+                        ((ArcaneCore.Game.Creatures.Scripts.InjuredPatientAI)patient.AI!).Save(player);
+                    }
+                }
+            }
+
+            if (save)
+            {
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TriageDoctorAI.QuestTriageH)], quests.Completed);
+            }
+            else
+            {
+                Assert.Equal([(player, ArcaneCore.Game.Creatures.Scripts.TriageDoctorAI.QuestTriageH)], quests.Failed);
+                Assert.Empty(quests.Completed);
+            }
+
+            Assert.False(ai.InProgress);
+        }
+    }
+
+    [Fact]
     public void Muglash_WaitsAtTheBrazier_ThenTwoWavesAndVorsha_ThenCredit()
     {
         // npc_muglashAI + GOUse_go_naga_brazier (ashenvale.cpp at e27966cec7): pause at 25, waves 10 s apart once the brazier is out.
