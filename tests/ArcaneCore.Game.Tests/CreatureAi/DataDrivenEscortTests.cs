@@ -688,6 +688,224 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Windsor_AcceptPlaysHisLines_TheGateScene_ThenWaitsForTheWordToEnterTheKeep()
+    {
+        // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(27, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(825, 50).Select(i => -1000000 - i)];
+        CreatureWaypoint throne = Assert.Single(path, p => p.Point == 26);
+        CreatureContent content = new([Template(entry), Template(466), Template(1749), Template(1756), Template(1747), Template(1748), Template(12739)],
+            [Spawn(1, entry, first.X, first.Y, first.Z), Spawn(2, 466, path[1].X + 5, path[1].Y, path[1].Z),
+             Spawn(3, 1749, first.X - 5, first.Y, first.Z), Spawn(4, 1747, first.X - 32, first.Y, first.Z),
+             Spawn(5, 1748, first.X - 34, first.Y, first.Z), Spawn(6, 1756, first.X - 36, first.Y, first.Z, respawnSeconds: 3600),
+             Spawn(7, 1756, first.X - 38, first.Y, first.Z, respawnSeconds: 3600)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
+            Creature[] throneGuards = [.. system.Creatures.Where(c => c.Entry == 1756)];
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade);
+            int guards = 0; // the gate guards are timed summons (180 s), gone before the keep
+            for (int elapsed = 0; elapsed < 1_200_000 && !ai.KeepEventReady; elapsed += 100)
+            {
+                player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
+                world.RunTick(100);
+                guards = Math.Max(guards, system.Creatures.Count(c => c.Entry == 1756));
+            }
+
+            Assert.True(ai.KeepEventReady, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} state paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
+            Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
+            Assert.Equal(8, guards); // six gate summons plus the two throne room guards (spawned near the start: their real spot is far off)
+            Assert.NotEqual(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.Contains("-1000825", said);
+            Assert.Contains("-1000841", said); // the gate scene
+            Assert.Contains("-1000849", said); // before the keep
+
+            // The throne room cast stands by (their spawn is far off): Prestor, Wrynn, Bolvar and two royal guards.
+            (uint Entry, float Dx, float Dy)[] cast = [(1749, 4, 0), (1747, 6, 2), (1748, 3, -3)];
+            foreach ((uint castEntry, float dx, float dy) in cast)
+            {
+                system.NearTeleport(Assert.Single(system.Creatures, c => c.Entry == castEntry), throne.X + dx, throne.Y + dy, throne.Z, 0f);
+            }
+
+            system.NearTeleport(throneGuards[0], throne.X + 8, throne.Y + 4, throne.Z, 0f);
+            system.NearTeleport(throneGuards[1], throne.X + 8, throne.Y, throne.Z, 0f);
+            ai.StartKeepEvent();
+            for (int elapsed = 0; elapsed < 30_000 && ai.HasEscortState(EscortAI.EscortState.Paused); elapsed += 100)
+            {
+                world.RunTick(100);
+            }
+
+            Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
+            Assert.Equal(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+
+            // The throne room: Prestor shows herself, the guards turn and fall, Bolvar kneels and the quest is done.
+            Creature bolvar = Assert.Single(system.Creatures, c => c.Entry == 1748);
+            string[] all0() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
+                world.RunTick(100);
+                // Players kill the guards after Onyxia has gone (a kill in the first seconds cuts her last line, as in the source).
+                if (!all0().Contains("-1000868"))
+                {
+                    continue;
+                }
+
+                foreach (Creature turned in throneGuards.Where(g => g.IsAlive && g.Entry == 12739))
+                {
+                    map.Combat.Kill(null, turned);
+                }
+            }
+
+            string[] all = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            Assert.True(quests.Completed.Count == 1, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade), quests.Completed[0]);
+            Assert.All(throneGuards, g => Assert.Equal(12739u, g.Entry));
+            Assert.Contains("-1000827", all); // SAY_PRESTOR_SIEZE at the start
+            Assert.Contains("-1000868", all); // SAY_PRESTOR_KEEP_14
+            Assert.Contains("-1000870", all); // SAY_WINDSOR_KEEP_16, with the credit
+            Assert.Equal(StandState.Dead, windsor.StandState);
+            Assert.Equal(StandState.Kneel, bolvar.StandState);
+            Assert.Equal(0u, bolvar.NpcFlags & (uint)NpcFlags.QuestGiver); // reset comes with the next step
+        }
+    }
+
+    [Fact]
+    public void InDreams_TaelanRidesOut_IsillienStrikesHimDown_TirionAvengesHim_AndTheEpilogueCredits()
+    {
+        // npc_taelan_fordringAI / npc_isillienAI / npc_tirion_fordringAI (western_plaguelands.cpp at 3e8597afe7) on the z2815 paths.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(57, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(1078, 28).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry), Template(1840, t => t.Faction = 14), Template(12126), Template(12128, t => t.Faction = 14)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: new[] { entry, 1840u, 12126u }.SelectMany(e => RealPath(e).Select(p => (e, 0u, p))));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature taelan = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI>(taelan.AI);
+            world.RunTick(100); // the player sees Taelan before he speaks
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.QuestInDreams);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.FactionEscortNeutralFriendPassive, taelan.FactionTemplate);
+            taelan.FactionTemplate = 35; // the test faction table has no 290; 35 is hostile to the Scarlets' 14 here as 290 is to 67 live
+            string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            bool hurt = false, isillienKilled = false;
+            for (int elapsed = 0; elapsed < 2_400_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(taelan.X, taelan.Y, taelan.Z, 0, 0);
+                world.RunTick(100);
+                string[] said = Said();
+                if (!hurt && ai.Isillien is not null && said.Contains("-1001089"))
+                {
+                    taelan.Health = taelan.MaxHealth / 3; // Isillien's blows, below half
+                    hurt = true;
+                }
+
+                if (!isillienKilled && said.Contains("-1001098") && ai.Isillien is { IsAlive: true } isillien)
+                {
+                    map.Combat.Kill(ai.Tirion, isillien); // Tirion's work
+                    isillienKilled = true;
+                }
+            }
+
+            string[] all = Said();
+            Assert.True(quests.Completed.Count == 1, $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} tirion {(ai.Tirion is { } tt ? $"{tt.IsInWorld} {tt.X},{tt.Y} motion {tt.Motion.CurrentType} d {MathF.Sqrt(((tt.X - taelan.X) * (tt.X - taelan.X)) + ((tt.Y - taelan.Y) * (tt.Y - taelan.Y)))}" : "none")} dead {ai.TaelanDead} tevade {taelan.IsEvading} tworld {taelan.IsInWorld} iworld {ai.Isillien?.IsInWorld} hp {taelan.Health}/{taelan.MaxHealth} tflags {taelan.UnitFlags} iflags {ai.Isillien?.UnitFlags} ihp {ai.Isillien?.Health} dist {(ai.Isillien is { } ii ? MathF.Sqrt(((ii.X - taelan.X) * (ii.X - taelan.X)) + ((ii.Y - taelan.Y) * (ii.Y - taelan.Y))) : -1)} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.QuestInDreams), quests.Completed[0]);
+            Assert.True(ai.TaelanDead);
+            Assert.Equal(StandState.Dead, taelan.StandState);
+            Assert.Contains("-1001090", all); // SAY_KILL_TAELAN_1
+            Assert.Contains("-1001094", all); // SAY_TIRION_1
+            Assert.Contains("-1001105", all); // SAY_EPILOG_5
+            Assert.Equal(5, system.Creatures.Count(c => c.Entry == 12128)); // two elites with Isillien, three more at the fight
+            Assert.NotEqual(0u, Assert.IsType<Creature>(ai.Tirion).NpcFlags & (uint)NpcFlags.QuestGiver);
+        }
+    }
+
+    [Fact]
+    public void NightmareManifests_RemulosConjuresEranikus_TenShadeWaves_ThenTheRedemptionCredits()
+    {
+        // npc_keeper_remulosAI / boss_eranikusAI (moonglade.cpp at 3e8597afe7) on the z2815 path (19 points).
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        Assert.Equal(19, path.Count);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(669, 38).Select(i => -1000000 - i)];
+        CreatureContent content = new(
+            [Template(entry), Template(15491, t => t.Faction = 14), Template(15628, t => t.Faction = 35), Template(15629, t => t.Faction = 14),
+             Template(15495), Template(15633), Template(15634)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature remulos = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI>(remulos.AI);
+            world.RunTick(100);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.QuestNightmareManifests);
+            string[] Said() => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            int shades = 0, maxTurns = 0;
+            var seen = new HashSet<Creature>(ReferenceEqualityComparer.Instance);
+            for (int elapsed = 0; elapsed < 1_800_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(remulos.X, remulos.Y, remulos.Z, 0, 0);
+                world.RunTick(100);
+                maxTurns = Math.Max(maxTurns, ai.SummonTurns);
+                foreach (Creature shade in system.Creatures.Where(c => c.Entry == 15629 && c.IsAlive).ToArray())
+                {
+                    if (seen.Add(shade))
+                    {
+                        shades++;
+                    }
+
+                    map.Combat.Kill(null, shade); // the players and the defenders deal with the shades
+                }
+
+                // The players beat Eranikus down once he has landed.
+                if (ai.Eranikus is { IsAlive: true } eranikus && eranikus.AI is ArcaneCore.Game.Creatures.Scripts.EranikusAI boss
+                    && !boss.Redeemed && boss.HealthCheck > 0 && (eranikus.UnitFlags & UnitFlags.ImmuneToPlayer) == 0)
+                {
+                    eranikus.Health = Math.Max(1u, (uint)((ulong)eranikus.MaxHealth * (uint)(boss.HealthCheck - 1) / 100));
+                }
+            }
+
+            Run(world, 7_000); // his two outro lines, three seconds apart
+            string[] all = Said();
+            Assert.True(quests.Completed.Count == 1,
+                $"point {ai.CurrentWaypointIndex} step {ai.DialogueStep} turns {maxTurns} eranikus {(ai.Eranikus is { } e ? $"{e.Entry} {e.IsAlive} {e.IsInWorld} {e.UnitFlags} {e.X},{e.Y} hc {(e.AI as ArcaneCore.Game.Creatures.Scripts.EranikusAI)?.HealthCheck}" : "none")} said {string.Join(' ', all)}");
+            Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.KeeperRemulosAI.QuestNightmareManifests), quests.Completed[0]);
+            Assert.Equal(10, maxTurns);
+            Assert.Equal(30, shades); // three in the houses, then three per turn for nine more turns
+            Assert.Contains("-1000676", all); // SAY_REMULOS_TAUNT_1 (Eranikus speaks from above the lake, out of the test player's range)
+            Assert.Contains("-1000685", all); // SAY_REMULOS_DEFEND_3
+            Assert.Equal(15628u, Assert.IsType<Creature>(ai.Eranikus).Entry); // redeemed (his lines are out of the test player's range)
+            Assert.Contains("-1000704", all); // SAY_REMULOS_OUTRO_1 follows the credit
+            Assert.Equal((UnitFlags)0, remulos.UnitFlags & UnitFlags.Pvp);
+        }
+    }
+
+    [Fact]
     public void Melizza_TwoAmbushes_CreditAt12_ThenHerLinesAndHornizzAt19()
     {
         // npc_melizza_brimbuzzleAI (desolace.cpp at 46a0597873) on the z2815 path.
