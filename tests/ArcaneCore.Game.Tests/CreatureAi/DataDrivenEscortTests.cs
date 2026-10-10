@@ -27,6 +27,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u, 648u, 35u)]
     [InlineData(7807u, 2767u, 38u)]
     [InlineData(12858u, 6544u, 21u)]
+    [InlineData(8284u, 3367u, 34u)]
     public void ValidatedEscortCatalog_HasTheSourceQuestAndCompletionPoint(uint entry, uint quest, uint completionPoint)
     {
         EscortSpec spec = EscortSpecCatalog.Find(entry)!;
@@ -47,6 +48,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u)]
     [InlineData(7807u)]
     [InlineData(12858u)]
+    [InlineData(8284u)]
     public void ClassicDbPath_FiresEveryDeclaredWaypointAction_ThenCompletes(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -143,6 +145,7 @@ public sealed class DataDrivenEscortTests
     [InlineData(7784u)]
     [InlineData(7807u)]
     [InlineData(12858u)]
+    [InlineData(8284u)]
     public void ClassicDbEscort_FailsItsQuestWhenThePlayerLeaves(uint entry)
     {
         using Rig rig = Setup(entry);
@@ -526,6 +529,70 @@ public sealed class DataDrivenEscortTests
             Assert.Contains("-1000413", said);
             Assert.Contains("-1000296", said);
             Assert.Contains("-1000297", said);
+        }
+    }
+
+    [Fact]
+    public void Grark_ThreeAmbushes_ThenTheExecutionScene_CreditsAndDies()
+    {
+        // npc_grark_lorkrubAI (burning_steppes.cpp at 3e8597afe7): pauses at 12/24/30 until 4/8/11 summons die; at 45 the outro dialogue.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.Entry;
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        int[] texts = [.. Enumerable.Range(873, 18).Select(i => -1000000 - i)];
+        var aiContent = new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]);
+        CreatureContent content = new(
+            [Template(entry, b => b.NpcFlags = (uint)NpcFlags.QuestGiver), Template(9522), Template(9605), Template(7042), Template(7046), Template(9538), Template(9539)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], aiContent, scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+            Creature grark = Assert.Single(system.Creatures, c => c.Entry == entry);
+            player.Relocate(grark.X, grark.Y, grark.Z, 0, 0);
+            world.RunTick(100);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI>(grark.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.QuestPrecariousPredicament);
+            uint[] hostile = [9522, 9605, 7042, 7046];
+            for (int elapsed = 0; elapsed < 2_400_000 && quests.Completed.Count == 0; elapsed += 100)
+            {
+                player.Relocate(grark.X, grark.Y, grark.Z, 0, 0);
+                world.RunTick(100);
+                foreach (Creature add in system.Creatures.Where(c => c.IsAlive && hostile.Contains(c.Entry)).ToList())
+                {
+                    map.Combat.Kill(null, add);
+                }
+            }
+
+            Assert.True(quests.Completed.Count == 1, $"killed {ai.Killed} alive {grark.IsAlive} esc {ai.HasEscortState(EscortAI.EscortState.Escorting)} done {quests.Completed.Count} failed {quests.Failed.Count} at {grark.X},{grark.Y} paused {ai.HasEscortState(EscortAI.EscortState.Paused)}");
+            Assert.Equal(11, ai.Killed);
+            Assert.False(grark.IsAlive);
+            string[] said = [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
+            foreach (int id in new[] { -1000873, -1000876, -1000878, -1000880, -1000882 }) // Lexlort speaks from 25 yards up the hill, past say range
+            {
+                Assert.Contains(id.ToString(CultureInfo.InvariantCulture), said);
+            }
+        }
+    }
+
+    [Fact]
+    public void Grark_CaptureOnlyWorksAtAQuarterHealth()
+    {
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000889, "submit", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            AddPlayer(world, 1, 2, 0);
+            Creature grark = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.GrarkLorkrubAI>(grark.AI);
+            Assert.False(ai.Capture());
+            grark.Health = grark.MaxHealth / 4;
+            Assert.True(ai.Capture());
+            Assert.True(ai.Submitted);
         }
     }
 
