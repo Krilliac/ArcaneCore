@@ -84,9 +84,14 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
             if (bossId is < 0 or > 2) throw new InvalidOperationException($"invalid AQ boss id {bossId}");
             bossMask |= (byte)(1 << bossId);
         }
+        WarEffortGongRow? gong = await db.Set<WarEffortGongRow>().AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
+        if (gong is not null && (gong.RingCount < 0 || gong.FirstRungAtUnix < 0 || (gong.RingCount > 0) != (gong.FirstRungAtUnix > 0)))
+            throw new InvalidOperationException($"invalid AQ gong row {gong.RingCount}@{gong.FirstRungAtUnix}");
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new WarEffortSnapshot(phase is null ? WarEffortPhase.Disabled : (WarEffortPhase)phase.Phase,
-            phase?.PhaseEndsAtUnix ?? 0, counters, bossMask);
+            phase?.PhaseEndsAtUnix ?? 0, counters, bossMask,
+            gong?.RingCount ?? 0, gong?.FirstRungAtUnix ?? 0, gong?.FirstRingerId ?? 0);
     }
 
     public async Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
