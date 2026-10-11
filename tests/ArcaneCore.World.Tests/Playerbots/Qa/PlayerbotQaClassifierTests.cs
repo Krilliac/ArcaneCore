@@ -12,6 +12,29 @@ public sealed class PlayerbotQaClassifierTests
     /// may well be missing too, but the bot was not supposed to be there), and is its own finding: the same stall inside the home keeps its
     /// old key and cause.
     /// </summary>
+    /// <summary>
+    /// A shared set-aside carries the position of the first stall behind it (for the report), but the bots that set it aside may have been
+    /// anywhere: its spawn check stays on every map. Stalls on map 0 and the objective creatures only on map 1 are not missing data (review
+    /// of #145: the map-0 check would have relabelled already-published set-aside issues).
+    /// </summary>
+    [Fact]
+    public void ASharedSetAside_ChecksSpawnsOnEveryMap_NotTheMapOfItsFirstStall()
+    {
+        var facts = new FakeFacts();
+        facts.Objectives[1656] = [6747];
+        facts.Spawns[(1, 6747)] = 4;
+        QaSignal setAside = QaData.Parse("Playerbots: 3 bots stalled on quest 1656 for 30 min; every bot sets it aside (stalls at -9471.9,-1792.0,132.1 map 0; -9427.0,-1908.0,94.0 map 0; 1.0,2.0,3.0 map 0)");
+        Assert.True(setAside.HasPosition);
+        Assert.Equal(0u, setAside.Map);
+
+        Assert.NotEqual(QaCause.MissingData, PlayerbotQaClassifier.Classify(setAside, facts).Cause);
+
+        facts.Spawns.Clear(); // no spawn anywhere: still missing data
+        QaClassification none = PlayerbotQaClassifier.Classify(setAside, facts);
+        Assert.Equal(QaCause.MissingData, none.Cause);
+        Assert.Contains("on any map", none.Detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AStallOutsideTheHome_IsOutsideHome_AndItsOwnFinding()
     {

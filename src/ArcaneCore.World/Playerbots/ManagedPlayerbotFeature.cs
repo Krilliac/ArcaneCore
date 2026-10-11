@@ -964,7 +964,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// where the bots behind it stalled. Before, the set-aside was logged only beside a new stall line: one completed by a further give-up
     /// of a stall already logged (PlayerbotStallWatch.GiveUps) waited for the bot's next stall, and was logged beside a stall on another
     /// goal (live 2026-10-11 04:23:57: quest 2160 beside an Explore stall). Returns the stalls now logged and whether
-    /// <paramref name="everyone"/> was logged (the caller clears it then).
+    /// <paramref name="everyone"/> was logged (the caller clears it then). A death loop's report is never marked outside the home.
     /// </summary>
     internal static (int StallsLogged, bool SharedLogged) LogStall(ILogger logger, Guid botId, string name, int stallCount, int stallsLogged,
         string? stall, bool outsideHome, PlayerbotSharedSetAside? everyone)
@@ -972,7 +972,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (stallCount != stallsLogged && stall is not null)
         {
             stallsLogged = stallCount;
-            if (outsideHome) logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall);
+            // The mark belongs to a living stall: a death loop counts as a stall too and its report comes first, while the flag still
+            // holds the last give-up (PlayerbotStallWatch.Report).
+            if (outsideHome && stall.StartsWith("stalled ", StringComparison.Ordinal)) logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall);
             else logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", botId, name, stall);
         }
 

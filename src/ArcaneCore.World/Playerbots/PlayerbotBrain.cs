@@ -1051,6 +1051,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         Risk.OnDeath(player, _attackers);
         _attackers.Clear();
         foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
+        if (loop) StallOutsideHome = false; // the death loop is the report now; the mark was the last living stall's
         if (!loop)
         {
             if (_options.Risk.Enabled && _errand.Entry != 0 && unchecked(now - _errand.AtMs) <= DeadlyErrandMs)

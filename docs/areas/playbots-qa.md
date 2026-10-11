@@ -17,7 +17,7 @@ lock beyond the queue's and never throws, so it cannot slow the world thread. On
 | Kind | The warning it comes from |
 |---|---|
 | stall | `Playerbot ... stalled 120s: goal=Quest target=N quest=Q at x,y,z map M; it gives up that goal` (a homed bot outside its home: `... it gives up that goal outside its home`) |
-| shared set-aside | `Playerbots: N bots stalled on quest Q for 30 min; every bot sets it aside (stalls at x,y,z map M; ...)` (the positions since 2026-10-11; the first is the signal's position) |
+| shared set-aside | `Playerbots: N bots stalled on quest Q for 30 min; every bot sets it aside (stalls at x,y,z map M; ...)` (the positions since 2026-10-11; the first is the signal's position, shown in the report; the classifier's spawn check of a set-aside still looks at every map, since the bots behind it may have stalled elsewhere) |
 | death loop | `Playerbot ... death loop: died N times in Ns within 60 yd of x,y,z map M attackers=a/b/c` |
 | action fault | `Playerbot ... action failed (InvalidOperationException: playerbot-recovery-...)` |
 | quarantine, disabled | `Playerbot ... quarantined for N s (fault N of N)`, `... disabled after N faults ...` |
@@ -50,7 +50,7 @@ content is not loaded.
   against three or more different attackers.
 * **OutsideHome**: a stall logged as made outside the bot's home area (checked first). Expected for a homed bot on its way back or on an
   errand out of its home; it set the goal aside for that bot only. Such a stall is its own finding (its key ends `|outside`; the keys of
-  the other stalls are unchanged) and is **never published** to GitHub; the report lists it. A shared set-aside counts only stalls made
+  the other stalls are unchanged; a death loop is never marked) and is **never published** to GitHub; the report lists it. A shared set-aside counts only stalls made
   inside the home (docs/areas/playbots.md, Home area), so it is never an outside-home finding.
 * **Unknown**: anything else; the detail says what was checked.
 

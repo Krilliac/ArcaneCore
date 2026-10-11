@@ -115,9 +115,15 @@ internal static class PlayerbotQaClassifier
     }
 
     private static int Spawns(QaSignal s, IQaContentFacts facts, uint entry)
-        => s.HasPosition ? facts.SpawnCount(s.Map, entry) : facts.SpawnCountAnyMap(entry);
+        => OnItsMap(s) ? facts.SpawnCount(s.Map, entry) : facts.SpawnCountAnyMap(entry);
 
-    private static string Where(QaSignal s) => s.HasPosition ? string.Create(CultureInfo.InvariantCulture, $"on map {s.Map}") : "on any map";
+    private static string Where(QaSignal s) => OnItsMap(s) ? string.Create(CultureInfo.InvariantCulture, $"on map {s.Map}") : "on any map";
+
+    /// <summary>
+    /// Whether the spawn check looks at the signal's map only. A shared set-aside's position is only its first stall (the bots behind it may
+    /// have stalled on other maps, and its finding's cause is recomputed with every repeat): its check stays on every map.
+    /// </summary>
+    private static bool OnItsMap(QaSignal s) => s.HasPosition && s.Kind != QaSignalKind.SharedSetAside;
 
     private static string NoSpawns(QaSignal s, uint entry, bool noTemplate)
         => string.Create(CultureInfo.InvariantCulture, $"creature entry {entry} has no spawn {Where(s)}") + (noTemplate ? " and no creature_template row" : string.Empty);

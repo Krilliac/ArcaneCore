@@ -324,6 +324,24 @@ public sealed class PlayerbotQaSignalParserTests
         Assert.EndsWith("; it gives up that goal", log.Lines[0], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The outside-home mark belongs to a living stall's line. A death loop also counts as a stall and its report comes first
+    /// (<see cref="PlayerbotBrain.StallReport"/>), while the brain's flag still holds the last give-up: the death loop is logged without the
+    /// mark (review of #145).
+    /// </summary>
+    [Fact]
+    public void LogStall_ADeathLoop_IsNeverMarkedOutsideTheHome()
+    {
+        var log = new CapturingLogger();
+        ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotfk", stallCount: 2, stallsLogged: 1,
+            "death loop: died 3 times in 99s within 60 yd of -10650.0,400.0,35.0 map 0 attackers=202/531/569", outsideHome: true, everyone: null);
+        string line = Assert.Single(log.Lines);
+        Assert.EndsWith("; it gives up that goal", line, StringComparison.Ordinal);
+        QaSignal s = QaData.Parse(line);
+        Assert.Equal(QaSignalKind.DeathLoop, s.Kind);
+        Assert.False(s.OutsideHome);
+    }
+
     /// <summary>A logger that keeps the formatted warning lines.</summary>
     private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
     {

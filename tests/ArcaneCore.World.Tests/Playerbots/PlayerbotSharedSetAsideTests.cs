@@ -77,10 +77,13 @@ public sealed class PlayerbotSharedSetAsideTests
     /// Raven Hill. The bot still sets the goal aside for itself.
     /// </summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AStallOutsideTheHome_IsTheBotsOwn_InsideItCountsForEveryBot(bool inside)
+    [InlineData("outside")]
+    [InlineData("inside")]
+    [InlineData("none")] // an unhomed bot counts as before
+    [InlineData("other-zone")] // inside the circle of a zone-clipped home, but in another zone: outside
+    public async Task AStallOutsideTheHome_IsTheBotsOwn_InsideItCountsForEveryBot(string home)
     {
+        bool inside = home is "inside" or "none";
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         var shared = new PlayerbotSharedSetAsides();
@@ -94,8 +97,15 @@ public sealed class PlayerbotSharedSetAsideTests
                 // Two other bots stalled on quest 109 a moment ago: this bot's stall would be the third.
                 shared.Report(PlayerbotGoalKind.Quest, 0, 109, ulong.MaxValue - 1, now);
                 shared.Report(PlayerbotGoalKind.Quest, 0, 109, ulong.MaxValue - 2, now);
-                float offset = inside ? 0f : 5000f;
-                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + offset, player.Y, player.Z), 300f, "Test");
+                var centre = new Vector3(player.X + 10f, player.Y, player.Z);
+                brain.Home = home switch
+                {
+                    "none" => null,
+                    "outside" => new PlayerbotHomeArea(player.MapId, centre + new Vector3(5000f, 0, 0), 300f, "Test"),
+                    "other-zone" => new PlayerbotHomeArea(player.MapId, centre, 300f, "Test", zoneClipped: true,
+                        new PlayerbotZoneLookup((x, _, _) => x == centre.X ? 40u : 12u)),
+                    _ => new PlayerbotHomeArea(player.MapId, centre, 300f, "Test"),
+                };
                 brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 234, 109);
 
                 brain.GiveUpStalledGoal(player);
