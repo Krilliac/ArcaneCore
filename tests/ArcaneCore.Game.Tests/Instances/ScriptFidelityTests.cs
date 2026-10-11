@@ -129,13 +129,58 @@ public sealed class ScriptFidelityTests
         Creature disciple = run.Creature(3678);
         Assert.IsType<DiscipleOfNaralexAi>(disciple.AI);
         Assert.True(run.Creatures.AttackStart(disciple, run.Player));
-        run.Map.Combat.DealDamage(run.Player, disciple, 10, direct: true);
-        run.Map.Combat.DealDamage(second, disciple, 1, direct: true);
+        // Not direct: direct damage starts the players' auto-attacks (MapCombat.DealDamage → Attack), whose swings roll on the shared
+        // combat random; a lucky swing by `second` made it the top of the threat list - and Sleep then correctly went on run.Player,
+        // no longer the tank (~1.7% of runs). Without the swings the threat stays 10 / 1 and the tank is run.Player throughout.
+        run.Map.Combat.DealDamage(run.Player, disciple, 10, direct: false);
+        run.Map.Combat.DealDamage(second, disciple, 1, direct: false);
 
         Ticks(run, 6_000);
 
+        Assert.Equal([run.Player, second], disciple.Combat.Threat.Entries.Select(e => (Unit)e.Target));
         Assert.Contains(caster.Casts, c => c.Spell == 1090 && ReferenceEquals(c.Target, second));
         Assert.DoesNotContain(caster.Casts, c => c.Spell == 1090 && ReferenceEquals(c.Target, run.Player));
+    }
+
+    [Fact]
+    public void Disciple_Sleep_FollowsTheThreatOrder_WhenTheSecondAttackerTakesTheTop()
+    {
+        // The flake's case pinned: SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 1) skips whoever is on top *now* (vmangos
+        // Creature::SelectAttackingTarget, Objects/Creature.cpp:3136-3164), so once `second` out-threatens the first player, the
+        // first player is the only one below the top and the one put to sleep.
+        var caster = new DungeonTestCaster();
+        using DungeonScriptHarness run = new(map => new WailingCavernsInstance(map), [3678], [3678], null,
+            new CreatureAiServices { Spells = caster });
+        Player second = run.AddPlayer(2);
+        Creature disciple = run.Creature(3678);
+        Assert.True(run.Creatures.AttackStart(disciple, run.Player));
+        run.Map.Combat.DealDamage(run.Player, disciple, 10, direct: false);
+        run.Map.Combat.DealDamage(second, disciple, 1, direct: false);
+        disciple.Combat.Threat.AddThreat(second, 100);
+
+        Ticks(run, 6_000);
+
+        Assert.Equal([second, run.Player], disciple.Combat.Threat.Entries.Select(e => (Unit)e.Target));
+        Assert.Contains(caster.Casts, c => c.Spell == 1090 && ReferenceEquals(c.Target, run.Player));
+        Assert.DoesNotContain(caster.Casts, c => c.Spell == 1090 && ReferenceEquals(c.Target, second));
+    }
+
+    [Fact]
+    public void Disciple_Sleep_WithOnlyTheTankOnTheThreatList_IsNotCast()
+    {
+        // position >= threatlist.size() returns nullptr (Objects/Creature.cpp:3146-3147) and the script then casts nothing
+        // (wailing_cavernsScripts.cpp:449-456): a lone tank is never slept.
+        var caster = new DungeonTestCaster();
+        using DungeonScriptHarness run = new(map => new WailingCavernsInstance(map), [3678], [3678], null,
+            new CreatureAiServices { Spells = caster });
+        Creature disciple = run.Creature(3678);
+        Assert.True(run.Creatures.AttackStart(disciple, run.Player));
+        run.Map.Combat.DealDamage(run.Player, disciple, 10, direct: false);
+
+        Ticks(run, 12_000);
+
+        Assert.Equal([run.Player], disciple.Combat.Threat.Entries.Select(e => (Unit)e.Target));
+        Assert.DoesNotContain(caster.Casts, c => c.Spell == 1090);
     }
 
     [Fact]
