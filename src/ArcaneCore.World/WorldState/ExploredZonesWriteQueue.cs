@@ -59,6 +59,9 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
+    /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
+
     public void Start()
     {
         if (_consumer is not null)
@@ -67,8 +70,8 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         }
 
         _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
-        _consumer = Task.Run(ConsumeAsync);
         _retry.Start();
+        _consumer = Task.Run(ConsumeAsync);
     }
 
     private bool HasAnyRetained()
@@ -318,18 +321,33 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
         }
 
+        int failed = 0;
+        bool locked = false;
+        Exception? first = null;
         for (int i = 0; i < retained.Length; i++)
         {
-            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, attempts: 1).ConfigureAwait(false);
-            if (failure is not null && DatabaseTransience.IsBusy(failure))
+            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, sweep: true).ConfigureAwait(false);
+            if (failure is null)
             {
-                logger.LogWarning("explored-zones retry: the database is locked; {Remaining} retained characters wait for the next sweep", retained.Length - i);
-                return;
+                continue;
             }
+
+            failed++;
+            first ??= failure;
+            if (DatabaseTransience.IsBusy(failure))
+            {
+                locked = true;
+                break;
+            }
+        }
+
+        if (failed > 0)
+        {
+            logger.LogWarning("explored-zones retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
         }
     }
 
-    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, int attempts = MaxAttempts)
+    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, bool sweep = false)
     {
         uint[] words;
         int version;
@@ -359,6 +377,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             version = unsaved.Version;
         }
 
+        int attempts = sweep ? 1 : MaxAttempts;
         Exception? failure = null;
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
@@ -376,7 +395,11 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             catch (Exception ex)
             {
                 failure = ex;
-                logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
+                if (!sweep)
+                {
+                    logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
+                }
+
                 if (attempt < attempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
@@ -398,7 +421,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
         }
 
-        if (failure is not null)
+        if (failure is not null && !sweep)
         {
             logger.LogError(failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }

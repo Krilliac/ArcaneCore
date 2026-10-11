@@ -90,7 +90,7 @@ public sealed class ExploredZonesWriteQueueTests
     [Fact]
     public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
     {
-        (ExploredZonesWriteQueue queue, InMemoryExploredZonesStore store) = Create(TimeSpan.FromMilliseconds(200));
+        (ExploredZonesWriteQueue queue, InMemoryExploredZonesStore store) = Create(Timeout.InfiniteTimeSpan);
         store.LockedSaves = 4; // three inline attempts fail, the first sweep fails, the second lands
         queue.Save(1, Words(10));
         await queue.FlushAsync();
@@ -99,10 +99,31 @@ public sealed class ExploredZonesWriteQueueTests
         Assert.Null(store.Get(1));
         Assert.Equal(3, store.Attempts);
 
-        await DurableAsync(queue, 1);
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Equal(4, store.Attempts);
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
         Assert.Equal(10u, store.Get(1)![0]);
         Assert.Equal(5, store.Attempts);
         Assert.Equal(1, store.Saves);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        (ExploredZonesWriteQueue queue, InMemoryExploredZonesStore store) = Create(TimeSpan.FromMilliseconds(50));
+        store.LockedSaves = 4;
+        queue.Save(1, Words(10));
+        await queue.FlushAsync();
+
+        await DurableAsync(queue, 1);
+        Assert.Equal(10u, store.Get(1)![0]);
         await queue.StopAsync();
     }
 

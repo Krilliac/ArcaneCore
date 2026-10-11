@@ -16,7 +16,22 @@ internal sealed class RetainedRetryTimer(TimeSpan interval, Func<bool> hasRetain
     private int _sweepQueued; // 1 while a marker is in the channel or being swept
     private Task? _loop;
 
-    public void Start() => _loop ??= Task.Run(RunAsync);
+    /// <summary>
+    /// Start ticking. <see cref="Timeout.InfiniteTimeSpan"/> never ticks (tests drive sweeps with <see cref="TryPost"/>).
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The interval is under 1 ms (PeriodicTimer truncates to whole milliseconds) and is not <see cref="Timeout.InfiniteTimeSpan"/>, or exceeds what a timer accepts.</exception>
+    public void Start()
+    {
+        if (interval != Timeout.InfiniteTimeSpan && (interval.TotalMilliseconds < 1 || interval.TotalMilliseconds > uint.MaxValue - 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(interval), interval, "the retained-write retry interval must be positive or Timeout.InfiniteTimeSpan");
+        }
+
+        if (interval != Timeout.InfiniteTimeSpan)
+        {
+            _loop ??= Task.Run(RunAsync);
+        }
+    }
 
     /// <summary>Post a marker unless one is already pending; true when one was posted.</summary>
     public bool TryPost()

@@ -132,6 +132,9 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per key, stopping at the first locked one; tests shorten it).</summary>
     public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
+
     public void Start()
     {
         if (_consumer is not null)
@@ -140,8 +143,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
 
         _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(WorkKind.Sweep, default, default, 0, 0, null)));
-        _consumer = Task.Run(ConsumeAsync);
         _retry.Start();
+        _consumer = Task.Run(ConsumeAsync);
     }
 
     private bool HasAnyRetained()
@@ -703,14 +706,29 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             ];
         }
 
+        int failed = 0;
+        bool locked = false;
+        Exception? first = null;
         for (int i = 0; i < rows.Length; i++)
         {
             Exception? failure = await RetryOneAsync(rows[i].Key, rows[i].Value, 1).ConfigureAwait(false);
-            if (failure is not null && DatabaseTransience.IsBusy(failure))
+            if (failure is null)
             {
-                _logger.LogWarning("social retry: the database is locked; {Remaining} retained writes wait for the next sweep", rows.Length - i);
-                return;
+                continue;
             }
+
+            failed++;
+            first ??= failure;
+            if (DatabaseTransience.IsBusy(failure))
+            {
+                locked = true;
+                break;
+            }
+        }
+
+        if (failed > 0)
+        {
+            _logger.LogWarning("social retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}", failed, rows.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
         }
     }
 

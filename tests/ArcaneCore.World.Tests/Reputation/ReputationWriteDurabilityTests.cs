@@ -152,7 +152,7 @@ public sealed class ReputationWriteDurabilityTests
     [Fact]
     public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
     {
-        await using var fixture = await Fixture.CreateAsync(TimeSpan.FromMilliseconds(200));
+        await using var fixture = await Fixture.CreateAsync(Timeout.InfiniteTimeSpan);
         int id = fixture.Ids[0];
         fixture.Control.LockedWrites = 4; // three inline attempts fail, the first sweep fails, the second lands
         fixture.Queue.SaveWatchedFaction(id, 0);
@@ -161,14 +161,35 @@ public sealed class ReputationWriteDurabilityTests
         Assert.True(fixture.Queue.HasRetainedFailure(id));
         Assert.Equal(3, fixture.Control.AttemptsFor(id));
 
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
+        Assert.True(fixture.Queue.HasRetainedFailure(id));
+        Assert.Equal(4, fixture.Control.AttemptsFor(id));
+
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(id));
+        Assert.Equal(5, fixture.Control.AttemptsFor(id));
+        Assert.Equal(0, (await fixture.LoadAsync(id)).WatchedFaction);
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        await using var fixture = await Fixture.CreateAsync(TimeSpan.FromMilliseconds(50));
+        int id = fixture.Ids[0];
+        fixture.Control.LockedWrites = 4;
+        fixture.Queue.SaveWatchedFaction(id, 0);
+        await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
+
         DateTime deadline = DateTime.UtcNow.AddSeconds(10);
         while (fixture.Queue.HasRetainedFailure(id))
         {
-            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the sweep");
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the timer");
             await Task.Delay(10);
         }
 
-        Assert.Equal(5, fixture.Control.AttemptsFor(id));
         Assert.Equal(0, (await fixture.LoadAsync(id)).WatchedFaction);
     }
 
@@ -193,7 +214,7 @@ public sealed class ReputationWriteDurabilityTests
 
     internal sealed class Fixture : IAsyncDisposable
     {
-        public static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+        public static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
         private readonly string _path;
         private readonly DbContextOptions<CharacterDbContext> _options;
         private readonly ServiceProvider _services;

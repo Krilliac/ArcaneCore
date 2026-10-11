@@ -102,4 +102,32 @@ public sealed class RetainedRetryTimerTests
         await Task.Delay(150);
         Assert.Equal(atStop, Volatile.Read(ref posts));
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void ANonPositiveInterval_IsRefusedAtStart(int milliseconds)
+    {
+        var timer = new RetainedRetryTimer(TimeSpan.FromMilliseconds(milliseconds), () => true, () => true);
+        Assert.Throws<ArgumentOutOfRangeException>(() => timer.Start());
+    }
+
+    [Fact]
+    public async Task AnInfiniteInterval_NeverTicks_ButStillPostsOnDemand_AndStopsCleanly()
+    {
+        int posts = 0;
+        var timer = new RetainedRetryTimer(Timeout.InfiniteTimeSpan, () => true, () =>
+        {
+            Interlocked.Increment(ref posts);
+            return true;
+        });
+        timer.Start();
+        await Task.Delay(100);
+        Assert.Equal(0, Volatile.Read(ref posts));
+
+        Assert.True(timer.TryPost());
+        Assert.Equal(1, Volatile.Read(ref posts));
+        await timer.StopAsync();
+        await timer.StopAsync();
+    }
 }

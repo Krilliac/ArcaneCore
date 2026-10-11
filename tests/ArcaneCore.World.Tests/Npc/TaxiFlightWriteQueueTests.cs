@@ -125,7 +125,7 @@ public sealed class TaxiFlightWriteQueueTests
     [Fact]
     public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_AndTheRouteIsNeverAbandoned()
     {
-        await using var fixture = Fixture.Create(TimeSpan.FromMilliseconds(200));
+        await using var fixture = Fixture.Create(Timeout.InfiniteTimeSpan);
         fixture.Store.LockedWrites = 4; // three inline attempts fail, the first sweep fails, the second lands
         int abandoned = 0;
         fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
@@ -134,16 +134,63 @@ public sealed class TaxiFlightWriteQueueTests
         Assert.True(fixture.Queue.HasRetainedFailure(7));
         Assert.Equal(3, fixture.Store.Attempts(7));
 
-        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-        while (fixture.Queue.HasRetainedFailure(7))
-        {
-            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the sweep");
-            await Task.Delay(10);
-        }
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(4, fixture.Store.Attempts(7));
 
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
         Assert.Equal(5, fixture.Store.Attempts(7));
         Assert.NotNull(fixture.Store.Saved(7));
         Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
+    public async Task ASweepThatFailsForAnotherReason_LeavesTheRouteRetained_AndNeverAbandonsIt()
+    {
+        await using var fixture = Fixture.Create(Timeout.InfiniteTimeSpan);
+        fixture.Store.FailBusy = true; // the inline attempts fail as a lock: retained, not abandoned
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+
+        fixture.Store.FailBusy = false;
+        fixture.Store.FailWrites = true; // now a failure that is not a lock
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(0, abandoned);
+        Assert.Empty(fixture.Store.Calls);
+
+        fixture.Store.FailWrites = false;
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(Route, fixture.Store.Saved(7));
+        Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        await using var fixture = Fixture.Create(TimeSpan.FromMilliseconds(50));
+        fixture.Store.LockedWrites = 4;
+        fixture.Queue.Save(7, Route);
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (fixture.Queue.HasRetainedFailure(7))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the timer");
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(fixture.Store.Saved(7));
     }
 
     [Fact]

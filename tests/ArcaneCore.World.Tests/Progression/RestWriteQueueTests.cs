@@ -58,7 +58,7 @@ public sealed class RestWriteQueueTests
     [Fact]
     public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
     {
-        (RestWriteQueue queue, InMemoryRestStore store) = Create(TimeSpan.FromMilliseconds(200));
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
         store.LockedSaves = 4; // the three inline attempts fail, the first sweep fails, the second sweep lands
         queue.Save(1, State(10));
         await queue.FlushAsync();
@@ -67,8 +67,15 @@ public sealed class RestWriteQueueTests
         Assert.Null(store.Get(1));
         Assert.Equal(3, store.Attempts);
 
-        // No further call on the queue: the sweep alone retries it.
-        await DurableAsync(queue, 1);
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Equal(4, store.Attempts);
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
         Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
         Assert.Equal(5, store.Attempts);
         Assert.Equal(1, store.Saves);
@@ -76,9 +83,30 @@ public sealed class RestWriteQueueTests
     }
 
     [Fact]
-    public async Task TheSweepStopsAtTheFirstLockedCharacter_AndLandsBothOnceTheLockIsGone()
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
     {
         (RestWriteQueue queue, InMemoryRestStore store) = Create(TimeSpan.FromMilliseconds(50));
+        store.LockedSaves = 4;
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+
+        await DurableAsync(queue, 1);
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ARetryIntervalThatIsNotPositive_IsRefusedAtStart()
+    {
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterRestStore>(new InMemoryRestStore()).BuildServiceProvider();
+        var queue = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = TimeSpan.FromSeconds(-5) };
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.Start());
+    }
+
+    [Fact]
+    public async Task TheSweepStopsAtTheFirstLockedCharacter_AndLandsBothOnceTheLockIsGone()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
         store.LockedSaves = int.MaxValue;
         queue.Save(1, State(10));
         queue.Save(3, State(30));
@@ -86,13 +114,16 @@ public sealed class RestWriteQueueTests
         Assert.Equal(3, store.AttemptsFor(1));
         Assert.Equal(3, store.AttemptsFor(3));
 
-        await Task.Delay(500); // several sweeps
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.Equal(4, store.AttemptsFor(1));
         Assert.Equal(3, store.AttemptsFor(3)); // never reached: the sweep stopped at character 1's locked write
-        Assert.True(store.AttemptsFor(1) > 3);
 
         store.LockedSaves = 0;
-        await DurableAsync(queue, 1);
-        await DurableAsync(queue, 3);
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.False(queue.HasRetainedFailure(3));
         Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
         Assert.Equal(30f, store.Get(3)!.Value.RestBonus);
         await queue.StopAsync();
@@ -101,7 +132,7 @@ public sealed class RestWriteQueueTests
     [Fact]
     public async Task ANewerStateReplacesTheRetainedOne_AndOnlyTheNewerIsEverStored()
     {
-        (RestWriteQueue queue, InMemoryRestStore store) = Create(TimeSpan.FromMilliseconds(50));
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
         store.LockedSaves = int.MaxValue;
         queue.Save(1, State(10));
         await queue.FlushAsync();
@@ -110,7 +141,9 @@ public sealed class RestWriteQueueTests
         Assert.True(queue.HasRetainedFailure(1));
 
         store.LockedSaves = 0;
-        await DurableAsync(queue, 1);
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
         Assert.Equal(11f, store.Get(1)!.Value.RestBonus);
         Assert.Equal(1, store.Saves);
         await queue.StopAsync();

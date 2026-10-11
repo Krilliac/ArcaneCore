@@ -43,7 +43,7 @@ public sealed class SocialWriteQueueRetentionTests
     [Fact]
     public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_ForRowsAndGuildsAlike()
     {
-        await using Rig rig = Rig.Create(retryInterval: TimeSpan.FromMilliseconds(200));
+        await using Rig rig = Rig.Create(retryInterval: Timeout.InfiniteTimeSpan);
         rig.Store.LockNext(8); // row: 3 inline, guild: 3 inline, then two sweeps stop at the row, the third lands both
 
         rig.Queue.SetSocial(1, 2, SocialFlags.Friend);
@@ -55,16 +55,42 @@ public sealed class SocialWriteQueueRetentionTests
         Assert.Empty(rig.Store.Guilds);
         Assert.Equal(6, rig.Store.Attempts);
 
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact. Each stops at the locked row.
+        for (int expected = 7; expected <= 8; expected++)
+        {
+            Assert.True(rig.Queue.PostRetainedSweepForTest());
+            await rig.Queue.FlushAsync().WaitAsync(Wait);
+            Assert.True(rig.Queue.HasRetainedFailure(1));
+            Assert.Equal(expected, rig.Store.Attempts);
+        }
+
+        Assert.True(rig.Queue.PostRetainedSweepForTest());
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+        Assert.False(rig.Queue.HasRetainedFailure(1));
+        Assert.Equal(SocialFlags.Friend, rig.Store.Row(1, 2));
+        Assert.Equal("retained", rig.Store.Guilds[7].Motd);
+        Assert.Equal(10, rig.Store.Attempts);
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsWritesHeldByALongLock()
+    {
+        await using Rig rig = Rig.Create(retryInterval: TimeSpan.FromMilliseconds(50));
+        rig.Store.LockNext(8);
+
+        rig.Queue.SetSocial(1, 2, SocialFlags.Friend);
+        rig.Queue.SaveGuild(Guild(7, "retained"));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+
         DateTime deadline = DateTime.UtcNow.AddSeconds(10);
         while (rig.Queue.HasRetainedFailure(1) || rig.Store.Guilds.Count == 0)
         {
-            Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried by the sweep");
+            Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried by the timer");
             await Task.Delay(10);
         }
 
         Assert.Equal(SocialFlags.Friend, rig.Store.Row(1, 2));
         Assert.Equal("retained", rig.Store.Guilds[7].Motd);
-        Assert.Equal(10, rig.Store.Attempts);
     }
 
     [Fact]
