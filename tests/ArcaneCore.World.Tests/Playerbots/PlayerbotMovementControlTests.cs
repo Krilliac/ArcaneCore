@@ -72,13 +72,13 @@ public sealed class PlayerbotMovementControlTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
-    internal static async Task<WorldSession> EnterAsync(WorldTestHost host)
+    internal static async Task<WorldSession> EnterAsync(WorldTestHost host, byte race = 1)
     {
         Account owner = await host.Accounts.CreateAsync(new Account
         { Username = "BOTCONTROL", Salt = new byte[32], Verifier = new byte[32] });
         WorldSession session = await WorldSession.CreateManagedAsync(owner, null, host.WorldServices, host.Opcodes,
             host.World, host.Registry, new WorldSessionOptions(), NullLogger.Instance);
-        var create = new PacketWriter(); create.WriteCString("Controlone"); create.WriteByte(1); create.WriteByte(1);
+        var create = new PacketWriter(); create.WriteCString("Controlone"); create.WriteByte(race); create.WriteByte(1);
         for (int i = 0; i < 8; i++) create.WriteByte(0);
         await session.DispatchManagedSessionAsync(WorldOpcode.CmsgCharCreate, create.ToArray());
         var login = new PacketWriter(); login.WriteUInt64((ulong)(await session.Services.GetRequiredService<ICharacterStore>().GetByAccountAsync(owner.Id)).Single().Id);

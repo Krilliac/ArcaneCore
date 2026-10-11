@@ -37,7 +37,7 @@ public sealed class PlayerbotTramFarStartTests
         Assert.InRange(routeLength, 1500f, options.MaxRouteYards); // the first part of the way, cut at the route bound
 
         var brain = new PlayerbotBrain(world.Session, options);
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
         for (int step = 0; step < 700; step++) await world.TickAsync(() => { brain.Update(100); return true; }); // 70 s: past the 60 s progress bound
         (TramStage? stage, float walked) = await world.OnWorldAsync(() => (PlayerbotTram.TripOf(world.Player)?.Stage,
             Vector2.Distance(new(world.Player.X, world.Player.Y), new(Westfall.X, Westfall.Y))));
@@ -51,7 +51,7 @@ public sealed class PlayerbotTramFarStartTests
         await using TramTestWorld world = await TramTestWorld.StartAsync(pathfinder: new NoWay());
         await world.PlaceAsync(0, Westfall);
         var brain = new PlayerbotBrain(world.Session, LiveOptions());
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
         string? stall = null;
         for (int step = 0; step < 900 && stall is null; step++)
             stall = await world.TickAsync(() =>

@@ -139,10 +139,16 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
 2218; reverse 1338) stood at the Stormwind tram entrance (-8285, 554) and on the Elwynn ridge. Now they ride the tram as a player does
 (`PlayerbotTram`):
 
-* **When.** `PlayerbotWorldDestinations` asks `TramNetwork.Choose` before it plans a walk: the bot takes the tram when its destination
-  lies on the other platform's side (nearer that platform's way out than this platform's entrance) and walking to this entrance plus
-  walking from the other exit to the destination is shorter, in straight lines, than the straight line itself. A failed trip is not tried
-  again for 10 minutes (`RetryAfterFailureMs`); the destination then falls back to the walk and the ordinary stall watch.
+* **When.** `PlayerbotWorldDestinations` asks `TramNetwork.Choose` before it plans a walk. The bot and goal must be in known zones on
+  opposite sides of the tram, and the bot must be Alliance. The Stormwind side includes Stormwind, Elwynn, Westfall, Redridge, Duskwood,
+  Deadwind Pass, Burning Steppes, Swamp of Sorrows, Blasted Lands, Stranglethorn Vale and the Temple of Atal'Hakkar exterior (1477);
+  the Ironforge side includes Dun Morogh, Ironforge, Loch Modan, Wetlands, Badlands, Searing Gorge, Thoradin's Wall (293) and the
+  northern Eastern Kingdoms. Blackrock Mountain (25) remains unclassified. These are build-5875 AreaTable zone IDs, not proximity to an
+  entrance. A Coldridge bot walks to Talin or Sten in its own zone and takes Ironforge's entrance (ClassicDB 2175) for Stormwind; a
+  Goldshire bot uses Stormwind's entrance (2173) for Coldridge. Duskwood to Thorium Point (Searing Gorge) uses the tram via Ironforge.
+  Unknown zones do not
+  start a trip. A failed trip is not tried again for 10 minutes (`RetryAfterFailureMs`); the destination then falls back to the walk and
+  the ordinary stall watch.
 * **The tram, from the data.** `TramNetwork.Build` reads the area triggers: the two entrances on the continent whose
   `areatrigger_teleport` leads to map 369 (classic-db 2173 Stormwind, 2175 Ironforge), each paired with the exit on map 369 nearest its
   landing whose teleport lands back beside it (2171, 2166). Anything else (one entrance, an exit missing or landing elsewhere) is no
@@ -215,8 +221,8 @@ tram map as a ghost, is revived there and leaves by the Stormwind exit).
 
 Not done: only quest destinations (`PlayerbotWorldDestinations`) begin a trip; trainer, vendor and home-area walks
 (`PlayerbotTrainerDestinations`, `PlayerbotTownGoals`, `PlayerbotHome`) do not use the tram yet, and party followers follow their leader
-only through triggers the leader took (`PlayerbotFollower`). `Choose` compares straight lines, so a bot well east of both cities (Redridge
-to Thelsamar) still walks. Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
+only through triggers the leader took (`PlayerbotFollower`). Zones outside the classified road networks do not begin tram trips.
+Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
 from the transport when the release finds a graveyard, `GraveyardRepopService.RepopAtGraveyard`) is not.
 
 #### Travel by elevator

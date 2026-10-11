@@ -37,7 +37,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         var brain = new PlayerbotBrain(world.Session, Options());
         await world.OnWorldAsync(() => brain.Home = new PlayerbotHomeArea(0, WestfallHome, 300f, "Sentinel Hill"));
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)), "the trip did not begin");
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)), "the trip did not begin");
 
         TramStage? stage = null;
         bool sawTramMap = false;
@@ -96,7 +96,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
             shared.Report(PlayerbotGoalKind.Quest, 0, 400, ulong.MaxValue - 2, now);
             brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 1376, 400);
         });
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
 
         string? stall = null;
         for (int step = 0; step < 2_000 && stall is null; step++)
@@ -133,7 +133,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         PlayerbotOptions options = Options();
         var brain = new PlayerbotBrain(world.Session, options);
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
 
         TramStage? stage = null;
         for (int step = 0; step < 4_000 && stage is not (TramStage.Waiting or TramStage.Done or TramStage.Failed); step++)

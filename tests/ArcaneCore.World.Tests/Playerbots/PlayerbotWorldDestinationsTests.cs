@@ -2,13 +2,19 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Tests.Items;
 using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
 using Xunit;
@@ -17,6 +23,119 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWorldDestinationsTests
 {
+    [Theory]
+    [InlineData(308u, 2686u)] // Distracting Jarven: Thunder Ale
+    [InlineData(3861u, 11109u)] // CLUCK!: Special Chicken Feed
+    public async Task VendorOnlyRepeatableItem_IsNotDeferred(uint questId, uint itemId)
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = questId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = itemId, ReqItemCount1 = 1 }], [], []));
+        var npcs = new NpcStore(NpcContent.Empty with
+        {
+            VendorItems = [new VendorItem { Entry = 990001, Item = itemId }],
+        });
+        Assert.Contains(npcs.Content.VendorItems, vendor => vendor.Item == itemId);
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(4886), npcs));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task QuestRewardOnlyItem_DoesNotCountAsAvailableToAnUntakenRepeatable()
+    {
+        const uint rewardItem = 930001;
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 930002, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = rewardItem, ReqItemCount1 = 1 },
+             new QuestTemplate { Entry = 930003, Method = 2, RewItemId1 = rewardItem, RewItemCount1 = 1 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(930002)!, LootWith(4886), NpcStore.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Theory]
+    [InlineData(813u, 4886u, 4u)] // Finding the Antidote: quest-only creature drops
+    [InlineData(410u, 3080u, 1u)] // The Dormant Shade: quest-only creature drop
+    public async Task RepeatableQuestWithAQuestGatedDrop_IsNotDeferred(uint questId, uint itemId, uint count)
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = questId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = itemId, ReqItemCount1 = count }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(itemId), NpcStore.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task NonRepeatableDeliveryWithoutItems_IsNotDeferred()
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 810001, Method = 2, MinLevel = 1, QuestLevel = 1,
+                ReqItemId1 = 4886, ReqItemCount1 = 4 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(810001)!, LootContent.Empty, NpcStore.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task ItemOnlyRepeatableStarterNeedsItsTurnInItemBeforeBotTravels()
+    {
+        // ClassicDB quest 579 at Donyal Tovald in Stormwind asks for Library Scrip 3898.
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 3898, Name = "Library Scrip", Class = (uint)ItemClass.Quest, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 579, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = 3898, ReqItemCount1 = 1 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var player = session.Player!;
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886), NpcStore.Empty));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3898, 1, out _));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886), NpcStore.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task BlockedNearestHintRotatesToReachableSameEntryOnNextThink()
     {
@@ -50,6 +169,76 @@ public sealed class PlayerbotWorldDestinationsTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.True(player.X < before);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task FailedLongRouteDoesNotSearchAnotherFarSpawnBeforeBackoff()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "far objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 21001, Entry = 6, MapId = 0, X = startX + 1600, Y = -132.49f, Z = 83.53f },
+             new CreatureSpawn { Guid = 21002, Entry = 6, MapId = 0, X = startX + 1800, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                int afterFirst = pathfinder.Calls;
+                Assert.True(afterFirst > 0);
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Equal(afterFirst, pathfinder.Calls);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task FarFailure_RetainsItsSpawnThroughAdvisoryBackoff_ThenTriesTheNextSpawn()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "far objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 22001, Entry = 6, MapId = 0, X = startX + 1600, Y = -132.49f, Z = 83.53f },
+             new CreatureSpawn { Guid = 22002, Entry = 6, MapId = 0, X = startX + 1800, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            PlayerbotWorldDestinations? destinations = null;
+            BlockEastPathfinder pathfinder = await host.OnWorldAsync(() =>
+            {
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Contains(pathfinder.Ends, end => MathF.Abs(end.X - (startX + 1600)) < 1f);
+                return pathfinder;
+            });
+            await host.World.AdvanceClockAsync(2_100);
+            await host.OnWorldAsync(() =>
+            {
+                destinations!.HasQuestCandidate(session.Player!); // the brain's advisory call before Update
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Contains(pathfinder.Ends, end => MathF.Abs(end.X - (startX + 1800)) < 1f);
                 return true;
             });
         }
@@ -118,6 +307,9 @@ public sealed class PlayerbotWorldDestinationsTests
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
     }
 
+    private static LootContent LootWith(uint itemId) => new(
+        [(LootTableKind.Creature, new LootStoreRow(3127, itemId, -40f, 0, 1, 1))], []);
+
     private sealed class FlatFloor : ILineOfSight
     {
         public bool Enabled => true;
@@ -133,10 +325,12 @@ public sealed class PlayerbotWorldDestinationsTests
     {
         public bool Enabled => true;
         public int Calls { get; private set; }
+        public List<Vector3> Ends { get; } = [];
 
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             Calls++;
+            Ends.Add(end);
             return end.X > start.X ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
         }
     }

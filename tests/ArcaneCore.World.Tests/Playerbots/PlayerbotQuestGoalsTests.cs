@@ -18,12 +18,34 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Game.Items;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Tests.Items;
+using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.World.GameObjects;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotQuestGoalsTests
 {
+    [Fact]
+    public async Task VisibleRepeatableQuestWithQuestGatedDrops_RemainsAnAcceptableGoal()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 4886, Name = "Venom Sac", Class = (uint)ItemClass.Quest, Stackable = 20 });
+        using IDisposable itemScope = items.Use();
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture
+        {
+            RepeatableItem = 4886, RepeatableItemCount = 4,
+        });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            quest.Host.WorldServices.GetRequiredService<GameObjectLootFeature>().ReplaceLootContent(new LootContent(
+                [(LootTableKind.Creature, new LootStoreRow(3127, 4886, -40f, 0, 1, 1))], []));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.True(goals.HasCandidate(quest.Session.Player!));
+            return true;
+        });
+    }
+
     [Fact]
     public Task AutonomousQuestStages_RespectBudgetThenAcceptAndRewardOnlyCompletedProgress()
         => RunQuestStagesAsync(feature => feature.Options.OrdinaryRewardQuestIds = [QuestInteractionFixture.QuestId]);

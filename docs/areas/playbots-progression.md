@@ -102,6 +102,20 @@ under `AllowlistOnly`. Quest travel (`PlayerbotWorldDestinations`) considers, un
 character is old enough for and that is not gray for it (vmangos GetGrayLevel), and keeps the 128 nearest giver and ender spawns;
 under `AllowlistOnly` the allowlist, as before.
 
+An item-only repeatable delivery is deferred only when the bot lacks its required items, none of the missing items has a row in the
+loaded loot or vendor tables, and the quest does not supply them on acceptance. The vendor-item set is built with `NpcStore` from
+the existing `npc_vendor` content and refreshed with vendor reloads; the quest check reads that set rather than scanning vendors.
+A quest-only drop requires the quest in the log
+(`QuestNpcServices.HasQuestForItem`), so repeatables such as 813 "Finding the Antidote" and 410 "The Dormant Shade" remain takeable
+before their loot is carried. Missing loot content is not proof that an item has no source, so it does not defer a quest. ClassicDB
+quest 579, "Stormwind Library", is offered by Donyal Tovald in Stormwind to level-1 characters but requires Library Scrip 3898,
+which has no loot or vendor row in the loaded world data. Without the scrip, a Coldridge bot does not travel there. Once it carries the item,
+normal eligibility and tram routing apply. A failed far destination waits two seconds before another search; that spawn stays blocked
+for 30 seconds so another far spawn gets a turn. Nearby alternate spawns still rotate at the next think.
+
+Vendor-only repeatables remain takeable: ClassicDB quest 308 requires Thunder Ale 2686, which has vendor rows and no loot row.
+Quest-reward-only items are not treated as vendor or loot sources by this check.
+
 ## Scenarios (`Scenarios/ScenarioProgression.cs`)
 
 The bots are set up scripted, then handed back to their brain (`GoAutonomousAsync`); the steps wait for what the brain does.

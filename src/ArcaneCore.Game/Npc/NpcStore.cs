@@ -18,6 +18,7 @@ public sealed class NpcStore
     private readonly FrozenDictionary<uint, GossipMenuOption[]> _options;
     private readonly FrozenDictionary<uint, NpcText> _texts;
     private readonly FrozenDictionary<uint, VendorItem[]> _vendor;
+    private readonly FrozenSet<uint> _vendorItemIds;
     private readonly FrozenDictionary<uint, TrainerSpell[]> _trainer;
     private readonly FrozenDictionary<uint, TaxiNode> _nodes;
     private readonly FrozenDictionary<(uint From, uint To), TaxiPath> _paths;
@@ -44,6 +45,7 @@ public sealed class NpcStore
         // vmangos LoadVendors: ORDER BY entry, slot.
         _vendor = content.VendorItems.GroupBy(v => v.Entry)
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
+        _vendorItemIds = content.VendorItems.Where(v => v.Item != 0).Select(v => v.Item).ToFrozenSet();
         _trainer = content.TrainerSpells.GroupBy(t => t.Entry)
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(t => t.Spell).ToArray());
         _nodes = content.TaxiNodes.Where(n => n.Id is > 0 and <= TaxiMaskSize * 32)
@@ -95,6 +97,9 @@ public sealed class NpcStore
     public NpcText? Text(uint textId) => _texts.GetValueOrDefault(textId);
 
     public IReadOnlyList<VendorItem> VendorItems(uint entry) => _vendor.GetValueOrDefault(entry) ?? [];
+
+    /// <summary>Whether any loaded vendor row sells the item; built with the NPC content and refreshed with vendor reloads.</summary>
+    public bool SellsItem(uint itemId) => _vendorItemIds.Contains(itemId);
 
     public IReadOnlyList<TrainerSpell> TrainerSpells(uint entry) => _trainer.GetValueOrDefault(entry) ?? [];
 
