@@ -17,12 +17,12 @@ public sealed class PlayerbotPopulationMemberRow
 }
 
 /// <summary>
-/// Characters schema 56 (wave 19, bot-population lane): which managed playerbots the population manager created and may park or
-/// relocate. The number is the next one after main's 55 at the time of writing; the integrator renumbers if a sibling lane took it.
+/// Characters schema 57 (wave 19, bot-population lane): which managed playerbots the population manager created and may park or
+/// relocate. Written as 56 (the next after main's 55); renumbered to 57 in the w19 train because the bot-home lane took 56.
 /// </summary>
 public sealed class PlayerbotPopulationDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 56;
+    public const int Version = 57;
     public const string Table = "playerbot_population_member";
 
     public DatabaseComponent Component => DatabaseComponent.Characters;

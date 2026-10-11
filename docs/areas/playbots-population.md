@@ -225,10 +225,10 @@ and swapped as one value on reload.
 | `Relocation` / `MaxRelocationsPerInterval` | `Teleport` / `2` | What to do with an out-levelled bot; moves per pass (0..50). |
 | `ExcludedZones` | `[]` | Zone ids bots are never placed in (at most 256). |
 
-## The characters table (schema 56)
+## The characters table (schema 57)
 
-`playerbot_population_member` (`PlayerbotPopulationDataModule`, characters version **56**, the next after main's 55 when the lane
-was written; the integrator renumbers if a sibling lane took 56 - the module is self-contained and only its `Version` constant,
+`playerbot_population_member` (`PlayerbotPopulationDataModule`, characters version **57**; written as 56, the next after main's 55 when the lane
+was written; the w19 train renumbered it because the bot-home lane took 56 - the module is self-contained and only its `Version` constant,
 the `IntegratedSchemaTests` expectation and `docs/reference/schema.md` change).
 
 | Column | Meaning |

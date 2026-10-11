@@ -8,7 +8,7 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests;
 
-/// <summary>The population manager's membership table (<c>playerbot_population_member</c>, characters schema 56).</summary>
+/// <summary>The population manager's membership table (<c>playerbot_population_member</c>, characters schema 57).</summary>
 public sealed class PlayerbotPopulationStoreTests
 {
     private static readonly Guid BotA = Guid.Parse("00000000-0000-0000-0000-00000000000a");
@@ -39,7 +39,7 @@ public sealed class PlayerbotPopulationStoreTests
             await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
 
             Assert.True(CharacterDbContext.Schema.CurrentVersion >= PlayerbotPopulationDataModule.Version);
-            Assert.Equal(56, new PlayerbotPopulationDataModule().SchemaVersion);
+            Assert.Equal(57, new PlayerbotPopulationDataModule().SchemaVersion);
             Assert.Equal(1, await db.Database.SqlQueryRaw<int>(
                 "SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'table' AND name = 'playerbot_population_member'").SingleAsync());
         }
