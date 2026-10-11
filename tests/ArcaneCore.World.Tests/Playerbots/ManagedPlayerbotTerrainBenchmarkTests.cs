@@ -148,6 +148,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             host.World.TickObserver = recorder.Tick;
             host.World.MapUpdateObserver = recorder.Map;
             host.World.FeatureObserver = recorder.Feature;
+            bots.ThinkObserver = recorder.Think;
         });
         output.WriteLine($"label {label}; steps {string.Join(",", steps)}; warmup {warmup} s; hold {hold} s; {Environment.ProcessorCount} logical CPUs; server GC {System.Runtime.GCSettings.IsServerGC}");
         output.WriteLine(Recorder.Header);
@@ -239,6 +240,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
                 host.World.TickObserver = null;
                 host.World.MapUpdateObserver = null;
                 host.World.FeatureObserver = null;
+                bots.ThinkObserver = null;
             });
             await bots.ShutdownBeforeWorldStopAsync();
         }
@@ -305,7 +307,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
 
     /// <summary>What one step measured.</summary>
     private sealed record StepResult(int Ticks, long[] Sorted, TickSample Total, long[] MapsSorted, long[] BotSorted,
-        long MapsBytes, long FeaturesBytes, long BotBytes, List<TickSample> Slowest)
+        long MapsBytes, long FeaturesBytes, long BotBytes, List<TickSample> Slowest, ThinkStats Thinks)
     {
         public string Row(string label, int bots, double cores, int gen0, int gen1, int gen2, double pauseMs, double rampSeconds)
         {
@@ -330,6 +332,11 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             foreach (TickSample slow in Slowest)
             {
                 yield return "slow tick " + slow.Describe();
+            }
+
+            foreach (string line in Thinks.Lines())
+            {
+                yield return line;
             }
         }
     }
@@ -451,10 +458,19 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _current.Clear();
         }
 
+        private ThinkStats _thinks = new();
+
+        /// <summary>World thread: one bot's think (ManagedPlayerbotFeature.ThinkObserver).</summary>
+        public void Think(Guid bot, PlayerbotThinkProbe probe)
+        {
+            lock (_gate) _thinks.Add(probe);
+        }
+
         public void Reset()
         {
             lock (_gate)
             {
+                _thinks = new ThinkStats();
                 _ticks.Clear();
                 _maps.Clear();
                 _bot.Clear();
@@ -472,7 +488,81 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
                 var total = new TickSample();
                 _total.AddTo(total);
                 return new StepResult(_ticks.Count, _ticks.Order().ToArray(), total, _maps.Order().ToArray(), _bot.Order().ToArray(),
-                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest]);
+                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest], _thinks);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The bots' think times of one step (PlayerbotThinkProbe): their distribution, the thinks over 50 ms by slowest phase and by the
+    /// phase of their largest path search, their search work, and the slowest ones in full.
+    /// </summary>
+    private sealed class ThinkStats
+    {
+        private const double SlowMs = 50;
+        private static readonly double[] Bounds = [1, 5, 10, 25, 50, 100, 250, 500, 1000];
+        private readonly List<double> _ms = new(65_536);
+        private readonly long[] _buckets = new long[Bounds.Length + 1];
+        private readonly Dictionary<string, (int Count, double Ms)> _bySlowestPhase = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (int Count, double Ms)> _byLargestSearch = new(StringComparer.Ordinal);
+        private readonly List<(double Ms, string Line)> _slowest = [];
+        private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches;
+        private double _slowQueryMs, _slowTotalMs;
+
+        public void Add(PlayerbotThinkProbe probe)
+        {
+            double ms = probe.ElapsedMs;
+            _ms.Add(ms);
+            int bucket = 0;
+            while (bucket < Bounds.Length && ms >= Bounds[bucket]) bucket++;
+            _buckets[bucket]++;
+            _allNodes += probe.Search.Nodes;
+            _allSearches += probe.Search.Searches;
+            if (ms < SlowMs) return;
+            _slowTotalMs += ms;
+            _slowSearches += probe.Search.Searches;
+            _slowNodes += probe.Search.Nodes;
+            _slowCapped += probe.Search.Capped;
+            _slowTiles += probe.Search.TileLoads;
+            _slowQueryMs += probe.QueryTicks * 1000.0 / Stopwatch.Frequency;
+            string phase = probe.SlowestPhase;
+            (int c, double m) = _bySlowestPhase.GetValueOrDefault(phase);
+            _bySlowestPhase[phase] = (c + 1, m + ms);
+            string search = probe.Largest.Nodes > 0 ? probe.Largest.Phase : "(no search)";
+            (c, m) = _byLargestSearch.GetValueOrDefault(search);
+            _byLargestSearch[search] = (c + 1, m + ms);
+            if (_slowest.Count < 12 || ms > _slowest[^1].Ms)
+            {
+                _slowest.Add((ms, string.Create(CultureInfo.InvariantCulture, $"{ms:F1} ms by {probe.Subject.Driver}, goal {probe.Subject.Goal} entry {probe.Subject.Entry} quest {probe.Subject.Quest}: {probe.Describe()}")));
+                _slowest.Sort((a, b) => b.Ms.CompareTo(a.Ms));
+                if (_slowest.Count > 12) _slowest.RemoveAt(_slowest.Count - 1);
+            }
+        }
+
+        public IEnumerable<string> Lines()
+        {
+            double[] sorted = [.. _ms.Order()];
+            string P(double pct) => sorted.Length == 0 ? "-" : sorted[Math.Clamp((int)Math.Ceiling(pct / 100 * sorted.Length) - 1, 0, sorted.Length - 1)].ToString("F2", CultureInfo.InvariantCulture);
+            yield return string.Create(CultureInfo.InvariantCulture,
+                $"thinks {sorted.Length}: p50 {P(50)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allSearches} searches, {_allNodes} nodes");
+            var buckets = new StringBuilder("think histogram (ms):");
+            for (int i = 0; i < _buckets.Length; i++)
+            {
+                string range = i == 0 ? $"<{Bounds[0]}" : i == Bounds.Length ? $">={Bounds[^1]}" : $"{Bounds[i - 1]}-{Bounds[i]}";
+                buckets.Append(CultureInfo.InvariantCulture, $" {range}:{_buckets[i]}");
+            }
+
+            yield return buckets.ToString();
+            int slow = _bySlowestPhase.Values.Sum(v => v.Count);
+            yield return string.Create(CultureInfo.InvariantCulture,
+                $"thinks >= {SlowMs} ms: {slow}, {_slowTotalMs:F0} ms in all; their bot path queries {_slowQueryMs:F0} ms, {_slowSearches} searches, {_slowNodes} nodes, {_slowCapped} at the node cap, {_slowTiles} tiles read");
+            yield return "slow thinks by slowest phase: " + string.Join(", ", _bySlowestPhase.OrderByDescending(p => p.Value.Ms)
+                .Select(p => string.Create(CultureInfo.InvariantCulture, $"{p.Key} {p.Value.Count}x/{p.Value.Ms:F0} ms")));
+            yield return "slow thinks by phase of their largest search: " + string.Join(", ", _byLargestSearch.OrderByDescending(p => p.Value.Ms)
+                .Select(p => string.Create(CultureInfo.InvariantCulture, $"{p.Key} {p.Value.Count}x/{p.Value.Ms:F0} ms")));
+            foreach ((double _, string line) in _slowest)
+            {
+                yield return "slow think " + line;
             }
         }
     }

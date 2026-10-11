@@ -64,6 +64,20 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
+    // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
+    private readonly PlayerbotThinkProbe _probe = new();
+    private PlayerbotSlowThinkLog? _slowThinks;
+    private double _slowThinkMs = double.NaN;
+    private long _slowThinkReadMs = long.MinValue;
+
+    /// <summary>
+    /// Called after every think with the bot and the think's probe (world thread; benchmarks and tests). The probe is valid only
+    /// during the call.
+    /// </summary>
+    internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
+
+    /// <summary>The slow-think log (null before the first think).</summary>
+    internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
     private uint _checkpointMs;
     private Task _checkpoint = Task.CompletedTask;
 
@@ -861,6 +875,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             { logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
         }
 
+        RefreshSlowThinkThreshold();
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         long started = Stopwatch.GetTimestamp();
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for.
@@ -876,9 +891,47 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         { _checkpointMs = 0; _checkpoint = Task.Run(CheckpointAsync); }
     }
 
-    /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain.</summary>
+    /// <summary>
+    /// <c>World:Playerbots:SlowThinkLogMs</c>, read from the configuration again once a second of world time (an edited settings file
+    /// takes effect without a restart); <see cref="PlayerbotOptions.SlowThinkLogMs"/> when the configuration has none or no valid one.
+    /// </summary>
+    private void RefreshSlowThinkThreshold()
+    {
+        long now = ClockMs;
+        if (_slowThinkReadMs != long.MinValue && now - _slowThinkReadMs < 1000) return;
+        _slowThinkReadMs = now;
+        double threshold = _options.SlowThinkLogMs;
+        if (services.GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.SlowThinkLogMs)] is { } text
+            && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double configured)
+            && double.IsFinite(configured) && configured is >= 0 and <= 60_000)
+            threshold = configured;
+        _slowThinkMs = threshold;
+    }
+
+    /// <summary>
+    /// One bot's think (world thread), measured (<see cref="PlayerbotThinkProbe"/>): a think over <c>World:Playerbots:SlowThinkLogMs</c>
+    /// is logged with its bot, driver, goal and phases (<see cref="PlayerbotSlowThinkLog"/>).
+    /// </summary>
     private void Think(ActiveBot active, ManagedActionBudget budget)
     {
+        _probe.Begin();
+        string driver;
+        try { driver = ThinkCore(active, budget); }
+        finally { _probe.End(); }
+        if (double.IsNaN(_slowThinkMs)) RefreshSlowThinkThreshold();
+        (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, _slowThinkMs, ClockMs, active.Record.BotId, active.Name, driver,
+            active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
+        if (ThinkObserver is { } observer)
+        {
+            _probe.Subject = (driver, active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
+            observer(active.Record.BotId, _probe);
+        }
+    }
+
+    /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain. Returns which drove it.</summary>
+    private string ThinkCore(ActiveBot active, ManagedActionBudget budget)
+    {
+        string driver = "idle";
         if (!active.Paused && active.Session.State == SessionState.InWorld)
         {
             uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
@@ -889,6 +942,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 {
                     // Scripted mode: the brain is suppressed and the shared action budget does not apply.
                     active.Session.ManagedBudget = null;
+                    driver = "controller";
+                    PlayerbotThinkProbe.Phase("controller");
                     controller.Tick(active.ControllerContext, sinceLast);
                 }
                 else if (active.Session.Player is { } driven)
@@ -905,6 +960,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         }
 
                         active.BattlegroundDriven = true;
+                        driver = "battleground";
+                        PlayerbotThinkProbe.Phase("battleground");
                         battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -918,6 +975,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         }
 
                         active.GroupDriven = true;
+                        driver = "group";
+                        PlayerbotThinkProbe.Phase("group");
                         coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
                     }
                     else
@@ -934,17 +993,18 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                             active.Brain.ResumeAfterGroup();
                         }
 
-                        UpdateAutonomous(active, driven, sinceLast);
+                        driver = UpdateAutonomous(active, driven, sinceLast);
                     }
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
+        return driver;
     }
 
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
-    private void UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
+    private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
         // A bot in a real player's group follows its party AI; out of it (or after its master's timeout) the
         // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
@@ -954,13 +1014,19 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
         if (party && !active.PartyDriven) PlayerbotTram.Cancel(driven);
         active.PartyDriven = party;
-        if (party) active.Party.Update(driven, sinceLast);
+        if (party)
+        {
+            PlayerbotThinkProbe.Phase("party");
+            active.Party.Update(driven, sinceLast);
+            return "party AI";
+        }
         else
         {
             active.Brain.Update(sinceLast);
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
                 active.StallsLogged, active.Brain.StallReport, active.Brain.StallOutsideHome, active.Brain.SharedSetAside);
             if (sharedLogged) active.Brain.SharedSetAside = null;
+            return "brain";
         }
     }
 

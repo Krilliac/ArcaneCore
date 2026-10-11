@@ -112,7 +112,7 @@ internal static class PlayerbotFollowDrop
     /// <summary>Whether the navigation mesh leads from <paramref name="landing"/> to the leader within twice the straight distance plus 10 yards.</summary>
     private static bool LeadsTo(MapCollision collision, Vector3 landing, Vector3 leader, PlayerbotOptions options)
     {
-        PathResult path = collision.FindPath(landing, leader, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+        PathResult path = PlayerbotThinkProbe.Find(collision, landing, leader, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = false,
             MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true });
         if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.Incomplete | PathType.NoPath)) != 0) return false;
