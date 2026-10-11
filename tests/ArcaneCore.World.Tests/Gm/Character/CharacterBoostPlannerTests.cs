@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Gm.Character.Boost;
 using ArcaneCore.World.Playerbots.Progression;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm.Character;
@@ -200,7 +201,7 @@ public sealed class CharacterBoostPlannerTests
         // Strength is worth 0.01 and item level 0.01 per point (PlayerbotItemScore.ItemLevelWeight), so these two score exactly the same
         // (2 * 0.01f against 0.01f + 0.01f, both exact doublings): the higher item level wins even with the higher entry.
         PlayerbotStatWeights weights = Weights(strength: 0.01f);
-        ItemTemplate highLevel = Piece(9, InventoryType.Head, itemLevel: 2);
+        ItemTemplate highLevel = Piece(9, InventoryType.Head, itemLevel: 2, armor: 1);   // armor weighs 0 here; it only makes the piece give something
         ItemTemplate lowLevel = Piece(3, InventoryType.Head, itemLevel: 1, strength: 1);
         Assert.Equal(PlayerbotItemScore.Score(highLevel, weights), PlayerbotItemScore.Score(lowLevel, weights));
 
@@ -268,10 +269,13 @@ public sealed class CharacterBoostPlannerTests
 
     [Theory]
     [InlineData("none", true)]
-    [InlineData("quality", false)]
+    [InlineData("blue", true)]
+    [InlineData("white", true)]
+    [InlineData("epic", false)]
+    [InlineData("grey", false)]
     [InlineData("requiredLevel", false)]
     [InlineData("itemLevel", false)]
-    [InlineData("randomProperty", false)]
+    [InlineData("randomProperty", true)]
     [InlineData("deprecated", false)]
     [InlineData("notObtainable", false)]
     [InlineData("requiredSkill", false)]
@@ -286,13 +290,16 @@ public sealed class CharacterBoostPlannerTests
     [InlineData("bag", false)]
     [InlineData("ammo", false)]
     [InlineData("noSource", false)]
-    public void Pool_AdmitsOnlyGreenOrLowerObtainableLevelAppropriateEquipment(string defect, bool admitted)
+    public void Pool_AdmitsOnlyWhiteToBlueObtainableLevelAppropriateEquipment(string defect, bool admitted)
     {
         const byte level = 14;
         ItemTemplate good = Piece(100, InventoryType.Chest, itemLevel: level) with { RequiredLevel = level };
         ItemTemplate item = defect switch
         {
-            "quality" => good with { Quality = 3 },
+            "blue" => good with { Quality = 3 },
+            "white" => good with { Quality = 1 },
+            "epic" => good with { Quality = 4 },
+            "grey" => good with { Quality = 0 },
             "requiredLevel" => good with { RequiredLevel = level + 1 },
             "itemLevel" => good with { ItemLevel = level + 1 },
             "randomProperty" => good with { RandomProperty = 5 },
@@ -439,7 +446,7 @@ public sealed class CharacterBoostPlannerTests
             Piece(vendorHead, InventoryType.Head, itemLevel: 2, strength: 1),
             Piece(rewardHead, InventoryType.Head, itemLevel: 1, strength: 1),
             Piece(trophyChest, InventoryType.Chest, itemLevel: 14, armor: 5),
-            Piece(vendorChest, InventoryType.Chest, itemLevel: 2),
+            Piece(vendorChest, InventoryType.Chest, itemLevel: 2, armor: 1),   // a plain piece that gives a little armor
         ];
         var npcs = new NpcStore(NpcContent.Empty with { VendorItems = [new VendorItem { Entry = 1, Item = vendorHead }, new VendorItem { Entry = 1, Item = vendorChest }] });
         var quests = new QuestStore(new QuestContent(
@@ -470,5 +477,144 @@ public sealed class CharacterBoostPlannerTests
         BoostGearPlan alone = BoostGearPlanner.Plan([items[3]], weights, Class.Warrior, false, _ => true, questOnly);
         Assert.Null(PickFor(alone, InventorySlots.Chest));
         Assert.Contains(InventorySlots.Chest, alone.EmptySlots);
+    }
+
+    [Fact]
+    public void Pool_DefaultCapIsBlue_TheCapIsConfigurable_AndGreyIsNeverAdmitted()
+    {
+        ItemTemplate piece = Piece(7, InventoryType.Head, itemLevel: 14) with { RequiredLevel = 14 };
+        HashSet<uint> sources = [7];
+
+        Assert.Equal(3u, BoostGearPlanner.DefaultMaxQuality);
+        Assert.True(BoostGearPlanner.IsPoolItem(piece with { Quality = 3 }, 14, sources));                  // a dungeon blue
+        Assert.False(BoostGearPlanner.IsPoolItem(piece with { Quality = 3 }, 14, sources, maxQuality: 2));  // World:GmCommands:Boost:MaxQuality = 2
+        Assert.True(BoostGearPlanner.IsPoolItem(piece with { Quality = 4 }, 14, sources, maxQuality: 4));
+        Assert.False(BoostGearPlanner.IsPoolItem(piece with { Quality = 0 }, 14, sources, maxQuality: 4));
+
+        Assert.Equal(3u, new CharacterBoostOptions().EffectiveMaxQuality);
+        Assert.Equal(4u, new CharacterBoostOptions { MaxQuality = 9 }.EffectiveMaxQuality);
+        Assert.Equal(1u, new CharacterBoostOptions { MaxQuality = 0 }.EffectiveMaxQuality);
+        var bound = CharacterBoostOptions.Bind(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["World:GmCommands:Boost:MaxQuality"] = "2" }).Build());
+        Assert.Equal(2u, bound.MaxQuality);
+    }
+
+    private static BoostSuffix Suffix(int id, string name, params (ItemStatType Type, int Value)[] stats)
+        => new(id, name, [.. stats.Select(s => new ItemStat((uint)s.Type, s.Value))]);
+
+    [Fact]
+    public void Suffix_IsTheRollThatSuitsTheBuild_WithTheLowerIdOnATie()
+    {
+        BoostSuffix bear = Suffix(1001, "of the Bear", (ItemStatType.Strength, 8), (ItemStatType.Stamina, 8));
+        BoostSuffix owl = Suffix(1002, "of the Owl", (ItemStatType.Intellect, 8), (ItemStatType.Spirit, 8));
+        BoostSuffix eagle = Suffix(1003, "of the Eagle", (ItemStatType.Stamina, 8), (ItemStatType.Intellect, 8));
+        BoostSuffix monkey = Suffix(1004, "of the Monkey", (ItemStatType.Agility, 8), (ItemStatType.Stamina, 8));
+        BoostSuffix[] all = [owl, monkey, bear, eagle];
+
+        Assert.Equal(bear, BoostGearPlanner.ChooseSuffix(all, PlayerbotStatWeights.ShieldTank));
+        Assert.Equal(bear, BoostGearPlanner.ChooseSuffix(all, PlayerbotStatWeights.TwoHandStrength));
+        Assert.Equal(monkey, BoostGearPlanner.ChooseSuffix(all, PlayerbotStatWeights.DualWieldAgility));
+        Assert.Equal(eagle, BoostGearPlanner.ChooseSuffix(all, PlayerbotStatWeights.Caster));    // 8 * 0.8 + 8 * 1.5 beats 8 * 1.5 + 8 * 0.5
+        Assert.Equal(owl, BoostGearPlanner.ChooseSuffix(all, PlayerbotStatWeights.Healer));      // spirit weighs 1.0 for a healer
+        Assert.Null(BoostGearPlanner.ChooseSuffix([], PlayerbotStatWeights.Caster));
+
+        BoostSuffix twin = Suffix(999, "of Strength", (ItemStatType.Strength, 8), (ItemStatType.Stamina, 8));
+        Assert.Equal(twin, BoostGearPlanner.ChooseSuffix([bear, twin], PlayerbotStatWeights.ShieldTank));
+    }
+
+    [Fact]
+    public void Gear_RandomPropertyTemplate_CompetesWithItsBestSuffix_AndIsLeftOutWhenNoSuffixIsKnown()
+    {
+        // A random-suffix green ("Ridge Cleaver of the Bear"): no stats in the template, so without the suffix it scores item level only.
+        ItemTemplate random = Piece(50, InventoryType.Chest, itemLevel: 20, armor: 100) with { RandomProperty = 5 };
+        ItemTemplate fixedStats = Piece(51, InventoryType.Chest, itemLevel: 20, strength: 4, armor: 100);
+        BoostSuffix bear = Suffix(1001, "of the Bear", (ItemStatType.Strength, 6), (ItemStatType.Stamina, 6));
+        BoostSuffix owl = Suffix(1002, "of the Owl", (ItemStatType.Intellect, 6), (ItemStatType.Spirit, 6));
+        IReadOnlyList<BoostSuffix> Rolls(ItemTemplate t) => t.RandomProperty == 5 ? [owl, bear] : [];
+
+        BoostGearPlan withSuffixes = BoostGearPlanner.Plan([random, fixedStats], PlayerbotStatWeights.ShieldTank, Class.Warrior, false, _ => true, suffixes: Rolls);
+        Assert.Equal(50u, PickFor(withSuffixes, InventorySlots.Chest)!.Entry);
+        Assert.Equal(bear, withSuffixes.Suffixes[InventorySlots.Chest]);
+
+        // A caster wants the Owl roll, which is still worth more to it than four strength.
+        BoostGearPlan caster = BoostGearPlanner.Plan([random, fixedStats], PlayerbotStatWeights.Caster, Class.Mage, false, _ => true, suffixes: Rolls);
+        Assert.Equal(50u, PickFor(caster, InventorySlots.Chest)!.Entry);
+        Assert.Equal(owl, caster.Suffixes[InventorySlots.Chest]);
+
+        // No suffix source (no ItemRandomProperties / SpellItemEnchantment data), or none for the group: the item would be created statless.
+        BoostGearPlan without = BoostGearPlanner.Plan([random, fixedStats], PlayerbotStatWeights.ShieldTank, Class.Warrior, false, _ => true);
+        Assert.Equal(51u, PickFor(without, InventorySlots.Chest)!.Entry);
+        Assert.Empty(without.Suffixes);
+        BoostGearPlan none = BoostGearPlanner.Plan([random], PlayerbotStatWeights.ShieldTank, Class.Warrior, false, _ => true, suffixes: _ => []);
+        Assert.Contains(InventorySlots.Chest, none.EmptySlots);
+    }
+
+    [Fact]
+    public void Gear_APieceThatGivesNothing_IsNeverOffered_EvenWhenTheSlotStaysEmpty()
+    {
+        // The level-20 kit of the real world wore "Red Winter Hat" (item level 1, no armor or stat) and a grey item-level-1 necklace.
+        ItemTemplate hat = Piece(21524, InventoryType.Head, itemLevel: 1);
+        ItemTemplate necklace = Piece(9333, InventoryType.Neck, itemLevel: 1);
+        ItemTemplate trinket = Piece(60, InventoryType.Trinket, itemLevel: 20) with { Spells = [new ItemSpell(100, 0, 0, 0, 0, 0, 0)] };
+
+        Assert.False(BoostGearPlanner.GivesAnything(hat));
+        Assert.True(BoostGearPlanner.GivesAnything(hat with { Armor = 1 }));
+        Assert.True(BoostGearPlanner.GivesAnything(hat with { RandomProperty = 5 }, Suffix(1, "of Stamina", (ItemStatType.Stamina, 3))));
+        Assert.True(BoostGearPlanner.GivesAnything(trinket));   // an on-use or equip spell counts
+
+        BoostGearPlan plan = BoostGearPlanner.Plan([hat, necklace, trinket], Weights(strength: 1f), Class.Warrior, false, _ => true);
+        Assert.Contains(InventorySlots.Head, plan.EmptySlots);
+        Assert.Contains(InventorySlots.Neck, plan.EmptySlots);
+        Assert.Equal(60u, PickFor(plan, InventorySlots.Trinket1)!.Entry);
+    }
+
+    [Fact]
+    public void Suffixes_ReadTheStatEffectsOfTheGroupsProperties_FromTheTwoCatalogs()
+    {
+        // item_enchantment_template group 5 rolls properties 1001 and 1002 (a duplicate row and an unknown property are ignored);
+        // their SpellItemEnchantment rows add +8 Strength / +8 Stamina and +7 Intellect plus a fire resistance effect (not a stat).
+        var properties = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0]), new ItemRandomPropertyRecord(1002, "of Intellect", [76, 0, 0])],
+            [new ItemEnchantmentChance(5, 1001, 40f), new ItemEnchantmentChance(5, 1001, 10f), new ItemEnchantmentChance(5, 1002, 40f),
+                new ItemEnchantmentChance(5, 4040, 10f), new ItemEnchantmentChance(6, 1002, 100f)]);
+        var enchants = new ArcaneCore.Kernel.Crafting.EnchantCatalog(
+        [
+            new ArcaneCore.Kernel.Crafting.SpellItemEnchantment(74, [5, 0, 0], [8, 0, 0], [(uint)ItemStatType.Strength, 0, 0], "+8 Strength", 0, 0),
+            new ArcaneCore.Kernel.Crafting.SpellItemEnchantment(75, [5, 0, 0], [8, 0, 0], [(uint)ItemStatType.Stamina, 0, 0], "+8 Stamina", 0, 0),
+            new ArcaneCore.Kernel.Crafting.SpellItemEnchantment(76, [5, 4, 0], [7, 10, 0], [(uint)ItemStatType.Intellect, 2, 0], "+7 Intellect", 0, 0),
+        ]);
+        BoostSuffixes suffixes = BoostSuffixes.TryCreate(properties, enchants)!;
+
+        IReadOnlyList<BoostSuffix> rolls = suffixes.For(Piece(1, InventoryType.Chest) with { RandomProperty = 5 });
+        Assert.Equal([1001, 1002], rolls.Select(r => r.PropertyId).ToArray());
+        Assert.Equal("of the Bear", rolls[0].Name);
+        Assert.Equal([new ItemStat((uint)ItemStatType.Strength, 8), new ItemStat((uint)ItemStatType.Stamina, 8)], rolls[0].Stats.ToArray());
+        Assert.Equal([new ItemStat((uint)ItemStatType.Intellect, 7)], rolls[1].Stats.ToArray());
+        Assert.Empty(suffixes.For(Piece(2, InventoryType.Chest)));                                    // no random property
+        Assert.Empty(suffixes.For(Piece(3, InventoryType.Chest) with { RandomProperty = 77 }));       // a group with no rows
+
+        Assert.Null(BoostSuffixes.TryCreate(properties, ArcaneCore.Kernel.Crafting.EnchantCatalog.Empty));
+        Assert.Null(BoostSuffixes.TryCreate(ItemRandomPropertyCatalog.Empty, enchants));
+        Assert.Null(BoostSuffixes.TryCreate(null, enchants));
+    }
+
+    [Fact]
+    public void Sources_CountWorldAndDungeonDrops_ThroughCreatureAndReferenceLoot_ButNotTheReferenceRowsThemselves()
+    {
+        // A world drop (creature_loot_template), a dungeon boss's shared table (reference_loot_template reached through a negative
+        // mincountOrRef) and the reference row itself (item 0 or an informational item, never a source).
+        var loot = new LootContent(
+        [
+            (LootTableKind.Creature, new LootStoreRow(100, 9001, 0.5f, 0, 1, 1)),
+            (LootTableKind.Creature, new LootStoreRow(200, 9002, 100f, 0, -24000, 1)),
+            (LootTableKind.Reference, new LootStoreRow(24000, 9003, 20f, 1, 1, 1)),
+        ], []);
+        var npcs = new NpcStore(NpcContent.Empty);
+        var quests = new QuestStore(new QuestContent([], [], []));
+
+        HashSet<uint> sources = BoostItemSources.Build(npcs, quests, loot);
+        Assert.Contains(9001u, sources);
+        Assert.Contains(9003u, sources);
+        Assert.DoesNotContain(9002u, sources);
     }
 }

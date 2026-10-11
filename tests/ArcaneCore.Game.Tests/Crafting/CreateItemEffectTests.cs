@@ -85,6 +85,36 @@ public sealed class CreateItemEffectTests
         Assert.Equal(75u, ItemEnchantments.Id(crafted, EnchantSlots.Property0 + 1));
     }
 
+    [Fact]
+    public void AddItemAt_GivesANamedRandomProperty_ToAnEquippedOrStoredItem_AndAnEquippedItemOtherwiseHasNone()
+    {
+        // .character boost equips a random-property item with the property it chose (PlayerInventory.AddItemAt's randomPropertyId); without
+        // one an equipped new item has none, as vmangos Player::EquipNewItem (Player.cpp:10306) creates it without a roll.
+        const uint sword = 94012;
+        var template = new ItemTemplate
+        {
+            Entry = sword, Class = 2, SubClass = 7, Name = "Random Sword", DisplayId = 7, InventoryType = 13, Stackable = 1, Quality = 2,
+            RandomProperty = 5, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+        };
+        using var rig = new CraftingTestKit([], [template]);
+        var catalog = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0]), new ItemRandomPropertyRecord(1002, "of the Owl", [76, 77, 0])],
+            [new ItemEnchantmentChance(5, 1001, 50f), new ItemEnchantmentChance(5, 1002, 50f)]);
+        rig.Inventory.RandomProperties = new ItemRandomProperties(catalog, () => 10f);   // a roll would give 1001
+
+        Assert.Equal(InventoryResult.Ok, rig.Inventory.AddItemAt(InventorySlots.Bag0, InventorySlots.MainHand, sword, 1, out Item? equipped, randomPropertyId: 1002));
+        Assert.Equal(1002, equipped!.RandomPropertyId);
+        Assert.Equal(76u, ItemEnchantments.Id(equipped, EnchantSlots.Property0));
+        Assert.Equal(77u, ItemEnchantments.Id(equipped, EnchantSlots.Property0 + 1));
+
+        Assert.Equal(InventoryResult.Ok, rig.Inventory.AddItemAt(InventorySlots.NullBag, InventorySlots.NullSlot, sword, 1, out Item? stored, randomPropertyId: 1002));
+        Assert.Equal(1002, stored!.RandomPropertyId);
+
+        rig.Inventory.DestroyItem(InventorySlots.Bag0, InventorySlots.MainHand);
+        Assert.Equal(InventoryResult.Ok, rig.Inventory.AddItemAt(InventorySlots.Bag0, InventorySlots.MainHand, sword, 1, out Item? plain));
+        Assert.Equal(0, plain!.RandomPropertyId);
+    }
+
     [Theory]
     [InlineData(10u, 1000, 1)]   // below the yellow limit 25: orange, 100 %
     [InlineData(50u, 750, 1)]    // yellow, 75 %
