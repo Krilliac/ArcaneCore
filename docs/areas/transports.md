@@ -71,6 +71,19 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
   without the data. The server keeps the object at its spawn position: `ElevatorPosition` computes where the animation puts it (the node
   offset times the rotation matrix of GAMEOBJECT_ROTATION, Y negated, plus the spawn, Transport.cpp:403-427) but nothing boards an elevator
   here, so a player on one keeps the position its client reports.
+  An elevator whose animation carries it farther from its spawn than the visibility range (100 yd) is **map-wide**, as vmangos keeps every
+  elevator (ObjectMgr.cpp:2667-2668 leaves type 11 spawns out of the grid; `Map::LoadElevatorTransports`, Map.cpp:568-600, creates them with
+  the map; `SendInitTransports`, Map.cpp:1720-1733, sends them at map entry): created when the map's object system gets the animations,
+  whatever grid is loaded, an active object (its grid stays loaded), and visible to every player on the map at any distance, never out of
+  range (`Map.AddMapWideObject`; `GameObjectMapSystem.MapWideElevators`). In the 5875 data that is exactly the six Deeprun Tram cars
+  (176080-176085, 2,480 yards along the tunnel); the Thunder Bluff and Undercity lifts stay within range of their spawn and remain grid
+  objects. Before, the cars were grid objects seen within 100 yards of their spawn: a player riding one lost it about a hundred yards out of
+  the platform (out of range of the car's spawn cell, so the client was told to remove the object it stood on), a player at one platform
+  never saw the cars of the other, and the anticheat judged every rider past 600 yards of the spawn a fake transport moving at a speed
+  hack's pace (it now measures from the car's animated position). `TramCarVisibilityTests` (RED before: 3 of the 6 cars existed for a player at
+  the Stormwind platform, the rider halfway through the tunnel lost its car, and a legitimate rider drew a fake-transport flag and speed
+  findings). Managed bots ride the tram too
+  ([playbots](playbots.md), "Travel by the Deeprun Tram").
 * **Continent instancing**: vmangos can run several continent instances (`GetContinentInstanceId`); this base has one, so a
   continent ship sails instance 0 only.
 * **The login seat** is applied when the player enters its saved map. A ship on the same map is boarded before the

@@ -946,6 +946,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
         bool party = active.Party.Drives(driven);
         if (active.PartyDriven && !party) ReplaceBrain(active);
+        // The party AI follows its master: a tram trip of the brain ends (its entrance consent with it); off the tram map again under the
+        // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
+        if (party && !active.PartyDriven) PlayerbotTram.Cancel(driven);
         active.PartyDriven = party;
         if (party) active.Party.Update(driven, sinceLast);
         else

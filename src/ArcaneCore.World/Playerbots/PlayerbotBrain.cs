@@ -269,6 +269,30 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
 
+        // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
+        // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
+        // trip (the goal that began it begins it again afterwards).
+        if (player.IsAlive)
+        {
+            if (player.Combat.IsInCombat && PlayerbotTram.TripOf(player) is { Stage: TramStage.ToEntrance }) PlayerbotTram.Cancel(player);
+            TramStep tram = PlayerbotTram.Drive(_session, player, _options, interval, out string? tramFailure);
+            if (tram == TramStep.Traveling)
+            {
+                _stall.Reset();
+                _target = null;
+                _route = null;
+                _attacking = false;
+                return;
+            }
+
+            if (tram == TramStep.Failed)
+            {
+                _stall.ReportExternal(tramFailure ?? "tram: the trip failed");
+                GiveUpStalledGoal(player);
+                return;
+            }
+        }
+
         if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);

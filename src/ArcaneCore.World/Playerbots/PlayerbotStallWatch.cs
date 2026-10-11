@@ -151,6 +151,20 @@ internal sealed class PlayerbotStallWatch
         return true;
     }
 
+    /// <summary>
+    /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
+    /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
+    /// </summary>
+    internal void ReportExternal(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        _stallReport = reason;
+        LastReport = reason;
+        Count++;
+        GiveUps++;
+        _started = false;
+    }
+
     private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers);
 
     /// <summary>
