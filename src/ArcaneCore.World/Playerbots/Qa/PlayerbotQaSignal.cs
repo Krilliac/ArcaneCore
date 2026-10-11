@@ -51,6 +51,12 @@ internal sealed record QaSignal
 
     public bool HasPosition { get; init; }
 
+    /// <summary>
+    /// For a stall: the bot stood outside its home area (the line ends <c>it gives up that goal outside its home</c>). Such a stall set
+    /// nothing aside for other bots, and is an expected one for a homed bot (<see cref="QaCause.OutsideHome"/>).
+    /// </summary>
+    public bool OutsideHome { get; init; }
+
     public uint Map { get; init; }
 
     public float X { get; init; }

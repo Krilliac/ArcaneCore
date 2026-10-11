@@ -269,7 +269,7 @@ public sealed class PlayerbotQaAggregatorTests
         QaFindingView f = Assert.Single(aggregator.Snapshot());
         Assert.Equal(QaSignalKind.SharedSetAside, f.Kind);
         Assert.Equal(3, f.DistinctBots);
-        Assert.Contains("set aside by every bot", f.Subject, StringComparison.Ordinal);
+        Assert.Contains("set aside for every bot after 3 stalled", f.Subject, StringComparison.Ordinal);
     }
 
     [Fact]

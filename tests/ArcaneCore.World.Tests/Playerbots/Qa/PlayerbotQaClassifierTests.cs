@@ -7,6 +7,50 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 /// <summary>The likely cause of a finding, guessed from the loaded content (scripted here with <see cref="FakeFacts"/>).</summary>
 public sealed class PlayerbotQaClassifierTests
 {
+    /// <summary>
+    /// A stall logged as made outside the bot's home is classified <see cref="QaCause.OutsideHome"/> before any content check (its target
+    /// may well be missing too, but the bot was not supposed to be there), and is its own finding: the same stall inside the home keeps its
+    /// old key and cause.
+    /// </summary>
+    /// <summary>
+    /// A shared set-aside carries the position of the first stall behind it (for the report), but the bots that set it aside may have been
+    /// anywhere: its spawn check stays on every map. Stalls on map 0 and the objective creatures only on map 1 are not missing data (review
+    /// of #145: the map-0 check would have relabelled already-published set-aside issues).
+    /// </summary>
+    [Fact]
+    public void ASharedSetAside_ChecksSpawnsOnEveryMap_NotTheMapOfItsFirstStall()
+    {
+        var facts = new FakeFacts();
+        facts.Objectives[1656] = [6747];
+        facts.Spawns[(1, 6747)] = 4;
+        QaSignal setAside = QaData.Parse("Playerbots: 3 bots stalled on quest 1656 for 30 min; every bot sets it aside (stalls at -9471.9,-1792.0,132.1 map 0; -9427.0,-1908.0,94.0 map 0; 1.0,2.0,3.0 map 0)");
+        Assert.True(setAside.HasPosition);
+        Assert.Equal(0u, setAside.Map);
+
+        Assert.NotEqual(QaCause.MissingData, PlayerbotQaClassifier.Classify(setAside, facts).Cause);
+
+        facts.Spawns.Clear(); // no spawn anywhere: still missing data
+        QaClassification none = PlayerbotQaClassifier.Classify(setAside, facts);
+        Assert.Equal(QaCause.MissingData, none.Cause);
+        Assert.Contains("on any map", none.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AStallOutsideTheHome_IsOutsideHome_AndItsOwnFinding()
+    {
+        var facts = new FakeFacts();
+        string report = "stalled 120s: goal=Quest target=1376 quest=400 at -8285.0,554.0,101.0 map 0";
+        QaSignal outside = QaData.Parse(QaData.BotLine(QaData.Bot1, "Wfbotdk", report) + " outside its home");
+        QaSignal inside = QaData.Parse(QaData.BotLine(QaData.Bot1, "Wfbotdk", report));
+
+        QaClassification c = PlayerbotQaClassifier.Classify(outside, facts);
+        Assert.Equal(QaCause.OutsideHome, c.Cause);
+        Assert.Contains("outside its home area", c.Detail, StringComparison.Ordinal);
+        Assert.NotEqual(QaCause.OutsideHome, PlayerbotQaClassifier.Classify(inside, facts).Cause);
+        Assert.NotEqual(PlayerbotQaFingerprint.Of(inside), PlayerbotQaFingerprint.Of(outside));
+        Assert.Equal(PlayerbotQaFingerprint.Key(inside) + "|outside", PlayerbotQaFingerprint.Key(outside));
+    }
+
     private static QaSignal QuestStall(uint quest = 1656, uint target = 6747, uint map = 0)
         => QaData.Stall(QaData.Bot1, -5608.8f, -439.4f, quest, target, map);
 

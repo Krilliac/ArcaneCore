@@ -16,6 +16,12 @@ public enum QaCause
 
     /// <summary>The content is simply harder than the bots (elite attackers, a death loop against higher levels).</summary>
     ContentDifficulty,
+
+    /// <summary>
+    /// A homed bot stalled outside its home area: on its way back, or on a turn-in or capital errand that took it out. Expected for a homed
+    /// bot, set nothing aside for other bots, and is not reported to GitHub (the report still lists it).
+    /// </summary>
+    OutsideHome,
 }
 
 /// <summary>Where a finding stands with GitHub.</summary>

@@ -14,6 +14,9 @@ internal static partial class PlayerbotQaSignalParser
 {
     internal const int MaxMessageChars = 600;
 
+    /// <summary>The end of a stall line of a bot that stood outside its home (ManagedPlayerbotFeature.LogStall).</summary>
+    internal const string OutsideHomeSuffix = "; it gives up that goal outside its home";
+
     private const string Xyz = @"(?<x>-?\d{1,9}(?:\.\d{1,3})?),(?<y>-?\d{1,9}(?:\.\d{1,3})?),(?<z>-?\d{1,9}(?:\.\d{1,3})?)";
 
     [GeneratedRegex(@"^Playerbot (?<bot>\S+) \((?<name>[^)]*)\) stalled (?<s>\d{1,9})s: goal=(?<goal>\w{1,32}) target=(?<t>\d{1,10}) quest=(?<q>\d{1,10}) at " + Xyz + @" map (?<m>\d{1,10})",
@@ -24,7 +27,8 @@ internal static partial class PlayerbotQaSignalParser
         RegexOptions.CultureInvariant)]
     private static partial Regex DeathLoopPattern();
 
-    [GeneratedRegex(@"^Playerbots: (?<n>\d{1,6}) bots stalled on (?<kind>quest|entry) (?<id>\d{1,10}) for (?<min>\d{1,9}) min; every bot sets it aside",
+    // The stall positions are optional: builds before 2026-10-11 logged the set-aside without them. Only the first is captured.
+    [GeneratedRegex(@"^Playerbots: (?<n>\d{1,6}) bots stalled on (?<kind>quest|entry) (?<id>\d{1,10}) for (?<min>\d{1,9}) min; every bot sets it aside(?: \(stalls at " + Xyz + @" map (?<m>\d{1,10}))?",
         RegexOptions.CultureInvariant)]
     private static partial Regex SetAsidePattern();
 
@@ -84,6 +88,7 @@ internal static partial class PlayerbotQaSignalParser
             {
                 Kind = QaSignalKind.Stall, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
                 HasPosition = true, Map = map, X = x, Y = y, Z = z, Seconds = seconds, Message = Clean(message, m),
+                OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
             };
             return true;
         }
@@ -156,10 +161,14 @@ internal static partial class PlayerbotQaSignalParser
         Match m = SetAsidePattern().Match(message);
         if (!m.Success || !U(m, "id", out uint id) || !I(m, "min", out int minutes) || !I(m, "n", out int bots)) return false;
         bool quest = m.Groups["kind"].Value == "quest";
+        float x = 0, y = 0, z = 0;
+        uint map = 0;
+        bool where = m.Groups["m"].Success && Position(m, out x, out y, out z) && U(m, "m", out map);
         signal = new QaSignal
         {
             Kind = QaSignalKind.SharedSetAside, AtUtc = atUtc, BotCount = bots, Goal = quest ? "Quest" : "Entry",
             Quest = quest ? id : 0, Target = quest ? 0 : id, Minutes = minutes, Message = Cap(message),
+            HasPosition = where, Map = where ? map : 0, X = where ? x : 0, Y = where ? y : 0, Z = where ? z : 0,
         };
         return true;
     }

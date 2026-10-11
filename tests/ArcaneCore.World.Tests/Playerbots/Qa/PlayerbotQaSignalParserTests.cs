@@ -200,10 +200,10 @@ public sealed class PlayerbotQaSignalParserTests
         string? everyone = null;
         for (ulong bot = 1; bot <= PlayerbotSharedSetAsides.BotsToShare; bot++)
         {
-            everyone = shared.Report(PlayerbotGoalKind.Quest, 6747, 1656, bot, (uint)(bot * 1000));
+            everyone = shared.Report(PlayerbotGoalKind.Quest, 6747, 1656, bot, (uint)(bot * 1000))?.Goal;
         }
 
-        // ManagedPlayerbotFeature: "Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside".
+        // ManagedPlayerbotFeature: "Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside (stalls at {Stalls})".
         QaSignal s = QaData.Parse($"Playerbots: {PlayerbotSharedSetAsides.BotsToShare} bots stalled on {everyone}; every bot sets it aside");
         Assert.Equal(QaSignalKind.SharedSetAside, s.Kind);
         Assert.Equal(1656u, s.Quest);
@@ -217,7 +217,8 @@ public sealed class PlayerbotQaSignalParserTests
         // The templates are literals in ManagedPlayerbotFeature and CreatureMapSystem; rewording one must fail here and not blind QA silently.
         string feature = RepoRoot.ReadText("src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs");
         Assert.Contains("\"Playerbot {BotId} ({Name}) {Stall}; it gives up that goal\"", feature, StringComparison.Ordinal);
-        Assert.Contains("\"Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside\"", feature, StringComparison.Ordinal);
+        Assert.Contains("\"Playerbot {BotId} ({Name}) {Stall}" + PlayerbotQaSignalParser.OutsideHomeSuffix + "\"", feature, StringComparison.Ordinal);
+        Assert.Contains("\"Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside (stalls at {Stalls})\"", feature, StringComparison.Ordinal);
         Assert.Contains("\"Playerbot {BotId} {What} failed ({Type}: {Message})\"", feature, StringComparison.Ordinal);
         Assert.Contains("\"Playerbot {BotId} quarantined for {Seconds} s (fault {Count} of {Max}): {Fault}\"", feature, StringComparison.Ordinal);
         Assert.Contains("\"Playerbot {BotId} disabled after {Count} faults within {Window} s: {Fault}\"", feature, StringComparison.Ordinal);
@@ -271,6 +272,90 @@ public sealed class PlayerbotQaSignalParserTests
     {
         QaSignal s = QaData.Parse("Playerbot 42 (X) stalled 120s: goal=Grind target=1196 quest=0 at 1.0,2.0,3.0 map 0", QaData.Bot3);
         Assert.Equal(QaData.Bot3, s.BotKey);
+    }
+
+    /// <summary>
+    /// The feature logs a goal set aside for every bot when the brain reports it, not only next to a new stall line. The brain gives its
+    /// goal up again after every further stall bound (<see cref="PlayerbotStallWatch.GiveUps"/>) without a new stall to log, and such a
+    /// give-up can complete a shared set-aside: live 2026-10-11 04:23:57, <c>3 bots stalled on quest 2160 for 60 min</c> was logged beside
+    /// an Explore stall of another quest, and no stall on quest 2160 had been logged in the 30 minutes before it.
+    /// </summary>
+    [Fact]
+    public void LogStall_LogsASharedSetAside_WithoutANewStall_AndBothLinesParse()
+    {
+        var log = new CapturingLogger();
+        var shared = new PlayerbotSharedSetAsides();
+        shared.Report(PlayerbotGoalKind.Quest, 0, 2160, 1, 1_000, 0, new Vector3(-9540.1f, 1015.2f, 52.3f));
+        shared.Report(PlayerbotGoalKind.Quest, 0, 2160, 2, 2_000, 0, new Vector3(-7527.0f, -2114.0f, 130.0f));
+        PlayerbotSharedSetAside? everyone = shared.Report(PlayerbotGoalKind.Quest, 6806, 2160, 3, 3_000, 0, new Vector3(-10275.0f, 1365.0f, 41.0f));
+        Assert.NotNull(everyone);
+
+        // A further give-up of a stall already logged: no stall line, but the set-aside is logged at once.
+        (int logged, bool sharedLogged) = ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotcg", stallCount: 4, stallsLogged: 4,
+            "stalled 360s: goal=Quest target=6806 quest=2160 at -10275.0,1365.0,41.0 map 0", outsideHome: false, everyone);
+        Assert.Equal(4, logged);
+        Assert.True(sharedLogged);
+        QaSignal s = QaData.Parse(Assert.Single(log.Lines));
+        Assert.Equal(QaSignalKind.SharedSetAside, s.Kind);
+        Assert.Equal(2160u, s.Quest);
+        Assert.Equal(30, s.Minutes);
+        Assert.True(s.HasPosition); // the first stall behind it
+        Assert.Equal(-9540.1f, s.X);
+        Assert.Equal(1015.2f, s.Y);
+        Assert.Equal(0u, s.Map);
+        Assert.Contains("-7527.0,-2114.0,130.0 map 0", s.Message, StringComparison.Ordinal);
+
+        // A new stall outside the home is logged as such and parsed as such.
+        log.Lines.Clear();
+        (logged, sharedLogged) = ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotcg", stallCount: 5, stallsLogged: 4,
+            "stalled 120s: goal=Quest target=1376 quest=400 at -8285.0,554.0,101.0 map 0", outsideHome: true, everyone: null);
+        Assert.Equal(5, logged);
+        Assert.False(sharedLogged);
+        QaSignal outside = QaData.Parse(Assert.Single(log.Lines));
+        Assert.Equal(QaSignalKind.Stall, outside.Kind);
+        Assert.True(outside.OutsideHome);
+        Assert.Equal(400u, outside.Quest);
+
+        // The same stall inside the home is an ordinary stall line.
+        log.Lines.Clear();
+        ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotcg", 6, 5,
+            "stalled 120s: goal=Quest target=1376 quest=400 at -8285.0,554.0,101.0 map 0", outsideHome: false, everyone: null);
+        Assert.False(QaData.Parse(Assert.Single(log.Lines)).OutsideHome);
+        Assert.EndsWith("; it gives up that goal", log.Lines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The outside-home mark belongs to a living stall's line. A death loop also counts as a stall and its report comes first
+    /// (<see cref="PlayerbotBrain.StallReport"/>), while the brain's flag still holds the last give-up: the death loop is logged without the
+    /// mark (review of #145).
+    /// </summary>
+    [Fact]
+    public void LogStall_ADeathLoop_IsNeverMarkedOutsideTheHome()
+    {
+        var log = new CapturingLogger();
+        ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotfk", stallCount: 2, stallsLogged: 1,
+            "death loop: died 3 times in 99s within 60 yd of -10650.0,400.0,35.0 map 0 attackers=202/531/569", outsideHome: true, everyone: null);
+        string line = Assert.Single(log.Lines);
+        Assert.EndsWith("; it gives up that goal", line, StringComparison.Ordinal);
+        QaSignal s = QaData.Parse(line);
+        Assert.Equal(QaSignalKind.DeathLoop, s.Kind);
+        Assert.False(s.OutsideHome);
+    }
+
+    /// <summary>A logger that keeps the formatted warning lines.</summary>
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        internal List<string> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= Microsoft.Extensions.Logging.LogLevel.Warning) Lines.Add(formatter(state, exception));
+        }
     }
 
     private static Player NewPlayer(float x, float y, float z)

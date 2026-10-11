@@ -228,6 +228,7 @@ internal sealed class PlayerbotQaPublisher
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
         if (f.Count < git.MinOccurrences) return false;
+        if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
         return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed);
     }
