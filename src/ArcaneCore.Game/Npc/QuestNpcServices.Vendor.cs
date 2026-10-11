@@ -8,8 +8,8 @@ namespace ArcaneCore.Game.Npc;
 /// <summary>Vendors (vmangos SendListInventory, Player::BuyItemFromVendor, HandleSellItemOpcode).</summary>
 public sealed partial class QuestNpcServices
 {
-    /// <summary>MAX_VENDOR_ITEMS (vmangos Creature.h): the client shows at most 150 lines.</summary>
-    public const int MaxVendorItems = 150;
+    /// <summary>MAX_VENDOR_ITEMS (vmangos CreatureDefines.h): the client shows at most 128 lines.</summary>
+    public const int MaxVendorItems = 128;
 
     /// <summary>Limited stock per creature and item (vmangos Creature::m_vendorItemCounts).</summary>
     private readonly Dictionary<(ObjectGuid Vendor, uint Item), VendorStock> _vendorStock = [];
@@ -74,24 +74,24 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        IReadOnlyList<VendorItem> list = Npcs.VendorItems(npc.Entry);
-        int vendorSlot = -1;
-        for (int i = 0; i < list.Count; i++)
+        VendorItem? vendorItem = null;
+        uint clientSlot = 0;
+        foreach (var (row, _, visibleSlot) in VisibleVendorItems(player, npc))
         {
-            if (list[i].Item == itemId)
+            if (row.Item == itemId)
             {
-                vendorSlot = i;
+                vendorItem = row;
+                clientSlot = visibleSlot;
                 break;
             }
         }
 
-        if (vendorSlot < 0 || !IsVendorItemVisible(player, npc, list[vendorSlot], proto))
+        if (vendorItem is null)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.CantFindItem));
             return;
         }
 
-        VendorItem vendorItem = list[vendorSlot];
         uint totalCount = proto.BuyCount * count;
         if (vendorItem.MaxCount != 0 && CurrentStock(npc.Guid, vendorItem, proto) < totalCount)
         {
@@ -137,16 +137,6 @@ public sealed partial class QuestNpcServices
         ModifyMoney(s, -(long)price);
 
         uint newCount = UseStock(npc.Guid, vendorItem, proto, totalCount);
-
-        // SMSG_LIST_INVENTORY numbers only visible rows: report the same compact slot.
-        uint clientSlot = 0;
-        for (int i = 0; i <= vendorSlot; i++)
-        {
-            if (items.GetItem(list[i].Item) is { } listed && IsVendorItemVisible(player, npc, list[i], listed))
-            {
-                clientSlot++;
-            }
-        }
 
         Send(player, WorldOpcode.SmsgBuyItem, NpcPackets.BuyItem(npc.Guid, clientSlot, vendorItem.MaxCount > 0 ? newCount : 0xFFFFFFFF, count));
         Flush(s);
@@ -285,23 +275,43 @@ public sealed partial class QuestNpcServices
 
         var entries = new List<VendorListEntry>();
         float discount = PriceDiscount(player, npc);
-        foreach (VendorItem vendorItem in Npcs.VendorItems(npc.Entry))
+        foreach (var (vendorItem, proto, slot) in VisibleVendorItems(player, npc))
         {
-            if (Deps.Items?.GetItem(vendorItem.Item) is not { } proto || !IsVendorItemVisible(player, npc, vendorItem, proto))
+            uint left = vendorItem.MaxCount == 0 ? 0xFFFFFFFF : CurrentStock(npc.Guid, vendorItem, proto);
+            entries.Add(new VendorListEntry(slot, vendorItem.Item, proto.DisplayId, left,
+                Discounted(proto.BuyPrice, discount), proto.MaxDurability, proto.BuyCount));
+        }
+
+        Send(player, WorldOpcode.SmsgListInventory, NpcPackets.ListInventory(npc.Guid, entries));
+    }
+
+    /// <summary>
+    /// The client-facing order and cap from vmangos WorldSession::SendListInventory (ItemHandler.cpp),
+    /// with its Player::IsVendorItemVisible filter (Player.cpp). Purchases use this same view;
+    /// vmangos Player::BuyItemFromVendor checks visibility but omits the packet's 150-row cap.
+    /// </summary>
+    private IEnumerable<(VendorItem Row, ItemInfo Proto, uint Slot)> VisibleVendorItems(Player player, NpcInfo npc)
+    {
+        if (Deps.Items is not { } items)
+        {
+            yield break;
+        }
+
+        uint slot = 0;
+        foreach (VendorItem row in Npcs.VendorItems(npc.Entry))
+        {
+            if (slot >= MaxVendorItems)
+            {
+                yield break;
+            }
+
+            if (items.GetItem(row.Item) is not { } proto || !IsVendorItemVisible(player, npc, row, proto))
             {
                 continue;
             }
 
-            uint left = vendorItem.MaxCount == 0 ? 0xFFFFFFFF : CurrentStock(npc.Guid, vendorItem, proto);
-            entries.Add(new VendorListEntry((uint)entries.Count + 1, vendorItem.Item, proto.DisplayId, left,
-                Discounted(proto.BuyPrice, discount), proto.MaxDurability, proto.BuyCount));
-            if (entries.Count >= MaxVendorItems)
-            {
-                break;
-            }
+            yield return (row, proto, ++slot);
         }
-
-        Send(player, WorldOpcode.SmsgListInventory, NpcPackets.ListInventory(npc.Guid, entries));
     }
 
     /// <summary>vmangos Player::IsVendorItemVisible (build &gt; 1.6.1: item reputation faction does not hide).</summary>

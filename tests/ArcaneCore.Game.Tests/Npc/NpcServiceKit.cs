@@ -46,12 +46,13 @@ internal sealed class NpcServiceKit : IDisposable
 
     public NpcServiceKit(NpcFlags flags, NpcContent? content = null, QuestNpcDependencies? extra = null, float npcDistance = 1,
         bool hostile = false, uint mapId = 0, long now = 1_000, RepairCostTable? repair = null, BankBagSlotPriceTable? bankPrices = null,
-        Func<Player, byte, bool>? persistBankSlots = null)
+        Func<Player, byte, bool>? persistBankSlots = null, ItemTemplateStore? itemStore = null)
     {
         Now = now;
         Map map = World.GetMap(mapId);
         Player = TestWorld.CreatePlayer(1, 0, 0, Session, mapId);
-        Player.Inventory.Templates = Store;
+        ItemTemplateStore store = itemStore ?? Store;
+        Player.Inventory.Templates = store;
         Player.Inventory.GuidAllocator = new ItemGuidAllocator();
         Player.Inventory.Load([]);
         World.AddPlayer(Player);
@@ -59,7 +60,7 @@ internal sealed class NpcServiceKit : IDisposable
         Npc = new NpcInfo(ObjectGuid.WithEntry(HighGuid.Unit, Entry, 77), Entry, 77, flags, map.MapId,
             Player.X + npcDistance, Player.Y, Player.Z, 0.5f, true, hostile, false, false, 0);
         Lookup = new MutableLookup(this);
-        Items = new InventoryItemService(() => Store, repair ?? RepairCostTable.Empty, bankPrices ?? BankBagSlotPriceTable.Empty,
+        Items = new InventoryItemService(() => store, repair ?? RepairCostTable.Empty, bankPrices ?? BankBagSlotPriceTable.Empty,
             () => Now, persistBankSlots);
         Items.SessionStarted(Player);
         QuestNpcDependencies deps = (extra ?? new QuestNpcDependencies()) with { Creatures = Lookup };
