@@ -64,13 +64,13 @@ public sealed class DatabaseOptions
     public int SqliteBusyTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs;
 
     /// <summary>
-    /// SQLite only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) one character save may wait for the write lock before it
-    /// fails as "database is locked" and the save queue retains the snapshot and retries it later with a backoff, instead of holding the single
-    /// save consumer for the connection's 30 s Default Timeout. It is applied to the save's connection as its Default Timeout, so it also bounds the
-    /// transaction's BEGIN; SQLite's own wait is still bounded by <c>Database:SqliteBusyTimeoutMs</c>, so the longer of the two is the real bound.
-    /// 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
+    /// SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection
+    /// waits for another connection's write lock before it fails as "database is locked". It replaces the connection's Default Timeout (30 s) when smaller, set
+    /// when the connection opens, so it also bounds EF's <c>BEGIN IMMEDIATE</c> and, through the busy-timeout clamp, SQLite's own wait. Without it a
+    /// writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried
+    /// by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
-    public int SqliteWriteTimeoutMs { get; set; } = ArcaneCore.Data.Stores.EfCharacterStore.DefaultSqliteWriteTimeoutMs;
+    public int SqliteWriteTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs;
 
     /// <summary>
     /// How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the

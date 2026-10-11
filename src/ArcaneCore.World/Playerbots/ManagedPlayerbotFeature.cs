@@ -675,12 +675,28 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     {
                         session.Kick();
                         await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
-                        if (bot is not null) await saves.FlushCharacterAsync(bot.CharacterId).ConfigureAwait(false);
+                        if (bot is not null) await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                     }
                     await scope.DisposeAsync().ConfigureAwait(false);
                 }
             }
             finally { _operations.Release(); }
+        }
+    }
+
+    /// <summary>
+    /// Wait for a bot character's save barrier, but not forever: the caller holds <c>_operations</c>, and while another writer holds the database the
+    /// save queue retains the snapshot and retries it, which would otherwise stall every bot operation. The snapshot is not lost on a timeout.
+    /// </summary>
+    private async Task FlushBoundedAsync(int characterId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await saves.FlushCharacterAsync(characterId, cancellationToken).WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
         }
     }
 
@@ -769,7 +785,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 { State = ManagedPlayerbotState.Stopping, DesiredEnabled = preserveDesired && active.Record.DesiredEnabled }, cancellationToken).ConfigureAwait(false);
                 active.Session.Kick();
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-                await saves.FlushCharacterAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                await FlushBoundedAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
                 bot = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 {
                     DesiredEnabled = preserveDesired && active.Record.DesiredEnabled,

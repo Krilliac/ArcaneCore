@@ -16,6 +16,9 @@ internal sealed class InMemoryRestStore : ICharacterRestStore
     /// <summary>While set, every save throws (a database outage).</summary>
     public volatile bool FailSaves;
 
+    /// <summary>The number of upcoming saves that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
+    public int LockedSaves;
+
     public int Saves => Volatile.Read(ref _saves);
 
     public CharacterRestState? Get(int characterId) => _rows.TryGetValue(characterId, out CharacterRestState state) ? state : null;
@@ -27,6 +30,17 @@ internal sealed class InMemoryRestStore : ICharacterRestStore
 
     public Task SaveAsync(int characterId, CharacterRestState state, CancellationToken cancellationToken = default)
     {
+        int left;
+        do
+        {
+            left = Volatile.Read(ref LockedSaves);
+        }
+        while (left > 0 && Interlocked.CompareExchange(ref LockedSaves, left - 1, left) != left);
+        if (left > 0)
+        {
+            throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
+        }
+
         if (FailSaves)
         {
             throw new InvalidOperationException("the characters database is unavailable");

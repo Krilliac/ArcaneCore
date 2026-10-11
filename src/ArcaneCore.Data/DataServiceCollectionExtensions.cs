@@ -56,7 +56,8 @@ public static class DataServiceCollectionExtensions
     {
         AddDatabaseCommon(services, configuration);
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>()));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
+                provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
@@ -101,8 +102,8 @@ public static class DataServiceCollectionExtensions
         return resolved;
     }
 
-    /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> (when given) is attached on every provider.</summary>
-    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null)
+    /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> (when given) is attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
@@ -130,7 +131,7 @@ public static class DataServiceCollectionExtensions
 
             case DatabaseProvider.Sqlite:
                 builder.UseSqlite(options.ConnectionString)
-                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs));
+                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs));
                 break;
 
             default:

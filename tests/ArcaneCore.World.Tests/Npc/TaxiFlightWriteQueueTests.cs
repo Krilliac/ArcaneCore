@@ -102,6 +102,27 @@ public sealed class TaxiFlightWriteQueueTests
     }
 
     [Fact]
+    public async Task ALockedDatabase_KeepsTheRouteInsteadOfAbandoningIt_AndTheSaveLandsOnTheNextBarrier()
+    {
+        await using var fixture = Fixture.Create();
+        fixture.Store.FailBusy = true;
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        // Another writer holds the file: that says nothing about the route, so the player is not teleported and the row is not deleted.
+        Assert.Equal(0, abandoned);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Empty(fixture.Store.Calls);
+
+        fixture.Store.FailBusy = false;
+        await fixture.Queue.FlushCharacterAsync(7).WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.NotNull(fixture.Store.Saved(7));
+        Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
     public async Task ASupersededFailingSave_DoesNotRunItsFallback()
     {
         await using var fixture = Fixture.Create();
@@ -256,6 +277,7 @@ public sealed class TaxiFlightWriteQueueTests
         private int _hold;
 
         public volatile bool FailWrites;
+        public volatile bool FailBusy;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -322,6 +344,11 @@ public sealed class TaxiFlightWriteQueueTests
             {
                 Entered.TrySetResult();
                 await Release.Task.ConfigureAwait(false);
+            }
+
+            if (FailBusy)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
             }
 
             if (FailWrites)

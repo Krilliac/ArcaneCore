@@ -1,22 +1,15 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
-using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
-using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Data.Stores;
 
 /// <summary>EF Core implementation of <see cref="ICharacterStore"/>.</summary>
-/// <param name="db">The scope's context.</param>
-/// <param name="databases">Supplies <c>Database:SqliteWriteTimeoutMs</c>; the shipped default when null.</param>
-public sealed class EfCharacterStore(CharacterDbContext db, IOptions<DatabaseOptions>? databases = null) : ICharacterStore, ICharacterDeletionStore
+public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, ICharacterDeletionStore
 {
-    /// <summary>The shipped bound on one character save's wait for the SQLite write lock (<c>Database:SqliteWriteTimeoutMs</c>).</summary>
-    public const int DefaultSqliteWriteTimeoutMs = 5000;
-
     public async Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(
         int accountId, CancellationToken cancellationToken = default)
     {
@@ -235,9 +228,6 @@ public sealed class EfCharacterStore(CharacterDbContext db, IOptions<DatabaseOpt
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
-        // SQLite: one save must not sit in the driver's lock wait for the connection's whole 30 s Default Timeout, which would hold the
-        // single save-queue consumer; the queue retains the snapshot on "database is locked" and retries it later.
-        using IDisposable bound = SqliteWriteBound.Apply(db, databases);
         if (!await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
         {
             return;

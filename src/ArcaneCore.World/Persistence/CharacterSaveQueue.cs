@@ -293,6 +293,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                     if (_sinceRetained >= RetainedEvery)
                     {
                         slot = TakeRetained();
+                        _sinceRetained = 0; // scan _failed at most once per RetainedEvery picks, whether or not anything was retained
                     }
 
                     slot ??= TakeNext();
@@ -300,7 +301,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                     {
                         slot = TakeRetained(); // idle: retry the retained busy failures
                     }
-                    else if (_sinceRetained < RetainedEvery)
+                    else
                     {
                         _sinceRetained++;
                     }
@@ -429,7 +430,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
             if ((barrier || state is null) && !dropped && !deferred)
             {
-                deferred = await RecoverAsync(slot.Id, token).ConfigureAwait(false);
+                deferred = await RecoverAsync(slot.Id, token, trustedSettlement: settlement && state is null).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -489,7 +490,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     }
 
     /// <summary>Retry the retained snapshot of a character, if any. True when the database was locked again and the snapshot stays retained for a later retry.</summary>
-    private async Task<bool> RecoverAsync(int id, CancellationToken cancellationToken)
+    private async Task<bool> RecoverAsync(int id, CancellationToken cancellationToken, bool trustedSettlement = false)
     {
         CharacterState? retained;
         lock (_gate)
@@ -498,13 +499,18 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             // authoritative storage before the owner explicitly resumes this ID.
             if (_quarantined.Contains(id))
             {
+                if (trustedSettlement)
+                {
+                    throw new InvalidOperationException($"character {id} is quarantined"); // a settlement is never told it was saved when nothing was written
+                }
+
                 return false;
             }
 
             retained = _failed.GetValueOrDefault(id)?.State;
         }
 
-        return retained is not null && await SaveRetainingFailureAsync(retained, cancellationToken).ConfigureAwait(false);
+        return retained is not null && await SaveRetainingFailureAsync(retained, cancellationToken, trustedSettlement).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -546,7 +552,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
                 return false;
             }
-            catch (Exception ex) when (DatabaseTransience.IsBusy(ex) && !cancellationToken.IsCancellationRequested && !IsStopping())
+            catch (Exception ex) when (DatabaseTransience.IsBusy(ex) && !IsStopping()) // also with a cancelled token: the lock wait ended, the snapshot must still be retried
             {
                 TimeSpan pause;
                 lock (_gate)

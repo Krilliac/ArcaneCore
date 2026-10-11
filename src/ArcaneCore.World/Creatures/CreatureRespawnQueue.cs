@@ -36,6 +36,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     private readonly Dictionary<OpKey, Retained> _retained = [];
     private readonly Dictionary<uint, long> _forgottenAt = [];
     private readonly CancellationTokenSource _timerStop = new();
+    private int _sweepQueued; // 1 while a retry marker is in the channel or being swept: the timer never stacks another
     private long _sequence;
     private Task? _timer;
     private Task? _consumer;
@@ -97,7 +98,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         {
             while (await timer.WaitForNextTickAsync(_timerStop.Token).ConfigureAwait(false))
             {
-                if (RetainedCount > 0)
+                if (RetainedCount > 0 && Interlocked.CompareExchange(ref _sweepQueued, 1, 0) == 0)
                 {
                     _channel.Writer.TryWrite(new Op(default, 0, RetrySweep));
                 }
@@ -204,11 +205,17 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     public async Task StopAsync()
     {
-        await _timerStop.CancelAsync().ConfigureAwait(false);
+        if (!_timerStop.IsCancellationRequested)
+        {
+            await _timerStop.CancelAsync().ConfigureAwait(false);
+        }
+
         if (_timer is not null)
         {
             await _timer.ConfigureAwait(false);
         }
+
+        _timerStop.Dispose(); // the timer task has ended; a second StopAsync only reads IsCancellationRequested
 
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -323,7 +330,15 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         {
             if (ReferenceEquals(op.Write, RetrySweep))
             {
-                await SweepRetainedAsync().ConfigureAwait(false);
+                try
+                {
+                    await SweepRetainedAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    Volatile.Write(ref _sweepQueued, 0); // a write retained during this sweep is caught by the next marker
+                }
+
                 continue; // not a counted write
             }
 

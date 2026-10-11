@@ -175,15 +175,16 @@ public sealed class CreatureRespawnQueueTests
         await using ServiceProvider sp = Build(store);
         var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
         {
-            RetainedRetryInterval = TimeSpan.FromMilliseconds(50),
+            RetainedRetryInterval = TimeSpan.FromSeconds(1),
         };
         queue.Start();
 
         queue.Save(0, 0, 1, Now + 100);
         queue.Save(0, 0, 2, Now + 100);
         await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        // Two writes, one attempt each at first (an inline retry would have been 3 each, with 600 ms of back-off); the timer may already have retried.
-        Assert.True(queue.RetainedCount <= 2);
+        // An inline retry would have been 3 attempts each, with 600 ms of back-off.
+        Assert.Equal(2, store.Attempts); // one attempt per write: the lock wait was not repeated inline
+        Assert.Equal(2, queue.RetainedCount);
 
         store.Locked = false;
         DateTime deadline = DateTime.UtcNow.AddSeconds(20);

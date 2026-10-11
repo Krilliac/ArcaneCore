@@ -39,6 +39,19 @@ public sealed class RestWriteQueueTests
     }
 
     [Fact]
+    public async Task ALockThatClearsWithinTheInlineRetries_LandsTheWriteWithNoFurtherTrigger()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create();
+        store.LockedSaves = 2; // another writer holds the file for the first two attempts
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus); // the third attempt landed: no new write, barrier or login was needed
+        Assert.False(queue.HasRetainedFailure(1));
+        await queue.StopAsync();
+    }
+
+    [Fact]
     public async Task AFailedWrite_IsRetained_NeverDropped_AndTheNextChangeCarriesIt()
     {
         (RestWriteQueue queue, InMemoryRestStore store) = Create();

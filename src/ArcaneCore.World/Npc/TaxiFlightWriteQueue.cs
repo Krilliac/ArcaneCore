@@ -328,9 +328,10 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
                     if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
                     {
-                        if (operation.Abandon is not null)
+                        if (operation.Abandon is not null && !DatabaseTransience.IsBusy(ex))
                         {
-                            // Give the route up rather than keep it: the owner relocates the character and the row goes.
+                            // Give the route up rather than keep it: the owner relocates the character and the row goes. Not when the database is merely locked by
+                            // another writer: that says nothing about the route, so it is kept and retried.
                             replacement = unsaved.Operation = new Operation(null, ++unsaved.Generation, null);
                         }
                         else
@@ -417,7 +418,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
+            catch (Exception ex) when (attempt < MaxAttempts)
             {
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);

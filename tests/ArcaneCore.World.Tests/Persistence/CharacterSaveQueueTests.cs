@@ -815,6 +815,52 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
+    public async Task ASettlementWhoseTokenFiresDuringTheLockedWrite_IsCancelled_AndItsSnapshotIsStillRetriedWithoutATrigger()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lockWaitEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Id != 1)
+            {
+                return;
+            }
+
+            if (@lock.Next() == 1)
+            {
+                entered.TrySetResult();
+                await lockWaitEnds.Task; // the driver's lock wait ignores the token
+                Assert.True(token.IsCancellationRequested, "the settlement token was expected to have fired during the lock wait");
+            }
+
+            if (!@lock.IsReleased)
+            {
+                throw Busy();
+            }
+        };
+        using var cancel = new CancellationTokenSource();
+        try
+        {
+            Task settlement = kit.Queue.SaveForSettlementAsync(State(1, 11), cancel.Token);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancel.Cancel();
+            lockWaitEnds.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => settlement.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            // Not logged as a final failure and not left retained for good: the idle queue retries it once the lock is gone.
+            @lock.Release();
+            Assert.True(await BecomesTrueAsync(() => kit.Store.Saved.Any(s => s.Id == 1 && s.Money == 11), seconds: 10), "the retained snapshot was never retried");
+        }
+        finally
+        {
+            @lock.Release();
+            lockWaitEnds.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task ANewerSnapshotSupersedesTheRetainedLockedOne_AndTheOlderIsNeverWrittenAfterIt()
     {
         await using var kit = new Kit();
