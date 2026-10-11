@@ -72,8 +72,14 @@ battleground game objects and creatures. Without the event rows nothing is gated
 - **The buff a trap gives is cast by the player on itself.** vmangos casts it from the game object; the spell system cannot cast from an object,
   and for a self-only aura the result differs only in the aura's caster guid.
 - **Opening an Arathi Basin or Alterac Valley banner also runs the button's own activation** (its state flips) before the battleground hears of
-  it; vmangos returns from the open-lock effect first. CMSG_GAMEOBJ_USE on a locked banner is refused by the lock as before; the click reaches the
-  battleground through the opening spell. There is no cast-time check of `CanUseBattleGroundObject` in the spell's cast checks.
+  it; vmangos returns from the open-lock effect first. There is no cast-time check of `CanUseBattleGroundObject` in the spell's cast checks.
+- **A direct use (CMSG_GAMEOBJ_USE) of a banner is refused on a battleground map** (`GameObjectUseResult.Locked`), for every object
+  `MatchRuntime.RoutesBannerUse` accepts: the button banners and the neutral goober banners. Only the opening spell's open-lock effect
+  (`GameObjectMapSystem.OpenLock`) reaches a banner, so a claim, an assault or a defence always takes the 10 s, interruptible Opening cast. A
+  deliberate divergence, failing closed: in vmangos (and here before) the lock does not stop a direct use - lock 1479 is lock type 17, which
+  needs no skill, so the direct-use lock check passes; `GameObject::PlayerCanUse` (GameObject.cpp:2189-2241) checks only a door's key item, and
+  `GameObject::Use` has no lock check for a goober - so a crafted use packet on a neutral banner fired its trigger spell and claimed the node at
+  once, and one on a button banner was handed to the battleground by the use event.
 - **Neutral banners are goobers, not buttons.** The five Arathi Basin neutral banners (classic-db `gameobject_template` 180087-180091) and the
   Snowfall banner (180418) are type 10 goobers locked by 1479 whose `data10` is a trigger spell (23932, 23936, 23935, 23938, 23937; 24677), one
   SCRIPT_EFFECT at the user. Opening one (Opening 21651, lock type 17) uses the goober (vmangos Spell::SendLoot, SpellEffects.cpp:2053-2063), which
@@ -82,7 +88,12 @@ battleground game objects and creatures. Without the event rows nothing is gated
   battleground as the node click. Here the object's cast carries the object (`SpellCast.CasterGameObject`, vmangos `m_casterGo`) and
   `BattlegroundFeature` registers the six trigger spells' script effect, which calls `MatchRuntime.OnBannerTriggered`. Until this, a neutral node
   could not be claimed with real data (only assaults and defends of the button banners worked). `CanUseBattleGroundObject` is checked there, as
-  for the buttons, rather than in the opening spell's cast checks (Spell.cpp:5990-5997).
+  for the buttons, rather than in the opening spell's cast checks (Spell.cpp:5990-5997). It is vmangos Player.cpp:20448-20465 in full: not a
+  GM, not mounted, not in Spirit of Redemption (any class: vmangos asks priests only, the only class that has the aura), not totally immune
+  (`Unit::IsTotalImmune`, Unit.cpp:5659-5670: school immunities that together cover every school, as Divine Shield or Ice Block), alive, and
+  neither unable to react nor out of control (UNIT_STATE_CAN_NOT_REACT_OR_LOST_CONTROL, UnitDefines.h:395-402: the stunned, confused, fleeing and
+  possessed unit flags here, and a feign death aura). The Snowfall banner has no `noDamageImmune` (data11 = 0), so this check is all that keeps
+  an immune player off it.
 - **A participant who logs out is removed at once** (offline: nothing of it is touched); vmangos keeps it for `MAX_OFFLINE_TIME` and lets it
   rejoin. Its next login is at the entry point (the memory, else the `character_battleground_data` row), as vmangos does once the match is gone.
 - **WorldDefense is open while honor is disabled** (above): vmangos cannot turn honor off.

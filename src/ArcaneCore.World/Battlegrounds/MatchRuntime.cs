@@ -106,6 +106,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             }
 
             objects.SpawnGate = this;
+            objects.DirectUseRefused = RefusesDirectUse;
             objects.RegisterUseHandler(GameObjectType.FlagStand, UseFlagStand);
             objects.RegisterUseHandler(GameObjectType.FlagDrop, UseFlagDrop);
             objects.Used += OnObjectUsed;
@@ -139,6 +140,10 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         if (_gameObjects is { } objects)
         {
             objects.Used -= OnObjectUsed;
+            if (objects.DirectUseRefused == RefusesDirectUse)
+            {
+                objects.DirectUseRefused = null;
+            }
             DetachAlteracValley(objects);
         }
 
@@ -209,11 +214,61 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         return new BattlegroundObjectUse(go.Entry, e1, e2, (dx * dx) + (dy * dy) + (dz * dz) <= 10f * 10f);
     }
 
-    /// <summary>vmangos <c>Player::CanUseBattleGroundObject</c> (Player.cpp:20448-20465): not a GM, not mounted, not in Spirit of Redemption.</summary>
-    private bool CanUseBattlegroundObject(Player player)
+    /// <summary>
+    /// The states vmangos <c>UNIT_STATE_CAN_NOT_REACT_OR_LOST_CONTROL</c> covers (UnitDefines.h:395-402: stunned, feign death, confused, fleeing,
+    /// possessed) as this server keeps them: the stunned, confused, fleeing and possessed unit flags (the crowd-control state, CcState) and a
+    /// feign death aura.
+    /// </summary>
+    private const UnitFlags LostControlFlags = UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing | UnitFlags.Possessed;
+
+    /// <summary>
+    /// vmangos <c>Player::CanUseBattleGroundObject</c> (Player.cpp:20448-20465): not in Spirit of Redemption, not a GM, not mounted, not totally
+    /// immune (<c>Unit::IsTotalImmune</c>, Unit.cpp:5659-5670: the school immunity auras together cover every school - Divine Shield, Ice Block),
+    /// alive, and neither unable to react nor out of control; and a participant of this match. vmangos asks only priests for Spirit of
+    /// Redemption; the aura exists only on priests, so the class test is left out.
+    /// </summary>
+    internal bool CanUseBattlegroundObject(Player player)
         => !player.IsGameMaster && !MountService.IsMounted(player)
             && Spells?.HasAura(player, BattlegroundConstants.SpellSpiritOfRedemption) != true
+            && !IsTotalImmune(player)
+            && player.IsAlive
+            && (player.UnitFlags & LostControlFlags) == 0
+            && Spells?.GetAuras(player).Any(h => h.HasAura(AuraType.FeignDeath)) != true
             && Battleground.PlayerTeam(player.Guid) is not null;
+
+    /// <summary>vmangos <c>Unit::IsTotalImmune</c> (Unit.cpp:5659-5670): the misc values (school masks) of the school immunity auras cover all schools.</summary>
+    private bool IsTotalImmune(Player player)
+    {
+        if (Spells is not { } spells)
+        {
+            return false;
+        }
+
+        int mask = 0;
+        foreach (SpellAuraHolder holder in spells.GetAuras(player))
+        {
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.SchoolImmunity })
+                {
+                    mask |= aura.MiscValue;
+                }
+            }
+        }
+
+        return mask == SpellSchoolMaskAll;
+    }
+
+    /// <summary>vmangos <c>SPELL_SCHOOL_MASK_ALL</c>: the seven schools.</summary>
+    private const int SpellSchoolMaskAll = 0x7F;
+
+    /// <summary>
+    /// A direct use (CMSG_GAMEOBJ_USE) of a banner is refused on the match's map: only the opening spell's open-lock effect reaches a banner
+    /// (<see cref="GameObjectMapSystem.OpenLock"/>), so a claim or an assault always takes the Opening cast (10 s, interruptible). A deliberate
+    /// divergence: vmangos lets a direct use through (GameObject::Use has no lock test for a goober, and <c>GameObject::PlayerCanUse</c>,
+    /// GameObject.cpp:2189-2241, checks a key item only for doors), so a crafted use packet claims a neutral node at once.
+    /// </summary>
+    private static bool RefusesDirectUse(Player player, GameObject go) => RoutesBannerUse(go.Template);
 
     /// <summary>vmangos GameObject::Use, GAMEOBJECT_TYPE_FLAGSTAND (GameObject.cpp:1843-1870).</summary>
     private GameObjectUseResult UseFlagStand(Player player, GameObject go)

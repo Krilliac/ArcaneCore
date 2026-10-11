@@ -183,10 +183,10 @@ internal static class ArathiBasinTestContent
     public const uint AllianceBanner = 5290005;
 
     /// <summary>Opening (Spell.dbc 21651; classic-db playercreateinfo_spell gives it to every race and class).</summary>
-    public const uint OpeningSpell = 21651;
+    public const uint OpeningSpell = BattlegroundBannerTestContent.OpeningSpell;
 
     /// <summary>The lock of every Arathi Basin banner (gameobject_template data0 of 180087-180091, data1 of 180058/180059).</summary>
-    public const uint BannerLock = 1479;
+    public const uint BannerLock = BattlegroundBannerTestContent.BannerLock;
 
     public static readonly (float X, float Y, float Z) Stables = (1166.79f, 1200.13f, -56.7086f);
 
@@ -212,8 +212,7 @@ internal static class ArathiBasinTestContent
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells(ScenarioTestContent.Spells())));
-        // The skills feature owns the open-lock effect of Opening (GatheringSpells); it runs once a skill catalog exists.
-        services.AddSingleton(new SkillCatalog([], [], [], []));
+        BattlegroundBannerTestContent.RegisterSkills(services);
         services.AddSingleton(new FactionTemplateCatalog(
         [
             new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
@@ -224,40 +223,50 @@ internal static class ArathiBasinTestContent
     }
 
     /// <summary>
-    /// Spell.dbc 5875: Opening 21651 (OPEN_LOCK (33) of lock type 17 at the object target (23), cast time index 7 (10 s), range index 12 (5 yd),
-    /// attributes 0x190, targets 0x4000, interrupt flags 31) and the five trigger spells (SCRIPT_EFFECT (77) at TARGET_UNIT (25), cast time
-    /// index 1, range index 6 (100 yd), attributes 0x100, attributesEx2 4).
+    /// The spells the guard scenarios put on a player (the real ids and aura types of Spell.dbc 5875; Spirit of Redemption is reduced to the aura
+    /// the guard looks for): Divine Shield 642 (two SCHOOL_IMMUNITY effects, school masks 1 and 126: together every school), a Divine Shield
+    /// with only its mask-126 effect (not total), Spirit of Redemption 27827 and Feign Death 5384 (FEIGN_DEATH, 66).
     /// </summary>
+    public const uint DivineShield = 642;
+    public const uint PartialImmunity = 991_642;
+    public const uint FeignDeath = 5384;
+
+    /// <summary>A minute: the guard auras outlast every step they are used in (a duration row of the test only).</summary>
+    private const uint GuardAuraDuration = 991_001;
+
     private static SpellContent Spells(SpellContent baseline)
     {
+        SpellContent banners = BattlegroundBannerTestContent.Extend(baseline);
         SpellTemplateRow[] added =
         [
             new SpellTemplateRow
             {
-                Id = OpeningSpell, SpellName = "Opening", Attributes = 0x190, Targets = 0x4000, CastingTimeIndex = 7, InterruptFlags = 31, RangeIndex = 12,
-                SpellVisual = 6139, Effect1 = 33, EffectDieSides1 = 1, EffectBaseDice1 = 1, EffectBasePoints1 = 99, EffectImplicitTargetA1 = 23,
-                EffectMiscValue1 = 17,
+                Id = DivineShield, SpellName = "Divine Shield", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 39, EffectMiscValue1 = 1,
+                Effect3 = 6, EffectImplicitTargetA3 = 1, EffectApplyAuraName3 = 39, EffectMiscValue3 = 126,
             },
-            Trigger(23932, "A-Mid Trigger"),
-            Trigger(23935, "H-Mid Trigger"),
-            Trigger(23936, "Mid Trigger"),
-            Trigger(23937, "ALT -N Trigger"),
-            Trigger(23938, "ALT -S Trigger"),
+            new SpellTemplateRow
+            {
+                Id = PartialImmunity, SpellName = "Partial Immunity", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 39, EffectMiscValue1 = 126,
+            },
+            new SpellTemplateRow
+            {
+                Id = BattlegroundConstants.SpellSpiritOfRedemption, SpellName = "Spirit of Redemption", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 4,
+            },
+            new SpellTemplateRow
+            {
+                Id = FeignDeath, SpellName = "Feign Death", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 66,
+            },
         ];
-        SpellCastTimeRow[] castTimes = [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }];
-        SpellRangeRow[] ranges = [new SpellRangeRow { Id = 6, MaxRange = 100 }, new SpellRangeRow { Id = 12, MaxRange = 5 }];
-        return baseline with
+        return banners with
         {
-            Spells = [.. baseline.Spells.Where(s => added.All(a => a.Id != s.Id)), .. added],
-            CastTimes = [.. baseline.CastTimes.Where(c => castTimes.All(a => a.Id != c.Id)), .. castTimes],
-            Ranges = [.. baseline.Ranges.Where(r => ranges.All(a => a.Id != r.Id)), .. ranges],
+            Spells = [.. banners.Spells.Where(s => added.All(a => a.Id != s.Id)), .. added],
+            Durations = [.. banners.Durations, new SpellDurationRow { Id = GuardAuraDuration, Duration = 60_000, MaxDuration = 60_000 }],
         };
     }
-
-    private static SpellTemplateRow Trigger(uint id, string name) => new()
-    {
-        Id = id, SpellName = name, Attributes = 0x100, AttributesEx2 = 4, CastingTimeIndex = 1, RangeIndex = 6, Effect1 = 77, EffectImplicitTargetA1 = 25,
-    };
 
     private sealed class Maps : IMapDataStore
     {
@@ -310,7 +319,7 @@ internal static class ArathiBasinTestContent
                 Spawn(AllianceContestedBanner, 180059, Stables),
                 Spawn(AllianceBanner, 180058, Stables),
             ],
-            [Lock1479()], [], []));
+            [BattlegroundBannerTestContent.Lock()], [], []));
 
         public static GameObjectTemplate[] Templates =>
         [
@@ -358,14 +367,60 @@ internal static class ArathiBasinTestContent
                 Entry = entry, Type = (uint)GameObjectType.Button, DisplayId = displayId, Name = name, Faction = 83, Flags = 32, Data = data,
             };
         }
-
-        /// <summary>Lock.dbc 1479: case 1 is LOCK_KEY_SKILL (2) of lock type 17, no skill required.</summary>
-        private static LockEntry Lock1479()
-        {
-            uint[] types = new uint[LockEntry.Cases];
-            uint[] indexes = new uint[LockEntry.Cases];
-            (types[1], indexes[1]) = (2, 17);
-            return new LockEntry(BannerLock, types, indexes, new uint[LockEntry.Cases]);
-        }
     }
+}
+
+/// <summary>
+/// What every battleground banner needs, from the 5875 client's DBCs and classic-db: Opening 21651 (OPEN_LOCK (33) of lock type 17 at the object
+/// target (23), cast time index 7 (10 s), range index 12 (5 yd), attributes 0x190, targets 0x4000, interrupt flags 31), the six banner trigger
+/// spells (SCRIPT_EFFECT (77) at TARGET_UNIT (25), cast time index 1, range index 6 (100 yd), attributes 0x100, attributesEx2 4), Lock.dbc 1479
+/// (case 1: LOCK_KEY_SKILL (2) of lock type 17, no skill), and the skill catalog the open-lock effect needs (GatheringSpells runs once one exists).
+/// </summary>
+internal static class BattlegroundBannerTestContent
+{
+    public const uint OpeningSpell = 21651;
+    public const uint BannerLock = 1479;
+
+    public static SpellContent Extend(SpellContent baseline)
+    {
+        SpellTemplateRow[] added =
+        [
+            new SpellTemplateRow
+            {
+                Id = OpeningSpell, SpellName = "Opening", Attributes = 0x190, Targets = 0x4000, CastingTimeIndex = 7, InterruptFlags = 31, RangeIndex = 12,
+                SpellVisual = 6139, Effect1 = 33, EffectDieSides1 = 1, EffectBaseDice1 = 1, EffectBasePoints1 = 99, EffectImplicitTargetA1 = 23,
+                EffectMiscValue1 = 17,
+            },
+            Trigger(23932, "A-Mid Trigger"),
+            Trigger(23935, "H-Mid Trigger"),
+            Trigger(23936, "Mid Trigger"),
+            Trigger(23937, "ALT -N Trigger"),
+            Trigger(23938, "ALT -S Trigger"),
+            Trigger(24677, "GY Mid Trigger"),
+        ];
+        SpellCastTimeRow[] castTimes = [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }];
+        SpellRangeRow[] ranges = [new SpellRangeRow { Id = 6, MaxRange = 100 }, new SpellRangeRow { Id = 12, MaxRange = 5 }];
+        return baseline with
+        {
+            Spells = [.. baseline.Spells.Where(s => added.All(a => a.Id != s.Id)), .. added],
+            CastTimes = [.. baseline.CastTimes.Where(c => castTimes.All(a => a.Id != c.Id)), .. castTimes],
+            Ranges = [.. baseline.Ranges.Where(r => ranges.All(a => a.Id != r.Id)), .. ranges],
+        };
+    }
+
+    /// <summary>The skills feature owns the open-lock effect of Opening (GatheringSpells); it runs once a skill catalog exists.</summary>
+    public static void RegisterSkills(IServiceCollection services) => services.AddSingleton(new SkillCatalog([], [], [], []));
+
+    public static LockEntry Lock()
+    {
+        uint[] types = new uint[LockEntry.Cases];
+        uint[] indexes = new uint[LockEntry.Cases];
+        (types[1], indexes[1]) = (2, 17);
+        return new LockEntry(BannerLock, types, indexes, new uint[LockEntry.Cases]);
+    }
+
+    private static SpellTemplateRow Trigger(uint id, string name) => new()
+    {
+        Id = id, SpellName = name, Attributes = 0x100, AttributesEx2 = 4, CastingTimeIndex = 1, RangeIndex = 6, Effect1 = 77, EffectImplicitTargetA1 = 25,
+    };
 }
