@@ -974,25 +974,30 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return true;
     }
 
+    /// <summary>The members the stall watch looks at, refilled every tick (world thread).</summary>
+    private readonly List<PlayerbotGroupStallMember> _stallMembers = [];
+
     /// <summary>
     /// The group-level stall watch (<see cref="PlayerbotGroupStallWatch"/>): bot members that make no progress for
     /// <see cref="PlayerbotOptions.StallSeconds"/> make the leader give up its target (set aside for the group for <see cref="SetAsideMs"/>)
     /// and choose again, with one stall report for bot QA (<see cref="TakeStalls"/>); a further bound without progress gives the goal up and
     /// dissolves the group (reason <c>stalled</c>; the goal is set aside for every member). Never a group with a real player in it, nor a
     /// stranded bot's walk out (<see cref="BotGroup.Solo"/>, it has its own bound), nor the states that wait on a bound of their own:
-    /// forming (the invitations), a wipe (the survivors' retreats), the leader waiting at the objective's spawn
+    /// forming (the invitations), a wipe (the survivors' retreats), leaving (the walk out, then <see cref="BringOut"/>; a finished run is not
+    /// failed for its stragglers), the leader waiting at the objective's spawn
     /// (<see cref="ObjectiveMissing"/>) and disbanding. True when the group was dissolved.
     /// </summary>
     private bool WatchStall(BotGroup group, Player leader, uint now)
     {
         if (group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
-            || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Wiped or PlayerbotGroupState.Disbanding)
+            || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
         {
             group.Stall.Reset();
             return false;
         }
 
-        var members = new List<PlayerbotGroupStallMember>(group.Members.Count);
+        List<PlayerbotGroupStallMember> members = _stallMembers;
+        members.Clear();
         foreach (Member member in group.Members)
         {
             if (!member.Joined || member.AI is not { } ai || _world!.FindOnlinePlayer(member.Guid) is not { } player) continue;
@@ -1011,7 +1016,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (verdict == PlayerbotGroupStallVerdict.Retarget)
         {
             StallCount++;
-            uint entry = target?.Entry ?? group.ObjectiveEntry;
+            // The objective is the target only while the group engages it; elsewhere (gathering, travelling, regrouping) it has none.
+            uint entry = group.State == PlayerbotGroupState.Engaging ? target?.Entry ?? group.ObjectiveEntry : 0;
             _stalls.Add((group.LeaderBotId, leader.Name, string.Create(CultureInfo.InvariantCulture,
                 $"stalled {seconds}s: goal={PlayerbotGoalKind.Group} target={entry} quest={group.Goal.QuestId} at {leader.X:F1},{leader.Y:F1},{leader.Z:F1} map {leader.MapId}")));
             if (target is not null) group.Shun(target.Guid, unchecked(now + SetAsideMs));

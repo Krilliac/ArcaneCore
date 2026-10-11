@@ -32,7 +32,14 @@ internal readonly record struct PlayerbotGroupStallMember(Guid BotId, uint MapId
 /// </summary>
 internal sealed class PlayerbotGroupStallWatch
 {
-    private readonly Dictionary<Guid, (uint Map, Vector3 Anchor, ulong Target)> _members = [];
+    /// <summary>
+    /// How long after a re-target a member's new target is taken as the re-target's own doing, not as progress: the leader gave its
+    /// target up and chose another, which says nothing about the group getting anywhere.
+    /// </summary>
+    internal const uint RetargetGraceMs = 5_000;
+
+    private Dictionary<Guid, (uint Map, Vector3 Anchor, ulong Target)> _members = [];
+    private Dictionary<Guid, (uint Map, Vector3 Anchor, ulong Target)> _next = [];
     private PlayerbotGroupState _state;
     private bool _started;
     private uint _progressMs;
@@ -51,10 +58,29 @@ internal sealed class PlayerbotGroupStallWatch
     internal PlayerbotGroupStallVerdict Observe(PlayerbotGroupState state, IReadOnlyList<PlayerbotGroupStallMember> members, uint nowMs, uint stallMs)
     {
         ArgumentNullException.ThrowIfNull(members);
-        if (!_started || state != _state || Progressed(members))
+        if (!_started || state != _state)
         {
             Start(state, members, nowMs);
             return PlayerbotGroupStallVerdict.None;
+        }
+
+        Progress progress = Progressed(members);
+        if ((progress & Progress.Moved) != 0)
+        {
+            Start(state, members, nowMs);
+            return PlayerbotGroupStallVerdict.None;
+        }
+
+        if ((progress & Progress.NewTarget) != 0)
+        {
+            // A new target right after a re-target is the re-target's own: the strike stands (with 2+ creatures the group cannot reach,
+            // every re-target picks another and the group would never reach the dissolve).
+            if (Strikes > 0 && unchecked(nowMs - _boundMs) is var since && since <= RetargetGraceMs) AdoptTargets(members);
+            else
+            {
+                Start(state, members, nowMs);
+                return PlayerbotGroupStallVerdict.None;
+            }
         }
 
         IdleMs = unchecked(nowMs - _progressMs);
@@ -64,32 +90,53 @@ internal sealed class PlayerbotGroupStallWatch
         return Strikes == 1 ? PlayerbotGroupStallVerdict.Retarget : PlayerbotGroupStallVerdict.Dissolve;
     }
 
-    private bool Progressed(IReadOnlyList<PlayerbotGroupStallMember> members)
+    [Flags]
+    private enum Progress : byte
     {
-        bool progressed = members.Count != _members.Count;
+        None = 0,
+
+        /// <summary>A member moved, changed map, is busy, or the set of members changed.</summary>
+        Moved = 1,
+
+        /// <summary>A member took a target other than the one it had.</summary>
+        NewTarget = 2,
+    }
+
+    private Progress Progressed(IReadOnlyList<PlayerbotGroupStallMember> members)
+    {
+        Progress progress = members.Count != _members.Count ? Progress.Moved : Progress.None;
         foreach (PlayerbotGroupStallMember member in members)
         {
             if (!_members.TryGetValue(member.BotId, out var seen))
             {
-                progressed = true;
+                progress |= Progress.Moved;
                 continue;
             }
 
-            if (member.Busy || member.MapId != seen.Map || Vector3.Distance(member.Position, seen.Anchor) >= PlayerbotStallWatch.ProgressYards
-                || (member.Target != 0 && member.Target != seen.Target))
-                progressed = true;
+            if (member.Busy || member.MapId != seen.Map || Vector3.Distance(member.Position, seen.Anchor) >= PlayerbotStallWatch.ProgressYards)
+                progress |= Progress.Moved;
+            else if (member.Target != 0 && member.Target != seen.Target)
+                progress |= Progress.NewTarget;
         }
 
-        return progressed;
+        return progress;
+    }
+
+    /// <summary>Remember the members' new targets without starting over (positions, time and strikes stay).</summary>
+    private void AdoptTargets(IReadOnlyList<PlayerbotGroupStallMember> members)
+    {
+        foreach (PlayerbotGroupStallMember member in members)
+            if (member.Target != 0 && _members.TryGetValue(member.BotId, out var seen))
+                _members[member.BotId] = (seen.Map, seen.Anchor, member.Target);
     }
 
     private void Start(PlayerbotGroupState state, IReadOnlyList<PlayerbotGroupStallMember> members, uint nowMs)
     {
         // The target a member had is kept while it has none now: dropping a target and taking the same one again is no progress.
-        var previous = new Dictionary<Guid, ulong>(_members.Select(m => KeyValuePair.Create(m.Key, m.Value.Target)));
-        _members.Clear();
+        _next.Clear();
         foreach (PlayerbotGroupStallMember member in members)
-            _members[member.BotId] = (member.MapId, member.Position, member.Target != 0 ? member.Target : previous.GetValueOrDefault(member.BotId));
+            _next[member.BotId] = (member.MapId, member.Position, member.Target != 0 ? member.Target : _members.TryGetValue(member.BotId, out var seen) ? seen.Target : 0);
+        (_members, _next) = (_next, _members);
         _state = state;
         _started = true;
         _progressMs = nowMs;
