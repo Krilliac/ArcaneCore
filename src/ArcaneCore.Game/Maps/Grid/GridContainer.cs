@@ -195,8 +195,8 @@ public sealed class GridContainer
     public CellCoord? CellOf(WorldObject obj) => _cells.TryGetValue(obj, out CellCoord cell) ? cell : null;
 
     /// <summary>
-    /// Index an object at its position. Active objects (players) load and activate their grid
-    /// and every grid within the activation distance (vmangos <c>Map::Add(Player*)</c> →
+    /// Index an object at its position. Players load and activate their grid
+    /// and every grid within the activation distance (a non-player active object only its own) (vmangos <c>Map::Add(Player*)</c> →
     /// <c>EnsureGridLoadedAtEnter</c> + <c>LoadMapCellsAround</c>); other objects only ensure
     /// their grid exists (vmangos <c>Map::Add&lt;T&gt;</c> → <c>EnsureGridCreated</c>).
     /// </summary>
@@ -218,10 +218,13 @@ public sealed class GridContainer
         {
             _active.Add(obj);
             grid.ActiveObjectCount++;
-            LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
+            if (obj is Player)
+            {
+                LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance); // a non-player active object pins only its own grid (SetActive)
+            }
         }
 
-        Approach(obj, active);
+        Approach(obj, active && obj is Player);
     }
 
     /// <summary>Remove an object from the index (vmangos <c>RemoveFromGrid</c>).</summary>
@@ -287,10 +290,15 @@ public sealed class GridContainer
                 newGrid.State = GridState.Active;
             }
 
-            LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
+            // Only a player loads the grids around it (vmangos Player::LoadMapCellsAround); an active creature or game object
+            // loads the grid it walks into (Map::CreatureCellRelocation, Maps/Map.cpp:1486-1509) and nothing more.
+            if (obj is Player)
+            {
+                LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
+            }
         }
 
-        Approach(obj, active);
+        Approach(obj, active && obj is Player);
         return true;
     }
 
@@ -323,8 +331,12 @@ public sealed class GridContainer
     }
 
     /// <summary>
-    /// Mark a non-player object active or not (vmangos <c>Map::AddToActive</c> /
-    /// <c>RemoveFromActive</c>): active objects keep the grids around them loaded, like players.
+    /// Mark a non-player object active or not (vmangos <c>Map::AddToActive</c> / <c>RemoveFromActive</c>, Maps/Map.cpp:1925-1963):
+    /// the object's own grid is loaded and pinned (<c>EnsureGridLoadedAtEnter</c>, <c>incUnloadActiveLock</c>) and the object is
+    /// updated wherever it stands. Unlike a player it loads no grid around it: the cells around it are updated only where their
+    /// grid is already loaded (<c>Map::UpdateCellsAroundObject</c> visits with <c>SetNoCreate</c>, Map.cpp:736;
+    /// <see cref="MarkActiveCells"/> marks cells without loading). Like vmangos' <c>Map::ActiveObjectsNearGrid</c>
+    /// (Map.cpp:1887-1921), it still keeps an already loaded grid within visibility range from unloading.
     /// </summary>
     public void SetActive(WorldObject obj, bool active)
     {
@@ -343,8 +355,6 @@ public sealed class GridContainer
                 grid.ResetTimer(Options.EffectiveCleanUpDelayMs, 0.1f);
                 grid.State = GridState.Active;
             }
-
-            LoadGridsAround(obj.X, obj.Y, Options.GridActivationDistance);
         }
         else if (!active && _active.Remove(obj))
         {

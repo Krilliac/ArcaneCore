@@ -633,10 +633,13 @@ public sealed partial class CreatureMapSystem
             case 21: // SCRIPT_COMMAND_SET_ACTIVEOBJECT (vmangos Map::ScriptCommand_SetActiveObject, Maps/ScriptCommands.cpp:831-845)
                 // The creature source, else the creature target, becomes an active object (datalong 1) or stops being one (0):
                 // it is updated and keeps its cells active wherever it walks (Map::AddToActive; Map.UpdatesActiveCellsOnly).
-                if ((source as Creature ?? target as Creature) is { } activated && ReferenceEquals(activated.Map, Map)
-                    && Map.Grids.Contains(activated))
+                if ((source as Creature ?? target as Creature) is { } activated && ReferenceEquals(activated.Map, Map))
                 {
-                    Map.SetActive(activated, step.DataLong != 0);
+                    activated.ScriptActiveObject = step.DataLong != 0; // m_isActiveObject: kept across death and respawn
+                    if (Map.Grids.Contains(activated))
+                    {
+                        Map.SetActive(activated, activated.ScriptActiveObject);
+                    }
                 }
                 else
                 {

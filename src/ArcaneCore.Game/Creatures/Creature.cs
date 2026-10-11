@@ -186,6 +186,12 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>The creature system's clock at this creature's last update (-1: never); a paused creature catches up from it.</summary>
     internal long LastUpdateClockMs { get; set; } = -1;
 
+    /// <summary>
+    /// Set by script command 21 (SCRIPT_COMMAND_SET_ACTIVEOBJECT): vmangos keeps m_isActiveObject on the creature for its life, so
+    /// the mark outlives a death and is applied again when the creature re-enters the map (CreatureMapSystem.QueueActivationIfFlagged).
+    /// </summary>
+    internal bool ScriptActiveObject { get; set; }
+
     private bool _respawnDelayDrawn;
     private uint _respawnDelaySeconds;
 

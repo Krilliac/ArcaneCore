@@ -153,6 +153,35 @@ public sealed class ActiveCellUpdateTests(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// vmangos Map::AddToActive (Maps/Map.cpp:1925-1950) pins only the active object's own grid, and its cell update visits with
+    /// SetNoCreate (Map.cpp:736): an active creature 30 yards from a grid border does not load the grid across it.
+    /// </summary>
+    [Fact]
+    public void AnActiveNonPlayerAtAGridEdgeDoesNotLoadTheNeighbouringGrid()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        // The first x past 0 where the grid changes: the border between grid g and grid h.
+        ArcaneCore.Game.Maps.Grid.GridCoord g = ArcaneCore.Game.Maps.Grid.GridDefines.ComputeGridCoord(0, 0);
+        float edge = 0;
+        while (ArcaneCore.Game.Maps.Grid.GridDefines.ComputeGridCoord(edge, 0) == g) edge += 1;
+        ArcaneCore.Game.Maps.Grid.GridCoord h = ArcaneCore.Game.Maps.Grid.GridDefines.ComputeGridCoord(edge, 0);
+        world.AddPlayer(TestWorld.CreatePlayer(1, edge - 300, 0, new FakeSession())); // loads g only
+        var unit = new TestUnit(1, edge - 30, 0);
+        map.AddObject(unit);
+        Assert.False(map.Grids.IsGridLoaded(h));
+
+        map.SetActive(unit, true);
+        world.RunTick(50);
+        Assert.True(map.Grids.IsActive(unit));
+        Assert.False(map.Grids.IsGridLoaded(h)); // a player there would load it (LoadMapCellsAround)
+
+        unit.SetPosition(edge - 5, 0, 0, 0); // still in g, 5 yards from h
+        world.RunTick(50);
+        Assert.False(map.Grids.IsGridLoaded(h));
+    }
+
     [Fact]
     public void AnActiveObjectIsUpdatedAnywhere_AndTheOptionOffUpdatesEveryCreature()
     {

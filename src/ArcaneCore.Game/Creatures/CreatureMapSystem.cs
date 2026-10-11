@@ -338,7 +338,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// </summary>
     private void QueueActivationIfFlagged(Creature creature)
     {
-        if ((creature.Template.Behaviour & ActiveOnSpawn) != 0 || FormationOfMember(creature) is not null)
+        if (creature.ScriptActiveObject || (creature.Template.Behaviour & ActiveOnSpawn) != 0 || FormationOfMember(creature) is not null)
         {
             _pendingActivation.Add(creature);
         }

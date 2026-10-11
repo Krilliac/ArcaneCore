@@ -52,6 +52,45 @@ public sealed class FormationTests
         return (world, system);
     }
 
+    /// <summary>
+    /// vmangos Creature::AddToWorld makes every member of a formation an active object (Objects/Creature.cpp:289-292): its cells are
+    /// updated though no player is near (Map::UpdateActiveCellsSynch marks the cells around active objects), so a creature beside
+    /// the group moves while the only player stands 250 yards off.
+    /// </summary>
+    [Fact]
+    public void FormationMembersAreActiveObjects_AndTheCellsAroundThemAreUpdated()
+    {
+        const uint Bystander = 9999;
+        var content = new CreatureContent(
+            [.. Spawns.Select(s => Template(s.Entry)), Template(WolfEntry)],
+            Spawns.Select(s => Spawn(s.Guid, s.Entry, s.X + ShiftX, s.Y + ShiftY, Z, respawnSeconds: 300) with { Orientation = s.O })
+                .Append(Spawn(Bystander, WolfEntry, Spawns[0].X + ShiftX + 15, Spawns[0].Y + ShiftY, Z, movementType: 1, wander: 8)),
+            [], [], [],
+            entryWaypoints: PathPoints.Select(p => (CreatureContent.WaypointPathEntry, CreatureContent.WaypointPathBit | 6883u,
+                new CreatureWaypoint(p.Point, p.X + ShiftX, p.Y + ShiftY, Z, p.O, p.WaitMs))))
+        {
+            SpawnGroups = new SpawnGroupCatalog([KargathExpeditionaryForce with { Flags = SpawnGroupFlags.None }]),
+        };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            AddPlayer(world, 1, 300, 300); // in their grid, out of their cells
+            Run(world, 200);
+            Assert.All(Spawns, s => Assert.True(map.Grids.IsActive(Member(system, s.Guid)), $"member {s.Guid} is not active"));
+            Creature bystander = Member(system, Bystander);
+            Assert.True(map.Grids.IsInActiveCell(bystander));
+            (float x, float y) = (bystander.X, bystander.Y);
+            bool moved = false;
+            for (int i = 0; i < 600 && !moved; i++)
+            {
+                Run(world, 100);
+                moved = bystander.X != x || bystander.Y != y;
+            }
+
+            Assert.True(moved, "the creature beside the formation was not updated");
+        }
+    }
+
     private static Creature Member(CreatureMapSystem system, uint guid) => system.Creatures.Single(c => c.Spawn?.Guid == guid);
 
     /// <summary>The point a follower's slot is at around the standing leader (the leader's facing plus the slot angle).</summary>

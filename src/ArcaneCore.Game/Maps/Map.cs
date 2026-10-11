@@ -478,8 +478,8 @@ public sealed class Map
     }
 
     /// <summary>
-    /// Mark a non-player object active (vmangos Map::AddToActive): it keeps the grids around it
-    /// loaded, as players do.
+    /// Mark a non-player object active (vmangos Map::AddToActive): it is updated wherever it stands and pins its own grid;
+    /// unlike a player it loads no grid around it (<see cref="Grid.GridContainer.SetActive"/>).
     /// </summary>
     public void SetActive(WorldObject obj, bool active)
     {

@@ -58,6 +58,20 @@ public sealed class RelayScriptExtraCommandTests
         Assert.False(off.Map.Grids.IsActive(off.Elly));
     }
 
+    [Fact]
+    public void SetActiveObject_TheMarkOutlivesADeathAndComesBackWithTheRespawn()
+    {
+        // vmangos keeps m_isActiveObject on the creature: SetActiveObjectState is not undone by a death.
+        using Town t = Start([Step(0, 21, dataLong: 1, flags: FlagReverse)]);
+        t.Wave();
+        Assert.True(t.Map.Grids.IsActive(t.Elly));
+        t.System.KillCreature(t.Elly);
+        for (int i = 0; i < 4000 && !(t.Elly.IsAlive && t.Elly.IsInWorld); i++) Run(t.World, 100); // corpse decay, then the respawn
+        Assert.True(t.Elly.IsAlive && t.Elly.IsInWorld, "Elly did not respawn");
+        Run(t.World, 100); // the queued activation applies before the next creature update
+        Assert.True(t.Map.Grids.IsActive(t.Elly));
+    }
+
     // --- 52 SET_GOSSIP_MENU ---------------------------------------------------------------
 
     [Fact]

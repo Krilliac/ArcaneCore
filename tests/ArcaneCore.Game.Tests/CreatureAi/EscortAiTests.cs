@@ -54,7 +54,8 @@ public sealed class EscortAiTests
     ];
 
     private static Rig Setup(bool withPath = true, ICreatureHostility? hostility = null,
-        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null, IScriptQuestEvents? quests = null)
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null, IScriptQuestEvents? quests = null,
+        bool active = false)
     {
         // With a hostile world the other creature stays out (it would fight the escort) and the player starts out of aggro reach.
         bool hostile = hostility is not null;
@@ -67,10 +68,10 @@ public sealed class EscortAiTests
         (Player player, _) = AddPlayer(world, 1, hostile ? 150 : 0, 0);
         system.RegisterEntryAi(EscortEntry, c => new TestEscortAI(c));
         Creature escort = Assert.Single(system.Creatures, c => c.Entry == EscortEntry);
-        // These tests put the player 150 yards off (hostile rig) or move it 200 yards in one step; on a continent only the cells
-        // within the activation distance of a player are updated (vmangos Map::UpdateActiveCellsSynch), so the escort is made an
-        // active object (Map::AddToActive) to keep running its own player-range check.
-        map.SetActive(escort, true);
+        // An escort is not an active object (as in vmangos). Tests that put the player 150 yards off (hostile rig) or move it
+        // 200 yards in one step pass active: true, so the escort keeps being updated outside the player's active cells
+        // (vmangos Map::UpdateActiveCellsSynch) and runs its own player-range check.
+        if (active) map.SetActive(escort, true);
         return new Rig(world, map, system, player, escort);
     }
 
@@ -141,7 +142,7 @@ public sealed class EscortAiTests
     public void EscortQuest_FailsForTheGroupWhenThePlayerLeavesRange_AndTheEscortDisappears()
     {
         var quests = new EscortQuests();
-        using Rig rig = Setup(quests: quests);
+        using Rig rig = Setup(quests: quests, active: true);
         Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393)); // Galen's Escape (quest id only; the path is synthetic)
 
         rig.Player.Relocate(200, 0, Z, 0, 0);
@@ -165,7 +166,6 @@ public sealed class EscortAiTests
     {
         var quests = new EscortQuests();
         using Rig rig = Setup(quests: quests);
-        rig.Map.SetActive(rig.Escort, false); // the production state: an escort is not an active object
         Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393));
         Run(rig.World, 200);
         (float x, float y) = (rig.Escort.X, rig.Escort.Y);
@@ -214,7 +214,7 @@ public sealed class EscortAiTests
     public void EscortQuest_StaysActiveWhileAnOnlineGroupMemberIsNear()
     {
         var quests = new EscortQuests();
-        using Rig rig = Setup(quests: quests);
+        using Rig rig = Setup(quests: quests, active: true);
         (Player member, _) = AddPlayer(rig.World, 2, 0, 1);
         quests.Group = [rig.Player, member];
         Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393));
@@ -290,7 +290,7 @@ public sealed class EscortAiTests
     [Fact]
     public void AFight_BreaksTheEscortOff_ThenItRunsBackToWhereTheFightBegan_AndGoesOn()
     {
-        using Rig rig = Setup(hostility: new AlwaysHostile());
+        using Rig rig = Setup(hostility: new AlwaysHostile(), active: true);
         Assert.True(rig.Ai.Start(run: true));
         RunUntil(rig, () => rig.Ai.Reached.Count == 1);
 
@@ -328,7 +328,7 @@ public sealed class EscortAiTests
     [Fact]
     public void AnEscortEvade_RunningBackToTheCombatStart_RaisesEvadedOnce()
     {
-        using Rig rig = Setup(hostility: new AlwaysHostile());
+        using Rig rig = Setup(hostility: new AlwaysHostile(), active: true);
         Assert.True(rig.Ai.Start(run: true));
         RunUntil(rig, () => rig.Ai.Reached.Count == 1);
         rig.Player.Relocate(rig.Escort.X + 1, 0, Z, 0, 0);
