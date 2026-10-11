@@ -94,6 +94,20 @@ public sealed class PlayerbotQaSpellCoreTests : IDisposable
     }
 
     [Fact]
+    public void EveryRankOfASpell_SharesOneFinding()
+    {
+        var aggregator = new PlayerbotQaAggregator(100, 5);
+
+        string? rank1 = aggregator.Ingest(Gap(7384) with { SpellName = "Overpower", SpellRank = "Rank 1" }, new FakeFacts(), QaData.T0);
+        string? rank4 = aggregator.Ingest(Gap(11585) with { SpellName = "Overpower", SpellRank = "Rank 4" }, new FakeFacts(), QaData.T0);
+        string? other = aggregator.Ingest(Gap(133) with { SpellName = "Fireball" }, new FakeFacts(), QaData.T0);
+
+        Assert.Equal(rank1, rank4);
+        Assert.NotEqual(rank1, other);
+        Assert.Equal((2L, 11585u), (aggregator.Get(rank1!)!.Count, aggregator.Get(rank1!)!.Spell)); // the latest rank met is the one to reproduce
+    }
+
+    [Fact]
     public void TheSpellIds_SurviveARestart()
     {
         var aggregator = new PlayerbotQaAggregator(100, 5);

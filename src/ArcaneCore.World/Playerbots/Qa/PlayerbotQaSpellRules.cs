@@ -30,6 +30,13 @@ internal static class QaSpellGaps
     /// </summary>
     internal static bool IsAdvisory(string code) => string.Equals(code, NoConsumer, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Whether no failing path shows the gap (a DUMMY or SCRIPT_EFFECT no script claims runs a no-op handler; a DUMMY aura nobody reads applies fine), so
+    /// the monitor reports it from the static facts on a bot's cast. A missing effect or aura handler and an unselectable target are reported only when the
+    /// cast really meets them (<see cref="ISpellCastObserver.OnUnsupported"/>).
+    /// </summary>
+    internal static bool IsSilent(string code) => code is Dummy or Script or NoConsumer;
+
     /// <summary>The gap in a few words for a title: <c>aura ModStun not implemented</c>.</summary>
     internal static string Describe(string code, string detail) => code switch
     {
@@ -75,7 +82,20 @@ internal readonly record struct QaRefusalRule(QaRefusalClass Class, QaCause Caus
 /// </summary>
 internal static class PlayerbotQaSpellRefusals
 {
-    /// <summary>The suspicious results and why each one is.</summary>
+    /// <summary>
+    /// The suspicious results and why each one is. Only results no rule of play produces belong here (audit of 2026-10-11, the sources in
+    /// src/ArcaneCore.Game and src/ArcaneCore.World):
+    /// <list type="bullet">
+    /// <item>Error: only an enchant whose SpellItemEnchantment row is missing (EnchantItemSpells): a data gap.</item>
+    /// <item>Unknown: an invalid power type of the spell row, or an enchant while enchanting is unavailable: data or configuration, never play.</item>
+    /// <item>NotFound: a spell id the spell table does not have; a bot casts ids from its own book.</item>
+    /// <item>NotKnown: HandleCastRequest's book check (or a passive); the rotation resolves its abilities from the same book, never a rank it lacks.</item>
+    /// <item>SpellUnavailable and LevelRequirement: produced by nothing in the server today, so any occurrence is new behaviour.</item>
+    /// </list>
+    /// Not here, because rules of play produce them on a bot's ordinary choices: BadTargets (a finishing move such as Overpower or Execute at a target
+    /// without combo points or above 20% health, ComboPointService / AuraStateService; a buff on a mounted or shapeshifted target,
+    /// FormMountCastChecks), BadImplicitTargets (an area spell with no unit in reach) and TrainingPoints (taming without training points).
+    /// </summary>
     internal static FrozenDictionary<SpellCastResult, QaRefusalRule> Suspicious { get; } = new Dictionary<SpellCastResult, QaRefusalRule>
     {
         [SpellCastResult.Error] = new(QaRefusalClass.Suspicious, QaCause.NotImplemented, "the server answered SPELL_FAILED_ERROR: an internal failure, not a rule of play"),
@@ -84,12 +104,7 @@ internal static class PlayerbotQaSpellRefusals
         [SpellCastResult.SpellUnavailable] = new(QaRefusalClass.Suspicious, QaCause.NotImplemented, "the server says the spell is unavailable for a spell the bot chose from its book"),
         [SpellCastResult.NotKnown] = new(QaRefusalClass.Suspicious, QaCause.BehaviourBug,
             "the server says the bot does not know the spell: the rotation picked a spell its spellbook does not hold, or the book and the server disagree"),
-        [SpellCastResult.BadTargets] = new(QaRefusalClass.Suspicious, QaCause.BehaviourBug,
-            "the target the bot chose is not a valid target of the spell: the rotation's target rule or the server's target check is wrong"),
-        [SpellCastResult.BadImplicitTargets] = new(QaRefusalClass.Suspicious, QaCause.BehaviourBug,
-            "the spell found no implicit target: the rotation cast it where it cannot land, or the target selection is wrong"),
         [SpellCastResult.LevelRequirement] = new(QaRefusalClass.Suspicious, QaCause.BehaviourBug, "the bot cast a spell above its level"),
-        [SpellCastResult.TrainingPoints] = new(QaRefusalClass.Suspicious, QaCause.BehaviourBug, "the bot tried to learn a pet spell without training points"),
     }.ToFrozenDictionary();
 
     /// <summary>The rule of <paramref name="result"/> (suspicious when listed, otherwise expected).</summary>

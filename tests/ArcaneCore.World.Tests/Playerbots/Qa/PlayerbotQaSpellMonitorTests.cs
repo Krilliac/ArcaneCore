@@ -33,7 +33,7 @@ internal sealed class RecordingQaSink : IPlayerbotQaSink
 internal sealed class QaSpellKit : IDisposable
 {
     public const uint UnhandledEffect = 990001, UnsupportedAura = 990002, DummyOnly = 990003, ScriptOnly = 990004, DummyWithHeal = 990005,
-        BadTarget = 990006, SelfHeal = 990007, SelfAura = 990008;
+        BadTarget = 990006, SelfHeal = 990007, SelfAura = 990008, SelfAbsorb = 990009, SelfNuke = 990010, ReferencedAura = 990011;
 
     /// <summary>An effect number no handler is registered for.</summary>
     public const SpellEffectName NoHandler = (SpellEffectName)250;
@@ -43,11 +43,12 @@ internal sealed class QaSpellKit : IDisposable
 
     public static readonly Guid BotKey = new("11111111-2222-3333-4444-555555555555");
 
-    public QaSpellKit(IPlayerbotQaSink? sink = null, bool brokenHeal = false)
+    public QaSpellKit(IPlayerbotQaSink? sink = null, bool brokenHeal = false, bool brokenDamage = false, SpellInfo[]? extra = null)
     {
         World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 }, new NoSaves(),
             NullLogger<WorldRuntime>.Instance);
         UnsupportedAuraType = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Unsupported).Type;
+        ReferencedAuraType = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Referenced && !new SpellSystem(SpellStore.Empty, () => 0).HasAuraHandler(e.Type)).Type;
         System = new SpellSystem(new SpellStore(
         [
             Spell(UnhandledEffect, Effect(NoHandler, 1)),
@@ -58,9 +59,14 @@ internal sealed class QaSpellKit : IDisposable
             Spell(BadTarget, Effect(SpellEffectName.Heal, 10, NoTarget)),
             Spell(SelfHeal, Effect(SpellEffectName.Heal, 20)),
             Spell(SelfAura, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModThreat)) with { Duration = new SpellDuration(30_000, 0, 30_000) },
+            Spell(SelfAbsorb, Effect(SpellEffectName.ApplyAura, 50, aura: AuraType.SchoolAbsorb, misc: 127)) with { Duration = new SpellDuration(30_000, 0, 30_000) },
+            Spell(SelfNuke, Effect(SpellEffectName.SchoolDamage, 10)),
+            Spell(ReferencedAura, Effect(SpellEffectName.ApplyAura, 1, aura: ReferencedAuraType)) with { Duration = new SpellDuration(30_000, 0, 30_000) },
+            .. extra ?? [],
         ], [], []), () => 10_000) { MapUpdateIntervalMs = 0 };
         new ScriptEffectModule().Register(System);
         if (brokenHeal) System.RegisterEffect(SpellEffectName.Heal, static _ => { }); // a handler that silently does nothing
+        if (brokenDamage) System.RegisterEffect(SpellEffectName.SchoolDamage, static _ => { });
         Bot = AddPlayer(1, Class.Mage);
         Human = AddPlayer(2, Class.Mage);
         Sink = sink ?? new RecordingQaSink();
@@ -70,6 +76,9 @@ internal sealed class QaSpellKit : IDisposable
     }
 
     public AuraType UnsupportedAuraType { get; }
+
+    /// <summary>An aura type with no handler that a rule reads (AuraSupport: Referenced): it works.</summary>
+    public AuraType ReferencedAuraType { get; }
 
     public WorldRuntime World { get; }
 
@@ -87,7 +96,10 @@ internal sealed class QaSpellKit : IDisposable
 
     public long NowMs { get; set; } = 1_000_000;
 
-    public SpellCastResult Cast(Player caster, uint spell) => System.CastSpell(caster, spell, SpellCastTargets.ForSelf(), triggered: true);
+    /// <summary>A bot's own cast (not triggered: the monitor skips triggered casts).</summary>
+    public SpellCastResult Cast(Player caster, uint spell) => System.CastSpell(caster, spell, SpellCastTargets.ForSelf(), triggered: false);
+
+    public SpellCastResult CastTriggered(Player caster, uint spell) => System.CastSpell(caster, spell, SpellCastTargets.ForSelf(), triggered: true);
 
     public void Dispose() => World.Dispose();
 
@@ -104,8 +116,9 @@ internal sealed class QaSpellKit : IDisposable
         return player;
     }
 
-    public static SpellEffectInfo Effect(SpellEffectName effect, int value, SpellImplicitTarget targetA = SpellImplicitTarget.UnitCaster, AuraType aura = AuraType.None)
-        => new() { Effect = effect, BasePoints = value - 1, BaseDice = 1, DieSides = 1, TargetA = targetA, AuraType = aura };
+    public static SpellEffectInfo Effect(SpellEffectName effect, int value, SpellImplicitTarget targetA = SpellImplicitTarget.UnitCaster, AuraType aura = AuraType.None,
+        int misc = 0)
+        => new() { Effect = effect, BasePoints = value - 1, BaseDice = 1, DieSides = 1, TargetA = targetA, AuraType = aura, MiscValue = misc };
 
     public static SpellInfo Spell(uint id, params SpellEffectInfo[] effects) => new()
     {
@@ -146,6 +159,49 @@ public sealed class PlayerbotQaSpellMonitorTests
         QaSignal aura = kit.Signals[1];
         Assert.Equal((QaSpellKit.BotKey, (byte)Class.Mage, "Spell 990002", "Rank 2", 3, (uint)kit.UnsupportedAuraType, "ApplyAura"),
             (aura.BotKey!.Value, aura.BotClass, aura.SpellName, aura.SpellRank, aura.EffectValue, aura.Aura, aura.EffectName));
+    }
+
+    [Fact]
+    public void ATriggeredCast_AndAReferencedAuraWithNoHandler_AreNotReported()
+    {
+        using var kit = new QaSpellKit();
+
+        foreach (uint spell in new[] { QaSpellKit.UnhandledEffect, QaSpellKit.UnsupportedAura, QaSpellKit.DummyOnly, QaSpellKit.BadTarget })
+        {
+            kit.CastTriggered(kit.Bot, spell); // a proc, item or script cast: not the bot's choice, and outside its spell book
+        }
+
+        kit.Cast(kit.Bot, QaSpellKit.ReferencedAura); // no handler, but a rule reads it: it works
+
+        Assert.Empty(kit.Signals);
+    }
+
+    [Fact]
+    public void AnUnsupportedEffect_IsReportedOnlyFromTheFailingPath_NotFromTheRegistryAlone()
+    {
+        using var kit = new QaSpellKit();
+        kit.Cast(kit.Bot, QaSpellKit.UnhandledEffect);
+        Assert.Single(kit.Signals);
+
+        // The live server has the handler (a feature installed it after the facts were cached): the next cast meets no gap and reports nothing.
+        kit.System.RegisterEffect(QaSpellKit.NoHandler, static _ => { });
+        kit.NowMs += PlayerbotQaSpellMonitor.ThrottleMs;
+        kit.Cast(kit.Bot, QaSpellKit.UnhandledEffect);
+
+        Assert.Single(kit.Signals);
+    }
+
+    [Fact]
+    public void AFullyAbsorbedDamageSpell_IsNotNoEffect()
+    {
+        using var shielded = new QaSpellKit(brokenDamage: true);
+        shielded.Cast(shielded.Bot, QaSpellKit.SelfAbsorb);
+        for (int i = 0; i < 5; i++) shielded.Cast(shielded.Bot, QaSpellKit.SelfNuke); // looks like no damage: the shield could have taken it
+        Assert.DoesNotContain(shielded.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+
+        using var bare = new QaSpellKit(brokenDamage: true);
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++) bare.Cast(bare.Bot, QaSpellKit.SelfNuke);
+        Assert.Contains(bare.Signals, s => s.Kind == QaSignalKind.SpellNoEffect && s.Spell == QaSpellKit.SelfNuke);
     }
 
     [Fact]
@@ -260,9 +316,10 @@ public sealed class PlayerbotQaSpellMonitorTests
 
         kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfHeal, SpellCastResult.CastOk);
         kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfHeal, SpellCastResult.NotKnown);
-        kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfAura, SpellCastResult.BadTargets);
+        kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfAura, SpellCastResult.Error);
+        kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfAura, SpellCastResult.BadTargets); // a rule of play: only repeats count
 
-        Assert.Equal([("NotKnown", "the spell is in the bot's spellbook"), ("BadTargets", "")], kit.Signals.Select(s => (s.Reason, s.Detail)));
+        Assert.Equal([("NotKnown", "the spell is in the bot's spellbook"), ("Error", "")], kit.Signals.Select(s => (s.Reason, s.Detail)));
     }
 
     /// <summary>The refusal table (PlayerbotQaSpellRefusals): what is a rule of play and what a bot should never get.</summary>
@@ -284,8 +341,10 @@ public sealed class PlayerbotQaSpellMonitorTests
     [InlineData(SpellCastResult.NotFound, true)]
     [InlineData(SpellCastResult.SpellUnavailable, true)]
     [InlineData(SpellCastResult.NotKnown, true)]
-    [InlineData(SpellCastResult.BadTargets, true)]
-    [InlineData(SpellCastResult.BadImplicitTargets, true)]
+    [InlineData(SpellCastResult.BadTargets, false)]
+    [InlineData(SpellCastResult.BadImplicitTargets, false)]
+    [InlineData(SpellCastResult.TrainingPoints, false)]
+    [InlineData(SpellCastResult.TargetAurastate, false)]
     [InlineData(SpellCastResult.LevelRequirement, true)]
     public void TheRefusalTable(SpellCastResult result, bool suspicious)
     {
@@ -301,8 +360,8 @@ public sealed class PlayerbotQaSpellMonitorTests
     public void TheRefusalTable_ListsExactlyTheSuspiciousResults_AndReadsNoOtherName()
     {
         Assert.Equal(
-            [SpellCastResult.BadImplicitTargets, SpellCastResult.BadTargets, SpellCastResult.Error, SpellCastResult.LevelRequirement, SpellCastResult.NotKnown,
-                SpellCastResult.SpellUnavailable, SpellCastResult.TrainingPoints, SpellCastResult.Unknown, SpellCastResult.NotFound],
+            [SpellCastResult.Error, SpellCastResult.LevelRequirement, SpellCastResult.NotKnown, SpellCastResult.SpellUnavailable, SpellCastResult.Unknown,
+                SpellCastResult.NotFound],
             PlayerbotQaSpellRefusals.Suspicious.Keys.Order());
         Assert.Null(PlayerbotQaSpellRefusals.Of("NotAResult"));
         Assert.Null(PlayerbotQaSpellRefusals.Of("200"));
@@ -343,7 +402,8 @@ public sealed class PlayerbotQaSpellMonitorTests
             }
         }
 
-        HotPath(); // warm: the JIT, the dictionaries' buckets, and the one refusal report (the repeats reach the threshold once)
+        for (int i = 0; i < PlayerbotQaSpellMonitor.RepeatThreshold; i++) kit.Monitor.OnCastRefused(kit.Bot, QaSpellKit.SelfHeal, SpellCastResult.NotReady);
+        HotPath(); // warm: the JIT, the dictionaries' buckets; the repeats above reported once, the next ones are throttled
         int signals = kit.Signals.Count;
         Assert.Equal(2, signals);
         long before = GC.GetAllocatedBytesForCurrentThread();

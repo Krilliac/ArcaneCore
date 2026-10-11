@@ -111,7 +111,7 @@ public sealed class PlayerbotQaSpellCoverageTests : IDisposable
         using var kit = new QaSpellKit();
         var signal = new QaSignal
         {
-            Kind = QaSignalKind.SpellUnsupported, AtUtc = QaData.T0, BotKey = QaData.Bot1, BotClass = 8, Spell = FrostNova, EffectIndex = 0,
+            Kind = QaSignalKind.SpellUnsupported, AtUtc = QaData.T0, BotKey = QaData.Bot1, BotClass = 8, Spell = FrostNova, SpellName = "Frost Nova", EffectIndex = 0,
             Reason = QaSpellGaps.Aura, Detail = Unsupported.ToString(),
         };
 

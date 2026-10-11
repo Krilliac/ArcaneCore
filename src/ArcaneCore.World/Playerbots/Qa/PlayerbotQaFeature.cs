@@ -39,6 +39,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private bool _exportFailureLogged;
     private bool _coverageFailureLogged;
     private QaSpellCoverageReport? _coverage;
+    private WorldRuntime? _world;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -61,6 +62,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     public void Attach(WorldRuntime world)
     {
+        _world = world;
         _log = (ILogger?)services.GetService<ILogger<PlayerbotQaFeature>>() ?? NullLogger.Instance;
         _bus = services.GetService<PlayerbotQaSignalBus>();
         if (services.GetService<IOptions<PlayerbotQaOptions>>()?.Value is not { } options || _bus is null) return;
@@ -223,8 +225,10 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     }
 
     /// <summary>
-    /// Compute the static spell coverage (<see cref="PlayerbotQaSpellCoverage"/>) on the QA task, once the spell table is loaded, and fold each gap in as a
-    /// coverage finding. It is computed again only when the first run had no class trainer rows and they have loaded since. True when it ran now.
+    /// Compute the static spell coverage (<see cref="PlayerbotQaSpellCoverage"/>) once the spell table is loaded, and fold each gap in as a coverage finding.
+    /// The coverage reads the spell system's registries, which belong to the world thread (features install handlers from posted work, and a hot module
+    /// could register one later), so it runs there (<see cref="WorldRuntime.InvokeAsync{T}"/>, one call a server lifetime; the QA task waits at most 30 s)
+    /// and only the folding happens on the QA task. Without a world (unit tests) it runs on the caller. It is computed again only when the first run had no class trainer rows and they have loaded since. True when it ran now.
     /// A failure is logged once and retried on the next pass.
     /// </summary>
     internal bool TryComputeSpellCoverage()
@@ -235,7 +239,10 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         try
         {
             IEnumerable<uint> talents = services.GetService<Talents.TalentFeature>()?.Catalog?.Talents.SelectMany(t => t.RankSpells) ?? [];
-            QaSpellCoverageReport report = PlayerbotQaSpellCoverage.Build(spells.System, rows, talents, DateTime.UtcNow);
+            Func<QaSpellCoverageReport> build = () => PlayerbotQaSpellCoverage.Build(spells.System, rows, talents, DateTime.UtcNow);
+            QaSpellCoverageReport report = _world is { } world && !world.IsWorldThread
+                ? world.InvokeAsync(build).WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult()
+                : build();
             foreach (QaSignal gap in PlayerbotQaSpellCoverage.Signals(report)) Aggregator.Ingest(gap, _facts, report.ComputedUtc);
             Volatile.Write(ref _coverage, report);
             _log.LogInformation("Bot QA: {Coverage}", report.Describe());

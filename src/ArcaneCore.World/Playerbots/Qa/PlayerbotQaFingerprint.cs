@@ -84,9 +84,10 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.RelayScriptMissing => string.Create(CultureInfo.InvariantCulture, $"relayscript|relay={s.Relay}"),
             // A spell gap is the spell, the effect and the gap code: never a place, never a bot (the same gap met anywhere by any bot, or found
             // by the start-up coverage, is one finding).
-            QaSignalKind.SpellUnsupported => string.Create(CultureInfo.InvariantCulture, $"spellgap|spell={s.Spell}|effect={s.EffectIndex}|{Token(s.Reason)}"),
-            QaSignalKind.SpellRefused => string.Create(CultureInfo.InvariantCulture, $"spellrefused|spell={s.Spell}|result={Token(s.Reason)}"),
-            QaSignalKind.SpellNoEffect => string.Create(CultureInfo.InvariantCulture, $"spellnoeffect|spell={s.Spell}"),
+            // Keyed by the spell's name, not its id, so every rank of a spell shares one finding (and one issue); an unnamed spell keys by id.
+            QaSignalKind.SpellUnsupported => string.Create(CultureInfo.InvariantCulture, $"spellgap|{SpellKey(s)}|effect={s.EffectIndex}|{Token(s.Reason)}"),
+            QaSignalKind.SpellRefused => $"spellrefused|{SpellKey(s)}|result={Token(s.Reason)}",
+            QaSignalKind.SpellNoEffect => $"spellnoeffect|{SpellKey(s)}",
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }
@@ -98,6 +99,14 @@ internal static partial class PlayerbotQaFingerprint
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..FullChars].ToLowerInvariant();
 
     internal static string ShortId(string id) => id.Length <= ShortChars ? id : id[..ShortChars];
+
+    /// <summary><c>name=fireball</c> (the lower-case name, every rank alike), or <c>spell=133</c> for a signal without a name.</summary>
+    private static string SpellKey(QaSignal s)
+    {
+        string name = WhitespacePattern().Replace(s.SpellName.Replace('|', '/'), " ").Trim().ToLowerInvariant();
+        if (name.Length == 0) return string.Create(CultureInfo.InvariantCulture, $"spell={s.Spell}");
+        return "name=" + (name.Length <= 80 ? name : name[..80]);
+    }
 
     /// <summary>A reason code as a key part: at most 40 characters, no separator (a code is an identifier; anything else is normalised).</summary>
     private static string Token(string code)

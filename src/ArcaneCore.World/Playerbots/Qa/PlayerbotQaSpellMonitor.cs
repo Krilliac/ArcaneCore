@@ -8,8 +8,10 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// Watches the spells of managed playerbots and reports what does not work (docs/areas/playbots-qa.md, Spell signals), straight to
 /// <see cref="IPlayerbotQaSink"/> with no log line:
 /// <list type="bullet">
-/// <item><see cref="QaSignalKind.SpellUnsupported"/>: a bot's cast of a spell with a gap (<see cref="PlayerbotQaSpellGapAnalyzer"/>), and an implicit
-/// target the cast could not select (<see cref="OnUnsupported"/>).</item>
+/// <item><see cref="QaSignalKind.SpellUnsupported"/>: a bot's own (not triggered) cast that really met a missing effect handler, an Unsupported aura type or an
+/// implicit target the system cannot select (<see cref="OnUnsupported"/>, raised on the failing path itself, so a handler the live server has can never be
+/// reported), and a cast of a spell with a silent gap the cast cannot show (a DUMMY or SCRIPT_EFFECT no script claims, a DUMMY aura nothing reads:
+/// <see cref="QaSpellGaps.IsSilent"/>, from <see cref="PlayerbotQaSpellGapAnalyzer"/>). Triggered casts (procs, item and script casts) are skipped.</item>
 /// <item><see cref="QaSignalKind.SpellRefused"/>: the cast result the server refused a bot's cast with (<see cref="OnCastRefused"/>): a suspicious
 /// result at once, an expected one when the same bot gets it <see cref="RepeatThreshold"/> times within <see cref="RepeatWindowMs"/>
 /// (<see cref="PlayerbotQaSpellRefusals"/>).</item>
@@ -24,8 +26,13 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// </summary>
 internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 {
-    /// <summary>An expected refusal is reported once one bot got it this many times for one spell ...</summary>
-    internal const int RepeatThreshold = 8;
+    /// <summary>
+    /// An expected refusal is reported once one bot got it this many times for one spell ... A bot leaves a refused spell out for
+    /// <see cref="PlayerbotCombatSpells.RefusalBackoffMs"/> (4 s), so a bot that honours its backoff gets at most 15 refusals a minute: only a bot that
+    /// retries faster than its own backoff (a loop that does not learn) reaches this. A rule-driven refusal stream (Overpower at a target without combo
+    /// points, every 4 s) never does.
+    /// </summary>
+    internal const int RepeatThreshold = (int)(RepeatWindowMs / PlayerbotCombatSpells.RefusalBackoffMs) + 5;
 
     /// <summary>... within this window.</summary>
     internal const long RepeatWindowMs = 60_000;
@@ -73,12 +80,14 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 
     public void OnCast(SpellCast cast)
     {
-        if (_identify(cast.Caster) is not { } bot) return;
+        if (cast.IsTriggered || _identify(cast.Caster) is not { } bot) return;
         SpellFacts facts = FactsOf(cast.Spell);
         if (facts.Gaps.Length == 0) return;
         long now = _clockMs();
         foreach (QaSpellGap gap in facts.Gaps)
         {
+            // A missing handler is reported only when a cast meets it (OnUnsupported); here only the gaps no failing path shows.
+            if (!QaSpellGaps.IsSilent(gap.Code)) continue;
             if (!Due(QaSignalKind.SpellUnsupported, cast.Spell.Id, gap.EffectIndex, now)) continue;
             Report(bot, cast.Spell, QaSignalKind.SpellUnsupported, gap.Code, gap.Detail, gap.EffectIndex, gap.EffectName, gap.EffectValue, gap.Aura,
                 string.Create(CultureInfo.InvariantCulture, $"a bot cast spell {cast.Spell.Id}: effect {gap.EffectIndex} {QaSpellGaps.Describe(gap.Code, gap.Detail)}"));
@@ -87,14 +96,36 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 
     public void OnUnsupported(SpellCast cast, int effectIndex, string kind, uint value)
     {
-        // Effects and auras are found per spell in OnCast (so they are counted once per cast); only the target is known at this point alone.
-        if (!string.Equals(kind, "implicit target", StringComparison.Ordinal) || _identify(cast.Caster) is not { } bot) return;
-        long now = _clockMs();
-        if (!Due(QaSignalKind.SpellUnsupported, cast.Spell.Id, 100 + effectIndex, now)) return;
+        if (cast.IsTriggered || _identify(cast.Caster) is not { } bot) return;
         SpellEffectInfo? effect = effectIndex >= 0 && effectIndex < cast.Spell.Effects.Count ? cast.Spell.Effects[effectIndex] : null;
+        string effectName = effect?.Effect.ToString() ?? string.Empty;
+        int effectValue = effect is null ? 0 : effect.BasePoints + 1;
+        long now = _clockMs();
+        switch (kind)
+        {
+            case "effect":
+                if (!Due(QaSignalKind.SpellUnsupported, cast.Spell.Id, effectIndex, now)) return;
+                Report(bot, cast.Spell, QaSignalKind.SpellUnsupported, QaSpellGaps.Effect, effectName, effectIndex, effectName, effectValue, 0,
+                    string.Create(CultureInfo.InvariantCulture, $"a bot cast spell {cast.Spell.Id}: effect {effectIndex} {effectName} has no handler"));
+                return;
+            case "aura":
+                // A Referenced type has no handler but a rule reads it (it works): only an Unsupported type is a gap.
+                if (PlayerbotQaSpellGapAnalyzer.LevelOf((AuraType)value) != AuraSupportLevel.Unsupported
+                    || !Due(QaSignalKind.SpellUnsupported, cast.Spell.Id, effectIndex, now)) return;
+                string aura = ((AuraType)value).ToString();
+                Report(bot, cast.Spell, QaSignalKind.SpellUnsupported, QaSpellGaps.Aura, aura, effectIndex, effectName, effectValue, value,
+                    string.Create(CultureInfo.InvariantCulture, $"a bot cast spell {cast.Spell.Id}: effect {effectIndex} applies aura {aura}, which nothing implements"));
+                return;
+            case "implicit target":
+                break;
+            default:
+                return;
+        }
+
+        if (!Due(QaSignalKind.SpellUnsupported, cast.Spell.Id, 100 + effectIndex, now)) return;
         string target = string.Create(CultureInfo.InvariantCulture, $"{value} ({(SpellImplicitTarget)value})");
-        Report(bot, cast.Spell, QaSignalKind.SpellUnsupported, QaSpellGaps.Target, target, effectIndex, effect?.Effect.ToString() ?? string.Empty,
-            effect is null ? 0 : effect.BasePoints + 1, 0, string.Create(CultureInfo.InvariantCulture, $"a bot cast spell {cast.Spell.Id}: implicit target {target} is not implemented"));
+        Report(bot, cast.Spell, QaSignalKind.SpellUnsupported, QaSpellGaps.Target, target, effectIndex, effectName,
+            effectValue, 0, string.Create(CultureInfo.InvariantCulture, $"a bot cast spell {cast.Spell.Id}: implicit target {target} is not implemented"));
     }
 
     // --- SpellNoEffect --------------------------------------------------------------------------------------------------------------------
@@ -107,7 +138,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
         int selected = outcome.EffectMask & facts.MeasurableMask;
         if (outcome.EffectMask != 0 && selected == 0) return; // nothing measurable aimed at this target (a self part of a mixed spell)
         var key = (cast.Caster.Guid.Value, cast.Spell.Id);
-        if (outcome.EffectMask != 0 && Worked(cast, outcome, facts, selected))
+        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected)))
         {
             if (_noEffect.ContainsKey(key)) _noEffect[key] = 0;
             return;
@@ -142,6 +173,22 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
                 SpellAuraHolder holder = holders[i];
                 if (holder.Spell.Id == cast.Spell.Id && holder.CasterGuid == cast.Caster.Guid) return true;
             }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A damage hit on a target with an absorb shield (SCHOOL_ABSORB, MANA_SHIELD) cannot be judged: the outcome counts damage dealt after absorbs, so a fully
+    /// absorbed hit looks like none. Only reached on the rare path where nothing measurable happened.
+    /// </summary>
+    private bool Unmeasurable(SpellTargetOutcome outcome, SpellFacts facts, int selected)
+    {
+        if ((selected & facts.DamageMask) == 0) return false;
+        IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(outcome.Target);
+        for (int i = 0; i < holders.Count; i++)
+        {
+            if (holders[i].HasAura(AuraType.SchoolAbsorb) || holders[i].HasAura(AuraType.ManaShield)) return true;
         }
 
         return false;

@@ -149,6 +149,44 @@ public sealed class PlayerbotQaSpellFeatureTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// GitHub review of #w22-qa-spells: a Battle Stance warrior casts Overpower unconditionally, the server refuses it with BadTargets at any target
+    /// without combo points (ComboPointService, vmangos Spell.cpp:7035-7038), and the bot retries every 4 s. Ten minutes of that from two warriors, each
+    /// on its own rank, opens nothing.
+    /// </summary>
+    [Fact]
+    public async Task AWarriorsOverpowerRefusalStream_PublishesNothing()
+    {
+        var (feature, sink, transport, services) = Feature();
+        using (services)
+        {
+            SpellInfo[] overpower =
+            [
+                QaSpellKit.Spell(7384, QaSpellKit.Effect(SpellEffectName.WeaponDamage, 5, SpellImplicitTarget.UnitEnemy)) with { Name = "Overpower", Rank = "Rank 1" },
+                QaSpellKit.Spell(11585, QaSpellKit.Effect(SpellEffectName.WeaponDamage, 35, SpellImplicitTarget.UnitEnemy)) with { Name = "Overpower", Rank = "Rank 4" },
+            ];
+            using var kit = new QaSpellKit(sink, extra: overpower);
+            var warriors = new PlayerbotQaSpellMonitor(sink, kit.System,
+                unit => unit is ArcaneCore.Game.Entities.Player p ? new QaBot(PlayerbotQaBots.KeyOf(p.Guid), (byte)ArcaneCore.Game.Class.Warrior) : null,
+                () => kit.NowMs);
+            for (long at = 0; at < 10 * 60_000; at += PlayerbotCombatSpellsBackoff)
+            {
+                warriors.OnCastRefused(kit.Bot, 7384, SpellCastResult.BadTargets);
+                warriors.OnCastRefused(kit.Human, 11585, SpellCastResult.BadTargets);
+                kit.NowMs += PlayerbotCombatSpellsBackoff;
+            }
+
+            feature.Drain();
+            await PassAsync(feature);
+
+            Assert.Empty(transport.Created);
+            Assert.DoesNotContain(feature.Aggregator!.Snapshot(), f => f.Kind == QaSignalKind.SpellRefused);
+            await feature.StopAsync();
+        }
+    }
+
+    private const long PlayerbotCombatSpellsBackoff = ArcaneCore.World.Playerbots.PlayerbotCombatSpells.RefusalBackoffMs;
+
     [Fact]
     public async Task WithQaDisabled_TheSinkIsInert_AndNothingIsQueued()
     {
