@@ -19,6 +19,9 @@ public interface IUnitSpellQueries
     /// <summary>Whether a live root aura holds <paramref name="unit"/> (an AI root lifted then keeps the aura's root).</summary>
     bool IsRooted(Unit unit) => false;
 
+    /// <summary>Sum the creature's level-eligible MOD_DETECT_RANGE auras (vmangos Creature::GetAttackDistance, Creature.cpp:2225-2230).</summary>
+    float GetDetectRangeModifier(Creature creature) => 0;
+
     /// <summary>cmangos Unit::RemoveAurasDueToSpell (EventAI REMOVEAURASFROMSPELL); false when nothing could be removed.</summary>
     bool RemoveAuras(Unit unit, uint spellId) => false;
 
@@ -43,6 +46,22 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
         ArgumentNullException.ThrowIfNull(unit);
         SpellAuraHolder? holder = spells().GetAuras(unit).FirstOrDefault(h => h.Spell.Id == spellId);
         return holder?.StackAmount ?? 0;
+    }
+
+    public float GetDetectRangeModifier(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        float total = 0;
+        foreach (SpellAuraHolder holder in spells().GetAuras(creature))
+        {
+            if (holder.IsRemoved || holder.Spell.MaxTargetLevel < creature.Level) continue;
+            foreach (SpellAura? aura in holder.AuraSpan)
+            {
+                if (aura is { Type: AuraType.ModDetectRange }) total += aura.Amount;
+            }
+        }
+
+        return total;
     }
 
     public bool IsRooted(Unit unit)

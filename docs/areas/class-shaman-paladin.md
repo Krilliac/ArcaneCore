@@ -87,6 +87,8 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
   report "not implemented"), `PlacementDistance=2.0`, `OwnerLeash=true`.
 - `TotemSystem.Register` throws when any of its effects already has a handler, because `RegisterEffect` replaces by
   key and two lanes registering the same effect would silently clobber each other.
+- Sentry Totem 6495's DUMMY aura moves its owner's camera to the air-slot totem while applied and restores it on
+  aura removal or totem unsummon (vmangos `Aura::HandleAuraDummy`, `SpellAuras.cpp:2182-2196`).
 
 ### 4. Intrinsic immunity and Grounding protection
 

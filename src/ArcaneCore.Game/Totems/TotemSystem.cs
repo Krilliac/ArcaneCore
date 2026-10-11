@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -104,6 +105,24 @@ public sealed partial class TotemSystem
 
         _spells.RegisterEffect(SpellEffectName.DestroyAllTotems, EffectDestroyAllTotems);
         _spells.RegisterCastCheck(new TotemOwnerCastCheck(this));
+        // vmangos Aura::HandleAuraDummy (SpellAuras.cpp:2182-2196): Sentry Totem's caster
+        // looks through the air-slot totem while its DUMMY aura is applied.
+        _spells.RegisterDummyAuraHandler(6495, (_, holder, _, apply) =>
+        {
+            if (holder.Target is not Player player) return;
+            Creature? totem = GetTotem(player, TotemSlot.Air);
+            if (apply)
+            {
+                if (totem is null) return;
+                UnitControl.SightWatchers.AddOrUpdate(totem, player);
+                CharmService.SetView(player, totem);
+            }
+            else
+            {
+                if (totem is not null) UnitControl.SightWatchers.Remove(totem);
+                CharmService.SetView(player, null);
+            }
+        });
         return true;
     }
 
@@ -158,6 +177,12 @@ public sealed partial class TotemSystem
         }
 
         Creature totem = info.Creature;
+        if (UnitControl.SightWatchers.TryGetValue(totem, out Player? viewer))
+        {
+            UnitControl.SightWatchers.Remove(totem);
+            if (viewer.GetUInt64(UpdateFields.PlayerFarsight) == totem.Guid.Value)
+                CharmService.SetView(viewer, null);
+        }
         if (totem.IsInWorld)
         {
             Send(totem, WorldOpcode.SmsgGameobjectDespawnAnim, totem.Guid);

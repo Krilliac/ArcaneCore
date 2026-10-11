@@ -48,10 +48,10 @@ public static class CreatureAggro
     /// vmangos Creature::GetAttackDistance (Objects/Creature.cpp:2193-2240): the template's detection range
     /// (<paramref name="detectionRange"/>, 18 by default) minus the level difference (target above the creature shrinks it,
     /// below grows it, at most 25 levels counted below), never under <c>min(detectionRange, 5)</c>, times the aggro rate.
-    /// A detection range under 1 or a rate of 0 means no proximity aggro. The detect-range auras are not applied (no aura
-    /// type exists for them yet).
+    /// A detection range under 1 or a rate of 0 means no proximity aggro. The eligible detect-range aura amounts join after
+    /// the level difference and before the minimum (Creature.cpp:2225-2237).
     /// </summary>
-    public static float GetAttackDistance(float detectionRange, int creatureLevel, int targetLevel, float aggroRate)
+    public static float GetAttackDistance(float detectionRange, int creatureLevel, int targetLevel, float aggroRate, float detectRangeModifier = 0)
     {
         if (aggroRate == 0)
         {
@@ -64,7 +64,7 @@ public static class CreatureAggro
             return 0;
         }
 
-        float distance = detectionRange - levelDifference;
+        float distance = detectionRange - levelDifference + detectRangeModifier;
         float minimum = Math.Min(detectionRange, MinimumRadius);
         if (distance < minimum)
         {

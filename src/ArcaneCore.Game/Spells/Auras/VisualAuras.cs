@@ -19,6 +19,12 @@ public sealed class VisualAuras : ISpellHandlerModule
     {
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterAura(AuraType.ModScale, new AuraHandler(ApplyScale, null));
+        // vmangos Aura::HandleAurasVisible (SpellAuras.cpp:4581-4584).
+        system.RegisterAura(AuraType.AurasVisible, new AuraHandler(static (_, holder, _, apply) =>
+        {
+            if (apply) holder.Target.UnitFlags |= UnitFlags.AurasVisible;
+            else holder.Target.UnitFlags &= ~UnitFlags.AurasVisible;
+        }, null));
         system.RegisterAura(AuraType.TrackCreatures, new AuraHandler(
             (s, h, a, apply) => ApplyTracking(s, h, a, apply, UpdateFields.PlayerTrackCreatures), null));
         system.RegisterAura(AuraType.TrackResources, new AuraHandler(

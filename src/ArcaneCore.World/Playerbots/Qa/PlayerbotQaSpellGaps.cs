@@ -56,7 +56,7 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
 
             if (IsAuraEffect(effect.Effect) && effect.AuraType != AuraType.None)
             {
-                if (AuraGap(spell, effect) is { } code) (gaps ??= []).Add(new QaSpellGap(i, code, effect.AuraType.ToString(), name, value, (uint)effect.AuraType));
+                if (AuraGap(spell, effect, i) is { } code) (gaps ??= []).Add(new QaSpellGap(i, code, effect.AuraType.ToString(), name, value, (uint)effect.AuraType));
                 continue;
             }
 
@@ -81,14 +81,18 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
     /// <summary>The level <see cref="AuraSupport"/> gives <paramref name="type"/> (Unsupported for a value outside the table).</summary>
     internal static AuraSupportLevel LevelOf(AuraType type) => (uint)type < (uint)s_auraLevels.Length ? s_auraLevels[(int)type] : AuraSupportLevel.Unsupported;
 
-    private string? AuraGap(SpellInfo spell, SpellEffectInfo effect)
+    private string? AuraGap(SpellInfo spell, SpellEffectInfo effect, int index)
     {
         AuraType type = effect.AuraType;
         if (type is AuraType.Dummy or AuraType.OverrideClassScripts)
         {
             // A known reader outside the registries: the Judgement script reads the DUMMY aura of every seal (PaladinSpellScripts).
             bool read = system.HasDummyAuraHandler(spell.Id) || system.HasPeriodicDummyAura(spell.Id) || TalentEffectCoverage.HasConsumer(system, spell, effect)
-                || (type == AuraType.Dummy && PaladinSpells.IsSeal(spell));
+                || (type == AuraType.Dummy && PaladinSpells.IsSeal(spell))
+                // vmangos Unit::SpellHealingBonusTaken (Unit.cpp:5364-5378) reads these two DUMMY effects on healing.
+                || (type == AuraType.Dummy && index is 0 or 1
+                    && spell.IsFitToFamily(PaladinSpells.Family, BlessingOfLightRules.BlessingsBit)
+                    && spell.SpellVisual == BlessingOfLightRules.BlessingOfLightVisual);
             return read ? null : QaSpellGaps.NoConsumer;
         }
 
@@ -104,7 +108,7 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
             SpellEffectInfo other = effects[j];
             if (j == index || other.IsEmpty || other.Effect is SpellEffectName.Dummy or SpellEffectName.ScriptEffect) continue;
             if (!system.HasEffectHandler(other.Effect)) continue;
-            if (IsAuraEffect(other.Effect) && other.AuraType != AuraType.None && AuraGap(spell, other) is not null) continue;
+            if (IsAuraEffect(other.Effect) && other.AuraType != AuraType.None && AuraGap(spell, other, j) is not null) continue;
             return true;
         }
 
