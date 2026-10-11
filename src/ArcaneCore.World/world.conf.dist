@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       317 keys
+#   WORLD                       323 keys
 #
 ###############################################################################
 
@@ -9158,6 +9158,85 @@ World.Playerbots.AllowLocalLlm = false
 # substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
 # World.Playerbots.AllowedMaps.0 = 0
 # World.Playerbots.AllowedMaps.1 = 1
+
+#
+#    World.Playerbots.Battlegrounds.Enabled
+#        Description: Let free bots queue for battlegrounds (on by default). Off: no bot starts a
+#                     queue; bots already walking to a battlemaster, queued or in a match finish.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.Enabled = true
+
+#
+#    World.Playerbots.Battlegrounds.MaxBotsPerBattleground
+#        Description: The most bots in one battleground (0..80; 0 queues none). Bots waiting for one
+#                     battleground type and level bracket never exceed it, a team never gets more
+#                     than half of it (rounded up) and a bot declines an invitation into a match
+#                     that already holds this many.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.MaxBotsPerBattleground = 20
+
+#
+#    World.Playerbots.Battlegrounds.MaxQueueWaitMinutes
+#        Description: Minutes a bot waits in a queue before it leaves it (1..240); it then does not
+#                     queue for that type again for 10 minutes.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.MaxQueueWaitMinutes = 30
+
+#
+#    World.Playerbots.Battlegrounds.MaxTravelYards
+#        Description: The farthest, in yards, a battlemaster may stand from a bot for the bot to
+#                     walk to it (100..20000): a straight line on the bot's own map, to a
+#                     battlemaster whose faction is not hostile to the bot.
+#        Type: int
+#        Default: 1500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.MaxTravelYards = 1500
+
+#
+#    World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues
+#        Description: Let bots fill the queues real players wait in, so their games start (on by
+#                     default): a bracket with a real player waiting gets bots at once (no chance
+#                     roll) up to the minimum both teams need, and they pick the type and bracket
+#                     the player waits for.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
+
+#
+#    World.Playerbots.Battlegrounds.QueueChancePerMinute
+#        Description: The chance, per minute, that a free bot of a fitting level starts to queue
+#                     (0..1; 0 never, 1 at the next scan). The chance of one scan is 1 - (1 -
+#                     p)^(scanSeconds / 60), so the rate does not depend on how often the
+#                     coordinator looks.
+#        Type: float
+#        Default: 0.05
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
 #    World.Playerbots.Chat.Channels
