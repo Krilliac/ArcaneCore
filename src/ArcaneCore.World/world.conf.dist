@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       331 keys
+#   WORLD                       334 keys
 #
 ###############################################################################
 
@@ -10402,6 +10402,20 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 World.Playerbots.Party.TeleportToLeader = true
 
 #
+#    World.Playerbots.Population.ActionLogSeconds
+#        Description: The population logs one information line for the passes that parked, started,
+#                     created or moved bots, at most once per this many seconds of world time; the
+#                     changes of the passes in between are added up into the next line (0..3600; 0 =
+#                     a line for every such pass).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ActionLogSeconds = 60
+
+#
 #    World.Playerbots.Population.AllianceSharePct
 #        Description: With Factions Both, the share of new bots that are Alliance (0..100).
 #        Type: int
@@ -10471,6 +10485,21 @@ World.Playerbots.Population.AllianceSharePct = 50
 # World.Playerbots.Population.Classes.6 = 8
 # World.Playerbots.Population.Classes.7 = 9
 # World.Playerbots.Population.Classes.8 = 11
+
+#
+#    World.Playerbots.Population.ConfirmWindows
+#        Description: The consecutive fresh windows of WindowTicks ticks the p95 must stay over
+#                     TickP95BudgetMs before a park for the budget, or under ResumeBelowPct of it
+#                     before an add (1..20). 1 acts on a single window. A window between the two, a
+#                     change, or a window on the other side starts the count again; a lowered target
+#                     is honoured without waiting.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ConfirmWindows = 2
 
 #
 #    World.Playerbots.Population.CreatureLevelMargin
@@ -10594,6 +10623,19 @@ World.Playerbots.Population.MaxRelocationsPerInterval = 2
 World.Playerbots.Population.MaxStartsPerInterval = 4
 
 #
+#    World.Playerbots.Population.MinRunSeconds
+#        Description: Anti-churn: a bot the population started is not parked for the tick budget
+#                     until it has run this many seconds of world time (0..3600; 0 = no minimum).
+#                     Over the target such a bot is still parked, last.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MinRunSeconds = 300
+
+#
 #    World.Playerbots.Population.OutlevelMargin
 #        Description: How many levels a bot may be above the highest level of its zone before it is
 #                     relocated (0..10).
@@ -10646,8 +10688,12 @@ World.Playerbots.Population.ResumeBelowPct = 80
 #    World.Playerbots.Population.TargetOnline
 #        Description: The number of managed bots to keep running (0..1000). The effective target is
 #                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count
-#                     towards it but are never stopped by the population; above the target only the
-#                     bots the population owns are parked. 0 parks every bot the population owns.
+#                     towards it but are never stopped by the population: the running ones are taken
+#                     off the top, and what is left (the population's own share) is what the bands
+#                     split by weight. An operator's bot never counts in a band, so a band full of
+#                     operator bots still gets its share of population bots. Above the target only
+#                     the bots the population owns are parked. 0 parks every bot the population
+#                     owns.
 #        Type: int
 #        Default: 0
 #        Allowed: a whole number, -2147483648 to 2147483647

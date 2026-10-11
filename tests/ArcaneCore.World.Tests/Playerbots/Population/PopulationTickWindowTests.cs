@@ -37,7 +37,7 @@ public sealed class PopulationTickWindowTests
         Assert.Equal(2.0, window.P95Ms(200)); // the slow ticks from before the reset no longer count
 
         PlayerbotPopulationOptions options = new();
-        Assert.Equal("settling", PopulationBudgetController.Decide(window.Samples, window.P95Ms(200), 0, 0, 10, options).State);
+        Assert.Equal("settling", PopulationBudgetController.Decide(window.Samples, window.P95Ms(200), 0, 0, 10, options, windows: 0).State);
     }
 
     [Fact]

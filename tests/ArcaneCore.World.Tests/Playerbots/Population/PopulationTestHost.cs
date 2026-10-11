@@ -167,6 +167,9 @@ internal sealed class PopulationTestHost : IAsyncDisposable
             Population =
             {
                 Enabled = true, TargetOnline = 2, IntervalSeconds = 600, WindowTicks = 20, TickP95BudgetMs = 60, ResumeBelowPct = 80,
+                // One window confirms and no minimum run time: a pass acts on the p95 the test sets (the hysteresis and anti-churn
+                // tests raise them).
+                ConfirmWindows = 1, MinRunSeconds = 0,
                 MaxStartsPerInterval = 4, MaxParksPerInterval = 1, MaxCreatePerMinute = 10, Factions = PopulationFactions.Alliance,
                 Classes = [1], Bands = [new PopulationBand { MinLevel = 1, MaxLevel = 10, Weight = 1 }], Relocation = PopulationRelocation.Off,
             },

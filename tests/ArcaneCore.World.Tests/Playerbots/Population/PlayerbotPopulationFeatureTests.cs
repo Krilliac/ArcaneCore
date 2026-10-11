@@ -748,6 +748,208 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task OperatorBotsInABand_DoNotSuppressThatBandsCreation_TheyOnlyReduceTheTotal()
+    {
+        // Live 2026-10-11: 201 operator bots (Wfbot*, Stressbot*) at levels 11-20 were counted as that band's "have", above its
+        // share of the target, so the population never created an 11-20 bot. Here two operator bots stand in band 1-10 (the one band
+        // the host can create in without the boost content).
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 6;
+            o.Population.TargetOnline = 4;
+            o.Population.Bands = [new PopulationBand { MinLevel = 1, MaxLevel = 10, Weight = 1 }, new PopulationBand { MinLevel = 11, MaxLevel = 20, Weight = 1 }];
+        });
+        foreach (string name in new[] { "Operatorone", "Operatortwo" })
+        {
+            PlayerbotOperationResult made = await world.Bots.CreateAsync(name, 1, 1);
+            Assert.True((await world.Bots.StartAsync(Assert.IsType<Guid>(made.BotId).ToString())).Success);
+        }
+
+        await world.WaitForSettledAsync(2);
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        // The operator bots take 2 of the 4 from the total; the population's own 2 are split by weight, 1 per band. Band 1-10 has none
+        // of its own yet, so it gets one (band 11-20 needs the boost, which the host does not have).
+        Assert.Equal("under-budget", status.State);
+        Assert.Contains("created 1", status.Reason);
+        Assert.Equal((1, 1), (status.Bands[0].Want, status.Bands[0].Have));
+        Assert.Equal((1, 0), (status.Bands[1].Want, status.Bands[1].Have));
+        Assert.Single(world.Members.Snapshot);
+    }
+
+    [Fact]
+    public async Task APassThatChangesSomething_LogsOneInformationLine_AtMostOncePerActionLogInterval()
+    {
+        var log = new CapturingLogger();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: s => s.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(log));
+        static bool IsAction(string line) => line.StartsWith("Playerbot population: parked ", StringComparison.Ordinal);
+
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        string first = Assert.Single(log.Infos, IsAction);
+        Assert.Contains("parked 0, started 0, created 1", first);
+        Assert.Contains("state under-budget", first);
+        Assert.Contains("bands 1-10 want 1 have 1", first);
+        await world.WaitForSettledAsync(1);
+
+        // A pass that changes nothing logs nothing; a second change inside the interval is held for the next line.
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        world.Population.TargetOnline = 2;
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        Assert.Single(log.Infos, IsAction);
+        await world.WaitForSettledAsync(2);
+
+        // A minute of world time later the held change is logged by the next pass, even one that changes nothing itself.
+        await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += 61_000; return true; });
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("at-target", status.State);
+        Assert.Equal(2, log.Infos.Count(IsAction));
+        string second = log.Infos.Last(IsAction);
+        Assert.Contains("parked 0, started 0, created 1", second);
+        Assert.Contains("bands 1-10 want 2 have 2", second);
+    }
+
+    [Fact]
+    public async Task OverTheBudget_ADeadBotIsParkedBeforeAHealthyOne_AndTheStatusSaysWhy()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync();
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        await world.WaitForSettledAsync(2);
+        Guid[] bots = [.. world.Members.Snapshot.Select(m => m.BotId)];
+        // The bot a band-fullness or most-recently-started rule would not prefer: the later one by BotId and start.
+        Guid dead = bots.Max();
+        await world.Host.World.InvokeAsync(() => world.Bots.FindSession(dead)!.Player!.Health = 0);
+
+        world.Ticks.Set(200, 80);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 1 (dead 1)", status.Reason);
+        await world.Host.WaitForWorldAsync(() => world.RunningCount == 1, "one bot parked");
+        Assert.NotEqual(ManagedPlayerbotState.Running, Assert.Single(world.Bots.Snapshot(), s => s.BotId == dead).State);
+    }
+
+    [Fact]
+    public async Task TheRotation_RestartsTheBotParkedLongestAgoFirst()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 3);
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        await world.WaitForSettledAsync(3);
+
+        // Park two, one pass and some world time apart (MaxParksPerInterval 1). The bot with the highest BotId dies first, so it is the
+        // first one parked: a rule by row age or BotId would bring back the other one.
+        Guid highest = world.Members.Snapshot.Max(m => m.BotId);
+        await world.Host.World.InvokeAsync(() => world.Bots.FindSession(highest)!.Player!.Health = 0);
+        var parked = new List<Guid>();
+        foreach (int target in new[] { 2, 1 })
+        {
+            HashSet<Guid> before = [.. world.Bots.Snapshot().Where(s => s.State == ManagedPlayerbotState.Running).Select(s => s.BotId)];
+            world.Population.TargetOnline = target;
+            world.Ticks.Set(200, 10);
+            Assert.Contains("parked 1", (await world.PassAsync()).Reason);
+            await world.Host.WaitForWorldAsync(() => world.RunningCount == target, "a bot parked");
+            parked.Add(Assert.Single(before, id => world.Bots.Snapshot().Single(s => s.BotId == id).State != ManagedPlayerbotState.Running));
+            await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += 5_000; return true; });
+        }
+
+        foreach (Guid bot in parked)
+        {
+            string name = world.Bots.Snapshot().Single(s => s.BotId == bot).Name;
+            await world.Host.WaitForWorldAsync(() => world.Host.World.FindOnlinePlayer(name) is null, "the parked bot logged out");
+        }
+
+        // Room for one again: the bot parked first comes back, not the one parked last.
+        world.Population.TargetOnline = 2;
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("started 1, created 0", status.Reason);
+        await world.WaitForSettledAsync(2);
+        Assert.Equal(highest, parked[0]);
+        Assert.Equal(ManagedPlayerbotState.Running, world.Bots.Snapshot().Single(s => s.BotId == parked[0]).State);
+        Assert.NotEqual(ManagedPlayerbotState.Running, world.Bots.Snapshot().Single(s => s.BotId == parked[1]).State);
+    }
+
+    [Fact]
+    public async Task ConfirmWindows_OneSlowWindowDoesNotPark_TheSecondDoes_AndTheCountStartsAgainAfterThePark()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.ConfirmWindows = 2);
+        world.Ticks.Set(200, 10);
+        Assert.Equal("under-budget-confirming", (await world.PassAsync()).State);
+        world.Ticks.Set(200, 10);
+        Assert.Contains("created 2", (await world.PassAsync()).Reason);
+        await world.WaitForSettledAsync(2);
+
+        world.Ticks.Set(200, 80);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("over-budget-confirming", status.State);
+        Assert.Equal(2, world.RunningCount);
+
+        world.Ticks.Set(200, 80);
+        status = await world.PassAsync();
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 1", status.Reason);
+        await world.Host.WaitForWorldAsync(() => world.RunningCount == 1, "one bot parked");
+
+        // The park reset the window and the count: the next slow window is the first again.
+        world.Ticks.Set(200, 80);
+        Assert.Equal("over-budget-confirming", (await world.PassAsync()).State);
+        Assert.Equal(1, world.RunningCount);
+    }
+
+    [Fact]
+    public async Task AntiChurn_ABotStartedLessThanMinRunSecondsAgo_IsNotParkedForTheBudget()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.MinRunSeconds = 300);
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        await world.WaitForSettledAsync(2);
+
+        world.Ticks.Set(200, 80);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 0", status.Reason);
+        Assert.Equal(2, world.RunningCount);
+
+        await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += 300_000; return true; });
+        world.Ticks.Set(200, 80);
+        status = await world.PassAsync();
+        Assert.Contains("parked 1 (rotation 1)", status.Reason);
+    }
+
+    [Fact]
+    public async Task ABandItsParkedBotsCannotFill_GetsNewBotsAlongsideTheRotation_NotOnlyAfterEveryParkedBotIsBack()
+    {
+        // Under a tick budget some bots are always parked; when restarts took every slot first, a band its parked bots could not fill
+        // waited for creation for as long as anything was parked.
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 6;
+            o.Population.TargetOnline = 5;
+            o.Population.MaxStartsPerInterval = 2;
+        });
+        foreach (string name in new[] { "Parkedone", "Parkedtwo", "Parkedthree" })
+        {
+            PlayerbotOperationResult made = await world.Bots.CreateAsync(name, 1, 1);
+            ManagedPlayerbot record = Assert.IsType<ManagedPlayerbot>(world.Owners.Peek(Assert.IsType<Guid>(made.BotId)));
+            world.Members.Seed(new PlayerbotPopulationMember(record.BotId, record.CharacterId, PopulationTestHost.Elwynn, 0, 100, 100));
+        }
+
+        // Band 1-10 wants 5: 3 parked bots can fill 3 of it, so 2 must be new. Two slots: one new bot, one restart.
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("started 1, created 1", status.Reason);
+        Assert.Equal(4, world.Members.Snapshot.Count);
+    }
+
+    [Fact]
     public async Task ABandNoZoneTakes_IsLoggedOnceTheAtlasIsLocated()
     {
         var log = new CapturingLogger();
@@ -780,8 +982,11 @@ public sealed class PlayerbotPopulationFeatureTests
     private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>
     {
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _warnings = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _infos = new();
 
         public IReadOnlyList<string> Warnings => [.. _warnings];
+
+        public IReadOnlyList<string> Infos => [.. _infos];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -791,6 +996,7 @@ public sealed class PlayerbotPopulationFeatureTests
             Func<TState, Exception?, string> formatter)
         {
             if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) _warnings.Enqueue(formatter(state, exception));
+            else if (logLevel == Microsoft.Extensions.Logging.LogLevel.Information) _infos.Enqueue(formatter(state, exception));
         }
     }
 

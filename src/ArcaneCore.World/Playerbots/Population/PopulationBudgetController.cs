@@ -14,16 +14,19 @@ internal enum PopulationAction
 }
 
 /// <summary>
-/// The control loop's answer. <see cref="State"/> is a stable code (settling, over-target, over-budget, over-budget-hold,
-/// over-budget-no-owned, hysteresis, under-budget, at-target); <see cref="Reason"/> says it in words for status.
+/// The control loop's answer. <see cref="State"/> is a stable code (settling, over-target, over-budget, over-budget-confirming,
+/// over-budget-hold, over-budget-no-owned, hysteresis, under-budget, under-budget-confirming, at-target); <see cref="Reason"/> says it
+/// in words for status.
 /// </summary>
 internal readonly record struct PopulationDecision(PopulationAction Action, int Count, string State, string Reason);
 
 /// <summary>
 /// The tick-budget control loop as a pure function (an ArcaneCore operator choice, not a game rule; the idea of a bounded population
-/// with periodic add and remove is vmangos <c>RandomBot.MinBots/MaxBots/Refresh</c>, PlayerBotMgr.cpp:54-56, 368-391). It has no state:
-/// the hysteresis is the band between <c>ResumeBelowPct</c> of the budget (adding allowed below it) and the budget itself (parking
-/// above it), and the caller resets the tick window after every change, so a decision never sees ticks from before the last one.
+/// with periodic add and remove is vmangos <c>RandomBot.MinBots/MaxBots/Refresh</c>, PlayerBotMgr.cpp:54-56, 368-391). It has no state.
+/// The hysteresis is threefold: the band between <c>ResumeBelowPct</c> of the budget (adding allowed below it) and the budget itself
+/// (parking above it); the caller resets the tick window after every change, so a decision never sees ticks from before the last
+/// one; and a park or an add for the tick budget needs <c>ConfirmWindows</c> consecutive fresh windows on the same side of the
+/// band (<see cref="PopulationBudgetWindows"/> counts them), so one slow window cannot park and one quiet window cannot add.
 /// </summary>
 internal static class PopulationBudgetController
 {
@@ -39,8 +42,13 @@ internal static class PopulationBudgetController
     /// <param name="runningAll">Every managed bot running, whoever created it.</param>
     /// <param name="ownedRunning">The running bots the population owns (the only ones it may park).</param>
     /// <param name="effectiveTarget">The lower of TargetOnline and MaxBots.</param>
+    /// <param name="windows">
+    /// Consecutive fresh windows, this one included, whose p95 fell on the same side of the band as this one
+    /// (<see cref="PopulationBudgetWindows"/>). A park for the budget needs <c>ConfirmWindows</c> of them over the budget, an add as
+    /// many under the resume line; fewer hold in the matching <c>-confirming</c> state.
+    /// </param>
     public static PopulationDecision Decide(int samples, double p95Ms, int runningAll, int ownedRunning, int effectiveTarget,
-        PlayerbotPopulationOptions options)
+        PlayerbotPopulationOptions options, int windows)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (samples < options.WindowTicks)
@@ -58,6 +66,8 @@ internal static class PopulationBudgetController
             string over = $"tick p95 {p95Ms:0.0} ms is over the {options.TickP95BudgetMs} ms budget";
             if (!options.ParkWhenOverBudget) return new(PopulationAction.Hold, 0, "over-budget-hold", over + "; parking is off");
             if (ownedRunning == 0) return new(PopulationAction.Hold, 0, "over-budget-no-owned", over + "; the population owns no running bot to park");
+            if (windows < options.ConfirmWindows)
+                return new(PopulationAction.Hold, 0, "over-budget-confirming", $"{over} in {windows} of the {options.ConfirmWindows} windows a park needs");
             return new(PopulationAction.Park, Math.Min(options.MaxParksPerInterval, ownedRunning), "over-budget", over);
         }
 
@@ -65,10 +75,47 @@ internal static class PopulationBudgetController
         if (p95Ms >= resumeBelow)
             return new(PopulationAction.Hold, 0, "hysteresis", $"tick p95 {p95Ms:0.0} ms is not below {resumeBelow:0.0} ms ({options.ResumeBelowPct}% of the budget)");
 
+        if (runningAll < effectiveTarget && windows < options.ConfirmWindows)
+            return new(PopulationAction.Hold, 0, "under-budget-confirming",
+                $"tick p95 {p95Ms:0.0} ms is under {resumeBelow:0.0} ms in {windows} of the {options.ConfirmWindows} windows an add needs");
+
         if (runningAll < effectiveTarget)
             return new(PopulationAction.Add, Math.Min(effectiveTarget - runningAll, options.MaxStartsPerInterval), "under-budget",
                 $"tick p95 {p95Ms:0.0} ms is under {resumeBelow:0.0} ms and {runningAll} of {effectiveTarget} bots run");
 
         return new(PopulationAction.Hold, 0, "at-target", $"{runningAll} of {effectiveTarget} bots run");
+    }
+}
+
+/// <summary>
+/// Counts the consecutive fresh windows whose p95 fell on the same side of the hysteresis band (over the budget, under the resume
+/// line, or between them), for <see cref="PopulationBudgetController.Decide"/>. A pass with fewer than <c>WindowTicks</c> fresh ticks
+/// (settling) is no evidence and leaves the count alone; <see cref="Reset"/> follows every change, together with the tick window.
+/// <para>Thread affinity: the population pass (one at a time).</para>
+/// </summary>
+internal sealed class PopulationBudgetWindows
+{
+    private int _side;
+    private int _count;
+
+    /// <summary>The count so far (0 after a reset, until a full window is seen).</summary>
+    public int Count => _count;
+
+    /// <summary>Record this pass's window and return the count, this window included (unchanged while settling).</summary>
+    public int Observe(int samples, double p95Ms, PlayerbotPopulationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (samples < options.WindowTicks) return _count;
+        int side = p95Ms > options.TickP95BudgetMs ? 1 : p95Ms < options.TickP95BudgetMs * options.ResumeBelowPct / 100.0 ? -1 : 0;
+        _count = _count > 0 && side == _side ? _count + 1 : 1;
+        _side = side;
+        return _count;
+    }
+
+    /// <summary>Forget the windows seen (after a start, creation, park or relocation: the load they measured is gone).</summary>
+    public void Reset()
+    {
+        _count = 0;
+        _side = 0;
     }
 }
