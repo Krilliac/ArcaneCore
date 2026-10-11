@@ -118,6 +118,36 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     }
 
     /// <summary>
+    /// A death loop (the third death at one spot) where no spirit healer can be had: the loop asks for the healer
+    /// (<see cref="PlayerbotRecovery.TakeSpiritHealer"/>), but taking it would leave the ghost waiting until the fallback faulted
+    /// (<see cref="PlayerbotRecovery.SpiritHealerFailed"/>) and the bot was kicked, then disabled. It keeps its corpse run and
+    /// reclaims; the loop's errand set-aside and the home return do the rest. Before, the loop forced the healer and faulted.
+    /// </summary>
+    [Fact]
+    public async Task ADeathLoopWithoutASpiritHealerToBeHad_ReclaimsTheBody_AndNeverFaults()
+    {
+        var clock = new TestDeathClock(1_000);
+        var kalimdor = new Vector3(100f, 100f, DeadminesTestContent.OutsideFloor);
+        await using DungeonBotHost host = await StartAsync(clock, map: 1, at: kalimdor);
+        PlayerbotBrain brain = await BrainAsync(host, new PlayerbotHomeArea(1, kalimdor, 300f, "Kalimdorhome"));
+        await DieAndComeBackAsync(host, brain);
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        await host.OnWorldAsync(() =>
+        {
+            Assert.StartsWith("death loop: died 3 times", brain.StallReport, StringComparison.Ordinal);
+            Assert.True(brain.Recovery.SpiritHealerRequested);
+        });
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 300); // a fault throws out of brain.Update
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
+        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
     /// A body outside the home whose spirit healer would leave the bot only a few yards nearer the home's centre (less than
     /// <see cref="PlayerbotRecovery.OutsideHomeGainYards"/>) is reclaimed: so small a gain is not worth resurrection sickness and a
     /// quarter of the durability.

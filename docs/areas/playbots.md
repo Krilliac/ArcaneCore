@@ -124,7 +124,9 @@ graveyards, a run-time outdoor PvP link or `World:Death:GraveyardFallbackToDefau
 `OutsideHomeGainYards` (50) when it does not leave it inside the home. The body is given up only when a spirit healer can be had at
 all, one in sight or a graveyard for the ghost's position (looked up once per body and 50-yard cell): with neither, the ghost would wait
 for a healer until the fallback faulted (`playerbot-recovery-spirit-healer-failed`), and vmangos leaves a spirit with no linked
-graveyard where it died, so it reclaims its body as before. A repeat death also sets aside the errand that led there, as a death loop
+graveyard where it died, so it reclaims its body as before. The same gate holds for a death loop's request
+(`PlayerbotRecovery.TakeSpiritHealer`, `SpiritHealerRequested`): with no healer to be had the looping bot keeps its corpse run instead
+of faulting, and the loop's errand set-aside and the home return take it from there. A repeat death also sets aside the errand that led there, as a death loop
 does. Any of them takes the spirit healer for this death (resurrection sickness and 25%
 durability, vmangos NPCHandler.cpp:430-471) and logs `Playerbot X takes the spirit healer instead of its body at (...): reason (detail)`
 at Information; the home return then takes the revived bot home as after any resurrection (Auto: a teleport when the way is far or

@@ -120,7 +120,7 @@ public sealed class PlayerbotDeathLoopTests
                     player.Map!.RemoveObject(killer);
                     Assert.True(death >= 2 == brain.IsEntrySetAside(Entry), $"death {death}: set aside {brain.IsEntrySetAside(Entry)}");
                     Assert.Equal(death == 3, brain.StallReport?.StartsWith("death loop: died 3 times", StringComparison.Ordinal) == true);
-                    Assert.Equal(death == 3, brain.Recovery.SpiritHealerChosen);
+                    Assert.Equal(death == 3, brain.Recovery.SpiritHealerRequested);
                     if (death < 3) player.Map!.Combat.ResurrectPlayer(player, 1f, applySickness: false);
                     return true;
                 });

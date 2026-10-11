@@ -234,6 +234,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private float _bestRouteLeft = float.PositiveInfinity;
     private bool _spiritHealer;
     private bool _preferSpiritHealer;
+    private bool _healerRequested;
     private Vector3? _spot;
     private object? _spotKey;
 
@@ -246,15 +247,24 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <summary>Whether the spirit-healer fallback was taken for this death.</summary>
     internal bool UsingSpiritHealer => _spiritHealer;
 
-    /// <summary>Whether this death goes to the spirit healer from the start (<see cref="TakeSpiritHealer"/>).</summary>
+    /// <summary>
+    /// Whether this death goes to the spirit healer instead of the body (a death loop, <see cref="TakeSpiritHealer"/>, once a healer
+    /// can be had; or an unsafe body, <see cref="UnsafeBody"/>).
+    /// </summary>
     internal bool SpiritHealerChosen => _preferSpiritHealer;
+
+    /// <summary>Whether the spirit healer was asked for this death (<see cref="TakeSpiritHealer"/>), whether or not one can be had.</summary>
+    internal bool SpiritHealerRequested => _healerRequested;
 
     /// <summary>
     /// Take the spirit healer for this death instead of the body: the bot keeps dying where its body lies (a death loop,
     /// <see cref="PlayerbotStallWatch.RecordDeath"/>), so reviving there again would only repeat it. The body is still released
-    /// first; the choice lasts until the bot is alive again.
+    /// first; the choice lasts until the bot is alive again. A ghost whose body lies on its map takes it only while a spirit healer
+    /// can be had (one in sight, or a graveyard for its position, <see cref="HealerOutcomeKnown"/>): with neither it would wait for a
+    /// healer until the fallback faulted (<see cref="SpiritHealerFailed"/>), so it keeps its corpse run, as a spirit with no linked
+    /// graveyard is left where it died (vmangos Player::RepopAtGraveyard); the errand set aside and the home return do the rest.
     /// </summary>
-    internal void TakeSpiritHealer() => _preferSpiritHealer = true;
+    internal void TakeSpiritHealer() => _healerRequested = true;
 
     /// <summary>The revive spot the ghost walks to or last chose (inspection and tests).</summary>
     internal Vector3? ReviveSpot => _spot;
@@ -325,6 +335,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotCorpsePlace place = corpse is null ? PlayerbotCorpsePlace.None
             : corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map) ? PlayerbotCorpsePlace.ThisMap
             : PlayerbotCorpsePlace.OtherMap;
+        // A death loop's request (TakeSpiritHealer): taken at once without a body on this map (the healer is the only way back
+        // anyway, as before), and with one only while a healer can be had; otherwise the corpse run goes on and it is asked again.
+        if (_healerRequested && !_preferSpiritHealer && ghost
+            && (place != PlayerbotCorpsePlace.ThisMap || HealerOutcomeKnown(player, corpse!)))
+            _preferSpiritHealer = true;
+
         // Only when the spirit healer can be had at all (one in sight, or a graveyard for this place, where one stands): with
         // neither, giving the body up would leave the ghost waiting for a healer until the fallback faults (SpiritHealerFailed);
         // vmangos leaves a spirit with no linked graveyard where it died (Player::RepopAtGraveyard), and the body is its way back.
@@ -406,6 +422,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _thinksSinceProgress = 0;
         _spiritHealer = false;
         _preferSpiritHealer = false;
+        _healerRequested = false;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
