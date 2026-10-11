@@ -39,14 +39,9 @@ public sealed class Aq40ImportedRuntimeTests
         string directory = Path.Combine(Path.GetTempPath(), "arcane-aq40-runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         string copy = Path.Combine(directory, "world.db");
-        File.Copy(Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!, copy);
         try
         {
-            IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:World:Provider"] = "Sqlite",
-                ["Database:World:ConnectionString"] = $"Data Source={copy};Pooling=False",
-            }).Build();
+            IConfiguration config = await RealWorldDatabaseCopy.CreateAsync(copy);
             string? terrain = Environment.GetEnvironmentVariable("ARCANECORE_TEST_TERRAIN_DIR");
             await using var host = WorldTestHost.Start(configure: options =>
             {
@@ -221,6 +216,15 @@ public sealed class Aq40ImportedRuntimeTests
                 var nilashAi = Assert.IsType<VeknilashAI>(nilash.AI);
                 var lorAi = Assert.IsType<VeklorAI>(lor.AI);
                 Assert.Contains(creatures.Creatures, c => c.Entry is 15316 or 15317 && c.AI is TwinBugAI);
+                var temple = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
+                // The direct test teleport bypasses 4047; mangos-classic temple_of_ahnqiraj.cpp:31-32,92-98 raises the emperors after a 2000 ms dialogue step (vmangos uses +3000 ms).
+                Assert.Equal(StandState.Kneel, nilash.StandState);
+                Assert.Equal(StandState.Kneel, lor.StandState);
+                temple.OnAreaTrigger(player, TempleOfAhnQirajInstance.AreaTriggerTwinEmperors);
+                temple.Update(0);
+                temple.Update(2000);
+                Assert.Equal(StandState.Stand, nilash.StandState);
+                Assert.Equal(StandState.Stand, lor.StandState);
                 var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
                 Assert.True(ImmunityRules.IsImmuneToDamage(spells, nilash,
                     SpellSchoolMasks.Of(SpellSchool.Frost), spells.Store.Get(116)));
