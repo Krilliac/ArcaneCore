@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
+using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
