@@ -299,6 +299,15 @@ internal static class PlayerbotTram
     /// </summary>
     internal static TramStep Drive(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
     {
+        TramStep step = DriveStage(session, player, options, elapsedMs, out failure);
+        // Every failure carries its reason: a trip that failed on the continent noted it on the trip only, and the log said just "the
+        // trip failed" (live-w22-r1).
+        if (step == TramStep.Failed && failure is null) failure = TripOf(player)?.Failure;
+        return step;
+    }
+
+    private static TramStep DriveStage(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
+    {
         failure = null;
         if (!player.IsInWorld || player.Map is not { } map) return IsTraveling(player) ? TramStep.Traveling : TramStep.Idle;
         uint now = session.World.NowMs;

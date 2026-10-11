@@ -296,9 +296,20 @@ internal static class PlayerbotNavigation
                 || PlayerbotMotion.IsBlacklisted(player, path.End)))
             return false;
 
-        route = Bounded(path.Points, options, complete: Reaches(path));
+        route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
         return route is not null;
     }
+
+    /// <summary>
+    /// A partial answer whose end is the destination's own spot, projected onto the mesh from above or below (within a yard, flat): the
+    /// way reaches the destination as surely as a complete one, and a long one is cut at the route bound like one (<see cref="Bounded"/>).
+    /// An area trigger's centre floats above its floor: the Stormwind tram entrance (2173) is 4.8 yards above it, so the mesh answered
+    /// its 2,314-yard way from Sentinel Hill as incomplete, the bound refused it whole, and 67 Westfall bots stood still for a minute
+    /// and gave their tram trip up (live-w22-r1, 2026-10-11 08:05).
+    /// </summary>
+    private static bool EndsAt(PathResult path, Vector3 destination)
+        => path.HasPath && (path.Type & PathType.Incomplete) != 0 && (path.Type & (PathType.NotUsingPath | PathType.NoPath)) == 0
+            && Vector2.Distance(Flat(path.End), Flat(destination)) <= 1f;
 
     /// <summary>
     /// The route along <paramref name="points"/>, or null when a point is not finite or it is longer than

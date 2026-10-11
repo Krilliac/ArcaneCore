@@ -147,6 +147,24 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
     run may walk the tram map while its body lies there (`PlayerbotTram.AllowsWalkingOn`), reclaims it as anywhere else (no spirit healer
     stands on map 369, so the body is the way back), and the revived bot, on the tram map without a trip, leaves by the nearest platform's exit.
 
+**Live regression w22 (2026-10-11 08:05, `live-w22-r1`).** 67 dwarf and gnome bots homed in Westfall (1,879 to 2,913 yards from the
+Stormwind entrance; `before-start-characters.db`) began their trip at their first think and gave it up about 60 s later, every one
+still where it started, logged as `tram: the trip failed` without a reason. Two causes:
+* **The way was refused whole.** The trip walks to the entrance trigger's centre, which floats 4.8 yards above its floor. From Sentinel
+  Hill the real mesh finds the whole 2,314-yard way to the floor under it, but answers it as incomplete (its end is the centre projected
+  onto the mesh), and a route longer than `MaxRouteYards` (2000) was cut at the bound only when it was complete: an incomplete one was
+  refused, and `TryPlanToward` tries no shorter step after a refusal by the mesh. Now a partial answer whose end lies within a yard (flat)
+  of the destination counts as reaching it (`PlayerbotNavigation.EndsAt`) and is cut at the bound like a complete one; the bot walks the
+  first 2,000 yards and plans the rest from there. This holds for every far bot walk, not only the tram's.
+* **The reason was lost.** A trip that failed on the continent noted its reason on the trip only; `PlayerbotTram.Drive` now always returns
+  it, and the log reads e.g. `tram: no way to the Deeprun Tram - Stormwind Instance entrance from -10193.8,1089.2,36.8; it gives up that
+  goal`.
+
+`PlayerbotTramLiveRegressionTests` (real terrain and DBCs) replays Wfbotak from its live start: through Elwynn to the Stormwind gate,
+the entrance at 328 s, aboard at 346 s, out at Ironforge at 427 s (before: still at Sentinel Hill, failed at 60.7 s with "tram: the trip
+failed"). `PlayerbotTramFarStartTests` is the same in the fixture world (a 2,330-yard incomplete way under the trigger; a trip with no way
+fails with its reason).
+
 Tests: `PlayerbotTramRouteTests` (the brain drives a bot from the Stormwind tram exit to Ironforge with the classic-db trigger and car
 rows, a synthetic animation and flat floors, with the anticheat judging the bot as a client: no fake transport, no speed; a destination of
 `PlayerbotWorldDestinations` on the Ironforge side begins the trip; a bot on the tram map without a trip plans nothing there and leaves by
