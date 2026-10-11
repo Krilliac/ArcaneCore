@@ -49,6 +49,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private long _lastWarning;
     private bool _warning;
 
+    // Test seam: observe the hand-off to waiters before the consumer takes another slot.
+    internal Action? BeforeWaitersCompletedForTesting { get; set; }
+
     /// <param name="scopes">Where the scoped <see cref="ICharacterStore"/> comes from.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="options">Backlog warning thresholds (<c>World:SaveQueueWarnDepth</c>, <c>World:SaveQueueWarnAgeMs</c>); the defaults when null.</param>
@@ -387,22 +390,6 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             error = ex;
         }
 
-        foreach (Waiter waiter in waiters)
-        {
-            if (dropped && waiter.Settlement)
-            {
-                waiter.Done.TrySetException(new InvalidOperationException($"character {slot.Id} is quarantined"));
-            }
-            else if (error is not null)
-            {
-                waiter.Done.TrySetException(error);
-            }
-            else
-            {
-                waiter.Done.TrySetResult();
-            }
-        }
-
         lock (_gate)
         {
             slot.InFlight = false;
@@ -416,6 +403,24 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             else
             {
                 Reap(slot);
+            }
+        }
+
+        // Publish a barrier result only after its slot no longer counts as in flight.
+        BeforeWaitersCompletedForTesting?.Invoke();
+        foreach (Waiter waiter in waiters)
+        {
+            if (dropped && waiter.Settlement)
+            {
+                waiter.Done.TrySetException(new InvalidOperationException($"character {slot.Id} is quarantined"));
+            }
+            else if (error is not null)
+            {
+                waiter.Done.TrySetException(error);
+            }
+            else
+            {
+                waiter.Done.TrySetResult();
             }
         }
     }
