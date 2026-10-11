@@ -142,6 +142,38 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         TryLaunch();
     }
 
+    /// <summary>After the world stopped: wait for the store job in flight, then write a queued phase start and boss deaths.</summary>
+    public async Task StopAsync()
+    {
+        if (!_hasStore || _store is null) return;
+        try
+        {
+            await _store.InFlight.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The queued work below is still written.
+        }
+
+        WarEffortPhase? phase = _queuedPhase == _inFlightPhase ? null : _queuedPhase;
+        int[] deaths = [.. _pendingBossDeaths];
+        if (phase is null && deaths.Length == 0) return;
+        var result = new RefreshResult();
+        try
+        {
+            await RunStoreAsync(phase, deaths, full: false, UtcNowUnix(), result).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not write the queued AQ war-effort state at shutdown");
+        }
+
+        if (result.BossDeathFailure is { } failure)
+            logger.LogError(failure, "could not persist AQ Colossus death at shutdown");
+    }
+
+    private WarEffortPhase? _inFlightPhase;
+
     private void OnTick(uint diffMs)
     {
         if (!_hasStore) return;
@@ -179,6 +211,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         if (!full && deaths.Length == 0 && phase is null) return;
         long now = UtcNowUnix();
         var result = new RefreshResult();
+        _inFlightPhase = phase;
         _store.TryRun(() => RunStoreAsync(phase, deaths, full, now, result),
             () =>
             {

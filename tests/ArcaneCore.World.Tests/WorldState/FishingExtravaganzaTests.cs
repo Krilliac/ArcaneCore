@@ -83,7 +83,7 @@ public sealed class FishingExtravaganzaTests
     }
 
     [Fact]
-    public void A_restart_keeps_the_announced_start_and_the_winner()
+    public async Task A_restart_keeps_the_announced_start_and_the_winner()
     {
         var store = new MemoryStore();
         FishingExtravaganzaFeature before = Create(store, () => true);
@@ -92,6 +92,7 @@ public sealed class FishingExtravaganzaTests
         before.HasWinner = true;
         before.PreviousWinTime = before.NowUnix();
         before.ResetIfStale(); // not stale: nothing changes
+        await before.Saves.FlushAsync(); // the state is written off the world thread
         Assert.Equal(new FishingExtravaganzaState(false, true, false, 0), store.Saved);
 
         // the winner is saved by the quest reward; simulate that save

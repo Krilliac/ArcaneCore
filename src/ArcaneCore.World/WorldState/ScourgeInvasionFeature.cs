@@ -288,6 +288,41 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         TryLaunch();
     }
 
+    /// <summary>
+    /// After the world stopped: wait for the store job in flight, then write what is still queued (start/stop, city defeats,
+    /// Necropolis deaths; each store call is idempotent for a repeated death). The world thread no longer runs, so its queues are
+    /// read here directly.
+    /// </summary>
+    public async Task StopAsync()
+    {
+        if (!_hasStore || _store is null) return;
+        try
+        {
+            await _store.InFlight.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Logged by the job's failure path when it was applied; the queued work below is still written.
+        }
+
+        StoreOp[] ops = [.. _ops];
+        _ops.Clear();
+        var deaths = _pendingDeaths.Select(p => (p.Key.ZoneId, p.Key.SpawnGuid, NextAttackSeconds: p.Value)).ToArray();
+        if (ops.Length == 0 && deaths.Length == 0) return;
+        var result = new RefreshResult();
+        try
+        {
+            await RunStoreAsync(ops, deaths, full: false, NowUnix(), [], result).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not write the queued Scourge invasion state at shutdown");
+        }
+
+        if (result.DeathFailure is { } failure)
+            logger.LogError(failure, "could not persist Scourge Necropolis death at shutdown");
+    }
+
     private void Enqueue(StoreOp op)
     {
         _ops.Add(op);

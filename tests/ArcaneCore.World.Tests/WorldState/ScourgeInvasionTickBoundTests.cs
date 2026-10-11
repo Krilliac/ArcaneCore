@@ -172,6 +172,20 @@ public sealed class ScourgeInvasionTickBoundTests(ITestOutputHelper output)
         Assert.All(ScourgeInvasionCatalog.Zones, zone => Assert.True(rig.Events.IsActiveEvent(zone.EventId)));
     }
 
+    [Fact]
+    public async Task StopAsyncWritesWhatTheWorldThreadStillHadQueued()
+    {
+        var store = new SlowStore();
+        using var rig = new Rig(store, inline: false);
+        store.Gate.Reset();
+        rig.Tick(5_000); // a refresh job, stuck in the store
+        Assert.True(rig.Events.Service!.StartEvent(17)); // queued behind it
+        rig.World.Stop(); // the world loop is done: no more applies
+        store.Gate.Set();
+        await rig.Invasion.StopAsync();
+        Assert.Equal(ScourgeInvasionState.Enabled, store.State.State);
+    }
+
     /// <summary>
     /// Reproducible before/after: a store with 200 ms per call (a contended SQLite file) and a disabled invasion, 30 refresh
     /// periods. "inline" runs every store call inside the tick as the feature did before; the default runs them off the world
