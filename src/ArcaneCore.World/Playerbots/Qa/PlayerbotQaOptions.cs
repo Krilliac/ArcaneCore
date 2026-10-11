@@ -132,6 +132,21 @@ public sealed class PlayerbotQaGitHubOptions
     /// <summary>The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default).</summary>
     public string[] Labels { get; set; } = ["bot-qa"];
 
+    /// <summary>
+    /// The most spell issues (spell unsupported, refused, no effect) created in one publish pass (0..100; 0 creates none). Spell findings can be
+    /// numerous on a first run; the hourly <see cref="MaxIssuesPerHour"/> still applies on top.
+    /// </summary>
+    public int MaxSpellIssuesPerPass { get; set; } = 2;
+
+    /// <summary>The most spell issues created per rolling 24 hours (0..1000; 0 creates none), saved with the hourly caps.</summary>
+    public int MaxSpellIssuesPerDay { get; set; } = 10;
+
+    /// <summary>
+    /// Add a per-kind label (<c>bot-qa:spell-unsupported</c>, <c>bot-qa:death-loop</c>, ...) to created issues besides <see cref="Labels"/> (off by
+    /// default: the <c>gh</c> transport refuses a label that does not exist yet, so create the labels in the repository first).
+    /// </summary>
+    public bool KindLabels { get; set; }
+
     /// <summary>Seconds one GitHub request may take (1..120).</summary>
     public int RequestTimeoutSeconds { get; set; } = 15;
 
@@ -150,6 +165,8 @@ public sealed class PlayerbotQaGitHubOptions
         if (MaxIssuesPerHour is < 0 or > 1000) problems.Add("GitHub:MaxIssuesPerHour must be 0..1000");
         if (MaxCommentsPerHour is < 0 or > 1000) problems.Add("GitHub:MaxCommentsPerHour must be 0..1000");
         if (CommentIntervalHours is < 1 or > 720) problems.Add("GitHub:CommentIntervalHours must be 1..720");
+        if (MaxSpellIssuesPerPass is < 0 or > 100) problems.Add("GitHub:MaxSpellIssuesPerPass must be 0..100");
+        if (MaxSpellIssuesPerDay is < 0 or > 1000) problems.Add("GitHub:MaxSpellIssuesPerDay must be 0..1000");
         if (RequestTimeoutSeconds is < 1 or > 120) problems.Add("GitHub:RequestTimeoutSeconds must be 1..120");
         if (MaxListPages is < 1 or > 100) problems.Add("GitHub:MaxListPages must be 1..100");
         if (Labels is null || Labels.Length is < 1 or > 10 || Labels.Any(label => string.IsNullOrWhiteSpace(label) || label.Length > 50 || label.Any(char.IsControl)))

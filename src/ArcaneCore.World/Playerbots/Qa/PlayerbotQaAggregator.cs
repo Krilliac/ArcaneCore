@@ -59,24 +59,35 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     return null;
                 }
 
-                finding = new QaFinding { Id = id, Key = key, Kind = signal.Kind, FirstSeenUtc = signal.AtUtc };
+                finding = new QaFinding { Id = id, Key = key, Kind = signal.Kind, FirstSeenUtc = signal.AtUtc, LastSeenUtc = signal.AtUtc };
                 _byId[id] = finding;
             }
 
-            finding.Count++;
-            if (signal.AtUtc > finding.LastSeenUtc) finding.LastSeenUtc = signal.AtUtc;
-            if (finding.FirstSeenUtc > signal.AtUtc) finding.FirstSeenUtc = signal.AtUtc;
-            if (bot is { } hash)
+            if (signal.FromCoverage)
             {
-                if (finding.Bots.Count < QaFinding.MaxTrackedBots) finding.Bots.Add(hash);
+                // A static fact (the start-up spell coverage): it marks the finding, adds no occurrence, sample or bot.
+                finding.Coverage = true;
             }
-            else if (signal.BotCount > finding.AnonymousBots)
+            else
             {
-                finding.AnonymousBots = signal.BotCount;
+                finding.Count++;
+                if (signal.AtUtc > finding.LastSeenUtc) finding.LastSeenUtc = signal.AtUtc;
+                if (finding.FirstSeenUtc > signal.AtUtc) finding.FirstSeenUtc = signal.AtUtc;
+                if (bot is { } hash)
+                {
+                    if (finding.Bots.Count < QaFinding.MaxTrackedBots) finding.Bots.Add(hash);
+                }
+                else if (signal.BotCount > finding.AnonymousBots)
+                {
+                    finding.AnonymousBots = signal.BotCount;
+                }
+
+                if (signal.BotClass is > 0 and < 32) finding.ClassMask |= 1u << signal.BotClass;
+                finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message));
+                while (finding.Samples.Count > maxSamples) finding.Samples.RemoveAt(0);
             }
 
-            finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message));
-            while (finding.Samples.Count > maxSamples) finding.Samples.RemoveAt(0);
+            CopyIds(finding, signal);
             if (signal.Quest != 0) finding.Quest = signal.Quest;
             if (signal.Target != 0) finding.Target = signal.Target;
             if (signal.HasPosition) finding.Map = signal.Map;
@@ -181,7 +192,10 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     FirstSeenUtc = view.FirstSeenUtc, LastSeenUtc = view.LastSeenUtc, Quest = view.Quest, Target = view.Target, Map = view.Map,
                     QuestTitle = view.QuestTitle, Cause = view.Cause, CauseDetail = view.CauseDetail ?? string.Empty, Severity = view.Severity,
                     Publication = view.Publication ?? QaPublication.Pending, LastCommentUtc = view.LastCommentUtc,
-                    OccurrencesReported = Math.Max(0, view.OccurrencesReported),
+                    OccurrencesReported = Math.Max(0, view.OccurrencesReported), Spell = view.Spell, SpellName = view.SpellName ?? string.Empty,
+                    SpellRank = view.SpellRank ?? string.Empty, EffectIndex = view.EffectIndex, EffectName = view.EffectName ?? string.Empty,
+                    EffectValue = view.EffectValue, Aura = view.Aura, Reason = view.Reason ?? string.Empty, ReasonDetail = view.ReasonDetail ?? string.Empty,
+                    Item = view.Item, Npc = view.Npc, GameObject = view.GameObject, ClassMask = view.ClassMask, Coverage = view.Coverage,
                 };
                 if (state.Bots.TryGetValue(view.Id, out ulong[]? bots)) finding.Bots.UnionWith(bots.Take(QaFinding.MaxTrackedBots));
                 if (finding.Bots.Count < view.DistinctBots) finding.AnonymousBots = view.DistinctBots;
@@ -193,6 +207,27 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         }
 
         return dropped;
+    }
+
+    /// <summary>The optional ids of a direct signal; a field the signal leaves empty keeps what the finding had.</summary>
+    private static void CopyIds(QaFinding finding, QaSignal signal)
+    {
+        if (signal.Spell != 0) finding.Spell = signal.Spell;
+        if (signal.SpellName.Length != 0) finding.SpellName = signal.SpellName;
+        if (signal.SpellRank.Length != 0) finding.SpellRank = signal.SpellRank;
+        if (signal.EffectIndex >= 0)
+        {
+            finding.EffectIndex = signal.EffectIndex;
+            finding.EffectValue = signal.EffectValue;
+        }
+
+        if (signal.EffectName.Length != 0) finding.EffectName = signal.EffectName;
+        if (signal.Aura != 0) finding.Aura = signal.Aura;
+        if (signal.Reason.Length != 0) finding.Reason = signal.Reason;
+        if (QaKinds.Of(signal.Kind).SpellKind && signal.Detail.Length != 0) finding.ReasonDetail = signal.Detail;
+        if (signal.Item != 0) finding.Item = signal.Item;
+        if (signal.Npc != 0) finding.Npc = signal.Npc;
+        if (signal.GameObject != 0) finding.GameObject = signal.GameObject;
     }
 
     private bool EvictOne()
@@ -240,9 +275,18 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             QaSignalKind.RelayDataMissing when s.Entry != 0 => string.Create(CultureInfo.InvariantCulture, $"relay {s.Relay} {s.Detail} path {s.PathId} missing entry {s.Entry}"),
             QaSignalKind.RelayDataMissing => string.Create(CultureInfo.InvariantCulture, $"relay {s.Relay} unsupported ") + Short(s.Detail),
             QaSignalKind.RelayScriptMissing => string.Create(CultureInfo.InvariantCulture, $"relay {s.Relay} does not exist"),
+            QaSignalKind.SpellUnsupported => SpellOf(s) + string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ")
+                + QaSpellGaps.Describe(s.Reason, s.Detail),
+            QaSignalKind.SpellRefused => SpellOf(s) + " refused: " + (s.Reason.Length != 0 ? s.Reason : "unknown result"),
+            QaSignalKind.SpellNoEffect => SpellOf(s) + " lands with no damage, healing or aura",
             _ => s.Kind.ToString(),
         };
     }
+
+    /// <summary><c>spell 133 Fireball (Rank 1)</c>.</summary>
+    internal static string SpellOf(QaSignal s)
+        => string.Create(CultureInfo.InvariantCulture, $"spell {s.Spell}") + (s.SpellName.Length != 0 ? " " + s.SpellName : string.Empty)
+            + (s.SpellRank.Length != 0 ? " (" + s.SpellRank + ")" : string.Empty);
 
     private static string Short(string text)
     {

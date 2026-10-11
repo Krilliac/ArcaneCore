@@ -197,7 +197,7 @@ public sealed partial class SpellSystem
         SpellEffectInfo effect = context.Effect;
         if (!AuraHandlers.ContainsKey(effect.AuraType))
         {
-            ReportUnsupported("aura", (uint)effect.AuraType, context.Spell.Id);
+            ReportUnsupported(context.Cast, context.EffectIndex, "aura", (uint)effect.AuraType);
         }
 
         context.PendingHolder ??= new SpellAuraHolder(

@@ -20,6 +20,9 @@ public static class PlayerbotQaServiceCollectionExtensions
             return new PlayerbotQaSignalBus(Math.Clamp(options.SignalQueueCapacity, 64, 1_000_000));
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, PlayerbotQaLogTap>());
+        // The direct report path (IPlayerbotQaSink): any feature reports a signal without a log line; inert while QA is disabled.
+        services.TryAddSingleton<PlayerbotQaSink>();
+        services.TryAddSingleton<IPlayerbotQaSink>(sp => sp.GetRequiredService<PlayerbotQaSink>());
         return services;
     }
 }

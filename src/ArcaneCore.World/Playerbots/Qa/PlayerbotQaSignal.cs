@@ -26,6 +26,19 @@ internal enum QaSignalKind
 
     /// <summary>A creature asked for a relay script that does not exist.</summary>
     RelayScriptMissing,
+
+    /// <summary>
+    /// A bot's spell reached something the spell system does not implement (an effect or aura type with no handler, a DUMMY or SCRIPT_EFFECT
+    /// that no script claims, an implicit target it cannot select), or the start-up coverage found such a gap in a spell bots can cast
+    /// (<see cref="QaSignal.FromCoverage"/>). Bot-independent: one occurrence is enough.
+    /// </summary>
+    SpellUnsupported,
+
+    /// <summary>The server refused a bot's cast: a suspicious result at once, an expected one (no mana, cooldown, range) only when one bot keeps repeating it.</summary>
+    SpellRefused,
+
+    /// <summary>A bot's completed casts of a spell that should deal damage, heal or apply an aura repeatedly did none of it on any target hit.</summary>
+    SpellNoEffect,
 }
 
 /// <summary>
@@ -90,6 +103,51 @@ internal sealed record QaSignal
     /// <summary>A death loop's death count, a fault count of a quarantine.</summary>
     public int Count { get; init; }
 
-    /// <summary>The log line with the bot id and name removed.</summary>
+    /// <summary>The log line with the bot id and name removed (a direct signal: a short description).</summary>
     public string Message { get; init; } = string.Empty;
+
+    // The optional ids of a direct signal (IPlayerbotQaSink); zero or empty when the kind has none. They are part of the finding (and of the
+    // fingerprint where the kind says so), never a bot's identity.
+
+    /// <summary>The spell id (spell kinds).</summary>
+    public uint Spell { get; init; }
+
+    /// <summary>The spell's name, as the spell table has it.</summary>
+    public string SpellName { get; init; } = string.Empty;
+
+    /// <summary>The spell's rank text (<c>Rank 3</c>), empty when it has none.</summary>
+    public string SpellRank { get; init; } = string.Empty;
+
+    /// <summary>The effect index (0..2) a spell signal is about; -1 when it is about the whole spell.</summary>
+    public int EffectIndex { get; init; } = -1;
+
+    /// <summary>The effect's name (<c>ApplyAura</c>, <c>SchoolDamage</c>).</summary>
+    public string EffectName { get; init; } = string.Empty;
+
+    /// <summary>The effect's base value (BasePoints + 1).</summary>
+    public int EffectValue { get; init; }
+
+    /// <summary>The aura type number of an aura effect; zero when none.</summary>
+    public uint Aura { get; init; }
+
+    /// <summary>A machine-readable reason: the gap code of an unsupported spell (<c>effect</c>, <c>aura</c>, <c>dummy</c>, ...), the cast result of a refusal.</summary>
+    public string Reason { get; init; } = string.Empty;
+
+    /// <summary>An item entry (item kinds).</summary>
+    public uint Item { get; init; }
+
+    /// <summary>A creature entry an interaction is about (NPC kinds; relay signals keep using <see cref="Entry"/>).</summary>
+    public uint Npc { get; init; }
+
+    /// <summary>A game object entry an interaction is about.</summary>
+    public uint GameObject { get; init; }
+
+    /// <summary>The bot's class (1..11, <c>ArcaneCore.Game.Class</c>); zero when unknown. Shown as the classes that met a finding.</summary>
+    public byte BotClass { get; init; }
+
+    /// <summary>
+    /// A static fact rather than an occurrence (the start-up spell coverage): it creates or marks the finding but adds no occurrence, no
+    /// sample and no bot, so a gap no bot has met yet is listed and never counted as seen.
+    /// </summary>
+    public bool FromCoverage { get; init; }
 }

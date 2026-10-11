@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       328 keys
+#   WORLD                       331 keys
 #
 ###############################################################################
 
@@ -11023,6 +11023,19 @@ World.Playerbots.Qa.GitHub.GhPassToken = false
 World.Playerbots.Qa.GitHub.GhPath = "gh"
 
 #
+#    World.Playerbots.Qa.GitHub.KindLabels
+#        Description: Add a per-kind label (bot-qa:spell-unsupported, bot-qa:death-loop, ...) to
+#                     created issues besides Labels (off by default: the gh transport refuses a
+#                     label that does not exist yet, so create the labels in the repository first).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.KindLabels = false
+
+#
 #    World.Playerbots.Qa.GitHub.Labels
 #        Description: The labels put on created issues; the first one is also how existing issues
 #                     are listed (1..10 labels; a configured list replaces the default).
@@ -11069,6 +11082,31 @@ World.Playerbots.Qa.GitHub.MaxIssuesPerHour = 5
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.GitHub.MaxListPages = 10
+
+#
+#    World.Playerbots.Qa.GitHub.MaxSpellIssuesPerDay
+#        Description: The most spell issues created per rolling 24 hours (0..1000; 0 creates none),
+#                     saved with the hourly caps.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MaxSpellIssuesPerDay = 10
+
+#
+#    World.Playerbots.Qa.GitHub.MaxSpellIssuesPerPass
+#        Description: The most spell issues (spell unsupported, refused, no effect) created in one
+#                     publish pass (0..100; 0 creates none). Spell findings can be numerous on a
+#                     first run; the hourly MaxIssuesPerHour still applies on top.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MaxSpellIssuesPerPass = 2
 
 #
 #    World.Playerbots.Qa.GitHub.MinDistinctBots
