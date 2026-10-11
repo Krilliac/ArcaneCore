@@ -684,6 +684,14 @@ internal static class PlayerbotNavigation
             ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
 
     /// <summary>
+    /// Whether the bot itself stands where the mesh finds walkable ground (<see cref="OnWalkableMesh"/>): after a refused plan, false
+    /// means the start is unplannable and every other destination would be refused the same way. One query; a bot off the map is
+    /// answered true (no evidence against the start).
+    /// </summary>
+    internal static bool StartOnWalkableMesh(Player player)
+        => player.Map is not { } map || OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player));
+
+    /// <summary>
     /// The search budget of one query: vmangos' 2048 nodes (<see cref="PathOptions.DefaultMaxSearchNodes"/>) within
     /// <see cref="NearYards"/>, else 48 nodes a yard of straight distance, at most <see cref="MaxSearchNodes"/>. The way down from the
     /// Red Cloud Mesa to Bloodhoof Village (405 yards apart, a 1,589-yard road) needs more than 8,192 nodes, the way from Stormwind to

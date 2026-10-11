@@ -269,6 +269,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// <summary>At most this many repair NPC spawns of the map are kept as trip goals (the nearest first).</summary>
     private const int MaxRepairSpawns = 64;
 
+    /// <summary>
+    /// The most repair NPC spawns one think plans a route to. Live (live-w27-r1): a bot whose start was off the mesh planned to every
+    /// spawn of the map in one think, up to 1,740 queries (59 ms for 528 of them), 94 slow thinks in 4 minutes.
+    /// </summary>
+    internal const int MaxRepairPlansPerThink = 3;
+
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
     private (uint MapId, CreatureContent? Content, int Version) _repairIndex;
@@ -362,12 +368,19 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             ClearRepairTrip();
         }
 
+        // At most MaxRepairPlansPerThink new candidates are planned to in one think, nearest first; the rest wait for the next think
+        // (the blocked set keeps the refused ones out). A refusal with the bot itself off the mesh says nothing of the spawn: the
+        // think stops there and the spawn stays a candidate.
+        int planned = 0;
         foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid))
                      .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
+            if (planned >= MaxRepairPlansPerThink) return false;
+            planned++;
             if (!PlayerbotNavigation.TryPlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, out PlayerbotRoute? route) || route is null)
             {
+                if (!PlayerbotNavigation.StartOnWalkableMesh(player)) return false;
                 _blockedRepairSpawns.Add(spawn.Guid);
                 continue;
             }
