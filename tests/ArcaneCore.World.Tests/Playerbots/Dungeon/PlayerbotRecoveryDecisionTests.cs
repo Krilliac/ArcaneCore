@@ -640,6 +640,62 @@ public sealed class PlayerbotRecoveryDecisionTests
         Assert.True(fallbackAt >= 0 && faultAt - fallbackAt > PlayerbotRecovery.NoProgressMs, $"faulted {faultAt - fallbackAt} ms into the fallback");
     }
 
+    /// <summary>
+    /// The fallback goes back to the body and reclaims it: the corpse run stalled (the body out of reach for a while), the ghost took
+    /// the spirit-healer fallback, and there is no healer or graveyard anywhere (Kalimdor in the test world: a spirit with no linked
+    /// graveyard is left where it died, vmangos Player::RepopAtGraveyard). The body is reachable again by then: the fallback resumes
+    /// the corpse run once (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>), and the ghost reclaims its body on the clear
+    /// spot where it stands, never faulting. Before, the ghost waited for a healer that could not come and faulted.
+    /// </summary>
+    [Fact]
+    public async Task WithoutAnySpiritHealer_TheFallbackResumesTheCorpseRun_AndReclaimsTheBody()
+    {
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        var clock = new TestDeathClock(1_000);
+        await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await host.TeleportAsync(1, 100f, 100f, DeadminesTestContent.OutsideFloor);
+        await host.KillAndReleaseAsync();
+        clock.Seconds += 125; // past any reclaim delay: only the recovery keeps the ghost from its body
+        Vector3 body = await host.OnWorldAsync(() =>
+        {
+            Corpse corpse = host.Player.Combat.Corpse!;
+            var at = new Vector3(corpse.X, corpse.Y, corpse.Z);
+            corpse.SetPosition(corpse.X, corpse.Y, corpse.Z - 500f, 0); // out of reach: the corpse run stalls
+            return at;
+        });
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        InvalidOperationException? fault = null;
+        bool resumed = false, restored = false, reclaimed = false;
+        for (int think = 0; think < 400 && fault is null && !host.Player.IsAlive; think++)
+        {
+            fault = await host.OnWorldAsync(() =>
+            {
+                host.Session.ManagedBudget = new ManagedActionBudget(4);
+                try { recovery.Update(host.Player, 500); return null; }
+                catch (InvalidOperationException error) { return error; }
+                finally
+                {
+                    resumed |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun;
+                    reclaimed |= recovery.LastStep == Step.Reclaim && host.Player.IsAlive;
+                    if (resumed && !restored && host.Player.Combat.Corpse is { } corpse)
+                    {
+                        corpse.SetPosition(body.X, body.Y, body.Z, 0); // reachable again
+                        restored = true;
+                    }
+                }
+            });
+            if (fault is null && !host.Player.IsAlive) await host.AdvanceAsync(500);
+        }
+
+        Assert.Null(fault);
+        Assert.True(resumed, "the fallback never went back to the body");
+        Assert.True(host.Player.IsAlive, $"still dead: {recovery.LastStep}/{recovery.LastSpiritHealerStep}");
+        Assert.True(reclaimed, "the bot came back without reclaiming its body");
+        await host.OnWorldAsync(() =>
+            Assert.True(Vector2.Distance(new(host.Player.X, host.Player.Y), new(body.X, body.Y)) <= CombatConstants.CorpseReclaimRadius));
+    }
+
     private sealed class TestDeathClock(long seconds) : DeathClock
     {
         public long Seconds { get; set; } = seconds;

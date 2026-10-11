@@ -484,8 +484,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _spiritHealer = false;
         _preferSpiritHealer = false;
         _healerRequested = false;
-        _healerGraveyard = null;
-        _corpseRunResumed = false;
+        _healerGraveyard = default;
+        _corpseRunResumedFor = default;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
@@ -522,21 +522,22 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         bool bodyHere = corpse is not null && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map);
         bool inReach = healer is not null && Distance(player, healer.X, healer.Y, healer.Z) <= SpiritHealerReachYards;
         PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, Stuck(now),
-            bodyRunLeft: bodyHere && !_corpseRunResumed);
+            bodyRunLeft: bodyHere && _corpseRunResumedFor != corpse!.Guid);
         LastSpiritHealerStep = step;
         switch (step)
         {
             case PlayerbotSpiritHealerStep.ResumeCorpseRun:
                 // Nothing to walk to and nobody to wait for: back to the body, with a fresh bound, once per death. The healer is not
                 // asked for again in this death unless one can be had (HealerOutcomeKnown); a second stall here faults as before.
-                _corpseRunResumed = true;
+                _corpseRunResumedFor = corpse!.Guid;
                 _spiritHealer = false;
                 _preferSpiritHealer = false;
+                UnsafeReason = PlayerbotUnsafeBody.None;
                 ClearWalk();
                 MarkProgress(now);
                 LoggerOf().LogInformation(
                     "Playerbot {Bot} goes back to its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: no spirit healer in sight and no graveyard for it at ({GX:F1}, {GY:F1}, {GZ:F1})",
-                    player.Name, corpse!.X, corpse.Y, corpse.Z, corpse.MapId, player.X, player.Y, player.Z);
+                    player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId, player.X, player.Y, player.Z);
                 return false;
             case PlayerbotSpiritHealerStep.Activate:
             {
@@ -963,19 +964,23 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     private WorldSafeLoc? HealerGraveyard(Player player)
     {
+        Corpse? corpse = player.Combat.Corpse;
+        ObjectGuid body = corpse?.Guid ?? default;
         WorldSafeLoc? graveyard = Graveyard(player);
-        if (graveyard is null && _healerGraveyard is { } kept && kept.MapId == player.MapId) graveyard = kept;
-        if (graveyard is null && player.Combat.Corpse is { } corpse && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map))
+        // Kept for this body only (a death and a revival can fall between two thinks, Reset unseen), and on this map only.
+        if (graveyard is null && _healerGraveyard is { Loc: { } kept } held && held.Body == body && kept.MapId == player.MapId)
+            graveyard = kept;
+        if (graveyard is null && corpse is not null && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map))
             graveyard = GraveyardAt(player, corpse.X, corpse.Y, corpse.Z);
-        if (graveyard is not null) _healerGraveyard = graveyard;
+        if (graveyard is not null) _healerGraveyard = (body, graveyard);
         return graveyard;
     }
 
-    /// <summary>The graveyard the spirit-healer fallback last walked to in this death (<see cref="HealerGraveyard"/>).</summary>
-    private WorldSafeLoc? _healerGraveyard;
+    /// <summary>The graveyard the spirit-healer fallback last walked to, and the body of the death it was for (<see cref="HealerGraveyard"/>).</summary>
+    private (ObjectGuid Body, WorldSafeLoc? Loc) _healerGraveyard;
 
-    /// <summary>Whether the spirit-healer fallback already went back to the body in this death (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>).</summary>
-    private bool _corpseRunResumed;
+    /// <summary>The body the spirit-healer fallback already went back to (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>), once per death.</summary>
+    private ObjectGuid _corpseRunResumedFor;
 
     /// <summary>The graveyard of a position on the ghost's own map, or null.</summary>
     private WorldSafeLoc? GraveyardAt(Player player, float x, float y, float z)
