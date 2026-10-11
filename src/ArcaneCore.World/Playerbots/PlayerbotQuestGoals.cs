@@ -51,7 +51,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal uint PreferredCreatureEntry { get; private set; }
     internal string StageName => _stage.ToString();
 
-    /// <summary>The bot's home area (<see cref="PlayerbotHomeArea"/>), or null. New quests are taken only inside it; turn-ins are never restricted.</summary>
+    /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
 
     /// <summary>Whether a quest exchange is under way (the brain does not pull the bot away from it to walk home).</summary>
@@ -85,15 +85,23 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return false;
         foreach ((uint id, QuestStatusData status) in state.Quests.Statuses.OrderBy(row => row.Key))
         {
-            if (status.Status != QuestStatus.Complete || status.Rewarded) continue;
-            bool reasonable = services.IsRewardable(id) && services.Quests.CreatureEndersOf(id)
+            if (status.Status != QuestStatus.Complete || status.Rewarded || IsRefused(id)
+                || services.Quests.Get(id) is not { IsActive: true } || !services.IsRewardable(id)) continue;
+            bool reasonable = services.Quests.CreatureEndersOf(id)
                 .SelectMany(entry => content.GetSpawns(player.MapId, entry))
                 .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))
                 .Any(spawn => ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn));
             if (reasonable) continue;
             int slot = state.Quests.FindSlot(id);
             if (slot >= QuestConstants.MaxQuestLogSize) continue;
-            return _session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot]);
+            if (!_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+            // Managed dispatch reports only that the session stayed InWorld. The handler may have refused the abandon.
+            if (state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
+            {
+                Refuse(id, _session.World.NowMs);
+                return false;
+            }
+            return true;
         }
         return false;
     }

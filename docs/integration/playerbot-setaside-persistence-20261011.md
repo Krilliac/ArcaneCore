@@ -51,3 +51,25 @@ dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQu
 ```
 
 After the final stop-path change and RED probe, the final build reported 0 warnings/errors, focused World tests 5/5 passed, and lifecycle/restart tests 24/24 passed. The broad 55/55 World run, 6/6 Data/schema run, 6/6 deletion run, and both 98/98 Docs runs were completed before that last stop-path change. Its direct coverage passed again in the 24/24 lifecycle/restart run. The tested DLLs were newer than the last corresponding source edit. `git diff --check` had no whitespace errors.
+
+## Independent review follow-up (same worktree, after commit `7651bf07`)
+
+The follow-up changes are uncommitted. No new schema step or config key was added.
+
+* A completed quest is considered for distant abandonment only when the quest is active and `QuestNpcServices.IsRewardable` says its turn-in is supported (`QuestNpcServices.Support.cs:242`, `SupportedRewardQuest`; vmangos `Quest::IsActive` as already documented by `PlayerbotQuestGoals.RefreshObjectiveEntry`). This preserves a completed event quest while its event is off. After dispatching `CMSG_QUESTLOG_REMOVE_QUEST`, the bot checks the live quest status; `TryManagedAction` only reports that the session remained in-world (`ManagedWorldSession.cs:99-100`). A refused abandon enters the existing ten-minute quest refusal backoff, and the brain continues other decisions.
+* A failed local set-aside save is logged while bot stop still kicks the session, persists Stopped/Faulted and removes the active bot. A failed shared save during shutdown is also logged, allowing planner and chat cleanup. The snapshot is best effort; a storage error may lose that pause on a later restart.
+* Shared repeat count now saturates at the store's 256 limit. Local restore enforces the existing 64-key bound per set. Startup's cached snapshot is discarded after successful bot start. Version reads use `Volatile`; a checkpoint finishing after `ReplaceBrain` cannot overwrite the new brain's unsaved marker because the final version write checks brain identity under the same gate as replacement.
+
+Behavioral RED before production edits, then GREEN after them:
+
+| Test | RED observation | GREEN observation |
+|---|---|---|
+| `RefusedDistantAbandon_DoesNotHoldTheBrainOrRepeatEveryThink` | With a no-op registered abandon handler, `IsRefused` was false and the bot kept returning early. | The quest remains Complete, only one abandon packet is sent over two thinks, the quest is refused for backoff, and the brain chooses another goal. |
+| `AnOutOfSeasonQuest_IsNeitherTakenNorTurnedIn_UntilItsEventRuns` | Explicit distant-return probe observed `abandoned == true` after Winter Veil stopped. | The completed event quest remains in the log until the event returns; the full existing scenario passes. |
+| `ThrowingSetAsideStore_DoesNotPreventBotShutdownOrLaterCleanup` | `set-aside-storage-refused` escaped feature shutdown. | Both bot records end Stopped and chat cleanup runs, despite bot and shared snapshot writes throwing. |
+| `RepeatedSharedSuspensions_KeepPersistedRepeatCountWithinStoreLimit` | Exported repeat count was 257. | After 257 suspensions it remains at 256, which the store accepts. |
+| `RestoreTwice_KeepsEachLocalSetBounded` | Two 80-row restores left more than 64 quest entries. | Export contains at most 64 quest entries. |
+
+Final validation: free RAM checked through `Get-Counter '\Memory\Available MBytes'` before `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false -p:NuGetAudit=false -v:q`; build exit 0, 0 warnings/errors. With `ARCANECORE_TEST_TERRAIN_DIR=D:/ArcaneCore-data/terrain-5875` and `ARCANECORE_TEST_DBC_DIR=D:/ArcaneCore-data/client-dbc-5875`, `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQualifiedName~PlayerbotSetAsidePersistenceTests|FullyQualifiedName~PlayerbotSharedSetAsideTests|FullyQualifiedName~ManagedPlayerbotSetAsideRestartTests|FullyQualifiedName~PlayerbotStallTests|FullyQualifiedName~PlayerbotQuestGoalsTests|FullyQualifiedName~PlayerbotQuestReturnTests|FullyQualifiedName~PlayerbotEventQuestTests|FullyQualifiedName~ManagedPlayerbotLifecycleTests'` passed 52/52. `dotnet test tests/ArcaneCore.Data.Tests -c Release --no-build --filter 'FullyQualifiedName~IntegratedSchemaTests'` passed 5/5. DLL timestamps postdate source edits; `git diff --check` reported no whitespace errors. Real-client behavior, crash recovery after a missed checkpoint, and a forced checkpoint/brain-replacement interleaving were not exercised in this follow-up.
+
+Changed production files: `src/ArcaneCore.World/Playerbots/PlayerbotQuestGoals.cs`, `ManagedPlayerbotFeature.cs`, `PlayerbotStallWatch.cs`, `src/ArcaneCore.Kernel/Characters/PlayerbotSetAside.cs`, `src/ArcaneCore.Data/Characters/Playerbots/ManagedPlayerbotSetAsideDataModule.cs`. Changed tests: `tests/ArcaneCore.World.Tests/Playerbots/PlayerbotQuestReturnTests.cs`, `PlayerbotEventQuestTests.cs`, `ManagedPlayerbotSetAsideRestartTests.cs`, `PlayerbotSharedSetAsideTests.cs`, `PlayerbotSetAsidePersistenceTests.cs`.

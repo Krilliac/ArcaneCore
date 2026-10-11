@@ -55,7 +55,7 @@ public sealed class EfManagedPlayerbotSetAsideStore(CharacterDbContext db) : IMa
     {
         ArgumentNullException.ThrowIfNull(rows);
         if (rows.Count > 512 || rows.Any(row => row.BotId != botId || row.ExpiresUnixMs <= 0
-            || row.RepeatCount is < 0 or > 256 || (row.Kind == PlayerbotSetAsideKind.Training ? row.TargetId != 0 : row.TargetId == 0)
+            || row.RepeatCount is < 0 or > PlayerbotSetAside.MaxRepeatCount || (row.Kind == PlayerbotSetAsideKind.Training ? row.TargetId != 0 : row.TargetId == 0)
             || (botId == Guid.Empty ? row.CharacterId != 0 || row.Kind is not (PlayerbotSetAsideKind.SharedEntry or PlayerbotSetAsideKind.SharedQuest)
                 : row.CharacterId <= 0 || row.Kind is PlayerbotSetAsideKind.SharedEntry or PlayerbotSetAsideKind.SharedQuest)))
             throw new ArgumentException("Invalid or unbounded playerbot set-aside snapshot.", nameof(rows));

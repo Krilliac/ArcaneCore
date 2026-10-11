@@ -16,6 +16,23 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotSharedSetAsideTests
 {
     [Fact]
+    public void RepeatedSharedSuspensions_KeepPersistedRepeatCountWithinStoreLimit()
+    {
+        var shared = new PlayerbotSharedSetAsides();
+        uint now = 1_000;
+        ulong bot = 1;
+        for (int repeat = 0; repeat < 257; repeat++)
+        {
+            for (int i = 0; i < PlayerbotSharedSetAsides.BotsToShare; i++)
+                shared.Report(PlayerbotGoalKind.Quest, 0, 1361, bot++, now);
+            Assert.True(shared.IsQuestSetAside(1361, now));
+            if (repeat != 256) now += PlayerbotSharedSetAsides.MaxSetAsideMs;
+        }
+
+        Assert.InRange(Assert.Single(shared.Export(now, 1_000_000)).RepeatCount, 1, 256);
+    }
+
+    [Fact]
     public void AQuestOnWhichThreeBotsStalled_IsSetAsideForEveryBot()
     {
         var shared = new PlayerbotSharedSetAsides();

@@ -7,6 +7,20 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotSetAsidePersistenceTests
 {
     [Fact]
+    public void RestoreTwice_KeepsEachLocalSetBounded()
+    {
+        Guid bot = Guid.NewGuid();
+        PlayerbotSetAside[] first = [.. Enumerable.Range(1, 80).Select(id =>
+            new PlayerbotSetAside(bot, 7, PlayerbotSetAsideKind.Quest, (uint)id, 1_500_000))];
+        PlayerbotSetAside[] second = [.. Enumerable.Range(81, 80).Select(id =>
+            new PlayerbotSetAside(bot, 7, PlayerbotSetAsideKind.Quest, (uint)id, 1_500_000))];
+        var suspensions = new PlayerbotSuspensions();
+        suspensions.Restore(first, 0, 1_000_000);
+        suspensions.Restore(second, 0, 1_000_000);
+        Assert.True(suspensions.Export(bot, 7, 0, 1_000_000).Count(row => row.Kind == PlayerbotSetAsideKind.Quest) <= 64);
+    }
+
+    [Fact]
     public void BotSetAside_RestoresRemainingLifetime_AndDoesNotExtendOnRestart()
     {
         Guid bot = Guid.NewGuid();

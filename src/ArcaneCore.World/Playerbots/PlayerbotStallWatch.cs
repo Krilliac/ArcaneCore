@@ -196,7 +196,8 @@ internal sealed class PlayerbotSuspensions
     private const int Max = 64;
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
-    internal int Version { get; private set; }
+    private int _version;
+    internal int Version => Volatile.Read(ref _version);
 
     internal bool IsEntrySuspended(uint entry, uint nowMs)
         => entry != 0 && (Active(_entries, entry, nowMs) || Shared?.IsEntrySetAside(entry, nowMs) == true);
@@ -222,17 +223,17 @@ internal sealed class PlayerbotSuspensions
     {
         _training = true;
         _trainingUntilMs = unchecked(nowMs + SuspendMs);
-        Version++;
+        Interlocked.Increment(ref _version);
     }
 
     internal void SuspendEntry(uint entry, uint nowMs)
     {
-        if (entry != 0) { Add(_entries, entry, nowMs); Version++; }
+        if (entry != 0) { Add(_entries, entry, nowMs); Interlocked.Increment(ref _version); }
     }
 
     internal void SuspendQuest(uint quest, uint nowMs)
     {
-        if (quest != 0) { Add(_quests, quest, nowMs); Version++; }
+        if (quest != 0) { Add(_quests, quest, nowMs); Interlocked.Increment(ref _version); }
     }
 
     internal PlayerbotSetAside[] Export(Guid botId, int characterId, uint nowMs, long unixNowMs)
@@ -258,14 +259,21 @@ internal sealed class PlayerbotSuspensions
             uint until = unchecked(nowMs + (uint)remaining);
             switch (row.Kind)
             {
-                case PlayerbotSetAsideKind.Entry when row.TargetId != 0: _entries[row.TargetId] = until; break;
-                case PlayerbotSetAsideKind.Quest when row.TargetId != 0: _quests[row.TargetId] = until; break;
+                case PlayerbotSetAsideKind.Entry when row.TargetId != 0: Restore(_entries, row.TargetId, until, nowMs); break;
+                case PlayerbotSetAsideKind.Quest when row.TargetId != 0: Restore(_quests, row.TargetId, until, nowMs); break;
                 case PlayerbotSetAsideKind.Training when row.TargetId == 0: _training = true; _trainingUntilMs = until; break;
             }
         }
     }
 
     private static long Remaining(uint until, uint nowMs) => Math.Max(0, unchecked((int)(until - nowMs)));
+
+    private static void Restore(Dictionary<uint, uint> set, uint key, uint until, uint nowMs)
+    {
+        if (set.Count >= Max && !set.ContainsKey(key))
+            set.Remove(set.OrderBy(entry => Remaining(entry.Value, nowMs)).First().Key);
+        set[key] = until;
+    }
 
     private static bool Active(Dictionary<uint, uint> set, uint key, uint nowMs)
     {
@@ -320,7 +328,8 @@ internal sealed class PlayerbotSharedSetAsides
     internal const int MaxKeys = 256;
 
     private readonly Dictionary<(bool Quest, uint Id), Record> _records = [];
-    internal int Version { get; private set; }
+    private int _version;
+    internal int Version => Volatile.Read(ref _version);
 
     /// <summary>Goals remembered (bounded by <see cref="MaxKeys"/>).</summary>
     internal int Count => _records.Count;
@@ -352,9 +361,9 @@ internal sealed class PlayerbotSharedSetAsides
         record.Bots.Add(new Stall(bot, nowMs, map, position));
         if (record.Bots.Count < BotsToShare || Active(record, nowMs)) return null;
         uint length = (uint)Math.Min((ulong)SetAsideMs << Math.Min(record.Times, 8), MaxSetAsideMs);
-        record.Times++;
+        record.Times = Math.Min(record.Times + 1, PlayerbotSetAside.MaxRepeatCount);
         record.UntilMs = unchecked(nowMs + length);
-        Version++;
+        Interlocked.Increment(ref _version);
         string stalls = string.Join("; ", record.Bots.Select(seen => string.Create(CultureInfo.InvariantCulture,
             $"{seen.Position.X:F1},{seen.Position.Y:F1},{seen.Position.Z:F1} map {seen.Map}")));
         record.Bots.Clear();
@@ -382,7 +391,7 @@ internal sealed class PlayerbotSharedSetAsides
             if (!quest && row.Kind != PlayerbotSetAsideKind.SharedEntry) continue;
             _records[(quest, row.TargetId)] = new Record
             {
-                UntilMs = unchecked(nowMs + (uint)remaining), Times = Math.Clamp(row.RepeatCount, 1, 256), LastMs = nowMs,
+                UntilMs = unchecked(nowMs + (uint)remaining), Times = Math.Clamp(row.RepeatCount, 1, PlayerbotSetAside.MaxRepeatCount), LastMs = nowMs,
             };
         }
     }

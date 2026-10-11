@@ -5,7 +5,10 @@ public enum PlayerbotSetAsideKind : byte { Entry, Quest, Training, SharedEntry, 
 
 /// <summary>Absolute expiry prevents a restart from extending a world-time suspension.</summary>
 public sealed record PlayerbotSetAside(Guid BotId, int CharacterId, PlayerbotSetAsideKind Kind,
-    uint TargetId, long ExpiresUnixMs, int RepeatCount = 0);
+    uint TargetId, long ExpiresUnixMs, int RepeatCount = 0)
+{
+    public const int MaxRepeatCount = 256;
+}
 
 public interface IManagedPlayerbotSetAsideStore
 {
