@@ -86,8 +86,13 @@ public sealed class NavRegionGraph
     /// visited polygon nearest its goal; empty when none is nearer than <paramref name="from"/>. A region of -1 (none) is unreachable.
     /// </summary>
     public NavRegionRouteStatus FindRoute(int fromRegion, Vector3 from, int toRegion, Vector3 to, int maxNodes, out List<Vector3> portals)
+        => FindRoute(fromRegion, from, toRegion, to, maxNodes, out portals, out _);
+
+    /// <summary>As <see cref="FindRoute(int, Vector3, int, Vector3, int, out List{Vector3})"/>; <paramref name="settled"/> is the number of portals the search settled (its work).</summary>
+    public NavRegionRouteStatus FindRoute(int fromRegion, Vector3 from, int toRegion, Vector3 to, int maxNodes, out List<Vector3> portals, out int settled)
     {
         portals = [];
+        settled = 0;
         if ((uint)fromRegion >= (uint)RegionCount)
         {
             return NavRegionRouteStatus.Unreachable;
@@ -98,10 +103,14 @@ public sealed class NavRegionGraph
             return NavRegionRouteStatus.Found;
         }
 
-        var cost = new Dictionary<int, float>();
-        var parent = new Dictionary<int, int>();
-        var closed = new HashSet<int>();
-        var open = new PriorityQueue<int, float>();
+        // The search's sets are the calling thread's, kept between searches (cleared, their capacity kept): a search across a
+        // continent settles thousands of portals and would otherwise allocate them anew on every plan.
+        SearchBuffers buffers = t_buffers ??= new SearchBuffers();
+        buffers.Clear();
+        Dictionary<int, float> cost = buffers.Cost;
+        Dictionary<int, int> parent = buffers.Parent;
+        HashSet<int> closed = buffers.Closed;
+        PriorityQueue<int, float> open = buffers.Open;
         int nearest = -1;
         float nearestYards = Vector3.Distance(from, to);
         for (int l = _firstLink[fromRegion]; l < _firstLink[fromRegion + 1]; l++)
@@ -120,6 +129,7 @@ public sealed class NavRegionGraph
             if (region == toRegion)
             {
                 Chain(link, portals);
+                settled = closed.Count;
                 return NavRegionRouteStatus.Found;
             }
 
@@ -133,6 +143,7 @@ public sealed class NavRegionGraph
             if (closed.Count >= maxNodes)
             {
                 Chain(nearest, portals);
+                settled = closed.Count;
                 return NavRegionRouteStatus.Exhausted;
             }
 
@@ -148,6 +159,7 @@ public sealed class NavRegionGraph
         }
 
         Chain(nearest, portals);
+        settled = closed.Count;
         return NavRegionRouteStatus.Unreachable;
 
         void Chain(int last, List<Vector3> into)
@@ -397,6 +409,29 @@ public sealed class NavRegionGraph
         }
 
         yield return (start + end) * 0.5f;
+    }
+
+    [ThreadStatic]
+    private static SearchBuffers? t_buffers;
+
+    /// <summary>One thread's sets for <see cref="FindRoute(int, Vector3, int, Vector3, int, out List{Vector3}, out int)"/>.</summary>
+    private sealed class SearchBuffers
+    {
+        public Dictionary<int, float> Cost { get; } = [];
+
+        public Dictionary<int, int> Parent { get; } = [];
+
+        public HashSet<int> Closed { get; } = [];
+
+        public PriorityQueue<int, float> Open { get; } = new();
+
+        public void Clear()
+        {
+            Cost.Clear();
+            Parent.Clear();
+            Closed.Clear();
+            Open.Clear();
+        }
     }
 
     private sealed record TileRegions(int[] Regions, List<(int Region, Vector3 A, Vector3 B)>[] Borders, float WalkableClimb);

@@ -17,6 +17,12 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
 {
     private static string Mmaps => Path.Combine(Environment.GetEnvironmentVariable(RealTerrainFactAttribute.Variable)!, "mmaps");
 
+    /// <summary>
+    /// The most portals a found way across a continent may settle. Work, not wall-clock time, so a loaded machine cannot fail it; the
+    /// searches took 0.4 to 16 ms (one 295 ms under load).
+    /// </summary>
+    private const int FoundWork = 5_000;
+
     private static readonly PathOptions Walking = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes };
 
     // Grish Longrunner (creature 12576, spawn 21295), the ender of quest 5881, on The Barrens side of the Great Lift's top.
@@ -32,7 +38,7 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         { 2705.1f, 1243.8f, 298.2f }, { 2424.1f, 1338.6f, 274.8f }, { 620.3f, 441.3f, 90.1f },
     };
 
-    /// <summary>Issue #191: every Stonetalon stall point is joined on foot to Grish Longrunner, the way found in at most 50 ms.</summary>
+    /// <summary>Issue #191: every Stonetalon stall point is joined on foot to Grish Longrunner, the way found settling at most <see cref="FoundWork"/> portals.</summary>
     [RealTerrainFact]
     public void Kalimdor_EveryStonetalonStallPoint_IsJoinedOnFoot_ToGrishLongrunner()
     {
@@ -40,11 +46,11 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         foreach ((float x, float y, float z) in StonetalonStalls.Select(row => ((float)row[0], (float)row[1], (float)row[2])))
         {
             Vector3 stall = new(x, y, z);
-            (NavRegionRouteStatus status, List<Vector3> portals, double ms) = Route(graph, finder, stall, Grish);
-            output.WriteLine($"{stall}: {status}, {portals.Count} portals in {ms:F2} ms");
+            (NavRegionRouteStatus status, List<Vector3> portals, double ms, int settled) = Route(graph, finder, stall, Grish);
+            output.WriteLine($"{stall}: {status}, {portals.Count} portals, {settled} settled, {ms:F2} ms");
             Assert.Equal(NavRegionRouteStatus.Found, status);
             Assert.NotEmpty(portals);
-            Assert.True(ms < 50, $"the region search took {ms:F1} ms");
+            Assert.True(settled <= FoundWork, $"the region search settled {settled} portals");
         }
     }
 
@@ -59,16 +65,17 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         (NavRegionGraph graph, NavMeshPathfinder finder) = Build(0);
         foreach (Vector3 stall in (Vector3[])[new(-9979.2f, -3137.6f, 113.9f), new(-9973.3f, -3152.3f, 109.1f), new(-9988.4f, -3070.9f, 54.1f)])
         {
-            (NavRegionRouteStatus status, List<Vector3> portals, double ms) = Route(graph, finder, stall, KargathFloor);
-            output.WriteLine($"{stall}: {status}, {portals.Count} portals in {ms:F2} ms");
+            (NavRegionRouteStatus status, List<Vector3> portals, double ms, int settled) = Route(graph, finder, stall, KargathFloor);
+            output.WriteLine($"{stall}: {status}, {portals.Count} portals, {settled} settled, {ms:F2} ms");
             Assert.Equal(NavRegionRouteStatus.Found, status);
-            Assert.True(ms < 50, $"the region search took {ms:F1} ms");
+            Assert.True(settled <= FoundWork, $"the region search settled {settled} portals");
 
-            (status, portals, ms) = Route(graph, finder, stall, Neeka);
-            output.WriteLine($"{stall} to Neeka: {status}, the way ends {Vector3.Distance(portals[^1], Neeka):F0} yards from her, in {ms:F2} ms");
+            (status, portals, ms, settled) = Route(graph, finder, stall, Neeka);
+            output.WriteLine($"{stall} to Neeka: {status}, the way ends {Vector3.Distance(portals[^1], Neeka):F0} yards from her, {settled} settled, {ms:F2} ms");
             Assert.NotEqual(NavRegionRouteStatus.Found, status);
             Assert.True(Vector3.Distance(portals[^1], Neeka) < 400, "the partial way does not lead to Kargath");
-            Assert.True(ms < 100, $"the region search took {ms:F1} ms");
+            Assert.Equal(NavRegionRouteStatus.Unreachable, status); // the whole joined part searched within the budget
+            Assert.True(settled < 20_000, $"the region search settled {settled} portals");
         }
 
         NavRegionGraph climbing = NavRegionGraph.Build(Mmaps, 0, PathMover.Player.IncludeFlags, NavTerrain.Empty);
@@ -87,14 +94,14 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         return (graph, new NavMeshPathfinder(Mmaps));
     }
 
-    private static (NavRegionRouteStatus, List<Vector3>, double) Route(NavRegionGraph graph, NavMeshPathfinder finder, Vector3 from, Vector3 to)
+    private static (NavRegionRouteStatus, List<Vector3>, double, int) Route(NavRegionGraph graph, NavMeshPathfinder finder, Vector3 from, Vector3 to)
     {
         int a = Locate(finder, graph, from), b = Locate(finder, graph, to);
         Assert.True(a >= 0, $"no region at {from}");
         Assert.True(b >= 0, $"no region at {to}");
         var watch = Stopwatch.StartNew();
-        NavRegionRouteStatus status = graph.FindRoute(a, from, b, to, 20_000, out List<Vector3> portals);
-        return (status, portals, watch.Elapsed.TotalMilliseconds);
+        NavRegionRouteStatus status = graph.FindRoute(a, from, b, to, 20_000, out List<Vector3> portals, out int settled);
+        return (status, portals, watch.Elapsed.TotalMilliseconds, settled);
     }
 
     private static int Locate(NavMeshPathfinder finder, NavRegionGraph graph, Vector3 at)

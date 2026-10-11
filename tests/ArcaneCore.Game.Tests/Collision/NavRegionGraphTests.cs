@@ -135,7 +135,7 @@ public sealed class NavRegionGraphTests : IDisposable
     }
 
     [Fact]
-    public async Task ThePathfinder_BuildsTheGraph_OffTheCallingThread_AndAnswersNullUntilItIsBuilt()
+    public async Task ThePathfinder_BuildsTheGraphOnce_AndHasNoneForAMapWithoutANavmesh()
     {
         NavMeshPathfinder nav = WriteLayout();
 
