@@ -145,6 +145,13 @@ public sealed class PlayerbotRiskWorldTests
             return true;
         });
         await world.SeeAsync(first);
+        // The creature's run home only advances while its cell is active (vmangos Unit::UpdateSplineMovement, CreatureMapSystem
+        // pauses the spline of an inactive-cell creature): while the bot was far away the evade froze part-way, and it resumes now
+        // that the bot is back. An evading creature is not a target, so let it finish before the bot starts thinking (otherwise the
+        // bot explores off while the creature still walks home).
+        for (int i = 0; i < 400 && await world.OnWorldAsync(() => first.IsInEvadeMode); i++)
+            await world.Host.World.AdvanceClockAsync(RiskTestWorld.ThinkMs);
+        Assert.False(await world.OnWorldAsync(() => first.IsInEvadeMode), "the creature never finished its run home with the bot in range: " + await world.OnWorldAsync(() => $"pos {first.X:F0},{first.Y:F0} home {first.Home.X:F0},{first.Home.Y:F0} spline {(first.Spline is null ? "none" : first.Spline.ElapsedMs(world.Host.World.NowMs) + "/" + first.Spline.DurationMs)} active {world.Player.Map!.Grids.IsInActiveCell(first)}"));
         Assert.True(await world.ThinkUntilAsync(60_000, () => first.Combat.IsInCombat && ReferenceEquals(first.Combat.Victim, world.Player)),
             "the bot never pulled the creature again after forgetting it: " + await world.OnWorldAsync(() =>
                 $"{world.Brain.RiskReport} goal {world.Brain.Goal} remembered {world.Brain.Risk.IsRemembered(first)} distance {RiskTestWorld.Distance(world.Player, new Vector3(first.X, first.Y, first.Z)):F0} visible {world.Player.VisibleObjects.Contains(first.Guid)} first {first.Health}/{first.MaxHealth} evade {first.IsInEvadeMode} bot {world.Player.Health}/{world.Player.MaxHealth} dps {world.Brain.Risk.Tracker.ObservedDps}"));
