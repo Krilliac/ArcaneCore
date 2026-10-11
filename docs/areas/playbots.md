@@ -222,7 +222,8 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at; a car that
   leaves the world under the bot, or a bot knocked off it in the shaft, drops the bot: it steps off and falls to the floor below as a
   client does (MOVEFLAG_FALLINGFAR, then MSG_MOVE_FALL_LAND with the fall's time; the server takes the fall damage), and the ride fails.
-  A death, or a party taking the bot over, ends the ride (a bot aboard steps off first).
+  A death ends the ride and the corpse loses the transport; a party taking the bot over ends it with the bot off the car (stepped off at a
+  floor, fallen to the floor below between floors); a bot saved mid-ride falls to the floor at its first think after login.
 
 Tests: `PlayerbotElevatorNetworkTests` (the lifts from the classic-db and DBC rows; `Choose` for issue #186, quest 5361 and Thunder Bluff),
 `PlayerbotElevatorRideTests` (a fixture cliff and the Great Lift's real paths: a destination in Ratchet begins the ride, the brain walks,
@@ -233,7 +234,7 @@ AreaTable.dbc, and the choices of issue #186 from the live stall points) and `Pl
 Kalimdor's real mesh and models: aboard 26 s after reaching the foot, off at the top 15 s later, the mesh leading on towards Ratchet).
 
 Not done: as with the tram, only quest destinations begin a ride. The Undercity lifts and the other lifts on map 0 have no region row, so
-no bot rides them. A bot saved aboard is not taken off the car at its next login. A bot far from a mesa whose way there is not a lift's
+no bot rides them. A bot far from a mesa whose way there is not a lift's
 regions (Desolace to Thunder Bluff) walks until it is in Mulgore.
 
 **Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit
