@@ -735,10 +735,24 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);
+        List<Exception> failures = [];
         try
         {
-            foreach (ActiveBot active in _active.Values.ToArray())
-                await StopCoreAsync(active.Record, true, CancellationToken.None).ConfigureAwait(false);
+            // Each stop waits for its own world-thread removal and character flush. Start a bounded
+            // group together so those waits overlap, while the operation lock keeps other lifecycle
+            // work out until all members of the group have finished.
+            foreach (ActiveBot[] batch in _active.Values.ToArray().Chunk(32))
+            {
+                Task[] stops = [.. batch.Select(active => StopCoreAsync(active.Record, true, CancellationToken.None))];
+                try { await Task.WhenAll(stops).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    foreach (Task stop in stops.Where(stop => stop.IsFaulted))
+                        failures.AddRange(stop.Exception!.InnerExceptions);
+                    foreach (Task stop in stops.Where(stop => stop.IsCanceled))
+                        failures.Add(new TaskCanceledException(stop));
+                }
+            }
             try { await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             { logger.LogWarning(ex, "Managed playerbot shared set-aside shutdown save failed ({Type})", ex.GetType().Name); }
@@ -748,6 +762,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
         _chatClient = null;
+        if (failures.Count > 0) throw new AggregateException("Managed playerbot shutdown failed", failures);
     }
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
@@ -789,6 +804,17 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             : active.PartyDriven ? (active.Party.Goal, active.Party.TargetEntry, active.Brain.QuestId)
             : (active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
 
+    /// <summary>
+    /// <see cref="GoalOf(ActiveBot)"/> read where the coordinators' collections are owned. A stopped world has no tick left to mutate them,
+    /// so it is read in place then (as the set-aside captures do).
+    /// </summary>
+    private async Task<(PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)> GoalOnWorldThreadAsync(ActiveBot active)
+    {
+        if (_world is not { } world || world.IsStopped || world.IsWorldThread) return GoalOf(active);
+        try { return await world.InvokeAsync(() => GoalOf(active)).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { return GoalOf(active); }
+    }
+
     private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
         => WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, _world!, registry, sessionOptions.Value, logger, cancellationToken);
 
@@ -810,12 +836,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 active.Session.Kick();
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
                 await saves.FlushCharacterAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                // Read on the world thread, queued behind this bot's own Forget: other bots' Forgets mutate the coordinators' collections.
+                (PlayerbotGoalKind goal, uint targetEntry, uint questId) = await GoalOnWorldThreadAsync(active).ConfigureAwait(false);
                 bot = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 {
                     DesiredEnabled = preserveDesired && active.Record.DesiredEnabled,
                     State = faultCode is null ? ManagedPlayerbotState.Stopped : ManagedPlayerbotState.Faulted,
                     ErrorCode = faultCode ?? active.Record.ErrorCode,
-                    Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId,
+                    Goal = goal, TargetEntry = targetEntry, QuestId = questId,
                 }, cancellationToken).ConfigureAwait(false);
                 active.Record = bot;
                 if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active))) Interlocked.Increment(ref _activeVersion);

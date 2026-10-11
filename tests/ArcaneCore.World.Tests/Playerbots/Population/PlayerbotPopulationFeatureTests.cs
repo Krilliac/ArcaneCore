@@ -15,6 +15,25 @@ namespace ArcaneCore.World.Tests.Playerbots.Population;
 public sealed class PlayerbotPopulationFeatureTests
 {
     [Fact]
+    public async Task APassCanceledBecauseTheWorldStopped_IsInformational()
+    {
+        var log = new CapturingLogger();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(
+            configureServices: services => services.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(log));
+        world.Ticks.Set(200, 10);
+        TaskCompletionSource held = world.Members.HoldNextLoad();
+        Task pass = world.Feature.RunPassNowAsync();
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        world.Host.World.Stop();
+        world.Members.CancelHeldLoad();
+        await pass.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains(log.Infos, line => line.Contains("population pass canceled during shutdown", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Warnings, line => line.Contains("population pass failed", StringComparison.Ordinal));
+        Assert.Null(world.Feature.Status.LastError);
+    }
+
+    [Fact]
     public async Task TheControlLoop_Adds_ThenHolds_ThenParks_ThenRestarts_AndResetsTheWindowAfterEachChange()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync();

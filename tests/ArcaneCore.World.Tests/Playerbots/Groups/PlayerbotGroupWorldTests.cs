@@ -31,6 +31,35 @@ public sealed class PlayerbotGroupWorldTests
     private const uint LesserHeal = 2050, Fireball = 133, Smite = 585;
 
     [Fact]
+    public async Task Shutdown_WithABotLedGroup_StopsLeaderAndMembersTogether_AndForgetsEveryone()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);
+        var tank = await world.AddBotAsync("Stoptank", Human, Warrior, 10, [Taunt]);
+        var healer = await world.AddBotAsync("Stopheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
+        var mage = await world.AddBotAsync("Stopmage", Human, Mage, 10, [Fireball]);
+        Guid[] ids = [tank.Id, healer.Id, mage.Id];
+        Assert.True(await world.RunUntilAsync(60_000, () => ids.All(id => world.HasQuest(id, EliteQuest))), world.Trace());
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        Assert.All(ids, id => Assert.True(world.Coordinator.Drives(id), world.Trace()));
+
+        // Leader and members stop in one batch while the world thread keeps forgetting them; the goals are read behind each bot's own Forget.
+        await world.Bots.ShutdownBeforeWorldStopAsync();
+
+        await world.OnWorldAsync(() =>
+        {
+            Assert.All(ids, id => Assert.False(world.Coordinator.Drives(id)));
+            Assert.Empty(world.Coordinator.Groups);
+            return true;
+        });
+        foreach (Guid id in ids)
+        {
+            PlayerbotStatus stopped = world.Bots.Snapshot().Single(s => s.BotId == id);
+            Assert.Equal(ManagedPlayerbotState.Stopped, stopped.State);
+            Assert.Null(world.Bots.FindSession(id));
+        }
+    }
+
+    [Fact]
     public async Task AnEliteQuest_TooHardAlone_ThreeBotsGroupWithATankAndAHealer_KillIt_AndDisband()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);

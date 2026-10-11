@@ -28,6 +28,10 @@ GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
 behaviour is described in `docs/integration/playerbot-*.md`.
 
+On world shutdown, managed bots stop in groups of at most 32 while the world thread is still running. Each bot's
+logout queues its character state and waits for that character's save to flush; the next group starts only after
+all stops in the current group settle. The world thread and final save queue stop afterward.
+
 Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line.
