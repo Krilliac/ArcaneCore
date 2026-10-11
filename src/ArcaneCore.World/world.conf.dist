@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       323 keys
+#   WORLD                       326 keys
 #
 ###############################################################################
 
@@ -10099,6 +10099,46 @@ World.Playerbots.Groups.MinTank = 1
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.RaidsEnabled = true
+
+#
+#    World.Playerbots.Home.DangerLevelMargin
+#        Description: Auto mode: the straight line from the bot to the centre crossing an area whose
+#                     AreaTable level (AreaLevel, the 1.12.1 AreaTable.dbc exploration level) is
+#                     more than this many levels above the bot's counts as unsafe, and the bot
+#                     teleports (0..60).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Home.DangerLevelMargin = 5
+
+#
+#    World.Playerbots.Home.ReturnMode
+#        Description: Walk, teleport, or teleport only when the walk is long or unsafe
+#                     (PlayerbotHomeReturnMode.Auto by default). Values: Walk, Teleport, Auto.
+#        Type: PlayerbotHomeReturnMode
+#        Default: Auto
+#        Allowed: Walk | Teleport | Auto
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Home.ReturnMode = Auto
+
+#
+#    World.Playerbots.Home.TeleportDistanceYards
+#        Description: Auto mode: a bot on the home map farther than this many yards from the centre
+#                     teleports instead of walking (100..20000). The default 1500 is twice a
+#                     750-yard home (the Sentinel Hill homes of the QA Westfall fleet): the
+#                     Darkshire road stray stood about 2000 yards from Sentinel Hill.
+#        Type: float
+#        Default: 1500
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Home.TeleportDistanceYards = 1500
 
 #
 #    World.Playerbots.LocalLlmContextSize

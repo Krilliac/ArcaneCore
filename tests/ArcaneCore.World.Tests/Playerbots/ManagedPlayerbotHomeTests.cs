@@ -341,7 +341,7 @@ public sealed class ManagedPlayerbotHomeTests
         do line = (await admin.ReadChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));
         Assert.StartsWith("BOTINSPECT home=place=Northshire map=0 centre=-8950.0,-132.5,83.5 radius=250 zone=12 distance=", line);
-        Assert.EndsWith(" state=inside", line);
+        Assert.EndsWith(" state=inside mode=auto teleports=0", line); // the return mode (World:Playerbots:Home:ReturnMode) and the return teleports so far
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Hmshowtwo");
         do line = (await admin.ReadChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));

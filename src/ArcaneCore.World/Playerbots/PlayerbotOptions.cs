@@ -118,6 +118,9 @@ public sealed class PlayerbotOptions
     /// <summary>How a following bot keeps up with its leader and catches up when it cannot walk (<c>World:Playerbots:Follow</c>; live).</summary>
     public PlayerbotFollowOptions Follow { get; set; } = new();
 
+    /// <summary>How a homed bot returns to its home area: walk, teleport, or teleport when the walk is long or unsafe (<c>World:Playerbots:Home</c>; live).</summary>
+    public PlayerbotHomeOptions Home { get; set; } = new();
+
     /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
     public Population.PlayerbotPopulationOptions Population { get; set; } = new();
 
@@ -182,6 +185,8 @@ public sealed class PlayerbotOptions
         Groups.Validate();
         if (Follow is null) throw new InvalidOperationException($"{SectionName}:Follow is missing.");
         Follow.Validate();
+        if (Home is null) throw new InvalidOperationException($"{SectionName}:Home is missing.");
+        Home.Validate();
         if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
         Population.Validate();
         if (Social is null) throw new InvalidOperationException($"{SectionName}:Social is missing.");

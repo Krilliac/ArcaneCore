@@ -234,6 +234,13 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Follow:MaxFallHealthPercent", o => o.Follow.MaxFallHealthPercent, (o, v) => o.Follow.MaxFallHealthPercent = v,
             PlayerbotFollowOptions.CheckFallPercent),
 
+        // The way home of a homed bot (docs/areas/playbots.md, Home area): a returning bot reads the shared object at each decision.
+        LivePlayerbotsValue("Home:ReturnMode", o => o.Home.ReturnMode, (o, v) => o.Home.ReturnMode = v, PlayerbotHomeOptions.CheckMode),
+        LivePlayerbotsValue("Home:TeleportDistanceYards", o => o.Home.TeleportDistanceYards, (o, v) => o.Home.TeleportDistanceYards = v,
+            PlayerbotHomeOptions.CheckTeleportDistance),
+        LivePlayerbotsValue("Home:DangerLevelMargin", o => o.Home.DangerLevelMargin, (o, v) => o.Home.DangerLevelMargin = v,
+            PlayerbotHomeOptions.CheckLevelMargin),
+
         // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
         // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
         LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),

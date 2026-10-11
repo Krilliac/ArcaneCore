@@ -433,6 +433,23 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     }
 
     /// <summary>
+    /// The area-level lookup of a map for the danger check of an Auto walk home (<see cref="PlayerbotAreaLevelLookup"/>); null reads
+    /// the world's terrain (<see cref="PlayerbotAreaLevelLookup.FromTerrain"/>). Tests without terrain data set a fixture. World thread.
+    /// </summary>
+    internal Func<uint, PlayerbotAreaLevelLookup>? AreaLevelLookups { get; set; }
+
+    // One lookup per map, shared by the bots homed there; built on any thread, read on the world thread.
+    private readonly ConcurrentDictionary<uint, PlayerbotAreaLevelLookup> _levelLookups = new();
+
+    private PlayerbotAreaLevelLookup? AreaLevelLookupOf(uint mapId)
+    {
+        if (_levelLookups.TryGetValue(mapId, out PlayerbotAreaLevelLookup? known)) return known;
+        PlayerbotAreaLevelLookup? lookup = AreaLevelLookups is { } fixture ? fixture(mapId)
+            : _world is { } world ? PlayerbotAreaLevelLookup.FromTerrain(ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world).Terrain, mapId) : null;
+        return lookup is null ? null : _levelLookups.GetOrAdd(mapId, lookup);
+    }
+
+    /// <summary>
     /// Store the homes (characters schema 56; the zone clip, schema 58) and apply them to the running brains on the world thread. A
     /// home that cannot be stored is not applied (fail closed) and counted as failed. Throws when no home store is available or the
     /// radius is out of bounds. <paramref name="zoneClipped"/> clips each home to the zone of its centre (the command's default).
@@ -717,6 +734,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 area => logger.LogWarning("Playerbot home of {BotId} is zone-clipped but the terrain knows no zone at its centre "
                     + "(map {Map} {X:F1},{Y:F1}): the home contains nothing until it is set again, or set with nozone",
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
+            {
+                AreaLevels = AreaLevelLookupOf(home.MapId),
+            }
             : null;
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).

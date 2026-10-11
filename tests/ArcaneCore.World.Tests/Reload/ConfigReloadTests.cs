@@ -576,6 +576,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Follow)}:{property.Name}");
         }
 
+        // The way home of a homed bot is live key by key (docs/areas/playbots.md, Home area).
+        foreach (PropertyInfo property in typeof(PlayerbotHomeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Home)}:{property.Name}");
+        }
+
         // The population section is live key by key (docs/areas/playbots-population.md).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

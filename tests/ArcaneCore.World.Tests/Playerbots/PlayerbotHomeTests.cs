@@ -451,6 +451,7 @@ public sealed class PlayerbotHomeTests
         finally { TownVendorServices.Current.Value = null; }
     }
 
+    /// <summary>Walk mode (<see cref="PlayerbotHomeReturnMode.Walk"/>): a bot on another map is left alone. Auto and Teleport: PlayerbotHomeTeleportTests.</summary>
     [Fact]
     public async Task Brain_OnAnotherMap_ReportsOffMapAndDoesNotWalk()
     {
@@ -463,7 +464,7 @@ public sealed class PlayerbotHomeTests
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
                 Player player = session.Player!;
                 var area = new PlayerbotHomeArea(player.Map!.MapId + 1, new Vector3(player.X + 300f, player.Y, player.Z), 100f, "Elsewhere");
-                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true }) { Home = area };
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Home = { ReturnMode = PlayerbotHomeReturnMode.Walk } }) { Home = area };
                 session.ManagedBudget = new ManagedActionBudget(2);
                 brain.Update(1_000);
                 Assert.Equal(PlayerbotHomeState.OffMap, brain.HomeReturn.State);
@@ -478,6 +479,7 @@ public sealed class PlayerbotHomeTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>Walk mode, so the off-map bot stays there (Auto would teleport it home: PlayerbotHomeTeleportTests).</summary>
     [Fact]
     public async Task Brain_OffMap_IsNotStarved_ItGrindsLikeABotWithNoHome()
     {
@@ -500,7 +502,7 @@ public sealed class PlayerbotHomeTests
                 Player player = session.Player!;
                 // The home is on another map: the in-area filters would skip every creature here (RED: the creature is never chosen).
                 var area = new PlayerbotHomeArea(player.Map!.MapId + 1, new Vector3(player.X, player.Y, player.Z), 100f, "Elsewhere");
-                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true }) { Home = area };
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Home = { ReturnMode = PlayerbotHomeReturnMode.Walk } }) { Home = area };
                 session.ManagedBudget = new ManagedActionBudget(2);
                 brain.Update(1_000);
                 Assert.Equal(PlayerbotHomeState.OffMap, brain.HomeReturn.State);
