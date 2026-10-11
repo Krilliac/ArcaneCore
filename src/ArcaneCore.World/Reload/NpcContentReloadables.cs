@@ -65,6 +65,10 @@ public abstract class NpcTableReloadable(
         {
             NpcStore? previous = null;
             transaction.Step(owner.Name, () => previous = feature.Services.ReplaceNpcs(store), () => feature.Services.ReplaceNpcs(previous!));
+            foreach (string problem in owner.Name == "npc_vendor" ? store.VendorDiagnostics.Take(10) : [])
+            {
+                transaction.Note($"vendor templates: {problem}");
+            }
         }
     }
 
@@ -90,10 +94,11 @@ public sealed class NpcTrainerContentReloadable(IServiceProvider services)
 
 /// <summary>
 /// <c>.reload npc_vendor</c> (ServerCommands.cpp:1292-1303, Chat.cpp:870 → LoadVendors, ObjectMgr.cpp:10780); in <c>reload all</c> through all_npc (:930).
-/// vmangos also reloads its <c>npc_vendor_template</c> here; ArcaneCore has no separate template table.
+/// vmangos also reloads <c>npc_vendor_template</c> here (ObjectMgr::LoadVendorTemplates).
 /// </summary>
 public sealed class NpcVendorContentReloadable(IServiceProvider services)
-    : NpcTableReloadable(services, "npc_vendor", true, "vendor items", c => c.VendorItems.Count, (live, fresh) => live with { VendorItems = fresh.VendorItems });
+    : NpcTableReloadable(services, "npc_vendor", true, "vendor items", c => c.VendorItems.Count + c.VendorTemplateItems.Count,
+        (live, fresh) => live with { VendorItems = fresh.VendorItems, VendorTemplateItems = fresh.VendorTemplateItems, VendorTemplateIds = fresh.VendorTemplateIds });
 
 /// <summary><c>.reload points_of_interest</c> (ServerCommands.cpp:1305-1311, Chat.cpp:880 → LoadPointsOfInterest, ObjectMgr.cpp:9081); in <c>reload all</c> through all_npc and all_gossips (:931, :992).</summary>
 public sealed class PointsOfInterestContentReloadable(IServiceProvider services)

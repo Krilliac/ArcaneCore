@@ -216,6 +216,12 @@ public sealed record NpcContent(
     IReadOnlyList<RaceTaxiStart> RaceTaxiStarts,
     IReadOnlyList<PointOfInterest> PointsOfInterest)
 {
+    /// <summary>Shared npc_vendor_template rows, keyed by their template entry.</summary>
+    public IReadOnlyList<VendorItem> VendorTemplateItems { get; init; } = [];
+
+    /// <summary>creature_template.VendorTemplateId for each creature with shared stock.</summary>
+    public IReadOnlyDictionary<uint, uint> VendorTemplateIds { get; init; } = new Dictionary<uint, uint>();
+
     public static NpcContent Empty { get; } = new([], [], [], [], [], [], [], [], [], []);
 }
 

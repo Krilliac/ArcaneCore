@@ -58,6 +58,9 @@ public sealed class CreatureTemplateRow
 
     public uint TrainerSpell { get; set; }
 
+    /// <summary>ClassicDB VendorTemplateId / vmangos vendor_id; shared npc_vendor_template entry.</summary>
+    public uint VendorTemplateId { get; set; }
+
     public uint UnitFlags { get; set; }
 
     public uint DynamicFlags { get; set; }

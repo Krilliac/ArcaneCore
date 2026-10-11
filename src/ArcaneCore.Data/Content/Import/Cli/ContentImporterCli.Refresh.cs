@@ -291,6 +291,13 @@ public static partial class ContentImporterCli
         (IReadOnlyCollection<RelayScriptRow> relaySteps, IReadOnlyCollection<RelayScriptTemplateRow> relayTemplates) = relays.RelaySnapshot();
         warnings.AddRange(graveyardReport.Warnings);
         warnings.AddRange(battlegroundReport.Warnings);
+        // A malformed npc_vendor_template is skipped; the creature links are then left alone too, so links and stock stay consistent.
+        bool vendorStockRejected = gossip.VendorTemplateTableRejected;
+        if (vendorStockRejected)
+        {
+            warnings.AddRange(gossip.BuildReport().Diagnostics.Where(d => d.StartsWith("npc_vendor_template", StringComparison.Ordinal)));
+            warnings.Add("npc_vendor_template: the world's shared vendor stock is left as it is, and creature_template.VendorTemplateId is not refreshed either");
+        }
 
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         void Count(string table, long rows, bool present)
@@ -318,6 +325,7 @@ public static partial class ContentImporterCli
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
+        Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
@@ -421,12 +429,20 @@ public static partial class ContentImporterCli
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshScriptNamesAsync(db, token).ConfigureAwait(false);
+                    // The links actually changed (a dry run reads no database, so it reports none).
+                    int linksChanged = vendorStockRejected ? 0 : await relays.RefreshVendorTemplateIdsAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasVendorTemplateIdColumn && !vendorStockRejected)
+                    {
+                        counts["creature_template (VendorTemplateId)"] = linksChanged;
+                    }
+
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
+                    await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
                         await db.Set<SpellProcEventRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);

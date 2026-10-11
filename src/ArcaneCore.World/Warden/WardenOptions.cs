@@ -96,9 +96,24 @@ public sealed class WardenOptions
 
     /// <summary>
     /// Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a
-    /// failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log.
+    /// failed module load). Log keeps the session and keeps scanning, up to <see cref="MaxProtocolFailures"/>; Kick disconnects. Ban
+    /// is treated as Kick, so a late reply from a lagging client never bans an account (vmangos kicks for every protocol failure).
+    /// Default Log.
     /// </summary>
     public WardenAction ProtocolAction { get; set; } = WardenAction.Log;
+
+    /// <summary>
+    /// Warden:MaxProtocolFailures: protocol failures to the server's own requests (a bad or late reply, a failed module load) that
+    /// disconnect the session even under ProtocolAction Log. Each valid reply forgives one. Unsolicited packets never count. 1-100,
+    /// default 3.
+    /// </summary>
+    public int MaxProtocolFailures { get; set; } = 3;
+
+    /// <summary>
+    /// Warden:ProtocolReportIntervalSeconds: under ProtocolAction Log, a session reports at most one protocol failure per interval and
+    /// then one line with the count of the rest. 1-3600, default 10.
+    /// </summary>
+    public uint ProtocolReportIntervalSeconds { get; set; } = 10;
 
     /// <summary>Warden:BanSeconds for <see cref="WardenAction.Ban"/>; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration).</summary>
     public long BanSeconds { get; set; } = 86400;
@@ -138,6 +153,16 @@ public sealed class WardenOptions
         if (ResponseTimeoutSeconds == 0)
         {
             problems.Add("Warden:ResponseTimeoutSeconds must be above 0.");
+        }
+
+        if (MaxProtocolFailures is < 1 or > 100)
+        {
+            problems.Add("Warden:MaxProtocolFailures must be 1-100.");
+        }
+
+        if (ProtocolReportIntervalSeconds is < 1 or > 3600)
+        {
+            problems.Add("Warden:ProtocolReportIntervalSeconds must be 1-3600.");
         }
 
         if (ScanIntervalMinSeconds == 0 || ScanIntervalMaxSeconds < ScanIntervalMinSeconds)

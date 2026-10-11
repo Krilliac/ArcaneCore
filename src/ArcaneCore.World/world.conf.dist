@@ -74,7 +74,7 @@
 #   STATS                       1 keys
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
-#   WARDEN                      12 keys
+#   WARDEN                      14 keys
 #   WORLD                       340 keys
 #
 ###############################################################################
@@ -7140,11 +7140,27 @@ Warden.ExemptSecurity = Moderator
 Warden.LoadFromDatabase = true
 
 #
+#    Warden.MaxProtocolFailures
+#        Description: Warden:MaxProtocolFailures: protocol failures to the server's own requests (a
+#                     bad or late reply, a failed module load) that disconnect the session even
+#                     under ProtocolAction Log. Each valid reply forgives one. Unsolicited packets
+#                     never count. 1-100, default 3.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#warden
+#
+Warden.MaxProtocolFailures = 3
+
+#
 #    Warden.ProtocolAction
 #        Description: Warden:ProtocolAction, applied when the handshake or a reply breaks the
-#                     protocol (a wrong hash, a malformed or late reply, a failed module load).
-#                     Never above Kick: a broken handshake is not evidence of a cheat (vmangos
-#                     kicks, Warden.cpp:166-173). Default Log. Values: Log, Kick, Ban.
+#                     protocol (a wrong hash, a malformed or late reply, a failed module load). Log
+#                     keeps the session and keeps scanning, up to MaxProtocolFailures; Kick
+#                     disconnects. Ban is treated as Kick, so a late reply from a lagging client
+#                     never bans an account (vmangos kicks for every protocol failure). Default Log.
+#                     Values: Log, Kick, Ban.
 #        Type: WardenAction
 #        Default: Log
 #        Allowed: Log | Kick | Ban
@@ -7152,6 +7168,19 @@ Warden.LoadFromDatabase = true
 #        Docs: docs/reference/configuration.md#warden
 #
 Warden.ProtocolAction = Log
+
+#
+#    Warden.ProtocolReportIntervalSeconds
+#        Description: Warden:ProtocolReportIntervalSeconds: under ProtocolAction Log, a session
+#                     reports at most one protocol failure per interval and then one line with the
+#                     count of the rest. 1-3600, default 10.
+#        Type: uint
+#        Default: 10
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#warden
+#
+Warden.ProtocolReportIntervalSeconds = 10
 
 #
 #    Warden.ResponseTimeoutSeconds

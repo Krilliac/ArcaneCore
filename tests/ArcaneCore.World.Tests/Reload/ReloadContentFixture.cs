@@ -28,6 +28,10 @@ internal sealed class ReloadContentFixture : IQuestContentStore, INpcContentStor
 
     public List<VendorItem> VendorItems { get; } = [];
 
+    public List<VendorItem> VendorTemplateItems { get; } = [];
+
+    public Dictionary<uint, uint> VendorTemplateIds { get; } = [];
+
     public List<TrainerSpell> TrainerSpells { get; } = [];
 
     public List<PointOfInterest> PointsOfInterest { get; } = [];
@@ -68,6 +72,8 @@ internal sealed class ReloadContentFixture : IQuestContentStore, INpcContentStor
                 GossipMenuOptions = [.. GossipMenuOptions],
                 NpcTexts = [.. NpcTexts],
                 VendorItems = [.. VendorItems],
+                VendorTemplateItems = [.. VendorTemplateItems],
+                VendorTemplateIds = new Dictionary<uint, uint>(VendorTemplateIds),
                 TrainerSpells = [.. TrainerSpells],
                 PointsOfInterest = [.. PointsOfInterest],
             });

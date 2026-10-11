@@ -42,10 +42,23 @@ public sealed class NpcStore
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(o => o.Id).ToArray());
         _texts = content.NpcTexts.GroupBy(t => t.Id).ToFrozenDictionary(g => g.Key, g => g.First());
 
-        // vmangos LoadVendors: ORDER BY entry, slot.
-        _vendor = content.VendorItems.GroupBy(v => v.Entry)
-            .ToFrozenDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
-        _vendorItemIds = content.VendorItems.Where(v => v.Item != 0).Select(v => v.Item).ToFrozenSet();
+        // vmangos ObjectMgr::LoadVendors orders each list by slot; ItemHandler::SendListInventory
+        // sends the creature's own items first, then GetVendorTemplateItems. Duplicate direct rows
+        // are rejected by IsVendorItemValid when the template already supplies that item.
+        var vendor = content.VendorItems.GroupBy(v => v.Entry)
+            .ToDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
+        var diagnostics = new List<string>();
+        Dictionary<uint, VendorItem[]> templates = ValidVendorTemplates(content, diagnostics);
+        foreach ((uint entry, uint templateId) in content.VendorTemplateIds.OrderBy(pair => pair.Key))
+        {
+            if (!templates.TryGetValue(templateId, out VendorItem[]? shared)) continue;
+            vendor.TryGetValue(entry, out VendorItem[]? own);
+            vendor[entry] = [.. (own ?? []).Where(item => !shared.Any(template => template.Item == item.Item)), .. shared];
+        }
+        VendorDiagnostics = diagnostics;
+        _vendor = vendor.ToFrozenDictionary();
+        // Includes shared template stock, so an item sold only through a vendor template still counts as sold.
+        _vendorItemIds = _vendor.Values.SelectMany(items => items).Where(v => v.Item != 0).Select(v => v.Item).ToFrozenSet();
         _trainer = content.TrainerSpells.GroupBy(t => t.Entry)
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(t => t.Spell).ToArray());
         _nodes = content.TaxiNodes.Where(n => n.Id is > 0 and <= TaxiMaskSize * 32)
@@ -95,6 +108,53 @@ public sealed class NpcStore
     public IReadOnlyList<GossipMenuOption> MenuOptions(uint menuId) => _options.GetValueOrDefault(menuId) ?? [];
 
     public NpcText? Text(uint textId) => _texts.GetValueOrDefault(textId);
+
+    /// <summary>
+    /// Why vendor template rows or links were skipped or flagged when this store was built (vmangos LoadVendorTemplates and
+    /// IsVendorItemValid log these and carry on); empty when the content is clean.
+    /// </summary>
+    public IReadOnlyList<string> VendorDiagnostics { get; }
+
+    /// <summary>
+    /// vmangos IsVendorItemValid for the checks this content can make (ObjectMgr.cpp:11262-11275 maxcount/incrtime pairing, the duplicate
+    /// item, and the <c>countItems >= UINT8_MAX</c> cap at :11321) and the LoadVendorTemplates post-load checks (:10836-10862: a creature
+    /// whose vendor_id has no rows, and template rows no creature uses). Item and condition existence need tables this store does not
+    /// hold: an unknown item is skipped when the list is built and an unknown condition hides its row.
+    /// </summary>
+    private static Dictionary<uint, VendorItem[]> ValidVendorTemplates(NpcContent content, List<string> diagnostics)
+    {
+        var templates = new Dictionary<uint, VendorItem[]>();
+        foreach (IGrouping<uint, VendorItem> group in content.VendorTemplateItems.GroupBy(v => v.Entry).OrderBy(g => g.Key))
+        {
+            var accepted = new List<VendorItem>();
+            foreach (VendorItem item in group.OrderBy(v => v.Slot).ThenBy(v => v.Item))
+            {
+                string? problem =
+                    item.MaxCount > 0 && item.IncrTime == 0 ? $"has maxcount ({item.MaxCount}) for item {item.Item} but incrtime=0"
+                    : item.MaxCount == 0 && item.IncrTime > 0 ? $"has maxcount=0 for item {item.Item} but incrtime<>0"
+                    : accepted.Any(other => other.Item == item.Item) ? $"has duplicate item {item.Item}"
+                    : accepted.Count >= byte.MaxValue ? $"has too many items ({accepted.Count} >= {byte.MaxValue}), item {item.Item}"
+                    : null;
+                if (problem is null) accepted.Add(item);
+                else diagnostics.Add($"npc_vendor_template {group.Key} {problem}, ignoring");
+            }
+
+            if (accepted.Count > 0) templates[group.Key] = [.. accepted];
+        }
+
+        HashSet<uint> defined = [.. content.VendorTemplateItems.Select(v => v.Entry)];
+        foreach ((uint entry, uint templateId) in content.VendorTemplateIds.OrderBy(pair => pair.Key))
+        {
+            if (!defined.Contains(templateId))
+                diagnostics.Add($"Creature (Entry: {entry}) has vendor_id = {templateId} for nonexistent vendor template");
+        }
+
+        // vmangos builds the unused list from the accepted map (ObjectMgr.cpp:10841), so a template whose rows were all rejected is reported only by its per-row messages, not here.
+        HashSet<uint> used = [.. content.VendorTemplateIds.Values];
+        foreach (uint entry in templates.Keys.Order().Where(entry => !used.Contains(entry)))
+            diagnostics.Add($"npc_vendor_template has vendor template {entry} not used by any vendors");
+        return templates;
+    }
 
     public IReadOnlyList<VendorItem> VendorItems(uint entry) => _vendor.GetValueOrDefault(entry) ?? [];
 

@@ -263,7 +263,7 @@ The design's NQ0 imports eleven new tables. Only the table with a finished consu
 
 ### Not delivered (still open from design NQ0/NQ1)
 
-`npc_vendor_template`, `npc_trainer_template`, `areatrigger_involvedrelation`, `questgiver_greeting`,
+`npc_trainer_template` (`npc_vendor_template` shipped with world schema 53), `areatrigger_involvedrelation`, `questgiver_greeting`,
 `trainer_greeting`, `spell_chain`, `game_graveyard_zone`, `world_safe_locs`, `taxi_shortcuts`, `creature_template_npc`,
 the quest_template column mapping report (`RewMail*`, scripts, emote delays are not model columns), the item_template
 importer (NQ0b) and the loading of any of them into the runtime stores. `UPDATE` statements in a dump are skipped by the

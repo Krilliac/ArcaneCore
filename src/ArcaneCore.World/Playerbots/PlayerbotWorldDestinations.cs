@@ -6,12 +6,14 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -222,8 +224,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     Backoff(now);
                 }
                 else _blockedSpawns.Add(entry.Spawn.Guid);
+                // A completed quest with just one indexed ender cannot be reached by retrying a plan that keeps failing from the same
+                // spot. Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.
+                // Both the near and the far branch count: far failures arrive once per backoff and still confirm.
+                if (returnQuestId == questId && questId != 0 && _entries.Count == 1)
+                    ConfirmUnclimbable(player, destination, questId, entry.Entry, now);
                 return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
+            if (questId == _failQuest) _failCount = 0;
             _route = route;
             _routeTarget = entry.Entry;
             _routeSpawnGuid = entry.Spawn.Guid;
@@ -249,6 +257,80 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
+
+    /// <summary>Failed plans of one completed quest from one spot (within <see cref="SpotYards"/>) before the climb is diagnosed.</summary>
+    internal const int ConfirmFailures = 3;
+
+    /// <summary>The quest's set-asides for this bot after which it is abandoned instead of set aside again.</summary>
+    internal const int AbandonAfterSetAsides = 3;
+
+    private const float SpotYards = 3f;
+
+    private uint _failQuest;
+    private Vector3 _failSpot;
+    private int _failCount;
+    private bool _failDiagnosed;
+    private readonly Dictionary<uint, int> _setAsides = [];
+
+    /// <summary>
+    /// One more failed plan of the completed quest <paramref name="questId"/> (a single ender). A single failure proves nothing
+    /// (<see cref="PlayerbotNavigation.TryPlanToward"/> also refuses a bot momentarily on a steep patch): only the
+    /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed (<see cref="PlayerbotNavigation.RequiresSteepAscent"/>, two
+    /// capped queries), once per quest and spot; a bot that moved starts the count again. A confirmed climb sets the quest and its
+    /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
+    /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up).
+    /// <para>
+    /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
+    /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
+    /// but behind steep ground.
+    /// </para>
+    /// </summary>
+    private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now)
+    {
+        Vector3 spot = new(player.X, player.Y, player.Z);
+        if (questId != _failQuest || Vector3.DistanceSquared(spot, _failSpot) > SpotYards * SpotYards)
+        {
+            _failQuest = questId;
+            _failSpot = spot;
+            _failCount = 0;
+            _failDiagnosed = false;
+        }
+
+        if (++_failCount < ConfirmFailures || _failDiagnosed || Suspensions is not { } suspensions) return;
+        _failDiagnosed = true;
+        if (!PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent)) return;
+        _failCount = 0;
+        _failDiagnosed = false;
+        int times = _setAsides.GetValueOrDefault(questId) + 1;
+        _setAsides[questId] = times;
+        TargetEntry = entry;
+        QuestId = questId;
+        ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
+        if (times >= AbandonAfterSetAsides && TryAbandon(player, questId))
+        {
+            _setAsides.Remove(questId);
+            log?.LogWarning(
+                "Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route climbs {Ascent:F1} yards of steep ground",
+                player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, ascent);
+            return;
+        }
+
+        suspensions.SuspendQuest(questId, now);
+        suspensions.SuspendEntry(entry, now);
+        log?.LogWarning(
+            "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route climbs {Ascent:F1} yards of steep ground",
+            player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, ascent);
+    }
+
+    /// <summary>Abandon <paramref name="questId"/> with the client's own packet (journal, source items and saves follow the player path).</summary>
+    private bool TryAbandon(Player player, uint questId)
+    {
+        if (_session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is not { Loaded: true } state) return false;
+        int slot = state.Quests.FindSlot(questId);
+        if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
+            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        return state.Quests.Get(questId) is not { Status: QuestStatus.Complete, Rewarded: false };
+    }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
     {
