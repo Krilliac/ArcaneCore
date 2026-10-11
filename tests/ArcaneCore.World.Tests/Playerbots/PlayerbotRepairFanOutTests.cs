@@ -19,34 +19,67 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots;
 
 /// <summary>
-/// The repair trip plans to at most <see cref="PlayerbotTownGoals.MaxRepairPlansPerThink"/> spawns in one think (live-w27-r1: a bot
-/// whose start was off the mesh planned to every repair spawn of the map in one think, up to 1,740 queries), keeps the refused ones
-/// blocked, goes on from the next candidate at the next think, and does not set a spawn aside when the start itself is unplannable.
+/// The repair trip plans to at most <see cref="PlayerbotTownGoals.MaxRepairPlansPerThink"/> spawns in one think, however many times the
+/// think calls Update (live-w27-r1: a bot whose start was off the mesh planned to every repair spawn of the map in one think, up to
+/// 1,740 queries). The refused ones stay blocked, the next think goes on from the next candidate, a start off the mesh does not stop
+/// the search (a farther spawn may plan), and with every spawn refused the trip rests and is no candidate.
 /// </summary>
 public sealed class PlayerbotRepairFanOutTests
 {
-    private const int Spawns = 10;
+    private const int Bound = PlayerbotTownGoals.MaxRepairPlansPerThink;
 
-    [Fact]
-    public async Task EveryPlanFailing_PlansAtMostTheBoundPerThink_AndVisitsEachSpawnOnce()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task EveryPlanFailing_PlansTheBoundPerThink_VisitsEachSpawnOnce_ThenRests(bool startOnMesh)
     {
-        var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => false };
-        List<int> perThink = await RunThinks(path, thinks: 5);
-
-        Assert.All(perThink, count => Assert.True(count <= PlayerbotTownGoals.MaxRepairPlansPerThink, $"plans per think: {string.Join(", ", perThink)}"));
-        Assert.Equal(PlayerbotTownGoals.MaxRepairPlansPerThink, perThink[0]);
-        Assert.Equal(Spawns, path.Ends.Distinct().Count()); // every spawn was tried ...
-        Assert.Equal(path.Ends.OrderBy(e => e.X).ToList(), path.Ends);   // nearest first, and none twice: the blocked set holds across thinks
+        var path = new ScriptedPathfinder { StartOnMesh = startOnMesh, Reaches = _ => false };
+        await Run(path, (player, goals, think) =>
+        {
+            Assert.True(goals.HasCandidate(player));
+            var perThink = new List<int>();
+            for (int i = 0; i < 5; i++) perThink.Add(think(1).Distinct().Count());
+            int[] expected = [Bound, Bound, Bound, ScriptedPathfinder.SpawnCount - 3 * Bound, 0];
+            Assert.Equal(expected, perThink);
+            Assert.Equal(ScriptedPathfinder.SpawnCount, path.AllEnds.Distinct().Count()); // every spawn tried ...
+            Assert.Equal(path.AllEnds.Distinct().OrderBy(e => e.X).ToList(), path.AllEnds.Distinct().ToList()); // ... nearest first
+            // Every candidate failed: the trip rests, and with it HasCandidate (so the brain's home return can run).
+            Assert.False(goals.HasCandidate(player));
+        });
     }
 
     [Fact]
-    public async Task StartOffTheMesh_StopsAfterOnePlan_AndSetsNoSpawnAside()
+    public async Task OnceEveryCandidateFailed_NothingIsPlannedDuringTheBackoff()
     {
-        var path = new ScriptedPathfinder { StartOnMesh = false, Reaches = _ => false };
-        List<int> perThink = await RunThinks(path, thinks: 4);
+        var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => false };
+        await Run(path, (player, goals, think) =>
+        {
+            for (int i = 0; i < 20 && goals.HasCandidate(player); i++) think(1);
+            Assert.Equal(ScriptedPathfinder.SpawnCount, path.AllEnds.Distinct().Count());
+            int plans = path.Queries;
+            for (int i = 0; i < 10; i++)
+            {
+                Assert.False(goals.HasCandidate(player));
+                Assert.Empty(think(1));
+            }
 
-        Assert.Equal([1, 1, 1, 1], perThink);
-        Assert.Single(path.Ends.Distinct()); // the nearest spawn again each think: it was not blacklisted
+            Assert.Equal(plans, path.Queries); // the world clock stands still in this test: well inside RepairTripBackoffMs
+        });
+    }
+
+    [Fact]
+    public async Task StartOffTheMesh_NearestRefused_AFartherSpawnThatPlansIsFound()
+    {
+        var path = new ScriptedPathfinder { StartOnMesh = false, Reaches = end => end.X >= ScriptedPathfinder.SpawnX(1) - 0.01f };
+        await Run(path, (player, goals, think) =>
+        {
+            List<Vector3> ends = think(1);
+            Assert.Equal(ScriptedPathfinder.SpawnX(0), ends[0].X, 0.01f);
+            Assert.Contains(ends, e => Math.Abs(e.X - ScriptedPathfinder.SpawnX(1)) < 0.01f);
+            Assert.True(ends.Distinct().Count() <= Bound);
+            Assert.Equal(951u, goals.TargetEntry);
+            Assert.Equal(PlayerbotGoalKind.Vendor, goals.Goal);
+        });
     }
 
     [Fact]
@@ -54,26 +87,40 @@ public sealed class PlayerbotRepairFanOutTests
     {
         const int reachable = 4; // the fifth nearest
         var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = end => end.X >= ScriptedPathfinder.SpawnX(reachable) - 0.01f };
-        List<int> perThink = await RunThinks(path, thinks: 2);
-
-        Assert.All(perThink, count => Assert.True(count <= PlayerbotTownGoals.MaxRepairPlansPerThink));
-        Assert.Equal(2, perThink.Count);
-        Assert.Equal(ScriptedPathfinder.SpawnX(reachable), path.Ends[^1].X, 0.01f);
-        Assert.Equal(950u + reachable, path.TargetEntry);
+        await Run(path, (player, goals, think) =>
+        {
+            Assert.Equal(Bound, think(1).Distinct().Count());
+            Assert.True(think(1).Distinct().Count() <= Bound);
+            Assert.Equal(ScriptedPathfinder.SpawnX(reachable), path.AllEnds[^1].X, 0.01f);
+            Assert.Equal(950u + reachable, goals.TargetEntry);
+        });
     }
 
     [Fact]
-    public async Task WhenTheFirstCandidatePlans_OneQueryIsMade_AndItIsTheNearest()
+    public async Task WhenTheFirstCandidatePlans_OneCandidateIsPlannedTo_AndItIsTheNearest()
     {
         var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => true };
-        List<int> perThink = await RunThinks(path, thinks: 1);
-
-        Assert.Equal([1], perThink);
-        Assert.Equal(ScriptedPathfinder.SpawnX(0), path.Ends[0].X, 0.01f);
-        Assert.Equal(950u, path.TargetEntry);
+        await Run(path, (player, goals, think) =>
+        {
+            Assert.Single(think(1).Distinct());
+            Assert.Equal(ScriptedPathfinder.SpawnX(0), path.AllEnds[0].X, 0.01f);
+            Assert.Equal(950u, goals.TargetEntry);
+        });
     }
 
-    private static async Task<List<int>> RunThinks(ScriptedPathfinder path, int thinks)
+    [Fact]
+    public async Task TwoUpdatesInOneThink_PlanAtMostTheBoundInTotal()
+    {
+        var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => false };
+        await Run(path, (player, goals, think) =>
+        {
+            Assert.Equal(Bound, think(2).Distinct().Count());
+            Assert.Equal(Bound, think(2).Distinct().Count());
+        });
+    }
+
+    /// <summary>Runs <paramref name="body"/> on the world thread; <c>think(updates)</c> opens a think, calls Update that many times, and returns the destinations planned to.</summary>
+    private static async Task Run(ScriptedPathfinder path, Action<Player, PlayerbotTownGoals, Func<int, List<Vector3>>> body)
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(Boots(9212, durability: 20));
@@ -86,29 +133,28 @@ public sealed class PlayerbotRepairFanOutTests
             var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
             try
             {
-                return await host.OnWorldAsync(() =>
+                await host.OnWorldAsync(() =>
                 {
                     Player player = session.Player!;
                     WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: path);
                     PlayerbotEquipmentTests.EquipFromBags(player, 9212);
                     player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
                     player.Money = 100;
-
-                    var perThink = new List<int>();
-                    for (int think = 0; think < thinks; think++)
+                    body(player, goals, updates =>
                     {
                         path.Ends.Clear();
-                        PlayerbotMotion.ElapseForTests(player, 500);
-                        session.ManagedBudget = new ManagedActionBudget(1);
-                        goals.Update(player, 500);
-                        perThink.Add(path.Ends.Distinct().Count()); // candidates planned to (a refused plan may try more starts for one)
-                        path.TargetEntry = goals.TargetEntry;
-                        path.AllEnds.AddRange(path.Ends);
-                    }
+                        goals.BeginThink();
+                        for (int i = 0; i < updates; i++)
+                        {
+                            PlayerbotMotion.ElapseForTests(player, 500);
+                            session.ManagedBudget = new ManagedActionBudget(1);
+                            goals.Update(player, 500);
+                        }
 
-                    path.Ends.Clear();
-                    path.Ends.AddRange(path.AllEnds);
-                    return perThink;
+                        path.AllEnds.AddRange(path.Ends);
+                        return [.. path.Ends];
+                    });
+                    return true;
                 });
             }
             finally { session.Kick(); await session.ManagedClosed; }
@@ -128,17 +174,17 @@ public sealed class PlayerbotRepairFanOutTests
 
 /// <summary>
 /// Plans to a destination are answered by <see cref="Reaches"/> (a straight line, or no path); a query from a point to itself is the
-/// "is the bot on the mesh" probe, answered by <see cref="StartOnMesh"/>. <see cref="Plans"/> counts the plan queries only.
+/// "is the bot on the mesh" probe, answered by <see cref="StartOnMesh"/>. <see cref="Queries"/> counts the plan queries only.
 /// </summary>
 internal sealed class ScriptedPathfinder : IPathfinder
 {
+    public const int SpawnCount = 10;
     public bool Enabled => true;
     public bool StartOnMesh { get; init; } = true;
     public Func<Vector3, bool> Reaches { get; init; } = _ => true;
-    public int Plans { get; private set; }
+    public int Queries { get; private set; }
     public List<Vector3> Ends { get; } = [];
     public List<Vector3> AllEnds { get; } = [];
-    public uint TargetEntry { get; set; }
 
     /// <summary>The x of the i-th repair spawn: 130 yards and more east of the start position, nearest first.</summary>
     public static float SpawnX(int i) => -8949.95f + 130f + 10f * i;
@@ -146,21 +192,21 @@ internal sealed class ScriptedPathfinder : IPathfinder
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
         if (start == end) return StartOnMesh ? PathResult.StraightLine(start, end, PathType.Normal) : PathResult.None(start);
-        Plans++;
+        Queries++;
         Ends.Add(end);
         return Reaches(end) ? PathResult.StraightLine(start, end, PathType.Normal) : PathResult.None(start);
     }
 }
 
-/// <summary>Ten repair NPCs (entries 950 to 959), each 10 yards further east than the one before, the first 130 yards from the start.</summary>
+/// <summary>Repair NPCs (entries 950 up), each 10 yards further east than the one before, the first 130 yards from the start.</summary>
 internal sealed class ManyRepairFixture : ICreatureDataStore, INpcContentStore
 {
     Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty);
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
-        Enumerable.Range(0, 10).Select(i => new CreatureTemplate
+        Enumerable.Range(0, ScriptedPathfinder.SpawnCount).Select(i => new CreatureTemplate
             { Entry = (uint)(950 + i), Name = $"armorer {i}", Faction = 900011, NpcFlags = (uint)NpcFlags.Repair, DisplayIds = [49] }).ToList(),
-        Enumerable.Range(0, 10).Select(i => new CreatureSpawn
+        Enumerable.Range(0, ScriptedPathfinder.SpawnCount).Select(i => new CreatureSpawn
             { Guid = (uint)(95001 + i), Entry = (uint)(950 + i), MapId = 0, X = ScriptedPathfinder.SpawnX(i), Y = -132.49f, Z = 83.53f }).ToList(),
         [], [], []));
 }
