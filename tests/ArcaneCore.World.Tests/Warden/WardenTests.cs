@@ -342,6 +342,9 @@ public sealed class WardenTests
         var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log,
             ScanIntervalMinSeconds = 10, ScanIntervalMaxSeconds = 10 });
         rig.Handshake();
+        rig.Warden.Update(10_000); // the first scan is at a random offset, at most one gap; answer it so the next gap is the full 10 s
+        rig.Next();
+        rig.Warden.Handle(rig.Result(0));
         rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
         rig.Warden.Update(9_000);
         rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
@@ -591,6 +594,73 @@ public sealed class WardenTests
         Assert.StartsWith("9 more", rig.Verdicts[1].Reason);
         rig.Warden.Flush();
         Assert.Equal(2, rig.Verdicts.Count);
+    }
+
+    [Fact]
+    public void AValidScanReply_ReportsTheHeldCountAheadOfItsOwnVerdicts()
+    {
+        WardenOptions options = Scans(new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Memory, Address = 0x00401000, Expected = "9090" });
+        options.ProtocolAction = WardenAction.Log;
+        options.ProtocolReportIntervalSeconds = 3600;
+        var rig = new Rig(options);
+        rig.Handshake();
+        for (int i = 0; i < 4; i++)
+        {
+            rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult)); // unsolicited: 1 reported, 3 held
+        }
+
+        Assert.Equal(3, rig.Warden.HeldVerdicts);
+        rig.Warden.Update(10_000);
+        rig.Next();
+        rig.Warden.Handle(rig.Result(0, 0x90, 0x91)); // valid reply, but the scan failed
+
+        Assert.Equal(0, rig.Warden.HeldVerdicts);
+        Assert.Equal(3, rig.Verdicts.Count);
+        Assert.StartsWith("3 more", rig.Verdicts[1].Reason);
+        Assert.False(rig.Verdicts[2].IsProtocolFailure);
+    }
+
+    [Fact]
+    public void TheFirstScan_StartsAtARandomOffset_ThenKeepsTheFullGap()
+    {
+        var firstScanSeconds = new HashSet<int>();
+        for (int seed = 1; seed <= 24; seed++)
+        {
+            var sent = new List<byte[]>();
+            var session = new WardenSession(SessionKey, Scans(new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Timing }), sent.Add, _ => { }, new Random(seed));
+            var client = new Client();
+            session.Start();
+            session.Handle(client.Write((byte)WardenClientCommand.ModuleOk));
+            session.Handle(client.Write([(byte)WardenClientCommand.HashResult, .. WardenModuleProfile.ClientKeySeedHash]));
+            int ready = sent.Count;
+            int second = 0;
+            while (sent.Count == ready && second < 20)
+            {
+                session.Update(1_000);
+                second++;
+            }
+
+            Assert.InRange(second, 1, 10);
+            firstScanSeconds.Add(second);
+            Assert.Equal(WardenState.AwaitingCheckResult, session.State);
+        }
+
+        Assert.True(firstScanSeconds.Count > 3, $"first scans were not spread: {string.Join(",", firstScanSeconds)}");
+    }
+
+    [Fact]
+    public void TheScansAfterTheFirst_KeepTheFullConfiguredGap()
+    {
+        var rig = new Rig(Scans(new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Timing }));
+        rig.Handshake();
+        rig.Warden.Update(10_000);
+        rig.Next();
+        rig.Warden.Handle(rig.Result(0));
+        int sent = rig.Sent.Count;
+        rig.Warden.Update(9_999);
+        Assert.Equal(sent, rig.Sent.Count);
+        rig.Warden.Update(1);
+        Assert.Equal(sent + 1, rig.Sent.Count);
     }
 
     [Theory]

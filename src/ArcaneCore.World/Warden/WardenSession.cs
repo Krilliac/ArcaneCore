@@ -200,7 +200,7 @@ public sealed class WardenSession
                     _crypto.InstallModuleKeys(WardenModuleProfile.ClientKeySeed, WardenModuleProfile.ServerKeySeed);
                     SendPlain(WardenCodec.ModuleInitialize()); // the first body under the module's keys; the module does not acknowledge it
                     State = WardenState.Ready;
-                    ScheduleScan();
+                    ScheduleScan(first: true);
                     return;
             }
         }
@@ -286,10 +286,16 @@ public sealed class WardenSession
         }
     }
 
-    private void ScheduleScan()
+    /// <summary>
+    /// Pick the next scan time. The first scan after the handshake lands at a random point of its gap (at least one second out, so the
+    /// client has processed MODULE_INITIALIZE), so sessions that log in together, or run with a fixed interval, do not all scan on the
+    /// same tick.
+    /// </summary>
+    private void ScheduleScan(bool first = false)
     {
         uint min = _options.ScanIntervalMinSeconds, max = _options.ScanIntervalMaxSeconds;
-        _nextScanMs = ClockMs + (1000L * _random.NextInt64(min, (long)max + 1));
+        long gapMs = 1000L * _random.NextInt64(min, (long)max + 1);
+        _nextScanMs = ClockMs + (first ? _random.NextInt64(Math.Min(1000L, gapMs), gapMs + 1) : gapMs);
     }
 
     private void Await(WardenState state)
@@ -354,6 +360,7 @@ public sealed class WardenSession
     /// </summary>
     private void Forgive()
     {
+        ReportSuppressed(); // a valid reply ends the failure streak: report the held count now, ahead of any verdict from this reply
         if (_strikes > 0)
         {
             _strikes--;
