@@ -227,6 +227,46 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     }
 
     /// <summary>
+    /// The graveyard chosen at the body is kept while the ghost crosses cells with no area on its way to it. Live 2026-10-11 12:18-12:32
+    /// (w23/w24, world.log; Grogeil, a level-28 Tauren): its body lay in the Barrens (zone 17, area flag 130) at (1437.1, -2804.0) among
+    /// creatures too strong for it, so it took the spirit healer; the ghost's position was in zone 17, linked to the Crossroads for the
+    /// Horde, so it walked west to that graveyard, out of sight of any healer. 150 yards on, at (1291.8, -2764.4), the terrain's area
+    /// cells read 0xFFFF (no area: zone 0, real terrain-5875 and AreaTable.dbc), and the graveyard was looked up again from there at every
+    /// think: nothing is linked to zone 0, so the goal vanished, the ghost stood waiting for a healer, and the fallback faulted
+    /// ("gives up the spirit healer ...: goal none, n/a yd away, route none") three times, until the bot was disabled. The test world's
+    /// band of cells without a graveyard lies between the body and the healer's graveyard, 300 yards east (beyond the ghost's sight).
+    /// </summary>
+    [Fact]
+    public async Task AGhostWalkingToItsGraveyardThroughCellsWithoutAnArea_KeepsItsGoal_AndReachesTheHealer()
+    {
+        var clock = new TestDeathClock(1_000);
+        WorldSafeLoc grave = DeadminesTestContent.Graveyard;
+        var body = new Vector3(grave.X - 300f, grave.Y, DeadminesTestContent.OutsideFloor);
+        await using DungeonBotHost host = await StartAsync(clock, at: body);
+        PlayerbotBrain brain = await BrainAsync(host, new PlayerbotHomeArea(0, (body + Healer) / 2f, 400f, "Barrenshome"));
+        // The graveyard is known round the body and round the graveyard; the cells in between have no area (zone 0, nothing linked).
+        await host.OnWorldAsync(() => brain.Recovery.GraveyardLookup = (_, at) =>
+            Vector2.Distance(new(at.X, at.Y), new(body.X, body.Y)) < 40f || Vector2.Distance(new(at.X, at.Y), new(grave.X, grave.Y)) < 60f
+                ? grave : null);
+        await KillAsync(host, brain);
+        Creature[] camp = await CampAsync(host, strong: true);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        await host.OnWorldAsync(() => Assert.DoesNotContain(host.Player.VisibleObjects,
+            guid => host.Player.Map!.FindObject(guid) is Creature c && (c.NpcFlags & (uint)NpcFlags.SpiritHealer) != 0));
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 400);
+
+        Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.TooStrong, run.Reason);
+        Assert.False(run.Reclaimed, run.Trail);
+        Assert.Contains("SpiritHealer.WalkToGraveyard", run.Trail, StringComparison.Ordinal);
+        Assert.True(Vector2.Distance(new(run.RevivedAt.X, run.RevivedAt.Y), new(Healer.X, Healer.Y)) < 10f, "revived away from the healer: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
     /// No regression: a first death in a safe spot inside the home (no creature near the body) is reclaimed as before, where the ghost
     /// stands, and the spirit healer is not taken.
     /// </summary>

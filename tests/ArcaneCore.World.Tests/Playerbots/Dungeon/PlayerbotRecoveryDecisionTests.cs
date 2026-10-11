@@ -72,6 +72,21 @@ public sealed class PlayerbotRecoveryDecisionTests
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
 
     /// <summary>
+    /// With the body on the ghost's map and nothing to walk to, the fallback goes back to the body once per death instead of waiting
+    /// for a healer that cannot come (vmangos leaves a spirit with no linked graveyard where it died); a healer or a graveyard still wins,
+    /// and a stall still faults.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, false, false, true, "ResumeCorpseRun")]
+    [InlineData(false, false, false, false, false, "WaitForHealer")]
+    [InlineData(false, false, true, false, true, "WalkToGraveyard")]
+    [InlineData(true, false, false, false, true, "WalkToHealer")]
+    [InlineData(true, true, false, false, true, "Activate")]
+    [InlineData(false, false, false, true, true, "Fault")]
+    public void DecideSpiritHealer_WithTheBodyOnThisMap(bool healer, bool inReach, bool graveyard, bool stalled, bool bodyRunLeft, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled, bodyRunLeft));
+
+    /// <summary>
     /// An unsafe body (<see cref="PlayerbotRecovery.JudgeBody"/>): a repeat death there, a creature too strong for the bot round it,
     /// or a body outside the home with the healer nearer home; outside the home alone, or the healer nearer home alone, is not.
     /// </summary>
@@ -597,7 +612,8 @@ public sealed class PlayerbotRecoveryDecisionTests
         InvalidOperationException? fault = null;
         long faultAt = 0, fallbackAt = -1, start = (long)host.Host.World.Uptime.TotalMilliseconds;
         bool waited = false;
-        for (int think = 0; think < 240 && fault is null; think++)
+        int resumed = 0;
+        for (int think = 0; think < 400 && fault is null; think++)
         {
             fault = await host.OnWorldAsync(() =>
             {
@@ -607,6 +623,7 @@ public sealed class PlayerbotRecoveryDecisionTests
                 finally
                 {
                     waited |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.WaitForHealer;
+                    if (recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun && recovery.LastStep == Step.SpiritHealer && !recovery.UsingSpiritHealer) resumed++;
                     if (fallbackAt < 0 && recovery.UsingSpiritHealer) fallbackAt = (long)host.Host.World.Uptime.TotalMilliseconds;
                 }
             });
@@ -617,6 +634,8 @@ public sealed class PlayerbotRecoveryDecisionTests
         Assert.NotNull(fault);
         Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
         Assert.True(waited, "the ghost never waited for a healer");
+        // The body is on this map: the fallback went back to it once (it is still out of reach here), then waited and faulted.
+        Assert.Equal(1, resumed);
         Assert.True(faultAt - start > PlayerbotRecovery.StuckMs, $"faulted after {faultAt - start} ms");
         Assert.True(fallbackAt >= 0 && faultAt - fallbackAt > PlayerbotRecovery.NoProgressMs, $"faulted {faultAt - fallbackAt} ms into the fallback");
     }
