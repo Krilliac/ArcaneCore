@@ -123,13 +123,49 @@ the **sub-areas** (Elwynn Forest 5-10, Westfall 9-18, Durotar 5-10, The Barrens 
 **Where a bot is placed.** The zone's safe locations are the graveyards linked to the zone or any of its sub-areas on the zone's
 map (`game_graveyard_zone`), split by team: link team 0 serves both factions, 469 the Alliance, 67 the Horde (vmangos
 `ObjectMgr::LoadGraveyardZones`). A zone with no graveyard for a team is not offered to it. The zone with the **fewest bots
-assigned** wins, ties broken at random, then one of its graveyards for the bot's team.
+assigned** wins, ties broken at random, then one of its graveyards for the bot's team that takes the bot's level.
 
-**The slack (an ArcaneCore choice, not a game rule).** A zone accepts a bot of level L when `MinLevel - ZoneLevelSlack <= L <=
+**Where the graveyard really stands.** `game_graveyard_zone` links a graveyard to the zones whose ghosts it serves, not to the zone
+it stands in, so the atlas asks the terrain (`Map.GetZoneAndAreaId` of the graveyard's position, through `WorldMaps.Terrain`) and:
+
+* **leaves out** a linked graveyard whose terrain zone is known and is not the zone (`PopulationZoneAtlas.Dropped`). Examples
+  from the r5 world DB: 829 "Alterac Valley, Alliance Exit" is linked to Western Plaguelands but stands in Alterac Mountains
+  beside level 61 Stormpike Battleguards (issue #178); Duskwood's Horde graveyard is Lakeshire in Redridge; Alterac Mountains'
+  two graveyards are Tarren Mill and Southshore in Hillsbrad. On that DB 15 of the links (90 to 75 zone locations) are left out,
+  and Alterac Mountains is offered to no one;
+* gives each kept graveyard the **level of the sub-area it stands in** (`LocationLevels`). A placement's floor is that level, never
+  below the zone's lowest (`FloorOf`). Duskwood's lowest sub-area is The Darkened Bank (10), but its graveyards stand in Raven
+  Hill (24) and Darkshire (25): band 1-10 used to fit Duskwood with levels 6-10, and those bots died in a loop at Raven Hill
+  (issue #177).
+
+The lookup never runs on the world thread: a terrain tile not in memory is read from disk synchronously and the terrain clean-up
+frees unreferenced tiles after a minute, so looking up some 90 graveyards inside a tick would be some 90 file reads on every
+build. The feature starts a background task (`TerrainManager.ReadZoneAndAreaIdDetached`, which reads the tile files itself and
+never touches the world thread's tile cache) when the atlas's sources change: the first pass, a content reload, an `AllowedMaps` or
+`ExcludedZones` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
+is in, and always without terrain data (`World:Maps:DataDirectory` unset), nothing is known: every link is kept and the floor is the
+zone's lowest sub-area level. A lookup for sources that change in the meantime is cancelled (each lookup has its own token source,
+linked to the feature's stop), and a result that still arrives is dropped, so repeated reloads never stack lookups. A lookup that
+fails is logged and keeps the fallback until the sources change again; it is not retried. The atlas logs its zone and location
+counts and the links it left out each time it is built.
+
+**Creation and relocation wait for the lookup.** While a lookup for the current sources is running (started, its result not yet
+delivered to the world thread), a pass creates no bot and relocates none, and the status says `held back: waiting for the
+graveyard terrain lookup`; restarting parked bots and parking go on. Otherwise the first pass after every start or reload would
+place bots from the fallback, which is the Duskwood bug again. After 6 such passes (`MaxTerrainHoldPasses`) creation and
+relocation go ahead on the fallback and a warning is logged, so a hung read cannot stall the population. A failed lookup ends the
+wait at once.
+
+**The detached reader and a missing tile.** `ReadZoneAndAreaIdDetached` returns (0, 0) for a position whose tile file is missing,
+unreadable or outside the map, so that graveyard's link is kept with no sub-area level. The cached path
+(`TerrainInfo.GetZoneAndAreaId`) instead reads a missing tile as area flag 0, which `AreaTable` resolves to the map's
+`linked_zone` area when the map has one. The two agree wherever a tile file exists.
+
+**The slack (an ArcaneCore choice, not a game rule).** A placement takes a bot of level L when `floor - ZoneLevelSlack <= L <=
 MaxLevel`. The lowest sub-area of a starter zone is level 4 or 5, so with no slack a level 1 bot would fit nowhere and a server
 without the boost content could never populate. The default of 4 lets a level 1 bot start in any starter zone while a level 1
-bot still never lands in a level 20 zone. `0` is the strict reading of the table. The slack applies only to the low end: a bot
-above a zone's highest level is out-levelled (see relocation).
+bot still never lands in a level 20 zone. `0` is the strict reading of the table. Above a zone's highest level a bot is
+out-levelled; below every floor of its zone minus the slack it is under-levelled (see relocation).
 
 ## Factions
 
@@ -169,10 +205,17 @@ behind) is deleted at the next pass.
 ## Relocation
 
 With `Relocation = Teleport` and `MaxRelocationsPerInterval > 0`, on a pass that otherwise holds (`under-budget`, `at-target`,
-`hysteresis`), owned bots that are autonomous, idle and not vetoed are looked at, the most out-levelled first. A bot whose level
-is at most its zone's highest level plus `OutlevelMargin` (default 2) stays; the row only records the zone it walked to. Otherwise
-it is teleported to a graveyard of the least populated zone that fits its level and team. `Off` leaves the bot to its own goals.
-No bot is relocated on a parking pass.
+`hysteresis`), owned bots that are autonomous, idle and not vetoed are looked at, the worst misfit first. A bot whose level is at
+most its zone's highest level plus `OutlevelMargin` (default 2) and not under-levelled (`PopulationZoneAtlas.UnderLevelled`: below
+the lowest floor of its zone's graveyards for its team minus `ZoneLevelSlack`) stays; the row only records the zone it walked to.
+Otherwise it is teleported to a graveyard of the least populated zone that fits its level and team. This also re-homes bots an
+older build placed badly (a level 9 bot at Raven Hill) and bots that walked over a border into a harder zone, on the first pass
+that sees them alive and idle. The zone checked is the one the bot stands in at that pass, whatever it is doing: a bot travelling
+on its own (a travel goal, a road through a harder zone) that is under- or out-levelled for the zone
+it is crossing is teleported too, mid-goal, and its goal is cut short. That is deliberate: a low-level bot crossing Duskwood is as
+likely to die there as one placed there. Dead, in-combat, teleporting, party-driven, scripted, group-driven and vetoed bots are
+never moved. `Off` leaves the bot to its own goals. No bot is relocated on a parking pass, and only bots with a
+`playerbot_population_member` row are ever moved: never a real player, never an operator's bot.
 
 ### The `IPopulationPlacementVeto` seam
 

@@ -83,6 +83,37 @@ public sealed class TerrainManager
         _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : null);
     }
 
+    /// <summary>
+    /// The zone and area at a position, read straight from the tile's <c>.map</c> file without the tile cache (vmangos
+    /// <c>TerrainInfo::GetZoneAndAreaId</c> without WMO areas): (0, 0) without terrain data, outside the map or for a missing or
+    /// unreadable file. Thread affinity: any thread. It reads only the data directory (fixed at construction) and the given
+    /// <paramref name="areas"/> (immutable), never the world-thread tile cache. It reads one file per call, so it is for background work.
+    /// </summary>
+    public (uint ZoneId, uint AreaId) ReadZoneAndAreaIdDetached(uint mapId, float x, float y, AreaTable areas)
+    {
+        ArgumentNullException.ThrowIfNull(areas);
+        if (_mapsDirectory is null || TerrainTile.TileOf(x, y) is not { } tile)
+        {
+            return (0, 0);
+        }
+
+        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tile.X, tile.Y));
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return (0, 0);
+            }
+
+            return areas.GetZoneAndAreaId(TerrainTile.Parse(File.ReadAllBytes(path)).GetAreaFlag(x, y), mapId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
+            return (0, 0);
+        }
+    }
+
     internal TerrainTile LoadTile(uint mapId, int tileX, int tileY)
     {
         if (_mapsDirectory is null)

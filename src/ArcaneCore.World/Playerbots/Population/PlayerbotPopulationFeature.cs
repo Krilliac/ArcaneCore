@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
@@ -121,6 +122,15 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private object? _atlasAreas;
     private object? _atlasGraveyards;
     private string _atlasKey = string.Empty;
+    private bool _atlasLocated;
+    private IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? _located;
+    private object? _locating;
+    private bool _locateRunning;
+    private int _locateHeldPasses;
+    private CancellationTokenSource? _locateCts;
+
+    /// <summary>The most passes creation and relocation wait for a running graveyard terrain lookup before going ahead on the fallback atlas.</summary>
+    internal const int MaxTerrainHoldPasses = 6;
     private string? _lastError;
 
     private ManagedPlayerbotFeature? Managed => services.GetService<ManagedPlayerbotFeature>();
@@ -129,6 +139,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     internal IPopulationTickSource? TickSource { get; set; }
 
     private IPopulationTickSource Source => TickSource ?? _window;
+
+    /// <summary>
+    /// Where a graveyard stands (zone, area), called on a background thread for each graveyard of the atlas; a test supplies a fake.
+    /// Null reads the terrain files (<see cref="TerrainManager.ReadZoneAndAreaIdDetached"/>) when terrain data is configured.
+    /// Set it before the first pass.
+    /// </summary>
+    internal Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? TerrainLocator { get; set; }
+
+    /// <summary>The atlas the last capture used (world thread; tests).</summary>
+    internal PopulationZoneAtlas Atlas => _atlas;
 
     /// <summary>World time this feature has seen, in ms (the creation rate limit runs on it); tests move it forward.</summary>
     internal long ClockMs
@@ -225,7 +245,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         bool BoostAvailable,
         string BoostMissing,
         long ClockMs,
-        ManagedPlayerbotFeature Managed);
+        ManagedPlayerbotFeature Managed,
+        string? TerrainHold);
 
     private PassInput? Capture()
     {
@@ -239,6 +260,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         PlayerbotPopulationOptions pop = _options.Population;
         PopulationZoneAtlas atlas = AtlasFor(world, pop);
+        string? terrainHold = TerrainHold();
         var realZones = new HashSet<uint>();
         foreach (Player online in world.OnlinePlayers)
             if (online.Session is not WorldSession { IsManaged: true }) realZones.Add(online.ZoneId);
@@ -265,24 +287,119 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.Bands, samples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed);
+            ClockMs, managed, terrainHold);
     }
 
-    /// <summary>The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload) or the maps/exclusions change.</summary>
+    /// <summary>
+    /// The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload), the maps/exclusions
+    /// change, or the terrain lookup of the graveyards (<see cref="StartLocating"/>) has come in.
+    /// <para>
+    /// Where each graveyard really stands comes from the terrain, and the world thread never reads it: a <c>TerrainInfo</c> tile not in
+    /// memory is read from disk synchronously, and the clean-up frees unreferenced tiles after a minute, so about 90 graveyard lookups
+    /// would be about 90 file reads inside a tick on every build. Until the background lookup for the current key is in, the atlas is
+    /// built without it (every link kept, the zone's lowest sub-area as the floor: the behaviour without terrain data).
+    /// </para>
+    /// </summary>
     private PopulationZoneAtlas AtlasFor(WorldRuntime world, PlayerbotPopulationOptions pop)
     {
-        var areas = WorldMaps.Of(world).Areas;
+        AreaTable areas = WorldMaps.Of(world).Areas;
         GraveyardCatalog graveyards = WorldGraveyards.Of(world).Catalog;
         string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones);
-        if (!ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey)
+        bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey;
+        if (sourcesChanged)
         {
-            _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones));
             _atlasAreas = areas;
             _atlasGraveyards = graveyards;
             _atlasKey = key;
+            _located = null;
+            // A lookup still running for the old sources is cancelled, and ignored if it posts anyway (its token is no longer current),
+            // so repeated reloads never stack lookups.
+            _locating = null;
+            _locateRunning = false;
+            _locateCts?.Cancel();
+            _locateCts?.Dispose();
+            _locateCts = null;
         }
 
+        if (!sourcesChanged && (_located is null || _atlasLocated)) return _atlas;
+
+        IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? located = _located;
+        _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
+            located is null ? null : l => located.GetValueOrDefault(l.Id));
+        _atlasLocated = located is not null;
+        logger.LogInformation(
+            "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Dropped} graveyard links left out as standing in another zone{List}",
+            located is null ? " (graveyard terrain lookup not in yet)" : string.Empty,
+            _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde), _atlas.Dropped.Count,
+            _atlas.Dropped.Count == 0 ? string.Empty
+                : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
+        if (located is null && _locating is null) StartLocating(world, areas);
         return _atlas;
+    }
+
+    /// <summary>
+    /// World thread: start the background lookup of where the graveyards of the current (unlocated) atlas stand, through
+    /// <see cref="TerrainLocator"/> or, by default, <see cref="TerrainManager.ReadZoneAndAreaIdDetached"/> (its own file reads, never
+    /// the world thread's tile cache). The result is posted back to the world thread (<see cref="WorldRuntime.Post"/>) and taken by
+    /// the next capture; a result for sources that have changed since is dropped. Without a locator and without terrain data nothing
+    /// starts and the atlas stays unlocated. A lookup that fails keeps the unlocated atlas until the sources change again (it is not
+    /// retried). Each lookup has its own token source, linked to the feature's stop, cancelled when the sources change.
+    /// </summary>
+    private void StartLocating(WorldRuntime world, AreaTable areas)
+    {
+        TerrainManager terrain = WorldMaps.Of(world).Terrain;
+        Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = TerrainLocator
+            ?? (terrain.Enabled ? l => terrain.ReadZoneAndAreaIdDetached(l.MapId, l.X, l.Y, areas) : null);
+        if (locate is null) return;
+        WorldSafeLoc[] locations = [.. _atlas.Zones.SelectMany(z => z.AllianceLocations.Concat(z.HordeLocations)).DistinctBy(l => l.Id)];
+        var token = new object();
+        _locating = token;
+        _locateRunning = true;
+        _locateHeldPasses = 0;
+        _locateCts = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        CancellationToken ct = _locateCts.Token;
+        _ = Task.Run(() =>
+        {
+            Dictionary<uint, (uint ZoneId, uint AreaId)>? result = [];
+            try
+            {
+                foreach (WorldSafeLoc location in locations)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    result[location.Id] = locate(location);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup failed; the atlas keeps every graveyard link until the area table, graveyards or maps change");
+                result = null;
+            }
+
+            // Every outcome ends the run on the world thread, so a failed lookup never holds the population back.
+            world.Post(() =>
+            {
+                if (!ReferenceEquals(_locating, token)) return;
+                _locateRunning = false;
+                if (result is not null) _located = result;
+            });
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// World thread, once per capture: why this pass must not create or relocate bots, or null. While the graveyard terrain lookup for
+    /// the current sources runs (started, its result not yet delivered), the atlas is the unlocated fallback, which would place a low
+    /// bot at Raven Hill again: creation and relocation wait. After <see cref="MaxTerrainHoldPasses"/> such passes they go ahead on the
+    /// fallback (a warning is logged once), so a hung read cannot stall the population.
+    /// </summary>
+    private string? TerrainHold()
+    {
+        if (!_locateRunning) return null;
+        _locateHeldPasses++;
+        if (_locateHeldPasses <= MaxTerrainHoldPasses) return "waiting for the graveyard terrain lookup";
+        if (_locateHeldPasses == MaxTerrainHoldPasses + 1)
+            logger.LogWarning("Playerbot population: the graveyard terrain lookup is still running after {Passes} passes; creating and relocating on the fallback atlas (every graveyard link kept)", MaxTerrainHoldPasses);
+        return null;
     }
 
     /// <summary>
@@ -348,7 +465,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     break;
             }
 
-            if (decision.State is "under-budget" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport && pop.MaxRelocationsPerInterval > 0)
+            bool relocate = decision.State is "under-budget" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
+                && pop.MaxRelocationsPerInterval > 0;
+            if (relocate && input.TerrainHold is { } relocationHold) ctx.Note ??= relocationHold; // no relocation on the fallback atlas either
+            else if (relocate)
             {
                 int moved = await RelocateAsync(ctx, ct).ConfigureAwait(false);
                 changed += moved;
@@ -450,6 +570,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         // 2. New bots, within the rate limit, the registry and the running cap.
+        if (ctx.Input.TerrainHold is { } hold && remaining > 0) stoppedBecause = hold;
         while (remaining > 0 && stoppedBecause is null)
         {
             if (pop.MaxCreatePerMinute == 0) break;
@@ -555,15 +676,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
         int moved = 0;
         // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
-        // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. Most out-levelled first.
+        // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
+        // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
+        // walked over a border into a harder zone) is moved the same way. The worst misfit first.
         foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Vetoed
                 && atlas.Find(f.ZoneId) is not null)
-            .OrderByDescending(f => f.Level - atlas.Find(f.ZoneId)!.MaxLevel).ThenBy(f => f.BotId))
+            .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f)).ThenBy(f => f.BotId))
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
             PopulationZone current = atlas.Find(bot.ZoneId)!;
-            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin)
+            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, pop.ZoneLevelSlack))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
                 if (member.ZoneId != current.ZoneId)
@@ -588,6 +711,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         return moved;
+
+        // How far the bot is outside its zone's levels, above or below (0 or less when it fits).
+        static int Misfit(PopulationZone zone, PopulationBotFacts bot) => Math.Max(bot.Level - zone.MaxLevel, zone.FloorFor(bot.Team) - bot.Level);
     }
 
     /// <summary>The status as chat lines (<c>.playerbot population status</c>).</summary>
