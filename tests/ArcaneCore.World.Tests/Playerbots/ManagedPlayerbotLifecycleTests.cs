@@ -665,7 +665,7 @@ public sealed class ManagedPlayerbotLifecycleTests
     internal static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         MemoryManagedPlayerbotStore owners, MemoryProvisionStore? provisions = null,
         bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null,
-        bool manualClock = false)
+        bool manualClock = false, IManagedPlayerbotSetAsideStore? setAsideStore = null)
         => WorldTestHost.Start(configureServices: services =>
         {
             if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
@@ -681,6 +681,7 @@ public sealed class ManagedPlayerbotLifecycleTests
             services.AddSingleton<ICharacterStore>(characters);
             services.AddSingleton<ICharacterLifeStore>(characters);
             services.AddSingleton<IManagedPlayerbotStore>(owners);
+            if (setAsideStore is not null) services.AddSingleton(setAsideStore);
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
             services.AddSingleton<IManagedPlayerbotProvisionStore>(provisions ?? new MemoryProvisionStore(accounts));
         });

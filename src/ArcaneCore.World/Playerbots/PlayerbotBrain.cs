@@ -373,6 +373,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
+        if (_quests.AbandonDistantCompletedQuest(player))
+        {
+            _goal = PlayerbotGoalKind.Quest;
+            return;
+        }
         uint completedReturn = _quests.CompletedReturnQuest(player);
         if (completedReturn != 0)
         {

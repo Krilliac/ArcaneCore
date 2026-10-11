@@ -80,6 +80,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
+    private readonly ConcurrentDictionary<Guid, PlayerbotSetAside[]> _loadedSetAsides = new();
+    private readonly TimeProvider _setAsideTime = services.GetService<TimeProvider>() ?? TimeProvider.System;
+    private int _savedSharedSetAsideVersion;
     private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
 
@@ -109,6 +112,19 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides)
+        {
+            IReadOnlyList<PlayerbotSetAside> rows = await setAsides.LoadAllAsync(cancellationToken).ConfigureAwait(false);
+            foreach (IGrouping<Guid, PlayerbotSetAside> group in rows.Where(row => row.BotId != Guid.Empty).GroupBy(row => row.BotId))
+                _loadedSetAsides[group.Key] = [.. group];
+            await _world!.InvokeAsync(() =>
+            {
+                _sharedSetAsides.Restore(rows.Where(row => row.BotId == Guid.Empty), _world.NowMs,
+                    _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+            _savedSharedSetAsideVersion = _sharedSetAsides.Version;
+        }
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
@@ -710,6 +726,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             foreach (ActiveBot active in _active.Values.ToArray())
                 await StopCoreAsync(active.Record, true, CancellationToken.None).ConfigureAwait(false);
+            await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
@@ -721,7 +738,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
-        => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+    {
+        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
+            brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+        return brain;
+    }
 
     /// <summary>
     /// The bot's home as a brain's area, or null when it has none. A zone-clipped home takes the zone of its centre from the terrain on
@@ -760,6 +782,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_active.TryGetValue(bot.BotId, out ActiveBot? active))
         {
             active.Paused = true;
+            await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false);
             if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
@@ -1081,7 +1104,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 }
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 { Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId }, CancellationToken.None).ConfigureAwait(false);
+                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             }
+            await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         { logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name); }
@@ -1133,8 +1158,51 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     private void ReplaceBrain(ActiveBot active)
     {
+        PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
+            active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
         active.Brain.Stop();
         active.Brain = NewBrain(active.Session, active.Record.BotId);
+        active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+        active.SavedSetAsideVersion = -1;
+    }
+
+    private async Task SaveBotSetAsidesAsync(ActiveBot active, bool force = false)
+    {
+        if (!force && active.SavedSetAsideVersion == active.Brain.Suspensions.Version) return;
+        (PlayerbotSetAside[] rows, int version) Capture()
+        {
+            PlayerbotSuspensions state = active.Brain.Suspensions;
+            return (state.Export(active.Record.BotId, active.Record.CharacterId, active.Session.World.NowMs,
+                _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()), state.Version);
+        }
+        // WorldTestHost and the production host may stop the world before stopping features. No tick can mutate the brain then.
+        (PlayerbotSetAside[] rows, int version) snapshot;
+        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        (PlayerbotSetAside[] rows, int version) = snapshot;
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
+            await store.ReplaceAsync(active.Record.BotId, rows).ConfigureAwait(false);
+        _loadedSetAsides[active.Record.BotId] = rows;
+        active.SavedSetAsideVersion = version;
+    }
+
+    private async Task SaveSharedSetAsidesAsync()
+    {
+        if (_savedSharedSetAsideVersion == _sharedSetAsides.Version) return;
+        (PlayerbotSetAside[] rows, int version) Capture()
+        {
+            return (_sharedSetAsides.Export(_world.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()),
+                _sharedSetAsides.Version);
+        }
+        (PlayerbotSetAside[] rows, int version) snapshot;
+        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        (PlayerbotSetAside[] rows, int version) = snapshot;
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
+            await store.ReplaceAsync(Guid.Empty, rows).ConfigureAwait(false);
+        _savedSharedSetAsideVersion = version;
     }
 
     /// <summary>
@@ -1313,6 +1381,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public AsyncServiceScope Scope { get; } = scope;
         public WorldSession Session { get; } = session;
         public PlayerbotBrain Brain = brain;
+        public int SavedSetAsideVersion;
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;
         public bool GroupDriven;
