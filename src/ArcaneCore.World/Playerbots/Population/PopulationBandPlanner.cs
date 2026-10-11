@@ -193,6 +193,10 @@ internal static class PopulationBandPlanner
         Team[] teams = options.Factions == PopulationFactions.Both
             ? [preferred, preferred == Team.Alliance ? Team.Horde : Team.Alliance] : [preferred];
         int[] deficits = Deficits(desired, have);
+        // (band, team, faction) triples with no safe placement in this call: the pick depends on nothing else about the race or
+        // class, so a second race of the same faction, or another class, would only repeat the same failed search. The team is
+        // part of the key because an incomplete catalog gives faction 0 to races of both teams.
+        var unplaceable = new HashSet<(int Band, Team Team, uint Faction)>();
         foreach (Team team in teams)
             foreach (int band in Enumerable.Range(0, options.Bands.Length)
                 .Where(i => deficits[i] > 0 && (boostAvailable || options.Bands[i].MinLevel <= 1))
@@ -210,12 +214,14 @@ internal static class PopulationBandPlanner
                     {
                         byte race = races[(firstRace + ri) % races.Count];
                         uint faction = cache.FactionTemplateOf(race);
+                        if (unplaceable.Contains((band, team, faction))) continue;
                         int minLevel = boostAvailable ? options.Bands[band].MinLevel : 1;
                         int maxLevel = boostAvailable ? options.Bands[band].MaxLevel : 1;
                         PopulationSafeSelection? selected = atlas.PickSafe(minLevel, maxLevel, team, options.ZoneLevelSlack,
                             assigned, random, (location, level) => safe(location, checked((byte)level), faction));
                         if (selected is not null)
                             return new PopulationPlan(band, team, race, cls, selected.Placement, selected.Level);
+                        unplaceable.Add((band, team, faction));
                     }
                 }
             }

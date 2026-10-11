@@ -74,6 +74,46 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Empty(world.Members.Snapshot);
         Assert.Equal(0, world.RunningCount);
         Assert.Contains("created 1", status.Reason);
+        // The unplaced level-1 bot is deleted, not parked: no registry row (so no MaxRegisteredBots slot) and no status entry.
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Bots.Snapshot());
+    }
+
+    [Fact]
+    public async Task PlacementRefusedRepeatedly_PausesCreation_AndNextPassPlansAgain()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.TargetOnline = 1;
+            o.Population.MaxCreatePerMinute = 60;
+        });
+        bool placeable = false;
+        world.Feature.Provisioner.AreaLevelSource = _ => placeable || world.Members.Snapshot.Count == 0 ? 0 : 60;
+
+        for (int pass = 1; pass <= 3; pass++)
+        {
+            PopulationStatus refused = await PassWithTicksAsync(world);
+            Assert.Contains("created 1", refused.Reason);
+            Assert.Empty(await world.Owners.LoadAllAsync());
+        }
+
+        PopulationStatus paused = await PassWithTicksAsync(world);
+        Assert.Contains("creation paused", paused.Reason);
+        Assert.Contains("created 0", paused.Reason);
+        Assert.Empty(await world.Owners.LoadAllAsync());
+
+        // The pause lifts on its own after a number of passes, and the next plan places the bot.
+        placeable = true;
+        PopulationStatus last = paused;
+        for (int pass = 0; pass < 12 && world.Members.Snapshot.Count == 0; pass++) last = await PassWithTicksAsync(world);
+        Assert.Single(world.Members.Snapshot);
+        Assert.Single(await world.Owners.LoadAllAsync());
+    }
+
+    private static Task<PopulationStatus> PassWithTicksAsync(PopulationTestHost world)
+    {
+        world.Ticks.Set(200, 10); // a pass needs a fresh tick window
+        return world.PassAsync();
     }
 
     private static void UnsafeStarterServices(IServiceCollection services)

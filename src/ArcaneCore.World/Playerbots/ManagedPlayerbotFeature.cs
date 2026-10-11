@@ -121,7 +121,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
                 .GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
-            if (character is null) continue;
+            if (character is null)
+            {
+                // A registry row whose character is gone owns nothing; leaving it would hold a MaxRegisteredBots slot for good.
+                await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
+                    .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
                 bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode, Home: StoppedHome(bot.BotId)));
         }
@@ -695,6 +701,61 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             _quarantine.TryRemove(bot.BotId, out _);
             await StopCoreAsync(bot, false, cancellationToken).ConfigureAwait(false);
             return new(true, "stopped", bot.BotId);
+        }
+        finally { _operations.Release(); }
+    }
+
+    /// <summary>
+    /// Delete a stopped bot: its character through the ordinary character-deletion path (which also clears the registry, member and
+    /// home rows in the same transaction in production), then whatever is left of the registry row, then the in-memory records. The
+    /// character goes first, never the row: a row without a character is recoverable, a character without a row is not owned by
+    /// anything. The owner account stays. Refused while the bot runs.
+    /// </summary>
+    public async Task<PlayerbotOperationResult> DeleteAsync(string idOrName, CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_stopping) return new(false, "playerbots-disabled");
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            ManagedPlayerbot? bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
+            if (bot is null) return new(false, "bot-not-found");
+            if (_active.ContainsKey(bot.BotId)) return new(false, "bot-running", bot.BotId);
+            Account? owner = await scope.ServiceProvider.GetRequiredService<IAccountStore>()
+                .FindByUsernameAsync(bot.AccountName, cancellationToken).ConfigureAwait(false);
+            if (owner?.Id != bot.AccountId || owner.Status != AccountStatus.Active
+                || owner.Security != AccountSecurity.Player || owner.SessionKey is not null)
+                return new(false, "owner-refused", bot.BotId);
+
+            if (await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
+                .GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                WorldSession session = await NewSessionAsync(owner, null, scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)bot.CharacterId).ConfigureAwait(false))
+                        return new(false, "character-delete-refused", bot.BotId);
+                }
+                finally
+                {
+                    session.Kick();
+                    await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+
+            await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
+                .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+            _quarantine.TryRemove(bot.BotId, out _);
+            _homes.TryRemove(bot.BotId, out _);
+            lock (_snapshotGate)
+            {
+                Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => s.BotId != bot.BotId).ToArray());
+                _snapshotEpoch++;
+            }
+
+            logger.LogInformation("Deleted managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
+            return new(true, "deleted", bot.BotId);
         }
         finally { _operations.Release(); }
     }

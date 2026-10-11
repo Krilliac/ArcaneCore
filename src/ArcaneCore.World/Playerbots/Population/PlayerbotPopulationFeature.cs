@@ -103,18 +103,23 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly WorldTickWindow _window = new();
     private readonly PopulationProvisioner _provisioner = new(services);
-
-    /// <summary>The provisioner the passes use (tests replace its area-level source).</summary>
-    internal PopulationProvisioner Provisioner => _provisioner;
     private readonly Random _random = new();
     private readonly PopulationNames _names = PopulationNames.Create();
     private readonly CancellationTokenSource _stop = new();
+
+    /// <summary>The provisioner the passes use (tests replace its area-level source).</summary>
+    internal PopulationProvisioner Provisioner => _provisioner;
     private readonly Queue<long> _createTimes = new();
     private readonly Dictionary<Guid, long> _startedAt = [];
     private WorldRuntime? _world;
     private long _clockMs;
     private long _sinceMs;
     private long _passes;
+    // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
+    private int _placementRefusals;
+    private long _pausedAtPass;
+    private const int MaxPlacementRefusals = 3;
+    private const int PauseLiftsAfterPasses = 10;
     private bool _stopping;
     private Task _pass = Task.CompletedTask;
     private PopulationStatus _status = PopulationStatus.Idle(false, "disabled", "the population manager is off");
@@ -228,7 +233,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         bool BoostAvailable,
         string BoostMissing,
         long ClockMs,
-        ManagedPlayerbotFeature Managed);
+        ManagedPlayerbotFeature Managed,
+        bool TeleportAvailable);
 
     private PassInput? Capture()
     {
@@ -268,7 +274,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.Bands, samples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed);
+            ClockMs, managed, teleports is not null);
     }
 
     /// <summary>The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload) or the maps/exclusions change.</summary>
@@ -453,9 +459,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         // 2. New bots, within the rate limit, the registry and the running cap.
+        if (!ctx.Input.TeleportAvailable) stoppedBecause = "the teleport service is not available";
+        else if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass >= PauseLiftsAfterPasses)
+            _placementRefusals = 0; // the pause lifts on its own: content may have been reloaded
         while (remaining > 0 && stoppedBecause is null)
         {
             if (pop.MaxCreatePerMinute == 0) break;
+            if (_placementRefusals >= MaxPlacementRefusals) { stoppedBecause = $"creation paused: {MaxPlacementRefusals} placements refused in a row"; break; }
             while (_createTimes.Count > 0 && ctx.Input.ClockMs - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
             if (_createTimes.Count >= pop.MaxCreatePerMinute) { stoppedBecause = $"creation is limited to {pop.MaxCreatePerMinute} per minute"; break; }
             if (ctx.Known.Count + created >= _options.MaxRegisteredBots) { stoppedBecause = "the bot registry is full (MaxRegisteredBots)"; break; }
@@ -498,16 +508,27 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
-                // The plan was safe when it was made (a content reload can change that before the teleport). The bot stays owned
-                // and stopped, but is no longer a population member: it must not be restarted in its race's starting area and
-                // counted as filling the band it was created for.
+                // The plan was safe when it was made (a content reload can change that before the teleport). A level-1 bot that
+                // cannot be placed is deleted rather than left in its race's starting area, where it would hold a registry slot and
+                // count towards a band; the next pass plans again.
                 Fail($"placement of {made.Name} refused: {refusal}");
-                await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
                 ctx.RunningNow.Remove(botId);
-                await ctx.Store.DeleteAsync(botId, ct).ConfigureAwait(false);
                 ctx.Members.Remove(botId);
+                _startedAt.Remove(botId);
+                await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
+                await ctx.Store.DeleteAsync(botId, ct).ConfigureAwait(false);
+                PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
+                if (!deleted.Success) Fail($"delete of unplaced bot {made.Name} refused: {deleted.Code}");
+                if (++_placementRefusals >= MaxPlacementRefusals)
+                {
+                    _pausedAtPass = Volatile.Read(ref _passes);
+                    stoppedBecause = $"creation paused: {MaxPlacementRefusals} placements refused in a row";
+                }
+
                 break;
             }
+
+            _placementRefusals = 0;
 
             member = member with { ZoneId = plan.Placement.Zone.ZoneId, UpdatedUnix = NowUnix() };
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
@@ -562,6 +583,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
         int moved = 0;
+        bool loggedNoSafe = false;
         // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
         // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. Most out-levelled first.
         foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Vetoed
@@ -590,7 +612,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 return player is null ? null : atlas.PickSafe(bot.Level, bot.Level, bot.Team, pop.ZoneLevelSlack, ctx.Assigned, _random,
                     (location, level) => _provisioner.IsSafe(_world!, location, checked((byte)level), player.FactionTemplate));
             }, ct).ConfigureAwait(false);
-            if (selected is null) continue;
+            if (selected is null)
+            {
+                if (!loggedNoSafe) logger.LogInformation("Playerbot population: no safe zone for out-levelled bot {BotId} (level {Level}); it stays where it is", bot.BotId, bot.Level);
+                loggedNoSafe = true;
+                continue;
+            }
+
             PopulationPlacement placement = selected.Placement;
             string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }

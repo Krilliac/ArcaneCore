@@ -55,6 +55,27 @@ public sealed class ManagedPlayerbotStoreTests
     }
 
     [Fact]
+    public async Task Sqlite_Delete_IsIdentityChecked()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options;
+        await using CharacterDbContext db = new(options);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 7, Name = "Botdel", Race = 1, Class = 1, Level = 1 });
+        var store = new EfManagedPlayerbotStore(db);
+        ManagedPlayerbot bot = Bot(character.Id, character.AccountId);
+        await store.CreateAsync(bot);
+
+        Assert.False(await store.DeleteAsync(bot.BotId, character.AccountId + 1, character.Id));
+        Assert.False(await store.DeleteAsync(bot.BotId, character.AccountId, character.Id + 1));
+        Assert.NotNull(await store.FindAsync(bot.BotId));
+        Assert.True(await store.DeleteAsync(bot.BotId, character.AccountId, character.Id));
+        Assert.Null(await store.FindAsync(bot.BotId));
+        Assert.False(await store.DeleteAsync(bot.BotId, character.AccountId, character.Id));
+    }
+
+    [Fact]
     public async Task Sqlite_Create_RejectsDuplicateAccountAndCharacterAndMismatchedOwner()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");
