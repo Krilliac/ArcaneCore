@@ -384,6 +384,42 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotEconomy_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // PlayerbotEconomy reads World:Playerbots:Economy from this options object at every decision.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Economy": { "Enabled": false, "ListChancePerVisit": 80, "MaxListingsPerBot": 7, "BuyUpgradeBudgetFraction": 0.5, "VisitIntervalMinutes": 10 } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotEconomyOptions economy = playerbots.Economy;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(economy, playerbots.Economy); // changed in place: the coordinator holds this object
+        Assert.False(economy.Enabled);
+        Assert.Equal(80, economy.ListChancePerVisit);
+        Assert.Equal(7, economy.MaxListingsPerBot);
+        Assert.Equal(0.5f, economy.BuyUpgradeBudgetFraction);
+        Assert.Equal(10, economy.VisitIntervalMinutes);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Economy": { "ListChancePerVisit": 101 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(80, economy.ListChancePerVisit);
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Economy": { "BuyUpgradeBudgetFraction": 1.5 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(0.5f, economy.BuyUpgradeBudgetFraction);
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Economy": { "VisitIntervalMinutes": 0 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(10, economy.VisitIntervalMinutes);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(economy.Enabled);
+        Assert.Equal(50, economy.ListChancePerVisit);
+        Assert.Equal(5, economy.MaxListingsPerBot);
+        Assert.Equal(0.25f, economy.BuyUpgradeBudgetFraction);
+        Assert.Equal(30, economy.VisitIntervalMinutes);
+    }
+
+    [Fact]
     public async Task PlayerbotGroups_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // PlayerbotGroupCoordinator reads World:Playerbots:Groups from this options object at every decision.
@@ -554,6 +590,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEmoteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Emotes:{property.Name}");
+        }
+
+        // The bot economy section is live key by key (docs/areas/playbots-economy.md).
+        foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Economy)}:{property.Name}");
         }
 
         // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).

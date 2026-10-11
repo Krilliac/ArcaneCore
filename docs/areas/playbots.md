@@ -32,6 +32,9 @@ Before a pull the brain weighs each candidate's risk against its reward, and in 
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line.
 
+Bots also use the faction auction house and the mailbox: they list loot they have no use for, buy one gear upgrade within a budget
+and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.
+
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,

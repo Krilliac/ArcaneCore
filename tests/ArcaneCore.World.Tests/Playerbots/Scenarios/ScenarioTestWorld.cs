@@ -255,6 +255,10 @@ internal static class ScenarioTestContent
     public const uint MailboxEntry = 990020;
     public const uint MailboxSpawn = 990020;
 
+    /// <summary>A friendly Stormwind auctioneer 2 yards from the start, for the scenarios that need one (<see cref="UseAuctioneer"/>).</summary>
+    public const uint AuctioneerEntry = 990040;
+    public const uint AuctioneerSpawn = 990040;
+
     public static ObjectGuid Wolf => ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, WolfSpawn);
 
     public static ObjectGuid Kobold => ObjectGuid.WithEntry(HighGuid.Unit, KoboldEntry, KoboldSpawn);
@@ -262,6 +266,9 @@ internal static class ScenarioTestContent
     public static ObjectGuid Giver => ObjectGuid.WithEntry(HighGuid.Unit, GiverEntry, GiverSpawn);
 
     public static ObjectGuid Mailbox => ObjectGuid.WithEntry(HighGuid.GameObject, MailboxEntry, MailboxSpawn);
+
+    /// <summary>Replace the creature content registered by <see cref="Register"/> with the same plus a Stormwind auctioneer beside the start (call it from the <c>configure</c> of <see cref="ScenarioTestWorld.StartAsync"/>).</summary>
+    public static void UseAuctioneer(IServiceCollection services) => services.AddSingleton<ICreatureDataStore>(new ContentStore(auctioneer: true));
 
     public static void Register(IServiceCollection services)
     {
@@ -292,11 +299,16 @@ internal static class ScenarioTestContent
 
     private sealed class ContentStore : ICreatureDataStore, IQuestContentStore, IGameObjectDataStore, ILootDataStore
     {
+        private readonly bool _auctioneer;
+
+        public ContentStore(bool auctioneer = false) => _auctioneer = auctioneer;
+
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [
                 Hostile(WolfEntry, "Scenario Wolf"),
                 Hostile(KoboldEntry, "Scenario Kobold"),
                 ScenarioClassContent.Imp,
+                .. _auctioneer ? new[] { Auctioneer() } : Array.Empty<CreatureTemplate>(),
                 new CreatureTemplate
                 {
                     Entry = GiverEntry, Name = "Scenario Marshal", Faction = 12, NpcFlags = (uint)NpcFlags.QuestGiver, DisplayIds = [49],
@@ -307,6 +319,7 @@ internal static class ScenarioTestContent
                 new CreatureSpawn { Guid = WolfSpawn, Entry = WolfEntry, MapId = 0, X = WolfX, Y = WolfY, Z = StartZ },
                 new CreatureSpawn { Guid = KoboldSpawn, Entry = KoboldEntry, MapId = 0, X = KoboldX, Y = KoboldY, Z = StartZ },
                 new CreatureSpawn { Guid = GiverSpawn, Entry = GiverEntry, MapId = 0, X = StartX + 3f, Y = StartY, Z = StartZ, Orientation = MathF.PI },
+                .. _auctioneer ? new[] { new CreatureSpawn { Guid = AuctioneerSpawn, Entry = AuctioneerEntry, MapId = 0, X = StartX + 2f, Y = StartY + 2f, Z = StartZ, Orientation = MathF.PI } } : Array.Empty<CreatureSpawn>(),
             ], [], [], []));
 
         Task<QuestContent> IQuestContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new QuestContent(
@@ -337,6 +350,12 @@ internal static class ScenarioTestContent
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [(LootTableKind.Creature, new LootStoreRow(WolfEntry, LinenCloth, 100f, 0, 1, 1))],
             [new CreatureLootInfo(WolfEntry, WolfEntry, 0, WolfGold, WolfGold)]));
+
+        private static CreatureTemplate Auctioneer() => new()
+        {
+            Entry = AuctioneerEntry, Name = "Scenario Auctioneer", Faction = 12, NpcFlags = (uint)NpcFlags.Auctioneer, DisplayIds = [49],
+            MinLevelHealth = 100, MaxLevelHealth = 100, ExtraFlags = Game.Creatures.Creature.ExtraFlagNoAggro,
+        };
 
         private static CreatureTemplate Hostile(uint entry, string name) => new()
         {

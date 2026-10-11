@@ -1154,6 +1154,11 @@ How to read the tables:
 | `World:Playerbots:Chat:Safety:StripPersonalData` | `bool` | `true` | live | Replace emails, phone numbers and street addresses in what is sent to a model provider with a placeholder (on). |
 | `World:Playerbots:Chat:Safety:TermsFile` | `string` | `""` | live | An operator's term file (the shipped file's JSON format), relative to the working directory or absolute. Empty: only the shipped list. Its entries are added to the shipped ones unless `ReplaceDefaultTerms`; it is read again when it changes. |
 | `World:Playerbots:Chat:TimeoutSeconds` | `int` | `10` | live | Seconds one model request may take before the next provider is tried (1..60). |
+| `World:Playerbots:Economy:BuyUpgradeBudgetFraction` | `float` | `0.25` | live | The share of the money a bot holds at the start of a visit that the visit may spend in all (0..1): listing deposits and the buyout of an upgrade count against it. 0 spends nothing. |
+| `World:Playerbots:Economy:Enabled` | `bool` | `true` | live | Let bots list, buy and collect at the auction house (on by default). Off: no visit starts; a running one is dropped. |
+| `World:Playerbots:Economy:ListChancePerVisit` | `int` | `50` | live | The chance in percent (0..100) that a visit lists anything: one roll per visit, then the bot lists up to its free listing slots. 0 lists nothing (a bot may still buy and collect); 100 always lists. |
+| `World:Playerbots:Economy:MaxListingsPerBot` | `int` | `5` | live | The most auctions one bot has listed at once (0..50), counted from the auction house's own owner list; 0 lists nothing. |
+| `World:Playerbots:Economy:VisitIntervalMinutes` | `int` | `30` | live | Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval. |
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
 | `World:Playerbots:FaultWindowSeconds` | `int` | `3600` | - | How far back faults count towards `MaxFaults`, in seconds of world time (1..604800). |

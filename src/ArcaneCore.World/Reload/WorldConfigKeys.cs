@@ -276,6 +276,18 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= Playerbots.BotSocial.PlayerbotSocialGuildChatOptions.MaxMessagesPerHour ? null : "must be 0..60"),
         LivePlayerbots("Social:Emotes:Enabled", o => o.Social.Emotes.Enabled, (o, v) => o.Social.Emotes.Enabled = v),
 
+        // Not vmangos keys: bots using the faction auction house (docs/areas/playbots-economy.md). PlayerbotEconomy reads the shared
+        // PlayerbotOptions.Economy at every decision.
+        LivePlayerbots("Economy:Enabled", o => o.Economy.Enabled, (o, v) => o.Economy.Enabled = v),
+        LivePlayerbotsValue("Economy:ListChancePerVisit", o => o.Economy.ListChancePerVisit, (o, v) => o.Economy.ListChancePerVisit = v,
+            v => v is >= 0 and <= 100 ? null : "must be 0..100"),
+        LivePlayerbotsValue("Economy:MaxListingsPerBot", o => o.Economy.MaxListingsPerBot, (o, v) => o.Economy.MaxListingsPerBot = v,
+            v => v is >= 0 and <= PlayerbotEconomyOptions.MaxListingsCeiling ? null : $"must be 0..{PlayerbotEconomyOptions.MaxListingsCeiling}"),
+        LivePlayerbotsValue("Economy:BuyUpgradeBudgetFraction", o => o.Economy.BuyUpgradeBudgetFraction, (o, v) => o.Economy.BuyUpgradeBudgetFraction = v,
+            v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
+            v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,

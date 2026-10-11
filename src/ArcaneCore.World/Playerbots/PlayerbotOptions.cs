@@ -124,6 +124,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bot guilds, guild chat and greetings (<c>World:Playerbots:Social</c>; live; docs/areas/playbots-social.md).</summary>
     public BotSocial.PlayerbotSocialOptions Social { get; set; } = new();
 
+    /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
+    public PlayerbotEconomyOptions Economy { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -181,6 +184,8 @@ public sealed class PlayerbotOptions
         Population.Validate();
         if (Social is null) throw new InvalidOperationException($"{SectionName}:Social is missing.");
         Social.Validate();
+        if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
+        Economy.Validate();
     }
 }
 
