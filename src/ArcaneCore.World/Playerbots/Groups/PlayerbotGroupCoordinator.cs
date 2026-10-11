@@ -146,6 +146,24 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>What happened last to bot groups, newest last (at most 32 lines; status and tests).</summary>
     internal List<string> Events { get; } = [];
 
+    private readonly List<(Guid BotId, string Name, string Report)> _stalls = [];
+
+    /// <summary>Groups the stall watch found without progress so far (status and tests).</summary>
+    internal int StallCount { get; private set; }
+
+    /// <summary>
+    /// The stall reports since the last call, one per stalled group (its leader's, in the brains' stall line shape:
+    /// <c>stalled 120s: goal=Group target=114 quest=9 at x,y,z map 0</c>). <see cref="ManagedPlayerbotFeature"/> logs them as it logs a
+    /// brain's stall, so bot QA (PlayerbotQaSignalParser) sees them.
+    /// </summary>
+    internal IReadOnlyList<(Guid BotId, string Name, string Report)> TakeStalls()
+    {
+        if (_stalls.Count == 0) return [];
+        (Guid, string, string)[] taken = [.. _stalls];
+        _stalls.Clear();
+        return taken;
+    }
+
     public void Attach(WorldRuntime world)
     {
         _world = world;
@@ -267,6 +285,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             text.Append(" members=");
             text.AppendJoin(',', group.Members.Select(m =>
                 $"{m.Name}({m.Role.ToString().ToLowerInvariant()}{(m.Guid == group.LeaderGuid ? ",leader" : string.Empty)}{(m.Real ? ",player" : string.Empty)}{(m.Joined ? string.Empty : ",invited")}{(group.Raid ? $",g{m.SubGroup + 1}" : string.Empty)})"));
+            // What the leader did at its last think, and how long the group has gone without progress (PlayerbotGroupStallWatch).
+            if (group.Find(group.LeaderBotId)?.AI is { } leading) text.Append(" step=").Append(leading.Step);
+            if (group.Stall.Strikes > 0) text.Append(CultureInfo.InvariantCulture, $" stalled={group.Stall.Strikes}");
             lines.Add(text.ToString());
         }
 
@@ -731,6 +752,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         if (group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging && !group.InFight(now))
             ShareQuests(group);
+        if (WatchStall(group, leader, now)) return;
         uint stepLimit = StepLimitOf(group);
 
         switch (group.State)
@@ -949,6 +971,62 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (!group.HadQuest) return group.ObjectiveKilled;
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
             if (_world!.FindOnlinePlayer(member.Guid) is { } player && !GoalDone(player, group.Goal)) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// The group-level stall watch (<see cref="PlayerbotGroupStallWatch"/>): bot members that make no progress for
+    /// <see cref="PlayerbotOptions.StallSeconds"/> make the leader give up its target (set aside for the group for <see cref="SetAsideMs"/>)
+    /// and choose again, with one stall report for bot QA (<see cref="TakeStalls"/>); a further bound without progress gives the goal up and
+    /// dissolves the group (reason <c>stalled</c>; the goal is set aside for every member). Never a group with a real player in it, nor a
+    /// stranded bot's walk out (<see cref="BotGroup.Solo"/>, it has its own bound), nor the states that wait on a bound of their own:
+    /// forming (the invitations), a wipe (the survivors' retreats), the leader waiting at the objective's spawn
+    /// (<see cref="ObjectiveMissing"/>) and disbanding. True when the group was dissolved.
+    /// </summary>
+    private bool WatchStall(BotGroup group, Player leader, uint now)
+    {
+        if (group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
+            || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Wiped or PlayerbotGroupState.Disbanding)
+        {
+            group.Stall.Reset();
+            return false;
+        }
+
+        var members = new List<PlayerbotGroupStallMember>(group.Members.Count);
+        foreach (Member member in group.Members)
+        {
+            if (!member.Joined || member.AI is not { } ai || _world!.FindOnlinePlayer(member.Guid) is not { } player) continue;
+            members.Add(new PlayerbotGroupStallMember(member.BotId, player.MapId, new Vector3(player.X, player.Y, player.Z),
+                player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.Target?.Guid.Value ?? 0));
+        }
+
+        PlayerbotGroupStallVerdict verdict = group.Stall.Observe(group.State, members, now, (uint)Math.Max(1, _options.StallSeconds) * 1000u);
+        if (verdict == PlayerbotGroupStallVerdict.None) return false;
+
+        PlayerbotGroupAI? leaderAI = group.Find(group.LeaderBotId)?.AI;
+        Game.Creatures.Creature? target = leaderAI?.Target;
+        uint seconds = group.Stall.IdleMs / 1000;
+        string step = leaderAI?.Step ?? "none";
+        string state = group.State.ToString().ToLowerInvariant();
+        if (verdict == PlayerbotGroupStallVerdict.Retarget)
+        {
+            StallCount++;
+            uint entry = target?.Entry ?? group.ObjectiveEntry;
+            _stalls.Add((group.LeaderBotId, leader.Name, string.Create(CultureInfo.InvariantCulture,
+                $"stalled {seconds}s: goal={PlayerbotGoalKind.Group} target={entry} quest={group.Goal.QuestId} at {leader.X:F1},{leader.Y:F1},{leader.Z:F1} map {leader.MapId}")));
+            if (target is not null) group.Shun(target.Guid, unchecked(now + SetAsideMs));
+            leaderAI?.Retarget(leader);
+            string what = target is not null ? string.Create(CultureInfo.InvariantCulture, $"gives up target {target.Entry} and re-targets") : "re-targets";
+            Note(string.Create(CultureInfo.InvariantCulture, $"group {group.Id} stalled {seconds}s in {state} (leader {step}): {what}"));
+            logger.LogWarning("Playerbot group {Group} stalled {Seconds}s in {State} (leader {Leader}: {Step}): {What}",
+                group.Id, seconds, state, leader.Name, step, what);
+            return false;
+        }
+
+        Note(string.Create(CultureInfo.InvariantCulture, $"group {group.Id} stalled {seconds}s in {state} (leader {step}) after re-targeting: dissolves"));
+        logger.LogWarning("Playerbot group {Group} stalled {Seconds}s in {State} after re-targeting (leader {Leader}: {Step}): it gives up {Goal} and dissolves",
+            group.Id, seconds, state, leader.Name, step, group.Goal);
+        Finish(group, success: false, "stalled");
         return true;
     }
 
@@ -1280,6 +1358,30 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             ObjectiveCreature = 0;
             ObjectiveKilled = false;
             MissingSinceMs = 0;
+        }
+
+        /// <summary>The group's stall watch (<see cref="WatchStall"/>).</summary>
+        public PlayerbotGroupStallWatch Stall { get; } = new();
+
+        private readonly Dictionary<ObjectGuid, uint> _shunned = [];
+
+        /// <summary>
+        /// Creatures the group gave up as targets (its stall watch: no progress against them), until when; the leader neither keeps nor
+        /// pulls them meanwhile (one attacking a member is still fought).
+        /// </summary>
+        public bool IsShunned(ObjectGuid creature, uint now)
+        {
+            if (!_shunned.TryGetValue(creature, out uint until)) return false;
+            if (unchecked((int)(until - now)) > 0) return true;
+            _shunned.Remove(creature);
+            return false;
+        }
+
+        /// <summary>Give <paramref name="creature"/> up as a target until <paramref name="until"/>.</summary>
+        public void Shun(ObjectGuid creature, uint until)
+        {
+            if (_shunned.Count >= 64) _shunned.Clear();
+            _shunned[creature] = until;
         }
 
         /// <summary>Whether a bot member is eating or drinking now (the leader waits).</summary>

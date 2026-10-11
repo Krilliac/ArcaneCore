@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
@@ -85,6 +86,7 @@ internal sealed class PlayerbotGroupAI
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
     private long _stuckSinceMs, _stuckLastMs;
+    private uint _rangedIdleMs;
 
     internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options)
     {
@@ -106,6 +108,9 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>The fight the bot is in (inspection and tests).</summary>
     internal Creature? Target => _target;
+
+    /// <summary>What the bot did at its last think (inspection, the group stall line): <c>lead:hold-not-ready</c>, <c>fight:114:hold</c>, ...</summary>
+    internal string Step { get; private set; } = "none";
 
     /// <summary>The bot's retreat (a wiping group).</summary>
     internal PlayerbotRetreat Retreat => _risk.Retreat;
@@ -157,6 +162,22 @@ internal sealed class PlayerbotGroupAI
         if (_risk.Retreat.Active) _risk.Retreat.Stop("released");
     }
 
+    /// <summary>
+    /// The group's stall watch gave up the leader's target (<see cref="PlayerbotGroupCoordinator"/>, set aside for the group): stop
+    /// fighting it and forget the way, so the next think chooses again.
+    /// </summary>
+    internal void Retarget(Player player)
+    {
+        if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
+        PlayerbotMovementControl.Stop(_session, player);
+        _target = null;
+        _attacking = false;
+        _route = null;
+        _runRoute = null;
+        _rangedIdleMs = 0;
+        _stuckSinceMs = _stuckLastMs = 0;
+    }
+
     /// <summary>One tick of a member (world thread, inside the shared action budget like the brain).</summary>
     internal void Update(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me, uint elapsedMs)
     {
@@ -189,6 +210,7 @@ internal sealed class PlayerbotGroupAI
 
         if (dead)
         {
+            Step = "dead";
             UpdateDead(player, group, interval);
             return;
         }
@@ -202,6 +224,7 @@ internal sealed class PlayerbotGroupAI
         // A wiping group gets out: back the way it came, past the creatures' leash (the solo retreat).
         if (_risk.UpdateRetreat(player, interval))
         {
+            Step = "retreat";
             Goal = PlayerbotGoalKind.Retreat;
             return;
         }
@@ -222,12 +245,13 @@ internal sealed class PlayerbotGroupAI
 
         if (_lootActions.TryPeek(out var next))
         {
+            Step = "loot";
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
             if (Act(next.Opcode, next.Payload)) _lootActions.Dequeue();
             return;
         }
 
-        if (_restUntilMs != 0 && ContinueRest(player)) return;
+        if (_restUntilMs != 0 && ContinueRest(player)) { Step = "rest"; return; }
 
         Player? leader = group.LeaderPlayer(_session.World);
         bool isLeader = leader is not null && leader.Guid == player.Guid;
@@ -251,11 +275,11 @@ internal sealed class PlayerbotGroupAI
         TargetEntry = 0;
         if (!player.Combat.IsInCombat)
         {
-            if (FinishLoot(player)) return;
-            if (Resurrect(player, group)) return;
-            if (LootHeld(player, interval)) return;
-            if (_spells.UpdateOutOfCombat(player, interval)) { Goal = PlayerbotGoalKind.Group; return; }
-            if (Rest(player)) return;
+            if (FinishLoot(player)) { Step = "loot"; return; }
+            if (Resurrect(player, group)) { Step = "resurrect"; return; }
+            if (LootHeld(player, interval)) { Step = "loot"; return; }
+            if (_spells.UpdateOutOfCombat(player, interval)) { Step = "buff"; Goal = PlayerbotGoalKind.Group; return; }
+            if (Rest(player)) { Step = "rest"; return; }
         }
 
         if (isLeader) Lead(player, group, interval);
@@ -267,6 +291,7 @@ internal sealed class PlayerbotGroupAI
     private void Lead(Player player, PlayerbotGroupCoordinator.BotGroup group, uint interval)
     {
         Goal = PlayerbotGoalKind.Group;
+        Step = "lead:" + group.State.ToString().ToLowerInvariant();
         if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
@@ -289,9 +314,13 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 return;
             case PlayerbotGroupState.Engaging:
-                if (group.Run is { CurrentBoss: null }) { HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
-                if (MembersBehind(player, group) || group.AnyResting(_session.World) || !Ready(player)) { HoldRun(player); return; }
-                NoteRunProgress(group, WalkTo(player, ObjectivePoint(player, group), interval, toward: true));
+                if (group.Run is { CurrentBoss: null }) { Step = "lead:hold-loot"; HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
+                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
+                if (!Ready(player)) { Step = "lead:hold-not-ready"; HoldRun(player); return; }
+                bool walked = WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
+                Step = walked ? "lead:walk-objective" : "lead:no-path-objective";
+                NoteRunProgress(group, walked);
                 return;
             case PlayerbotGroupState.Leaving:
                 // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
@@ -360,7 +389,7 @@ internal sealed class PlayerbotGroupAI
         return now - since > RunStuckMs;
     }
 
-    private static Creature? FindObjectiveCreature(Player player, PlayerbotGroupCoordinator.BotGroup group)
+    private Creature? FindObjectiveCreature(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
         if (player.Map is not { } map || group.ObjectiveEntry == 0) return null;
         Creature? best = null;
@@ -368,7 +397,7 @@ internal sealed class PlayerbotGroupAI
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.ObjectiveEntry) continue;
-            if (!map.Combat.Hooks.CanAttack(player, creature)) continue;
+            if (!map.Combat.Hooks.CanAttack(player, creature) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
             float distance = Distance(player, creature);
             if (distance < nearest) { nearest = distance; best = creature; }
         }
@@ -397,6 +426,7 @@ internal sealed class PlayerbotGroupAI
     private void Follow(Player player, PlayerbotGroupCoordinator.BotGroup group, Player? leader, uint interval)
     {
         Goal = PlayerbotGoalKind.Follow;
+        Step = "follow";
         // Into the instance after the leader: walk into the entrance it took (its trigger brings the member into the group's instance).
         if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap
             && (leader is null || leader.MapId == group.Goal.MapId || !ReferenceEquals(leader.Map, player.Map))
@@ -446,7 +476,8 @@ internal sealed class PlayerbotGroupAI
         Player? leader, bool isLeader)
     {
         if (player.Map is not { } map) return null;
-        Creature? current = _target is not null && IsValidTarget(player, _target) ? _target : null;
+        // A target the group gave up (its stall watch: no progress against it) is not kept; one that attacks a member comes back below.
+        Creature? current = _target is not null && IsValidTarget(player, _target) && !group.IsShunned(_target.Guid, _session.World.NowMs) ? _target : null;
         var loose = new List<(Creature Creature, float Distance, bool OnSelf)>();
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
@@ -529,7 +560,7 @@ internal sealed class PlayerbotGroupAI
 
         PlayerbotRunPull? pull = PlayerbotRunRoute.NextPull(points, 0, seen, boss.Entry, run.Plan.BossEntries);
         run.PullsLeft = pull?.PacksAhead ?? 0;
-        if (pull is not null && map.FindObject(new ObjectGuid(pull.Lead.Guid)) is Creature lead) return lead;
+        if (pull is not null && map.FindObject(new ObjectGuid(pull.Lead.Guid)) is Creature lead && !group.IsShunned(lead.Guid, _session.World.NowMs)) return lead;
         if (FindObjectiveCreature(player, group) is { } objective && Distance(player, objective) <= 60f)
         {
             group.NoteObjective(objective);
@@ -561,7 +592,7 @@ internal sealed class PlayerbotGroupAI
         foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
         {
             if (threat.Source is not { IsAlive: true } creature || !IsValidTarget(player, creature)) continue;
-            if (PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) continue;
+            if (PlayerbotBrain.IsSomeoneElses(player, creature, Groups()) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
             float distance = Distance(player, creature);
             if (distance <= nearest)
             {
@@ -580,24 +611,43 @@ internal sealed class PlayerbotGroupAI
             _target = target;
             _attacking = false;
             _route = null;
+            _rangedIdleMs = 0;
         }
 
         Goal = PlayerbotGoalKind.Assist;
         TargetEntry = target.Entry;
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
-        if (_spells.Update(player, target, interval)) return;
+        if (_spells.Update(player, target, interval))
+        {
+            _rangedIdleMs = 0;
+            Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:cast");
+            return;
+        }
+
         float distance = Distance(player, target);
+        // A ranged member that stands at its range with nothing to cast (a healer leader without an attack spell, a caster out of mana)
+        // while nobody fights the target closes in after RangedIdleLimitMs, as the brain does (PlayerbotBrain.Update). Before, the
+        // group AI never did: a healer leading a pair stood 15-22 yards from the objective for good (replays 2026-10-11, quest 9).
+        bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
         PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
-            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player), idleTooLong: false,
+            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
+            idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs && !engaged,
             inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
+        Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:{position.ToString().ToLowerInvariant()}:{distance:F0}yd");
         switch (position)
         {
             case PlayerbotFightPosition.Hold:
+                _rangedIdleMs = engaged ? 0 : _rangedIdleMs + interval;
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false)) _target = null;
+                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false))
+                {
+                    Step = string.Create(CultureInfo.InvariantCulture, $"fight:{target.Entry}:no-path");
+                    _target = null;
+                }
+
                 return;
         }
 

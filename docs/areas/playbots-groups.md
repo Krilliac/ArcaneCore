@@ -108,7 +108,10 @@ Shield Slam still tanks a group without another tank): every member first answer
 tank especially one attacking someone else, whose rotation then taunts it (`NeedsTaunt`: Taunt, Growl, Mocking Blow); the others then
 assist the leader's victim. The healer's rotation heals the party (its group heal targets, vmangos `SelectHealTarget`), and fights when
 nobody needs healing. Positioning is the brain's (`PlayerbotBrain.DecidePosition`: casters and healers at range, melee at melee, facing
-the victim before a swing).
+the victim before a swing), and so is its fallback: a member holding at its range with nothing to cast while nobody fights the target
+closes into melee after `PlayerbotBrain.RangedIdleLimitMs` (8 s). Without it a healer leading a pair (a paladin or priest in the group's
+healer role keeps caster range) that has no attack spell it can cast never pulled, and the members, who assist the leader's victim, stood
+with it (replays 2026-10-11 on the real terrain, quest 9 "The Killing Fields": 260-840 s in `engaging`).
 
 **Between fights**: a member below 50% health or mana eats or drinks (the leader does not pull meanwhile); a healer resurrects a dead
 member it can see (Resurrection, Redemption, Ancestral Spirit, and Rebirth when it carries the seed, through the ordinary cast; the dead
@@ -142,6 +145,17 @@ group then walks out, then disbands. The brains turn the quests in.
 the objective's spawn without it in sight, too few members left, or the leader gone. The goal is then set aside for every member for
 10 minutes (its quest and objective in the brain's suspensions, so the brain does not walk into it alone either), and the group walks
 out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service.
+
+**Stalls.** The brains' stall watch does not run while a group drives the bots, so a group has its own (`PlayerbotGroupStallWatch`,
+checked by the coordinator every tick): when no bot member moved 10 yards or changed map, was in combat, ate, drank or looted, or took a
+new target (dropping a target and taking the same one again is not progress) for `World:Playerbots:StallSeconds` (120), the leader gives
+its target up (set aside for the group for 10 minutes; one that attacks a member is still fought) and chooses again, and one stall line is
+logged on the leader in the brains' shape (`Playerbot <id> (<name>) stalled 120s: goal=Group target=<entry> quest=<id> at x,y,z map m;
+it gives up that goal`), which bot QA parses as a stall with goal `Group`. A further bound without progress gives the goal up (reason
+`stalled`, set aside for every member) and dissolves the group. The coordinator's warning and the events name the leader's last step
+(`PlayerbotGroupAI.Step`: `lead:hold-not-ready`, `fight:114:hold:20yd`, ...). Never a group with a real player in it, a stranded bot
+walking out, or the forming, wiped and disbanding states, nor while the leader waits at the objective's spawn (that has its own two
+minutes).
 
 ## Few bots and stray cases
 
@@ -306,7 +320,8 @@ tests below run on real classic-db rows copied into `RunFixtures`, not on a live
 ## Where it shows
 
 * `.playerbot groups` (GameMaster): a summary line (enabled, running, waiting, formed / completed / given up), one line per group
-  (`group 1 quest:990720 quest=990701 size=3 source=quest state=engaging party failures=0 age=45s members=Tank(tank,leader),Heal(healer),Mage(damage)`),
+  (`group 1 quest:990720 quest=990701 size=3 source=quest state=engaging party failures=0 age=45s members=Tank(tank,leader),Heal(healer),Mage(damage) step=fight:990720:melee:2yd`:
+  `step=` is the leader's last step, `stalled=1` follows once the stall watch re-targeted),
   one per waiting bot, and the last five events.
 * `.playerbot status` / `list`: ` group=1:tank:engaging:leader` or ` group=waiting:quest:990720:size3` at the end of a bot's line; the
   risk part reads `decision=group` while the group AI drives it.
@@ -328,6 +343,10 @@ resurrected, the group gathered again one failure down; a raid quest for six con
 different subgroups; the formation timeout setting the goal aside; a real player's party bot left alone; `InvitePlayers` inviting a
 nearby player who declines; the GM commands; a server group of bots nobody leads left; a bot stranded in an instance, stopped and
 logged in again there (the login gate), walking out (`PlayerbotGroupWorldTests`, `PlayerbotGroupPlayerTests`). `ConfigReloadTests` checks every key is live and range-checked.
+`PlayerbotGroupStallTests`: a pair led by a priest healer without an attack spell pulls and completes, with no stall line; a pair whose
+objective no path reaches re-targets after one stall bound, dissolves after the next (`stalled`, the goal set aside for both) and logs a
+stall line `PlayerbotQaSignalParser` reads as goal `Group`; the watch's bounds, a healthy group never stalling, and a target dropped and
+taken again counting as no progress.
 
 Runs: `PlayerbotRunFixesTests` (the stuck clock counting only continuous failure, bosses never pulled as trash, early-kill credit, the
 patrolling boss, a quest group's objective still judged by sight, and `.reload instance_encounter` replacing the encounters and the
