@@ -122,6 +122,11 @@ public sealed partial class MapCombat
 
         victim.Combat.AttackersInternal.Remove(attacker);
         c.Victim = null;
+        if (!targetSwitch && attacker is ICombatCreature me)
+        {
+            me.ResetDamageTakenOrigin(); // vmangos Unit::AttackStop: reset only at real combat stop (Unit.cpp:4607-4611)
+        }
+
         c.IsMeleeAttacking = false;
         attacker.Target = default;
         CombatEnvironment.For(_world).MeleeSpells?.OnMeleeAttackStopped(attacker);
@@ -824,6 +829,13 @@ public sealed partial class MapCombat
         // Duels end at 1 hp (MapCombat.Duel.cs; vmangos Unit.cpp:762-779).
         bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage, reflected);
 
+        // vmangos Unit.cpp:788-789: a creature counts where its damage came from, the killing blow included, for the
+        // damage-origin rule of the kill (Creature::IsLootAllowedDueToDamageOrigin).
+        if (victim is ICombatCreature counted)
+        {
+            counted.CountDamageTaken(damage, attacker.CharmerOrOwnerOrOwnGuid.IsPlayer || ReferenceEquals(attacker, victim));
+        }
+
         // The per-attacker damage history is recorded before the lethal check, so the killing blow counts
         // (vmangos Unit::UnitDamaged, Unit.cpp:788-796; the kill is at :825). Never for self damage.
         if (!ReferenceEquals(attacker, victim))
@@ -848,7 +860,7 @@ public sealed partial class MapCombat
         uint invincible = victim.InvincibilityHpThreshold;
         if (victim.Health <= damage && invincible == 0)
         {
-            Kill(attacker, victim, durabilityLoss, threatSpell);
+            KillCore(attacker, victim, durabilityLoss, threatSpell);
             if (duelEnded)
             {
                 AfterLethalDuelDamage((Player)victim); // Unit.cpp:825-843
@@ -938,11 +950,32 @@ public sealed partial class MapCombat
     /// 0 and JUST_DIED (combat stop, threat cleared, player rooted, power emptied), removal from
     /// every threat list, the PvP-death mark; creatures go straight to CORPSE.
     /// </summary>
+    /// <remarks>
+    /// A direct call (a script, a GM command or a test killing outright) stands for a lethal blow of the victim's remaining
+    /// health by <paramref name="killer"/>: a creature victim counts it toward its damage origin, as Unit::DealDamage would have
+    /// before reaching Unit::Kill (Unit.cpp:789, 825).
+    /// </remarks>
     public void Kill(Unit? killer, Unit victim, bool durabilityLoss = true, SpellInfo? spell = null)
+    {
+        if (killer is not null && victim is ICombatCreature counted && IsAliveState(victim))
+        {
+            counted.CountDamageTaken(Math.Max(victim.Health, 1u), killer.CharmerOrOwnerOrOwnGuid.IsPlayer || ReferenceEquals(killer, victim));
+        }
+
+        KillCore(killer, victim, durabilityLoss, spell);
+    }
+
+    private void KillCore(Unit? killer, Unit victim, bool durabilityLoss, SpellInfo? spell)
     {
         if (IsQuestSettlementPending(killer) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
             return;
+        }
+
+        // vmangos Unit::Kill (Unit.cpp:987-1008): before any credit resolves, a creature mostly damaged by non-players drops its tap.
+        if (victim is ICombatCreature settled)
+        {
+            settled.SettleKillCredit();
         }
 
         // Wear eligibility follows the source's owner/charmer lookup. Existing kill credit

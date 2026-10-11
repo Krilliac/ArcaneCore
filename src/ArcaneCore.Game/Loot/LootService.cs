@@ -378,17 +378,34 @@ public sealed partial class LootService : IViewerFieldFilter
 
     // --- creature corpses -----------------------------------------------------------------
 
-    /// <summary>Record the first player damage tap before death; later attackers cannot take the loot rights.</summary>
+    /// <summary>
+    /// vmangos Unit::DealDamage (Unit.cpp:800-819), every hit before the lethal check (subscribe to <see cref="MapCombat.DamageTaken"/>):
+    /// the first hit by a player, or by something a player owns or charms, taps a creature that is no pet; later attackers cannot
+    /// take the loot rights, except that a tap still held by an owner's active pet (<see cref="KillRewards.TapGuid"/>) passes to the
+    /// owner, or to a member of the tap's group, on their first hit.
+    /// </summary>
     public void OnCreatureDamaged(Unit attacker, Unit victim, uint damage)
     {
         if (damage == 0 || victim is not Creature { IsPet: false, DeathState: CreatureDeathState.Alive } creature
-            || !creature.LootTapPlayerGuid.IsEmpty || KillRewards.CreditedPlayer(attacker) is not { } player)
+            || KillRewards.CreditedPlayer(attacker) is not { } player)
         {
             return;
         }
 
-        // vmangos Unit.cpp:800-819 records the original player and group on the first hit.
-        creature.LootTapPlayerGuid = player.Guid;
+        if (!creature.LootTapPlayerGuid.IsEmpty)
+        {
+            if (KillRewards.TakesOverPetTap(creature.LootTapPlayerGuid, attacker,
+                creature.LootTapGroup is { } tapGroup && ReferenceEquals(Groups?.GroupOf(player), tapGroup)))
+            {
+                creature.LootTapPlayerGuid = player.Guid;
+                creature.LootTapGroup = Groups?.GroupOf(player) ?? creature.LootTapGroup;
+            }
+
+            return;
+        }
+
+        // vmangos Creature::SetLootRecipient (Creature.cpp:1590-1612) records the player (or the active pet) and the group on the first hit.
+        creature.LootTapPlayerGuid = KillRewards.TapGuid(attacker, player);
         creature.LootTapGroup = Groups?.GroupOf(player);
         creature.ViewerFieldFilter = this;
         creature.SetUInt32(UpdateFields.UnitDynamicFlags,

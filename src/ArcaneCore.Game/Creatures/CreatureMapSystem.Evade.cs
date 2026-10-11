@@ -202,6 +202,7 @@ public sealed partial class CreatureMapSystem
     {
         creature.LootTapPlayerGuid = default;
         creature.LootTapGroup = null;
+        creature.ResetDamageTakenOrigin();
         creature.SetUInt32(UpdateFields.UnitDynamicFlags,
             creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
     }

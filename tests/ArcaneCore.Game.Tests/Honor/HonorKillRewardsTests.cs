@@ -369,6 +369,34 @@ public sealed class HonorKillRewardsTests : IDisposable
     }
 
     [Fact]
+    public void A_guard_finishing_a_leader_players_damaged_35_percent_or_less_rewards_nobody()
+    {
+        // Creature::IsLootAllowedDueToDamageOrigin (Creature.h:548-554) fails, so Unit::Kill drops the tap (Unit.cpp:1007-1008) and the
+        // killing blow belongs to no player.
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        (Creature guard, _, _) = CreatureAt(Template(1003, level: 60), 6);
+
+        _map.Combat.DealDamage(_a, leader, leader.MaxHealth * 30 / 100);
+        _map.Combat.DealDamage(guard, leader, leader.Health);
+
+        Assert.False(leader.IsAlive);
+        Assert.Empty(RowsOf(_a));
+    }
+
+    [Fact]
+    public void A_guard_finishing_a_leader_players_damaged_more_than_35_percent_rewards_the_tapper()
+    {
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        (Creature guard, _, _) = CreatureAt(Template(1003, level: 60), 6);
+
+        _map.Combat.DealDamage(_a, leader, leader.MaxHealth * 40 / 100);
+        _map.Combat.DealDamage(guard, leader, leader.Health);
+
+        Assert.False(leader.IsAlive);
+        Assert.Single(RowsOf(_a));
+    }
+
+    [Fact]
     public void A_creature_nobody_tapped_rewards_the_killer()
     {
         (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);

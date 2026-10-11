@@ -32,6 +32,22 @@ public interface ICombatCreature
 
     /// <summary>The creature died (vmangos CreatureAI::JustDied); loot, respawn timers etc. belong to the creature side.</summary>
     void OnJustDied(Unit? killer);
+
+    /// <summary>
+    /// vmangos Creature::CountDamageTaken (Creature.h:540-546), which Unit::DealDamage calls for every hit before the lethal check
+    /// (Unit.cpp:789): <paramref name="fromPlayerOrSelf"/> when the attacker is a player, something a player charms or owns, or the
+    /// creature itself. The default keeps no count.
+    /// </summary>
+    void CountDamageTaken(uint damage, bool fromPlayerOrSelf) { }
+
+    /// <summary>vmangos Creature::ResetDamageTakenOrigin, at a real combat stop (Unit::AttackStop, Unit.cpp:4607-4611).</summary>
+    void ResetDamageTakenOrigin() { }
+
+    /// <summary>
+    /// The start of vmangos Unit::Kill for a creature victim (Unit.cpp:987-1008), before any kill credit resolves: a corpse whose
+    /// damage came mostly from non-players (Creature::IsLootAllowedDueToDamageOrigin, Creature.h:548-554) loses its loot recipient.
+    /// </summary>
+    void SettleKillCredit() { }
 }
 
 /// <summary>

@@ -68,23 +68,30 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
     }
 
     /// <summary>
-    /// vmangos Unit::Kill (Unit.cpp:977-1000, 1094-1097): the player behind the killing blow (a pet's, totem's, guardian's or
+    /// vmangos Unit::Kill (Unit.cpp:981-1008, 1094-1097): the player behind the killing blow (a pet's, totem's, guardian's or
     /// charmed creature's master; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, the creature's original loot recipient
-    /// and the group of the tap replace it, and KilledMonster goes to that group (Group.cpp:2373-2380) or the tapper alone. A
-    /// creature no player controls credits nobody.
+    /// and the group of the tap replace him (<see cref="KillRewards.ResolveTap"/>), and KilledMonster goes to that group
+    /// (Group.cpp:2373-2380) or the tapper alone. A creature no player controls credits only a tap that passed the damage-origin rule.
     /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (!Authoritative(KillRewards.CreditedPlayer(killer), victim, out Player? player, out Creature? creature))
+        if (victim is not Creature { IsInWorld: true } creature || creature.Map is not { } map
+            || !ReferenceEquals(map.FindObject(creature.Guid), creature))
         {
             return;
         }
 
-        // Player::RewardSinglePlayerAtKill (Player.cpp:19961, 19968-19982): a victim owned by a player is a PvP kill
-        // (IsCharmerOrOwnerPlayerOrPlayerItself), which gives no KilledMonster credit; a totem is owned by its summoner.
-        if (TotemQuery.TryGet(creature, out TotemInfo totem) && totem.Owner is Player)
+        // Player::RewardSinglePlayerAtKill / RewardGroupAtKill (Player.cpp:19961, 19968-19982; Group.cpp:2364, 2378): a victim a player
+        // owns or charms (a totem is owned by its summoner) is a PvP kill, which gives no KilledMonster credit.
+        if (KillRewards.IsPvpVictim(creature) || (TotemQuery.TryGet(creature, out TotemInfo totem) && totem.Owner is Player))
         {
             return;
+        }
+
+        Player? player = KillRewards.CreditedPlayer(killer);
+        if (player is not { IsInWorld: true } || !ReferenceEquals(map.FindPlayer(player.Guid), player))
+        {
+            player = null;
         }
 
         (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, groups ?? (_ => null));

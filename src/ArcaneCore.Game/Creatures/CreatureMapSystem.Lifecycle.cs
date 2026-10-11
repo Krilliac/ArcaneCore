@@ -487,6 +487,7 @@ public sealed partial class CreatureMapSystem
         creature.InitializeFields();
         creature.LootTapPlayerGuid = default;
         creature.LootTapGroup = null;
+        creature.ResetKillCredit();
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
         DeletePersistedRespawn(creature);

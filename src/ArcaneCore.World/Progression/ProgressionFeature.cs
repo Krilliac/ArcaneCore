@@ -124,24 +124,34 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
     }
 
     /// <summary>
-    /// vmangos Unit::Kill (Unit.cpp:977-1000, 1094-1097): the player behind the killing blow (the killer, or the player that owns or
-    /// charms a pet, demon, totem, guardian or charmed creature; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, which the
-    /// creature's original loot recipient and the group of the tap replace; that group shares the experience (RewardGroupAtKill),
-    /// else the tapper alone (RewardSinglePlayerAtKill). A creature no player controls rewards nobody: the share of non-player damage
-    /// (Creature::IsLootAllowedDueToDamageOrigin) is not tracked, so a tap alone does not earn a guard's or another creature's kill.
+    /// vmangos Unit::Kill (Unit.cpp:981-1008, 1094-1097): the player behind the killing blow (the killer, or the player that owns
+    /// or charms a pet, demon, totem, guardian or charmed creature; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, the
+    /// creature's original loot recipient and the group of the tap replace him (<see cref="KillRewards.ResolveTap"/>); that group
+    /// shares the experience (RewardGroupAtKill), else the tapper alone (RewardSinglePlayerAtKill). The tap of a creature that
+    /// players damaged 35% or less was dropped at the kill, so a guard's or another creature's kill then rewards nobody; above that
+    /// the experience is scaled by the players' share (<see cref="Creature.KillXpModifier"/>).
     /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (KillRewards.CreditedPlayer(killer) is not { IsInWorld: true } player || victim is not Creature creature
-            || creature.Map is not { } map || !ReferenceEquals(player.Map, map)
-            || !ReferenceEquals(map.FindPlayer(player.Guid), player))
+        if (victim is not Creature creature || creature.Map is not { } map)
+        {
+            return;
+        }
+
+        Player? player = KillRewards.CreditedPlayer(killer);
+        if (player is not { IsInWorld: true } || !ReferenceEquals(map.FindPlayer(player.Guid), player))
+        {
+            player = null; // no player on this map is behind the killing blow: only a tap can earn the kill
+        }
+
+        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, _groups);
+        if (tapper is null && group is null)
         {
             return;
         }
 
         bool nonRaidDungeon = _world is { } world
             && WorldMaps.Of(world).Registry.Find(map.MapId) is { IsDungeon: true, IsRaid: false };
-        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, _groups);
         IReadOnlyList<Player> recipients = KillRewards.TapRecipients(tapper, creature, group, Progression.Options.GroupXpDistance);
         KillRewards.AwardExperience(Progression, recipients, creature, nonRaidDungeon);
     }

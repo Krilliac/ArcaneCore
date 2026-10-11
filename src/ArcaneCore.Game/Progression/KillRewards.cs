@@ -28,16 +28,43 @@ public static class KillRewards
         => unit is null ? null : unit.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(unit);
 
     /// <summary>
+    /// The GUID vmangos Creature::SetLootRecipient records for a tap by <paramref name="unit"/>, acting for <paramref name="player"/>
+    /// (Creature.cpp:1602-1605): the pet's own GUID while it is its owner's active pet (UNIT_FIELD_SUMMON), a provisional tap the
+    /// owner or his group takes over on their first hit (<see cref="TakesOverPetTap"/>); otherwise the player's.
+    /// Guardians, totems and charmed creatures tap for their player at once.
+    /// </summary>
+    public static ObjectGuid TapGuid(Unit unit, Player player)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(player);
+        return unit is not Player && !unit.Guid.IsEmpty && player.PetGuid == unit.Guid ? unit.Guid : player.Guid;
+    }
+
+    /// <summary>
+    /// vmangos Unit::DealDamage (Unit.cpp:811-819): a tap still held by a pet passes to a player <paramref name="attacker"/> who owns
+    /// that pet, or who is in the group recorded with the tap (<paramref name="inTapGroup"/>).
+    /// </summary>
+    public static bool TakesOverPetTap(ObjectGuid tap, Unit attacker, bool inTapGroup)
+        => !tap.IsEmpty && !tap.IsPlayer && attacker is Player hitter && (hitter.PetGuid == tap || inTapGroup);
+
+    /// <summary>
     /// Unit::Kill's tap for a creature victim (Unit.cpp:981-1000): pPlayerTap is <paramref name="killingPlayer"/> (see
-    /// <see cref="CreditedPlayer"/>) replaced by the creature's original loot recipient while he is on the victim's map; pGroupTap
-    /// is the group of the tap while it has members, else pPlayerTap's current group (<paramref name="groupOf"/>; a group that
-    /// does not hold him is ignored). Both null when nobody is credited.
+    /// <see cref="CreditedPlayer"/>, null when no player on the map is behind the killing blow) replaced by the creature's original
+    /// loot recipient; a tap still held by a pet leaves no pPlayerTap at all (Unit.cpp:995-997). pGroupTap is the group of the tap
+    /// while it has members, else pPlayerTap's current group (<paramref name="groupOf"/>; a group that does not hold him is ignored).
+    /// Both null when nobody is credited. A tap that failed the damage-origin rule was already cleared at the kill
+    /// (<see cref="Creature.SettleKillCredit"/>, Unit.cpp:1007-1008), which leaves the killing player alone.
+    /// Limit: the recipient is looked up on the victim's map only (vmangos GetOriginalLootRecipient finds him anywhere in the world);
+    /// a tapper who has left the map is replaced by the killing player.
     /// </summary>
     public static (Player? Tapper, RewardGroup? Group) ResolveTap(Player? killingPlayer, Creature victim, Func<Player, RewardGroup?> groupOf)
     {
         ArgumentNullException.ThrowIfNull(victim);
         ArgumentNullException.ThrowIfNull(groupOf);
-        Player? tapper = (victim.LootTapPlayerGuid.IsEmpty ? null : victim.Map?.FindPlayer(victim.LootTapPlayerGuid)) ?? killingPlayer;
+        ObjectGuid tap = victim.LootTapPlayerGuid;
+        Player? tapper = tap.IsEmpty ? killingPlayer
+            : !tap.IsPlayer ? null
+            : victim.Map?.FindPlayer(tap) ?? killingPlayer;
         RewardGroup? group = victim.LootTapGroup is { MemberCount: > 0 } tapGroup
             ? new RewardGroup([.. tapGroup.Members.Select(m => m.Guid)], tapGroup.IsRaid)
             : tapper is not null && groupOf(tapper) is { } current && current.Members.Contains(tapper.Guid) ? current : null;
@@ -113,6 +140,17 @@ public static class KillRewards
         return recipients;
     }
 
+    /// <summary>
+    /// vmangos Unit::IsCharmerOrOwnerPlayerOrPlayerItself for a victim (the PvP flag of RewardSinglePlayerAtKill and
+    /// RewardGroupAtKill): a creature a player owns or charms, or one a stand-in reports through <see cref="IPlayerControlledUnit"/>.
+    /// Such a kill gives no experience, no reputation and no KilledMonster credit.
+    /// </summary>
+    public static bool IsPvpVictim(Unit victim)
+    {
+        ArgumentNullException.ThrowIfNull(victim);
+        return victim.IsCharmerOrOwnerPlayerOrPlayerItself || DuelRules.ControllingPlayer(victim) is not null;
+    }
+
     /// <summary>vmangos: quest objectives update for alive members or dead ones that have not released.</summary>
     public static bool CanReceiveQuestCredit(Player player) => player.IsAlive || (player.Flags & PlayerFlags.Ghost) == 0;
 
@@ -131,16 +169,18 @@ public static class KillRewards
         ArgumentNullException.ThrowIfNull(progression);
         ArgumentNullException.ThrowIfNull(recipients);
         ArgumentNullException.ThrowIfNull(victim);
-        if (TotemQuery.IsTotem(victim))
+        if (TotemQuery.IsTotem(victim) || IsPvpVictim(victim))
         {
-            // Player::IsHonorOrXPTarget (Player.cpp:19950) and MaNGOS::XP::Gain (Formulas.h:102-107): a summoned totem is worth nothing.
+            // Player::IsHonorOrXPTarget (Player.cpp:19950) and MaNGOS::XP::Gain (Formulas.h:102-107): a summoned totem is worth nothing;
+            // a victim a player owns or charms is a PvP kill, which gives no experience (Player.cpp:19961-19962, Group.cpp:2364, 2378).
             return new uint[recipients.Count];
         }
 
         KillCandidate[] candidates = recipients
             .Select(p => new KillCandidate(p.Level, p.IsAlive, (p.Flags & PlayerFlags.Ghost) != 0)).ToArray();
+        // MaNGOS::XP::Gain multiplies by the players' damage share before the kill rate (Formulas.h:152-153).
         IReadOnlyList<KillShare> shares = KillExperience.Distribute(candidates, victim.Level, IsElite(victim), nonRaidDungeon,
-            progression.Options.RateXpKill, progression.Options.RateXpKillElite);
+            progression.Options.RateXpKill * victim.KillXpModifier, progression.Options.RateXpKillElite);
         uint[] granted = new uint[recipients.Count];
         foreach (KillShare share in shares)
         {

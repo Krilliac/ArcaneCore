@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Totems;
 using ArcaneCore.Kernel.Honor;
@@ -20,10 +21,10 @@ namespace ArcaneCore.Game.Honor;
 /// recipient needs the victim above its gray level. Creature kills reward the TAPPER, as vmangos does (Unit::Kill takes the creature's loot recipient and its group, Unit.cpp:988-1001, 1076-1079):
 /// the first player (or the owner of the first pet) to damage a creature that is not a pet taps it (Unit::DealDamage, Unit.cpp:804-807), the
 /// tap is dropped when the creature is back at full health (what an evade or a respawn does, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
-/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature nobody tapped (killed by one hit that is its
-/// first damage, or by non-player damage) rewards the killer's controlling player, which is the original's pPlayerTap fallback. Documented limits:
-/// the tap is a snapshot of the tapper's group taken at the first hit (the tapper's current group is preferred while it still contains the tapper),
-/// "IsLootAllowedDueToDamageOrigin" (the share of damage done by players) and the pet to owner tap swap have no data here, and a creature healed
+/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature nobody tapped, or one players damaged 35% or less
+/// (Creature::IsLootAllowedDueToDamageOrigin, settled at the kill), rewards the killing blow's player, which is the original's pPlayerTap fallback;
+/// an owner's active pet holds its tap until the owner or the tap's group hits. Documented limits: the tap is a snapshot of the tapper's group taken
+/// at the first hit (the tapper's current group is preferred while it still contains the tapper), and a creature healed
 /// to full health mid-fight loses its tap; the "xp_multiplier 0" and "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
 /// </para>
 /// </summary>
@@ -86,11 +87,16 @@ public sealed class HonorKillRewards
             return;
         }
 
-        Player? owner = KillRewards.CreditedPlayer(attacker);
+        // Unit.cpp:791-794: UnitDamaged records the attacker's affecting player (a pet's owner; a charmed creature's own owner, if any).
+        Player? owner = attacker.GetAffectingPlayer() ?? DuelRules.ControllingPlayer(attacker);
         state.Ledger.Record(owner?.Guid.Value ?? 0, damage, _honor.Clock.UnixMilliseconds);
     }
 
-    /// <summary>Unit::DealDamage (Unit.cpp:804-807): a creature that is not a pet is tapped by the first player to damage it.</summary>
+    /// <summary>
+    /// Unit::DealDamage (Unit.cpp:800-819): a creature that is not a pet is tapped by the first player (or what a player owns or charms)
+    /// to damage it; an owner's active pet holds the tap provisionally (<see cref="KillRewards.TapGuid"/>) until the owner or a member of
+    /// the tap's group hits.
+    /// </summary>
     private void RecordTap(Unit attacker, Creature creature)
     {
         if (creature.IsPet || KillRewards.CreditedPlayer(attacker) is not { } owner)
@@ -104,9 +110,13 @@ public sealed class HonorKillRewards
             _taps.Remove(creature);
         }
 
-        if (!_taps.TryGetValue(creature, out _))
+        if (!_taps.TryGetValue(creature, out Tap? held))
         {
-            _taps.Add(creature, new Tap(owner.Guid, _groups(owner)));
+            _taps.Add(creature, new Tap(KillRewards.TapGuid(attacker, owner), _groups(owner)));
+        }
+        else if (KillRewards.TakesOverPetTap(held.Player, attacker, held.Group?.Members.Contains(owner.Guid) == true))
+        {
+            _taps.AddOrUpdate(creature, new Tap(owner.Guid, _groups(owner) ?? held.Group));
         }
     }
 
@@ -131,9 +141,16 @@ public sealed class HonorKillRewards
             _taps.Remove(creature);
         }
 
+        // Unit::Kill (Unit.cpp:989, 1007-1008): a creature players damaged 35% or less loses its tap, leaving the killing blow's player.
+        if (!creature.KillCreditAllowed)
+        {
+            tap = null;
+        }
+
+        // A tap a pet still holds credits no player, only its group (Unit.cpp:995-997).
         Player? tapper = tap is null
             ? KillRewards.CreditedPlayer(killer)
-            : map.FindPlayer(tap.Player);
+            : tap.Player.IsPlayer ? map.FindPlayer(tap.Player) : null;
         RewardCreatureKill(tapper, tap?.Group, creature);
     }
 
