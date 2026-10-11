@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Numerics;
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -118,15 +119,19 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The way back: from the plateau to a destination on the canyon floor the bot boards at the top and steps off at the foot.
+    /// The way back: from the plateau to a destination on the canyon floor the bot boards at the top and steps off at the foot; at the
+    /// test's 100 ms thinks and at the default <see cref="PlayerbotOptions.ThinkIntervalMs"/> (500 ms, a heartbeat's interval).
     /// </summary>
-    [Fact]
-    public async Task ABotOnThePlateau_RidesTheGreatLiftDown()
+    [Theory]
+    [InlineData(100)]
+    [InlineData(500)]
+    public async Task ABotOnThePlateau_RidesTheGreatLiftDown(int thinkMs)
     {
         await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
         await world.PlaceAsync(new Vector3(-4600f, -1800f, ElevatorTestWorld.TopFloor));
         ElevatorLift lift = await world.GreatLiftAsync();
-        PlayerbotOptions options = Options();
+        PlayerbotOptions options = new() { Enabled = true, ThinkIntervalMs = thinkMs };
+        Assert.Equal(500, new PlayerbotOptions().ThinkIntervalMs);
         // The mesh's way down ends at the cliff's edge, 63 yards short: that is no way, and the ride begins.
         Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)));
         Assert.Equal(ElevatorLevel.High, await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)!.From));
@@ -269,6 +274,123 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.False(aboard, "still on a car that left the world");
         Assert.True(MathF.Abs(at.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {at}: not on the canyon floor");
         Assert.True(!alive || health < healthBefore, "a fall of 40 yards and more cost nothing");
+    }
+
+    /// <summary>Drive a ride from the canyon floor until the bot is aboard and at least <paramref name="above"/> yards up the shaft.</summary>
+    private static async Task RideIntoTheShaftAsync(ElevatorTestWorld world, PlayerbotOptions options, float above)
+    {
+        ElevatorLift lift = await world.GreatLiftAsync();
+        await world.OnWorldAsync(() => PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet));
+        float z = float.MinValue;
+        ElevatorStage? stage = null;
+        for (int i = 0; i < 2_000 && !(stage == ElevatorStage.Aboard && z > ElevatorTestWorld.BottomFloor + above); i++)
+        {
+            (stage, z) = await world.TickAsync(() =>
+            {
+                PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _);
+                return (PlayerbotElevator.TripOf(world.Player)?.Stage, world.Player.Z);
+            });
+        }
+
+        Assert.Equal(ElevatorStage.Aboard, stage);
+        Assert.True(await world.OnWorldAsync(() => (world.Player.Movement.Flags & MovementFlags.OnTransport) != 0), "not on the car");
+    }
+
+    /// <summary>
+    /// The review's blocking case: a real player invites a riding bot into a party (ManagedPlayerbotFeature cancels the ride, the party AI
+    /// moves the bot next) while the car is between floors. The bot leaves the car falling: it ends on the canyon floor below, off the
+    /// transport, with the fall's damage, never hanging in the air for the party AI to slide along.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledRide_BetweenFloors_FallsTheBotToTheFloor()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        await RideIntoTheShaftAsync(world, Options(), above: 40f);
+        (Vector3 at, bool aboard, ulong transport, uint healthBefore, uint health) = await world.OnWorldAsync(() =>
+        {
+            uint before = world.Player.Health;
+            PlayerbotElevator.Cancel(world.Player);
+            Player p = world.Player;
+            return (new Vector3(p.X, p.Y, p.Z), (p.Movement.Flags & MovementFlags.OnTransport) != 0, p.Movement.TransportGuid, before, p.Health);
+        });
+        output.WriteLine($"after the cancel: {at}, aboard {aboard}, health {healthBefore} -> {health}");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+        Assert.False(aboard, "still on the transport after the cancel");
+        Assert.Equal(0ul, transport);
+        Assert.True(MathF.Abs(at.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {at}: left in the air, not on the canyon floor");
+        Assert.True(health < healthBefore, "a fall of 40 yards and more cost nothing");
+    }
+
+    /// <summary>A cancel while the car stands at a floor is a plain step off: no fall, no damage.</summary>
+    [Fact]
+    public async Task ACancelledRide_AtAFloor_StepsTheBotOff()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        await RideIntoTheShaftAsync(world, Options(), above: -10f); // aboard, still at the foot
+        (Vector3 at, bool aboard, uint healthBefore, uint health) = await world.OnWorldAsync(() =>
+        {
+            uint before = world.Player.Health;
+            PlayerbotElevator.Cancel(world.Player);
+            return (new Vector3(world.Player.X, world.Player.Y, world.Player.Z), (world.Player.Movement.Flags & MovementFlags.OnTransport) != 0,
+                before, world.Player.Health);
+        });
+        Assert.False(aboard);
+        Assert.True(MathF.Abs(at.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {at}");
+        Assert.Equal(healthBefore, health);
+    }
+
+    /// <summary>
+    /// A bot killed aboard: the death ends the ride (the brain cancels it) and the corpse loses the transport (flag, GUID and offset), so
+    /// it is not reported riding a car it no longer stands on.
+    /// </summary>
+    [Fact]
+    public async Task ABotKilledAboard_LosesTheTransport()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        PlayerbotOptions options = Options();
+        var brain = new PlayerbotBrain(world.Session, options);
+        await RideIntoTheShaftAsync(world, options, above: 20f);
+        (bool alive, bool aboard, ulong transport, Vector3 offset, ElevatorTrip? trip) = await world.OnWorldAsync(() =>
+        {
+            Player p = world.Player;
+            p.Health = 0;
+            p.Map!.Combat.KillPlayer(p);
+            brain.Update(1);
+            return (p.IsAlive, (p.Movement.Flags & MovementFlags.OnTransport) != 0, p.Movement.TransportGuid,
+                new Vector3(p.Movement.TransportX, p.Movement.TransportY, p.Movement.TransportZ), PlayerbotElevator.TripOf(p));
+        });
+        Assert.False(alive);
+        Assert.Null(trip);
+        Assert.False(aboard, "the corpse still rides the car");
+        Assert.Equal(0ul, transport);
+        Assert.Equal(Vector3.Zero, offset);
+    }
+
+    /// <summary>
+    /// A bot saved mid-ride logs in in the shaft, in the air, with no trip. At its first think it falls to the floor below (and is off any
+    /// transport); a bot standing on the plateau beside the lift is not touched.
+    /// </summary>
+    [Fact]
+    public async Task ABotLoggedInMidShaft_FallsToTheFloorAtItsFirstThink()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        ElevatorCar bottom = lift.Cars.Single(c => c.SpawnGuid == 16876);
+        var midShaft = new Vector3(bottom.Low.X + 1f, bottom.Low.Y, 20f);
+        await world.PlaceAsync(midShaft);
+        Assert.True(await world.OnWorldAsync(() => world.Player.Z) > 10f, "the fixture put the bot on the floor already");
+        var brain = new PlayerbotBrain(world.Session, Options());
+        (Vector3 at, bool aboard) = await world.TickAsync(() =>
+        {
+            brain.Update(100);
+            return (new Vector3(world.Player.X, world.Player.Y, world.Player.Z), (world.Player.Movement.Flags & MovementFlags.OnTransport) != 0);
+        });
+        output.WriteLine($"after the first think: {at}");
+        Assert.False(aboard);
+        Assert.True(MathF.Abs(at.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {at}: still in the air");
     }
 
     private static async Task<ElevatorStage?> RunAsync(ElevatorTestWorld world, PlayerbotBrain brain, int thinks)
