@@ -1,5 +1,7 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -22,11 +24,15 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
     /// <summary>Pause between attempts of one write (tests shorten it).</summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
     private Task? _consumer;
     private Task? _stop;
+    private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
     private int _pending;
 
@@ -37,6 +43,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         FlushCharacter,
         Retry,
         DrainAll,
+        Sweep,
     }
 
     private sealed class Unsaved
@@ -52,7 +59,28 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
+
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _retry.Start();
+        _consumer = Task.Run(ConsumeAsync);
+    }
+
+    private bool HasAnyRetained()
+    {
+        lock (_gate)
+        {
+            return _characters.Values.Any(u => u.Failure is not null);
+        }
+    }
 
     /// <summary>Record the character's current words (copied) and queue a write unless one is waiting.</summary>
     public void Save(int characterId, ReadOnlySpan<uint> words)
@@ -150,6 +178,11 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        if (_retry is not null)
+        {
+            await _retry.StopAsync().ConfigureAwait(false);
+        }
+
         _channel.Writer.TryWrite(new Work(0, Kind.DrainAll, null));
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -249,6 +282,20 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
                         }
 
                         break;
+                    case Kind.Sweep:
+                        try
+                        {
+                            if (!_stopped)
+                            {
+                                await SweepRetainedAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            _retry?.SweepFinished();
+                        }
+
+                        break;
                     default:
                         work.Done?.TrySetResult();
                         break;
@@ -262,7 +309,45 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         }
     }
 
-    private async Task ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued)
+    /// <summary>
+    /// On the consumer: one attempt for each retained character, ascending, so a lock that outlasts the inline retries does not leave the write held
+    /// in memory with nobody to retry it. Stops at the first locked database (the rest would only wait out the same lock); any other failure does not stop it.
+    /// </summary>
+    private async Task SweepRetainedAsync()
+    {
+        int[] retained;
+        lock (_gate)
+        {
+            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
+        }
+
+        int failed = 0;
+        bool locked = false;
+        Exception? first = null;
+        for (int i = 0; i < retained.Length; i++)
+        {
+            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, sweep: true).ConfigureAwait(false);
+            if (failure is null)
+            {
+                continue;
+            }
+
+            failed++;
+            first ??= failure;
+            if (DatabaseTransience.IsBusy(failure))
+            {
+                locked = true;
+                break;
+            }
+        }
+
+        if (failed > 0)
+        {
+            logger.LogWarning("explored-zones retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+        }
+    }
+
+    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, bool sweep = false)
     {
         uint[] words;
         int version;
@@ -270,7 +355,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             if (clearQueued)
@@ -280,20 +365,21 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
 
             if (onlyIfFailed && unsaved.Failure is null)
             {
-                return;
+                return null;
             }
 
             if (unsaved.Words.Length == 0)
             {
-                return;
+                return null;
             }
 
             words = unsaved.Words;
             version = unsaved.Version;
         }
 
+        int attempts = sweep ? 1 : MaxAttempts;
         Exception? failure = null;
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
             try
             {
@@ -309,8 +395,12 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             catch (Exception ex)
             {
                 failure = ex;
-                logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, MaxAttempts);
-                if (attempt < MaxAttempts)
+                if (!sweep)
+                {
+                    logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
+                }
+
+                if (attempt < attempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
@@ -321,7 +411,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             unsaved.Failure = failure;
@@ -331,9 +421,11 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
         }
 
-        if (failure is not null)
+        if (failure is not null && !sweep)
         {
-            logger.LogError(failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, MaxAttempts);
+            logger.LogError(failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
+
+        return failure;
     }
 }

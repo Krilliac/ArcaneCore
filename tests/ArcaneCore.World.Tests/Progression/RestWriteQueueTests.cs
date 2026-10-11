@@ -9,11 +9,15 @@ namespace ArcaneCore.World.Tests.Progression;
 /// <summary>The retained-write rules of <see cref="RestWriteQueue"/>: nothing is dropped, only the latest state is written, and shutdown says what is not durable.</summary>
 public sealed class RestWriteQueueTests
 {
-    private static (RestWriteQueue Queue, InMemoryRestStore Store) Create()
+    private static (RestWriteQueue Queue, InMemoryRestStore Store) Create(TimeSpan? retryInterval = null)
     {
         var store = new InMemoryRestStore();
         ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterRestStore>(store).BuildServiceProvider();
-        var queue = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetryDelay = TimeSpan.Zero };
+        var queue = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+        {
+            RetryDelay = TimeSpan.Zero,
+            RetainedRetryInterval = retryInterval ?? TimeSpan.FromSeconds(30),
+        };
         queue.Start();
         return (queue, store);
     }
@@ -36,6 +40,123 @@ public sealed class RestWriteQueueTests
         Assert.Equal(7f, store.Get(2)!.Value.RestBonus);
         Assert.Equal(0, queue.Pending);
         await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ALockThatClearsWithinTheInlineRetries_LandsTheWriteWithNoFurtherTrigger()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create();
+        store.LockedSaves = 2; // another writer holds the file for the first two attempts
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus); // the third attempt landed: no new write, barrier or login was needed
+        Assert.False(queue.HasRetainedFailure(1));
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
+        store.LockedSaves = 4; // the three inline attempts fail, the first sweep fails, the second sweep lands
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Null(store.Get(1));
+        Assert.Equal(3, store.Attempts);
+
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Equal(4, store.Attempts);
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
+        Assert.Equal(5, store.Attempts);
+        Assert.Equal(1, store.Saves);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(TimeSpan.FromMilliseconds(50));
+        store.LockedSaves = 4;
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+
+        await DurableAsync(queue, 1);
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ARetryIntervalThatIsNotPositive_IsRefusedAtStart()
+    {
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterRestStore>(new InMemoryRestStore()).BuildServiceProvider();
+        var queue = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = TimeSpan.FromSeconds(-5) };
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.Start());
+    }
+
+    [Fact]
+    public async Task TheSweepStopsAtTheFirstLockedCharacter_AndLandsBothOnceTheLockIsGone()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
+        store.LockedSaves = int.MaxValue;
+        queue.Save(1, State(10));
+        queue.Save(3, State(30));
+        await queue.FlushAsync();
+        Assert.Equal(3, store.AttemptsFor(1));
+        Assert.Equal(3, store.AttemptsFor(3));
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.Equal(4, store.AttemptsFor(1));
+        Assert.Equal(3, store.AttemptsFor(3)); // never reached: the sweep stopped at character 1's locked write
+
+        store.LockedSaves = 0;
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.False(queue.HasRetainedFailure(3));
+        Assert.Equal(10f, store.Get(1)!.Value.RestBonus);
+        Assert.Equal(30f, store.Get(3)!.Value.RestBonus);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ANewerStateReplacesTheRetainedOne_AndOnlyTheNewerIsEverStored()
+    {
+        (RestWriteQueue queue, InMemoryRestStore store) = Create(Timeout.InfiniteTimeSpan);
+        store.LockedSaves = int.MaxValue;
+        queue.Save(1, State(10));
+        await queue.FlushAsync();
+        queue.Save(1, State(11));
+        await queue.FlushAsync();
+        Assert.True(queue.HasRetainedFailure(1));
+
+        store.LockedSaves = 0;
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync();
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.Equal(11f, store.Get(1)!.Value.RestBonus);
+        Assert.Equal(1, store.Saves);
+        await queue.StopAsync();
+    }
+
+    private static async Task DurableAsync(RestWriteQueue queue, int characterId)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (queue.HasRetainedFailure(characterId))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the sweep");
+            await Task.Delay(10);
+        }
     }
 
     [Fact]

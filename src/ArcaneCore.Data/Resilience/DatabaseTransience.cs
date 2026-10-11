@@ -15,6 +15,40 @@ public static class DatabaseTransience
     /// <summary>The cached delegate form of <see cref="IsTransient"/>.</summary>
     public static readonly Func<Exception, bool> Classifier = IsTransient;
 
+    /// <summary>
+    /// True when the failure is SQLite reporting that another connection holds the file: <c>SQLITE_BUSY</c> (5) or <c>SQLITE_LOCKED</c> (6),
+    /// directly or wrapped (EF's <see cref="DbUpdateException"/>, an aggregate, any inner exception). The wait already happened inside
+    /// the driver (up to the command timeout), so a write queue must not repeat it inline: it keeps the write and retries later.
+    /// Other engines never match (their lock waits surface as <see cref="DbException.IsTransient"/>, not as this code).
+    /// </summary>
+    public static bool IsBusy(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Exception? current = exception;
+        for (int depth = 0; current is not null && depth < TransientFailure.MaxDepth; depth++)
+        {
+            if (current is SqliteException { SqliteErrorCode: 5 or 6 })
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate)
+            {
+                foreach (Exception inner in aggregate.InnerExceptions)
+                {
+                    if (IsBusy(inner))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
+    }
+
     /// <summary>True when the failure means the database could not be reached, opened, or answered in time.</summary>
     public static bool IsTransient(Exception exception)
     {

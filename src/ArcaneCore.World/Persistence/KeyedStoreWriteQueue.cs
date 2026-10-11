@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -325,6 +326,11 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             {
                 failure = ex;
                 logger.LogWarning(ex, "{Queue} write {Key} failed (attempt {Attempt} of {Max})", name, key, attempt, MaxAttempts);
+                if (DatabaseTransience.IsBusy(ex))
+                {
+                    break; // another connection holds the database: keep the write retained, never wait out the lock again inline
+                }
+
                 if (attempt < MaxAttempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);

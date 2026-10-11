@@ -3566,6 +3566,22 @@
       "isCollection": false
     },
     {
+      "path": "Database:SlowTransactionWarnMs",
+      "section": "Database",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2000",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the code that closed it, on every provider. A transaction that holds the write lock this long is what makes other writers fail with \"database is locked\", so the next holder names itself in the log (docs/areas/persistence.md).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#database",
+      "isCollection": false
+    },
+    {
       "path": "Database:SqliteBusyTimeoutMs",
       "section": "Database",
       "type": "int",
@@ -3577,6 +3593,22 @@
       "daemons": "Both",
       "reload": "start",
       "meaning": "SQLite only: how long (0..60000 ms, default 5000) a connection waits inside SQLite for another connection's write lock before reporting \"database is locked\", set as `PRAGMA busy_timeout` on every connection (never more than the connection string's Default Timeout, and clamped to `Resilience:Database:QueryTimeoutMs` when the database guard is on, so a refused call never outlives its deadline in SQLite's busy handler). Without it a waiting writer retries only every 150 ms, so the many background writers on one SQLite file starve each other. 0 disables the pragma. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#database",
+      "isCollection": false
+    },
+    {
+      "path": "Database:SqliteWriteTimeoutMs",
+      "section": "Database",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "5000",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection waits for another connection's write lock before it fails as \"database is locked\". It replaces the connection's Default Timeout (30 s) when smaller, set when the connection opens, so it also bounds EF's `BEGIN IMMEDIATE` and, through the busy-timeout clamp, SQLite's own wait. Without it a writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
