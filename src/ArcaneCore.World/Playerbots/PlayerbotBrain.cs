@@ -227,7 +227,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
                 PlayerbotTram.Cancel(player);
-                PlayerbotElevator.Cancel(player); // and a lift ride (a bot that fell to its death off a car among them)
+                // And a lift ride: the corpse loses the transport. This must run BEFORE the acknowledgements below
+                // (PlayerbotMovementControl.Update): the death root's ack then carries the cleared block, relayed as MSG_MOVE_ROOT.
+                PlayerbotElevator.Cancel(player);
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -235,6 +237,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         else
         {
             // Alive again: the next death is a new one, even when pending movement orders hold this update below.
+            if (_deathIntentRetired) PlayerbotElevator.SettleAfterRevive(player);
             _deathIntentRetired = false;
             RememberAttackers(player);
         }

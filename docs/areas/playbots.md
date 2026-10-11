@@ -219,16 +219,24 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   onto the landing there nearest its destination, and the destination plans again from there. Nothing teleports the bot.
 * **Fails closed** with a stall reason (`elevator: ...`, the bot's own set-aside as for the tram, never every bot's): no way to the lift or
   its landing (no progress for 60 s), no car in the world, no floor beside a car, no car standing at the landing within two cycles and 30 s
-  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at; a car that
-  leaves the world under the bot, or a bot knocked off it in the shaft, drops the bot: it steps off and falls to the floor below as a
-  client does (MOVEFLAG_FALLINGFAR, then MSG_MOVE_FALL_LAND with the fall's time; the server takes the fall damage), and the ride fails.
-  A death ends the ride and the corpse loses the transport; a party taking the bot over ends it with the bot off the car (stepped off at a
-  floor, fallen to the floor below between floors); a bot saved mid-ride falls to the floor at its first think after login.
+  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at.
+* **Never off a car where it stands.** Under a car the static collision data has no floor but the bottom of the shaft (a car is a dynamic
+  object, in no vmap; measured on the real Great Lift: 5.3 to 5.5 yards down into the pit at the foot, 134.8 yards at the top), so the bot
+  is never stepped off or dropped where it stands. A car that leaves the world under the bot (or a bot knocked off it in the shaft) lets
+  it fall only when the fall costs less than half its health (vmangos fall damage at the world's rate: MOVEFLAG_FALLINGFAR, then
+  MSG_MOVE_FALL_LAND with the fall's time); otherwise, or over no known floor, the bot is placed on the nearest landing (a same-map
+  teleport, as vmangos' undermap recall does; logged), and the ride fails. A party taking the bot over, or anything else that cancels a
+  ride aboard, never moves it off a car mid-shaft: the ride alights at the next stop and the party AI takes the bot on the landing
+  (`PlayerbotElevator.HoldsForLanding`). A bot found on a car at login or revival boards it and rides to the next stop; one found hanging
+  in a shaft (the car elsewhere, or not in the world after 10 s) is placed on a landing. A corpse killed aboard loses the transport and
+  its observers are told (the death root's acknowledgement carries the cleared block; a bot already rooted relays a heartbeat).
 
 Tests: `PlayerbotElevatorNetworkTests` (the lifts from the classic-db and DBC rows; `Choose` for issue #186, quest 5361 and Thunder Bluff),
 `PlayerbotElevatorRideTests` (a fixture cliff and the Great Lift's real paths: a destination in Ratchet begins the ride, the brain walks,
 waits, rides up and steps off on the plateau with the anticheat judging it, then walks on; the ride down; the 90 s wait for cars that never
-stop; the 60 s bound on a landing the bot cannot reach; the fall when the car leaves the world under it), `PlayerbotElevatorRealTerrainTests`
+stop; the 60 s bound on a landing the bot cannot reach), `PlayerbotElevatorSafetyTests` (the same fixture with no floor under the cars:
+a cancel mid-shaft or at a stop, a party invite through ManagedPlayerbotFeature, a car lost low over a floor or high over none, a login
+hanging in a shaft, on a parked car and on a moving car, a death aboard seen by an observer), `PlayerbotElevatorRealTerrainTests`
 (needs `ARCANECORE_TEST_TERRAIN_DIR` and `ARCANECORE_TEST_DBC_DIR`: the four lifts and the region table against the real terrain and
 AreaTable.dbc, and the choices of issue #186 from the live stall points) and `PlayerbotElevatorRealRideTests` (the Great Lift ridden on
 Kalimdor's real mesh and models: aboard 26 s after reaching the foot, off at the top 15 s later, the mesh leading on towards Ratchet).

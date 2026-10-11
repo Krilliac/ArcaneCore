@@ -951,7 +951,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (party && !active.PartyDriven)
         {
             PlayerbotTram.Cancel(driven);
-            PlayerbotElevator.Cancel(driven); // a bot aboard a lift steps off where it is: the party AI moves it next
+            // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
+            // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
+            PlayerbotElevator.Cancel(driven);
+            if (PlayerbotElevator.HoldsForLanding(driven))
+            {
+                if (!PlayerbotMovementControl.Update(active.Session, driven))
+                    PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
+                return;
+            }
         }
         active.PartyDriven = party;
         if (party) active.Party.Update(driven, sinceLast);

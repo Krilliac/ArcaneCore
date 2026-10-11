@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
@@ -11,10 +12,12 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -311,7 +314,7 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public ElevatorLift Lift { get; } = lift;
     public ElevatorLevel From { get; set; } = from;
     public ElevatorLevel To { get; set; } = ElevatorLift.Other(from);
-    public Vector3 Goal { get; } = goal;
+    public Vector3 Goal { get; set; } = goal;
     public ElevatorStage Stage { get; set; } = ElevatorStage.ToStop;
     public uint StageMs { get; set; } = nowMs;
     public string? Failure { get; set; }
@@ -328,6 +331,15 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public Vector3 FallLanding { get; set; }
     public uint FallTimeMs { get; set; }
     public float FallYards { get; set; }
+
+    /// <summary>
+    /// The ride ends at the next stop, at either level: a controller took the bot over while it was aboard (<see cref="PlayerbotElevator.Cancel"/>),
+    /// or it was found on a car at login or a revival (<see cref="PlayerbotElevator.Settle"/>). <see cref="PlayerbotElevator.HoldsForLanding"/>.
+    /// </summary>
+    public bool Alighting { get; set; }
+
+    /// <summary>Rescues refused so far (<see cref="PlayerbotElevator.Rescue"/>); the trip fails after <c>MaxRescueTries</c>.</summary>
+    public int RescueTries { get; set; }
 }
 
 /// <summary>
@@ -347,9 +359,16 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 /// Fails closed, with a stall reason and no retry for <see cref="RetryAfterFailureMs"/>: no car of the lift in the world, no floor beside a
 /// car at the bot's level, no way to that landing (no progress for <see cref="NoProgressMs"/>), no car standing at the landing within two
 /// cycles and 30 s. Aboard: a car that does not stand at the other level within a cycle and 30 s is left where it stands next at either
-/// level; one that leaves the world under the bot (or a bot knocked off it in the shaft) drops the bot: it falls to the ground below as a
-/// client does (MSG_MOVE_HEARTBEAT with MOVEFLAG_FALLINGFAR, then MSG_MOVE_FALL_LAND with the fall time; the server applies the fall damage),
-/// and the trip fails.
+/// level; one that leaves the world under the bot (or a bot knocked off it in the shaft) drops the bot (<see cref="Drop"/>).
+/// </para>
+/// <para>
+/// Under a car the static collision data has no floor but the bottom of the shaft (a type-11 car is a dynamic object, in no vmap): so
+/// nothing here steps a bot off a car where it stands or drops it to "the floor below", except <see cref="Drop"/> when the car is gone,
+/// and then only for a fall that costs less than <see cref="MaxFallHealthPercent"/> percent of the bot's health (vmangos fall damage);
+/// otherwise the bot is placed on the nearest landing (<see cref="Rescue"/>, a same-map teleport, as vmangos' undermap recall and the
+/// spell system's last-safe recall do). A controller taking a riding bot over waits until it alights at the next stop
+/// (<see cref="HoldsForLanding"/>); a bot found on a car at login or revival rides to the next stop, one found hanging in a shaft is
+/// placed on a landing (<see cref="Settle"/>); a corpse killed aboard loses the transport, and its observers are told.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -403,6 +422,18 @@ internal static class PlayerbotElevator
 
     /// <summary>A bot this far (or more) above the floor under it, off a car, is falling.</summary>
     internal const float AirborneYards = 3f;
+
+    /// <summary>A bot found within this of a car's height, inside its footprint, stands on it (<see cref="Settle"/>).</summary>
+    internal const float OnCarYards = 2.5f;
+
+    /// <summary>How long <see cref="Settle"/> waits for a car's object to be in the world (its grid loading) before it rescues the bot.</summary>
+    internal const uint SettleWaitMs = 10_000;
+
+    /// <summary><see cref="Drop"/> lets a bot fall only when the fall costs less than this percent of its current health.</summary>
+    internal const int MaxFallHealthPercent = 50;
+
+    /// <summary>Refused rescues (<see cref="Rescue"/>) before <see cref="Drop"/> gives up and fails the trip.</summary>
+    private const int MaxRescueTries = 3;
 
     private const uint SampleMs = 250;
 
@@ -474,6 +505,7 @@ internal static class PlayerbotElevator
         Begin(session, player, choice.Lift, choice.From, goal);
         return true;
     }
+
     /// <summary>Begin a trip on <paramref name="lift"/> from <paramref name="from"/> (tests; <see cref="TryBegin"/> chooses).</summary>
     internal static ElevatorTrip Begin(WorldSession session, Player player, ElevatorLift lift, ElevatorLevel from, Vector3 goal)
     {
@@ -486,93 +518,221 @@ internal static class PlayerbotElevator
     }
 
     /// <summary>
-    /// Drop the trip (death, a controller taking the bot over: a party AI that moves it next). A bot on the car leaves it first
-    /// (<see cref="LeaveCar"/>): on a floor it steps off; between floors it falls to the floor below as <see cref="Drop"/> has it fall,
-    /// landed at once with the fall's whole time (nothing drives a fall after the trip is gone); dead, its corpse loses the transport.
-    /// Whatever moves the bot next never carries a stale transport or starts in mid-air.
+    /// A controller takes the bot over (a party AI) or it died. A bot on a car is never moved off it where it stands: under a car the only
+    /// static floor is the bottom of the shaft (see the class remarks). Aboard and alive, the trip is kept and ends at the next stop at
+    /// either level (<see cref="ElevatorTrip.Alighting"/>, its goal the bot's own position, so the nearest landing); the controller waits
+    /// for it (<see cref="HoldsForLanding"/>). A fall under way lands on schedule. Dead, the trip ends and the corpse loses the transport,
+    /// and its observers are told (<see cref="ClearTransport"/>). Any other stage ends the trip.
     /// </summary>
     internal static void Cancel(Player player)
     {
         if (!Trips.TryGetValue(player, out ElevatorTrip? trip)) return;
-        Trips.Remove(player);
-        if (trip.Stage is ElevatorStage.Aboard or ElevatorStage.Falling && player.Session is WorldSession session)
-            LeaveCar(session, player, trip.Stage == ElevatorStage.Falling ? trip.FallLanding : null);
-    }
-
-    /// <summary>
-    /// Off the car now: a corpse loses the transport (no packet: a dead client sends none; vmangos clears it with the movement info);
-    /// a living bot within <see cref="AirborneYards"/> of the floor steps off onto it; higher, it falls to it (<see cref="FallNow"/>).
-    /// </summary>
-    private static void LeaveCar(WorldSession session, Player player, Vector3? landing)
-    {
         if (!player.IsAlive)
         {
-            ClearTransport(player);
+            Trips.Remove(player);
+            if ((player.Movement.Flags & MovementFlags.OnTransport) != 0 && player.Session is WorldSession session) ClearTransport(session, player);
             return;
         }
 
-        if (!player.IsInWorld || player.Map is not { } map) return;
-        Vector3 at = new(player.X, player.Y, player.Z);
-        float floor = landing?.Z ?? FloorBelow(map, at);
-        if (float.IsFinite(floor) && at.Z - floor >= AirborneYards) FallNow(session, player, at, floor);
-        else if ((player.Movement.Flags & MovementFlags.OnTransport) != 0
-            && !PlayerbotMotion.SendStepOff(session, player, float.IsFinite(floor) ? at with { Z = floor } : at, player.Orientation))
-            ClearTransport(player);
+        switch (trip.Stage)
+        {
+            case ElevatorStage.Aboard:
+                if (!trip.Alighting)
+                {
+                    trip.Alighting = true;
+                    trip.Goal = new Vector3(player.X, player.Y, player.Z);
+                    trip.Failure = null;
+                }
+
+                return;
+            case ElevatorStage.Falling:
+                return;
+            default:
+                Trips.Remove(player);
+                return;
+        }
     }
 
     /// <summary>
-    /// The fall of <see cref="Drop"/> in one go: off the car (when on it), MOVEFLAG_FALLINGFAR where it is, MSG_MOVE_FALL_LAND on the floor
-    /// with the time a fall of that height takes (the server takes the fall damage). Should a packet be refused, the transport is still
-    /// cleared so nothing moves the bot on a stale one.
+    /// Whether the bot's ride holds it until it stands on a landing: aboard and alighting at the next stop, or falling. A controller that
+    /// takes the bot over (<see cref="ManagedPlayerbotFeature"/>'s party AI) drives the ride (<see cref="Drive"/>) until this is false.
     /// </summary>
-    private static void FallNow(WorldSession session, Player player, Vector3 at, float floor)
-    {
-        uint fallMs = (uint)MathF.Ceiling(MathF.Sqrt(2f * MathF.Max(0f, at.Z - floor) / PlayerbotFollowDrop.Gravity) * 1000f);
-        bool off = (player.Movement.Flags & MovementFlags.OnTransport) == 0 || PlayerbotMotion.SendStepOff(session, player, at, player.Orientation);
-        if (!off || !PlayerbotMotion.StartFall(session, player, at, player.Orientation)
-            || !PlayerbotMotion.Land(session, player, at with { Z = floor }, player.Orientation, fallMs))
-            ClearTransport(player);
-    }
+    internal static bool HoldsForLanding(Player player)
+        => Trips.TryGetValue(player, out ElevatorTrip? trip)
+            && (trip.Stage == ElevatorStage.Falling || (trip.Stage == ElevatorStage.Aboard && trip.Alighting));
 
-    private static void ClearTransport(Player player)
+    /// <summary>
+    /// The stored movement without the transport block (Unit.ApplyMovement; the position, the body's world position, is unchanged: vmangos
+    /// Player::KillPlayer and SetDeathState leave the transport alone and the corpse is made at the body's position on release). Observers
+    /// are told: when a root order is pending (the death root of MapCombat.SetDeathState), the bot's acknowledgement carries this block and
+    /// is relayed as MSG_MOVE_ROOT (RootAckHandler); otherwise (a bot already rooted when it died) it is relayed here as MSG_MOVE_HEARTBEAT.
+    /// </summary>
+    private static void ClearTransport(WorldSession session, Player player)
     {
-        // The stored movement without the transport block, at its own time (Unit.ApplyMovement; the position is unchanged).
         MovementInfo movement = player.Movement;
         movement.Flags &= ~MovementFlags.OnTransport;
         movement.TransportGuid = 0;
         movement.TransportX = movement.TransportY = movement.TransportZ = movement.TransportOrientation = 0;
-        player.ApplyMovement(movement, movement.Time);
+        player.ApplyMovement(movement, session.World.NowMs);
+        if (!player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
+            MovementHandlers.RelayStoredMovement(player, WorldOpcode.MsgMoveHeartbeat);
     }
 
-    private static readonly ConditionalWeakTable<Player, object> Settled = [];
+    private sealed class SettleState
+    {
+        public bool Due = true;
+        public uint SinceMs;
+    }
+
+    private static readonly ConditionalWeakTable<Player, SettleState> Settles = [];
+
+    /// <summary>The bot was revived: at its next think without a trip it is settled again (<see cref="Settle"/>), as at a login.</summary>
+    internal static void SettleAfterRevive(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        SettleState state = Settles.GetOrCreateValue(player);
+        state.Due = true;
+        state.SinceMs = 0;
+    }
 
     /// <summary>
-    /// Once per login (per player object), at the first think without a trip: a bot standing in a lift's shaft (within the car's half
-    /// width of a car's spawn, flat) with the floor more than <see cref="AirborneYards"/> below it was saved mid-ride; it falls to that
-    /// floor (<see cref="FallNow"/>). Anywhere else nothing is probed: a floor the collision data misses must not drop a bot.
+    /// At the first think without a trip after a login (per player object) or a revival (<see cref="SettleAfterRevive"/>): a bot standing
+    /// inside a car's footprint (<see cref="CarHalfYards"/> flat of a car's shaft) is judged by the live car, never by the static floor.
+    /// On the car (within <see cref="OnCarYards"/> of its height): it boards it again and rides to the next stop (<see cref="BoardFound"/>;
+    /// true: a trip began). With the car elsewhere, or no car in the world after <see cref="SettleWaitMs"/>: it is placed on the nearest
+    /// landing (<see cref="Rescue"/>). Outside every footprint nothing happens. <paramref name="waiting"/>: the car is not in the world
+    /// yet and the bot is held still meanwhile.
     /// </summary>
-    private static void SettleAfterLogin(WorldSession session, Player player)
+    internal static bool Settle(WorldSession session, Player player, Map map, uint now, out bool waiting)
     {
-        if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map || Settled.TryGetValue(player, out _)) return;
-        Settled.Add(player, new object());
-        if (NetworkOf(session) is not { } network) return;
+        waiting = false;
+        SettleState state = Settles.GetOrCreateValue(player);
+        if (!state.Due || !player.IsAlive) return false;
+        if (NetworkOf(session) is not { } network)
+        {
+            state.Due = false;
+            return false;
+        }
+
         Vector3 at = new(player.X, player.Y, player.Z);
         foreach (ElevatorLift lift in network.Lifts)
         {
-            if (lift.MapId != map.MapId || Vector2.Distance(lift.Centre, ElevatorNetwork.Flat(at)) > ElevatorNetwork.PairYards) continue;
+            if (lift.MapId != map.MapId) continue;
             foreach (ElevatorCar car in lift.Cars)
             {
                 if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) > CarHalfYards) continue;
-                float floor = FloorBelow(map, at);
-                if (float.IsFinite(floor) && at.Z - floor >= AirborneYards) FallNow(session, player, at, floor);
-                else if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(player);
-                return;
+                if (state.SinceMs == 0) state.SinceMs = now == 0 ? 1u : now;
+                GameObjectMapSystem? system = map.FindUpdater<GameObjectMapSystem>();
+                GameObject? live = system is null ? null : FindCar(system, car);
+                if (live is null || system!.ElevatorPosition(live) is not { } position)
+                {
+                    if (unchecked(now - state.SinceMs) < SettleWaitMs)
+                    {
+                        waiting = true;
+                        return false;
+                    }
+
+                    state.Due = false;
+                    if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(session, player);
+                    Rescue(session, player, map, lift, at, out _,
+                        $"elevator: in the shaft of {lift.Name} at login, its car not in the world after {SettleWaitMs / 1000}s");
+                    return false;
+                }
+
+                state.Due = false;
+                var carAt = new Vector3(position.X, position.Y, position.Z);
+                if (MathF.Abs(at.Z - carAt.Z) <= OnCarYards) return BoardFound(session, player, system, lift, car, live, carAt, at, now);
+                if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(session, player);
+                Rescue(session, player, map, lift, at, out _, string.Create(CultureInfo.InvariantCulture,
+                    $"elevator: logged in hanging in the shaft of {lift.Name} at z {at.Z:F1} with the car at z {carAt.Z:F1}"));
+                return false;
             }
         }
+
+        state.Due = false;
+        return false;
     }
+
     /// <summary>
-    /// One think of the trip, before anything else the brain does. <see cref="ElevatorStep.Idle"/>: no trip (the brain goes on).
-    /// <see cref="ElevatorStep.Arrived"/> and <see cref="ElevatorStep.Failed"/> are reported once; <paramref name="failure"/> then says why.
+    /// A bot found on a car (<see cref="Settle"/>): it boards it at the same world position (the seat offset clamped inside the car as
+    /// <see cref="Wait"/> clamps it; a change of flags, not of place) and alights at the next stop: the level the car stands at, else the
+    /// one it is heading for (its position 500 ms ahead, rising: the top).
+    /// </summary>
+    private static bool BoardFound(WorldSession session, Player player, GameObjectMapSystem system, ElevatorLift lift, ElevatorCar car, GameObject live,
+        Vector3 carAt, Vector3 at, uint now)
+    {
+        ElevatorLevel to = StandingAt(system, live, car.Low.Z, 0) is not null ? ElevatorLevel.Low
+            : StandingAt(system, live, car.High.Z, 0) is not null ? ElevatorLevel.High
+            : Position(system, live, 500) is { } ahead && ahead.Z > carAt.Z ? ElevatorLevel.High : ElevatorLevel.Low;
+        float x = at.X, y = at.Y, z = carAt.Z, o = 0;
+        ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, carAt.X, carAt.Y, carAt.Z, live.Orientation);
+        float inside = CarHalfYards - InsideMarginYards;
+        var offset = new Vector3(Math.Clamp(x, -inside, inside), Math.Clamp(y, -inside, inside), 0f);
+        var trip = new ElevatorTrip(lift, ElevatorLift.Other(to), at, now)
+        {
+            Stage = ElevatorStage.Aboard, Alighting = true, LeftStop = true, Car = car, CarObject = live, Offset = offset, LastBeatMs = now,
+        };
+        Trips.AddOrUpdate(player, trip);
+        SendAboard(session, player, live, carAt, offset);
+        return true;
+    }
+
+    /// <summary>
+    /// Place the bot on a landing of <paramref name="lift"/>: the one beside the car nearest the bot at the level nearer its height, then
+    /// the other level; else its last safe position on this map (taken off any transport before it boarded); else its bind point. A
+    /// same-map teleport (TeleportService: a near teleport that leaves the transport; observers get MSG_MOVE_TELEPORT), used only for this
+    /// rescue: vmangos' undermap recall (MovementHandler.cpp:1116-1128) and the spell system's last-safe recall do the same. The teleport
+    /// is refused only for a quest settlement under way, a far teleport under way or bad coordinates (TeleportService.Check): false then.
+    /// </summary>
+    private static bool Rescue(WorldSession session, Player player, Map map, ElevatorLift lift, Vector3 at, out string placed, string why)
+    {
+        placed = "";
+        if (session.Services.GetService<TeleportFeature>()?.Teleports is not { } teleports) return false;
+        ElevatorLevel nearer = MathF.Abs(at.Z - lift.LowZ) <= MathF.Abs(at.Z - lift.HighZ) ? ElevatorLevel.Low : ElevatorLevel.High;
+        bool sent = false;
+        foreach (ElevatorLevel level in (ElevatorLevel[])[nearer, ElevatorLift.Other(nearer)])
+        {
+            foreach (ElevatorCar car in lift.Cars.OrderBy(c => Vector2.DistanceSquared(ElevatorNetwork.Flat(c.Low), ElevatorNetwork.Flat(at))))
+            {
+                if (LandingBeside(map, car.At(level), at) is not { } landing) continue;
+                if (teleports.TeleportTo(player, map.MapId, landing.X, landing.Y, landing.Z, player.Orientation))
+                {
+                    placed = $"placed on the {Word(level)} landing of {lift.Name}";
+                    sent = true;
+                }
+
+                break;
+            }
+
+            if (sent) break;
+        }
+
+        if (!sent && player.LastSafePosition is { } safe && safe.MapId == map.MapId
+            && teleports.TeleportTo(player, map.MapId, safe.X, safe.Y, safe.Z, safe.O))
+        {
+            placed = "placed at its last safe position";
+            sent = true;
+        }
+
+        if (!sent && teleports.TeleportToHomebind(player))
+        {
+            placed = "sent to its bind point";
+            sent = true;
+        }
+
+        if (sent)
+        {
+            session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogInformation(
+                "Playerbot {Bot}: {Why}; {Placed}", player.Name, why, placed);
+        }
+
+        return sent;
+    }
+
+    /// <summary>
+    /// One think of the trip, before anything else the brain does. <see cref="ElevatorStep.Idle"/>: no trip (the brain goes on); without
+    /// a trip a bot just logged in or revived is settled first (<see cref="Settle"/>), which may begin one. <see cref="ElevatorStep.Arrived"/>
+    /// and <see cref="ElevatorStep.Failed"/> are reported once; <paramref name="failure"/> then says why.
     /// </summary>
     internal static ElevatorStep Drive(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
     {
@@ -580,19 +740,23 @@ internal static class PlayerbotElevator
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
         failure = null;
+        if (!player.IsInWorld || player.Map is not { } map) return IsTraveling(player) ? ElevatorStep.Traveling : ElevatorStep.Idle;
+        uint now = session.World.NowMs;
         if (!Trips.TryGetValue(player, out ElevatorTrip? trip) || trip.Stage is ElevatorStage.Done or ElevatorStage.Failed)
         {
-            if (trip is null) SettleAfterLogin(session, player); // a bot saved mid-ride: on the floor before anything moves it
-            return ElevatorStep.Idle;
+            if (!player.IsAlive) return ElevatorStep.Idle;
+            if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return ElevatorStep.Idle;
+            if (!Settle(session, player, map, now, out bool waiting)) return waiting ? ElevatorStep.Traveling : ElevatorStep.Idle;
+            trip = Trips.TryGetValue(player, out ElevatorTrip? begun) ? begun : null;
+            if (trip is null) return ElevatorStep.Idle;
         }
+
         if (!player.IsAlive)
         {
             Cancel(player);
             return ElevatorStep.Idle;
         }
 
-        if (!player.IsInWorld || player.Map is not { } map) return ElevatorStep.Traveling;
-        uint now = session.World.NowMs;
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return ElevatorStep.Traveling;
         ElevatorStep step = map.MapId != trip.Lift.MapId
             ? Fail(trip, string.Create(CultureInfo.InvariantCulture, $"elevator: left for map {map.MapId} on the way to {trip.Lift.Name}"))
@@ -770,13 +934,17 @@ internal static class PlayerbotElevator
         }
 
         uint cycle = system.ElevatorCycle(live);
-        float fromZ = car.At(trip.From).Z, toZ = car.At(trip.To).Z;
+        float fromZ = car.At(trip.From).Z;
         if (!trip.LeftStop && MathF.Abs(carAt.Z - fromZ) > AtLevelYards) trip.LeftStop = true;
-        if (trip.LeftStop && StandingAt(system, live, toZ, 0) is { } stop)
+        // At the other level (alighting: at the next stop at either level), step off onto the landing nearest the destination (alighting:
+        // nearest the bot).
+        foreach (ElevatorLevel level in trip.Alighting ? (ElevatorLevel[])[trip.To, trip.From] : [trip.To])
         {
-            // At the other level: step off onto the landing nearest the destination.
+            if (!trip.Alighting && !trip.LeftStop) break;
+            if (StandingAt(system, live, car.At(level).Z, 0) is not { } stop) continue;
             if (LandingBeside(map, stop, trip.Goal) is not { } ground)
             {
+                if (trip.Alighting) continue;
                 // No floor there: ride back and get off where the bot got on (the trip fails there).
                 trip.Failure ??= string.Create(CultureInfo.InvariantCulture,
                     $"elevator: no floor beside the car of {trip.Lift.Name} at its {Word(trip.To)} level");
@@ -814,19 +982,35 @@ internal static class PlayerbotElevator
     }
 
     /// <summary>
-    /// Off the car, wherever the bot is: on a floor (within <see cref="AirborneYards"/>) it steps off there; above one it falls to it
-    /// (<see cref="ElevatorStage.Falling"/>). The trip fails with <paramref name="why"/> either way.
+    /// Off a car that is gone, that never stands at a level, or that the bot was knocked off: the trip fails with <paramref name="why"/>.
+    /// On a known floor (within <see cref="AirborneYards"/>) the bot steps off there; above a known floor it falls to it
+    /// (<see cref="ElevatorStage.Falling"/>) only when the fall costs less than <see cref="MaxFallHealthPercent"/> percent of its health
+    /// (<see cref="Survivable"/>); otherwise, or over no known floor, it is placed on a landing (<see cref="Rescue"/>), retried while the
+    /// teleport is refused, up to <see cref="MaxRescueTries"/> times.
     /// </summary>
     private static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
     {
         trip.Failure ??= why;
         Vector3 at = new(player.X, player.Y, player.Z);
         float floor = FloorBelow(map, at);
-        if (!float.IsFinite(floor) || at.Z - floor < AirborneYards)
+        if (float.IsFinite(floor) && at.Z - floor < AirborneYards)
         {
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0
-                && !PlayerbotMotion.SendStepOff(session, player, float.IsFinite(floor) ? at with { Z = floor } : at, player.Orientation))
+                && !PlayerbotMotion.SendStepOff(session, player, at with { Z = floor }, player.Orientation))
                 return ElevatorStep.Traveling;
+            return ElevatorStep.Failed;
+        }
+
+        if (!float.IsFinite(floor) || !Survivable(session, player, at.Z - floor))
+        {
+            if (Rescue(session, player, map, trip.Lift, at, out string placed, trip.Failure))
+            {
+                trip.Failure = $"{trip.Failure}; {placed}";
+                return ElevatorStep.Failed;
+            }
+
+            if (++trip.RescueTries < MaxRescueTries) return ElevatorStep.Traveling;
+            trip.Failure = $"{trip.Failure}; the rescue teleport was refused {MaxRescueTries} times";
             return ElevatorStep.Failed;
         }
 
@@ -848,6 +1032,16 @@ internal static class PlayerbotElevator
             return ElevatorStep.Traveling;
         trip.Failure = string.Create(CultureInfo.InvariantCulture, $"{trip.Failure}; fell {trip.FallYards:F1} yards");
         return ElevatorStep.Failed;
+    }
+
+    /// <summary>
+    /// Whether a fall of <paramref name="yards"/> costs the bot less than <see cref="MaxFallHealthPercent"/> percent of its current health:
+    /// vmangos' fall damage (FallDamageCalculator, Player::HandleFall) at the world's fall damage rate, without safe fall (the worst case).
+    /// </summary>
+    private static bool Survivable(WorldSession session, Player player, float yards)
+    {
+        uint damage = FallDamageCalculator.Damage(yards, 0, player.MaxHealth, LocomotionEnvironment.For(session.World).Options.RateDamageFall);
+        return (ulong)damage * 100 < (ulong)player.Health * MaxFallHealthPercent;
     }
 
     /// <summary>The floor under <paramref name="at"/> (models and terrain), or NaN where none is known.</summary>

@@ -161,7 +161,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        RelayOwnMovement(player, opcode);
+        RelayStoredMovement(player, opcode);
     }
 
     /// <summary>
@@ -183,7 +183,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         }
 
         ApplyObserved(session, player, opcode, movement);
-        RelayOwnMovement(player, opcode);
+        RelayStoredMovement(player, opcode);
         return true;
     }
 
@@ -209,7 +209,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// Relay a player's stored movement to every observer: packed mover GUID + the movement block carrying the server receive time
     /// (vmangos/cmangos-classic MovementInfo::Write sends stime).
     /// </summary>
-    private static void RelayOwnMovement(Player player, WorldOpcode opcode)
+    internal static void RelayStoredMovement(Player player, WorldOpcode opcode)
     {
         var packet = new PacketWriter(64);
         packet.WritePackedGuid(player.Guid.Value);
