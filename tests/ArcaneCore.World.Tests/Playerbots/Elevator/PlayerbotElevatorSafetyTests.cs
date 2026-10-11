@@ -124,20 +124,20 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
         PlayerbotOptions options = Options();
         await RideIntoTheShaftAsync(world, options, above: -10f); // aboard, still at the foot
         uint healthBefore = await world.OnWorldAsync(() => world.Player.Health);
+        ElevatorCar car = (await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)!.Car))!;
         ElevatorStep step = await world.OnWorldAsync(() =>
         {
             PlayerbotElevator.Cancel(world.Player);
             return PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _);
         });
         (Vector3 at, bool aboard, _, uint health, bool alive) = await world.OnWorldAsync(() => State(world));
-        ElevatorCar car = (await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)!.Car))!;
         output.WriteLine($"{step}: at {at}, {Vector2.Distance(new(at.X, at.Y), new(car.Low.X, car.Low.Y)):F1} yards from the car");
-        Assert.Equal(ElevatorStep.Arrived, step);
         Assert.True(alive);
         Assert.False(aboard);
         Assert.True(Vector2.Distance(new(at.X, at.Y), new(car.Low.X, car.Low.Y)) >= PlayerbotElevator.LandingRadii[0] - 0.5f, $"at {at}: still on the car");
         Assert.True(MathF.Abs(at.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {at}");
         Assert.Equal(healthBefore, health);
+        Assert.Equal(ElevatorStep.Arrived, step);
     }
 
     /// <summary>
@@ -235,16 +235,15 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
         if (z != 0f) await world.PlaceAsync(new Vector3(bottom.Low.X + 1f, bottom.Low.Y, z));
         uint healthBefore = await world.OnWorldAsync(() => world.Player.Health);
         var brain = new PlayerbotBrain(world.Session, Options());
-        bool fell = false;
-        for (int i = 0; i < 20; i++)
+        // The first think places the bot (a near teleport); whatever the brain does afterwards (a walk) is not the rescue's.
+        bool rescued = await world.OnWorldAsync(() =>
         {
-            fell |= await world.TickAsync(() =>
-            {
-                brain.Update(100);
-                return (world.Player.Movement.Flags & MovementFlags.FallingFar) != 0;
-            });
-        }
-
+            brain.Update(100);
+            return world.Teleports.StageOf(world.Player) is not null;
+        });
+        Assert.True(rescued, "no rescue at the bot's first think: it was left hanging in the shaft");
+        await AcknowledgeAsync(world);
+        bool fell = await world.OnWorldAsync(() => (world.Player.Movement.Flags & MovementFlags.FallingFar) != 0);
         (Vector3 at, bool aboard, _, uint health, bool alive) = await world.OnWorldAsync(() => State(world));
         output.WriteLine($"placed in the shaft at z {z} (car at {carZ:F1}); now at {at}");
         Assert.False(fell, "the bot fell");
