@@ -338,6 +338,140 @@ public sealed class PlayerbotHomeTeleportTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// Never alone into an instance: a home on the Deadmines (map 36, MapType.Instance in the test map data) with the map listed in
+    /// <c>AllowedMaps</c> still does not teleport a lone bot on Eastern Kingdoms there (the instance rule of <c>.playerbot send</c>,
+    /// vmangos HandleGroupgoCommand LANG_CANNOT_SUMMON_TO_INST): it stays off-map, behaving as a bot with no home.
+    /// </summary>
+    [Theory]
+    [InlineData(PlayerbotHomeReturnMode.Auto)]
+    [InlineData(PlayerbotHomeReturnMode.Teleport)]
+    public async Task NeverAloneIntoAnInstance(PlayerbotHomeReturnMode mode)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                Assert.True(WorldMaps.Of(host.World).Registry.Find(36) is { Instanceable: true });
+                var options = new PlayerbotOptions { Enabled = true, AllowedMaps = [0, 1, 36], Home = { ReturnMode = mode } };
+                var area = new PlayerbotHomeArea(36, new Vector3(-16.4f, -383.07f, 61.78f), 200f, "Deadmines");
+                var brain = new PlayerbotBrain(session, options) { Home = area };
+                for (int i = 0; i < 3; i++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(1_000);
+                }
+
+                Assert.Equal(0, brain.HomeReturn.Teleports);
+                Assert.Equal(PlayerbotHomeState.OffMap, brain.HomeReturn.State);
+                Assert.Equal("off-map", brain.HomeReport);
+                Assert.Equal(0u, player.MapId);
+                Assert.False(host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player));
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A bot homed in an area far above its level (a level-30 home for a level-1 bot) walks back from just outside: the home's own area
+    /// is not a danger on the way to it (RED before: Danger at every return, a teleport at every step out). An area outside the home no
+    /// higher than the home's centre does not count either; one higher than it does.
+    /// </summary>
+    [Theory]
+    [InlineData(3, PlayerbotHomeTeleportReason.None)]
+    [InlineData(30, PlayerbotHomeTeleportReason.None)]
+    [InlineData(40, PlayerbotHomeTeleportReason.Danger)]
+    public async Task AHomeAboveTheBotsLevel_IsNotADangerOnTheWayToIt(int outsideLevel, PlayerbotHomeTeleportReason expected)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player player = session.Player!;
+                var centre = new Vector3(player.X + 300f, player.Y, player.Z);
+                // Level 30 within 150 yards of the centre (the home's own area, radius 100, and a ring round it); outsideLevel beyond.
+                var levels = new PlayerbotAreaLevelLookup((x, y, z) => MathF.Abs(x - centre.X) <= 150f ? 30 : outsideLevel);
+                var area = new PlayerbotHomeArea(player.Map!.MapId, centre, 100f, "High") { AreaLevels = levels };
+                Assert.Equal(expected == PlayerbotHomeTeleportReason.None ? 0 : outsideLevel, PlayerbotHomeReturn.DangerLevelOnLine(new Vector3(player.X, player.Y, player.Z), area, levels));
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true }) { Home = area };
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(1_000);
+                Assert.Equal(PlayerbotGoalKind.Home, brain.Goal);
+                Assert.Equal(expected, brain.HomeReturn.LastJudgement);
+                Assert.Equal(expected == PlayerbotHomeTeleportReason.None ? 0 : 1, brain.HomeReturn.Teleports);
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// At most one return teleport per <see cref="PlayerbotHomeReturn.TeleportCooldownMs"/>: a bot teleported home and out again at once
+    /// is not teleported again (its return is set aside), and is once the time has passed.
+    /// </summary>
+    [Fact]
+    public async Task ReturnTeleports_AreRateLimited()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var options = new PlayerbotOptions { Enabled = true, Home = { ReturnMode = PlayerbotHomeReturnMode.Teleport } };
+            PlayerbotHomeArea? area = null;
+            PlayerbotBrain? brain = null;
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player player = session.Player!;
+                area = new PlayerbotHomeArea(player.Map!.MapId, new Vector3(player.X + 500f, player.Y, player.Z), 100f, "Limited");
+                brain = new PlayerbotBrain(session, options) { Home = area };
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(1_000);
+                Assert.Equal(1, brain.HomeReturn.Teleports);
+                return true;
+            });
+            await host.WaitForWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain!.Update(1_000);
+                return area!.DistanceTo(session.Player!.X, session.Player.Y) < 1f
+                    && !host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(session.Player);
+            }, "the bot arrives at its home's centre");
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Relocate(area!.Centre.X - 500f, player.Y, player.Z, 0, host.World.NowMs); // out again at once
+                PlayerbotMotion.Reset(player);
+                for (int i = 0; i < 3; i++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain!.Update(1_000);
+                }
+
+                Assert.Equal(1, brain!.HomeReturn.Teleports);
+                Assert.Equal(PlayerbotHomeState.Blocked, brain.HomeReturn.State);
+
+                // Once the cooldown has passed, the next return teleports again.
+                uint later = unchecked(host.World.NowMs + PlayerbotHomeReturn.TeleportCooldownMs + 1);
+                Assert.Equal(PlayerbotHomeState.Returning, brain.HomeReturn.Evaluate(player, area, later));
+                Assert.True(brain.HomeReturn.TryTeleport(session, player, area, options, PlayerbotHomeTeleportReason.Mode, later));
+                Assert.Equal(2, brain.HomeReturn.Teleports);
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     /// <summary>Never in combat: a bot fighting 2000 yards from home in Teleport mode fights on; the teleport itself refuses a bot in combat.</summary>
     [Fact]
     public async Task NeverInCombat()
@@ -568,7 +702,11 @@ public sealed class PlayerbotHomeTeleportTests
         var darkshireRoad = new Vector3(-10703f, -918f, 40f);
         var lochModan = new Vector3(-5886f, -2951f, 300f);
         var ravenHill = new Vector3(-10650f, 450f, 40f);
-        var area = new PlayerbotHomeArea(0, sentinelHill, 750f, "SentinelHill") { AreaLevels = levels };
+        // A zone-clipped home (the default of .playerbot home): the line's points inside it (the circle and Westfall) are not a danger.
+        var area = new PlayerbotHomeArea(0, sentinelHill, 750f, "SentinelHill", zoneClipped: true, PlayerbotZoneLookup.FromTerrain(terrain, 0))
+        {
+            AreaLevels = levels,
+        };
 
         // Measured on the 5875 AreaTable.dbc and terrain: Sentinel Hill is an area of level 15, the Darkshire road one of 28 (Duskwood),
         // Raven Hill one of 24 (the QA death loops), the Loch Modan stray's spot one of 13.
@@ -596,7 +734,7 @@ public sealed class PlayerbotHomeTeleportTests
 
     private static PlayerbotHomeTeleportReason Decide(PlayerbotHomeArea area, PlayerbotAreaLevelLookup levels, Vector3 bot, int level,
         PlayerbotHomeReturnMode mode)
-        => PlayerbotHomeRules.Decide(new PlayerbotHomeFacts(true, area.DistanceTo(bot.X, bot.Y), levels.HighestOnLine(bot, area.Centre), level, false),
+        => PlayerbotHomeRules.Decide(new PlayerbotHomeFacts(true, area.DistanceTo(bot.X, bot.Y), PlayerbotHomeReturn.DangerLevelOnLine(bot, area, levels), level, false),
             new PlayerbotHomeOptions { ReturnMode = mode });
 
     private static WorldConfigKey Key(string name) => WorldConfigKeys.All.Single(k => k.Path == "World:Playerbots:Home:" + name);

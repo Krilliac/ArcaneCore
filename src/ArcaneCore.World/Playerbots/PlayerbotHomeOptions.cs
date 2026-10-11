@@ -136,6 +136,11 @@ internal static class PlayerbotHomeRules
 /// position of one map, for the danger check of a walk home. Over the terrain it is the level of the area
 /// <see cref="AreaTable.GetByAreaFlagAndMap"/> answers for the tile's area flag (the lookup <see cref="PlayerbotZoneLookup"/> uses), cached
 /// per flag. 0 where the terrain knows no area or the area carries no level (most zone rows: the levels sit on the sub-areas).
+/// <para>
+/// Indoors the answer is the outdoor one: <see cref="TerrainInfo.GetAreaFlag"/> reads the ADT cell's area flag only (vmangos
+/// <c>TerrainInfo::GetAreaFlag</c> without the WMO area info), so a cave, building or WMO sub-area with its own, higher level reports
+/// the level of the outdoor area above it, and the danger of a way through such a place can be under-reported.
+/// </para>
 /// <para>Thread affinity: world thread (the terrain loads tiles on demand; the cache is a plain dictionary).</para>
 /// </summary>
 internal sealed class PlayerbotAreaLevelLookup
@@ -169,9 +174,10 @@ internal sealed class PlayerbotAreaLevelLookup
 
     /// <summary>
     /// The highest area level on the straight line from <paramref name="from"/> to <paramref name="to"/>, sampled every
-    /// <see cref="PlayerbotHomeRules.DangerSampleYards"/> (both ends included; the height is interpolated, the area flag ignores it).
+    /// <see cref="PlayerbotHomeRules.DangerSampleYards"/> (both ends included; the height is interpolated, the area flag ignores it),
+    /// leaving out the points <paramref name="skip"/> names (the home area itself, <see cref="PlayerbotHomeReturn.Judge"/>).
     /// </summary>
-    internal int HighestOnLine(System.Numerics.Vector3 from, System.Numerics.Vector3 to)
+    internal int HighestOnLine(System.Numerics.Vector3 from, System.Numerics.Vector3 to, Func<System.Numerics.Vector3, bool>? skip = null)
     {
         float length = System.Numerics.Vector2.Distance(new(from.X, from.Y), new(to.X, to.Y));
         if (!float.IsFinite(length)) return 0;
@@ -180,6 +186,7 @@ internal sealed class PlayerbotAreaLevelLookup
         for (int i = 0; i <= samples; i++)
         {
             System.Numerics.Vector3 at = System.Numerics.Vector3.Lerp(from, to, i / (float)samples);
+            if (skip?.Invoke(at) == true) continue;
             highest = Math.Max(highest, LevelAt(at.X, at.Y, at.Z));
         }
 

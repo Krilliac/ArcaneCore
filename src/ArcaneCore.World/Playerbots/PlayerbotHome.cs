@@ -290,6 +290,15 @@ internal sealed class PlayerbotHomeReturn
     /// <summary>Failed plans (or stalls) in a row before the walk is set aside.</summary>
     internal const int MaxFailures = 3;
 
+    /// <summary>
+    /// The shortest time between two return teleports of one bot (5 minutes, an ArcaneCore choice: no reference server has a home).
+    /// A bot sent home that is out again within it is not teleported again: its return is set aside (blocked, tried again every
+    /// <see cref="BlockedMs"/>) until the time has passed. A home the bot cannot stay in (an area it keeps leaving, a fight that drags
+    /// it out) so costs at most one teleport per 5 minutes per bot instead of one per think; 5 minutes is several times what a bot
+    /// needs to walk back across a 750-yard home (about 7 yards a second), so an ordinary stray is never held by it.
+    /// </summary>
+    internal const uint TeleportCooldownMs = 300_000;
+
     private PlayerbotRoute? _route;
     private Vector3 _lastPosition;
     private uint _stuckMs;
@@ -300,6 +309,7 @@ internal sealed class PlayerbotHomeReturn
     private uint _teleportRetryAt;
     private bool _teleportRetryPending;
     private ILogger? _logger;
+    private uint _lastTeleportAt;
 
     internal PlayerbotHomeState State { get; private set; }
 
@@ -382,17 +392,31 @@ internal sealed class PlayerbotHomeReturn
         int highest = 0;
         if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && Distance <= options.TeleportDistanceYards
             && area.AreaLevels is { } levels)
-            highest = _highestAreaLevel ??= levels.HighestOnLine(new Vector3(player.X, player.Y, player.Z), area.Centre);
+            highest = _highestAreaLevel ??= DangerLevelOnLine(new Vector3(player.X, player.Y, player.Z), area, levels);
         var facts = new PlayerbotHomeFacts(onMap, Distance, highest, (int)player.Level, WalkBlocked);
         return LastJudgement = PlayerbotHomeRules.Decide(facts, options);
     }
 
     /// <summary>
+    /// The highest area level on the straight line home that counts for the danger check: the points inside the home area itself are
+    /// skipped, and a level no higher than the area at the home's centre counts as 0. The operator homed the bot there, so its own area
+    /// is not a danger on the way to it; without this a bot homed in an area above its level + margin would teleport at every return.
+    /// </summary>
+    internal static int DangerLevelOnLine(Vector3 from, PlayerbotHomeArea area, PlayerbotAreaLevelLookup levels)
+    {
+        int highest = levels.HighestOnLine(from, area.Centre,
+            at => area.Contains(area.MapId, at.X, at.Y, at.Z));
+        return highest > levels.LevelAt(area.Centre.X, area.Centre.Y, area.Centre.Z) ? highest : 0;
+    }
+
+    /// <summary>
     /// Teleport the bot to the home's centre. True when a teleport started or is still under way (the bot is busy). False when the bot
     /// may not teleport now: dead or a ghost, in combat or a duel, in a group (whose AI drives it), on a battleground, its home map not
-    /// allowed (<see cref="PlayerbotMapPolicy.Allows"/>, the same rule as <c>.playerbot send</c>), no teleport service, or the service
-    /// refused it; a refusal is not retried for <see cref="BlockedMs"/>, and on the home map the return is set aside (state blocked: an
-    /// unsafe walk is not taken instead).
+    /// allowed by <see cref="PlayerbotMapPolicy.Allows"/> (<c>AllowedMaps</c>), its home map a dungeon or raid it is not already inside
+    /// (the instance rule of <c>.playerbot send</c>: vmangos <c>HandleGroupgoCommand</c> refuses a summon into an instance without the
+    /// group, LANG_CANNOT_SUMMON_TO_INST; a lone bot has no group, so only a near teleport inside its own instance is allowed), it
+    /// teleported home less than <see cref="TeleportCooldownMs"/> ago, no teleport service, or the service refused it; a refusal is not
+    /// retried for <see cref="BlockedMs"/>, and on the home map the return is set aside (state blocked: an unsafe walk is not taken instead).
     /// </summary>
     internal bool TryTeleport(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options,
         PlayerbotHomeTeleportReason reason, uint nowMs)
@@ -412,6 +436,11 @@ internal sealed class PlayerbotHomeReturn
 
         // A teleport under way (this one, not yet acknowledged, or any other): wait for it, start nothing.
         if (teleports!.IsBeingTeleported(player)) return true;
+        if (Teleports > 0 && unchecked(nowMs - _lastTeleportAt) < TeleportCooldownMs)
+        {
+            Refuse(player, area, reason, "teleported home less than 5 minutes ago", nowMs);
+            return false;
+        }
 
         PlayerbotMovementControl.Stop(session, player);
         var from = new Vector3(player.X, player.Y, player.Z);
@@ -425,6 +454,7 @@ internal sealed class PlayerbotHomeReturn
 
         Teleports++;
         LastTeleport = reason;
+        _lastTeleportAt = nowMs;
         _route = null;
         _stuckMs = 0;
         _failures = 0;
@@ -453,6 +483,10 @@ internal sealed class PlayerbotHomeReturn
         MapTemplate? template = maps.Registry.Find(area.MapId);
         if (template is null || template.IsBattleground) return "home map unknown";
         if (!PlayerbotMapPolicy.Allows(options.AllowedMaps, area.MapId, template, current: false)) return "home map not allowed";
+        // .playerbot send (PlayerbotFleetCommands.SkipReason, vmangos HandleGroupgoCommand, TeleportCommands.cpp:181-266): nobody is
+        // summoned into an instance without its group; a bot already inside the very instance stays there (a near teleport, which keeps
+        // the bot's own instance). A lone bot has no group, so a home on a dungeon or raid map is reached only from inside it.
+        if (template.Instanceable && player.Map?.MapId != area.MapId) return "home map is an instance";
         return null;
     }
 

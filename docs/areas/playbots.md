@@ -194,11 +194,19 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   AreaTable.dbc exploration level of the area the terrain's area flag names, sampled every 20 yards, `PlayerbotAreaLevelLookup`) is more than
   `DangerLevelMargin` (default **5**, 0..60) above the bot's level (Raven Hill is a level-24 area 630 yards from Sentinel Hill: a level-14 bot
   teleports, a level-20 one walks; an area with no known level is never dangerous), or when its walk was set aside as blocked (failed plans, no
-  progress, a stall); otherwise it walks. The rules are `PlayerbotHomeRules.Decide`; the level check is made once per return. The teleport is the one
+  progress, a stall); otherwise it walks. The rules are `PlayerbotHomeRules.Decide`; the level check is made once per return. The points of the line
+  inside the home area itself are left out, and a level no higher than the area at the home's centre never counts (`PlayerbotHomeReturn.DangerLevelOnLine`):
+  the operator homed the bot there, so a bot homed above its level does not teleport at every return. Indoors the level is the outdoor one: the
+  terrain's area flag is the ADT cell's only (`TerrainInfo.GetAreaFlag`, vmangos `TerrainInfo::GetAreaFlag` without the WMO area info), so a cave or
+  building sub-area with a higher level of its own reports the outdoor area's level and its danger can be under-reported. The teleport is the one
   the follower's catch-up (`PlayerbotFollower`, `World:Playerbots:Follow:CatchUpMode`) and `.playerbot send` use: the ordinary
   `TeleportService.TeleportTo` (vmangos `Player::TeleportTo`), its near or far acknowledgement answered by `PlayerbotMovementControl` as a client's,
-  to the home's centre. **Never** in combat, in a duel, dead or as a ghost, in a group, on a battleground, or to a home map `PlayerbotMapPolicy` does not
-  allow (`AllowedMaps`, the rule of `.playerbot send`); a party AI, a bot-led group, the battlegrounds coordinator or a scripted controller drives
+  to the home's centre. **Never** in combat, in a duel, dead or as a ghost, in a group, on a battleground, to a home map `PlayerbotMapPolicy.Allows`
+  refuses (`AllowedMaps`), or into a dungeon or raid the bot is not already inside: `.playerbot send` summons nobody into an instance without its
+  group (`PlayerbotFleetCommands.SkipReason`, vmangos `HandleGroupgoCommand`, `LANG_CANNOT_SUMMON_TO_INST`) and a lone bot has none, so a home on an
+  instance map is reached only by a near teleport inside it. At most **one return teleport per 5 minutes** per bot (`PlayerbotHomeReturn.TeleportCooldownMs`):
+  a bot that is out again sooner has its return set aside until then, so a home it cannot stay in costs one teleport per 5 minutes, not one per
+  think. A party AI, a bot-led group, the battlegrounds coordinator or a scripted controller drives
   the bot instead of the brain, so its home and the teleport are suspended then. A refused teleport is not retried for 30 s; on the home map the return
   is set aside (`blocked`) rather than walked, off the map the bot stays `off-map`. Each return teleport is logged at Information
   (`Playerbot <Name> teleports home to <place> (<reason>; <distance> yd) from (...) map M to (...) map H`).
