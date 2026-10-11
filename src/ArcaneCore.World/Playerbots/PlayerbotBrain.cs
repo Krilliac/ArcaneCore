@@ -1042,7 +1042,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// for the goals, and a death loop takes the spirit healer for this death instead of the body in the same place again, and sets
     /// aside the errand it was last travelling for (its quest and NPC, every trainer for a trainer visit): the route to it led
     /// through the place (replay of the 2026-10-08 rehearsal: without that, Dawnrover walked from the Goldshire graveyard to its
-    /// next trainer in Stormwind past the Scourge invasion point and died on the road again).
+    /// next trainer in Stormwind past the Scourge invasion point and died on the road again). A second death within
+    /// <see cref="PlayerbotStallWatch.DeathLoopYards"/> of an earlier one in the window sets the errand aside the same way (its
+    /// recovery takes the spirit healer when one can be had, <see cref="JudgeBody"/>).
     /// </summary>
     private void RecordDeath(Player player)
     {
@@ -1054,7 +1056,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attackers.Clear();
         foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
         if (loop) StallOutsideHome = false; // the death loop is the report now; the mark was the last living stall's
-        if (!loop)
+        // A second death where the bot already died (the repeat death that sends a ghost to the spirit healer, JudgeBody) sets the
+        // errand that led there aside as a death loop does, so the revived bot does not walk straight back.
+        bool repeat = loop || _stall.DeathsNear(player.MapId, new System.Numerics.Vector3(player.X, player.Y, player.Z), now) >= 2;
+        if (!repeat)
         {
             if (_options.Risk.Enabled && _errand.Entry != 0 && unchecked(now - _errand.AtMs) <= DeadlyErrandMs)
             {
@@ -1066,7 +1071,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
-        _recovery.TakeSpiritHealer();
+        if (loop) _recovery.TakeSpiritHealer();
         if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
         if (_errand.Goal == PlayerbotGoalKind.Train) _suspensions.SuspendTraining(now);
         _suspensions.SuspendEntry(_errand.Entry, now);
@@ -1078,7 +1083,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// the bot already died within <see cref="PlayerbotStallWatch.DeathLoopYards"/> of it inside the death watch's window (this death
     /// and an earlier one, <see cref="PlayerbotStallWatch.DeathsNear"/>: the third would be a death loop, which takes the healer
     /// already); a creature round it is too strong for the bot (<see cref="PlayerbotRisk.TooStrongNear"/>, with the estimate on); or it
-    /// lies outside the home while the spirit healer leaves the bot inside the home or nearer its centre
+    /// lies outside the home while the spirit healer leaves the bot inside the home or at least
+    /// <see cref="PlayerbotRecovery.OutsideHomeGainYards"/> nearer its centre
     /// (<see cref="PlayerbotRecovery.SpiritHealerLanding"/>). Live 2026-10-11: Wfbotaz (level 14, homed at Sentinel Hill) reclaimed its
     /// body among Raven Hill's level 20+ skeletons and spiders again and again, two death loops in fifteen minutes (world.log
     /// 05:53:21 and 06:00:42, attackers 202/531/569 and 202/217/569).
@@ -1099,7 +1105,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_recovery.SpiritHealerLanding(player, corpse) is { } landing)
             {
                 healerFromHome = home.DistanceTo(landing.X, landing.Y);
-                nearer = home.Contains(home.MapId, landing.X, landing.Y, landing.Z) || healerFromHome < bodyFromHome;
+                nearer = home.Contains(home.MapId, landing.X, landing.Y, landing.Z)
+                    || healerFromHome + PlayerbotRecovery.OutsideHomeGainYards <= bodyFromHome;
             }
         }
 

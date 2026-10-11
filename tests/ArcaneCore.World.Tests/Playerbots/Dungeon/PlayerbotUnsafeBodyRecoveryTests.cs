@@ -5,6 +5,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -75,6 +76,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         await using DungeonBotHost host = await StartAsync(clock);
         PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
         await DieAndComeBackAsync(host, brain);
+        await OnAnOldErrandAsync(host, brain);
         await KillAsync(host, brain);
 
         Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
@@ -83,6 +85,58 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
         Assert.Equal(PlayerbotUnsafeBody.DiedHere, run.Reason);
         Assert.False(run.Reclaimed, run.Trail);
+        // The errand that led there is set aside as after a death loop: the revived bot does not walk straight back.
+        await host.OnWorldAsync(() => Assert.True(brain.IsEntrySetAside(ErrandVendor), "the errand that led there was not set aside"));
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// No spirit healer to be had (Kalimdor in the test world: no graveyard is linked and no healer stands anywhere): a second death
+    /// at the body among monsters too strong for the bot is no reason to give the body up, for the ghost would wait for a healer
+    /// until the fallback faulted (<see cref="PlayerbotRecovery.SpiritHealerFailed"/>) and the bot was kicked. vmangos leaves a spirit
+    /// with no linked graveyard where it died (Player::RepopAtGraveyard); the body is its way back, and it reclaims it, never faulting.
+    /// </summary>
+    [Fact]
+    public async Task WithoutASpiritHealerToBeHad_ASecondDeathAmongStrongHostiles_StillReclaimsTheBody()
+    {
+        var clock = new TestDeathClock(1_000);
+        var kalimdor = new Vector3(100f, 100f, DeadminesTestContent.OutsideFloor);
+        await using DungeonBotHost host = await StartAsync(clock, map: 1, at: kalimdor);
+        PlayerbotBrain brain = await BrainAsync(host, new PlayerbotHomeArea(1, kalimdor, 300f, "Kalimdorhome"));
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        Creature[] camp = await CampAsync(host, strong: true);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 300); // a fault throws out of brain.Update
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.None, run.Reason);
+        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
+        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// A body outside the home whose spirit healer would leave the bot only a few yards nearer the home's centre (less than
+    /// <see cref="PlayerbotRecovery.OutsideHomeGainYards"/>) is reclaimed: so small a gain is not worth resurrection sickness and a
+    /// quarter of the durability.
+    /// </summary>
+    [Fact]
+    public async Task ABodyOutsideTheHome_WithTheHealerHardlyNearer_IsReclaimed()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock);
+        // Centre 400 yards north of the body and the healer, radius 100: both outside, the healer 0.2 yards nearer.
+        var home = new PlayerbotHomeArea(0, new Vector3(Healer.X - 30f, Healer.Y + 400f, Healer.Z), 100f, "Northhome");
+        PlayerbotBrain brain = await BrainAsync(host, home);
+        await KillAsync(host, brain);
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 100);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.None, run.Reason);
+        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
         await host.OnWorldAsync(brain.Stop);
     }
 
@@ -119,6 +173,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         var clock = new TestDeathClock(1_000);
         await using DungeonBotHost host = await StartAsync(clock);
         PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await OnAnOldErrandAsync(host, brain);
         await KillAsync(host, brain);
 
         Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 100);
@@ -128,6 +183,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
         Assert.Equal(PlayerbotUnsafeBody.None, run.Reason);
         Assert.True(Vector2.Distance(new(run.RevivedAt.X, run.RevivedAt.Y), new(Body.X, Body.Y)) < 5f, "revived away from the body: " + run.Trail);
+        await host.OnWorldAsync(() => Assert.False(brain.IsEntrySetAside(ErrandVendor), "a first death set its errand aside"));
         await host.OnWorldAsync(brain.Stop);
     }
 
@@ -188,7 +244,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     /// <summary>A home round the body and the healer (radius 300): neither is outside it.</summary>
     private static PlayerbotHomeArea HomeAroundBodyAndHealer() => new(0, (Body + Healer) / 2f, 300f, "Westfallhome");
 
-    private static async Task<DungeonBotHost> StartAsync(TestDeathClock clock)
+    private static async Task<DungeonBotHost> StartAsync(TestDeathClock clock, uint map = 0, Vector3? at = null)
     {
         DungeonBotHost host = await DungeonBotHost.StartAsync();
         await host.OnWorldAsync(() =>
@@ -196,12 +252,26 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
             DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock));
             host.Player.Level = 14;
         });
-        await host.TeleportAsync(0, Body.X, Body.Y, Body.Z);
+        Vector3 start = at ?? Body;
+        await host.TeleportAsync(map, start.X, start.Y, start.Z);
         return host;
     }
 
     private static Task<PlayerbotBrain> BrainAsync(DungeonBotHost host, PlayerbotHomeArea home)
         => host.OnWorldAsync(() => new PlayerbotBrain(host.Session, new PlayerbotOptions { Enabled = true }) { Home = home });
+
+    /// <summary>A vendor the bot was walking to (<see cref="PlayerbotBrain.NoteErrand"/>).</summary>
+    private const uint ErrandVendor = 994999;
+
+    /// <summary>
+    /// The bot was on its way to <see cref="ErrandVendor"/> 31 seconds ago, longer than <see cref="PlayerbotBrain.DeadlyErrandMs"/>: a
+    /// first death does not set that errand aside.
+    /// </summary>
+    private static async Task OnAnOldErrandAsync(DungeonBotHost host, PlayerbotBrain brain)
+    {
+        await host.OnWorldAsync(() => brain.NoteErrand(PlayerbotGoalKind.Vendor, ErrandVendor, 0));
+        await host.AdvanceAsync(PlayerbotBrain.DeadlyErrandMs + 1_000);
+    }
 
     /// <summary>The bot dies where it stands; the brain sees the death at once (its death memory, the risk's danger memory).</summary>
     private static Task KillAsync(DungeonBotHost host, PlayerbotBrain brain) => host.OnWorldAsync(() =>
@@ -219,6 +289,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     /// </summary>
     private static async Task DieAndComeBackAsync(DungeonBotHost host, PlayerbotBrain brain)
     {
+        Vector3 spot = await host.OnWorldAsync(() => new Vector3(host.Player.X, host.Player.Y, host.Player.Z));
         await KillAsync(host, brain);
         await host.OnWorldAsync(() =>
         {
@@ -228,11 +299,11 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
             brain.Update(1);
         });
         await host.AdvanceAsync(60_000);
-        await host.OnWorldAsync(() => host.Player.Relocate(Body.X, Body.Y, Body.Z, 0, host.Host.World.NowMs));
+        await host.OnWorldAsync(() => host.Player.Relocate(spot.X, spot.Y, spot.Z, 0, host.Host.World.NowMs));
     }
 
     /// <summary>
-    /// Three monsters round the body, west of it (60 yards and more from the healer, beyond their reach of it): level 24 against the
+    /// Three monsters round the body (where the ghost stands), west of it (60 yards and more from the healer, beyond their reach of it): level 24 against the
     /// level-14 bot with 1500 health and 40-60 damage a swing (<paramref name="strong"/>), as Raven Hill's Skeletal Horrors; else level 8 with
     /// 40 health and 1-2 damage, a camp the bot takes on at half health.
     /// </summary>
@@ -240,6 +311,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     {
         Map map = host.Player.Map!;
         uint now = host.Host.World.NowMs;
+        var body = new Vector3(host.Player.X, host.Player.Y, host.Player.Z); // the ghost stays at its body here
         return new[] { (-15f, 0f), (-10f, 12f), (-10f, -12f) }.Select((offset, index) =>
         {
             uint low = 994400u + (uint)index;
@@ -250,7 +322,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
                 MinLevelHealth = strong ? 1500u : 40u, MaxLevelHealth = strong ? 1500u : 40u,
                 MinMeleeDamage = strong ? 40f : 1f, MaxMeleeDamage = strong ? 60f : 2f, MeleeBaseAttackTime = 2000,
             }, null, CreatureContent.Empty, new Random((int)low));
-            creature.Relocate(Body.X + offset.Item1, Body.Y + offset.Item2, Body.Z, 0, now);
+            creature.Relocate(body.X + offset.Item1, body.Y + offset.Item2, body.Z, 0, now);
             map.AddObject(creature);
             return creature;
         }).ToArray();

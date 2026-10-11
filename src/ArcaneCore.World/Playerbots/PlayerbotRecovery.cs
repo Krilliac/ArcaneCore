@@ -163,6 +163,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         return bodyOutsideHome && healerNearerHome ? PlayerbotUnsafeBody.OutsideHome : PlayerbotUnsafeBody.None;
     }
 
+    /// <summary>
+    /// How much nearer the home's centre than the body the spirit healer must leave a bot whose body lies outside its home (when it
+    /// does not leave it inside the home) for <see cref="PlayerbotUnsafeBody.OutsideHome"/>: a few yards are not worth resurrection
+    /// sickness and a quarter of the durability. An ArcaneCore choice (no reference server has a home).
+    /// </summary>
+    internal const float OutsideHomeGainYards = 50f;
+
     internal const long NoProgressMs = 60_000;
     internal const long StuckMs = 10_000;
 
@@ -318,8 +325,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotCorpsePlace place = corpse is null ? PlayerbotCorpsePlace.None
             : corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map) ? PlayerbotCorpsePlace.ThisMap
             : PlayerbotCorpsePlace.OtherMap;
-        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody?.Invoke(player, corpse!) is
-            { Reason: not PlayerbotUnsafeBody.None } verdict)
+        // Only when the spirit healer can be had at all (one in sight, or a graveyard for this place, where one stands): with
+        // neither, giving the body up would leave the ghost waiting for a healer until the fallback faults (SpiritHealerFailed);
+        // vmangos leaves a spirit with no linked graveyard where it died (Player::RepopAtGraveyard), and the body is its way back.
+        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
+            && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict)
         {
             // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
@@ -730,12 +740,46 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// Where the spirit healer would leave the bot whose body lies on its map: the graveyard of the body's position, which the
     /// resurrection teleports to (vmangos SendSpiritResurrect, NPCHandler.cpp:430-471: the corpse's graveyard when it differs from the
     /// ghost's; <see cref="GraveyardRepopService.TeleportToCorpseGraveyard"/>), else the nearest spirit healer the ghost sees (no
-    /// graveyard: the bot stays at the healer). Null when neither is known.
+    /// graveyard: the bot stays at the healer). Null when neither is known. The body's graveyard is looked up once per body.
+    /// <para>
+    /// A prediction through <see cref="GraveyardSelector.FindClosest"/>, the selector the server's chooser starts from: the server
+    /// may in addition take a battleground's own graveyards (no solo bot recovers there), a run-time outdoor PvP link nearer the body,
+    /// or, with <c>World:Death:GraveyardFallbackToDefaults</c>, the faction's default graveyard when nothing is linked (here: no
+    /// graveyard, so the healer in sight). Those can only move the landing; a landing off the home map is never judged nearer home.
+    /// </para>
     /// </summary>
     internal Vector3? SpiritHealerLanding(Player player, Corpse corpse)
     {
-        if (GraveyardAt(player, corpse.X, corpse.Y, corpse.Z) is { } graveyard) return new Vector3(graveyard.X, graveyard.Y, graveyard.Z);
+        var body = new Vector2(corpse.X, corpse.Y);
+        if (_landing.Body != corpse.Guid || _landing.At != body)
+        {
+            WorldSafeLoc? graveyard = GraveyardAt(player, corpse.X, corpse.Y, corpse.Z);
+            _landing = (corpse.Guid, body, graveyard is null ? null : new Vector3(graveyard.X, graveyard.Y, graveyard.Z));
+        }
+
+        if (_landing.Landing is { } landing) return landing;
         return NearestSpiritHealer(player) is { } healer ? new Vector3(healer.X, healer.Y, healer.Z) : null;
+    }
+
+    /// <summary>The cell size the cached graveyard of the ghost's position is kept for (<see cref="HealerOutcomeKnown"/>).</summary>
+    private const float GraveyardCellYards = 50f;
+
+    private (ObjectGuid Body, Vector2 At, int CellX, int CellY, bool Known) _ghostGraveyard;
+    private (ObjectGuid Body, Vector2 At, Vector3? Landing) _landing;
+
+    /// <summary>
+    /// Whether the spirit-healer fallback has something to go to from here: a healer in sight, or a graveyard for the ghost's position
+    /// (the inputs of <see cref="DecideSpiritHealer"/>). The graveyard lookup (zone and area, then the selector) is kept per body and
+    /// per <see cref="GraveyardCellYards"/> cell of the ghost's position, not repeated at every think.
+    /// </summary>
+    private bool HealerOutcomeKnown(Player player, Corpse corpse)
+    {
+        if (NearestSpiritHealer(player) is not null) return true;
+        int cellX = (int)MathF.Floor(player.X / GraveyardCellYards), cellY = (int)MathF.Floor(player.Y / GraveyardCellYards);
+        var body = new Vector2(corpse.X, corpse.Y);
+        if (_ghostGraveyard.Body != corpse.Guid || _ghostGraveyard.At != body || _ghostGraveyard.CellX != cellX || _ghostGraveyard.CellY != cellY)
+            _ghostGraveyard = (corpse.Guid, body, cellX, cellY, Graveyard(player) is not null);
+        return _ghostGraveyard.Known;
     }
 
     private static string Describe(PlayerbotUnsafeBody reason) => reason switch

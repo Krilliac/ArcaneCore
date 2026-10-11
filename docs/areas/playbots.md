@@ -119,7 +119,13 @@ and its assistance weighed by `PlayerbotRiskModel.Assess` at the half health and
 loot or danger memory; `Avoid`, not `Rest`); `OutsideHome`, the body lies outside the bot's home (`PlayerbotHomeArea.Contains`, the
 zone clip included) and the spirit healer leaves the bot inside the home or nearer its centre than the body
 (`PlayerbotRecovery.SpiritHealerLanding`: the graveyard of the body's position, where vmangos `SendSpiritResurrect` teleports the
-revived bot, else the healer the ghost sees). Any of them takes the spirit healer for this death (resurrection sickness and 25%
+revived bot, else the healer the ghost sees; a prediction through `GraveyardSelector.FindClosest`, which a battleground's own
+graveyards, a run-time outdoor PvP link or `World:Death:GraveyardFallbackToDefaults` can only move), by at least
+`OutsideHomeGainYards` (50) when it does not leave it inside the home. The body is given up only when a spirit healer can be had at
+all, one in sight or a graveyard for the ghost's position (looked up once per body and 50-yard cell): with neither, the ghost would wait
+for a healer until the fallback faulted (`playerbot-recovery-spirit-healer-failed`), and vmangos leaves a spirit with no linked
+graveyard where it died, so it reclaims its body as before. A repeat death also sets aside the errand that led there, as a death loop
+does. Any of them takes the spirit healer for this death (resurrection sickness and 25%
 durability, vmangos NPCHandler.cpp:430-471) and logs `Playerbot X takes the spirit healer instead of its body at (...): reason (detail)`
 at Information; the home return then takes the revived bot home as after any resurrection (Auto: a teleport when the way is far or
 crosses a higher-level area). A first death in a safe spot inside the home is reclaimed as before, and so is a body round which only
