@@ -237,7 +237,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (services.Quests.Get(id) is not { } quest
                     || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
                     continue;
-                if (_stage == Stage.None && !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot)) continue;
+                if (_stage == Stage.None && !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot, services.Npcs)) continue;
                 if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
                 if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
                     continue;

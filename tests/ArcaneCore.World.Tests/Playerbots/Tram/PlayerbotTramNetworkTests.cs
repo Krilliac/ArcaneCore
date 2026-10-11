@@ -102,6 +102,22 @@ public sealed class PlayerbotTramNetworkTests
         Assert.Equal(2175u, leg.Value.To.Entrance.Id);
     }
 
+    [Theory]
+    [InlineData(293u, 1519u, 2175u)] // Thoradin's Wall -> Stormwind
+    [InlineData(1477u, 1u, 2173u)] // Temple of Atal'Hakkar exterior -> Dun Morogh
+    public void Additional5875Zones_UseTheirContinentSide(uint sourceZone, uint goalZone, uint expectedEntrance)
+    {
+        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0,
+            new Vector3(-6000f, -1000f, 100f), new Vector3(-8400f, 500f, 100f), sourceZone, goalZone);
+        Assert.NotNull(leg);
+        Assert.Equal(expectedEntrance, leg.Value.From.Entrance.Id);
+    }
+
+    [Fact]
+    public void BlackrockMountainZone_RemainsUnknown()
+        => Assert.Null(Network().Choose(0, new Vector3(-7500f, -1100f, 200f),
+            new Vector3(-8400f, 500f, 100f), sourceZoneId: 25, goalZoneId: 1519));
+
     [Fact]
     public void TheTram_IsLeftAloneOnAnotherMap()
         => Assert.Null(Network().Choose(1, new Vector3(-8354f, 524f, 0), new Vector3(-4918.9f, -982.5f, 0)));

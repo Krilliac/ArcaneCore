@@ -140,6 +140,17 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         Assert.Equal(TramTestData.Tram, await world.OnWorldAsync(() => PlayerbotAreaTriggers.TeleportTargetOf(world.Player)));
     }
 
+    [Fact]
+    public async Task HordeBot_DoesNotBeginAnAllianceCityTramTrip()
+    {
+        await using TramTestWorld world = await TramTestWorld.StartAsync(race: 2);
+        await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
+        Assert.Equal(Team.Horde, await world.OnWorldAsync(() => world.Player.Team));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player,
+            IronforgeGoal, TramTestData.ZoneAt)));
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)));
+    }
+
     /// <summary>
     /// Without a trip a bot on the tram map plans nothing there (the map is off AllowedMaps), and its brain takes it out by the nearest
     /// platform's exit: a bot saved on the way logs back in there and leaves, and never wanders the platforms or the tunnel.

@@ -3,12 +3,14 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -21,6 +23,53 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWorldDestinationsTests
 {
+    [Theory]
+    [InlineData(308u, 2686u)] // Distracting Jarven: Thunder Ale
+    [InlineData(3861u, 11109u)] // CLUCK!: Special Chicken Feed
+    public async Task VendorOnlyRepeatableItem_IsNotDeferred(uint questId, uint itemId)
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = questId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = itemId, ReqItemCount1 = 1 }], [], []));
+        var npcs = new NpcStore(NpcContent.Empty with
+        {
+            VendorItems = [new VendorItem { Entry = 990001, Item = itemId }],
+        });
+        Assert.Contains(npcs.Content.VendorItems, vendor => vendor.Item == itemId);
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(4886), npcs));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task QuestRewardOnlyItem_DoesNotCountAsAvailableToAnUntakenRepeatable()
+    {
+        const uint rewardItem = 930001;
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 930002, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = rewardItem, ReqItemCount1 = 1 },
+             new QuestTemplate { Entry = 930003, Method = 2, RewItemId1 = rewardItem, RewItemCount1 = 1 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(930002)!, LootWith(4886), NpcStore.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Theory]
     [InlineData(813u, 4886u, 4u)] // Finding the Antidote: quest-only creature drops
     [InlineData(410u, 3080u, 1u)] // The Dormant Shade: quest-only creature drop
@@ -35,7 +84,7 @@ public sealed class PlayerbotWorldDestinationsTests
         {
             await host.World.InvokeAsync(() =>
             {
-                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(itemId)));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(itemId), NpcStore.Empty));
                 return true;
             });
         }
@@ -54,7 +103,7 @@ public sealed class PlayerbotWorldDestinationsTests
         {
             await host.World.InvokeAsync(() =>
             {
-                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(810001)!, LootContent.Empty));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(810001)!, LootContent.Empty, NpcStore.Empty));
                 return true;
             });
         }
@@ -78,9 +127,9 @@ public sealed class PlayerbotWorldDestinationsTests
             await host.World.InvokeAsync(() =>
             {
                 var player = session.Player!;
-                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886)));
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886), NpcStore.Empty));
                 Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3898, 1, out _));
-                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886)));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886), NpcStore.Empty));
                 return true;
             });
         }

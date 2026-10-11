@@ -146,11 +146,11 @@ internal sealed class TramNetwork
     {
         // Stormwind, Elwynn, Westfall, Redridge, Duskwood, Deadwind, Burning Steppes, Swamp of Sorrows,
         // Blasted Lands and Stranglethorn Vale.
-        1519 or 12 or 40 or 44 or 10 or 41 or 46 or 8 or 4 or 33 => TramSide.Stormwind,
+        1519 or 12 or 40 or 44 or 10 or 41 or 46 or 8 or 4 or 33 or 1477 => TramSide.Stormwind,
         // Ironforge, Dun Morogh, Loch Modan, Wetlands, Badlands, Searing Gorge, Arathi Highlands,
         // Hinterlands, Hillsbrad, Alterac, the Plaguelands, Tirisfal, Silverpine and Undercity.
         1537 or 1 or 38 or 11 or 3 or 51 or 45 or 47 or 267 or 36 or 28 or 139 or 85 or 130 or 1497
-            or 170 or 269 or 330 => TramSide.Ironforge,
+            or 170 or 269 or 330 or 293 => TramSide.Ironforge,
         _ => TramSide.Unknown,
     };
 
@@ -288,6 +288,7 @@ internal static class PlayerbotTram
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
+        if (player.Team != Team.Alliance) return false;
         if (IsTraveling(player)) return true;
         if (!player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return false;
         uint now = session.World.NowMs;

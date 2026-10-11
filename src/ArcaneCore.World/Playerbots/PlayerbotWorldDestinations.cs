@@ -330,11 +330,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     /// <summary>
     /// An item-only repeatable is deferred only when it lacks its items and the loaded content has no loot
-    /// row for any missing item. Quest-chance drops require the quest in the log (QuestNpcServices.HasQuestForItem,
+    /// or vendor row for any missing item. Quest-chance drops require the quest in the log (QuestNpcServices.HasQuestForItem,
     /// LootSeams); vmangos Player::CanCompleteRepeatableQuest checks items for completion, not acceptance
     /// (Player.cpp:12663-12680). Missing loot content is not evidence of an unobtainable item.
     /// </summary>
-    internal static bool CanPursueStarter(Player player, Quest quest, LootContent? loot)
+    internal static bool CanPursueStarter(Player player, Quest quest, LootContent? loot, NpcStore? npcs)
     {
         if (!quest.IsRepeatable || !quest.HasSpecialFlag(QuestSpecialFlags.Deliver)
             || quest.ReqCreatureOrGOCountTotal != 0 || quest.ReqSpell.Any(id => id != 0)) return true;
@@ -347,7 +347,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             uint supplied = quest.Template.SrcItemId == id ? Math.Max(1u, quest.Template.SrcItemCount) : 0;
             if ((ulong)player.Inventory.GetItemCount(id) + supplied >= quest.ReqItemCount[i]) continue;
             missing = true;
-            if (supplied != 0 || loot.HasLootItem(id)) return true;
+            if (supplied != 0 || loot.HasLootItem(id) || npcs?.SellsItem(id) == true) return true;
         }
         return !missing;
     }
@@ -376,7 +376,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (uint id in services.Quests.StartersOf(entry))
         {
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
-                && services.Quests.Get(id) is { } quest && CanPursueStarter(player, quest, loot)
+                && services.Quests.Get(id) is { } quest && CanPursueStarter(player, quest, loot, services.Npcs)
                 && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
         }
         return false;

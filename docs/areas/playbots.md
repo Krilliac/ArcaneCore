@@ -125,9 +125,10 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
 (`PlayerbotTram`):
 
 * **When.** `PlayerbotWorldDestinations` asks `TramNetwork.Choose` before it plans a walk. The bot and goal must be in known zones on
-  opposite sides of the tram. The Stormwind side includes Stormwind, Elwynn, Westfall, Redridge, Duskwood, Deadwind Pass, Burning Steppes,
-  Swamp of Sorrows, Blasted Lands and Stranglethorn Vale; the Ironforge side includes Dun Morogh, Ironforge, Loch Modan, Wetlands,
-  Badlands, Searing Gorge and the northern Eastern Kingdoms. These are build-5875 AreaTable zone IDs, not straight-line proximity to an
+  opposite sides of the tram, and the bot must be Alliance. The Stormwind side includes Stormwind, Elwynn, Westfall, Redridge, Duskwood,
+  Deadwind Pass, Burning Steppes, Swamp of Sorrows, Blasted Lands, Stranglethorn Vale and the Temple of Atal'Hakkar exterior (1477);
+  the Ironforge side includes Dun Morogh, Ironforge, Loch Modan, Wetlands, Badlands, Searing Gorge, Thoradin's Wall (293) and the
+  northern Eastern Kingdoms. Blackrock Mountain (25) remains unclassified. These are build-5875 AreaTable zone IDs, not proximity to an
   entrance. A Coldridge bot walks to Talin or Sten in its own zone and takes Ironforge's entrance (ClassicDB 2175) for Stormwind; a
   Goldshire bot uses Stormwind's entrance (2173) for Coldridge. Duskwood to Thorium Point (Searing Gorge) uses the tram via Ironforge.
   Unknown zones do not

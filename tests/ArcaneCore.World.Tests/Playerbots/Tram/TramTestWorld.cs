@@ -152,7 +152,7 @@ internal sealed class TramTestWorld : IAsyncDisposable
     public TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
 
     public static async Task<TramTestWorld> StartAsync(TransportAnimationCatalog? animation = null, Action<IServiceCollection>? configure = null,
-        IPathfinder? pathfinder = null)
+        IPathfinder? pathfinder = null, byte race = 1)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -162,7 +162,7 @@ internal sealed class TramTestWorld : IAsyncDisposable
             services.AddSingleton<IWorldFeature, ManualClockFeature>();
             configure?.Invoke(services);
         });
-        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host, race);
         await host.OnWorldAsync(() => WorldCollision.Of(host.World).Install(lineOfSight: new TramTestData.Floors(), pathfinder: pathfinder ?? new OpenPathfinder()));
         return new TramTestWorld(host, session);
     }
