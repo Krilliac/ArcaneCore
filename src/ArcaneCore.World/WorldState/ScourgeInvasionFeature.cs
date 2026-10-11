@@ -26,7 +26,14 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private readonly Dictionary<uint, uint> _circleZoneByGuid = [];
     private readonly HashSet<CreatureMapSystem> _healthSystems = [];
     private readonly Dictionary<GameObjectMapSystem, InvasionCircleAi> _circleAis = [];
-    private readonly HashSet<(uint ZoneId, uint SpawnGuid)> _pendingDeaths = [];
+    private readonly Dictionary<(uint ZoneId, uint SpawnGuid), int> _pendingDeaths = [];
+    private readonly List<StoreOp> _ops = [];
+    private readonly Dictionary<uint, (int SpawnIndex, uint Entry)> _unsummonedCityAttacks = [];
+    private OffThreadStoreWork? _store;
+    private Func<Func<Task>, Task>? _offload;
+    private ScourgeInvasionState? _intendedState;
+    private bool _refreshDue;
+    private bool _wake;
     private uint _reloadMs;
     private readonly Dictionary<uint, Creature> _mouths = [];
     private readonly Dictionary<uint, Creature> _cityAttackers = [];
@@ -45,9 +52,31 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
 
     public ScourgeInvasionSnapshot Snapshot => Volatile.Read(ref _snapshot);
 
+    /// <summary>
+    /// Test seam for where realm-store work runs (<see cref="OffThreadStoreWork.Offload"/>). Production leaves it null: the
+    /// thread pool, never the world thread. Tests whose fake stores complete synchronously pass <c>work =&gt; work()</c>.
+    /// </summary>
+    internal Func<Func<Task>, Task>? StoreOffload
+    {
+        get => _offload;
+        set
+        {
+            _offload = value;
+            if (_store is not null && value is not null) _store.Offload = value;
+        }
+    }
+
+    /// <summary>The single-flight store runner (null before <see cref="Attach"/>); tests read its job count.</summary>
+    internal OffThreadStoreWork? StoreWork => _store;
+
+    /// <summary>One queued store mutation and the error logged if it fails.</summary>
+    private sealed record StoreOp(Func<IScourgeInvasionStateStore, Task> Run, string Failure, uint Zone);
+
     public void Attach(WorldRuntime world)
     {
         _world = world;
+        _store = new OffThreadStoreWork(world);
+        if (_offload is not null) _store.Offload = _offload;
         using (IServiceScope scope = scopes.CreateScope())
         {
             if (scope.ServiceProvider.GetService<IScourgeInvasionStateStore>() is { } store)
@@ -122,19 +151,17 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     public void OnEventChanged(ushort eventId, bool active, bool resume)
     {
         if (!_hasStore || eventId != ScourgeInvasionCatalog.MainEvent) return;
-        if (active && Snapshot.State == ScourgeInvasionState.Disabled)
+        // A start or stop still queued for the store counts as the state, so a quick start/stop pair is not lost.
+        ScourgeInvasionState state = _intendedState ?? Snapshot.State;
+        if (active && state == ScourgeInvasionState.Disabled)
         {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>()
-                .StartAsync().GetAwaiter().GetResult();
-            Reload();
+            _intendedState = ScourgeInvasionState.Enabled;
+            Enqueue(new StoreOp(store => store.StartAsync(), "could not start the Scourge invasion", 0));
         }
-        else if (!active && Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon < 150)
+        else if (!active && state == ScourgeInvasionState.Enabled && Snapshot.BattlesWon < 150)
         {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>()
-                .StopAsync().GetAwaiter().GetResult();
-            Reload();
+            _intendedState = ScourgeInvasionState.Disabled;
+            Enqueue(new StoreOp(store => store.StopAsync(), "could not stop the Scourge invasion", 0));
         }
     }
 
@@ -217,18 +244,10 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (_cityAttackers.TryGetValue(zoneId, out Creature? tracked) && ReferenceEquals(tracked, creature))
             _cityAttackers.Remove(zoneId);
         if (!_hasStore) return;
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>().CityAttackDefeatedAsync(zoneId, NowUnix(),
-                Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1))
-                .GetAwaiter().GetResult();
-            Reload();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "could not save the Scourge city attack defeat in zone {Zone}", zoneId);
-        }
+        long now = NowUnix();
+        int next = Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1);
+        Enqueue(new StoreOp(store => store.CityAttackDefeatedAsync(zoneId, now, next),
+            "could not save the Scourge city attack defeat in zone {Zone}", zoneId));
     }
 
     internal uint? CircleZone(GameObject go)
@@ -263,72 +282,166 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             ? mapped : creature.Map is { } map ? map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z).ZoneId : null;
         if (zoneId is not { } zone || ScourgeInvasionCatalog.ForZone(zone) is null || creature.Spawn is not { } known)
             return;
-        _pendingDeaths.Add((zone, known.Guid));
-        FlushDeaths();
+        // NecropolisDestroyedAsync rolls the zone's 45-60 minute reattack once, when the death is recorded.
+        _pendingDeaths.TryAdd((zone, known.Guid), Random.Next(2700, 3601));
+        _wake = true;
+        TryLaunch();
     }
 
-    private void FlushDeaths()
+    private void Enqueue(StoreOp op)
     {
-        if (_pendingDeaths.Count == 0) return;
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            IScourgeInvasionStateStore store = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>();
-            foreach ((uint zone, uint guid) in _pendingDeaths.ToArray())
-            {
-                store.NecropolisDestroyedAsync(zone, guid, NowUnix(),
-                    Random.Next(2700, 3601)).GetAwaiter().GetResult();
-                _pendingDeaths.Remove((zone, guid));
-            }
-            Reload();
-            SyncEvents();
-        }
-        catch (Exception ex)
-        {
-            // Complete CreatureMapSystem's death transition even if the realm store is unavailable.
-            logger.LogError(ex, "could not persist Scourge Necropolis death; {Count} pending retry", _pendingDeaths.Count);
-        }
+        _ops.Add(op);
+        _wake = true;
+        TryLaunch();
     }
 
     private void OnTick(uint diffMs)
     {
         if (!_hasStore) return;
         _reloadMs = _reloadMs > diffMs ? _reloadMs - diffMs : 0;
-        if (_reloadMs != 0) return;
+        if (_reloadMs == 0)
+        {
+            _refreshDue = true;
+            _wake = true;
+            _reloadMs = 5_000;
+        }
+        TryLaunch();
+    }
+
+    /// <summary>What one store job did, filled off the world thread and read by <see cref="ApplyRefresh"/> on it.</summary>
+    private sealed class RefreshResult
+    {
+        public readonly List<(uint ZoneId, uint SpawnGuid)> FlushedDeaths = [];
+        public Exception? DeathFailure;
+        public ScourgeInvasionSnapshot? Snapshot;
+        public readonly List<(ScourgeCityAttack City, int SpawnIndex, uint Entry)> Claims = [];
+    }
+
+    /// <summary>
+    /// Starts the next store job when one is wanted and none is in flight. The world thread only copies its queues here;
+    /// every realm-store call runs in <see cref="RunStoreAsync"/> off it, and the result is applied by a later world command.
+    /// A busy runner leaves the request set for the next tick, so at most one job runs and no request is lost.
+    /// </summary>
+    private void TryLaunch()
+    {
+        if (!_wake || _store is null || _store.Busy) return;
+        _wake = false;
+        StoreOp[] ops = [.. _ops];
+        _ops.Clear();
+        var deaths = _pendingDeaths.Select(p => (p.Key.ZoneId, p.Key.SpawnGuid, NextAttackSeconds: p.Value)).ToArray();
+        bool full = _refreshDue;
+        _refreshDue = false;
+        if (!full && ops.Length == 0 && deaths.Length == 0) return;
+        long now = NowUnix();
+        // mangos-classic StartNewCityAttackIfTime: only a capital whose map can take the summon is claimed.
+        HashSet<uint> summonable = full
+            ? ScourgeInvasionCatalog.Cities.Where(c => Creatures(c.MapId) is not null).Select(c => c.ZoneId).ToHashSet()
+            : [];
+        var result = new RefreshResult();
+        _store.TryRun(() => RunStoreAsync(ops, deaths, full, now, summonable, result),
+            () => ApplyRefresh(result, full, syncEvents: full || deaths.Length > 0),
+            ex =>
+            {
+                foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
+                logger.LogError(ex, "could not refresh Scourge invasion state");
+            });
+    }
+
+    /// <summary>Off the world thread: queued writes in order, pending deaths, then the refresh's due zone restarts and city claims.</summary>
+    private async Task RunStoreAsync(StoreOp[] ops, (uint ZoneId, uint SpawnGuid, int NextAttackSeconds)[] deaths, bool full,
+        long now, HashSet<uint> summonable, RefreshResult result)
+    {
+        using IServiceScope scope = scopes.CreateScope();
+        IScourgeInvasionStateStore store = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>();
+        foreach (StoreOp op in ops)
+        {
+            try
+            {
+                await op.Run(store).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+#pragma warning disable CA2254 // each StoreOp carries a constant template
+                logger.LogError(ex, op.Failure, op.Zone);
+#pragma warning restore CA2254
+            }
+        }
         try
         {
-            FlushDeaths();
-            Reload();
-            if (Snapshot.State == ScourgeInvasionState.Enabled && Snapshot.BattlesWon < 150)
+            foreach ((uint zone, uint guid, int next) in deaths)
             {
-                long now = NowUnix();
-                foreach (ScourgeInvasionZoneProgress zone in Snapshot.Zones.OrderBy(z => z.NextAttackUnix))
-                {
-                    if (zone.Remaining != 0 || zone.NextAttackUnix == 0 || zone.NextAttackUnix > now) continue;
-                    using IServiceScope scope = scopes.CreateScope();
-                    if (scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>()
-                        .RestartZoneAsync(zone.ZoneId, now).GetAwaiter().GetResult()) Reload();
-                    if (Snapshot.Zones.Count(z => z.Remaining > 0) > 1) break;
-                }
+                await store.NecropolisDestroyedAsync(zone, guid, now, next).ConfigureAwait(false);
+                result.FlushedDeaths.Add((zone, guid));
             }
-            SyncEvents();
-            SyncChoreography();
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "could not refresh Scourge invasion state");
+            // CreatureMapSystem's death transition already completed; the unsaved deaths stay pending for the next refresh.
+            result.DeathFailure = ex;
         }
-        _reloadMs = 5_000;
+        ScourgeInvasionSnapshot snapshot = await store.LoadAsync().ConfigureAwait(false);
+        result.Snapshot = snapshot;
+        if (!full) return;
+        if (snapshot.State == ScourgeInvasionState.Enabled && snapshot.BattlesWon < 150)
+        {
+            foreach (ScourgeInvasionZoneProgress zone in snapshot.Zones.OrderBy(z => z.NextAttackUnix))
+            {
+                if (zone.Remaining != 0 || zone.NextAttackUnix == 0 || zone.NextAttackUnix > now) continue;
+                if (await store.RestartZoneAsync(zone.ZoneId, now).ConfigureAwait(false))
+                    result.Snapshot = snapshot = await store.LoadAsync().ConfigureAwait(false);
+                if (snapshot.Zones.Count(z => z.Remaining > 0) > 1) break;
+            }
+        }
+        if (snapshot.State != ScourgeInvasionState.Enabled) return;
+        foreach (ScourgeCityAttack city in ScourgeInvasionCatalog.Cities)
+        {
+            if (!snapshot.IsCityAttackDue(city.ZoneId, now) || !summonable.Contains(city.ZoneId)) continue;
+            if (!await store.ClaimCityAttackAsync(city.ZoneId, now,
+                    Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1))
+                .ConfigureAwait(false)) continue;
+            int spawnIndex = Random.Next(city.Spawns.Count);
+            uint entry = Random.Next(2) == 0 ? ScourgeInvasionCatalog.PallidHorror : ScourgeInvasionCatalog.PatchworkTerror;
+            result.Claims.Add((city, spawnIndex, entry));
+            result.Snapshot = snapshot = await store.LoadAsync().ConfigureAwait(false);
+        }
     }
 
-    private void Reload()
+    /// <summary>On the world thread: publish the loaded state, then drive the game events and the summons from it.</summary>
+    private void ApplyRefresh(RefreshResult result, bool full, bool syncEvents)
     {
-        using IServiceScope scope = scopes.CreateScope();
-        ScourgeInvasionSnapshot previous = Snapshot;
-        ScourgeInvasionSnapshot current = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>()
-            .LoadAsync().GetAwaiter().GetResult();
-        Volatile.Write(ref _snapshot, current);
-        PublishWorldStates(previous, current);
+        foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
+        if (result.DeathFailure is { } failure)
+            logger.LogError(failure, "could not persist Scourge Necropolis death; {Count} pending retry", _pendingDeaths.Count);
+        if (_ops.Count == 0) _intendedState = null;
+        // A claim saved the capital's next timer: its summon is owed until a refresh finds the map (or the invasion stops).
+        foreach ((ScourgeCityAttack city, int spawnIndex, uint entry) in result.Claims)
+            _unsummonedCityAttacks[city.ZoneId] = (spawnIndex, entry);
+        if (result.Snapshot is { } current)
+        {
+            ScourgeInvasionSnapshot previous = Snapshot;
+            Volatile.Write(ref _snapshot, current);
+            PublishWorldStates(previous, current);
+        }
+        // A start or stop queued after this job began is not in its snapshot: driving event 17 from it would undo the
+        // operator's .event start/stop. The job that carries the queued change applies the events and summons.
+        if (_intendedState is null)
+        {
+            try
+            {
+                if (syncEvents) SyncEvents();
+                if (full) SyncChoreography();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "could not refresh Scourge invasion state");
+            }
+        }
+        else if (full)
+        {
+            _refreshDue = true; // the choreography (and any city claim made here) is applied by the follow-up job
+            _wake = true;
+        }
+        TryLaunch();
     }
 
     private void SyncEvents()
@@ -384,7 +497,6 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 _mouths[zone.ZoneId] = summoned;
         }
 
-        long now = NowUnix();
         foreach (ScourgeCityAttack city in ScourgeInvasionCatalog.Cities)
         {
             if (_cityAttackers.TryGetValue(city.ZoneId, out Creature? attacker) && !IsLive(attacker))
@@ -393,30 +505,25 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             {
                 if (attacker is not null) Despawn(attacker);
                 _cityAttackers.Remove(city.ZoneId);
+                _unsummonedCityAttacks.Remove(city.ZoneId);
                 continue;
             }
-            if (!Snapshot.IsCityAttackDue(city.ZoneId, now) || Creatures(city.MapId) is not { } creatures) continue;
-            using (IServiceScope scope = scopes.CreateScope())
-            {
-                if (!scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>().ClaimCityAttackAsync(city.ZoneId, now,
-                        Random.Next(ScourgeInvasionCatalog.CityAttackTimerMinSeconds, ScourgeInvasionCatalog.CityAttackTimerMaxSeconds + 1))
-                    .GetAwaiter().GetResult()) continue;
-            }
+            // A claim whose map unloaded before this apply keeps its summon for the next refresh that finds the map.
+            if (!_unsummonedCityAttacks.TryGetValue(city.ZoneId, out (int SpawnIndex, uint Entry) pick)
+                || Creatures(city.MapId) is not { } creatures) continue;
+            _unsummonedCityAttacks.Remove(city.ZoneId);
             if (attacker is not null) Despawn(attacker);
             _cityAttackers.Remove(city.ZoneId);
-            int spawnIndex = Random.Next(city.Spawns.Count);
-            ScourgeInvasionPosition at = city.Spawns[spawnIndex];
-            uint entry = Random.Next(2) == 0 ? ScourgeInvasionCatalog.PallidHorror : ScourgeInvasionCatalog.PatchworkTerror;
-            if (creatures.SummonInstanceCreature(entry, at.X, at.Y, at.Z, at.O) is { } summoned)
+            ScourgeInvasionPosition at = city.Spawns[pick.SpawnIndex];
+            if (creatures.SummonInstanceCreature(pick.Entry, at.X, at.Y, at.Z, at.O) is { } summoned)
             {
                 _cityAttackers[city.ZoneId] = summoned;
-                if (!creatures.StartEntryWaypointPath(summoned, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, spawnIndex)))
+                if (!creatures.StartEntryWaypointPath(summoned, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, pick.SpawnIndex)))
                     logger.LogWarning("Scourge city attacker {Entry} in zone {Zone} has no entry path {Path}; it holds its spawn point",
-                        entry, city.ZoneId, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, spawnIndex));
+                        pick.Entry, city.ZoneId, ScourgeInvasionCatalog.CityAttackPath(city.ZoneId, pick.SpawnIndex));
             }
             else
-                logger.LogWarning("Scourge city attack in zone {Zone}: creature template {Entry} is missing", city.ZoneId, entry);
-            Reload();
+                logger.LogWarning("Scourge city attack in zone {Zone}: creature template {Entry} is missing", city.ZoneId, pick.Entry);
         }
     }
 

@@ -89,6 +89,7 @@ public sealed class WarEffortConditionTests
             new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
             NullLogger<WorldRuntime>.Instance);
         WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.StoreOffload = work => work(); // the fake store completes synchronously
         war.Attach(world);
         ConditionFeature conditions = provider.GetRequiredService<ConditionFeature>();
         conditions.Attach(world);
@@ -120,6 +121,7 @@ public sealed class WarEffortConditionTests
         GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
         events.Attach(world);
         WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.StoreOffload = work => work(); // the fake store completes synchronously
         war.Attach(world);
         provider.GetRequiredService<MemoryStore>().SetState(
             new WarEffortSnapshot(WarEffortPhase.Gathering, 0, new long[WarEffortCatalog.ResourceCount]));
@@ -162,6 +164,7 @@ public sealed class WarEffortConditionTests
         GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
         events.Attach(world);
         WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.StoreOffload = work => work(); // the fake store completes synchronously
         war.Attach(world);
         MemoryStore store = provider.GetRequiredService<MemoryStore>();
 
@@ -200,6 +203,7 @@ public sealed class WarEffortConditionTests
         GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
         events.Attach(world);
         WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.StoreOffload = work => work(); // the fake store completes synchronously
         war.Attach(world);
         MemoryStore store = provider.GetRequiredService<MemoryStore>();
         store.SetState(new WarEffortSnapshot(WarEffortPhase.TenHourWar,
