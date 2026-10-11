@@ -125,7 +125,22 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
     }
 
     /// <summary>CMSG_WARDEN_DATA (session task).</summary>
-    public void Handle(WorldSession session, byte[] payload) => Find(session)?.Handle(payload);
+    public void Handle(WorldSession session, byte[] payload)
+    {
+        if (Find(session) is not { } warden)
+        {
+            return;
+        }
+
+        warden.Handle(payload);
+        if (session.State == SessionState.Closed)
+        {
+            // A packet that lands after the world tick already flushed this session (or before it removes it) may have throttled a Log
+            // verdict; nothing would report that count later, so report it now. Flush is idempotent.
+            _sessions.TryRemove(session, out _);
+            warden.Flush();
+        }
+    }
 
     private void OnWorldTick(uint diffMs)
     {
