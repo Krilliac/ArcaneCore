@@ -178,8 +178,11 @@ public sealed class IntegratedCreatureCombatTests
         ArcaneCore.Game.Maps.Grid.GridCoord home = map.Grids.CellOf(wolf)!.Value.Grid;
         system.MoveTo(wolf, 800, 0, 83.5f, run: true, finalOrientation: 0);
         uint duration = wolf.Spline!.DurationMs;
-        player.Relocate(800, 0, 83.5f, 0, 0);
+        // The wolf is updated while it stands in the player's active cells (vmangos Map::UpdateActiveCellsSynch); its spline is
+        // clock-based, so one tick of the whole duration brings it to 800. The player follows it there afterwards.
         world.RunTick(duration);
+        player.Relocate(800, 0, 83.5f, 0, 0);
+        world.RunTick(50);
         Assert.Equal(800f, wolf.X);
         Assert.NotEqual(home, map.Grids.CellOf(wolf)!.Value.Grid);
 

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -309,15 +310,80 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         _catchUp.Clear();
     }
 
+    /// <summary>Creature updates skipped because the creature stood outside every active cell (diagnostics, tests).</summary>
+    public long SkippedInactiveCreatures { get; private set; }
+
+    /// <summary>
+    /// A creature updated wherever it stands (vmangos WorldObject::IsActiveObject, Objects/Object.h:780: m_isActiveObject or a
+    /// viewpoint with viewers): an active object of the map (<see cref="Map.SetActive"/>, vmangos SetActiveObjectState / AddToActive:
+    /// script command 21, the AOI and ACTIVE template flags and formation members, <see cref="QueueActivationIfFlagged"/>), and a
+    /// creature a player looks through (possession, Eyes of the Beast: Camera viewers; it is updated but does not activate cells).
+    /// A formation member also counts from the moment it enters, before its queued activation applies.
+    /// </summary>
+    private bool IsAlwaysUpdated(Creature creature)
+        => Map.Grids.IsActive(creature) || UnitControl.ViewerOf(creature) is not null || FormationOfMember(creature) is not null;
+
+    private readonly List<Creature> _pendingActivation = [];
+
+    /// <summary>The creature behaviour bits that make a creature an active object when it enters the map.</summary>
+    private const CreatureBehaviourFlags ActiveOnSpawn = CreatureBehaviourFlags.Active | CreatureBehaviourFlags.LargeAoi
+        | CreatureBehaviourFlags.GiganticAoi | CreatureBehaviourFlags.InfiniteAoi;
+
+    /// <summary>
+    /// A creature entering the map that is an active object from its template or group (Map::AddToActive): vmangos Creature.cpp:683-699
+    /// (CREATURE_STATIC_FLAG_LARGE_AOI, CREATURE_FLAG_EXTRA_GIGANTIC_AOI / INFINITE_AOI, with Visibility.ForceActiveObjects, default
+    /// true, World.cpp:828), mangos-classic Creature.cpp:205 (CREATURE_EXTRA_FLAG_ACTIVE, classic-db's dialect) and vmangos
+    /// Creature.cpp:289-292 (a formation member). Queued and applied before the next creature update: activating loads and pins the
+    /// creature's own grid, which must not run inside the grid load that placed the creature.
+    /// </summary>
+    private void QueueActivationIfFlagged(Creature creature)
+    {
+        if (creature.ScriptActiveObject || (creature.Template.Behaviour & ActiveOnSpawn) != 0 || FormationOfMember(creature) is not null)
+        {
+            _pendingActivation.Add(creature);
+        }
+    }
+
+    private void ApplyPendingActivations()
+    {
+        if (_pendingActivation.Count == 0)
+        {
+            return;
+        }
+
+        Creature[] pending = [.. _pendingActivation];
+        _pendingActivation.Clear();
+        foreach (Creature creature in pending)
+        {
+            if (ReferenceEquals(creature.Map, Map) && Map.Grids.Contains(creature) && !Map.Grids.IsActive(creature))
+            {
+                Map.SetActive(creature, true);
+            }
+        }
+    }
+
     private void UpdateCreatures(uint diffMs)
     {
         uint now = _serverTime();
         // Live position may be outside the spawn's original grid. Snapshot ownership rather
         // than spawn buckets so a moved creature is updated once and survives home-grid unload.
+        ApplyPendingActivations();
         _scratchCreatures.Clear();
         _scratchCreatures.AddRange(_creatures.Values);
+        bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
         foreach (Creature creature in _scratchCreatures)
         {
+            // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
+            if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
+            {
+                SkippedInactiveCreatures++;
+                continue;
+            }
+
+            // WorldObject::UpdateHelper::UpdateRealTime: the update after a pause gets the time since the last one (update_diff),
+            // which the corpse timers count down (Creature::Update CORPSE, Creature.cpp:901-914); motion and AI get the tick.
+            uint sinceLast = creature.LastUpdateClockMs < 0 ? diffMs : (uint)Math.Min(_clockMs - creature.LastUpdateClockMs, uint.MaxValue);
+            creature.LastUpdateClockMs = _clockMs;
             switch (creature.DeathState)
             {
                 case CreatureDeathState.Alive:
@@ -371,14 +437,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                 case CreatureDeathState.Corpse:
                     // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
                     bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
-                    creature.SkinningForOthersMs = creature.SkinningForOthersMs <= diffMs ? 0 : creature.SkinningForOthersMs - diffMs; // Creature.cpp:911-914
-                    if (creature.CorpseDecayMs <= diffMs || respawnDue)
+                    creature.SkinningForOthersMs = creature.SkinningForOthersMs <= sinceLast ? 0 : creature.SkinningForOthersMs - sinceLast; // Creature.cpp:911-914
+                    if (creature.CorpseDecayMs <= sinceLast || respawnDue)
                     {
                         RemoveCorpse(creature);
                     }
                     else
                     {
-                        creature.CorpseDecayMs -= diffMs;
+                        creature.CorpseDecayMs -= sinceLast;
                     }
 
                     break;

@@ -9169,6 +9169,38 @@
       "isCollection": false
     },
     {
+      "path": "World:Maps:UpdateActiveCellsOnly",
+      "section": "World",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "On continents, update creatures only in the cells within `GridActivationDistance` of a player or active object (vmangos Map::UpdateCells → UpdateActiveCellsSynch, Maps/Map.cpp:815-857): a creature elsewhere in a loaded grid stands still, its AI and movement paused, until a player comes near; its respawn time is wall-clock and its corpse decay catches up on the first update (WorldObject::UpdateHelper::UpdateRealTime, Objects/Object.h:477-481). False updates every creature of the loaded grids each tick (the behaviour before 2026-10-11).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#world",
+      "isCollection": false
+    },
+    {
+      "path": "World:Maps:VisibilityRelocationLowerLimit",
+      "section": "World",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "How far (yards, 3D) a unit (player or creature) must move from where its last movement-triggered visibility pass was scheduled before the next one is (vmangos `Visibility.RelocationLowerLimit`, default 10, World.cpp:830; Unit::OnRelocated). Moves within it keep the visible sets of the last pass; the grey distance (`Map.VisibilityGreyDistance`) and the next pass cover the difference. Game objects get a pass on every move. 0 runs a pass on every move.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#world",
+      "isCollection": false
+    },
+    {
       "path": "World:MaxCommandsPerTick",
       "section": "World",
       "type": "int",

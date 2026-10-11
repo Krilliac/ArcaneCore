@@ -174,19 +174,24 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
         }
     }
 
+    private StateSaveQueue<int, NightmareDragonsState>? _saves;
+
+    /// <summary>The state's writer: off the world thread (the 20 s update saved on it, live 2026-10-11).</summary>
+    internal StateSaveQueue<int, NightmareDragonsState> Saves => _saves ??= new(async state =>
+    {
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<INightmareDragonsStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
+    }, logger, "Dragons of Nightmare");
+
+    /// <summary>sObjectMgr.SetSavedVariable(..., true): memory is the state at once, the row is written off the world thread.</summary>
     private void Save(NightmareDragonsState state)
     {
         State = state;
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetService<INightmareDragonsStore>()?.SaveAsync(state).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "could not save the Dragons of Nightmare state");
-        }
+        Saves.Save(0, state);
     }
+
+    /// <summary>Writes every queued state before shutdown completes.</summary>
+    public Task StopAsync() => _saves?.FlushAsync() ?? Task.CompletedTask;
 
     private CreatureMapSystem? CreaturesOf(int portal)
         => _world?.FindMap(Portals[portal].MapId)?.FindUpdater<CreatureMapSystem>();

@@ -227,6 +227,8 @@ internal sealed class CreatureTemplateBuilder
     public uint NpcFlags { get; set; }
     public uint UnitFlags { get; set; }
     public uint ExtraFlags { get; set; }
+    public ArcaneCore.Kernel.WorldData.Creatures.CreatureExtraFlagsDialect ExtraFlagsDialect { get; set; }
+    public uint StaticFlags1 { get; set; }
     public uint CorpseDecaySeconds { get; set; }
     public float Scale { get; set; }
     public string AIName { get; set; } = string.Empty;
@@ -251,6 +253,8 @@ internal sealed class CreatureTemplateBuilder
         NpcFlags = NpcFlags,
         UnitFlags = UnitFlags,
         ExtraFlags = ExtraFlags,
+        ExtraFlagsDialect = ExtraFlagsDialect,
+        StaticFlags1 = StaticFlags1,
         CorpseDecaySeconds = CorpseDecaySeconds,
         Scale = Scale,
         CreatureType = 1,

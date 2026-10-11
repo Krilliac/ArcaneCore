@@ -26,6 +26,9 @@ internal sealed class OffThreadStoreWork(WorldRuntime world)
     /// <summary>A job is running or its completion is waiting for the world thread.</summary>
     public bool Busy => _busy;
 
+    /// <summary>The store work of the job in flight (completed when none); a feature's StopAsync waits for it.</summary>
+    public Task InFlight { get; private set; } = Task.CompletedTask;
+
     /// <summary>Jobs started (diagnostics and tests).</summary>
     public long Started { get; private set; }
 
@@ -47,6 +50,7 @@ internal sealed class OffThreadStoreWork(WorldRuntime world)
         {
             task = Task.FromException(ex);
         }
+        InFlight = task;
         if (task.IsCompleted) Complete(task, apply, fail);
         else task.ContinueWith(done => world.Post(() => Complete(done, apply, fail)), CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);

@@ -112,6 +112,9 @@ internal sealed class AvScriptRig : IDisposable
                 Hostility = hostility ?? new FactionHostility(),
             },
             world: spells?.World);
+        // Alterac Valley is a battleground: it updates every creature of its loaded grids (Map.UpdatesActiveCellsOnly is for
+        // continents), but this rig runs it on the template-less test map 0, which would count as a continent.
+        world.Options.Maps.UpdateActiveCellsOnly = false;
         var objects = new GameObjectMapSystem(map, new GameObjectContent(objectTemplates ?? [], objectSpawns ?? [], [], [], []));
         map.AddUpdater(objects);
 

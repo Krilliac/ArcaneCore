@@ -14,6 +14,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -141,18 +142,19 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         return SilithusCatalog.DefaultMaxResources;
     }
 
-    private void SaveSilithyst(uint alliance, uint horde, uint max)
+    private StateSaveQueue<int, SilithystState>? _silithystSaves;
+
+    /// <summary>The Silithyst counters' writer: off the world thread (a turn-in saved on it).</summary>
+    internal StateSaveQueue<int, SilithystState> SilithystSaves => _silithystSaves ??= new(async state =>
     {
-        try
-        {
-            using IServiceScope scope = services.CreateScope();
-            scope.ServiceProvider.GetService<ISilithystStore>()?.SaveAsync(new SilithystState(alliance, horde, max)).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "could not save the Silithyst state");
-        }
-    }
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<ISilithystStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
+    }, logger, "Silithyst");
+
+    private void SaveSilithyst(uint alliance, uint horde, uint max) => SilithystSaves.Save(0, new SilithystState(alliance, horde, max));
+
+    /// <summary>Writes every queued Silithyst state before shutdown completes.</summary>
+    public Task StopAsync() => _silithystSaves?.FlushAsync() ?? Task.CompletedTask;
 
     private void OnWorldTick(uint diffMs)
     {

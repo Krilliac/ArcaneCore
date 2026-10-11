@@ -419,7 +419,7 @@ public sealed class Map
     /// <summary>
     /// Put a non-player object (creature, game object, …) into the map — the seam for content
     /// that spawns into grids. Its grid is created (vmangos Map::Add&lt;T&gt; → EnsureGridCreated;
-    /// an <paramref name="active"/> object also loads the grids around it, like a player), and
+    /// an <paramref name="active"/> object pins only its own grid; only players load the grids around them), and
     /// every player in range gets its create block at the end of the tick.
     /// </summary>
     public void AddObject(WorldObject obj, bool active = false, bool isNewObject = false)
@@ -478,8 +478,8 @@ public sealed class Map
     }
 
     /// <summary>
-    /// Mark a non-player object active (vmangos Map::AddToActive): it keeps the grids around it
-    /// loaded, as players do.
+    /// Mark a non-player object active (vmangos Map::AddToActive): it is updated wherever it stands and pins its own grid;
+    /// unlike a player it loads no grid around it (<see cref="Grid.GridContainer.SetActive"/>).
     /// </summary>
     public void SetActive(WorldObject obj, bool active)
     {
@@ -678,6 +678,12 @@ public sealed class Map
                 unit.UpdateHeartbeat(diffMs);
         diagnostics?.EndHeartbeat();
 
+        // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).
+        if (UpdatesActiveCellsOnly)
+        {
+            _grid.MarkActiveCells();
+        }
+
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
         {
@@ -864,7 +870,17 @@ public sealed class Map
             return;
         }
 
+        // vmangos Unit::OnRelocated: the AI notify is scheduled on every relocation, the visibility pass only past the
+        // relocation lower limit (World:Maps:VisibilityRelocationLowerLimit). It is a Unit rule (OnRelocated and
+        // m_lastNotifiedPosition are Unit members, Unit.cpp:10151): a game object (a transport, an elevator) keeps a pass on every move.
         ObjectRelocated?.Invoke(obj);
+
+        float limit = _grid.Options.VisibilityRelocationLowerLimit;
+        if (obj is Unit && !obj.TakeRelocationNotify(limit > 0 ? limit * limit : 0f))
+        {
+            RelocationsWithoutVisibility++;
+            return;
+        }
 
         if (obj is Player player)
         {
@@ -881,6 +897,20 @@ public sealed class Map
             viewer.NeedsVisibilityUpdate = true;
         }
     }
+
+    /// <summary>
+    /// Whether this map updates creatures only in the active cells (<see cref="MapOptions.UpdateActiveCellsOnly"/>). vmangos uses
+    /// the active cells on every map (Map::Update → UpdateCells); this server limits it to continents as a deliberate deviation
+    /// (a map without a loaded template counts as one when it is 0 or 1): vmangos activates 170 yards in instances
+    /// (Visibility.Distance.Instances) and 180 in battlegrounds, where ArcaneCore has only the one 100-yard
+    /// <see cref="MapOptions.GridActivationDistance"/>, so instances and battlegrounds keep updating every creature of their loaded
+    /// grids rather than freezing scripted encounters at a radius vmangos does not use there.
+    /// </summary>
+    internal bool UpdatesActiveCellsOnly
+        => _grid.Options.UpdateActiveCellsOnly && (Template is { } template ? !template.Instanceable : MapId is 0 or 1);
+
+    /// <summary>Moves that stayed within the relocation lower limit and so scheduled no visibility pass (diagnostics, tests).</summary>
+    public long RelocationsWithoutVisibility { get; private set; }
 
     /// <summary>
     /// Unload every grid (objects are evicted, grid/terrain events run) and refuse further

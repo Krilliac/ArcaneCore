@@ -26,6 +26,24 @@ public sealed class MapOptions
     public float GridActivationDistance { get; set; } = Map.VisibilityRange;
 
     /// <summary>
+    /// How far (yards, 3D) a unit (player or creature) must move from where its last movement-triggered visibility pass was
+    /// scheduled before the next one is (vmangos <c>Visibility.RelocationLowerLimit</c>, default 10, World.cpp:830;
+    /// Unit::OnRelocated). Moves within it keep the visible sets of the last pass; the grey distance
+    /// (<see cref="Map.VisibilityGreyDistance"/>) and the next pass cover the difference. Game objects get a pass on every move.
+    /// 0 runs a pass on every move.
+    /// </summary>
+    public float VisibilityRelocationLowerLimit { get; set; } = 10f;
+
+    /// <summary>
+    /// On continents, update creatures only in the cells within <see cref="GridActivationDistance"/> of a player or active object (vmangos
+    /// Map::UpdateCells → UpdateActiveCellsSynch, Maps/Map.cpp:815-857): a creature elsewhere in a loaded grid stands still, its
+    /// AI and movement paused, until a player comes near; its respawn time is wall-clock and its corpse decay catches up on the
+    /// first update (WorldObject::UpdateHelper::UpdateRealTime, Objects/Object.h:477-481). False updates every creature of the
+    /// loaded grids each tick (the behaviour before 2026-10-11).
+    /// </summary>
+    public bool UpdateActiveCellsOnly { get; set; } = true;
+
+    /// <summary>
     /// How far beyond <see cref="GridActivationDistance"/> a player (or active object) looks for grids that do not exist yet, so
     /// their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created
     /// (<see cref="GridContainer.GridApproaching"/>); other objects look half as far. 0 turns the prefetch off. An ArcaneCore

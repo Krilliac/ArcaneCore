@@ -51,6 +51,9 @@ public sealed class VisibilityPerformanceTests(ITestOutputHelper output)
     public void Map0WithSixtySixThousandSpawns_VisibilityMatchesBruteForce_AndOnlyVisitsNearbyPlayersForMovers()
     {
         using WorldRuntime world = TestWorld.CreateRuntime();
+        // The oracle checks the incremental algorithm on every move; the relocation lower limit (a pass only every 10 yards,
+        // VisibilityRelocationLowerLimitTests) would make the visible sets lag the brute force by design.
+        world.Options.Maps.VisibilityRelocationLowerLimit = 0;
         Map map = world.GetMap(0);
         var random = new Random(5875);
 

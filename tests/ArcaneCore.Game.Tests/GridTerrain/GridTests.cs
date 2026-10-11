@@ -74,19 +74,31 @@ public sealed class GridContainerTests
     }
 
     [Fact]
-    public void ActiveObject_LoadsItsGridAndTheGridsWithinActivationDistance()
+    public void Player_LoadsItsGridAndTheGridsWithinActivationDistance()
     {
         GridContainer grids = Create();
         var loaded = new List<GridCoord>();
         grids.GridLoaded += g => loaded.Add(g.Coord);
 
-        grids.Add(new TestUnit(1, 0, 0), active: true);
+        grids.Add(TestWorld.CreatePlayer(1, 0, 0, new FakeSession()), active: true); // vmangos Player::LoadMapCellsAround
 
         // (0, 0) sits on the corner of four grids; 100 yards reaches all of them.
         Assert.Equal(4, grids.LoadedGridCount);
         Assert.Equal(4, loaded.Count);
         Assert.All(grids.LoadedGrids, g => Assert.Equal(GridState.Active, g.State));
         Assert.True(grids.IsGridLoaded(new GridCoord(31, 31)));
+    }
+
+    [Fact]
+    public void ActiveNonPlayer_LoadsAndPinsOnlyItsOwnGrid()
+    {
+        // vmangos Map::Add<T> with an active object -> EnsureGridLoadedAtEnter of its own cell and Map::AddToActive's unload lock;
+        // only a player loads the grids around it.
+        GridContainer grids = Create();
+        grids.Add(new TestUnit(1, 0, 0), active: true); // (0, 0): the corner of four grids
+        Grid own = Assert.Single(grids.LoadedGrids);
+        Assert.True(own.ObjectDataLoaded);
+        Assert.Equal(GridState.Active, own.State);
     }
 
     [Fact]
@@ -108,7 +120,7 @@ public sealed class GridContainerTests
         GridContainer grids = Create();
         var unloaded = new List<GridCoord>();
         grids.GridUnloaded += unloaded.Add;
-        var player = new TestUnit(1, 0, 0);
+        Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
         grids.Add(player, active: true);
 
         Run(grids, 3 * MapOptions.MinGridDelayMs);

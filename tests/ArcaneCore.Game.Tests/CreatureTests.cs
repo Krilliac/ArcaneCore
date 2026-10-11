@@ -240,6 +240,8 @@ public sealed class CreatureTests
         // Distance 100 + radii: a creature at 100.5 yd is created (radii 0.389 + 0.389)…
         CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 100.5f, 0)]);
         (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(content);
+        // The edge itself, move by move: the 10-yard relocation lower limit (vmangos Unit::OnRelocated) would skip these sub-yard steps.
+        world.Options.Maps.VisibilityRelocationLowerLimit = 0;
         var session = new FakeSession();
         Player player = TestWorld.CreatePlayer(1, 0, 0, session);
         world.AddPlayer(player);

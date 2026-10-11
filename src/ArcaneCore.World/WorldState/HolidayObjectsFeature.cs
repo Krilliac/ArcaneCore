@@ -82,17 +82,18 @@ public sealed class HolidayObjectsFeature(IServiceProvider services, IServiceSco
         }
     }
 
-    private void Save(int index)
+    private StateSaveQueue<int, ElementalInvasionState>? _saves;
+
+    /// <summary>The per-element writer: off the world thread (every invader kill saved on it).</summary>
+    internal StateSaveQueue<int, ElementalInvasionState> Saves => _saves ??= new(async state =>
     {
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetService<IElementalInvasionStore>()?
-                .SaveAsync(new ElementalInvasionState(index, Invasion.Stage(index), Invasion.Kills(index))).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "could not save the elemental invasion state");
-        }
-    }
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IElementalInvasionStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
+    }, logger, "elemental invasion");
+
+    /// <summary>VAR_*_KILLS / VAR_* stage: the element's latest stage and kills, written off the world thread.</summary>
+    private void Save(int index) => Saves.Save(index, new ElementalInvasionState(index, Invasion.Stage(index), Invasion.Kills(index)));
+
+    /// <summary>Writes every queued state before shutdown completes.</summary>
+    public Task StopAsync() => _saves?.FlushAsync() ?? Task.CompletedTask;
 }
