@@ -14,6 +14,72 @@ namespace ArcaneCore.Game.Tests.Instances;
 public sealed class ShadowfangKeepScriptTests
 {
     [Fact]
+    public void UnmarkedClassicDbWolfGuardDoesNotArmAnEndlessPatrolRetry()
+    {
+        // The supplied ClassicDB has only 3854 spawn 3300044 with 7200/7200.
+        // No vmangos 7201/7202 patrol exists to reveal in that content.
+        using var run = new DungeonScriptTestKit(map => new ShadowfangKeepInstance(map),
+            [3887, 4278, 3854], [3887, 4278], [], extraSpawns:
+            [Spawn(3300044, 3854, -12f, -383.07f, 61.78f, mapId: InstanceFixture.Dungeon, respawnSeconds: 7200)]);
+        var script = (ShadowfangKeepInstance)run.Script;
+        var guard = run.Creature(3854);
+        Assert.Contains(guard.Guid, run.Player.VisibleObjects); // retain this ClassicDB guard as an ordinary spawn
+        run.Kill(3887);
+        run.Kill(4278);
+        run.Tick(6_000);
+        uint baron = (uint)typeof(ShadowfangKeepInstance)
+            .GetField("_baronPatrolMs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(script)!;
+        uint commander = (uint)typeof(ShadowfangKeepInstance)
+            .GetField("_commanderPatrolMs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(script)!;
+        Assert.Equal(0u, baron);
+        Assert.Equal(0u, commander);
+        Assert.Contains(guard.Guid, run.Player.VisibleObjects);
+    }
+
+    [Fact]
+    public void WolfGuardPatrolsRevealSixSecondsAfterTheirRespectiveBossDeaths()
+    {
+        // vmangos instance_shadowfang_keep::OnCreatureDeath/Update keys the two
+        // patrols by the special 7201/7202 respawn markers in its world data.
+        using var run = new DungeonScriptTestKit(map => new ShadowfangKeepInstance(map),
+            [3887, 4278, 3854], [3887, 4278], [], extraSpawns:
+            [
+                Spawn(101, 3854, -12f, -383.07f, 61.78f, mapId: InstanceFixture.Dungeon, respawnSeconds: 7201),
+                Spawn(102, 3854, -11f, -383.07f, 61.78f, mapId: InstanceFixture.Dungeon, respawnSeconds: 7202),
+            ]);
+        var baronGuard = run.Creatures.Creatures.Single(c => c.Spawn?.Guid == 101);
+        var commanderGuard = run.Creatures.Creatures.Single(c => c.Spawn?.Guid == 102);
+        Assert.Equal(35u, baronGuard.FactionTemplate);
+        Assert.Equal(35u, commanderGuard.FactionTemplate);
+        Assert.DoesNotContain(baronGuard.Guid, run.Player.VisibleObjects);
+
+        run.Kill(3887);
+        run.Tick(5_999);
+        Assert.Equal(35u, baronGuard.FactionTemplate);
+        run.Tick(1);
+        Assert.Equal(17u, baronGuard.FactionTemplate);
+        Assert.Equal(35u, commanderGuard.FactionTemplate);
+        Assert.Contains(baronGuard.Guid, run.Player.VisibleObjects);
+        Assert.DoesNotContain(commanderGuard.Guid, run.Player.VisibleObjects);
+
+        run.Kill(4278);
+        run.Tick(6_000);
+        Assert.Equal(17u, commanderGuard.FactionTemplate);
+        Assert.Contains(commanderGuard.Guid, run.Player.VisibleObjects);
+    }
+
+    [Fact]
+    public void FenrusCombatHookPlaysTheVmangosAggroHowl()
+    {
+        using var run = new DungeonScriptTestKit(map => new ShadowfangKeepInstance(map), [4274], [4274], []);
+        int before = run.Sent(WorldOpcode.SmsgPlaySound).Count;
+        run.Script.OnCreatureEnterCombat(run.Creature(4274));
+        Assert.Equal(before + 1, run.Sent(WorldOpcode.SmsgPlaySound).Count);
+    }
+
+    [Fact]
     public void ArugalDoesNotCurseTheOnlyAttacker_OrThunderShockOutOfMeleeRange()
     {
         var spells = new RecordingCreatureSpells();

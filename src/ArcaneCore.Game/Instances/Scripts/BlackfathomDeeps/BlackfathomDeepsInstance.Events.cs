@@ -30,11 +30,13 @@ public sealed partial class BlackfathomDeepsInstance
     private readonly uint[] _waveTimers = new uint[4];
     private readonly HashSet<ObjectGuid> _waveMobs = [];
     private int _waveCount;
+    private uint _checkEventEndMs;
 
     public override void Initialize()
     {
         base.Initialize();
         _waveCount = 0;
+        _checkEventEndMs = 1_000;
         Array.Clear(_waveTimers);
         _waveMobs.Clear();
         if (Instance.FindUpdater<GameObjectMapSystem>() is { } objects)
@@ -62,6 +64,7 @@ public sealed partial class BlackfathomDeepsInstance
         if (_waveCount < Waves.Length)
         {
             _waveTimers[_waveCount++] = 3_000;
+            _checkEventEndMs = 5_000;
         }
     }
 
@@ -72,11 +75,7 @@ public sealed partial class BlackfathomDeepsInstance
             SetData(TypeAquanis, EncounterState.Done);
         }
 
-        if (Encounters[1] == EncounterState.InProgress && _waveMobs.Remove(creature.Guid)
-            && _waveCount == Waves.Length && _waveMobs.Count == 0 && _waveTimers.All(t => t == 0))
-        {
-            SetData(TypeShrine, EncounterState.Done);
-        }
+        _waveMobs.Remove(creature.Guid);
     }
 
     public override void OnCreatureDeath(Creature creature) => WaveMobDied(creature);
@@ -86,6 +85,24 @@ public sealed partial class BlackfathomDeepsInstance
         if (Encounters[1] != EncounterState.InProgress)
         {
             return;
+        }
+
+        // vmangos instance_blackfathom_deeps::Update polls the wave's completion
+        // after the last fire's five-second window, then every second until all die.
+        if (_checkEventEndMs <= diffMs)
+        {
+            if (IsWaveEventFinished())
+            {
+                SetData(TypeShrine, EncounterState.Done);
+            }
+            else
+            {
+                _checkEventEndMs = 1_000;
+            }
+        }
+        else
+        {
+            _checkEventEndMs -= diffMs;
         }
 
         for (int i = 0; i < _waveTimers.Length; i++)
@@ -105,6 +122,19 @@ public sealed partial class BlackfathomDeepsInstance
             SpawnWave(i);
         }
 
+    }
+
+    // vmangos instance_blackfathom_deeps::IsWaveEventFinished: a missing
+    // creature is no longer an active wave member (despawn or grid unload).
+    private bool IsWaveEventFinished()
+    {
+        if (_waveCount < Waves.Length)
+        {
+            return false;
+        }
+
+        CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+        return _waveMobs.All(guid => creatures?.FindCreature(guid) is not { IsAlive: true });
     }
 
     private void SpawnWave(int index)
@@ -127,7 +157,9 @@ public sealed partial class BlackfathomDeepsInstance
                 if (summon is not null)
                 {
                     _waveMobs.Add(summon.Guid);
-                    summon.Motion.MovePoint(0, kelris.Home.X, kelris.Home.Y, kelris.Home.Z, run: false);
+                    creatures.CastSpell(summon, 7741, summon, triggered: true);
+                    creatures.SetHomePosition(summon, kelris.Home.X, kelris.Home.Y, kelris.Home.Z, kelris.Home.Orientation);
+                    creatures.SetInCombatWithZone(summon);
                 }
             }
         }

@@ -57,10 +57,11 @@ public sealed partial class GameObjectMapSystem
     /// An instance script's door or button use (ScriptDev2 <c>ScriptedInstance::DoUseDoorOrButton</c>, mangos-classic
     /// AI/ScriptDevAI/include/sc_instance.cpp:15-32): a ready door or button is used (GameObject::UseDoorOrButton: its state flips, it is in use
     /// and comes back after <paramref name="withRestoreTimeSeconds"/>, the template's auto-close time when 0, never when both are 0); an active
-    /// one is reset (GameObject::ResetDoorOrButton). No lock is checked and no linked trap fires. Other types and objects this system does not
+    /// one is reset (GameObject::ResetDoorOrButton). <paramref name="alternative"/> selects GO_STATE_ACTIVE_ALTERNATIVE for the Deadmines
+    /// cannon. No lock is checked and no linked trap fires. Other types and objects this system does not
     /// track are refused.
     /// </summary>
-    public GameObjectUseResult ToggleDoorOrButton(GameObject go, uint withRestoreTimeSeconds = 0)
+    public GameObjectUseResult ToggleDoorOrButton(GameObject go, uint withRestoreTimeSeconds = 0, bool alternative = false)
     {
         ArgumentNullException.ThrowIfNull(go);
         if (!Tracks(go))
@@ -76,7 +77,7 @@ public sealed partial class GameObjectMapSystem
         switch (go.LootState)
         {
             case GameObjectLootState.Ready:
-                return ActivateDoorOrButton(go, withRestoreTimeSeconds != 0 ? withRestoreTimeSeconds : go.Template.AutoCloseSeconds());
+                return ActivateDoorOrButton(go, withRestoreTimeSeconds != 0 ? withRestoreTimeSeconds : go.Template.AutoCloseSeconds(), alternative);
             case GameObjectLootState.Activated:
                 ResetToReady(go);
                 return GameObjectUseResult.Ok;

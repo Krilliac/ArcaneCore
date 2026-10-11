@@ -32,7 +32,7 @@ public sealed partial class BlackfathomDeepsInstance(Map instance) : ScriptedIns
         switch (go.Entry)
         {
             case GoPortalDoor:
-                OpenIf(go, Encounters[1] == EncounterState.Done);
+                OpenIf(go, Encounters[0] == EncounterState.Done && Encounters[1] == EncounterState.Done);
                 StoreGameObject(go);
                 break;
             case >= GoShrine1 and <= GoShrine4:
@@ -49,6 +49,12 @@ public sealed partial class BlackfathomDeepsInstance(Map instance) : ScriptedIns
                 if (Encounters[0] != EncounterState.Done && data == EncounterState.Done)
                 {
                     Encounters[0] = data;
+                    // vmangos instance_blackfathom_deeps::SetData(TYPE_KELRIS): a finished shrine
+                    // opens the portal when Kelris dies second.
+                    if (Encounters[1] == EncounterState.Done)
+                    {
+                        DoUseDoorOrButton(GoPortalDoor);
+                    }
                 }
 
                 break;
@@ -58,7 +64,7 @@ public sealed partial class BlackfathomDeepsInstance(Map instance) : ScriptedIns
                 {
                     QueueNextWave();
                 }
-                else if (data == EncounterState.Done)
+                else if (data == EncounterState.Done && Encounters[0] == EncounterState.Done)
                 {
                     DoUseDoorOrButton(GoPortalDoor);
                 }

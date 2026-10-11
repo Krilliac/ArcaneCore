@@ -11,6 +11,11 @@ public sealed partial class ShadowfangKeepInstance
 {
     public const uint NpcAda = 3849, NpcAsh = 3850, NpcFenrus = 4274, NpcArchmageArugal = 4275, NpcNandos = 3927;
     private readonly HashSet<ObjectGuid> _nandosPack = [];
+    private readonly HashSet<ObjectGuid> _hiddenWolfGuards = [];
+    private uint _baronPatrolMs;
+    private uint _commanderPatrolMs;
+    private int _baronPatrolRetries;
+    private int _commanderPatrolRetries;
     private Creature? _eventArugal;
     private uint _dialogueTimer;
     private int _dialogueStep = -1;
@@ -23,6 +28,11 @@ public sealed partial class ShadowfangKeepInstance
     {
         base.Initialize();
         _nandosPack.Clear();
+        _hiddenWolfGuards.Clear();
+        _baronPatrolMs = 0;
+        _commanderPatrolMs = 0;
+        _baronPatrolRetries = 0;
+        _commanderPatrolRetries = 0;
         _dialogueStep = -1;
         _dialogueTimer = 0;
         _introStep = -1;
@@ -57,6 +67,19 @@ public sealed partial class ShadowfangKeepInstance
                 }
 
                 break;
+            case 3887 or 4278:
+                StoreCreature(creature);
+                break;
+            case 3854 when creature.Spawn is { } spawn
+                && spawn.SpawnTimeMinSeconds == spawn.SpawnTimeMaxSeconds
+                && spawn.SpawnTimeMinSeconds is 7201 or 7202:
+                // vmangos instance_shadowfang_keep::OnCreatureCreate hides the
+                // patrols selected by these special respawn-delay markers. The
+                // supplied ClassicDB has only a 7200 wolf guard, so hiding all
+                // 3854 as vmangos does would leave that normal spawn invisible.
+                creature.FactionTemplate = 35;
+                _hiddenWolfGuards.Add(creature.Guid);
+                break;
             case 3863 or 5058 or 3861 or 3862:
                 if (creature.Z > 151.91f && creature.Spawn is not null)
                 {
@@ -69,6 +92,17 @@ public sealed partial class ShadowfangKeepInstance
 
     public override void OnCreatureDeath(Creature creature)
     {
+        if (creature.Entry == 3887 && HasHiddenWolfGuard(7201))
+        {
+            _baronPatrolMs = 6_000;
+            _baronPatrolRetries = 0;
+        }
+        if (creature.Entry == 4278 && HasHiddenWolfGuard(7202))
+        {
+            _commanderPatrolMs = 6_000;
+            _commanderPatrolRetries = 0;
+        }
+
         if (!_nandosPack.Remove(creature.Guid) || _nandosPack.Count != 0
             || GetSingleCreatureFromStorage(NpcNandos) is not { IsAlive: true } nandos || nandos.Combat.IsInCombat)
         {
@@ -77,6 +111,15 @@ public sealed partial class ShadowfangKeepInstance
 
         Instance.FindUpdater<CreatureMapSystem>()?.SayText(nandos, -1033020);
         nandos.Motion.MovePoint(0, -170.6f, 2182.45f, 151.91f, run: true);
+    }
+
+    public override void OnCreatureEnterCombat(Creature creature)
+    {
+        if (creature.Entry == NpcFenrus)
+        {
+            // vmangos instance_shadowfang_keep::OnCreatureEnterCombat.
+            Instance.FindUpdater<CreatureMapSystem>()?.PlayDirectSound(creature, 6017);
+        }
     }
 
     private void PrisonersSpeak()
@@ -107,6 +150,8 @@ public sealed partial class ShadowfangKeepInstance
 
     public override void Update(uint diffMs)
     {
+        UpdateWolfPatrol(ref _baronPatrolMs, ref _baronPatrolRetries, 3887, 7201, diffMs);
+        UpdateWolfPatrol(ref _commanderPatrolMs, ref _commanderPatrolRetries, 4278, 7202, diffMs);
         UpdateIntro(diffMs);
         if (_dialogueStep < 0)
         {
@@ -151,6 +196,56 @@ public sealed partial class ShadowfangKeepInstance
                 _dialogueStep = -1;
                 break;
         }
+    }
+
+    private bool HasHiddenWolfGuard(uint spawnMarker)
+    {
+        if (_hiddenWolfGuards.Count == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return false;
+        }
+
+        return creatures.Creatures.Any(c => _hiddenWolfGuards.Contains(c.Guid) && c.Spawn is { } spawn
+            && spawn.SpawnTimeMinSeconds == spawnMarker && spawn.SpawnTimeMaxSeconds == spawnMarker);
+    }
+
+    private void UpdateWolfPatrol(ref uint timer, ref int retries, uint bossEntry, uint spawnMarker, uint diffMs)
+    {
+        if (timer == 0 || _hiddenWolfGuards.Count == 0 || GetSingleCreatureFromStorage(bossEntry) is not { } boss)
+        {
+            if (_hiddenWolfGuards.Count == 0) timer = 0;
+            return;
+        }
+
+        if (timer > diffMs)
+        {
+            timer -= diffMs;
+            return;
+        }
+
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
+        {
+            return;
+        }
+
+        bool revealed = false;
+        foreach (Creature guard in creatures.Creatures.Where(c => c.Entry == 3854 && c.Spawn is { } spawn
+            && spawn.SpawnTimeMinSeconds == spawnMarker && spawn.SpawnTimeMaxSeconds == spawnMarker))
+        {
+            float dx = guard.X - boss.X, dy = guard.Y - boss.Y;
+            if (dx * dx + dy * dy > 400f * 400f)
+            {
+                continue;
+            }
+
+            guard.FactionTemplate = 17;
+            _hiddenWolfGuards.Remove(guard.Guid);
+            Instance.RefreshVisibility(guard);
+            revealed = true;
+        }
+
+        // A grid may arrive late, but never scan the map every tick forever.
+        timer = revealed || ++retries >= 5 ? 0u : 1_000u;
     }
 
     private void UpdateIntro(uint diffMs)
@@ -207,6 +302,7 @@ public sealed partial class ShadowfangKeepInstance
         public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
         {
             if (target is not Creature creature) return true;
+            if (instance._hiddenWolfGuards.Contains(creature.Guid)) return false;
             return creature.Entry switch
             {
                 10000 => instance._introVisible,
