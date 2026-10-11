@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
@@ -132,7 +131,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private string _atlasKey = string.Empty;
     private bool _atlasLocated;
     private PopulationLocated? _located;
-    private string _coverageKey = string.Empty;
+    private (PopulationZoneAtlas Atlas, PopulationBand[] Bands, PopulationLevelRule Rule, PopulationFactions Factions)? _coverageChecked;
     private object? _locating;
     private bool _locateRunning;
     private int _locateHeldPasses;
@@ -325,7 +324,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         AreaTable areas = WorldMaps.Of(world).Areas;
         GraveyardCatalog graveyards = WorldGraveyards.Of(world).Catalog;
         CreatureContent? creatures = services.GetService<CreatureWorldFeature>()?.Content;
-        string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones) + "|" + pop.CreatureSurveyRadius;
+        // The creature definitions version: `.reload creature_template` swaps templates (levels, factions) in the same content.
+        string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones) + "|" + pop.CreatureSurveyRadius
+            + "|" + creatures?.DefinitionsVersion;
         bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards)
             || !ReferenceEquals(creatures, _atlasCreatures) || key != _atlasKey;
         if (sourcesChanged)
@@ -355,7 +356,6 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             located is null ? null : l => located.Where.GetValueOrDefault(l.Id),
             located is null || located.Creatures.Count == 0 ? null : (l, t) => located.Creatures.GetValueOrDefault((l.Id, t)));
         _atlasLocated = located is not null;
-        _coverageKey = string.Empty;
         logger.LogInformation(
             "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Surveyed} graveyard/faction pairs with a creature survey level; {Dropped} graveyard links left out as standing in another zone{List}",
             located is null ? " (graveyard terrain lookup not in yet)" : string.Empty,
@@ -377,16 +377,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         if (!_atlasLocated) return;
         PopulationLevelRule rule = PopulationLevelRule.From(pop);
+        // Nothing to build when nothing changed (every pass): the atlas and band list are replaced, never mutated; the rule is a record.
+        if (_coverageChecked is { } last && ReferenceEquals(last.Atlas, _atlas) && ReferenceEquals(last.Bands, pop.Bands) && last.Rule == rule
+            && last.Factions == pop.Factions) return;
+        _coverageChecked = (_atlas, pop.Bands, rule, pop.Factions);
         Team[] teams = pop.Factions switch
         {
             PopulationFactions.Alliance => [Team.Alliance],
             PopulationFactions.Horde => [Team.Horde],
             _ => [Team.Alliance, Team.Horde],
         };
-        string key = string.Create(CultureInfo.InvariantCulture,
-            $"{RuntimeHelpers.GetHashCode(_atlas)}|{string.Join(',', pop.Bands.Select(b => b.ToString()))}|{rule}|{pop.Factions}");
-        if (key == _coverageKey) return;
-        _coverageKey = key;
         IReadOnlyList<(PopulationBand Band, Team Team)> uncovered = _atlas.UncoveredBands(pop.Bands, teams, rule);
         if (uncovered.Count == 0) return;
         logger.LogWarning(

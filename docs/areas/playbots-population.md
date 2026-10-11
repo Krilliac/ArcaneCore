@@ -139,19 +139,28 @@ it stands in, so the atlas asks the terrain (`Map.GetZoneAndAreaId` of the grave
   (issue #177).
 
 * surveys the **creatures near each kept graveyard** (`PopulationCreatureSurvey`, the same background job): for each team, the
-  lower median template `MinLevel` of the database creature spawns within `CreatureSurveyRadius` yards (default 100) that are
-  hostile to the team (the FactionTemplate.dbc relation of the creature's template to template 1 Human or 2 Orc, without
-  reputation), leaving out civilians and spawns of positive game events (absent while no event runs; the AQ war effort silithids
-  at Camp Mojache and Gadgetzan). Fewer than 3 hostile creatures give no level. The level is kept per (graveyard, team) as
+  lower median template `MinLevel` of the database creature spawns within `CreatureSurveyRadius` yards (default 100, measured
+  flat) and within 15 yards above or below the graveyard that are hostile to the team (the FactionTemplate.dbc relation of the
+  creature's template to template 1 Human or 2 Orc). Left out: civilians, creatures that never aggro on sight, invisible (trigger)
+  and not-selectable creatures, and spawns of positive game events (absent while no event runs; the AQ war effort silithids at
+  Camp Mojache and Gadgetzan). The height bound matters at Stonard: the graveyard stands at z 22, and the flat circle takes in 23
+  level 46-47 Nethergarde Miners and 3 others in the valley at z -13 to +7, which would have raised the Horde's lowest level there
+  from 37 to 44. Fewer than 3 hostile creatures give no level.
+  **Caveat: no reputation.** Hostility is the template relation only, not the reputation a real character has (a faction at war,
+  forced reactions, contested-guard flags): a creature whose reaction to a player depends on reputation counts as the template says.
+  It is a placement heuristic, not the combat rule. The level is kept per (graveyard, team) as
   `CreatureLevels`; the Dire Maul graveyard in Feralas gets 43 (level 43-46 howlers, bears, screechers), Morgan's Plot in Deadwind
-  Pass 59 (level 58-60 undead), and Aerie Peak in the Hinterlands a Horde level from the Wildhammer sentries. Without creature
+  Pass 59 (level 58-60 undead). The height bound also leaves out the Wildhammer sentries of Aerie Peak (hostile to the Horde,
+  17-19 yards below the graveyard), so Aerie Peak has no survey level and a Horde bot of 41 or more may still land there; no bounded
+  height difference separates those sentries from the Stonard miners (the nearest at 15.4-20 yards). Without creature
   content or faction templates, or with `CreatureSurveyRadius` 0, nothing is surveyed.
 
 The lookup never runs on the world thread: a terrain tile not in memory is read from disk synchronously and the terrain clean-up
 frees unreferenced tiles after a minute, so looking up some 90 graveyards inside a tick would be some 90 file reads on every
 build. The feature starts a background task (`TerrainManager.ReadZoneAndAreaIdDetached`, which reads the tile files itself and
 never touches the world thread's tile cache) when the atlas's sources change: the first pass, a content reload, an `AllowedMaps` or
-`ExcludedZones` change, new creature content or a `CreatureSurveyRadius` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
+`ExcludedZones` change, new creature content, new creature definitions (`.reload creature_template`, through
+`CreatureContent.DefinitionsVersion`) or a `CreatureSurveyRadius` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
 is in, and always without terrain data (`World:Maps:DataDirectory` unset), nothing is known: every link is kept and the floor is the
 zone's lowest sub-area level. A lookup for sources that change in the meantime is cancelled (each lookup has its own token source,
 linked to the feature's stop), and a result that still arrives is dropped, so repeated reloads never stack lookups. A lookup that
@@ -169,7 +178,9 @@ delivered to the world thread), a pass creates no bot and relocates none, and th
 graveyard terrain lookup`; restarting parked bots and parking go on. Otherwise the first pass after every start or reload would
 place bots from the fallback, which is the Duskwood bug again. After 6 such passes (`MaxTerrainHoldPasses`) creation and
 relocation go ahead on the fallback and a warning is logged, so a hung read cannot stall the population. A failed lookup ends the
-wait at once.
+wait at once. The wait also applies **without terrain data** when the creature survey runs (creature content and faction templates
+loaded, `CreatureSurveyRadius` above 0): the background job then only surveys, and the first pass after a start or a reload holds
+creation and relocation until it is in (usually the next pass).
 
 **The detached reader and a missing tile.** `ReadZoneAndAreaIdDetached` returns (0, 0) for a position whose tile file is missing,
 unreadable or outside the map, so that graveyard's link is kept with no sub-area level. The cached path
@@ -201,12 +212,13 @@ issues name:
 
 | Zone (levels) | Graveyard (teams) | Stands in (level) | Floor | Survey A / H | Lowest, flat 4 | Lowest, default A / H |
 |---|---|---|---|---|---|---|
-| The Hinterlands 47 (41-49) | 349 Aerie Peak (both) | Aerie Peak 348 (41) | 41 | - / 55 | 37 | 41 / 52 |
+| The Hinterlands 47 (41-49) | 349 Aerie Peak (both) | Aerie Peak 348 (41) | 41 | - / - | 37 | 41 / 41 |
 | | 789 The Overlook Cliffs (both) | The Overlook Cliffs 307 (48) | 48 | - / - | 44 | 48 / 48 |
-| Feralas 357 (41-60) | 309 Feathermoon Stronghold (A) | Feathermoon Stronghold 1116 (0) | 41 | 40 / - | 37 | 41 / - |
+| Feralas 357 (41-60) | 309 Feathermoon Stronghold (A) | Feathermoon Stronghold 1116 (0) | 41 | - / - | 37 | 41 / - |
 | | 310 Camp Mojache (H) | Camp Mojache 1099 (42) | 42 | - / 40 | 38 | - / 42 |
 | | 849 Dire Maul (both) | Dire Maul 2577 (44) | 44 | 43 / 43 | 40 | 44 / 44 |
 | Deadwind Pass 41 (50-60) | 36 Morgan's Plot (both) | Morgan's Plot 2563 (0) | 50 | 59 / 59 | 46 | 56 / 56 |
+| Swamp of Sorrows 8 (36-43) | 108 Stonard (H) | Stonard 75 (37) | 37 | - / - (47 without the height bound) | 33 | - / 37 (44 without it) |
 
 Zones per default band on the same data (`FittingZones`), flat 4 before and the default rule after; no band is left without a
 zone for either faction:
@@ -216,8 +228,8 @@ zone for either faction:
 | 1-10 | 5 / 5 | 5 / 5 |
 | 11-20 | 13 / 9 | 11 / 8 |
 | 21-30 | 9 / 9 | 10 / 10 |
-| 31-40 | 12 / 8 | 14 / 9 |
-| 41-50 | 15 / 13 | 15 / 12 |
+| 31-40 | 12 / 8 | 14 / 10 |
+| 41-50 | 15 / 13 | 15 / 13 |
 | 51-60 | 13 / 13 | 12 / 12 |
 
 ## Factions

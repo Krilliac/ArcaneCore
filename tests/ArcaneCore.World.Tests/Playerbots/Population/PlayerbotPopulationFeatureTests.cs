@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
 using Microsoft.Extensions.DependencyInjection;
@@ -663,6 +664,87 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
         Assert.NotEmpty(onWorldThread);
         Assert.DoesNotContain(true, onWorldThread);
+    }
+
+    [Fact]
+    public async Task TheRealCreatureSurvey_ReadsTheCreatureContent_UnwrapsTheReputationHooks_AndSkipsEventSpawns()
+    {
+        // No CreatureSurveyor: the production survey (PopulationCreatureSurvey over CreatureWorldFeature.Content), with the faction
+        // templates reached through the world's combat hooks wrapped in ReputationCombatHooks, as the live world registers them. Beside
+        // Sentinel Hill (graveyard 2, z 34) stand three level 20 monsters, four level 60 monsters listed under a positive game event
+        // (absent while no event runs), one level 60 monster 30 yards below the graveyard (another floor) and one 150 yards away.
+        // Counted: 20, 20, 20 -> 20. With the event spawns it would be 60.
+        const uint Monster = 9101, Raider = 9102;
+        CreatureTemplate Template(uint entry, byte level) => new()
+        {
+            Entry = entry, Name = "Survey" + entry, MinLevel = level, MaxLevel = level, DisplayIds = [903], Faction = 14, CreatureType = 1,
+            MinLevelHealth = 100, MaxLevelHealth = 100,
+        };
+        CreatureSpawn Spawn(uint guid, uint entry, float dx, float dz = 0f) => new()
+        {
+            Guid = guid, Entry = entry, MapId = 0, X = -10_653.0f + dx, Y = 1_165.0f, Z = 34.0f + dz, SpawnTimeMinSeconds = 120, SpawnTimeMaxSeconds = 120,
+        };
+        CreatureContent creatures = new(
+            [Template(Monster, 20), Template(Raider, 60)],
+            [
+                Spawn(92001, Monster, 10), Spawn(92002, Monster, 20), Spawn(92003, Monster, 30),
+                Spawn(92011, Raider, 11), Spawn(92012, Raider, 12), Spawn(92013, Raider, 13), Spawn(92014, Raider, 14),
+                Spawn(92021, Raider, 15, dz: -30f), Spawn(92022, Raider, 150),
+            ],
+            [], [], []);
+        ArcaneCore.World.Tests.Creatures.CreatureTestStore.Current.Value = new ArcaneCore.World.Tests.Creatures.CreatureTestContext(creatures);
+        ArcaneCore.World.Tests.WorldState.GameEventTestStore.Current.Value = new ArcaneCore.Kernel.WorldData.WorldState.GameEventContent(
+            [new ArcaneCore.Kernel.WorldData.WorldState.GameEventRecord(1, 1, 1440, 180, 0, 0, "Raid")],
+            [new ArcaneCore.Kernel.WorldData.WorldState.GameEventTimeRecord(1, "2089-01-01 00:00:00", "2090-12-31 22:59:59")], // never running
+            [.. new uint[] { 92011, 92012, 92013, 92014 }.Select(g => new ArcaneCore.Kernel.WorldData.WorldState.GameEventSpawnRecord(g, 1))],
+            [], [], [], []);
+        PopulationTestHost world;
+        try
+        {
+            world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 0, withRelocation: true);
+        }
+        finally
+        {
+            ArcaneCore.World.Tests.Creatures.CreatureTestStore.Current.Value = null;
+            ArcaneCore.World.Tests.WorldState.GameEventTestStore.Current.Value = null;
+        }
+
+        await using (world)
+        {
+            var templates = new ArcaneCore.Kernel.Npc.FactionTemplateCatalog(
+            [
+                new ArcaneCore.Kernel.Npc.FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
+                new ArcaneCore.Kernel.Npc.FactionTemplateRecord(2, 2, 0, OwnMask: 5, FriendlyMask: 4, HostileMask: 10),
+                new ArcaneCore.Kernel.Npc.FactionTemplateRecord(14, 7, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 1),
+            ]);
+            Assert.Null(world.Host.WorldServices.GetService<ArcaneCore.Kernel.Npc.FactionTemplateCatalog>()); // the hooks are the only source
+            // The event rows really reached the game-event service (a rejected event would leave the gate silently empty).
+            Assert.Equal([92011u, 92012u, 92013u, 92014u], world.Host.WorldServices.GetRequiredService<ArcaneCore.World.WorldState.GameEventFeature>()
+                .Service!.Rows.Creatures[1].Order().ToArray());
+            ArcaneCore.Game.Combat.CombatHooks.Register(world.Host.World, new ArcaneCore.Game.Reputation.ReputationCombatHooks(
+                new ArcaneCore.Game.Combat.FactionCombatHooks(templates),
+                new ArcaneCore.Game.Reputation.ReputationReactionResolver(templates, ArcaneCore.Kernel.Reputation.FactionCatalog.Empty, _ => null)));
+            await PollAsync(() => world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Creatures.CreatureWorldFeature>().ContentInstalled,
+                "the creature content");
+            world.Population.ExcludedZones = [];
+
+            IReadOnlyDictionary<(uint LocationId, Team Team), int>? levels = null;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline)
+            {
+                world.Ticks.Set(200, 10);
+                await world.PassAsync();
+                levels = await world.Host.World.InvokeAsync(() => world.Feature.Atlas.Find(PopulationTestHost.Westfall)?.CreatureLevels);
+                if (levels is { Count: > 0 }) break;
+                await Task.Delay(20);
+            }
+
+            Assert.NotNull(levels);
+            Assert.Equal(20, Assert.Contains((2u, Team.Alliance), levels));
+            Assert.Equal(20, Assert.Contains((2u, Team.Horde), levels));
+            PopulationZone westfall = await world.Host.World.InvokeAsync(() => world.Feature.Atlas.Find(PopulationTestHost.Westfall)!);
+            Assert.Equal(17, westfall.LowestLevelFor(Team.Alliance, PopulationLevelRule.From(world.Population))); // 20 - 3, above 12 - 4
+        }
     }
 
     [Fact]

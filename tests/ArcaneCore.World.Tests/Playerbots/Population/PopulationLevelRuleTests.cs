@@ -79,8 +79,9 @@ public sealed class PopulationLevelRuleTests
         _ => (0, 0),
     };
 
-    // The creature survey of the live data (lower median MinLevel of the hostile spawns within 100 yards): Dire Maul 43 for both teams,
-    // Morgan's Plot 59, and Aerie Peak 55 for the Horde only (Wildhammer sentries); the others have no level.
+    // The creature survey of the live data (lower median MinLevel of the hostile spawns within 100 yards and 15 yards of height): Dire
+    // Maul 43 for both teams, Morgan's Plot 59. Aerie Peak 55 for the Horde only is a fixture: the Wildhammer sentries hostile to the
+    // Horde stand 17-19 yards below the live graveyard, outside the height bound, so the live survey gives Aerie Peak no level.
     private static int Creatures(WorldSafeLoc location, Team team) => (location.Id, team) switch
     {
         (849, _) => 43,
@@ -264,6 +265,7 @@ public sealed class PopulationLevelRuleTests
             [5] = new() { Entry = 5, Name = "Spirit Healer", MinLevel = 60, MaxLevel = 60, Faction = 35 },
             [6] = new() { Entry = 6, Name = "Peasant", MinLevel = 60, MaxLevel = 60, Faction = 14, Civilian = true },
             [7] = new() { Entry = 7, Name = "Silithid", MinLevel = 57, MaxLevel = 57, Faction = 14 },
+            [8] = new() { Entry = 8, Name = "Trigger", MinLevel = 60, MaxLevel = 60, Faction = 14, UnitFlags = 0x02000000 }, // not selectable
         };
         var at = new WorldSafeLoc(849, 1, 0f, 0f, 0f, 0f, "Dire Maul");
         List<CreatureSpawn> spawns =
@@ -272,20 +274,23 @@ public sealed class PopulationLevelRuleTests
             Spawn(7, 7, 7, 7), Spawn(8, 7, 8, 8), Spawn(9, 7, 9, 9), // gated by an event
             Spawn(10, 3, 150, 0), // outside the radius
             Spawn(11, 3, 1, 1, map: 0), // another map
+            Spawn(12, 8, 2, 2), Spawn(13, 8, 3, 3), Spawn(14, 8, 4, 4), // not selectable
+            Spawn(15, 3, 1, 2) with { Z = 16 }, Spawn(16, 3, 2, 1) with { Z = -16 }, Spawn(17, 3, 2, 3) with { Z = -16 }, // another floor (|dz| > 15)
+            Spawn(18, 1, 3, 2) with { Z = 15 }, // at the bound: counts
         ];
         HashSet<uint> gated = [7, 8, 9];
         FactionTemplateCatalog factions = Factions();
-        // Hostile in the radius: 43, 43, 44, 46 -> the lower median is 43.
+        // Hostile in the radius and height: 43, 43, 43, 44, 46 -> the lower median is 43.
         Assert.Equal(43, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 100, spawns, e => templates.GetValueOrDefault(e), factions, gated));
-        Assert.Equal(46, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 100, spawns, e => templates.GetValueOrDefault(e), factions, new HashSet<uint>()));
+        Assert.Equal(44, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 100, spawns, e => templates.GetValueOrDefault(e), factions, new HashSet<uint>())); // 43 x3, 44, 46, 57 x3
 
-        // Four sentries hostile to the Horde only: the Horde sees 43, 43, 44, 46, 55 x4 -> 46; the Alliance still 43.
+        // Four sentries hostile to the Horde only: the Horde sees 43 x3, 44, 46, 55 x4 -> 46; the Alliance still 43.
         spawns.AddRange([Spawn(20, 4, 3, 0), Spawn(21, 4, 4, 0), Spawn(22, 4, 5, 0), Spawn(23, 4, 6, 0)]);
         Assert.Equal(46, PopulationCreatureSurvey.LevelNear(at, Team.Horde, 100, spawns, e => templates.GetValueOrDefault(e), factions, gated));
         Assert.Equal(43, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 100, spawns, e => templates.GetValueOrDefault(e), factions, gated));
 
         // Fewer than three hostile creatures, a zero radius or no player template give no level.
-        Assert.Equal(0, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 25, spawns, e => templates.GetValueOrDefault(e), factions, gated));
+        Assert.Equal(0, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 5, spawns, e => templates.GetValueOrDefault(e), factions, gated));
         Assert.Equal(0, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 0, spawns, e => templates.GetValueOrDefault(e), factions, gated));
         Assert.Equal(0, PopulationCreatureSurvey.LevelNear(at, Team.Alliance, 100, spawns, e => templates.GetValueOrDefault(e), FactionTemplateCatalog.Empty, gated));
     }
