@@ -98,6 +98,12 @@ internal sealed class PlayerbotHomeArea
     /// <summary>A clipped home whose centre's zone is not known: it contains nothing (fail closed).</summary>
     internal bool ZoneUnknown => ZoneClipped && ZoneId == 0;
 
+    /// <summary>
+    /// <see cref="ZoneUnknown"/> as far as it is already known, without looking the zone up: true only once the brain's first use
+    /// (world thread) found no zone. Safe for status lines read from any thread.
+    /// </summary>
+    internal bool ZoneFoundUnknown => ZoneClipped && _zoneId == 0;
+
     /// <summary>The distance from the centre a walking-back bot stops at.</summary>
     internal float ReturnRadius => Radius * ReturnFraction;
 

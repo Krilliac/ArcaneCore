@@ -84,7 +84,10 @@ public sealed class PlayerbotHomeZoneTests
         int reported = 0;
         var unknown = new PlayerbotHomeArea(0, SentinelHill, 750f, null, zoneClipped: true, new PlayerbotZoneLookup((x, y, z) => 0u),
             _ => reported++);
+        Assert.False(unknown.ZoneFoundUnknown); // the status line never looks the zone up itself (it may be read off the world thread)
+        Assert.Equal(0, reported);
         Assert.False(unknown.Contains(0, SentinelHill.X, SentinelHill.Y, SentinelHill.Z));
+        Assert.True(unknown.ZoneFoundUnknown); // once the brain's own use found no zone, the status line says so
         Assert.True(unknown.ZoneUnknown);
         Assert.Equal("unknown", unknown.ZoneText);
         Assert.False(unknown.Contains(0, -10500f, 1200f, 0f));

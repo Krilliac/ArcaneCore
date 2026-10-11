@@ -82,7 +82,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal PlayerbotHomeArea? ActiveFilterHome => _quests.Home;
 
     /// <summary>The home line <c>.playerbot status</c> shows (<c>inside:120</c>, <c>returning:812</c>, <c>off-map</c>, <c>blocked:812</c>), null without a home.</summary>
-    internal string? HomeReport => _home is null ? null : _homeReturn.Report;
+    internal string? HomeReport => _home is null ? null : _home.ZoneFoundUnknown ? "zone-unknown" : _homeReturn.Report;
 
     /// <summary>The home line BOTINSPECT shows (place, map, centre, radius, distance, state), null without a home.</summary>
     internal string? HomeDescription => _home is null ? null : _homeReturn.Describe(_home);

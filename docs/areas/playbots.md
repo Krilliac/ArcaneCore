@@ -190,7 +190,8 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   every creature and take no quest, starving the bot. It behaves as a bot with no home (normal autonomous grinding, questing and exploring on the map
   it is on) and the filters apply again the moment it is on the home map.
 * **Scripted and party bots.** A scripted controller, a party AI or a bot-led group drives the bot and ignores its home (shown as `suspended`).
-* **Seeing it.** `.playerbot status` appends `home=inside:120`, `returning:810`, `off-map` or `blocked:810` (distance rounded to 10 yards);
+* **Seeing it.** `.playerbot status` appends `home=inside:120`, `returning:810`, `off-map`, `blocked:810` (distance rounded to 10 yards) or
+  `zone-unknown` (a zone-clipped home whose centre has no known zone, so it contains nothing; re-home the bot or set it with `nozone`);
   `.playerbot inspect` prints the place, map, centre, radius, zone (`zone=40`, `zone=off`, `zone=unknown`), exact distance and state. The set reply names
   the zone of a tele place (`... radius 750, zone 40`) or `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
