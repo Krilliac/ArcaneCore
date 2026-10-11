@@ -88,6 +88,15 @@ internal sealed class PlayerbotRisk
     /// </summary>
     internal bool AvoidsStrongCreatures { get; init; } = true;
 
+    /// <summary>A strong creature's hazard lapses this long after the last look that saw it (three scans).</summary>
+    internal const uint StrongHazardLifeMs = 3 * HazardScanMs;
+
+    /// <summary>Route plans refused for a strong hazard, with none given in between, before the strong hazards are let go.</summary>
+    internal const int StrongRefusalsBeforeRelief = 4;
+
+    /// <summary>How long strong hazards are let go after <see cref="StrongRefusalsBeforeRelief"/> refusals.</summary>
+    internal const uint StrongReliefMs = 10_000;
+
     /// <summary>How often the visible creatures are looked over for hazards.</summary>
     internal const uint HazardScanMs = 2_000;
     private uint _nextScanMs;
@@ -181,6 +190,7 @@ internal sealed class PlayerbotRisk
         Retreat.Stop("died");
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         Breadcrumbs.Clear();
+        Hazards.ClearStrong();
         Detour = null;
         _waitUntilMs = 0;
     }
@@ -375,14 +385,15 @@ internal sealed class PlayerbotRisk
         };
     }
 
-    private RiskEnemy Enemy(Creature creature, RiskJoin join, Player bot)
+    private RiskEnemy Enemy(Creature creature, RiskJoin join, Player bot) => Enemy(creature, join, bot.MaxHealth, SpellThreat(creature));
+
+    private static RiskEnemy Enemy(Creature creature, RiskJoin join, uint botMaxHealth, CreatureSpellThreat spells)
     {
         CreatureTemplate t = creature.Template;
         bool elite = t.Rank is 1 or 2 or 3;
-        CreatureSpellThreat spells = SpellThreat(creature);
         return new RiskEnemy(creature.Entry, creature.Level, t.Rank, creature.Health,
             PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, elite) + spells.Dps,
-            join, spells.IsLethalTo(bot.MaxHealth));
+            join, spells.IsLethalTo(botMaxHealth));
     }
 
     /// <summary>The creature's own spells (<see cref="PlayerbotCreatureSpells"/>).</summary>
@@ -536,9 +547,11 @@ internal sealed class PlayerbotRisk
 
     /// <summary>
     /// Every <see cref="HazardScanMs"/> (alive or a ghost): each visible creature that would attack the bot and has a spell that kills it outright, or that
-    /// the bot fled from or died to, or that is beyond the bot's strength (<see cref="BeyondStrength(Player, Creature, CreatureSpellThreat)"/>),
-    /// is a hazard round its aggro reach (moving with it while seen). A creature no longer beyond the bot's strength (the bot levelled,
-    /// the creature is wounded) stops being one at the next look.
+    /// the bot fled from or died to, is a hazard round its aggro reach (moving with it while seen); while the bot is alive, so is each
+    /// one beyond its strength alone (<see cref="BeyondStrength(Player, Creature, CreatureSpellThreat)"/>, kind <c>strong</c>, with
+    /// <see cref="AvoidsStrongCreatures"/>), for as long as a look sees it alive and strong (<see cref="PlayerbotHazards.EndStrongScan"/>)
+    /// and at most <see cref="StrongHazardLifeMs"/> after the last one. A ghost keeps no strong hazards: its routes are never blocked
+    /// and its revive spot does not count them.
     /// <para>
     /// The strong ones: the pull estimate never chooses such a creature, but a creature attacks whoever walks into its reach (vmangos
     /// BasicAI::MoveInLineOfSight), and a walk (quest travel, exploring, an errand) did not look. Live w23 2026-10-11 11:35-12:13
@@ -546,61 +559,98 @@ internal sealed class PlayerbotRisk
     /// walks round it, among Defias Cutpurses (94) and Mangy Wolves (525) of level 5-6 that each of those verdicts judged
     /// <c>decision=avoid reason=too-strong</c> (risk 2.9 to 28).
     /// </para>
+    /// <para>
+    /// Cost (about a thousand bots, one world thread): the threats go into a list kept for the purpose, the strong hazards are updated
+    /// in place, the strength test allocates nothing (<see cref="PlayerbotRiskModel.BeyondStrengthAlone"/>), and after the first look a
+    /// bot's looks are spread over the period by its guid (bots that log in on the same tick do not all look on the same tick after).
+    /// </para>
     /// </summary>
     internal void ScanHazards(Player player)
     {
         if (!Enabled || !player.IsInWorld) return;
         uint now = _session.World.NowMs;
         if (unchecked((int)(_nextScanMs - now)) > 0) return;
-        _nextScanMs = unchecked(now + HazardScanMs);
+        uint phase = _scanned ? 0u : (uint)((player.Guid.Low * 2654435761UL) % HazardScanMs);
+        _scanned = true;
+        _nextScanMs = unchecked(now + HazardScanMs + phase);
         int seconds = _options.Risk.DangerMemorySeconds;
-        foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
+        SpellStore? store = _session.Services.GetService<SpellFeature>()?.System.Store;
+        bool strong = AvoidsStrongCreatures && player.IsAlive;
+        float botDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level);
+        if (strong) Hazards.BeginStrongScan();
+        PlayerbotRecovery.Threats(player, _threats);
+        foreach (PlayerbotThreat threat in _threats)
         {
             if (threat.Source is not { } creature) continue;
-            CreatureSpellThreat spells = SpellThreat(creature);
+            CreatureSpellThreat spells = PlayerbotCreatureSpells.Of(creature, store);
             if (spells.IsLethalTo(player.MaxHealth))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
             else if (Memory.IsRemembered(creature.Guid, now))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
-            else if (AvoidsStrongCreatures && BeyondStrength(player, creature, spells))
-                Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, seconds, "strong", creature.Guid);
-            else
-                Hazards.Forget(creature.Guid, "strong");
+            else if (strong && BeyondStrength(player, creature, spells, botDps))
+                Hazards.SetStrong(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, StrongHazardLifeMs, creature.Guid);
         }
+
+        _threats.Clear();
+        if (strong) Hazards.EndStrongScan();
     }
+
+    private readonly List<PlayerbotThreat> _threats = [];
+    private bool _scanned;
 
     /// <summary>
     /// Whether the bot could not take <paramref name="creature"/> alone even at full health and mana
-    /// (<see cref="PlayerbotRiskModel.BeyondStrength"/>: an elite well above it, or a risk above the highest share any pull is taken
-    /// at), judged on the creature alone (its assistance would only add to it), from the same template damage and bot damage as a pull.
+    /// (<see cref="PlayerbotRiskModel.BeyondStrengthAlone"/>, the verdict of <see cref="PlayerbotRiskModel.BeyondStrength"/>: an elite well
+    /// above it, or a risk above the highest share any pull is taken at), judged on the creature alone (its assistance would only add
+    /// to it), from the same template damage and bot damage as a pull.
     /// </summary>
     internal bool BeyondStrength(Player player, Creature creature, CreatureSpellThreat spells)
+        => BeyondStrength(player, creature, spells, Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level));
+
+    private bool BeyondStrength(Player player, Creature creature, CreatureSpellThreat spells, float botDps)
     {
-        CreatureTemplate t = creature.Template;
-        bool elite = t.Rank is 1 or 2 or 3;
-        var enemy = new RiskEnemy(creature.Entry, creature.Level, t.Rank, creature.Health,
-            PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, elite) + spells.Dps,
-            RiskJoin.Target);
-        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
-        var facts = new PlayerbotEngagementFacts
-        {
-            BotLevel = player.Level,
-            BotHealth = player.MaxHealth,
-            BotMaxHealth = player.MaxHealth,
-            BotManaPct = player.PowerType == PowerType.Mana && maxMana > 0 ? 100f : null,
-            ManaDependence = ManaDependence(player.Class),
-            BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level),
-            Enemies = [enemy],
-        };
-        return PlayerbotRiskModel.BeyondStrength(facts, _options.Risk);
+        RiskEnemy enemy = Enemy(creature, RiskJoin.Target, player.MaxHealth, spells);
+        return PlayerbotRiskModel.BeyondStrengthAlone(player.Level, player.MaxHealth, botDps, enemy, _options.Risk);
     }
 
     /// <summary>
     /// Whether a living bot may walk <paramref name="points"/>: none of them inside a hazard it did not start in. A retreat walks
-    /// where it must; a dead bot (a ghost) is not attacked.
+    /// where it must; a dead bot (a ghost) is not attacked. During a relief (<see cref="NoteRefused"/>) the strong creatures are not
+    /// held against it; deaths, retreats, lethal creatures and those it fled from always are.
     /// </summary>
     internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points)
-        => !Enabled || !player.IsAlive || Retreat.Active ? null : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs);
+    {
+        if (!Enabled || !player.IsAlive || Retreat.Active) return null;
+        uint now = _session.World.NowMs;
+        bool relief = _strongReliefUntilMs != 0 && unchecked((int)(_strongReliefUntilMs - now)) > 0;
+        return Hazards.FirstOnRoute(player.MapId, points, now, strong: !relief);
+    }
+
+    /// <summary>
+    /// A route was refused for <paramref name="hazard"/> (<see cref="PlayerbotNavigation"/>, no way round it). A bot ringed by strong
+    /// creatures (a low-level bot revived among higher ones, a dozen reaches overlapping round it) would have every plan refused, and
+    /// the goals only back off and try again: after <see cref="StrongRefusalsBeforeRelief"/> refusals for strong creatures, each within
+    /// <see cref="StrongReliefMs"/> of the last, the strong hazards are let go for <see cref="StrongReliefMs"/>, so the bot walks out
+    /// (past a creature that may attack it: that fight is then judged, and fled, as any other).
+    /// </summary>
+    internal void NoteRefused(PlayerbotHazard hazard)
+    {
+        if (hazard.Kind != PlayerbotHazards.StrongKind) return;
+        uint now = _session.World.NowMs;
+        if (unchecked(now - _lastStrongRefusalMs) > StrongReliefMs) _strongRefusals = 0;
+        _lastStrongRefusalMs = now;
+        if (++_strongRefusals < StrongRefusalsBeforeRelief) return;
+        _strongRefusals = 0;
+        _strongReliefUntilMs = Math.Max(1u, unchecked(now + StrongReliefMs));
+        StrongReliefs++;
+    }
+
+    /// <summary>The reliefs granted so far (inspection, tests).</summary>
+    internal int StrongReliefs { get; private set; }
+
+    private int _strongRefusals;
+    private uint _lastStrongRefusalMs;
+    private uint _strongReliefUntilMs;
 
     /// <summary>
     /// The hazards as threats for the ghost's revive spot (<see cref="PlayerbotRecovery"/>): a revive in reach of a creature that kills
@@ -610,7 +660,7 @@ internal sealed class PlayerbotRisk
     /// revive spot keeps out of their aggro reach by <see cref="PlayerbotRecovery.Threats(Player)"/> already.
     /// </summary>
     internal IEnumerable<PlayerbotThreat> HazardThreats(Player player)
-        => !Enabled ? [] : Hazards.Active(player.MapId, _session.World.NowMs).Where(h => !h.Creature.IsEmpty && h.Kind != "strong")
+        => !Enabled ? [] : Hazards.Active(player.MapId, _session.World.NowMs).Where(h => !h.Creature.IsEmpty && h.Kind != PlayerbotHazards.StrongKind)
             .Select(h => new PlayerbotThreat(h.At, h.Radius, IgnoresHeight: true, Radii: 0));
 
     // --- in a fight ------------------------------------------------------------------------------------------------

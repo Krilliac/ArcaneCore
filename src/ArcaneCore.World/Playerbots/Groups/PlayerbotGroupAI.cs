@@ -107,6 +107,9 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The fight the bot is in (inspection and tests).</summary>
     internal Creature? Target => _target;
 
+    /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
+    internal PlayerbotRisk Risk => _risk;
+
     /// <summary>The bot's retreat (a wiping group).</summary>
     internal PlayerbotRetreat Retreat => _risk.Retreat;
 

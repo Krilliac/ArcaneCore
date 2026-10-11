@@ -128,7 +128,13 @@ yards, following it while seen), each creature the bot fled from or died to (its
 strength alone (`strong`: `PlayerbotRiskModel.BeyondStrength` on the creature by itself, at full health and mana; its reach plus 3,
 dropped at the next look once the bot can take it), the place of each death (25 yards) and of each retreat (20). The brain looks the
 visible creatures over every 2 seconds, alive or a ghost. The `strong` kind is for a bot on its own: a bot-led group's leader and a
-party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Live w23 2026-10-11:
+party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Strong hazards are
+kept apart (their own cap of 64, so they never push a death or retreat place out), updated in place at each look, dropped when a look
+no longer sees the creature alive and strong, and lapse 6 seconds after the last look (a ghost, or a bot whose brain a bot-led
+group drives, keeps none). A bot ringed by them (every way out through some reach) is not held: after 4 plans refused for a strong
+hazard, each within 10 seconds of the last, the strong hazards are let go for 10 seconds (`PlayerbotRisk.NoteRefused`); deaths,
+retreats, lethal creatures and those it fled from are still kept out of. One look at 64 strong creatures costs about 32 us and
+allocates nothing (`PlayerbotStrongHazardCostTests`; 272-300 us and 47 KB before). Live w23 2026-10-11:
 five level 1-3 bots without a home, revived at the Goldshire spirit healer, gave 58 bodies up in 38 minutes among level 5-6 Defias
 Cutpurses and Mangy Wolves that the pull estimate rightly avoided (`reason=too-strong`), attacked on sight on their walks past them.
 

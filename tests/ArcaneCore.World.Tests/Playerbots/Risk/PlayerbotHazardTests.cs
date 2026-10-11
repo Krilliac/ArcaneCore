@@ -161,7 +161,7 @@ public sealed class PlayerbotHazardTests
             player.Health = 400;
             return true;
         });
-        await world.Host.World.AdvanceClockAsync(PlayerbotRisk.HazardScanMs);
+        await world.Host.World.AdvanceClockAsync(2 * PlayerbotRisk.HazardScanMs); // past the first look's phase
         await world.OnWorldAsync(() =>
         {
             world.Brain.Risk.ScanHazards(world.Player);

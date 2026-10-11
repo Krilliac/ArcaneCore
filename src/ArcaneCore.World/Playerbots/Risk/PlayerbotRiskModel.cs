@@ -234,6 +234,22 @@ internal static class PlayerbotRiskModel
         return full > Acceptable(float.PositiveInfinity, options.Tolerance);
     }
 
+    /// <summary>
+    /// <see cref="BeyondStrength"/> for a bot alone against <paramref name="enemy"/> alone, at full health and mana, no danger memory, no
+    /// escape counted: the same verdict without a facts record, a list or LINQ (the hazard scan asks it for every visible creature of
+    /// every bot every 2 seconds, <see cref="PlayerbotRisk.ScanHazards"/>). Full mana leaves the bot's damage whole
+    /// (<see cref="ManaFactor"/> at 100 is 1).
+    /// </summary>
+    internal static bool BeyondStrengthAlone(byte botLevel, uint botMaxHealth, float botDps, in RiskEnemy enemy, PlayerbotRiskOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (enemy.Lethal) return true;
+        if (enemy.Elite && enemy.Level >= botLevel + EliteLevelMargin) return true;
+        if (botMaxHealth == 0) return true;
+        float risk = enemy.Dps * (enemy.Health / MathF.Max(0.1f, botDps)) / botMaxHealth;
+        return risk > Acceptable(float.PositiveInfinity, options.Tolerance);
+    }
+
     /// <summary>The risk a reward justifies: <c>Tolerance x min(0.9, 0.4 + 0.2 x reward)</c>.</summary>
     internal static float Acceptable(float reward, float tolerance) => tolerance * MathF.Min(0.9f, 0.4f + (0.2f * MathF.Max(0f, reward)));
 

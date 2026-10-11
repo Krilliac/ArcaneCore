@@ -501,6 +501,9 @@ internal sealed class PlayerbotPartyAI
         }
     }
 
+    /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
+    internal PlayerbotRisk Risk => _risk;
+
     /// <summary>The retreat (inspection and tests): a party bot retreats only from a wiping group.</summary>
     internal PlayerbotRetreat Retreat => _risk.Retreat;
 

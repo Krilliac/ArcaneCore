@@ -161,7 +161,12 @@ internal static class PlayerbotNavigation
         route = null;
         Vector3 start = direct.Points[0], end = direct.Points[^1];
         Vector3 flat = new(end.X - start.X, end.Y - start.Y, 0);
-        if (flat.Length() < 1f || player.Map is not { } map) return false;
+        if (flat.Length() < 1f || player.Map is not { } map)
+        {
+            risk.NoteRefused(hazard);
+            return false;
+        }
+
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
         foreach (float extra in HazardDetourYards)
@@ -188,6 +193,7 @@ internal static class PlayerbotNavigation
                 return true;
             }
 
+        risk.NoteRefused(hazard); // a bot ringed by strong creatures is let through after a few (PlayerbotRisk.NoteRefused)
         return false;
     }
 
