@@ -478,6 +478,21 @@ internal sealed class PlayerbotHomeReturn
         return true;
     }
 
+    /// <summary>
+    /// Why a <see cref="TryTeleport"/> that is not urgent would be refused now, or null, without its side effects (no retry delay, the
+    /// return not set aside as blocked): the brain asks before a teleport home that it would otherwise make to the bind point
+    /// (PlayerbotBrain.EscapeIsland), so a refusal never marks the walk of a bot inside its home as blocked.
+    /// </summary>
+    internal string? TeleportRefusal(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options, uint nowMs)
+    {
+        TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+        if (_teleportRetryPending && unchecked((int)(nowMs - _teleportRetryAt)) < 0) return "a refused teleport waits for its retry";
+        if ((player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return "in the air";
+        if (RefusalOf(session, teleports, player, area, options) is { } refusal) return refusal;
+        if (teleports!.IsBeingTeleported(player)) return "a teleport under way";
+        return CanTeleportNow(nowMs) ? null : "teleported home less than 5 minutes ago";
+    }
+
     /// <summary>Why the bot may not teleport home now, or null.</summary>
     private static string? RefusalOf(WorldSession session, TeleportService? teleports, Player player, PlayerbotHomeArea area, PlayerbotOptions options)
     {

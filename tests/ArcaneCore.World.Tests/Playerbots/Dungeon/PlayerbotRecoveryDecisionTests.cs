@@ -72,6 +72,47 @@ public sealed class PlayerbotRecoveryDecisionTests
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
 
     /// <summary>
+    /// With the body on the ghost's map and nothing to walk to, the fallback goes back to the body once per death instead of waiting
+    /// for a healer that cannot come (vmangos leaves a spirit with no linked graveyard where it died); a healer or a graveyard still wins,
+    /// and a stall still faults.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, false, false, true, "ResumeCorpseRun")]
+    [InlineData(false, false, false, false, false, "WaitForHealer")]
+    [InlineData(false, false, true, false, true, "WalkToGraveyard")]
+    [InlineData(true, false, false, false, true, "WalkToHealer")]
+    [InlineData(true, true, false, false, true, "Activate")]
+    [InlineData(false, false, false, true, true, "ResumeCorpseRun")]
+    [InlineData(true, false, false, true, true, "ResumeCorpseRun")]
+    [InlineData(true, true, false, true, true, "ResumeCorpseRun")]
+    public void DecideSpiritHealer_WithTheBodyOnThisMap(bool healer, bool inReach, bool graveyard, bool stalled, bool bodyRunLeft, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled, bodyRunLeft));
+
+    /// <summary>
+    /// A stalled fallback with a healer in sight but out of reach tries the long way round to it once (DetourToHealer), then the body,
+    /// then faults; a healer in reach (the server refused it) or none in sight is no reason for the long way.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false, true, true, "DetourToHealer")]
+    [InlineData(true, false, true, false, "DetourToHealer")]
+    [InlineData(true, false, false, true, "ResumeCorpseRun")]
+    [InlineData(true, false, false, false, "Fault")]
+    [InlineData(true, true, true, true, "ResumeCorpseRun")]
+    [InlineData(false, false, true, false, "Fault")]
+    public void DecideSpiritHealer_WhenStalled(bool healer, bool inReach, bool detourLeft, bool bodyRunLeft, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected),
+            PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyardKnown: false, stalled: true, bodyRunLeft, detourLeft));
+
+    /// <summary>A stalled walk from where the server itself would accept the activation (a ledge the mesh does not quite reach) activates.</summary>
+    [Theory]
+    [InlineData(true, true, "Activate")]
+    [InlineData(true, false, "DetourToHealer")]
+    [InlineData(false, true, "ResumeCorpseRun")]
+    public void DecideSpiritHealer_WhenStalled_WhereTheServerAccepts(bool healer, bool serverAccepts, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, healerInReach: false, graveyardKnown: false,
+            stalled: true, bodyRunLeft: true, detourLeft: true, serverAccepts: serverAccepts));
+
+    /// <summary>
     /// An unsafe body (<see cref="PlayerbotRecovery.JudgeBody"/>): a repeat death there, a creature too strong for the bot round it,
     /// or a body outside the home with the healer nearer home; outside the home alone, or the healer nearer home alone, is not.
     /// </summary>
@@ -597,7 +638,8 @@ public sealed class PlayerbotRecoveryDecisionTests
         InvalidOperationException? fault = null;
         long faultAt = 0, fallbackAt = -1, start = (long)host.Host.World.Uptime.TotalMilliseconds;
         bool waited = false;
-        for (int think = 0; think < 240 && fault is null; think++)
+        int resumed = 0;
+        for (int think = 0; think < 400 && fault is null; think++)
         {
             fault = await host.OnWorldAsync(() =>
             {
@@ -607,6 +649,7 @@ public sealed class PlayerbotRecoveryDecisionTests
                 finally
                 {
                     waited |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.WaitForHealer;
+                    if (recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun && recovery.LastStep == Step.SpiritHealer && !recovery.UsingSpiritHealer) resumed++;
                     if (fallbackAt < 0 && recovery.UsingSpiritHealer) fallbackAt = (long)host.Host.World.Uptime.TotalMilliseconds;
                 }
             });
@@ -617,8 +660,66 @@ public sealed class PlayerbotRecoveryDecisionTests
         Assert.NotNull(fault);
         Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
         Assert.True(waited, "the ghost never waited for a healer");
+        // The body is on this map: the fallback went back to it once (it is still out of reach here), then waited and faulted.
+        Assert.Equal(1, resumed);
         Assert.True(faultAt - start > PlayerbotRecovery.StuckMs, $"faulted after {faultAt - start} ms");
         Assert.True(fallbackAt >= 0 && faultAt - fallbackAt > PlayerbotRecovery.NoProgressMs, $"faulted {faultAt - fallbackAt} ms into the fallback");
+    }
+
+    /// <summary>
+    /// The fallback goes back to the body and reclaims it: the corpse run stalled (the body out of reach for a while), the ghost took
+    /// the spirit-healer fallback, and there is no healer or graveyard anywhere (Kalimdor in the test world: a spirit with no linked
+    /// graveyard is left where it died, vmangos Player::RepopAtGraveyard). The body is reachable again by then: the fallback resumes
+    /// the corpse run once (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>), and the ghost reclaims its body on the clear
+    /// spot where it stands, never faulting. Before, the ghost waited for a healer that could not come and faulted.
+    /// </summary>
+    [Fact]
+    public async Task WithoutAnySpiritHealer_TheFallbackResumesTheCorpseRun_AndReclaimsTheBody()
+    {
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        var clock = new TestDeathClock(1_000);
+        await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await host.TeleportAsync(1, 100f, 100f, DeadminesTestContent.OutsideFloor);
+        await host.KillAndReleaseAsync();
+        clock.Seconds += 125; // past any reclaim delay: only the recovery keeps the ghost from its body
+        Vector3 body = await host.OnWorldAsync(() =>
+        {
+            Corpse corpse = host.Player.Combat.Corpse!;
+            var at = new Vector3(corpse.X, corpse.Y, corpse.Z);
+            corpse.SetPosition(corpse.X, corpse.Y, corpse.Z - 500f, 0); // out of reach: the corpse run stalls
+            return at;
+        });
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        InvalidOperationException? fault = null;
+        bool resumed = false, restored = false, reclaimed = false;
+        for (int think = 0; think < 400 && fault is null && !host.Player.IsAlive; think++)
+        {
+            fault = await host.OnWorldAsync(() =>
+            {
+                host.Session.ManagedBudget = new ManagedActionBudget(4);
+                try { recovery.Update(host.Player, 500); return null; }
+                catch (InvalidOperationException error) { return error; }
+                finally
+                {
+                    resumed |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun;
+                    reclaimed |= recovery.LastStep == Step.Reclaim && host.Player.IsAlive;
+                    if (resumed && !restored && host.Player.Combat.Corpse is { } corpse)
+                    {
+                        corpse.SetPosition(body.X, body.Y, body.Z, 0); // reachable again
+                        restored = true;
+                    }
+                }
+            });
+            if (fault is null && !host.Player.IsAlive) await host.AdvanceAsync(500);
+        }
+
+        Assert.Null(fault);
+        Assert.True(resumed, "the fallback never went back to the body");
+        Assert.True(host.Player.IsAlive, $"still dead: {recovery.LastStep}/{recovery.LastSpiritHealerStep}");
+        Assert.True(reclaimed, "the bot came back without reclaiming its body");
+        await host.OnWorldAsync(() =>
+            Assert.True(Vector2.Distance(new(host.Player.X, host.Player.Y), new(body.X, body.Y)) <= CombatConstants.CorpseReclaimRadius));
     }
 
     private sealed class TestDeathClock(long seconds) : DeathClock

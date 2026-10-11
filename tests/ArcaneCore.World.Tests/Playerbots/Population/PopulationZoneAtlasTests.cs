@@ -44,6 +44,8 @@ public sealed class PopulationZoneAtlasTests
         (1, 0, 12, 0), (2, 1, 14, 0), (3, 0, 85, 0), (4, 0, 42, GraveyardCatalog.TeamAlliance), (7, 0, 10, GraveyardCatalog.TeamHorde),
         (5, 0, 33, GraveyardCatalog.TeamAlliance), (6, 0, 1519, 0), (8, 36, 99, 0), (9, 1, 78, 0));
 
+    private static PopulationLevelRule Flat(int slack) => PopulationLevelRule.Flat(slack);
+
     private static PopulationZoneAtlas Atlas(IReadOnlyCollection<uint>? maps = null, params uint[] excluded)
         => PopulationZoneAtlas.Build(Areas(), World(), maps ?? [0, 1], new HashSet<uint>(excluded));
 
@@ -52,11 +54,11 @@ public sealed class PopulationZoneAtlasTests
     {
         PopulationZone elwynn = Atlas().Find(12)!;
         Assert.Equal((5, 10), (elwynn.MinLevel, elwynn.MaxLevel)); // the unleveled sub-area (0) does not count
-        Assert.True(PopulationZoneAtlas.Fits(elwynn, 5, Team.Alliance, 0));
-        Assert.True(PopulationZoneAtlas.Fits(elwynn, 10, Team.Alliance, 0));
-        Assert.False(PopulationZoneAtlas.Fits(elwynn, 11, Team.Alliance, 4));
-        Assert.True(PopulationZoneAtlas.Fits(elwynn, 1, Team.Alliance, 4)); // a level 1 bot may start in a zone whose lowest area is 5
-        Assert.False(PopulationZoneAtlas.Fits(elwynn, 1, Team.Alliance, 3));
+        Assert.True(PopulationZoneAtlas.Fits(elwynn, 5, Team.Alliance, Flat(0)));
+        Assert.True(PopulationZoneAtlas.Fits(elwynn, 10, Team.Alliance, Flat(0)));
+        Assert.False(PopulationZoneAtlas.Fits(elwynn, 11, Team.Alliance, Flat(4)));
+        Assert.True(PopulationZoneAtlas.Fits(elwynn, 1, Team.Alliance, Flat(4))); // a level 1 bot may start in a zone whose lowest area is 5
+        Assert.False(PopulationZoneAtlas.Fits(elwynn, 1, Team.Alliance, Flat(3)));
         Assert.Equal(30, Atlas().Find(10)!.MaxLevel);
     }
 
@@ -64,22 +66,22 @@ public sealed class PopulationZoneAtlasTests
     public void AnAllianceOnlyZone_IsNeverOfferedToHorde()
     {
         PopulationZoneAtlas atlas = Atlas();
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, 4), z => z.ZoneId == 12);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, Flat(4)), z => z.ZoneId == 12);
         var random = new Random(1);
         for (int i = 0; i < 200; i++)
-            Assert.NotEqual(12u, atlas.Pick(1, 10, Team.Horde, 4, new Dictionary<uint, int>(), random)!.Zone.ZoneId);
-        Assert.False(PopulationZoneAtlas.Fits(atlas.Find(12)!, 6, Team.Horde, 4));
+            Assert.NotEqual(12u, atlas.Pick(1, 10, Team.Horde, Flat(4), new Dictionary<uint, int>(), random)!.Zone.ZoneId);
+        Assert.False(PopulationZoneAtlas.Fits(atlas.Find(12)!, 6, Team.Horde, Flat(4)));
     }
 
     [Fact]
     public void AHordeOnlyZone_IsNeverOfferedToAlliance()
     {
         PopulationZoneAtlas atlas = Atlas();
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, 4), z => z.ZoneId is 14 or 85);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, Flat(4)), z => z.ZoneId is 14 or 85);
         var random = new Random(2);
         for (int i = 0; i < 200; i++)
-            Assert.DoesNotContain(atlas.Pick(1, 10, Team.Alliance, 4, new Dictionary<uint, int>(), random)!.Zone.ZoneId, new uint[] { 14, 85 });
-        Assert.False(PopulationZoneAtlas.Fits(atlas.Find(14)!, 6, Team.Alliance, 4));
+            Assert.DoesNotContain(atlas.Pick(1, 10, Team.Alliance, Flat(4), new Dictionary<uint, int>(), random)!.Zone.ZoneId, new uint[] { 14, 85 });
+        Assert.False(PopulationZoneAtlas.Fits(atlas.Find(14)!, 6, Team.Alliance, Flat(4)));
     }
 
     [Fact]
@@ -94,8 +96,8 @@ public sealed class PopulationZoneAtlasTests
         PopulationZoneAtlas atlas = Atlas([0], 12, 33, 85); // only Duskwood is left on map 0 for level 25
         for (int i = 0; i < 100; i++)
         {
-            Assert.Equal(4u, atlas.Pick(25, 25, Team.Alliance, 0, new Dictionary<uint, int>(), random)!.Location.Id);
-            Assert.Equal(7u, atlas.Pick(25, 25, Team.Horde, 0, new Dictionary<uint, int>(), random)!.Location.Id);
+            Assert.Equal(4u, atlas.Pick(25, 25, Team.Alliance, Flat(0), new Dictionary<uint, int>(), random)!.Location.Id);
+            Assert.Equal(7u, atlas.Pick(25, 25, Team.Horde, Flat(0), new Dictionary<uint, int>(), random)!.Location.Id);
         }
     }
 
@@ -117,14 +119,14 @@ public sealed class PopulationZoneAtlasTests
     {
         PopulationZoneAtlas atlas = Atlas();
         // Stranglethorn has only an Alliance link: offered to the Alliance, never to the Horde.
-        Assert.Contains(atlas.FittingZones(30, 50, Team.Alliance, 0), z => z.ZoneId == 33);
-        Assert.DoesNotContain(atlas.FittingZones(30, 50, Team.Horde, 0), z => z.ZoneId == 33);
+        Assert.Contains(atlas.FittingZones(30, 50, Team.Alliance, Flat(0)), z => z.ZoneId == 33);
+        Assert.DoesNotContain(atlas.FittingZones(30, 50, Team.Horde, Flat(0)), z => z.ZoneId == 33);
         Assert.Empty(atlas.Find(33)!.HordeLocations);
         // The graveyard of zone 77 is on another map than the zone, so the zone has none and is not offered at all.
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, 4), z => z.ZoneId == 77);
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, 4), z => z.ZoneId == 77);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, Flat(4)), z => z.ZoneId == 77);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, Flat(4)), z => z.ZoneId == 77);
         Assert.Equal(0, PopulationZoneAtlas.Empty.CountFor(Team.Alliance));
-        Assert.Null(PopulationZoneAtlas.Empty.Pick(1, 60, Team.Alliance, 4, new Dictionary<uint, int>(), new Random(4)));
+        Assert.Null(PopulationZoneAtlas.Empty.Pick(1, 60, Team.Alliance, Flat(4), new Dictionary<uint, int>(), new Random(4)));
     }
 
     [Fact]
@@ -135,17 +137,17 @@ public sealed class PopulationZoneAtlasTests
         // Level 10 Alliance fits Elwynn (5-10, slack 4) and Duskwood (10-30): the empty one wins.
         for (int i = 0; i < 20; i++)
         {
-            Assert.Equal(10u, atlas.Pick(10, 10, Team.Alliance, 4, new Dictionary<uint, int> { [12] = 1 }, random)!.Zone.ZoneId);
-            Assert.Equal(12u, atlas.Pick(10, 10, Team.Alliance, 4, new Dictionary<uint, int> { [10] = 2, [12] = 1 }, random)!.Zone.ZoneId);
+            Assert.Equal(10u, atlas.Pick(10, 10, Team.Alliance, Flat(4), new Dictionary<uint, int> { [12] = 1 }, random)!.Zone.ZoneId);
+            Assert.Equal(12u, atlas.Pick(10, 10, Team.Alliance, Flat(4), new Dictionary<uint, int> { [10] = 2, [12] = 1 }, random)!.Zone.ZoneId);
         }
 
         // A tie is broken at random: both zones appear.
         var seen = new HashSet<uint>();
-        for (int i = 0; i < 100; i++) seen.Add(atlas.Pick(10, 10, Team.Alliance, 4, new Dictionary<uint, int> { [10] = 1, [12] = 1 }, random)!.Zone.ZoneId);
+        for (int i = 0; i < 100; i++) seen.Add(atlas.Pick(10, 10, Team.Alliance, Flat(4), new Dictionary<uint, int> { [10] = 1, [12] = 1 }, random)!.Zone.ZoneId);
         Assert.Equal([10u, 12u], seen.Order().ToArray());
 
         // The levels a placement allows are the band's range cut by the zone's: band 1-20 in Elwynn is 1-10 (5 minus the slack, 10).
-        PopulationPlacement placement = atlas.Pick(1, 20, Team.Alliance, 4, new Dictionary<uint, int> { [10] = 5 }, random)!;
+        PopulationPlacement placement = atlas.Pick(1, 20, Team.Alliance, Flat(4), new Dictionary<uint, int> { [10] = 5 }, random)!;
         Assert.Equal(12u, placement.Zone.ZoneId);
         Assert.Equal((1, 10), (placement.LowLevel, placement.HighLevel));
     }
@@ -210,23 +212,23 @@ public sealed class PopulationZoneAtlasTests
         var random = new Random(177);
         for (int i = 0; i < 200; i++)
         {
-            PopulationPlacement placement = atlas.Pick(1, 10, Team.Horde, 4, new Dictionary<uint, int> { [14] = 1 }, random)!;
+            PopulationPlacement placement = atlas.Pick(1, 10, Team.Horde, Flat(4), new Dictionary<uint, int> { [14] = 1 }, random)!;
             Assert.Equal(14u, placement.Zone.ZoneId);
         }
 
         PopulationZone duskwood = atlas.Find(10)!;
         Assert.Equal(10, duskwood.MinLevel); // the zone's range is unchanged: the floor sits on the graveyard
         Assert.Equal(24, duskwood.FloorOf(duskwood.HordeLocations.Single()));
-        Assert.False(PopulationZoneAtlas.Fits(duskwood, 9, Team.Horde, 4));
-        Assert.False(PopulationZoneAtlas.Fits(duskwood, 19, Team.Horde, 4));
-        Assert.True(PopulationZoneAtlas.Fits(duskwood, 20, Team.Horde, 4)); // Raven Hill (24) minus the slack
-        Assert.True(PopulationZoneAtlas.UnderLevelled(duskwood, 9, Team.Horde, 4));
-        Assert.False(PopulationZoneAtlas.UnderLevelled(duskwood, 20, Team.Horde, 4));
+        Assert.False(PopulationZoneAtlas.Fits(duskwood, 9, Team.Horde, Flat(4)));
+        Assert.False(PopulationZoneAtlas.Fits(duskwood, 19, Team.Horde, Flat(4)));
+        Assert.True(PopulationZoneAtlas.Fits(duskwood, 20, Team.Horde, Flat(4))); // Raven Hill (24) minus the slack
+        Assert.True(PopulationZoneAtlas.UnderLevelled(duskwood, 9, Team.Horde, Flat(4)));
+        Assert.False(PopulationZoneAtlas.UnderLevelled(duskwood, 20, Team.Horde, Flat(4)));
 
         // A band that reaches Duskwood gets a level that fits the graveyard it lands at, not the zone's lowest sub-area.
         for (int i = 0; i < 200; i++)
         {
-            PopulationPlacement placement = atlas.Pick(11, 30, Team.Alliance, 4, new Dictionary<uint, int>(), random)!;
+            PopulationPlacement placement = atlas.Pick(11, 30, Team.Alliance, Flat(4), new Dictionary<uint, int>(), random)!;
             Assert.Equal(10u, placement.Zone.ZoneId);
             Assert.Equal(placement.Location.Id == 3 ? 21 : 20, placement.LowLevel);
         }
@@ -247,8 +249,8 @@ public sealed class PopulationZoneAtlasTests
         var random = new Random(178);
         for (int i = 0; i < 200; i++)
         {
-            Assert.Equal(509u, atlas.Pick(55, 55, Team.Alliance, 4, new Dictionary<uint, int>(), random)!.Location.Id);
-            Assert.Null(atlas.Pick(55, 55, Team.Horde, 4, new Dictionary<uint, int>(), random));
+            Assert.Equal(509u, atlas.Pick(55, 55, Team.Alliance, Flat(4), new Dictionary<uint, int>(), random)!.Location.Id);
+            Assert.Null(atlas.Pick(55, 55, Team.Horde, Flat(4), new Dictionary<uint, int>(), random));
         }
 
         // Without terrain nothing is known: the links stand as the world DB has them.
@@ -278,8 +280,8 @@ public sealed class PopulationZoneAtlasTests
         Assert.Equal((10, 33, AreaTeams.Horde), (atlas.Find(17)!.MinLevel, atlas.Find(17)!.MaxLevel, atlas.Find(17)!.AreaTeam)); // The Barrens
         Assert.Equal((10, 30, AreaTeams.None), (atlas.Find(10)!.MinLevel, atlas.Find(10)!.MaxLevel, atlas.Find(10)!.AreaTeam)); // Duskwood
         Assert.Equal((30, 50, AreaTeams.None), (atlas.Find(33)!.MinLevel, atlas.Find(33)!.MaxLevel, atlas.Find(33)!.AreaTeam)); // Stranglethorn Vale
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, 4), z => z.ZoneId is 14 or 17);
-        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, 4), z => z.ZoneId is 12 or 40);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Alliance, Flat(4)), z => z.ZoneId is 14 or 17);
+        Assert.DoesNotContain(atlas.FittingZones(1, 60, Team.Horde, Flat(4)), z => z.ZoneId is 12 or 40);
         // The game's own AreaTable gives the same zone list.
         var table = new AreaTable(rows, ArcaneCore.Game.Maps.Templates.MapRegistry.Default);
         Assert.Equal(atlas.Zones.Select(z => z.ZoneId), PopulationZoneAtlas.Build(table.All, graveyards, [0, 1], new HashSet<uint>()).Zones.Select(z => z.ZoneId));

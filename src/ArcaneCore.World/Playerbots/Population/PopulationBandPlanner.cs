@@ -147,6 +147,7 @@ internal static class PopulationBandPlanner
     {
         ArgumentNullException.ThrowIfNull(options);
         PopulationBand[] bands = options.Bands;
+        PopulationLevelRule rule = PopulationLevelRule.From(options);
         Team team = ChooseTeam(options, alliance, horde);
         (byte Race, byte Class)? raceClass = ChooseRaceClass(cache, team, options.Classes, random);
         if (raceClass is null) return null;
@@ -158,7 +159,7 @@ internal static class PopulationBandPlanner
         {
             int minLevel = boostAvailable ? bands[band].MinLevel : 1;
             int maxLevel = boostAvailable ? bands[band].MaxLevel : 1;
-            PopulationPlacement? placement = atlas.Pick(minLevel, maxLevel, team, options.ZoneLevelSlack, assigned, random);
+            PopulationPlacement? placement = atlas.Pick(minLevel, maxLevel, team, rule, assigned, random);
             if (placement is null) continue;
             int level = random.Next(placement.LowLevel, placement.HighLevel + 1);
             return new PopulationPlan(band, team, raceClass.Value.Race, raceClass.Value.Class, placement, level);

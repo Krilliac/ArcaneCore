@@ -94,6 +94,14 @@ internal enum PlayerbotSpiritHealerStep
     /// <summary>A healer is in sight: walk to it.</summary>
     WalkToHealer,
 
+    /// <summary>
+    /// The walk to the healer in sight stalled short of its reach: plan once, with the largest search budget
+    /// (<see cref="PlayerbotNavigation.MaxSearchNodes"/>), a whole route to a point within its reach, and walk it. Live 2026-10-11
+    /// (w25, Deeleibreind): the ghost stood 18 yards under the Stonard healer, in the lake basin below the bluff; the near search
+    /// (2048 nodes) answered a partial route ending right under it, while the mesh's way up is a 1,010-yard road round the bluff.
+    /// </summary>
+    DetourToHealer,
+
     /// <summary>No healer in sight: walk to the graveyard of this position, where one stands.</summary>
     WalkToGraveyard,
 
@@ -102,6 +110,13 @@ internal enum PlayerbotSpiritHealerStep
     /// and look again next think. Not progress, so a ghost that never finds either faults after <see cref="PlayerbotRecovery.NoProgressMs"/>.
     /// </summary>
     WaitForHealer,
+
+    /// <summary>
+    /// No healer in sight and no graveyard to walk to, from here or for the body (a spirit with no linked graveyard is left where it
+    /// died, vmangos Player::RepopAtGraveyard), while the body lies on the ghost's map and the corpse run was not resumed yet for this
+    /// death: go back to the body, with a fresh bound, instead of waiting for a healer that cannot come. Once per death.
+    /// </summary>
+    ResumeCorpseRun,
 
     /// <summary>The fallback stalled too (no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>, or a walk stuck): the recovery faults.</summary>
     Fault,
@@ -165,6 +180,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// combat before its next think, the home teleport refused, three deaths there). True when the bot was moved. Null: no escape.
     /// </summary>
     internal Func<Player, bool>? EscapeLanding { get; set; }
+
+    /// <summary>
+    /// Tests only: the graveyard of a position on the ghost's map in place of the zone and area lookup and the static links (the test
+    /// terrain knows no zones, so it cannot hold a band of cells without an area). Null: the real lookup.
+    /// </summary>
+    internal Func<Player, Vector3, WorldSafeLoc?>? GraveyardLookup { get; set; }
 
     /// <summary>Whether this death's body was kept although judged unsafe, because the healer's landing was worse (inspection and tests).</summary>
     internal bool BodyKeptOverLanding { get; private set; }
@@ -322,12 +343,26 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>The spirit-healer fallback, free of world state.</summary>
-    internal static PlayerbotSpiritHealerStep DecideSpiritHealer(bool healerKnown, bool healerInReach, bool graveyardKnown, bool stalled)
+    /// <param name="bodyRunLeft">The body lies on the ghost's map and the corpse run was not resumed yet for this death.</param>
+    /// <param name="detourLeft">The long route to the healer (<see cref="PlayerbotSpiritHealerStep.DetourToHealer"/>) was not tried yet for this death.</param>
+    /// <param name="serverAccepts">The walk stalled short of <see cref="SpiritHealerReachYards"/>, and the server's own checks would accept
+    /// CMSG_SPIRIT_HEALER_ACTIVATE from where the ghost stands (<see cref="ServerReachProbeYards"/>).</param>
+    internal static PlayerbotSpiritHealerStep DecideSpiritHealer(bool healerKnown, bool healerInReach, bool graveyardKnown, bool stalled,
+        bool bodyRunLeft = false, bool detourLeft = false, bool serverAccepts = false)
     {
-        if (stalled) return PlayerbotSpiritHealerStep.Fault;
+        // A stalled fallback: the healer from here if the server takes it, else by the long way round, else the body, else the fault
+        // (each once per death).
+        if (stalled)
+        {
+            if (healerKnown && serverAccepts) return PlayerbotSpiritHealerStep.Activate;
+            if (healerKnown && !healerInReach && detourLeft) return PlayerbotSpiritHealerStep.DetourToHealer;
+            return bodyRunLeft ? PlayerbotSpiritHealerStep.ResumeCorpseRun : PlayerbotSpiritHealerStep.Fault;
+        }
         if (healerKnown) return healerInReach ? PlayerbotSpiritHealerStep.Activate : PlayerbotSpiritHealerStep.WalkToHealer;
-        // Neither is a fault by itself: one look that finds nothing can be a transient (the bound decides, Stuck).
-        return graveyardKnown ? PlayerbotSpiritHealerStep.WalkToGraveyard : PlayerbotSpiritHealerStep.WaitForHealer;
+        if (graveyardKnown) return PlayerbotSpiritHealerStep.WalkToGraveyard;
+        // Neither is a fault by itself: one look that finds nothing can be a transient (the bound decides, Stuck). With the body on
+        // this map the corpse run is the way back the server leaves a spirit with no graveyard; it is resumed once per death.
+        return bodyRunLeft ? PlayerbotSpiritHealerStep.ResumeCorpseRun : PlayerbotSpiritHealerStep.WaitForHealer;
     }
 
     internal bool Update(Player player, uint elapsedMs)
@@ -341,6 +376,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         long now = (long)session.World.Uptime.TotalMilliseconds;
+        // A new death no think saw coming (a revival and a death between two thinks, the brain's reset unseen): the body this recovery
+        // saw released is gone (reclaimed, or bones after the healer) or another one lies in its place. It starts afresh, as after a reset.
+        if (_deathBody != default && (player.Combat.Corpse?.Guid ?? default) != _deathBody)
+            Reset();
+        if ((player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is { } ownBody) _deathBody = ownBody.Guid;
         if (_progressMs < 0)
         {
             // The first think of a new death: the loop watch starts afresh (PlayerbotMotion.ForgetLoops), so the routes of the living
@@ -375,7 +415,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // Never overridden by the landing (KeepBodyOverLanding): the healer is the way out of a body death loop, and an unsafe landing
         // is left at once after the resurrection (EscapeLanding).
         if (_healerRequested && !_preferSpiritHealer && ghost
-            && (place != PlayerbotCorpsePlace.ThisMap || HealerOutcomeKnown(player, corpse!)))
+            && (place != PlayerbotCorpsePlace.ThisMap || (_corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse))))
             _preferSpiritHealer = true;
 
         // Only when the spirit healer can be had at all (one in sight, or a graveyard for this place, where one stands): with
@@ -387,8 +427,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // homed; Dawnrover, unhomed): bodies near Raven Hill were given up for the healer, which revived the bots at the Raven Hill
         // graveyard among the Skeletal Horrors; they died there again and again. A third death there is a death loop, whose request
         // above takes the healer whatever the landing: at most two kept bodies per death-loop window.
+        // Not once the fallback went back to this body (ResumeCorpseRun): its healer could not be reached, or there was none.
         if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
-            && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
+            && _corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
             && !KeepBodyOverLanding(player, corpse!))
         {
             // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
@@ -467,6 +508,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _spiritHealer = false;
         _preferSpiritHealer = false;
         _healerRequested = false;
+        _healerGraveyard = default;
+        _corpseRunResumedFor = default;
+        _detourTriedFor = default;
+        _detourGoal = null;
+        _deathBody = default;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
@@ -498,12 +544,73 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         LastStep = PlayerbotRecoveryStep.SpiritHealer;
         Creature? healer = NearestSpiritHealer(player);
-        WorldSafeLoc? graveyard = healer is null ? Graveyard(player) : null;
+        // On the long way round to a healer (DetourToHealer) it drops out of sight for a while (a ghost sees it only so far): the walk
+        // goes on to where it stands, under the same bounds, until it is in sight again.
+        if (healer is null && _detourGoal is { } detourGoal && Equals(_goal, detourGoal.Guid) && detourGoal.Map == player.MapId)
+        {
+            if (!Stuck(now))
+            {
+                LastSpiritHealerStep = PlayerbotSpiritHealerStep.WalkToHealer;
+                return Walk(player, detourGoal.At, detourGoal.Guid, elapsedMs, now);
+            }
+
+            _detourGoal = null;
+        }
+
+        WorldSafeLoc? graveyard = healer is null ? HealerGraveyard(player) : null;
+        Corpse? corpse = player.Combat.Corpse;
+        bool bodyHere = corpse is not null && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map);
         bool inReach = healer is not null && Distance(player, healer.X, healer.Y, healer.Z) <= SpiritHealerReachYards;
-        PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, Stuck(now));
+        bool stalled = Stuck(now);
+        // The server's own range is asked only of a walk that stalled: activating farther out than the walk's goal would change where
+        // the bot is revived (among a camp round the healer, the landing escape is judged at the walk's goal).
+        bool serverAccepts = stalled && healer is not null && !inReach && ServerAccepts(player, healer);
+        PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, stalled,
+            bodyRunLeft: bodyHere && _corpseRunResumedFor != corpse!.Guid, detourLeft: healer is not null && _detourTriedFor != healer.Guid,
+            serverAccepts: serverAccepts);
+        if (step == PlayerbotSpiritHealerStep.DetourToHealer)
+        {
+            _detourTriedFor = healer!.Guid;
+            if (PlayerbotNavigation.TryPlanFar(player, new Vector3(healer.X, healer.Y, healer.Z), options, PlayerbotNavigation.MaxSearchNodes,
+                    out PlayerbotRoute? detour) && detour is { Points.Count: > 1 }
+                && Vector3.Distance(detour.Points[^1], new Vector3(healer.X, healer.Y, healer.Z)) <= SpiritHealerReachYards + 2f)
+            {
+                ClearWalk();
+                _goal = healer.Guid;
+                _route = detour;
+                _detourRoute = true;
+                _detourGoal = (healer.Guid, player.MapId, new Vector3(healer.X, healer.Y, healer.Z));
+                LastSpiritHealerStep = PlayerbotSpiritHealerStep.DetourToHealer;
+                MarkProgress(now);
+                MarkClosing(now);
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} takes the long way to the spirit healer {Healer} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Length:F0} yd round, {Straight:F1} yd straight",
+                    player.Name, healer.Entry, healer.X, healer.Y, healer.Z, player.MapId, detour.Distance, Distance(player, healer.X, healer.Y, healer.Z));
+                return Walk(player, new Vector3(healer.X, healer.Y, healer.Z), healer.Guid, elapsedMs, now);
+            }
+
+            // No way round within the bounds either: the body, else the fault.
+            step = DecideSpiritHealer(true, false, graveyard is not null, stalled: true, bodyRunLeft: bodyHere && _corpseRunResumedFor != corpse!.Guid);
+        }
+
         LastSpiritHealerStep = step;
         switch (step)
         {
+            case PlayerbotSpiritHealerStep.ResumeCorpseRun:
+                // Nothing to walk to and nobody to wait for: back to the body, with a fresh bound, once per death. The healer is not
+                // asked for again in this death unless one can be had (HealerOutcomeKnown); a second stall here faults as before.
+                _corpseRunResumedFor = corpse!.Guid;
+                _spiritHealer = false;
+                _preferSpiritHealer = false;
+                UnsafeReason = PlayerbotUnsafeBody.None;
+                ClearWalk();
+                MarkProgress(now);
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} goes back to its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Why} at ({GX:F1}, {GY:F1}, {GZ:F1})",
+                    player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId,
+                    healer is not null ? $"the spirit healer {healer.Entry} {Distance(player, healer.X, healer.Y, healer.Z):F1} yd away cannot be reached"
+                        : "no spirit healer in sight and no graveyard for it", player.X, player.Y, player.Z);
+                return false;
             case PlayerbotSpiritHealerStep.Activate:
             {
                 if (!StandStill(player)) return false;
@@ -666,6 +773,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
             // A fresh route sets its own yardstick; only walking it down counts, so replanning on the spot is not closing.
             _bestRouteLeft = float.PositiveInfinity;
+            _detourRoute = false;
         }
 
         PlayerbotRoute route = _route!;
@@ -673,7 +781,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         float left = RouteLeft(player, route, goal);
         if (float.IsFinite(left))
         {
-            if (float.IsFinite(_bestRouteLeft) && left < _bestRouteLeft - RouteClosingYards) MarkClosing(now);
+            if (float.IsFinite(_bestRouteLeft) && left < _bestRouteLeft - RouteClosingYards)
+            {
+                MarkClosing(now);
+                // On the long way round to a healer (DetourToHealer) the straight line grows for a while: walking the one planned
+                // route down is progress. It is planned once per death, so this cannot keep a ghost walking for good.
+                if (_detourRoute && countsAsProgress) MarkProgress(now);
+            }
             if (left < _bestRouteLeft - RouteClosingYards || !float.IsFinite(_bestRouteLeft)) _bestRouteLeft = left;
         }
 
@@ -698,6 +812,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     private void ClearWalk()
     {
+        _detourRoute = false;
         _route = null;
         _goal = null;
         _closingMs = -1;
@@ -921,10 +1036,64 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <summary>The graveyard of the ghost's position on its own map (a spirit healer stands at it), or null.</summary>
     private WorldSafeLoc? Graveyard(Player player) => GraveyardAt(player, player.X, player.Y, player.Z);
 
+    /// <summary>
+    /// The graveyard the spirit-healer fallback walks to: the one of the ghost's position, else the one it was already walking to in
+    /// this death, else the body's (where the resurrection sends the bot, vmangos SendSpiritResurrect), else null. The spirit healer
+    /// stands at the graveyard whatever the ghost's own cell says: a ghost crossing cells with no area (zone 0, nothing linked, as on
+    /// the hills between the Barrens and Ashenvale) keeps its goal instead of standing and faulting there.
+    /// </summary>
+    private WorldSafeLoc? HealerGraveyard(Player player)
+    {
+        Corpse? corpse = player.Combat.Corpse;
+        ObjectGuid body = corpse?.Guid ?? default;
+        WorldSafeLoc? graveyard = Graveyard(player);
+        // Kept for this body only (a death and a revival can fall between two thinks, Reset unseen), and on this map only.
+        if (graveyard is null && _healerGraveyard is { Loc: { } kept } held && held.Body == body && kept.MapId == player.MapId)
+            graveyard = kept;
+        if (graveyard is null && corpse is not null && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map))
+            graveyard = GraveyardAt(player, corpse.X, corpse.Y, corpse.Z);
+        if (graveyard is not null) _healerGraveyard = (body, graveyard);
+        return graveyard;
+    }
+
+    /// <summary>The graveyard the spirit-healer fallback last walked to, and the body of the death it was for (<see cref="HealerGraveyard"/>).</summary>
+    private (ObjectGuid Body, WorldSafeLoc? Loc) _healerGraveyard;
+
+    /// <summary>The healer whose long route (<see cref="PlayerbotSpiritHealerStep.DetourToHealer"/>) was tried in this death.</summary>
+    private ObjectGuid _detourTriedFor;
+
+    /// <summary>The healer the long route leads to, kept while it is out of sight (<see cref="PlayerbotSpiritHealerStep.DetourToHealer"/>).</summary>
+    private (ObjectGuid Guid, uint Map, Vector3 At)? _detourGoal;
+
+    /// <summary>Whether the route being walked is the long one to a healer (<see cref="PlayerbotSpiritHealerStep.DetourToHealer"/>).</summary>
+    private bool _detourRoute;
+
+    /// <summary>The body this recovery saw released (a different one, or none while dead, is a new death the brain's reset missed).</summary>
+    private ObjectGuid _deathBody;
+
+    /// <summary>
+    /// Closer than this the server itself is asked whether it would accept CMSG_SPIRIT_HEALER_ACTIVATE from here
+    /// (<see cref="QuestNpcServices.SpiritHealerRefusal"/>): vmangos GetNPCIfCanInteractWith takes INTERACTION_DISTANCE (5 yards), in 3D,
+    /// plus both bounding radii (Player.cpp:2524, Object.cpp IsWithinDist).
+    /// </summary>
+    internal const float ServerReachProbeYards = 8f;
+
+    /// <summary>
+    /// Whether the server's own checks would accept CMSG_SPIRIT_HEALER_ACTIVATE for <paramref name="healer"/> from where the ghost stands
+    /// (a healer on a ledge the mesh does not quite reach): asked within <see cref="ServerReachProbeYards"/> only.
+    /// </summary>
+    private bool ServerAccepts(Player player, Creature healer)
+        => Distance(player, healer.X, healer.Y, healer.Z) <= ServerReachProbeYards
+            && session.Services.GetService<QuestNpcFeature>()?.Services.SpiritHealerRefusal(player, healer.Guid) is null;
+
+    /// <summary>The body the spirit-healer fallback already went back to (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>), once per death.</summary>
+    private ObjectGuid _corpseRunResumedFor;
+
     /// <summary>The graveyard of a position on the ghost's own map, or null.</summary>
     private WorldSafeLoc? GraveyardAt(Player player, float x, float y, float z)
     {
         if (player.Map is not { } map) return null;
+        if (GraveyardLookup is { } lookup) return lookup(player, new Vector3(x, y, z)) is { } seen && seen.MapId == map.MapId ? seen : null;
         GraveyardCatalog catalog = WorldGraveyards.Of(session.World).Catalog;
         if (catalog.SafeLocCount == 0) return null;
         (uint zone, uint area) = map.GetZoneAndAreaId(x, y, z);

@@ -48,6 +48,12 @@ public enum PlayerbotHomeTeleportReason
     /// teleport is made in the think of the resurrection, before they aggro, and the cooldown does not hold it back.
     /// </summary>
     UnsafeLanding,
+
+    /// <summary>
+    /// A stall gave the bot's goal up where the navigation mesh joins its ground to nothing round it (PlayerbotNavigation.IsOnMeshIsland,
+    /// PlayerbotBrain.EscapeIsland): no walk leaves the place.
+    /// </summary>
+    Island,
 }
 
 /// <summary>
@@ -134,6 +140,7 @@ internal static class PlayerbotHomeRules
         PlayerbotHomeTeleportReason.Danger => "way home through a higher-level area",
         PlayerbotHomeTeleportReason.WalkBlocked => "walk home blocked",
         PlayerbotHomeTeleportReason.UnsafeLanding => "revived by the spirit healer among creatures too strong for it",
+        PlayerbotHomeTeleportReason.Island => "stalled on ground no route leaves",
         _ => "none",
     };
 }

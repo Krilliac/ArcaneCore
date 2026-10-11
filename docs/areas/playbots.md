@@ -98,6 +98,21 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
 and logged once.
 
+Some walkable ground is a navigation-mesh **island**: polygons the mesh joins to nothing round them, so every route from there ends at the
+island's edge nearest the goal and the next plan is refused, whatever the goal. Inside the round wall of the Molsen Farm in Westfall
+(x -10305..-10274, y 1355..1385) the collision data closes it too: the wall stands 1.7 to 3 yards above the ground inside, and no floor
+within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136) Wfbotac and Wfbotaj stalled there with
+every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
+across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, not a failed tram or lift trip), the brain asks
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 60 yards out; an island ends every one within 45 yards) and, out of combat in the
+open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
+ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
+The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
+brain), a duel, on a battleground, in the air, during another teleport (an unsafe landing replaces the resurrection's near one), to a map
+not allowed; not urgent, at most one every 5 minutes, so a bind point that is itself an island cannot loop (`PlayerbotMeshIslandTests`,
+`AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An island beside water or a void, where a probe point
+has no polygon near it (a NoPath answer), is never detected: its bots still stall and give their goals up one by one.
+
 #### Travel by the Deeprun Tram
 
 Stormwind and Ironforge are 3,960 yards apart in a straight line with no road a bot can walk between them (the Elwynn and Dun Morogh

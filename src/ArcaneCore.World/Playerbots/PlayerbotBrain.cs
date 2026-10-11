@@ -234,8 +234,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         else
         {
-            // Alive again: the next death is a new one, even when pending movement orders hold this update below.
+            // Alive again: the next death is a new one, even when pending movement orders hold this update below. The recovery is
+            // reset here too, before that early return: a death in the window it held would otherwise start in the last death's
+            // spirit-healer fallback (PlayerbotRecovery.Update goes straight to it), never release its new body, and fault.
             _deathIntentRetired = false;
+            _recovery.Reset();
             RememberAttackers(player);
         }
         // Death cleanup must happen before this seam, but pending movement orders still
@@ -764,6 +767,41 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attacking = false;
         _lootOpened = false;
         PlayerbotMovementControl.Stop(_session, player);
+        if (shareable) EscapeIsland(player);
+    }
+
+    /// <summary>
+    /// A stall gave a goal up on a navigation-mesh island (<see cref="PlayerbotNavigation.IsOnMeshIsland"/>): no route leaves it, so
+    /// the next goal would stall the same, and so would every one after it. Out of combat and alive, the bot is moved off as from an
+    /// unsafe landing (<see cref="EscapeLanding"/>): a homed bot teleports to its home's centre
+    /// (<see cref="PlayerbotHomeTeleportReason.Island"/>, at most once per home-teleport cooldown), a bot without a home to its bind point.
+    /// Only in the open world: a dungeon's own map is left to its group and the instance.
+    /// <para>
+    /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): Wfbotac and Wfbotaj stood inside the round wall of the Molsen Farm
+    /// (Westfall), on an island the mesh joins to nothing, and gave up goal after goal there for hours, across restarts (Wfbotac was saved
+    /// there, and stalled within two minutes of every login). True when the bot was moved.
+    /// </para>
+    /// </summary>
+    private bool EscapeIsland(Player player)
+    {
+        if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
+        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        uint now = _session.World.NowMs;
+        // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
+        // aside as blocked (PlayerbotHomeReturn.Refuse), and the bind point is the way out then, as from an unsafe landing.
+        if (_home is { } home)
+        {
+            _homeReturn.Evaluate(player, home, now);
+            if (_homeReturn.TeleportRefusal(_session, player, home, _options, now) is null
+                && _homeReturn.TryTeleport(_session, player, home, _options, PlayerbotHomeTeleportReason.Island, now))
+            {
+                DropIntent();
+                _goal = PlayerbotGoalKind.Home;
+                return true;
+            }
+        }
+
+        return TryTeleportToBindPoint(player, "stalled on ground no route leaves", urgent: false);
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -1197,16 +1235,72 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
-        TeleportService? teleports = _session.Services.GetService<ArcaneCore.World.Teleport.TeleportFeature>()?.Teleports;
+        // The near teleport pending now is the resurrection's own, into the landing: the escape replaces it (urgent).
+        return TryTeleportToBindPoint(player, "was revived by the spirit healer among creatures too strong for it", urgent: true);
+    }
+
+    /// <summary>The shortest time between two of the brain's own bind-point teleports that are not urgent (<see cref="TryTeleportToBindPoint"/>).</summary>
+    internal const uint BindTeleportCooldownMs = PlayerbotHomeReturn.TeleportCooldownMs;
+
+    private uint _bindTeleportAt;
+    private bool _bindTeleported;
+
+    /// <summary>
+    /// Why the bot may not teleport to its bind point now, or null: the rules of the return teleport home (PlayerbotHomeReturn.RefusalOf
+    /// and TryTeleport; vmangos PartyBotAI.cpp:808) for a teleport the brain makes of its own accord. <c>TeleportService.TeleportToHomebind</c>
+    /// checks nothing itself, and a bot can run this brain while in a group (PlayerbotPartyAI.Drives is false while it never engaged and no
+    /// real member is online): it must not be pulled away from its group, out of a duel or a battleground, nor in the air. A teleport
+    /// under way is waited for, except (<paramref name="urgent"/>) a near one, which the next teleport replaces (the resurrection's own into
+    /// an unsafe landing). Not urgent, at most one every <see cref="BindTeleportCooldownMs"/>: a bind point that is itself an island cannot
+    /// loop the bot through it at every stall.
+    /// </summary>
+    private string? BindTeleportRefusal(Player player, TeleportService? teleports, bool urgent, uint now)
+    {
+        if (teleports is null || !_session.IsManaged) return "no teleport service";
         HomeBind bind = player.Home;
-        if (teleports is null || bind == default) return false;
+        if (bind == default) return "no bind point";
+        if (!player.IsAlive) return "dead";
+        if (player.Combat.IsInCombat) return "in combat";
+        if (player.Duel is not null) return "in a duel";
+        if (_session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not null) return "in a group";
+        if (player.Map?.Template is { IsBattleground: true }) return "on a battleground";
+        if ((player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return "in the air";
+        ArcaneCore.Kernel.WorldData.MapTemplate? template = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Registry.Find(bind.MapId);
+        if (template is null || template.IsBattleground) return "bind map unknown";
+        if (!PlayerbotMapPolicy.Allows(_options.AllowedMaps, bind.MapId, template, current: false)) return "bind map not allowed";
+        if (teleports.IsBeingTeleported(player) && !(urgent && teleports.IsBeingTeleportedNear(player))) return "a teleport under way";
+        if (!urgent && _bindTeleported && unchecked(now - _bindTeleportAt) < BindTeleportCooldownMs)
+            return "teleported to its bind point less than 5 minutes ago";
+        return null;
+    }
+
+    /// <summary>
+    /// Teleport the bot to its bind point (where its hearthstone leads; vmangos <c>Player::TeleportToHomebind</c>) when
+    /// <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>). True when the bot was sent; its intent is dropped
+    /// and it explores from there.
+    /// </summary>
+    private bool TryTeleportToBindPoint(Player player, string why, bool urgent)
+    {
+        uint now = _session.World.NowMs;
+        TeleportService? teleports = _session.Services.GetService<ArcaneCore.World.Teleport.TeleportFeature>()?.Teleports;
+        ILogger? logger = _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>();
         var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
-        if (!teleports.TeleportToHomebind(player)) return false;
+        HomeBind bind = player.Home;
+        if (BindTeleportRefusal(player, teleports, urgent, now) is { } refusal)
+        {
+            logger?.LogDebug("Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: does not teleport to its bind point ({Refusal})",
+                player.Name, why, from.X, from.Y, from.Z, player.MapId, refusal);
+            return false;
+        }
+
+        if (!teleports!.TeleportToHomebind(player)) return false;
+        _bindTeleported = true;
+        _bindTeleportAt = now;
         DropIntent();
         _goal = PlayerbotGoalKind.Explore;
-        _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>().LogInformation(
-            "Playerbot {Bot} was revived by the spirit healer among creatures too strong for it at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: teleports to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
-            player.Name, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
+        logger?.LogInformation(
+            "Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: teleports to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
+            player.Name, why, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
         return true;
     }
 
