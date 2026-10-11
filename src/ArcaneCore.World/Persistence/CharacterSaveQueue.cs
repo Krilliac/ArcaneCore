@@ -50,7 +50,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private bool _warning;
 
     // Test seam: observe the hand-off to waiters before the consumer takes another slot.
-    internal Action? AfterWaitersCompletedForTesting { get; set; }
+    internal Action? BeforeWaitersCompletedForTesting { get; set; }
 
     /// <param name="scopes">Where the scoped <see cref="ICharacterStore"/> comes from.</param>
     /// <param name="logger">Diagnostics.</param>
@@ -407,6 +407,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }
 
         // Publish a barrier result only after its slot no longer counts as in flight.
+        BeforeWaitersCompletedForTesting?.Invoke();
         foreach (Waiter waiter in waiters)
         {
             if (dropped && waiter.Settlement)
@@ -422,8 +423,6 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 waiter.Done.TrySetResult();
             }
         }
-
-        AfterWaitersCompletedForTesting?.Invoke();
     }
 
     private async Task RecoverAsync(int id, CancellationToken cancellationToken)

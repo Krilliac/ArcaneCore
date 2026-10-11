@@ -91,7 +91,7 @@ public sealed class CharacterSaveQueueTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pendingAtCompletion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        kit.Queue.AfterWaitersCompletedForTesting = () => pendingAtCompletion.TrySetResult(kit.Queue.Pending);
+        kit.Queue.BeforeWaitersCompletedForTesting = () => pendingAtCompletion.TrySetResult(kit.Queue.Pending);
         kit.Store.OnSave = async (_, token) =>
         {
             if (kit.Store.Attempts.Count == 1)
