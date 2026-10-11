@@ -20,6 +20,7 @@ internal sealed class QaLedger
     private readonly object _gate = new();
     private readonly List<DateTime> _creates = [];
     private readonly List<DateTime> _comments = [];
+    private readonly List<DateTime> _spellCreates = [];
 
     internal bool CanCreate(DateTime now, int max)
     {
@@ -44,6 +45,21 @@ internal sealed class QaLedger
         lock (_gate) _creates.Add(now);
     }
 
+    /// <summary>Whether another spell issue may be created within the rolling 24 hours.</summary>
+    internal bool CanCreateSpell(DateTime now, int max)
+    {
+        lock (_gate)
+        {
+            _spellCreates.RemoveAll(at => now - at >= TimeSpan.FromHours(24));
+            return _spellCreates.Count < max;
+        }
+    }
+
+    internal void RecordSpellCreate(DateTime now)
+    {
+        lock (_gate) _spellCreates.Add(now);
+    }
+
     internal void RecordComment(DateTime now)
     {
         lock (_gate) _comments.Add(now);
@@ -51,7 +67,7 @@ internal sealed class QaLedger
 
     internal QaLedgerState Export()
     {
-        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments]);
+        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates]);
     }
 
     internal void Restore(QaLedgerState? state)
@@ -60,9 +76,11 @@ internal sealed class QaLedger
         {
             _creates.Clear();
             _comments.Clear();
+            _spellCreates.Clear();
             if (state is null) return;
             _creates.AddRange(state.CreatesUtc ?? []);
             _comments.AddRange(state.CommentsUtc ?? []);
+            _spellCreates.AddRange(state.SpellCreatesUtc ?? []);
         }
     }
 
@@ -196,6 +214,9 @@ internal sealed class PlayerbotQaPublisher
 
         public int Lookups;
 
+        /// <summary>Spell issues created in this pass (<see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/>).</summary>
+        public int SpellCreates;
+
         public bool IncompleteLogged;
     }
 
@@ -227,7 +248,10 @@ internal sealed class PlayerbotQaPublisher
     private bool Eligible(QaFindingView f)
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
-        if (f.Count < git.MinOccurrences) return false;
+        // A spell gap is reported on its first real occurrence (a bot cast it); a gap only the start-up coverage lists (Count 0) stays in the
+        // report's Spell coverage section and is never published on its own, so a first deploy cannot open one issue per uncast spell.
+        if (f.Count < (QaKinds.Of(f.Kind).SingleOccurrence ? 1 : git.MinOccurrences)) return false;
+        if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
         return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed);
@@ -261,6 +285,8 @@ internal sealed class PlayerbotQaPublisher
                     _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
                     return true;
                 }
+
+                if (!SpellCreateAllowed(current, pass, now)) return true;
             }
             else if (current.Publication.State == QaPublicationState.Published && !commentDue)
             {
@@ -303,9 +329,16 @@ internal sealed class PlayerbotQaPublisher
                     return true;
                 }
 
-                QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(current, git.Labels, _build, redactor);
+                if (!SpellCreateAllowed(current, pass, now)) return true;
+                QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(current, LabelsFor(current), _build, redactor);
                 QaIssueRef created = await client.CreateIssueAsync(draft.Title, draft.Body, draft.Labels, cancellationToken).ConfigureAwait(false);
                 Ledger.RecordCreate(now);
+                if (QaKinds.Of(current.Kind).SpellKind)
+                {
+                    pass.SpellCreates++;
+                    Ledger.RecordSpellCreate(now);
+                }
+
                 index.AddCreated(created, id);
                 _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, created.Number), now, current.Count));
                 _logger.LogInformation("Bot QA: opened issue #{Number} for finding {Id}", created.Number, current.ShortId);
@@ -358,6 +391,38 @@ internal sealed class PlayerbotQaPublisher
         }
     }
 
+    /// <summary>
+    /// The spell caps on top of the hourly one: at most <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/> spell issues per pass and
+    /// <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerDay"/> per rolling day. Other kinds are not limited by them.
+    /// </summary>
+    private bool SpellCreateAllowed(QaFindingView finding, Pass pass, DateTime now)
+    {
+        if (!QaKinds.Of(finding.Kind).SpellKind) return true;
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (pass.SpellCreates >= git.MaxSpellIssuesPerPass)
+        {
+            _logger.LogInformation("Bot QA: the per-pass spell issue cap ({Cap}) is reached; {Id} stays pending", git.MaxSpellIssuesPerPass, finding.ShortId);
+            return false;
+        }
+
+        if (!Ledger.CanCreateSpell(now, git.MaxSpellIssuesPerDay))
+        {
+            _logger.LogInformation("Bot QA: the daily spell issue cap ({Cap}) is reached; {Id} stays pending", git.MaxSpellIssuesPerDay, finding.ShortId);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>The configured labels, plus the kind's own label when <see cref="PlayerbotQaGitHubOptions.KindLabels"/> is on (the first label stays the listing one).</summary>
+    internal IReadOnlyList<string> LabelsFor(QaFindingView finding)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (!git.KindLabels) return git.Labels;
+        string kind = QaKinds.Of(finding.Kind).GitHubLabel;
+        return git.Labels.Contains(kind, StringComparer.OrdinalIgnoreCase) ? git.Labels : [.. git.Labels, kind];
+    }
+
     private void Fail(string id, QaFindingView? current, string reason)
     {
         string text = reason.Length > 300 ? reason[..300] : reason;
@@ -374,7 +439,7 @@ internal sealed class PlayerbotQaPublisher
         {
             if (f.Publication.Pinned) continue;
             if (f.Publication.State == QaPublicationState.DryRun && f.OccurrencesReported == f.Count) continue;
-            QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, git.Labels, _build, _redactor);
+            QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, LabelsFor(f), _build, _redactor);
             try
             {
                 Directory.CreateDirectory(folder);

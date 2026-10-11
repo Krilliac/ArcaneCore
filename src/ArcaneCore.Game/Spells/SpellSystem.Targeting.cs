@@ -81,7 +81,7 @@ public sealed partial class SpellSystem
             List<(Unit Unit, float Multiplier)>? units = SelectEffectTargets(cast, effect, i, selector, unitTarget);
             if (units is null)
             {
-                ReportUnsupported("implicit target", (uint)selector, cast.Spell.Id);
+                ReportUnsupported(cast, i, "implicit target", (uint)selector);
                 continue;
             }
 

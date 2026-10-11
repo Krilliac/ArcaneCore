@@ -22,6 +22,9 @@ public enum QaCause
     /// bot, set nothing aside for other bots, and is not reported to GitHub (the report still lists it).
     /// </summary>
     OutsideHome,
+
+    /// <summary>The server does not implement what the bots used: a spell effect, aura type, script or implicit target with no handler.</summary>
+    NotImplemented,
 }
 
 /// <summary>Where a finding stands with GitHub.</summary>
@@ -117,12 +120,47 @@ internal sealed record QaFindingView
     /// <summary>The occurrences already told to GitHub (the issue body, comments) or written to a dry-run file.</summary>
     public long OccurrencesReported { get; init; }
 
+    /// <summary>The spell a spell finding is about (0 for other kinds).</summary>
+    public uint Spell { get; init; }
+
+    public string SpellName { get; init; } = string.Empty;
+
+    public string SpellRank { get; init; } = string.Empty;
+
+    /// <summary>The effect index (0..2), or -1 when the finding is about the whole spell.</summary>
+    public int EffectIndex { get; init; } = -1;
+
+    public string EffectName { get; init; } = string.Empty;
+
+    public int EffectValue { get; init; }
+
+    /// <summary>The aura type number of an aura effect (0 when none).</summary>
+    public uint Aura { get; init; }
+
+    /// <summary>The gap code of an unsupported spell, the cast result of a refusal (<see cref="QaSignal.Reason"/>).</summary>
+    public string Reason { get; init; } = string.Empty;
+
+    /// <summary>What the reason names, in words (the effect or aura name, the target type).</summary>
+    public string ReasonDetail { get; init; } = string.Empty;
+
+    public uint Item { get; init; }
+
+    public uint Npc { get; init; }
+
+    public uint GameObject { get; init; }
+
+    /// <summary>The classes of the bots that met it: bit c = class c (<c>ArcaneCore.Game.Class</c>).</summary>
+    public uint ClassMask { get; init; }
+
+    /// <summary>The start-up spell coverage lists it (<see cref="QaSignal.FromCoverage"/>): it is a gap whether or not a bot met it yet.</summary>
+    public bool Coverage { get; init; }
+
     [JsonIgnore]
     public string ShortId => PlayerbotQaFingerprint.ShortId(Id);
 
-    /// <summary>Whether the finding comes from creature data rather than from bots (it has no bot count to threshold on).</summary>
+    /// <summary>Whether the finding comes from data rather than from bots (it has no bot count to threshold on; <see cref="QaKinds"/>).</summary>
     [JsonIgnore]
-    public bool BotIndependent => Kind is QaSignalKind.RelayDataMissing or QaSignalKind.RelayScriptMissing;
+    public bool BotIndependent => QaKinds.Of(Kind).BotIndependent;
 
     [JsonIgnore]
     public string KindLabel => LabelOf(Kind);
@@ -138,18 +176,23 @@ internal sealed record QaFindingView
     internal static bool QuestIsGoalOf(QaSignalKind kind, string goal)
         => kind != QaSignalKind.Stall || string.Equals(goal, "Quest", StringComparison.Ordinal);
 
-    internal static string LabelOf(QaSignalKind kind) => kind switch
+    internal static string LabelOf(QaSignalKind kind) => Enum.IsDefined(kind) ? QaKinds.Of(kind).Label : kind.ToString();
+
+    /// <summary>The class names of <see cref="ClassMask"/> (<c>Mage, Warlock</c>), empty when none is known.</summary>
+    [JsonIgnore]
+    public string ClassNames => ClassNamesOf(ClassMask);
+
+    internal static string ClassNamesOf(uint mask)
     {
-        QaSignalKind.Stall => "stall",
-        QaSignalKind.SharedSetAside => "shared set-aside",
-        QaSignalKind.DeathLoop => "death loop",
-        QaSignalKind.ActionFault => "action fault",
-        QaSignalKind.Quarantine => "quarantine",
-        QaSignalKind.Disabled => "disabled",
-        QaSignalKind.RelayDataMissing => "relay data",
-        QaSignalKind.RelayScriptMissing => "relay script",
-        _ => kind.ToString(),
-    };
+        if (mask == 0) return string.Empty;
+        var names = new List<string>();
+        for (int c = 1; c < 32; c++)
+        {
+            if ((mask & (1u << c)) != 0) names.Add(((ArcaneCore.Game.Class)c).ToString());
+        }
+
+        return string.Join(", ", names);
+    }
 }
 
 /// <summary>What a publish attempt changed about a finding.</summary>
@@ -203,6 +246,34 @@ internal sealed class QaFinding
 
     public long OccurrencesReported { get; set; }
 
+    public uint Spell { get; set; }
+
+    public string SpellName { get; set; } = string.Empty;
+
+    public string SpellRank { get; set; } = string.Empty;
+
+    public int EffectIndex { get; set; } = -1;
+
+    public string EffectName { get; set; } = string.Empty;
+
+    public int EffectValue { get; set; }
+
+    public uint Aura { get; set; }
+
+    public string Reason { get; set; } = string.Empty;
+
+    public string ReasonDetail { get; set; } = string.Empty;
+
+    public uint Item { get; set; }
+
+    public uint Npc { get; set; }
+
+    public uint GameObject { get; set; }
+
+    public uint ClassMask { get; set; }
+
+    public bool Coverage { get; set; }
+
     /// <summary>Different bots seen (saturates at <see cref="MaxTrackedBots"/> tracked ids; a bot-less signal's own count counts too).</summary>
     public int DistinctBots => Math.Max(Bots.Count, AnonymousBots);
 
@@ -211,6 +282,8 @@ internal sealed class QaFinding
         Id = Id, Key = Key, Kind = Kind, Subject = Subject, Goal = Goal, Count = Count, DistinctBots = DistinctBots, FirstSeenUtc = FirstSeenUtc,
         LastSeenUtc = LastSeenUtc, Samples = [.. Samples], Quest = Quest, Target = Target, Map = Map, QuestTitle = QuestTitle, Cause = Cause,
         CauseDetail = CauseDetail, Severity = Severity, Publication = Publication, LastCommentUtc = LastCommentUtc,
-        OccurrencesReported = OccurrencesReported,
+        OccurrencesReported = OccurrencesReported, Spell = Spell, SpellName = SpellName, SpellRank = SpellRank, EffectIndex = EffectIndex,
+        EffectName = EffectName, EffectValue = EffectValue, Aura = Aura, Reason = Reason, ReasonDetail = ReasonDetail, Item = Item, Npc = Npc,
+        GameObject = GameObject, ClassMask = ClassMask, Coverage = Coverage,
     };
 }

@@ -134,6 +134,16 @@ public interface ISpellCastObserver
     void OnSummoned(SpellEffectContext context, Creatures.Creature summon)
     {
     }
+
+    /// <summary>
+    /// The cast reached something the spell system does not implement: an effect with no handler (<paramref name="kind"/> <c>effect</c>,
+    /// <paramref name="value"/> the effect number), an aura type with no handler (<c>aura</c>, the aura number) or an implicit target type
+    /// it cannot select (<c>implicit target</c>, the target number). Raised every time it happens (the Information log of the same gap is
+    /// written once per process); it only runs on that path, never for a supported cast. <paramref name="effectIndex"/> is the effect.
+    /// </summary>
+    void OnUnsupported(SpellCast cast, int effectIndex, string kind, uint value)
+    {
+    }
 }
 
 /// <summary>Which number an <see cref="ISpellValueModifier"/> is asked to adjust.</summary>

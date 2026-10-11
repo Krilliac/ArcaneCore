@@ -140,6 +140,25 @@ public sealed class PlayerbotQaCommandsTests : IDisposable
     }
 
     [Fact]
+    public async Task QaSpells_ShowsTheCoverageState_AndTheSpellFindingsBotsMet()
+    {
+        await using WorldTestHost host = StartWithQa();
+        var feature = host.WorldServices.GetRequiredService<PlayerbotQaFeature>();
+        Assert.NotNull(feature.SpellMonitor); // registered on the in-process world's spell system
+        string id = Ingest(feature, PlayerbotQaSpellCoreTests.Gap(133));
+        Ingest(feature, QaData.Stall(QaData.Bot1, 1, 1));
+
+        string[] lines = await RunAsync(host, ".playerbot qa spells");
+        string[] bad = await RunAsync(host, ".playerbot qa spells banana");
+
+        Assert.StartsWith("Spell coverage", lines[0], StringComparison.Ordinal);
+        Assert.Contains("Spell findings bots met: top 1 of 1", lines);
+        Assert.Contains(lines, l => l.StartsWith("#1 " + PlayerbotQaFingerprint.ShortId(id) + " x1 bots 1 spell unsupported: spell 133", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("stall", StringComparison.Ordinal));
+        Assert.Contains(bad, l => l.Contains("Syntax", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task QaReset_ForgetsOneOrAll_LocallyOnly()
     {
         await using WorldTestHost host = StartWithQa();

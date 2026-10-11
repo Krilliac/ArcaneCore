@@ -1282,10 +1282,13 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
 | `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
 | `World:Playerbots:Qa:GitHub:GhPath` | `string` | `"gh"` | - | The `gh` executable for `Transport` = `GhCli`: a file name looked up on PATH (`gh`) or a full path (1..260 characters). |
+| `World:Playerbots:Qa:GitHub:KindLabels` | `bool` | `false` | - | Add a per-kind label (`bot-qa:spell-unsupported`, `bot-qa:death-loop`, ...) to created issues besides `Labels` (off by default: the `gh` transport refuses a label that does not exist yet, so create the labels in the repository first). |
 | `World:Playerbots:Qa:GitHub:Labels` | `string[]` | `["bot-qa"]` | - | The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default). |
 | `World:Playerbots:Qa:GitHub:MaxCommentsPerHour` | `int` | `10` | - | The most comments added per rolling hour (0..1000; 0 adds none). |
 | `World:Playerbots:Qa:GitHub:MaxIssuesPerHour` | `int` | `5` | - | The most issues created per rolling hour (0..1000; 0 creates none); the rest stay pending. |
 | `World:Playerbots:Qa:GitHub:MaxListPages` | `int` | `10` | - | The most 100-issue pages read when looking for an existing issue (1..100). |
+| `World:Playerbots:Qa:GitHub:MaxSpellIssuesPerDay` | `int` | `10` | - | The most spell issues created per rolling 24 hours (0..1000; 0 creates none), saved with the hourly caps. |
+| `World:Playerbots:Qa:GitHub:MaxSpellIssuesPerPass` | `int` | `2` | - | The most spell issues (spell unsupported, refused, no effect) created in one publish pass (0..100; 0 creates none). Spell findings can be numerous on a first run; the hourly `MaxIssuesPerHour` still applies on top. |
 | `World:Playerbots:Qa:GitHub:MinDistinctBots` | `int` | `2` | - | A finding caused by bots is reported once this many different bots met it (1..10000); data findings of creature scripts are exempt. |
 | `World:Playerbots:Qa:GitHub:MinOccurrences` | `int` | `3` | - | A finding is reported once it was seen this many times (1..1000000). |
 | `World:Playerbots:Qa:GitHub:Publish` | `bool` | `false` | - | Really create issues and comments (off by default = dry run: the would-be issues are written to `qa/pending-issues/` and logged, nothing is sent). |
