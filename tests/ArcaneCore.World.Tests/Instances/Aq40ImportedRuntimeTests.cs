@@ -217,7 +217,7 @@ public sealed class Aq40ImportedRuntimeTests
                 var lorAi = Assert.IsType<VeklorAI>(lor.AI);
                 Assert.Contains(creatures.Creatures, c => c.Entry is 15316 or 15317 && c.AI is TwinBugAI);
                 var temple = Assert.IsType<TempleOfAhnQirajInstance>(map.FindUpdater<InstanceData>());
-                // The direct test teleport bypasses 4047; vmangos instance_temple_of_ahnqiraj::JustDidDialogueStep raises the emperors.
+                // The direct test teleport bypasses 4047; mangos-classic temple_of_ahnqiraj.cpp:31-32,92-98 raises the emperors after a 2000 ms dialogue step (vmangos uses +3000 ms).
                 Assert.Equal(StandState.Kneel, nilash.StandState);
                 Assert.Equal(StandState.Kneel, lor.StandState);
                 temple.OnAreaTrigger(player, TempleOfAhnQirajInstance.AreaTriggerTwinEmperors);
