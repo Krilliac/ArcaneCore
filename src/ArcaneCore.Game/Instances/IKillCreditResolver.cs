@@ -27,5 +27,5 @@ public sealed class PlayerKillCreditResolver : IKillCreditResolver
     public static PlayerKillCreditResolver Instance { get; } = new();
 
     public Player? Resolve(Unit? killer, Creature victim)
-        => killer is null ? null : killer.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(killer);
+        => Progression.KillRewards.CreditedPlayer(killer);
 }

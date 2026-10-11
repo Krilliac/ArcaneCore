@@ -252,7 +252,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
-        map.Combat.DamageDealt += OnDamageDealt;
+        map.Combat.DamageTaken += OnDamageTaken;
         map.Combat.UnitKilled += OnUnitKilled;
     }
 
@@ -261,7 +261,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         if (_systems.Remove(map))
         {
             map.Combat.UnitKilled -= OnUnitKilled;
-            map.Combat.DamageDealt -= OnDamageDealt;
+            map.Combat.DamageTaken -= OnDamageTaken;
         }
     }
 
@@ -288,7 +288,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
     }
 
-    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool melee)
+    // DamageTaken fires before the lethal check, so the killing blow taps too (vmangos Unit.cpp:800-819 precede the kill at :825).
+    private void OnDamageTaken(Unit attacker, Unit victim, uint damage)
     {
         if (victim.Map is { } map)
         {

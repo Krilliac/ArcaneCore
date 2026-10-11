@@ -2,6 +2,8 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Totems;
 using ArcaneCore.Kernel.Honor;
@@ -19,12 +21,14 @@ namespace ArcaneCore.Game.Honor;
 /// the other team; a group's damage is pooled and split evenly over its qualifying members with the group rate. Every
 /// recipient needs the victim above its gray level. Creature kills reward the TAPPER, as vmangos does (Unit::Kill takes the creature's loot recipient and its group, Unit.cpp:988-1001, 1076-1079):
 /// the first player (or the owner of the first pet) to damage a creature that is not a pet taps it (Unit::DealDamage, Unit.cpp:804-807), the
-/// tap is dropped when the creature is back at full health (what an evade or a respawn does, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
-/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature nobody tapped (killed by one hit that is its
-/// first damage, or by non-player damage) rewards the killer's controlling player, which is the original's pPlayerTap fallback. Documented limits:
-/// the tap is a snapshot of the tapper's group taken at the first hit (the tapper's current group is preferred while it still contains the tapper),
-/// "IsLootAllowedDueToDamageOrigin" (the share of damage done by players) and the pet to owner tap swap have no data here, and a creature healed
-/// to full health mid-fight loses its tap; the "xp_multiplier 0" and "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
+/// tap is dropped on an explicit reset (evade or respawn, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
+/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature players damaged 35% or less
+/// (Creature::IsLootAllowedDueToDamageOrigin, settled at the kill) rewards the killing blow's player ALONE (pGroupTap stays null,
+/// Unit.cpp:1007-1008); a creature nobody tapped rewards the killer and his current group (:998-999).
+/// A respawn is a reset too (Creature.cpp:2306, via Creature.ClearLootRecipient);
+/// an owner's active pet holds its tap until the owner or the tap's group hits. Without that player tapper, group rewards are also gated
+/// (Unit.cpp:1020). Documented limits: honor keeps its own snapshot of the tapper's group at the first hit; the "xp_multiplier 0" and
+/// "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
 /// </para>
 /// </summary>
 public sealed class HonorKillRewards
@@ -36,7 +40,7 @@ public sealed class HonorKillRewards
     private readonly HashSet<MapCombat> _attached = [];
     private readonly ConditionalWeakTable<Creature, Tap> _taps = new();
 
-    private sealed record Tap(ObjectGuid Player, RewardGroup? Group);
+    private sealed record Tap(ObjectGuid Player, RewardGroup? Group, ulong Revision);
 
     /// <param name="honor">The honor owner.</param>
     /// <param name="groups">A player's reward group (null for solo).</param>
@@ -86,31 +90,41 @@ public sealed class HonorKillRewards
             return;
         }
 
-        Player? owner = DuelRules.ControllingPlayer(attacker);
+        // Unit.cpp:791-794: UnitDamaged records the attacker's affecting player (a pet's owner; a charmed creature's own owner, if any).
+        Player? owner = attacker.GetAffectingPlayer() ?? DuelRules.ControllingPlayer(attacker);
         state.Ledger.Record(owner?.Guid.Value ?? 0, damage, _honor.Clock.UnixMilliseconds);
     }
 
-    /// <summary>Unit::DealDamage (Unit.cpp:804-807): a creature that is not a pet is tapped by the first player to damage it.</summary>
+    /// <summary>
+    /// Unit::DealDamage (Unit.cpp:800-819): a creature that is not a pet is tapped by the first player (or what a player owns or charms)
+    /// to damage it; an owner's active pet holds the tap provisionally (<see cref="KillRewards.TapGuid"/>) until the owner or a member of
+    /// the tap's group hits.
+    /// </summary>
     private void RecordTap(Unit attacker, Creature creature)
     {
-        if (creature.IsPet || DuelRules.ControllingPlayer(attacker) is not { } owner)
+        if (creature.IsPet || KillRewards.CreditedPlayer(attacker) is not { } owner)
         {
             return;
         }
 
-        // Damage dealt at full health starts a new fight: an evade (CreatureAI.cpp:344) or a respawn (Creature.cpp:2306) cleared the old tap.
-        if (creature.Health >= creature.MaxHealth)
+        // CreatureAI::EnterEvadeMode clears the recipient without requiring full health.
+        // A heal to full during the same fight is not a tap reset.
+        if (_taps.TryGetValue(creature, out Tap? previous) && previous.Revision != creature.LootTapRevision)
         {
             _taps.Remove(creature);
         }
 
-        if (!_taps.TryGetValue(creature, out _))
+        if (!_taps.TryGetValue(creature, out Tap? held))
         {
-            _taps.Add(creature, new Tap(owner.Guid, _groups(owner)));
+            _taps.Add(creature, new Tap(KillRewards.TapGuid(attacker, owner), _groups(owner), creature.LootTapRevision));
+        }
+        else if (KillRewards.TakesOverPetTap(held.Player, attacker, held.Group?.Members.Contains(owner.Guid) == true))
+        {
+            _taps.AddOrUpdate(creature, new Tap(owner.Guid, _groups(owner) ?? held.Group, creature.LootTapRevision));
         }
     }
 
-    /// <summary>React to a death: honor for a player victim from its damage history, for a creature victim from the killer.</summary>
+    /// <summary>React to a death: honor for a player victim from its damage history, for a creature victim from the tap (Unit::Kill).</summary>
     public void OnUnitKilled(Unit? killer, Unit victim)
     {
         if (victim is Player deadPlayer)
@@ -127,15 +141,45 @@ public sealed class HonorKillRewards
         Tap? tap = null;
         if (_taps.TryGetValue(creature, out Tap? held))
         {
-            tap = held;
+            tap = held.Revision == creature.LootTapRevision ? held : null; // a reset (evade, respawn) since the tap: stale
             _taps.Remove(creature);
         }
 
-        Player? tapper = tap is null
-            ? (killer is null ? null : DuelRules.ControllingPlayer(killer))
-            : map.FindPlayer(tap.Player);
-        RewardCreatureKill(tapper, tap?.Group, creature);
+        Player? tapper;
+        RewardGroup? group = null;
+        if (!creature.KillCreditAllowed)
+        {
+            // Unit.cpp:1007-1008: the tap was dropped and pGroupTap is never set; RewardSinglePlayerAtKill for the killing blow's player.
+            tapper = KillRewards.CreditedPlayer(killer);
+        }
+        else if (tap is null)
+        {
+            // Unit.cpp:984, 998-999: nobody tapped; pPlayerTap is the killer's player and pGroupTap his current group.
+            tapper = KillRewards.CreditedPlayer(killer);
+            group = CurrentGroupOf(tapper);
+        }
+        else if (!tap.Player.IsPlayer)
+        {
+            return; // a provisional pet tap: pPlayerTap = nullptr gates loot and both reward paths (Unit.cpp:995-997, 1020)
+        }
+        else
+        {
+            // Unit.cpp:989-999: the original recipient (the killer's player when he left the map), the tap's group while it has
+            // members, else his current group.
+            tapper = map.FindPlayer(tap.Player) ?? KillRewards.CreditedPlayer(killer);
+            group = tap.Group is { Members.Count: > 0 } ? tap.Group : CurrentGroupOf(tapper);
+        }
+
+        if (tapper is null || !ReferenceEquals(tapper.Map, map))
+        {
+            return;
+        }
+
+        RewardCreatureKill(tapper, group, creature);
     }
+
+    private RewardGroup? CurrentGroupOf(Player? player)
+        => player is not null && _groups(player) is { } current && current.Members.Contains(player.Guid) ? current : null;
 
     /// <summary>Player::IsHonorOrXPTarget: the victim is above the gray level and is no totem or pet.</summary>
     public static bool IsHonorOrXpTarget(Player rewarded, Unit victim)
@@ -232,36 +276,18 @@ public sealed class HonorKillRewards
     }
 
     /// <summary>
-    /// The honor of a creature kill for <paramref name="tapper"/> (the player the creature's honor belongs to): the player alone, or every
-    /// living member of its group within reach (Group::RewardGroupAtKill_helper calls RewardHonor for living members).
+    /// Group::RewardGroupAtKill_helper (Group.cpp:2295-2300) for a creature victim: RewardHonor for every living member of
+    /// <paramref name="group"/> at reward distance; without a group, Player::RewardSinglePlayerAtKill (Player.cpp:19965) for the tapper alone.
     /// </summary>
-    public void RewardCreatureKill(Player tapper, Creature victim)
+    private void RewardCreatureKill(Player tapper, RewardGroup? group, Creature victim)
     {
-        ArgumentNullException.ThrowIfNull(tapper);
-        ArgumentNullException.ThrowIfNull(victim);
-        RewardCreatureKill(tapper, null, victim);
-    }
-
-    // tapper null: the tapping player is gone, only the tap-time group is left to reward.
-    private void RewardCreatureKill(Player? tapper, RewardGroup? tapGroup, Creature victim)
-    {
-        if (victim.Map is not { } map || (tapper is not null && !ReferenceEquals(tapper.Map, map)))
-        {
-            return;
-        }
-
-        RewardGroup? current = tapper is null ? null : _groups(tapper);
-        RewardGroup? group = tapper is not null && current is not null && current.Members.Contains(tapper.Guid) ? current : tapGroup;
         if (group is null)
         {
-            if (tapper is not null)
-            {
-                RewardHonor(tapper, victim);
-            }
-
+            RewardHonor(tapper, victim);
             return;
         }
 
+        Map map = victim.Map!;
         foreach (ObjectGuid guid in group.Members)
         {
             if (map.FindPlayer(guid) is { IsAlive: true } member && GroupRewardRange.IsAtGroupRewardDistance(member, victim, _range))

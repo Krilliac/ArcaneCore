@@ -485,8 +485,9 @@ public sealed partial class CreatureMapSystem
         MapCombat.ClearInCombat(creature);
         creature.Combat.SetAttackTimer(WeaponAttackType.BaseAttack, 0);
         creature.InitializeFields();
-        creature.LootTapPlayerGuid = default;
-        creature.LootTapGroup = null;
+        creature.ClearLootRecipient(); // vmangos Creature::SetDeathState(JUST_ALIVED), Creature.cpp:2306: bumps LootTapRevision so honor drops a stale tap
+        creature.ResetKillCredit();
+        creature.UnitFlags &= ~UnitFlags.Skinnable; // Creature.cpp:2324
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
         DeletePersistedRespawn(creature);

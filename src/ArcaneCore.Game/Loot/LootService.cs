@@ -4,6 +4,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
@@ -377,17 +379,34 @@ public sealed partial class LootService : IViewerFieldFilter
 
     // --- creature corpses -----------------------------------------------------------------
 
-    /// <summary>Record the first player damage tap before death; later attackers cannot take the loot rights.</summary>
+    /// <summary>
+    /// vmangos Unit::DealDamage (Unit.cpp:800-819), every hit before the lethal check (subscribe to <see cref="MapCombat.DamageTaken"/>):
+    /// the first hit by a player, or by something a player owns or charms, taps a creature that is no pet; later attackers cannot
+    /// take the loot rights, except that a tap still held by an owner's active pet (<see cref="KillRewards.TapGuid"/>) passes to the
+    /// owner, or to a member of the tap's group, on their first hit.
+    /// </summary>
     public void OnCreatureDamaged(Unit attacker, Unit victim, uint damage)
     {
         if (damage == 0 || victim is not Creature { IsPet: false, DeathState: CreatureDeathState.Alive } creature
-            || !creature.LootTapPlayerGuid.IsEmpty || DuelRules.ControllingPlayer(attacker) is not { } player)
+            || KillRewards.CreditedPlayer(attacker) is not { } player)
         {
             return;
         }
 
-        // vmangos Unit.cpp:800-819 records the original player and group on the first hit.
-        creature.LootTapPlayerGuid = player.Guid;
+        if (!creature.LootTapPlayerGuid.IsEmpty)
+        {
+            if (KillRewards.TakesOverPetTap(creature.LootTapPlayerGuid, attacker,
+                creature.LootTapGroup is { } tapGroup && ReferenceEquals(Groups?.GroupOf(player), tapGroup)))
+            {
+                creature.LootTapPlayerGuid = player.Guid;
+                creature.LootTapGroup = Groups?.GroupOf(player) ?? creature.LootTapGroup;
+            }
+
+            return;
+        }
+
+        // vmangos Creature::SetLootRecipient (Creature.cpp:1590-1612) records the player (or the active pet) and the group on the first hit.
+        creature.LootTapPlayerGuid = KillRewards.TapGuid(attacker, player);
         creature.LootTapGroup = Groups?.GroupOf(player);
         creature.ViewerFieldFilter = this;
         creature.SetUInt32(UpdateFields.UnitDynamicFlags,
@@ -398,12 +417,29 @@ public sealed partial class LootService : IViewerFieldFilter
     /// A creature died (subscribe to <see cref="MapCombat.UnitKilled"/>): generate its corpse loot
     /// for the killing player and their group, set UNIT_DYNFLAG_LOOTABLE (shown only to allowed
     /// looters), or mark it looted out at once when nothing dropped. The first damage tap owns
-    /// the rights; a first-hit killing blow uses its killer as the tapper.
+    /// the rights; a first-hit killing blow uses its killer as the tapper. A kill that failed the damage-origin rule generates nothing.
     /// </summary>
     public LootBag? OnCreatureKilled(Unit? killer, Unit victim)
     {
         Prune();
         if (victim is not Creature creature || !creature.IsInWorld || creature.Map is not { } map)
+        {
+            return null;
+        }
+
+        // Unit::Kill (Unit.cpp:1007-1008) cleared the recipient: vmangos still fills the loot (:1090) but Player::IsAllowedToLoot
+        // (Player.cpp:15253-15278) is false for everyone, UNIT_DYNFLAG_LOOTABLE is masked for every viewer (Object.cpp:797-798) and
+        // UNIT_FLAG_SKINNABLE is never set (Creature.cpp:2274-2277: HasLootRecipient() is false). Observably: no loot, no skinning, and the
+        // corpse decays on its plain timer (AllLootRemovedFromCorpse never fires). Generating no bag is the same observable outcome and
+        // avoids the empty-bag "looted out" decay shortcut below.
+        if (!creature.KillCreditAllowed)
+        {
+            return null;
+        }
+
+        // Unit::Kill (Unit.cpp:995-997, 1020): a provisional pet tap clears pPlayerTap,
+        // so even a recorded group cannot generate corpse loot yet.
+        if (!creature.LootTapPlayerGuid.IsEmpty && !creature.LootTapPlayerGuid.IsPlayer)
         {
             return null;
         }
@@ -426,7 +462,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (creature.LootTapPlayerGuid.IsEmpty)
         {
-            player = killer is null ? null : DuelRules.ControllingPlayer(killer);
+            player = KillRewards.CreditedPlayer(killer);
         }
         if (player is null || !ReferenceEquals(player.Map, map))
         {
@@ -476,7 +512,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (obj is Creature tapped && !tapped.LootTapPlayerGuid.IsEmpty)
         {
-            bool canTap = tapped.LootTapPlayerGuid == viewer.Guid || tapped.LootTapGroup is { } group
+            bool canTap = tapped.LootTapPlayerGuid == viewer.Guid || tapped.LootTapPlayerGuid == viewer.PetGuid || tapped.LootTapGroup is { } group
                 && ReferenceEquals(Groups?.GroupOf(viewer), group);
             value = canTap ? value | UnitDynFlagTapped | UnitDynFlagTappedByPlayer
                 : (value | UnitDynFlagTapped) & ~UnitDynFlagTappedByPlayer;

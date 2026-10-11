@@ -67,32 +67,45 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
         _spells.Clear();
     }
 
+    /// <summary>
+    /// vmangos Unit::Kill (Unit.cpp:981-1008, 1094-1097): the player behind the killing blow (a pet's, totem's, guardian's or
+    /// charmed creature's master; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, the creature's original loot recipient
+    /// and the group of the tap replace him (<see cref="KillRewards.ResolveTap"/>), and KilledMonster goes to that group
+    /// (Group.cpp:2373-2380) or the tapper alone. A creature no player controls credits only a tap that passed the damage-origin rule.
+    /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (!Authoritative(killer, victim, out Player? player, out Creature? creature))
+        if (victim is not Creature { IsInWorld: true } creature || creature.Map is not { } map
+            || !ReferenceEquals(map.FindObject(creature.Guid), creature))
         {
             return;
         }
 
-        // Player::RewardSinglePlayerAtKill (Player.cpp:19961, 19968-19982): a victim owned by a player is a PvP kill
-        // (IsCharmerOrOwnerPlayerOrPlayerItself), which gives no KilledMonster credit; a totem is owned by its summoner.
-        if (TotemQuery.TryGet(creature, out TotemInfo totem) && totem.Owner is Player)
+        // Player::RewardSinglePlayerAtKill / RewardGroupAtKill (Player.cpp:19961, 19968-19982; Group.cpp:2364, 2378): a victim a player
+        // owns or charms (a totem is owned by its summoner) is a PvP kill, which gives no KilledMonster credit.
+        if (KillRewards.IsPvpVictim(creature) || (TotemQuery.TryGet(creature, out TotemInfo totem) && totem.Owner is Player))
         {
             return;
         }
 
-        RewardGroup? group = groups?.Invoke(player);
-        if (group is null || !group.Members.Contains(player.Guid))
+        Player? player = KillRewards.CreditedPlayer(killer);
+        if (player is not { IsInWorld: true } || !ReferenceEquals(map.FindPlayer(player.Guid), player))
         {
-            if (player.IsAlive)
+            player = null;
+        }
+
+        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, groups ?? (_ => null));
+        if (group is null)
+        {
+            if (tapper is { IsAlive: true })
             {
-                objectives.KilledMonsterCredit(player, creature.Entry, creature.Guid);
+                objectives.KilledMonsterCredit(tapper, creature.Entry, creature.Guid);
             }
 
             return;
         }
 
-        foreach (Player member in KillRewards.Recipients(player, creature, group, rewardDistance))
+        foreach (Player member in KillRewards.TapRecipients(tapper, creature, group, rewardDistance))
         {
             if (!KillRewards.CanReceiveQuestCredit(member))
             {

@@ -213,7 +213,7 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
             return;
         }
 
-        Player? player = killer is null ? null : DuelRules.ControllingPlayer(killer);
+        Player? player = KillRewards.CreditedPlayer(killer);
         if (player is not { IsInWorld: true } || !ReferenceEquals(map.FindPlayer(player.Guid), player))
         {
             player = null; // the killing blow came from no player on this map: only a tap can earn the reputation
