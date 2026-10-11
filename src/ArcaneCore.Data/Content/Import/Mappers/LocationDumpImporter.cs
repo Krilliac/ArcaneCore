@@ -130,6 +130,31 @@ public sealed class LocationDumpImporter
         return portals.Count;
     }
 
+    /// <summary>Refresh entry requirements on matching portals without replacing a world's destinations or custom rows.</summary>
+    public async Task<int> RefreshPortalRequirementsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        IReadOnlyCollection<AreaTriggerTeleportRow> source = Snapshot().Portals;
+        if (source.Count == 0)
+            return 0;
+
+        Dictionary<uint, AreaTriggerTeleportRow> existing = await db.Set<AreaTriggerTeleportRow>()
+            .ToDictionaryAsync(r => r.Id, cancellationToken).ConfigureAwait(false);
+        foreach (AreaTriggerTeleportRow row in source)
+        {
+            if (!existing.TryGetValue(row.Id, out AreaTriggerTeleportRow? target))
+                continue;
+
+            target.RequiredLevel = row.RequiredLevel;
+            target.RequiredItem = row.RequiredItem;
+            target.RequiredItem2 = row.RequiredItem2;
+            target.RequiredQuestDone = row.RequiredQuestDone;
+            target.RequiredCondition = row.RequiredCondition;
+        }
+
+        return await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     // vmangos progressive rows: patch_min <= 10 <= patch_max (a table without the columns always applies), as the other quest relations.
     private void ReadQuestTrigger(DumpRow row)
     {

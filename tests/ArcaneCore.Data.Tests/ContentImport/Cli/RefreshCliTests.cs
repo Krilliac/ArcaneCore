@@ -73,6 +73,36 @@ public sealed class RefreshCliTests : IDisposable
     private static WorldDbContext Open(string path)
         => new(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options);
 
+    [Fact]
+    public async Task Refresh_RestoresPortalRequirements_WithoutReplacingCustomPortalsOrDestinations()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await using (WorldDbContext seed = Open(world))
+        {
+            seed.Set<AreaTriggerTeleportRow>().AddRange(
+                new AreaTriggerTeleportRow { Id = 2848, Name = "local destination", TargetMap = 249 },
+                new AreaTriggerTeleportRow { Id = 3528, Name = "local molten core", TargetMap = 409 },
+                new AreaTriggerTeleportRow { Id = 9999, Name = "custom portal", RequiredItem = 42 });
+            await seed.SaveChangesAsync();
+        }
+
+        string dump = PathOf("portals.sql");
+        await File.WriteAllTextAsync(dump, """
+            CREATE TABLE `areatrigger_teleport` (`id` mediumint unsigned NOT NULL, `name` text, `required_level` tinyint unsigned NOT NULL, `required_item` mediumint unsigned, `required_item2` mediumint unsigned, `required_quest_done` mediumint unsigned, `target_map` smallint unsigned NOT NULL, `target_position_x` float NOT NULL, `target_position_y` float NOT NULL, `target_position_z` float NOT NULL, `target_orientation` float NOT NULL, `status_failed_text` text, `condition_id` int, PRIMARY KEY (`id`));
+            INSERT INTO `areatrigger_teleport` VALUES (2848,'Onyxia',50,16309,7,0,249,1,2,3,4,'amulet',11),(3528,'Molten Core',50,0,0,7848,409,5,6,7,8,'quest',0);
+            """);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world);
+        Assert.True(code == ExitCodes.Ok, error + output);
+        await using WorldDbContext verify = Open(world);
+        AreaTriggerTeleportRow onyxia = await verify.Set<AreaTriggerTeleportRow>().SingleAsync(r => r.Id == 2848);
+        AreaTriggerTeleportRow moltenCore = await verify.Set<AreaTriggerTeleportRow>().SingleAsync(r => r.Id == 3528);
+        Assert.Equal(((byte)50, 16309u, 7u, 0u, 11u), (onyxia.RequiredLevel, onyxia.RequiredItem, onyxia.RequiredItem2, onyxia.RequiredQuestDone, onyxia.RequiredCondition));
+        Assert.Equal(((byte)50, 0u, 0u, 7848u, 0u), (moltenCore.RequiredLevel, moltenCore.RequiredItem, moltenCore.RequiredItem2, moltenCore.RequiredQuestDone, moltenCore.RequiredCondition));
+        Assert.Equal("local destination", onyxia.Name);
+        Assert.Equal(42u, (await verify.Set<AreaTriggerTeleportRow>().SingleAsync(r => r.Id == 9999)).RequiredItem);
+    }
+
     /// <summary>A world as an older importer left it: one creature template, one portal, everything this command fills empty.</summary>
     private async Task<string> OldWorldAsync(bool withShip = true)
     {
