@@ -131,9 +131,24 @@ visible creatures over every 2 seconds, alive or a ghost. The `strong` kind is f
 party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Strong hazards are
 kept apart (their own cap of 64, so they never push a death or retreat place out), updated in place at each look, dropped when a look
 no longer sees the creature alive and strong, and lapse 6 seconds after the last look (a ghost, or a bot whose brain a bot-led
-group drives, keeps none). A bot ringed by them (every way out through some reach) is not held: after 4 plans refused for a strong
-hazard, each within 10 seconds of the last, the strong hazards are let go for 10 seconds (`PlayerbotRisk.NoteRefused`); deaths,
-retreats, lethal creatures and those it fled from are still kept out of. One look at 64 strong creatures costs about 32 us and
+group drives, keeps none).
+
+A bot ringed by them (a low-level bot revived among higher creatures, their reaches overlapping round it) walks out by a bounded
+escape (`PlayerbotRisk.Refused`, ring-escape spec of 2026-10-11):
+* **Gate.** Only a goal's walk refused for a strong hazard counts; the trial plans of the pull estimate and of detours do not. The bot
+  must have stayed within 10 yards of where the clock started for 6 seconds of world time (`BoxedMs`; any number of refusals in one
+  tick count for nothing), and no straight line round it may be clear for its first 40 yards. Two creatures guarding a destination
+  leave open lines: no escape, the goal backs off and the stall watch sets it aside as before. At most one escape per 6 seconds.
+* **Exit.** `PlayerbotHazards.TryFindGap`: a fan of 48 lines (7.5 degrees), each scored by how deep its 2-yard samples lie inside the
+  creatures' own aggro reach up to 5 yards past the last strong hazard on it; a line touching a death, retreat, lethal or fled
+  hazard on the way is unusable; the least exposed wins (the gap between two creatures), ties to the nearer exit. Up to 3 exits
+  are planned on the navigation, each checked again against the non-strong hazards. No allocation (about 0.3-0.8 ms at 64 strong
+  and 10 other hazards, `PlayerbotStrongHazardCostTests`).
+* **Walk.** The route is pinned (`EscapeRoute`, goal `Escape`), walked by the brain before any goal, for at most 20 seconds
+  (`EscapeLifeMs`); `TryAdvance` exempts that one route from strong hazards only. Combat or a death ends it, and a death resets
+  the clock.
+* **Invariants.** Death, retreat, lethal and fled hazards always block, the escape route included. An ordinary route never has
+  strong hazards relaxed. One look at 64 strong creatures costs about 32 us and
 allocates nothing (`PlayerbotStrongHazardCostTests`; 272-300 us and 47 KB before). Live w23 2026-10-11:
 five level 1-3 bots without a home, revived at the Goldshire spirit healer, gave 58 bodies up in 38 minutes among level 5-6 Defias
 Cutpurses and Mangy Wolves that the pull estimate rightly avoided (`reason=too-strong`), attacked on sight on their walks past them.

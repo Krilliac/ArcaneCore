@@ -91,11 +91,21 @@ internal sealed class PlayerbotRisk
     /// <summary>A strong creature's hazard lapses this long after the last look that saw it (three scans).</summary>
     internal const uint StrongHazardLifeMs = 3 * HazardScanMs;
 
-    /// <summary>Route plans refused for a strong hazard, with none given in between, before the strong hazards are let go.</summary>
-    internal const int StrongRefusalsBeforeRelief = 4;
+    /// <summary>
+    /// A bot whose goal walks are refused for strong hazards and that has not moved <see cref="BoxedProgressYards"/> for this long of
+    /// world time is boxed in, when the fan of straight lines round it confirms it (<see cref="Refused"/>); also the least time
+    /// between two escapes.
+    /// </summary>
+    internal const uint BoxedMs = 3 * HazardScanMs;
 
-    /// <summary>How long strong hazards are let go after <see cref="StrongRefusalsBeforeRelief"/> refusals.</summary>
-    internal const uint StrongReliefMs = 10_000;
+    /// <summary>Moving this far from where the boxed-in clock started is progress (the stall watch's measure).</summary>
+    internal const float BoxedProgressYards = PlayerbotStallWatch.ProgressYards;
+
+    /// <summary>The longest an escape route is walked (<see cref="EscapeRoute"/>).</summary>
+    internal const uint EscapeLifeMs = 20_000;
+
+    /// <summary>The exits planned at most for one escape (the least exposed first, <see cref="PlayerbotHazards.TryFindGap"/>).</summary>
+    internal const int MaxEscapePlans = 3;
 
     /// <summary>How often the visible creatures are looked over for hazards.</summary>
     internal const uint HazardScanMs = 2_000;
@@ -169,7 +179,12 @@ internal sealed class PlayerbotRisk
         // The trail runs on through a pull (a bot is in combat from its first swing, often well short of where it fights).
         Breadcrumbs.Track(player);
         ScanHazards(player);
-        if (player.Combat.IsInCombat) return;
+        if (player.Combat.IsInCombat)
+        {
+            EndEscape(); // aggroed on the way out: the fight is judged as any other
+            return;
+        }
+
         _cornered = false;
         if (Tracker.Active) Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
     }
@@ -191,6 +206,8 @@ internal sealed class PlayerbotRisk
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         Breadcrumbs.Clear();
         Hazards.ClearStrong();
+        EndEscape();
+        _boxedSinceMs = 0;
         Detour = null;
         _waitUntilMs = 0;
     }
@@ -356,7 +373,7 @@ internal sealed class PlayerbotRisk
         fight = [.. counted];
 
         // ... and those whose radius covers the way there (the planned route, sampled every 3 yards).
-        if (PlayerbotNavigation.TryPlan(player, spot, _options, out PlayerbotRoute? approach) && approach is not null)
+        if (PlayerbotNavigation.TryPlan(player, spot, _options, out PlayerbotRoute? approach, trial: true) && approach is not null)
             foreach (PlayerbotThreat threat in threats)
                 if (threat.Source is { } creature && !counted.Contains(creature.Guid) && Covers(threat, approach.Points))
                 {
@@ -437,7 +454,7 @@ internal sealed class PlayerbotRisk
             foreach (float sign in (float[])[1f, -1f])
             {
                 Vector3 waypoint = middle + (side * offset * sign);
-                if (!PlayerbotNavigation.TryPlan(player, waypoint, _options, out PlayerbotRoute? route) || route is null) continue;
+                if (!PlayerbotNavigation.TryPlan(player, waypoint, _options, out PlayerbotRoute? route, trial: true) || route is null) continue;
                 List<Vector3> points = [.. route.Points, spot];
                 if (avoid.Any(threat => Covers(threat with { Radius = threat.Radius + 2f }, points))) continue;
                 if (Blocking(player, points) is not null) continue;
@@ -615,42 +632,93 @@ internal sealed class PlayerbotRisk
 
     /// <summary>
     /// Whether a living bot may walk <paramref name="points"/>: none of them inside a hazard it did not start in. A retreat walks
-    /// where it must; a dead bot (a ghost) is not attacked. During a relief (<see cref="NoteRefused"/>) the strong creatures are not
-    /// held against it; deaths, retreats, lethal creatures and those it fled from always are.
+    /// where it must; a dead bot (a ghost) is not attacked. Without <paramref name="strong"/> the creatures beyond the bot's strength
+    /// are not held against it: only for the escape route itself (<see cref="EscapeRoute"/>, <see cref="PlayerbotNavigation.TryAdvance"/>);
+    /// an ordinary route never has them relaxed, and deaths, retreats, lethal creatures and those the bot fled from always hold.
     /// </summary>
-    internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points)
-    {
-        if (!Enabled || !player.IsAlive || Retreat.Active) return null;
-        uint now = _session.World.NowMs;
-        bool relief = _strongReliefUntilMs != 0 && unchecked((int)(_strongReliefUntilMs - now)) > 0;
-        return Hazards.FirstOnRoute(player.MapId, points, now, strong: !relief);
-    }
+    internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points, bool strong = true)
+        => !Enabled || !player.IsAlive || Retreat.Active ? null : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs, strong);
 
     /// <summary>
-    /// A route was refused for <paramref name="hazard"/> (<see cref="PlayerbotNavigation"/>, no way round it). A bot ringed by strong
-    /// creatures (a low-level bot revived among higher ones, a dozen reaches overlapping round it) would have every plan refused, and
-    /// the goals only back off and try again: after <see cref="StrongRefusalsBeforeRelief"/> refusals for strong creatures, each within
-    /// <see cref="StrongReliefMs"/> of the last, the strong hazards are let go for <see cref="StrongReliefMs"/>, so the bot walks out
-    /// (past a creature that may attack it: that fight is then judged, and fled, as any other).
+    /// The route out of a ring of strong creatures (<see cref="Refused"/>), walked by the brain before any goal (as a retreat is), or
+    /// null. It ends when complete, after <see cref="EscapeLifeMs"/>, in combat, or at a death.
     /// </summary>
-    internal void NoteRefused(PlayerbotHazard hazard)
+    internal PlayerbotRoute? EscapeRoute
     {
-        if (hazard.Kind != PlayerbotHazards.StrongKind) return;
-        uint now = _session.World.NowMs;
-        if (unchecked(now - _lastStrongRefusalMs) > StrongReliefMs) _strongRefusals = 0;
-        _lastStrongRefusalMs = now;
-        if (++_strongRefusals < StrongRefusalsBeforeRelief) return;
-        _strongRefusals = 0;
-        _strongReliefUntilMs = Math.Max(1u, unchecked(now + StrongReliefMs));
-        StrongReliefs++;
+        get
+        {
+            if (_escapeRoute is { } route
+                && (route.Complete || unchecked((int)(_escapeUntilMs - _session.World.NowMs)) <= 0)) EndEscape();
+            return _escapeRoute;
+        }
     }
 
-    /// <summary>The reliefs granted so far (inspection, tests).</summary>
-    internal int StrongReliefs { get; private set; }
+    /// <summary>Whether <paramref name="route"/> is the escape route (the one route exempt from strong hazards).</summary>
+    internal bool IsEscape(PlayerbotRoute route) => _escapeRoute is not null && ReferenceEquals(route, EscapeRoute);
 
-    private int _strongRefusals;
-    private uint _lastStrongRefusalMs;
-    private uint _strongReliefUntilMs;
+    /// <summary>Stop escaping (the route walked, given up, the bot in combat or dead).</summary>
+    internal void EndEscape()
+    {
+        _escapeRoute = null;
+        _escapeUntilMs = 0;
+    }
+
+    /// <summary>The escapes granted so far (inspection, tests).</summary>
+    internal int Escapes { get; private set; }
+
+    private Vector3 _boxedAt;
+    private uint _boxedMap;
+    private uint _boxedSinceMs;
+    private PlayerbotRoute? _escapeRoute;
+    private uint _escapeUntilMs;
+
+    /// <summary>
+    /// A goal's walk was refused for <paramref name="hazard"/> (<see cref="PlayerbotNavigation"/>: no way round it; trial plans of the
+    /// pull estimate and of detours are not told). A low-level bot revived among higher creatures can stand in a ring of their reaches,
+    /// every goal walk refused and every goal only backing off; this is the way out, under three conditions:
+    /// <list type="bullet">
+    /// <item>evidence of a ring, not of one guarded destination: the hazard is a strong creature's, the bot has not moved
+    /// <see cref="BoxedProgressYards"/> from where the clock started for <see cref="BoxedMs"/> of world time (any number of refusals in
+    /// one tick count for nothing), and no straight line round it is clear for its first <see cref="PlayerbotHazards.GapOpenYards"/>
+    /// (<see cref="PlayerbotHazards.TryFindGap"/>; two creatures guarding a quest giver leave open lines: the goal backs off and the
+    /// stall watch sets it aside, as before);</item>
+    /// <item>the least exposed way out: the line of the fan that passes least deep into the creatures' aggro reach (the gap between
+    /// two of them), never through a death, retreat, lethal or fled hazard, planned on the navigation and checked against those again;</item>
+    /// <item>bounded: one route, pinned (<see cref="EscapeRoute"/>, exempt from strong hazards only), walked for at most
+    /// <see cref="EscapeLifeMs"/>, ended by combat or a death, and at most one escape per <see cref="BoxedMs"/>.</item>
+    /// </list>
+    /// </summary>
+    internal void Refused(Player player, PlayerbotHazard hazard)
+    {
+        if (hazard.Kind != PlayerbotHazards.StrongKind || !Enabled || !player.IsAlive || EscapeRoute is not null) return;
+        uint now = _session.World.NowMs;
+        var here = new Vector3(player.X, player.Y, player.Z);
+        if (_boxedSinceMs == 0 || _boxedMap != player.MapId || Vector3.Distance(here, _boxedAt) >= BoxedProgressYards)
+        {
+            _boxedAt = here;
+            _boxedMap = player.MapId;
+            _boxedSinceMs = Math.Max(1u, now);
+            return;
+        }
+
+        if (unchecked(now - _boxedSinceMs) < BoxedMs) return;
+        _boxedSinceMs = Math.Max(1u, now);
+        ulong tried = 0;
+        for (int plan = 0; plan < MaxEscapePlans; plan++)
+        {
+            if (!Hazards.TryFindGap(player.MapId, here, now, tried, out Vector3 exit, out int direction)) return;
+            tried |= 1UL << direction;
+            if (!PlayerbotNavigation.TryPlanUnguarded(player, exit, _options, out PlayerbotRoute? route) || route is null) continue;
+            if (Hazards.FirstOnRoute(player.MapId, route.Points, now, strong: false) is not null) continue;
+            _escapeRoute = route;
+            _escapeUntilMs = Math.Max(1u, unchecked(now + EscapeLifeMs));
+            Escapes++;
+            return;
+        }
+    }
+
+    /// <summary>When the boxed-in clock started (0: not started; tests).</summary>
+    internal uint BoxedSinceMs => _boxedSinceMs;
 
     /// <summary>
     /// The hazards as threats for the ghost's revive spot (<see cref="PlayerbotRecovery"/>): a revive in reach of a creature that kills

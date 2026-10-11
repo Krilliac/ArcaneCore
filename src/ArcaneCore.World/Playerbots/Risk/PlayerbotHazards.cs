@@ -125,6 +125,105 @@ internal sealed class PlayerbotHazards
         return null;
     }
 
+    /// <summary>Lines of the escape fan (<see cref="TryFindGap"/>), 7.5 degrees apart.</summary>
+    internal const int GapDirections = 48;
+
+    /// <summary>The fan's lines are sampled every this many yards.</summary>
+    internal const float GapStepYards = 2f;
+
+    /// <summary>The fan's lines run this far.</summary>
+    internal const float GapReachYards = 100f;
+
+    /// <summary>A line clear of every hazard for its first this many yards is open: the bot is not boxed in.</summary>
+    internal const float GapOpenYards = 40f;
+
+    /// <summary>An exit lies this far past the last strong reach along its line.</summary>
+    internal const float GapBeyondYards = 5f;
+
+    /// <summary>A strong hazard's creature's own aggro reach (its radius without <see cref="StrongMarginYards"/>).</summary>
+    internal static float StrongReach(in PlayerbotHazard hazard) => hazard.Radius - StrongMarginYards;
+
+    /// <summary>
+    /// The way out of a ring of strong creatures (<see cref="PlayerbotRisk.Refused"/>): a fan of <see cref="GapDirections"/> straight
+    /// lines from <paramref name="from"/>, each sampled every <see cref="GapStepYards"/> to <see cref="GapReachYards"/> (at the height of
+    /// <paramref name="from"/>; hazards it stands in, and other maps', are not counted, as for <see cref="FirstOnRoute"/>). False when
+    /// any line is open (clear of every hazard for its first <see cref="GapOpenYards"/>): the bot is not boxed in. Otherwise the line
+    /// with the least exposure (the sum, over its samples up to its exit and over the strong hazards, of how deep the sample lies inside
+    /// the creature's own aggro reach, <see cref="StrongReach"/>), ties to the nearer exit, among the lines not in
+    /// <paramref name="excluded"/> (bit k for line k) that leave every strong hazard within the reach (the exit
+    /// <see cref="GapBeyondYards"/> past the last) and never touch another hazard (a death, retreat, lethal or fled one) up to the exit.
+    /// False when none does. Allocates nothing.
+    /// </summary>
+    internal bool TryFindGap(uint mapId, Vector3 from, uint nowMs, ulong excluded, out Vector3 exit, out int direction)
+    {
+        exit = from;
+        direction = -1;
+        if (_strong.Count == 0) return false;
+        Expire(nowMs);
+        int samples = (int)(GapReachYards / GapStepYards);
+        float best = float.PositiveInfinity, bestExit = float.PositiveInfinity;
+        for (int k = 0; k < GapDirections; k++)
+        {
+            float angle = k * MathF.Tau / GapDirections;
+            var along = new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f);
+            float firstBlocked = -1f, lastStrong = -1f;
+            bool otherHit = false;
+            float otherFirst = -1f;
+            for (int i = 1; i <= samples; i++)
+            {
+                float distance = i * GapStepYards;
+                Vector3 point = from + (along * distance);
+                bool inStrong = false, inOther = false;
+                foreach ((PlayerbotHazard hazard, uint _) in _strong.Values)
+                    if (hazard.MapId == mapId && Live(hazard, nowMs) && hazard.Covers(point) && !hazard.Covers(from))
+                    {
+                        inStrong = true;
+                        break;
+                    }
+
+                foreach (PlayerbotHazard hazard in _hazards)
+                    if (hazard.MapId == mapId && hazard.Covers(point) && !hazard.Covers(from))
+                    {
+                        inOther = true;
+                        break;
+                    }
+
+                if ((inStrong || inOther) && firstBlocked < 0) firstBlocked = distance;
+                if (inStrong) lastStrong = distance;
+                if (inOther && otherFirst < 0) otherFirst = distance;
+                otherHit |= inOther;
+            }
+
+            if (firstBlocked < 0 || firstBlocked > GapOpenYards) return false; // an open line: not boxed in
+            if (lastStrong < 0) continue;
+            float exitAt = lastStrong + GapBeyondYards;
+            if (exitAt > GapReachYards) continue;
+            if (otherHit && otherFirst <= exitAt) continue;
+            if ((excluded & (1UL << k)) != 0) continue;
+            float exposure = 0f;
+            for (int i = 1; i * GapStepYards <= exitAt; i++)
+            {
+                Vector3 point = from + (along * (i * GapStepYards));
+                foreach ((PlayerbotHazard hazard, uint _) in _strong.Values)
+                {
+                    if (hazard.MapId != mapId || !Live(hazard, nowMs) || hazard.Covers(from)) continue;
+                    float flat = Vector2.Distance(new Vector2(hazard.At.X, hazard.At.Y), new Vector2(point.X, point.Y));
+                    exposure += MathF.Max(0f, StrongReach(hazard) - flat);
+                }
+            }
+
+            if (exposure < best || (exposure == best && exitAt < bestExit))
+            {
+                best = exposure;
+                bestExit = exitAt;
+                direction = k;
+                exit = from + (along * exitAt);
+            }
+        }
+
+        return direction >= 0;
+    }
+
     internal void Clear()
     {
         _hazards.Clear();

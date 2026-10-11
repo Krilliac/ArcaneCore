@@ -11,8 +11,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Risk;
 
 /// <summary>
 /// The hazards of creatures beyond a solo bot's strength (kind <c>strong</c>, <see cref="PlayerbotRisk.ScanHazards"/>) next to the
-/// shared hazard machinery (review of 07aa8286): they never push a death or retreat place out, they last only while the creature is
-/// seen alive, and a bot ringed by them is not held in place for good.
+/// shared hazard machinery (review of 07aa8286): they never push a death or retreat place out and they last only while the creature
+/// is seen alive. A bot ringed by them: <see cref="PlayerbotRingEscapeTests"/>.
 /// </summary>
 public sealed class PlayerbotStrongHazardTests
 {
@@ -101,58 +101,6 @@ public sealed class PlayerbotStrongHazardTests
         await world.OnWorldAsync(() =>
         {
             Assert.DoesNotContain(world.Brain.Risk.Hazards.Active(world.Player.MapId, world.Host.World.NowMs), h => h.Kind == "strong");
-            return true;
-        });
-    }
-
-    /// <summary>
-    /// A level 2 bot inside a ring of twelve level-5 creatures 35 yards round it: every way out passes through one's reach, so every
-    /// plan is refused at first. After <see cref="PlayerbotRisk.StrongRefusalsBeforeRelief"/> refusals the strong hazards are let go
-    /// for <see cref="PlayerbotRisk.StrongReliefMs"/> and the bot moves; a death place is still kept out of meanwhile.
-    /// </summary>
-    [Fact]
-    public async Task ABotRingedByStrongCreatures_IsNotHeldForGood()
-    {
-        await using RiskTestWorld world = await StartLevelTwoAsync();
-        Creature[] ring = await RingAsync(world, 12, _ => 35f);
-        await world.SeeAsync(ring);
-        await world.OnWorldAsync(() =>
-        {
-            Player player = world.Player;
-            PlayerbotRisk risk = world.Brain.Risk;
-            risk.ScanHazards(player);
-            Assert.Equal(12, risk.Hazards.Active(player.MapId, world.Host.World.NowMs).Count(h => h.Kind == "strong"));
-            PlayerbotNavigation.Guard(player, risk);
-            try
-            {
-                Vector3 Out(int direction)
-                {
-                    float angle = (direction % 8) * MathF.Tau / 8f + 0.13f;
-                    return new Vector3(player.X + MathF.Cos(angle) * 80f, player.Y + MathF.Sin(angle) * 80f, player.Z);
-                }
-
-                Assert.False(PlayerbotNavigation.TryPlan(player, Out(0), world.Options, out _), "the ring did not hold the first plan");
-                // A death place due east of the bot: never walked through, relief or not.
-                var deathSpot = new Vector3(player.X + 50f, player.Y, player.Z);
-                risk.Hazards.Add(player.MapId, deathSpot, PlayerbotHazards.DeathYards, world.Host.World.NowMs, 300, "death");
-                int attempts = 1;
-                PlayerbotRoute? route = null;
-                while (attempts < 3 * PlayerbotRisk.StrongRefusalsBeforeRelief && route is null)
-                {
-                    PlayerbotNavigation.TryPlan(player, Out(attempts), world.Options, out route);
-                    attempts++;
-                }
-
-                Assert.True(route is not null, $"no way out of the ring after {attempts} plans");
-                Assert.False(PlayerbotNavigation.TryPlan(player, deathSpot + new Vector3(30f, 0, 0), world.Options, out PlayerbotRoute? east)
-                    && east!.Points.Any(p => Vector2.Distance(new(p.X, p.Y), new(deathSpot.X, deathSpot.Y)) < PlayerbotHazards.DeathYards - 1f),
-                    "a route through the death place was given during the relief");
-            }
-            finally
-            {
-                PlayerbotNavigation.Guard(player, null);
-            }
-
             return true;
         });
     }

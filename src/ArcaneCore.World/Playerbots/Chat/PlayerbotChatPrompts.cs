@@ -220,6 +220,7 @@ internal static class PlayerbotChatPrompts
         PlayerbotGoalKind.Follow => p.MasterName is { } master ? $"following {master}" : "following my group",
         PlayerbotGoalKind.Assist => p.MasterName is { } master ? $"helping {master}" : "helping my group",
         PlayerbotGoalKind.Retreat => "backing off from a fight",
+        PlayerbotGoalKind.Escape => "walking out from among creatures too strong for me",
         _ => null,
     };
 
