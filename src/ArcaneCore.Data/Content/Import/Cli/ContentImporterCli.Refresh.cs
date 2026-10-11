@@ -318,6 +318,8 @@ public static partial class ContentImporterCli
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
+        Count("creature_template (VendorTemplateId)", relays.ScriptNames.Count, relays.HasVendorTemplateIdColumn);
+        Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
@@ -421,12 +423,14 @@ public static partial class ContentImporterCli
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshScriptNamesAsync(db, token).ConfigureAwait(false);
+                    await relays.RefreshVendorTemplateIdsAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
+                    await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
                         await db.Set<SpellProcEventRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);

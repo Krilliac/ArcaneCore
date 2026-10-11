@@ -3,6 +3,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Npc;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -11,6 +12,78 @@ namespace ArcaneCore.Data.Tests.Npc;
 
 public sealed class NpcDumpImporterTests : IAsyncLifetime
 {
+    [Fact]
+    public void VendorTemplateRowsAreRecognizedForImport()
+    {
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader("INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`,`slot`,`condition_id`) VALUES (133,2901,2,60,102,0);"));
+        Assert.Contains("npc_vendor_template", NpcDumpImporter.TrackedTables);
+        Assert.True(NpcDumpImporter.ReadsColumn("npc_vendor_template", "condition_id"));
+        Assert.Equal(1, importer.BuildReport().VendorTemplates);
+    }
+
+    [Fact]
+    public async Task VendorTemplateImportAndCreatureLinkRoundTripThroughWorldStore()
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader("INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`,`slot`,`condition_id`) VALUES (133,2901,2,60,102,0);"));
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow { Entry = 500, VendorTemplateId = 133 });
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            await importer.WriteAsync(db, replace: true);
+        }
+
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            NpcContent content = await new EfNpcContentStore(db).LoadAsync();
+            Assert.Equal(133u, content.VendorTemplateIds[500]);
+            VendorItem item = Assert.Single(content.VendorTemplateItems);
+            Assert.Equal(2901u, item.Item);
+            Assert.Equal(2u, item.MaxCount);
+            Assert.Equal(60u, item.IncrTime);
+            Assert.Equal(102u, item.Slot);
+        }
+    }
+
+    [Fact]
+    public async Task VendorTemplateRefreshReplacesSharedRowsAndLinkButKeepsDirectRows()
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        var shared = new NpcDumpImporter();
+        shared.Read(new StringReader("INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`,`slot`,`condition_id`) VALUES (134,2902,0,0,1,0);"));
+        var creatures = new CreatureDumpImporter();
+        creatures.Read(new StringReader("INSERT INTO `creature_template` (`Entry`,`VendorTemplateId`) VALUES (500,134);"));
+        await using WorldDbContext db = TestContexts.Create<WorldDbContext>(connection);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        db.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow { Entry = 500, VendorTemplateId = 133 });
+        db.Set<VendorItem>().Add(new VendorItem { Entry = 500, Item = 2900 });
+        db.Set<VendorTemplateItemRow>().Add(new VendorTemplateItemRow { Entry = 133, Item = 2901 });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        Assert.Equal(1, await creatures.RefreshVendorTemplateIdsAsync(db));
+        Assert.Equal(1, await shared.RefreshVendorTemplatesAsync(db));
+        Assert.Equal(134u, (await db.Set<CreatureTemplateRow>().SingleAsync()).VendorTemplateId);
+        Assert.Equal(2900u, (await db.Set<VendorItem>().SingleAsync()).Item);
+        Assert.Equal(2902u, (await db.Set<VendorTemplateItemRow>().SingleAsync()).Item);
+
+        var partial = new CreatureDumpImporter();
+        partial.Read(new StringReader("INSERT INTO `creature_template` (`Entry`,`Name`) VALUES (500,'partial');"));
+        Assert.Equal(0, await partial.RefreshVendorTemplateIdsAsync(db));
+        Assert.Equal(134u, (await db.Set<CreatureTemplateRow>().SingleAsync()).VendorTemplateId);
+
+        var emptied = new NpcDumpImporter();
+        emptied.Read(new StringReader("CREATE TABLE `npc_vendor_template` (`entry` int, `item` int);"));
+        Assert.True(emptied.SawVendorTemplateTable);
+        Assert.Equal(0, await emptied.RefreshVendorTemplatesAsync(db));
+        Assert.Empty(await db.Set<VendorTemplateItemRow>().ToListAsync());
+        Assert.Equal(2900u, (await db.Set<VendorItem>().SingleAsync()).Item);
+    }
+
     private readonly TestDatabases _databases = new();
 
     public Task InitializeAsync() => Task.CompletedTask;

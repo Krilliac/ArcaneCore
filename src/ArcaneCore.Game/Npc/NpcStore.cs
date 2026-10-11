@@ -41,9 +41,20 @@ public sealed class NpcStore
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(o => o.Id).ToArray());
         _texts = content.NpcTexts.GroupBy(t => t.Id).ToFrozenDictionary(g => g.Key, g => g.First());
 
-        // vmangos LoadVendors: ORDER BY entry, slot.
-        _vendor = content.VendorItems.GroupBy(v => v.Entry)
-            .ToFrozenDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
+        // vmangos ObjectMgr::LoadVendors orders each list by slot; ItemHandler::SendListInventory
+        // sends the creature's own items first, then GetVendorTemplateItems. Duplicate direct rows
+        // are rejected by IsVendorItemValid when the template already supplies that item.
+        var vendor = content.VendorItems.GroupBy(v => v.Entry)
+            .ToDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
+        var templates = content.VendorTemplateItems.GroupBy(v => v.Entry)
+            .ToDictionary(g => g.Key, g => g.OrderBy(v => v.Slot).ThenBy(v => v.Item).ToArray());
+        foreach ((uint entry, uint templateId) in content.VendorTemplateIds)
+        {
+            if (!templates.TryGetValue(templateId, out VendorItem[]? shared)) continue;
+            vendor.TryGetValue(entry, out VendorItem[]? own);
+            vendor[entry] = [.. (own ?? []).Where(item => !shared.Any(template => template.Item == item.Item)), .. shared];
+        }
+        _vendor = vendor.ToFrozenDictionary();
         _trainer = content.TrainerSpells.GroupBy(t => t.Entry)
             .ToFrozenDictionary(g => g.Key, g => g.OrderBy(t => t.Spell).ToArray());
         _nodes = content.TaxiNodes.Where(n => n.Id is > 0 and <= TaxiMaskSize * 32)

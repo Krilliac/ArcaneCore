@@ -218,6 +218,26 @@ public sealed class NpcReloadTests
     }
 
     [Fact]
+    public async Task VendorReloadPicksUpTemplateRowsAndCreatureTemplateLinks()
+    {
+        ReloadContentFixture content = Content();
+        content.VendorItems.Clear();
+        content.VendorTemplateIds[Entry] = 133;
+        content.VendorTemplateItems.Add(new VendorItem { Entry = 133, Item = 301 });
+        await using WorldTestHost host = ReloadContentTestServices.Start(content);
+        QuestNpcServices services = Services(host);
+        Assert.Equal([301u], services.Npcs.VendorItems(Entry).Select(v => v.Item));
+
+        content.VendorTemplateIds[Entry] = 134;
+        content.VendorTemplateItems.Clear();
+        content.VendorTemplateItems.Add(new VendorItem { Entry = 134, Item = 302 });
+        ReloadResult result = await Coordinator(host).ReloadAsync("npc_vendor");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal([302u], services.Npcs.VendorItems(Entry).Select(v => v.Item));
+    }
+
+    [Fact]
     public async Task AFailingStore_ChangesNothing()
     {
         ReloadContentFixture content = Content();

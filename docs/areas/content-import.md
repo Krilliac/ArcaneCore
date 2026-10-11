@@ -6,6 +6,8 @@ dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyr
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
 database or report inside a git work tree unless git ignores the path.
 
+World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link; refresh with schema migration replaces the shared stock and updates the links without replacing direct `npc_vendor` rows. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
+
 ## Delivered
 
 ### Content gaps: game-event orphans and four relay commands (2026-10-10; wave 17, branch `grok/content-gaps`; no schema change)

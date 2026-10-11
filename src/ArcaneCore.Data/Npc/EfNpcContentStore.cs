@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Data.World.Creatures;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Npc;
@@ -22,6 +23,12 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
         List<VendorItem> vendor = await db.Set<VendorItem>().AsNoTracking()
             .OrderBy(r => r.Entry).ThenBy(r => r.Slot).ThenBy(r => r.Item)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<VendorTemplateItemRow> vendorTemplates = await db.Set<VendorTemplateItemRow>().AsNoTracking()
+            .OrderBy(r => r.Entry).ThenBy(r => r.Slot).ThenBy(r => r.Item)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        Dictionary<uint, uint> vendorTemplateIds = await db.Set<CreatureTemplateRow>().AsNoTracking()
+            .Where(r => r.VendorTemplateId != 0)
+            .ToDictionaryAsync(r => r.Entry, r => r.VendorTemplateId, cancellationToken).ConfigureAwait(false);
         List<TrainerSpell> trainer = await db.Set<TrainerSpell>().AsNoTracking()
             .OrderBy(r => r.Entry).ThenBy(r => r.Spell)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -35,7 +42,11 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
         List<PointOfInterest> pois = await db.Set<PointOfInterest>().AsNoTracking().OrderBy(r => r.Entry)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
-        return new NpcContent(gossips, menus, options, textRows.Select(ToNpcText).ToArray(), vendor, trainer, nodes, paths, starts, pois);
+        return new NpcContent(gossips, menus, options, textRows.Select(ToNpcText).ToArray(), vendor, trainer, nodes, paths, starts, pois)
+        {
+            VendorTemplateItems = vendorTemplates.Select(r => r.ToVendorItem()).ToArray(),
+            VendorTemplateIds = vendorTemplateIds,
+        };
     }
 
     /// <summary>The inline cmangos-classic row as eight variants.</summary>

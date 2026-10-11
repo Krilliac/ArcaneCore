@@ -11,7 +11,7 @@ namespace ArcaneCore.Data.Npc;
 
 public sealed record NpcImportReport(
     int NpcGossips, int GossipMenus, int GossipOptions, int NpcTexts, int Vendors, int Trainers,
-    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics);
+    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics, int VendorTemplates);
 
 /// <summary>
 /// Maps the existing CMaNGOS NPC service tables into the already-owned EF entities. Reflection is
@@ -33,8 +33,10 @@ public sealed class NpcDumpImporter
     private readonly Dictionary<(uint, uint), GossipMenuOption> _options = [];
     private readonly Dictionary<uint, NpcTextRow> _texts = [];
     private readonly Dictionary<(uint, uint), VendorItem> _vendors = [];
+    private readonly Dictionary<(uint, uint), VendorTemplateItemRow> _vendorTemplates = [];
     private readonly Dictionary<(uint, uint), TrainerSpell> _trainers = [];
     private readonly List<string> _diagnostics = [];
+    private bool _sawVendorTemplateTable;
     private readonly HashSet<(string Table, IReadOnlyList<string> Columns)> _validatedLayouts = [];
     private static readonly ConcurrentDictionary<Type, Dictionary<string, PropertyInfo>> PropertyCache = new();
     private int _replaced;
@@ -44,9 +46,14 @@ public sealed class NpcDumpImporter
     {
         foreach (object item in new MySqlDumpReader(dump).Read())
         {
+            if (item is DumpTable definition && string.Equals(definition.Name, "npc_vendor_template", StringComparison.OrdinalIgnoreCase))
+            {
+                _sawVendorTemplateTable = true;
+            }
             if (item is not DumpRow row)
                 continue;
             string table = row.Table.ToLowerInvariant();
+            if (table == "npc_vendor_template") _sawVendorTemplateTable = true;
             // Conditions are owned by ConditionsDumpImporter and are intentionally not consumed here.
 
             if (!Required.TryGetValue(table, out string[]? required))
@@ -74,6 +81,7 @@ public sealed class NpcDumpImporter
                     }
                     case "npc_text": { NpcTextRow x = ConvertModel<NpcTextRow>(row); RequirePositive(x.Id, table, "ID"); Put(_texts, x, v => v.Id); break; }
                     case "npc_vendor": { VendorItem x = ConvertModel<VendorItem>(row); RequirePositive(x.Entry, table, "entry"); RequirePositive(x.Item, table, "item"); Put(_vendors, x, v => (v.Entry, v.Item)); break; }
+                    case "npc_vendor_template": { VendorTemplateItemRow x = ConvertModel<VendorTemplateItemRow>(row); RequirePositive(x.Entry, table, "entry"); RequirePositive(x.Item, table, "item"); Put(_vendorTemplates, x, v => (v.Entry, v.Item)); break; }
                     case "npc_trainer":
                     {
                         ValidateTrainerExtensions(row);
@@ -100,7 +108,18 @@ public sealed class NpcDumpImporter
     public IReadOnlyCollection<GossipMenuOption> ScriptedOptions => [.. _options.Values.Where(o => o.ActionScriptId != 0)];
 
     public NpcImportReport BuildReport() => new(_gossip.Count, _menus.Count, _options.Count, _texts.Count,
-        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics]);
+        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count);
+
+    public bool SawVendorTemplateTable => _sawVendorTemplateTable;
+
+    /// <summary>Refresh the newly supported shared vendor table without replacing existing direct vendor rows.</summary>
+    public async Task<int> RefreshVendorTemplatesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (!_sawVendorTemplateTable) return 0;
+        await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _vendorTemplates.Values, 2000, cancellationToken).ConfigureAwait(false);
+        return _vendorTemplates.Count;
+    }
 
     public async Task<NpcImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {
@@ -124,6 +143,7 @@ public sealed class NpcDumpImporter
                 await db.Set<GossipMenuOption>().ExecuteDeleteAsync(cancellationToken);
                 await db.Set<NpcTextRow>().ExecuteDeleteAsync(cancellationToken);
                 await db.Set<VendorItem>().ExecuteDeleteAsync(cancellationToken);
+                await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(cancellationToken);
                 await db.Set<TrainerSpell>().ExecuteDeleteAsync(cancellationToken);
             }
             const int batchSize = 2000;
@@ -132,6 +152,7 @@ public sealed class NpcDumpImporter
             await InsertBatchedAsync(db, _options.Values, batchSize, cancellationToken);
             await InsertBatchedAsync(db, _texts.Values, batchSize, cancellationToken);
             await InsertBatchedAsync(db, _vendors.Values, batchSize, cancellationToken);
+            await InsertBatchedAsync(db, _vendorTemplates.Values, batchSize, cancellationToken);
             await InsertBatchedAsync(db, _trainers.Values, batchSize, cancellationToken);
             if (savepoint is not null) await tx.ReleaseSavepointAsync(savepoint, cancellationToken); else await tx.CommitAsync(cancellationToken);
         }
@@ -274,7 +295,7 @@ public sealed class NpcDumpImporter
     {
         ["npc_gossip"] = typeof(NpcGossip), ["gossip_menu"] = typeof(GossipMenu),
         ["gossip_menu_option"] = typeof(GossipMenuOption), ["npc_text"] = typeof(NpcTextRow),
-        ["npc_vendor"] = typeof(VendorItem), ["npc_trainer"] = typeof(TrainerSpell),
+        ["npc_vendor"] = typeof(VendorItem), ["npc_vendor_template"] = typeof(VendorTemplateItemRow), ["npc_trainer"] = typeof(TrainerSpell),
     };
 
     private static void RequirePositive(uint value, string table, string column)
@@ -289,6 +310,7 @@ public sealed class NpcDumpImporter
         ["gossip_menu_option"] = ["menu_id", "id", "option_icon", "option_text", "option_id", "npc_option_npcflag", "action_menu_id", "action_poi_id", "box_coded", "box_text", "condition_id"],
         ["npc_text"] = ["ID", "text0_0", "text0_1", "lang0", "prob0", "em0_0", "em0_1", "em0_2", "em0_3", "em0_4", "em0_5"],
         ["npc_vendor"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
+        ["npc_vendor_template"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
         ["npc_trainer"] = ["entry", "spell", "spellcost", "reqskill", "reqskillvalue", "reqlevel"],
     };
 

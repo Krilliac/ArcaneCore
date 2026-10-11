@@ -34,6 +34,7 @@ public static class ContentTableSpecs
         // CreatureNpcMetadataDataModule (vmangos CreatureDefines.h:242,272-275)
         "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
         "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
+        "VendorTemplateId", "vendor_id",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
@@ -252,6 +253,7 @@ public static class ContentTableSpecs
         new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
         new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
         new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
+        new("npc_vendor_template", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor_template", c)),
         new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
         new("conditions", [new KeyColumn("condition_entry")], ["type", "value1", "value2", "value3", "value4", "flags"], []),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),

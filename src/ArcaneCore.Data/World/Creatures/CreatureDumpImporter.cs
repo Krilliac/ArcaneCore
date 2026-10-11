@@ -99,6 +99,7 @@ public sealed class CreatureDumpImporter
     public const int ClientBuild = 5875;
 
     private readonly Dictionary<uint, (int Patch, CreatureTemplateRow Row, VMangosStats? Stats)> _templates = [];
+    private bool _sawVendorTemplateIdColumn;
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
@@ -135,6 +136,8 @@ public sealed class CreatureDumpImporter
     /// <summary>Selected creature_template ScriptName values read from the dump, including empty names.</summary>
     public IReadOnlyDictionary<uint, string> ScriptNames => _templates.ToDictionary(pair => pair.Key, pair => pair.Value.Row.ScriptName);
 
+    public bool HasVendorTemplateIdColumn => _sawVendorTemplateIdColumn;
+
     /// <summary>Refresh only ScriptName on templates already in the world; other creature fields keep their current values.</summary>
     public async Task<int> RefreshScriptNamesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
     {
@@ -154,6 +157,23 @@ public sealed class CreatureDumpImporter
             }
         }
 
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return updated;
+    }
+
+    /// <summary>Apply the dump's shared vendor ids to existing creature templates during content refresh.</summary>
+    public async Task<int> RefreshVendorTemplateIdsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (!_sawVendorTemplateIdColumn || _templates.Count == 0) return 0;
+        int updated = 0;
+        foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (_templates.TryGetValue(template.Entry, out var source) && template.VendorTemplateId != source.Row.VendorTemplateId)
+            {
+                template.VendorTemplateId = source.Row.VendorTemplateId;
+                updated++;
+            }
+        }
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return updated;
     }
@@ -671,6 +691,7 @@ public sealed class CreatureDumpImporter
 
     private void ReadTemplate(DumpRow row)
     {
+        _sawVendorTemplateIdColumn |= row.Has("VendorTemplateId") || row.Has("vendor_id");
         bool vmangos = row.Has("level_min");
         SetDialect(vmangos ? CreatureDumpDialect.VMangos : CreatureDumpDialect.CMangos);
 
@@ -712,6 +733,7 @@ public sealed class CreatureDumpImporter
             TrainerClass = U8(row, "TrainerClass", "trainer_class"),
             TrainerRace = U8(row, "TrainerRace", "trainer_race"),
             TrainerSpell = U32(row, "TrainerSpell", "trainer_spell"),
+            VendorTemplateId = U32(row, "VendorTemplateId", "vendor_id"),
             UnitFlags = U32(row, "UnitFlags"),
             DynamicFlags = U32(row, "DynamicFlags"),
             TypeFlags = U32(row, "CreatureTypeFlags"),
