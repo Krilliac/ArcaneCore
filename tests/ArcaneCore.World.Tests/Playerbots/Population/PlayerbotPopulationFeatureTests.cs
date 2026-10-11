@@ -609,6 +609,109 @@ public sealed class PlayerbotPopulationFeatureTests
         return member.BotId;
     }
 
+    [Fact]
+    public async Task TheSlackTaper_IsTheFloorRelocationUses_ABotBelowTheShrunkSlackIsMoved()
+    {
+        // Sentinel Hill's floor is 12. With the whole slack only up to floor 8, floor 12 keeps 4 - (12 - 8 + 1) / 2 = 2 levels of slack:
+        // level 8 (12 minus the old flat 4) is now below anywhere it could have been placed in Westfall, and goes back to Elwynn.
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        await SetBotAsync(world, bot, 8, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Population.ZoneLevelSlackMaxFloor = 8;
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Contains("moved 1", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
+    public async Task TheCreatureSurvey_JoinsTheBackgroundLookup_AndABotFarBelowTheCreaturesAtItsGraveyardIsMoved()
+    {
+        // Level 9 at Sentinel Hill fits the area (12 minus the slack 4), but the survey says most hostile creatures there are level 20:
+        // 20 minus the margin (3) is 17, so the bot is below every place of Westfall and goes back to Elwynn. The survey runs off the
+        // world thread with the graveyard lookup; a radius change (part of the atlas key) starts it again.
+        var onWorldThread = new System.Collections.Concurrent.ConcurrentBag<bool>();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        await SetBotAsync(world, bot, 9, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        Assert.DoesNotContain("moved", (await world.PassAsync()).Reason); // no survey yet: 9 is within the slack
+
+        world.Feature.CreatureSurveyor = (location, team) =>
+        {
+            onWorldThread.Add(world.Host.World.IsWorldThread);
+            return location.Id == 2 ? 20 : 0;
+        };
+        world.Population.CreatureSurveyRadius = 50;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        PopulationStatus status;
+        do
+        {
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+            if (status.Reason.Contains("moved 1", StringComparison.Ordinal)) break;
+            await Task.Delay(20);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        Assert.Contains("moved 1", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+        Assert.NotEmpty(onWorldThread);
+        Assert.DoesNotContain(true, onWorldThread);
+    }
+
+    [Fact]
+    public async Task ABandNoZoneTakes_IsLoggedOnceTheAtlasIsLocated()
+    {
+        var log = new CapturingLogger();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.TargetOnline = 1;
+            o.Population.Bands = [new PopulationBand { MinLevel = 1, MaxLevel = 10, Weight = 1 }, new PopulationBand { MinLevel = 41, MaxLevel = 50, Weight = 1 }];
+        }, withRelocation: true, configureServices: s => s.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(log));
+        world.Feature.TerrainLocator = _ => (0, 0);
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!log.Warnings.Any(w => w.Contains("no zone takes", StringComparison.Ordinal)) && DateTime.UtcNow < deadline)
+        {
+            world.Ticks.Set(200, 10);
+            await world.PassAsync();
+            await Task.Delay(20);
+        }
+
+        string warning = Assert.Single(log.Warnings, w => w.Contains("no zone takes", StringComparison.Ordinal));
+        Assert.Contains("levels 41-50 for the Alliance", warning);
+        Assert.DoesNotContain("levels 1-10", warning);
+        Assert.DoesNotContain("Horde", warning); // the host creates Alliance bots only
+
+        // Logged once per atlas and rule, not at every pass.
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        Assert.Single(log.Warnings, w => w.Contains("no zone takes", StringComparison.Ordinal));
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _warnings = new();
+
+        public IReadOnlyList<string> Warnings => [.. _warnings];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) _warnings.Enqueue(formatter(state, exception));
+        }
+    }
+
     private static Task SetBotAsync(PopulationTestHost world, Guid bot, byte level, uint zone) => world.Host.World.InvokeAsync(() =>
     {
         Player player = world.Bots.FindSession(bot)!.Player!;

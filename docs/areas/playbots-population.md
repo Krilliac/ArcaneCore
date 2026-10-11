@@ -138,16 +138,31 @@ it stands in, so the atlas asks the terrain (`Map.GetZoneAndAreaId` of the grave
   Hill (24) and Darkshire (25): band 1-10 used to fit Duskwood with levels 6-10, and those bots died in a loop at Raven Hill
   (issue #177).
 
+* surveys the **creatures near each kept graveyard** (`PopulationCreatureSurvey`, the same background job): for each team, the
+  lower median template `MinLevel` of the database creature spawns within `CreatureSurveyRadius` yards (default 100) that are
+  hostile to the team (the FactionTemplate.dbc relation of the creature's template to template 1 Human or 2 Orc, without
+  reputation), leaving out civilians and spawns of positive game events (absent while no event runs; the AQ war effort silithids
+  at Camp Mojache and Gadgetzan). Fewer than 3 hostile creatures give no level. The level is kept per (graveyard, team) as
+  `CreatureLevels`; the Dire Maul graveyard in Feralas gets 43 (level 43-46 howlers, bears, screechers), Morgan's Plot in Deadwind
+  Pass 59 (level 58-60 undead), and Aerie Peak in the Hinterlands a Horde level from the Wildhammer sentries. Without creature
+  content or faction templates, or with `CreatureSurveyRadius` 0, nothing is surveyed.
+
 The lookup never runs on the world thread: a terrain tile not in memory is read from disk synchronously and the terrain clean-up
 frees unreferenced tiles after a minute, so looking up some 90 graveyards inside a tick would be some 90 file reads on every
 build. The feature starts a background task (`TerrainManager.ReadZoneAndAreaIdDetached`, which reads the tile files itself and
 never touches the world thread's tile cache) when the atlas's sources change: the first pass, a content reload, an `AllowedMaps` or
-`ExcludedZones` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
+`ExcludedZones` change, new creature content or a `CreatureSurveyRadius` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
 is in, and always without terrain data (`World:Maps:DataDirectory` unset), nothing is known: every link is kept and the floor is the
 zone's lowest sub-area level. A lookup for sources that change in the meantime is cancelled (each lookup has its own token source,
 linked to the feature's stop), and a result that still arrives is dropped, so repeated reloads never stack lookups. A lookup that
 fails is logged and keeps the fallback until the sources change again; it is not retried. The atlas logs its zone and location
-counts and the links it left out each time it is built.
+counts, the number of surveyed (graveyard, team) pairs and the links it left out each time it is built.
+
+**Band coverage.** Once the located atlas is in, and again whenever the atlas, the bands, the level rule or `Factions` change, the
+feature checks that every band with a weight has a zone for every faction it creates bots for
+(`PopulationZoneAtlas.UncoveredBands`) and logs a warning naming each band and faction that has none (`no zone takes a bot of
+levels 41-50 for the Horde under the level rule ...`): such a band's deficit can never be filled by a new bot. On the w24 live data
+every default band has zones for both factions under the default rule (see the table below).
 
 **Creation and relocation wait for the lookup.** While a lookup for the current sources is running (started, its result not yet
 delivered to the world thread), a pass creates no bot and relocates none, and the status says `held back: waiting for the
@@ -161,11 +176,49 @@ unreadable or outside the map, so that graveyard's link is kept with no sub-area
 (`TerrainInfo.GetZoneAndAreaId`) instead reads a missing tile as area flag 0, which `AreaTable` resolves to the map's
 `linked_zone` area when the map has one. The two agree wherever a tile file exists.
 
-**The slack (an ArcaneCore choice, not a game rule).** A placement takes a bot of level L when `floor - ZoneLevelSlack <= L <=
-MaxLevel`. The lowest sub-area of a starter zone is level 4 or 5, so with no slack a level 1 bot would fit nowhere and a server
-without the boost content could never populate. The default of 4 lets a level 1 bot start in any starter zone while a level 1
-bot still never lands in a level 20 zone. `0` is the strict reading of the table. Above a zone's highest level a bot is
-out-levelled; below every floor of its zone minus the slack it is under-levelled (see relocation).
+**The level rule (an ArcaneCore choice, not a game rule; `PopulationLevelRule`).** A placement at a graveyard takes a bot of
+level L when `lowest <= L <= MaxLevel`, where
+
+```
+lowest = max(1, floor - slack(floor), creatureLevel(team) - CreatureLevelMargin)
+slack(floor) = ZoneLevelSlack                                                      when floor <= ZoneLevelSlackMaxFloor
+             = max(0, ZoneLevelSlack - (floor - ZoneLevelSlackMaxFloor + 1) / 2)   above it
+```
+
+With the defaults (4, 12, 3) the slack is 4 up to floor 12, 3 at 13-14, 2 at 15-16, 1 at 17-18 and 0 from 19. The lowest sub-area
+of a starter zone is level 4 or 5 and its graveyards stand in level 4-7 areas, so without slack a level 1 bot would fit nowhere and
+a server without the boost content could never populate; the whole slack stays there. Above the starter zones it is wrong: under
+the flat slack of 4 (PR #188, live on w24) a level 38 bot fitted Aerie Peak (41) in the Hinterlands and Feathermoon (41) or Camp
+Mojache (42) in Feralas, and a level 40 bot the Dire Maul graveyard (44), and those bots died in loops to level 43-48 creatures
+(issues #183, #193, #195); a level 49 bot (Grosan) fitted Deadwind Pass (50) beside level 58-60 undead. The creature term keeps
+a bot away from a graveyard where most hostile creatures are more than `CreatureLevelMargin` levels above it. Above a zone's
+highest level a bot is out-levelled; below every placement of its zone for its team (`LowestLevelFor`, the same rule) it is
+under-levelled (see relocation). `ZoneLevelSlackMaxFloor = 60` gives back the flat slack; `ZoneLevelSlack = 0` is the strict reading
+of the table.
+
+The w24 live data (r5 world DB, 5875 terrain; 40 zones, 75 locations), placement floor and survey per graveyard of the zones the
+issues name:
+
+| Zone (levels) | Graveyard (teams) | Stands in (level) | Floor | Survey A / H | Lowest, flat 4 | Lowest, default A / H |
+|---|---|---|---|---|---|---|
+| The Hinterlands 47 (41-49) | 349 Aerie Peak (both) | Aerie Peak 348 (41) | 41 | - / 55 | 37 | 41 / 52 |
+| | 789 The Overlook Cliffs (both) | The Overlook Cliffs 307 (48) | 48 | - / - | 44 | 48 / 48 |
+| Feralas 357 (41-60) | 309 Feathermoon Stronghold (A) | Feathermoon Stronghold 1116 (0) | 41 | 40 / - | 37 | 41 / - |
+| | 310 Camp Mojache (H) | Camp Mojache 1099 (42) | 42 | - / 40 | 38 | - / 42 |
+| | 849 Dire Maul (both) | Dire Maul 2577 (44) | 44 | 43 / 43 | 40 | 44 / 44 |
+| Deadwind Pass 41 (50-60) | 36 Morgan's Plot (both) | Morgan's Plot 2563 (0) | 50 | 59 / 59 | 46 | 56 / 56 |
+
+Zones per default band on the same data (`FittingZones`), flat 4 before and the default rule after; no band is left without a
+zone for either faction:
+
+| Band | Alliance before / after | Horde before / after |
+|---|---|---|
+| 1-10 | 5 / 5 | 5 / 5 |
+| 11-20 | 13 / 9 | 11 / 8 |
+| 21-30 | 9 / 9 | 10 / 10 |
+| 31-40 | 12 / 8 | 14 / 9 |
+| 41-50 | 15 / 13 | 15 / 12 |
+| 51-60 | 13 / 13 | 12 / 12 |
 
 ## Factions
 
@@ -207,7 +260,7 @@ behind) is deleted at the next pass.
 With `Relocation = Teleport` and `MaxRelocationsPerInterval > 0`, on a pass that otherwise holds (`under-budget`, `at-target`,
 `hysteresis`), owned bots that are autonomous, idle and not vetoed are looked at, the worst misfit first. A bot whose level is at
 most its zone's highest level plus `OutlevelMargin` (default 2) and not under-levelled (`PopulationZoneAtlas.UnderLevelled`: below
-the lowest floor of its zone's graveyards for its team minus `ZoneLevelSlack`) stays; the row only records the zone it walked to.
+the lowest placement level of its zone's graveyards for its team under the level rule, `LowestLevelFor`) stays; the row only records the zone it walked to.
 Otherwise it is teleported to a graveyard of the least populated zone that fits its level and team. This also re-homes bots an
 older build placed badly (a level 9 bot at Raven Hill) and bots that walked over a border into a harder zone, on the first pass
 that sees them alive and idle. The zone checked is the one the bot stands in at that pass, whatever it is doing: a bot travelling
@@ -263,7 +316,10 @@ and swapped as one value on reload.
 | `Factions` / `AllianceSharePct` | `Both` / `50` | Which factions; the Alliance share with `Both`. |
 | `Classes` | all nine | The 1.12 class ids new bots may have. |
 | `Bands` | six of ten levels | `MinLevel`, `MaxLevel`, `Weight` per band. |
-| `ZoneLevelSlack` | `4` | Levels below a zone's lowest sub-area that it still accepts (0..10). |
+| `ZoneLevelSlack` | `4` | Levels below a placement's floor a bot may be, up to `ZoneLevelSlackMaxFloor` (0..10). |
+| `ZoneLevelSlackMaxFloor` | `12` | The highest floor with the whole slack; above it one level less per two floor levels (1..60; 60 = flat). |
+| `CreatureLevelMargin` | `3` | No placement where most hostile creatures near the graveyard are more than this above the bot (0..10). |
+| `CreatureSurveyRadius` | `100` | Yards around each graveyard the creature survey counts (0..300; 0 = no survey). |
 | `OutlevelMargin` | `2` | Levels above a zone's highest before relocation (0..10). |
 | `Relocation` / `MaxRelocationsPerInterval` | `Teleport` / `2` | What to do with an out-levelled bot; moves per pass (0..50). |
 | `ExcludedZones` | `[]` | Zone ids bots are never placed in (at most 256). |
@@ -296,7 +352,8 @@ seconds for it.
 ## Tests
 
 `tests/ArcaneCore.World.Tests/Playerbots/Population/`: the pure helpers (`PopulationBudgetControllerTests`,
-`PopulationBandPlannerTests`, `PopulationZoneAtlasTests`, `PopulationTickWindowTests`, `PopulationNamesTests`,
+`PopulationBandPlannerTests`, `PopulationZoneAtlasTests`, `PopulationLevelRuleTests` (the slack taper, the creature survey, band
+coverage and no relocation ping-pong, on the live w24 floors of the Hinterlands, Feralas and Deadwind Pass), `PopulationTickWindowTests`, `PopulationNamesTests`,
 `PlayerbotPopulationOptionsTests`), `PopulationParkingTests` (who may be parked and in which order),
 `PlayerbotPopulationFeatureTests` (a real world and managed bots with a fake tick source: add, hold, park, restart and the window
 reset; the creation caps; owned-only parking; the pass-scoped store; enable and disable on the timer) and

@@ -29,17 +29,40 @@ internal sealed record PopulationZone(
     public IReadOnlyList<WorldSafeLoc> LocationsFor(Team team) => team == Team.Alliance ? AllianceLocations : HordeLocations;
 
     /// <summary>
-    /// The lowest level a bot landing at <paramref name="location"/> is meant to have (before the slack): the level of the sub-area the
-    /// graveyard stands in, never below the zone's lowest. Duskwood's lowest sub-area is The Darkened Bank (10), but its graveyards stand
-    /// in Darkshire (25) and Raven Hill (24/26), where a level 9 bot dies to level 23-25 skeletons.
+    /// What the creature survey found near each location, by location and team: the level most of the creatures hostile to the team
+    /// within <c>CreatureSurveyRadius</c> are at least (the lower median of their template <c>MinLevel</c>). A location without a survey, or
+    /// with too few hostile creatures near it (<see cref="PopulationCreatureSurvey.MinHostile"/>), is absent and does not constrain.
+    /// </summary>
+    public IReadOnlyDictionary<(uint LocationId, Team Team), int> CreatureLevels { get; init; } = new Dictionary<(uint, Team), int>();
+
+    /// <summary>
+    /// The level of the sub-area <paramref name="location"/> stands in, never below the zone's lowest (before the slack). Duskwood's lowest
+    /// sub-area is The Darkened Bank (10), but its graveyards stand in Darkshire (25) and Raven Hill (24/26), where a level 9 bot dies to
+    /// level 23-25 skeletons.
     /// </summary>
     public int FloorOf(WorldSafeLoc location) => Math.Max(MinLevel, LocationLevels.GetValueOrDefault(location.Id));
 
-    /// <summary>The lowest <see cref="FloorOf"/> of the team's locations; the zone's lowest level when it has none for the team.</summary>
-    public int FloorFor(Team team)
+    /// <summary>
+    /// The lowest level a bot of <paramref name="team"/> landing at <paramref name="location"/> may have under <paramref name="rule"/>: the
+    /// location's <see cref="FloorOf"/> minus the slack the rule gives that floor, raised to the survey's creature level minus the rule's
+    /// creature margin (the bot is not placed where most hostile creatures are more than that margin above it), and at least 1.
+    /// </summary>
+    public int LowestLevelAt(WorldSafeLoc location, Team team, PopulationLevelRule rule)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        int floor = FloorOf(location);
+        int lowest = floor - rule.SlackAt(floor);
+        if (rule.CreatureMargin is { } margin && CreatureLevels.TryGetValue((location.Id, team), out int creatures))
+            lowest = Math.Max(lowest, creatures - margin);
+        return Math.Max(1, lowest);
+    }
+
+    /// <summary>The lowest <see cref="LowestLevelAt"/> of the team's locations; the zone's lowest level (minus its slack) when it has none for the team.</summary>
+    public int LowestLevelFor(Team team, PopulationLevelRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
         IReadOnlyList<WorldSafeLoc> locations = LocationsFor(team);
-        return locations.Count == 0 ? MinLevel : locations.Min(FloorOf);
+        return locations.Count == 0 ? Math.Max(1, MinLevel - rule.SlackAt(MinLevel)) : locations.Min(l => LowestLevelAt(l, team, rule));
     }
 
     /// <summary>Whether the zone is open to the team: no team (0), or its own (2 Alliance, 4 Horde). Any other area team value is never offered.</summary>
@@ -50,6 +73,30 @@ internal sealed record PopulationZone(
 
 /// <summary>A graveyard link the atlas left out: the terrain puts location <c>LocationId</c> in <c>TerrainZoneId</c>, not in <c>ZoneId</c>.</summary>
 internal sealed record PopulationDroppedLocation(uint ZoneId, uint LocationId, uint TerrainZoneId);
+
+/// <summary>
+/// How far below a placement's floor a bot may be (an ArcaneCore choice, not a game rule). <see cref="Slack"/> levels for a floor up to
+/// <see cref="FullSlackMaxFloor"/>, so a level 1 bot starts in a starter zone whose graveyards stand in level 4-7 areas; above it the slack
+/// shrinks by one level for every two floor levels, to 0 from <c>FullSlackMaxFloor + 7</c> (19 by default). The levels the zones of the
+/// 40s and 50s are built for are not much below their graveyard areas: a level 38 bot at Aerie Peak (41) or the Dire Maul graveyard (44,
+/// level 43-46 bears and howlers) dies in a loop. With <see cref="CreatureMargin"/> set, a location whose creature survey level
+/// (<see cref="PopulationZone.CreatureLevels"/>) is more than that margin above the bot does not take it either; null ignores the survey.
+/// </summary>
+internal sealed record PopulationLevelRule(int Slack, int FullSlackMaxFloor, int? CreatureMargin)
+{
+    /// <summary>The same slack at every floor and no creature check (the rule before the taper; tests).</summary>
+    public static PopulationLevelRule Flat(int slack) => new(slack, PlayerbotPopulationOptions.MaxLevel, null);
+
+    /// <summary>The rule the options configure: <c>ZoneLevelSlack</c>, <c>ZoneLevelSlackMaxFloor</c> and <c>CreatureLevelMargin</c>.</summary>
+    public static PopulationLevelRule From(PlayerbotPopulationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new(options.ZoneLevelSlack, options.ZoneLevelSlackMaxFloor, options.CreatureLevelMargin);
+    }
+
+    /// <summary>The slack a placement whose floor is <paramref name="floor"/> gets (0..<see cref="Slack"/>).</summary>
+    public int SlackAt(int floor) => floor <= FullSlackMaxFloor ? Slack : Math.Max(0, Slack - (floor - FullSlackMaxFloor + 1) / 2);
+}
 
 /// <summary>A zone, one of its graveyards, and the levels a bot placed there may have.</summary>
 internal sealed record PopulationPlacement(PopulationZone Zone, WorldSafeLoc Location, int LowLevel, int HighLevel);
@@ -98,8 +145,12 @@ internal sealed class PopulationZoneAtlas
     /// Redridge. A bot "placed" there lands in another zone, often far above or below its level. A location the terrain puts in the zone
     /// also gets the level of the sub-area it stands in (<see cref="PopulationZone.LocationLevels"/>).
     /// </param>
+    /// <param name="creatureLevel">
+    /// The creature survey level of a location for a team (<see cref="PopulationCreatureSurvey"/>; 0 when nothing constrains it); null
+    /// surveys nothing. Kept on the zone as <see cref="PopulationZone.CreatureLevels"/>.
+    /// </param>
     public static PopulationZoneAtlas Build(IReadOnlyList<AreaTemplate> areas, GraveyardCatalog graveyards, IReadOnlyCollection<uint> allowedMaps,
-        ISet<uint> excluded, Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = null)
+        ISet<uint> excluded, Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = null, Func<WorldSafeLoc, Team, int>? creatureLevel = null)
     {
         ArgumentNullException.ThrowIfNull(areas);
         ArgumentNullException.ThrowIfNull(graveyards);
@@ -148,9 +199,18 @@ internal sealed class PopulationZoneAtlas
                 }
             }
 
+            var creatureLevels = new Dictionary<(uint, Team), int>();
+            if (creatureLevel is not null)
+            {
+                foreach ((Team team, List<WorldSafeLoc> locations) in new[] { (Team.Alliance, alliance), (Team.Horde, horde) })
+                    foreach (WorldSafeLoc location in locations)
+                        if (creatureLevel(location, team) is var level and > 0) creatureLevels[(location.Id, team)] = level;
+            }
+
             zones.Add(new PopulationZone(zone.Entry, zone.MapId, zone.Name, levels.Min(), levels.Max(), zone.Team, alliance, horde)
             {
                 LocationLevels = locationLevels,
+                CreatureLevels = creatureLevels,
             });
         }
 
@@ -159,42 +219,54 @@ internal sealed class PopulationZoneAtlas
 
     /// <summary>
     /// Whether a bot of <paramref name="team"/> and <paramref name="level"/> may be placed in <paramref name="zone"/>: the zone is open to
-    /// the team, the level is at most the zone's highest, and one of the team's locations takes it (its <see cref="PopulationZone.FloorOf"/>
-    /// minus <paramref name="slack"/> is at most the level). The slack is an ArcaneCore choice, not a game rule: it lets a level 1 bot
-    /// start in a starter zone whose lowest sub-area is level 4 or 5.
+    /// the team, the level is at most the zone's highest, and one of the team's locations takes it (its
+    /// <see cref="PopulationZone.LowestLevelAt"/> under <paramref name="rule"/> is at most the level).
     /// </summary>
-    public static bool Fits(PopulationZone zone, int level, Team team, int slack)
-        => level <= zone.MaxLevel && zone.OpenTo(team) && zone.LocationsFor(team).Any(l => zone.FloorOf(l) - slack <= level);
+    public static bool Fits(PopulationZone zone, int level, Team team, PopulationLevelRule rule)
+        => level <= zone.MaxLevel && zone.OpenTo(team) && zone.LocationsFor(team).Any(l => zone.LowestLevelAt(l, team, rule) <= level);
 
     /// <summary>
-    /// Whether a bot of <paramref name="level"/> is below every place in <paramref name="zone"/> it could have been put (the zone's
-    /// <see cref="PopulationZone.FloorFor"/> the team, minus <paramref name="slack"/>). Such a bot could not have been placed there.
+    /// Whether a bot of <paramref name="level"/> is below every place in <paramref name="zone"/> it could have been put
+    /// (<see cref="PopulationZone.LowestLevelFor"/> the team under the same <paramref name="rule"/> placement uses). Such a bot could not
+    /// have been placed there, and a bot placed anywhere is never under-levelled where it was placed, so relocation does not ping-pong.
     /// </summary>
-    public static bool UnderLevelled(PopulationZone zone, int level, Team team, int slack) => level < zone.FloorFor(team) - slack;
+    public static bool UnderLevelled(PopulationZone zone, int level, Team team, PopulationLevelRule rule) => level < zone.LowestLevelFor(team, rule);
 
-    private static bool Takes(PopulationZone zone, WorldSafeLoc location, int minLevel, int maxLevel, int slack)
-        => Math.Max(minLevel, zone.FloorOf(location) - slack) <= Math.Min(maxLevel, zone.MaxLevel);
+    private static bool Takes(PopulationZone zone, WorldSafeLoc location, Team team, int minLevel, int maxLevel, PopulationLevelRule rule)
+        => Math.Max(minLevel, zone.LowestLevelAt(location, team, rule)) <= Math.Min(maxLevel, zone.MaxLevel);
 
     /// <summary>The zones <see cref="Fits"/> for the team at some level of <paramref name="minLevel"/>..<paramref name="maxLevel"/>.</summary>
-    public IEnumerable<PopulationZone> FittingZones(int minLevel, int maxLevel, Team team, int slack)
-        => _zones.Where(z => z.OpenTo(team) && z.LocationsFor(team).Any(l => Takes(z, l, minLevel, maxLevel, slack)));
+    public IEnumerable<PopulationZone> FittingZones(int minLevel, int maxLevel, Team team, PopulationLevelRule rule)
+        => _zones.Where(z => z.OpenTo(team) && z.LocationsFor(team).Any(l => Takes(z, l, team, minLevel, maxLevel, rule)));
+
+    /// <summary>
+    /// The (band, team) pairs no zone takes at any level of the band under <paramref name="rule"/>, for the bands with a weight above 0
+    /// and the given teams. Empty when every band has a zone for every team; the feature logs any other result.
+    /// </summary>
+    public IReadOnlyList<(PopulationBand Band, Team Team)> UncoveredBands(IReadOnlyList<PopulationBand> bands, IReadOnlyList<Team> teams, PopulationLevelRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(bands);
+        ArgumentNullException.ThrowIfNull(teams);
+        return [.. bands.Where(b => b.Weight > 0).SelectMany(b => teams.Select(t => (Band: b, Team: t)))
+            .Where(p => !FittingZones(p.Band.MinLevel, p.Band.MaxLevel, p.Team, rule).Any())];
+    }
 
     /// <summary>
     /// A placement for a bot that may have any level of <paramref name="minLevel"/>..<paramref name="maxLevel"/>: the fitting zone with the
     /// fewest bots assigned (ties broken by <paramref name="random"/>), one of its graveyards for the team, and the levels of the range the
     /// zone takes. Null when no zone fits.
     /// </summary>
-    public PopulationPlacement? Pick(int minLevel, int maxLevel, Team team, int slack, IReadOnlyDictionary<uint, int> assigned, Random random)
+    public PopulationPlacement? Pick(int minLevel, int maxLevel, Team team, PopulationLevelRule rule, IReadOnlyDictionary<uint, int> assigned, Random random)
     {
         ArgumentNullException.ThrowIfNull(assigned);
         ArgumentNullException.ThrowIfNull(random);
-        PopulationZone[] fitting = [.. FittingZones(minLevel, maxLevel, team, slack)];
+        PopulationZone[] fitting = [.. FittingZones(minLevel, maxLevel, team, rule)];
         if (fitting.Length == 0) return null;
         int fewest = fitting.Min(z => assigned.GetValueOrDefault(z.ZoneId));
         PopulationZone[] least = [.. fitting.Where(z => assigned.GetValueOrDefault(z.ZoneId) == fewest)];
         PopulationZone zone = least[random.Next(least.Length)];
-        WorldSafeLoc[] locations = [.. zone.LocationsFor(team).Where(l => Takes(zone, l, minLevel, maxLevel, slack))];
+        WorldSafeLoc[] locations = [.. zone.LocationsFor(team).Where(l => Takes(zone, l, team, minLevel, maxLevel, rule))];
         WorldSafeLoc location = locations[random.Next(locations.Length)];
-        return new PopulationPlacement(zone, location, Math.Max(minLevel, Math.Max(1, zone.FloorOf(location) - slack)), Math.Min(maxLevel, zone.MaxLevel));
+        return new PopulationPlacement(zone, location, Math.Max(minLevel, zone.LowestLevelAt(location, team, rule)), Math.Min(maxLevel, zone.MaxLevel));
     }
 }
