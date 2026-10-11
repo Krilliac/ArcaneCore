@@ -14,17 +14,24 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
     public const uint TypeRhahkzor = 0, TypeSneed = 1, TypeGilnid = 2, TypeIronCladDoor = 3;
     public const uint GoFactoryDoor = 13965, GoMastRoomDoor = 16400, GoFoundryDoor = 16399;
     public const uint GoIronCladDoor = 16397, GoDefiasCannon = 16398, GoSmiteChest = 144111;
+    public const uint GoDefiasGunpowder = 17155, GoDoorLever = 101833, TypeGunpowderEvent = 5000;
     public const uint NpcMrSmite = 646;
 
     private readonly HashSet<uint> _spawnedPatrols = [];
+    private uint _rhahkzorPatrolTimer;
+    private uint _gilnidPatrolTimer;
     private uint _ironDoorTimer;
     private int _doorStep;
+    private bool _gunpowderUsed;
 
     public override void Initialize()
     {
         base.Initialize();
         _ironDoorTimer = 0;
+        _rhahkzorPatrolTimer = 0;
+        _gilnidPatrolTimer = 0;
         _doorStep = 0;
+        _gunpowderUsed = false;
         _spawnedPatrols.Clear();
         if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures)
         {
@@ -32,7 +39,12 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
             creatures.RegisterEntryAi(NpcMrSmite, c => new MrSmiteAi(c, this));
         }
 
-        Instance.FindUpdater<GameObjectMapSystem>()?.RegisterAi(GoDefiasCannon, new CannonAi(this));
+        if (Instance.FindUpdater<GameObjectMapSystem>() is { } objects)
+        {
+            objects.RegisterAi(GoDefiasCannon, new CannonAi(this));
+            objects.RegisterAi(GoDefiasGunpowder, new GunpowderAi(this));
+            objects.RegisterAi(GoDoorLever, new DoorLeverAi(this));
+        }
     }
 
     public override void Load(string data)
@@ -73,9 +85,9 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
             case GoMastRoomDoor: OpenIf(go, Encounters[TypeSneed] == EncounterState.Done); break;
             case GoFoundryDoor: OpenIf(go, Encounters[TypeGilnid] == EncounterState.Done); break;
             case GoIronCladDoor:
-                if (Encounters[TypeIronCladDoor] == EncounterState.Done)
+                if (Encounters[TypeIronCladDoor] is EncounterState.InProgress or EncounterState.Done)
                 {
-                    go.State = GameObjectState.ActiveAlternative;
+                    go.State = GameObjectState.Active;
                 }
 
                 break;
@@ -107,26 +119,51 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
                         TypeSneed => GoMastRoomDoor,
                         _ => GoFoundryDoor,
                     });
-                    SpawnPatrol(type);
+                    // vmangos instance_deadmines::OnCreatureDeath/Update waits 60 s after
+                    // Rhahkzor and 30 s after Gilnid before revealing their patrols.
+                    // The already completed state on load is restored in Load above.
+                    if (type == TypeRhahkzor)
+                    {
+                        _rhahkzorPatrolTimer = 60_000;
+                    }
+                    else if (type == TypeGilnid)
+                    {
+                        _gilnidPatrolTimer = 30_000;
+                    }
+                    else
+                    {
+                        SpawnPatrol(type);
+                    }
                 }
 
                 Encounters[type] = data;
                 break;
             case TypeIronCladDoor:
-                if (data == EncounterState.Done && Encounters[type] != EncounterState.Done)
+                if (data == EncounterState.InProgress && Encounters[type] == EncounterState.NotStarted)
                 {
-                    _ironDoorTimer = 500;
+                    // vmangos instance_deadmines::SetData(TYPE_DEFIAS_ENDDOOR) opens
+                    // the Ironclad door on cannon use, then waits 3 s for Smite's alarm.
+                    if (GetSingleGameObjectFromStorage(GoIronCladDoor) is { State: not GameObjectState.Active })
+                    {
+                        DoUseDoorOrButton(GoIronCladDoor);
+                    }
+
+                    _ironDoorTimer = 3_000;
                 }
 
                 Encounters[type] = data;
                 break;
+            case TypeGunpowderEvent:
+                _gunpowderUsed = data != 0;
+                return;
             default: return;
         }
 
         SaveIfDone(data);
     }
 
-    public override uint GetData(uint type) => type < 4 ? Encounters[type] : 0;
+    public override uint GetData(uint type) => type == TypeGunpowderEvent ? (_gunpowderUsed ? 1u : 0u)
+        : type < 4 ? Encounters[type] : 0;
 
     // The GUIDs are the scripted spawns in instance_deadmines::SpawnFirst/Second/ThirdDeadminesPatrol.
     private void SpawnPatrol(uint type)
@@ -159,6 +196,32 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
 
     public override void Update(uint diffMs)
     {
+        if (_rhahkzorPatrolTimer != 0)
+        {
+            if (_rhahkzorPatrolTimer > diffMs)
+            {
+                _rhahkzorPatrolTimer -= diffMs;
+            }
+            else
+            {
+                _rhahkzorPatrolTimer = 0;
+                SpawnPatrol(TypeRhahkzor);
+            }
+        }
+
+        if (_gilnidPatrolTimer != 0)
+        {
+            if (_gilnidPatrolTimer > diffMs)
+            {
+                _gilnidPatrolTimer -= diffMs;
+            }
+            else
+            {
+                _gilnidPatrolTimer = 0;
+                SpawnPatrol(TypeGilnid);
+            }
+        }
+
         if (_ironDoorTimer == 0)
         {
             return;
@@ -170,19 +233,20 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
             return;
         }
 
+        if (GetSingleCreatureFromStorage(NpcMrSmite) is null)
+        {
+            _ironDoorTimer = 0; // vmangos Update stops the alarm when Smite is absent.
+            return;
+        }
+
         if (_doorStep++ == 0)
         {
-            DoUseDoorOrButton(GoIronCladDoor);
-            if (GetSingleGameObjectFromStorage(GoIronCladDoor) is { } door)
+            if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures)
             {
-                door.State = GameObjectState.ActiveAlternative;
-                if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures)
+                foreach (uint guid in new uint[] { 3_600_148, 3_600_149, 3_600_150 })
                 {
-                    foreach (uint guid in new uint[] { 3_600_148, 3_600_149, 3_600_150 })
-                    {
-                        Creature? guard = creatures.Creatures.FirstOrDefault(c => c.Spawn?.Guid == guid);
-                        guard?.Motion.MovePoint(0, door.X, door.Y, door.Z, run: guid != 3_600_150);
-                    }
+                    Creature? guard = creatures.Creatures.FirstOrDefault(c => c.Spawn?.Guid == guid);
+                    guard?.Motion.MovePoint(0, -99.6611f, -671.071655f, 7.42241f, run: true);
                 }
             }
 
@@ -213,12 +277,87 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
         public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs) { }
         public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
         {
-            if (instance.GetData(TypeIronCladDoor) != EncounterState.Done)
+            if (instance.GetData(TypeIronCladDoor) is not (EncounterState.InProgress or EncounterState.Done))
             {
-                instance.SetData(TypeIronCladDoor, EncounterState.Done);
+                instance.SetData(TypeIronCladDoor, EncounterState.InProgress);
             }
 
             return false; // GOUse_go_defias_cannon lets the cannon's normal animation run
+        }
+    }
+
+    private sealed class DoorLeverAi(DeadminesInstance instance) : IGameObjectAi
+    {
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs) { }
+
+        // vmangos deadmines.cpp GOHello_go_door_lever_dm: the lever's normal
+        // action is allowed only after the Ironclad door is already open.
+        public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
+            => instance.GetSingleGameObjectFromStorage(GoIronCladDoor)?.State != GameObjectState.Active;
+    }
+
+    private sealed class GunpowderAi(DeadminesInstance instance) : IGameObjectAi
+    {
+        private readonly Dictionary<ObjectGuid, (ObjectGuid Overseer, byte Stage)> _routes = [];
+        public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
+
+        // vmangos deadmines.cpp go_defias_gunpowderAI::SummonedMovementInform:
+        // continue from point 0 to point 1, then make the end point the overseer's home.
+        public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs)
+        {
+            if (!_routes.TryGetValue(go.Guid, out var route)
+                || objects.Map.FindUpdater<CreatureMapSystem>() is not { } creatures)
+            {
+                return;
+            }
+
+            Creature? overseer = creatures.FindCreature(route.Overseer);
+            if (overseer is null || !overseer.IsAlive)
+            {
+                _routes.Remove(go.Guid);
+                return;
+            }
+
+            if (overseer.Motion.CurrentType == MovementGeneratorType.Point)
+            {
+                return;
+            }
+
+            if (route.Stage == 0 && Near(overseer, -128.925980f, -616.494629f, 13.532340f))
+            {
+                overseer.Motion.MovePoint(1, -115.263672f, -617.396118f, 13.579387f, run: false);
+                _routes[go.Guid] = (route.Overseer, 1);
+            }
+            else if (route.Stage == 1 && Near(overseer, -115.263672f, -617.396118f, 13.579387f))
+            {
+                creatures.SetHomePosition(overseer, -115.263672f, -617.396118f, 13.579387f, 6.182347f);
+                _routes.Remove(go.Guid);
+            }
+        }
+
+        public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
+        {
+            if (instance.GetData(TypeGunpowderEvent) == 0)
+            {
+                if (objects.Map.FindUpdater<CreatureMapSystem>() is { } creatures
+                    && creatures.SummonFromGameObject(634, -131.290833f, -591.243103f, 18.077190f, 4.792192f,
+                        310_000, outOfCombat: true) is { } overseer)
+                {
+                    overseer.Motion.MovePoint(0, -128.925980f, -616.494629f, 13.532340f, run: false);
+                    _routes[go.Guid] = (overseer.Guid, 0);
+                }
+
+                instance.SetData(TypeGunpowderEvent, 1);
+            }
+
+            return true; // GOHello_go_defias_gunpowder handles the use.
+        }
+
+        private static bool Near(Creature creature, float x, float y, float z)
+        {
+            float dx = creature.X - x, dy = creature.Y - y, dz = creature.Z - z;
+            return dx * dx + dy * dy + dz * dz <= 1f;
         }
     }
 }

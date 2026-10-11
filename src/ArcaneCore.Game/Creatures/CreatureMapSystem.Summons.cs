@@ -233,8 +233,9 @@ public sealed partial class CreatureMapSystem
         return creature;
     }
 
-    /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer.</summary>
-    public Creature? SummonFromGameObject(uint entry, float x, float y, float z, float orientation, uint lifetimeMs)
+    /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer;
+    /// <paramref name="outOfCombat"/> selects vmangos TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT for Deadmines gunpowder.</summary>
+    public Creature? SummonFromGameObject(uint entry, float x, float y, float z, float orientation, uint lifetimeMs, bool outOfCombat = false)
     {
         if (_content.FindTemplate(entry) is not { } template)
         {
@@ -247,7 +248,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Creature creature = SpawnTemporary(template, x, y, z, orientation);
-        AddTimedSummon(creature, lifetimeMs, SummonTimer.Absolute);
+        AddTimedSummon(creature, lifetimeMs, outOfCombat ? SummonTimer.OutOfCombatUncharmed : SummonTimer.Absolute);
         return creature;
     }
 

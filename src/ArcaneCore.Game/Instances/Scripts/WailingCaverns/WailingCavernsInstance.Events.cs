@@ -14,7 +14,16 @@ public sealed partial class WailingCavernsInstance
     public override void Initialize()
     {
         base.Initialize();
-        Instance.FindUpdater<CreatureMapSystem>()?.RegisterEntryAi(NpcDisciple, c => new DiscipleOfNaralexAi(c, this));
+        if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures)
+        {
+            creatures.RegisterEntryAi(NpcDisciple, c => new DiscipleOfNaralexAi(c, this));
+            // vmangos' npc_evolving_ectoplasm ScriptName is bound to these three
+            // coloured entries (sql/old_migrations/20200611185308_world.sql).
+            foreach (uint entry in new uint[] { 5776, 5777, 5778 })
+            {
+                creatures.RegisterEntryAi(entry, c => new EvolvingEctoplasmAi(c));
+            }
+        }
     }
 
     public override void OnCreatureCreate(Creature creature)
