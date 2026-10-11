@@ -21,6 +21,14 @@ internal sealed class InMemoryRestStore : ICharacterRestStore
 
     public int Saves => Volatile.Read(ref _saves);
 
+    private readonly ConcurrentDictionary<int, int> _attempts = new();
+    private int _attemptsTotal;
+
+    /// <summary>Every save call, successful or not.</summary>
+    public int Attempts => Volatile.Read(ref _attemptsTotal);
+
+    public int AttemptsFor(int characterId) => _attempts.GetValueOrDefault(characterId);
+
     public CharacterRestState? Get(int characterId) => _rows.TryGetValue(characterId, out CharacterRestState state) ? state : null;
 
     public void Set(int characterId, CharacterRestState state) => _rows[characterId] = state;
@@ -30,6 +38,8 @@ internal sealed class InMemoryRestStore : ICharacterRestStore
 
     public Task SaveAsync(int characterId, CharacterRestState state, CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _attemptsTotal);
+        _attempts.AddOrUpdate(characterId, 1, static (_, n) => n + 1);
         int left;
         do
         {

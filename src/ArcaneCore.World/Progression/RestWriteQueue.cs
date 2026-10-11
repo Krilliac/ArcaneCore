@@ -1,5 +1,7 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Resilience;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -21,11 +23,15 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// <summary>Pause between attempts of one write (tests shorten it).</summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
     private Task? _consumer;
     private Task? _stop;
+    private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
     private int _pending;
 
@@ -36,6 +42,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         FlushCharacter,
         Retry,
         DrainAll,
+        Sweep,
     }
 
     private sealed class Unsaved
@@ -51,7 +58,25 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _consumer = Task.Run(ConsumeAsync);
+        _retry.Start();
+    }
+
+    private bool HasAnyRetained()
+    {
+        lock (_gate)
+        {
+            return _characters.Values.Any(u => u.Failure is not null);
+        }
+    }
 
     /// <summary>Record the character's current state and queue a write unless one is waiting.</summary>
     public void Save(int characterId, CharacterRestState state)
@@ -149,6 +174,11 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        if (_retry is not null)
+        {
+            await _retry.StopAsync().ConfigureAwait(false);
+        }
+
         _channel.Writer.TryWrite(new Work(0, Kind.DrainAll, null));
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -248,6 +278,20 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                         }
 
                         break;
+                    case Kind.Sweep:
+                        try
+                        {
+                            if (!_stopped)
+                            {
+                                await SweepRetainedAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            _retry?.SweepFinished();
+                        }
+
+                        break;
                     default:
                         work.Done?.TrySetResult();
                         break;
@@ -261,7 +305,30 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
     }
 
-    private async Task ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued)
+    /// <summary>
+    /// On the consumer: one attempt for each retained character, ascending, so a lock that outlasts the inline retries does not leave the write held
+    /// in memory with nobody to retry it. Stops at the first locked database (the rest would only wait out the same lock); any other failure does not stop it.
+    /// </summary>
+    private async Task SweepRetainedAsync()
+    {
+        int[] retained;
+        lock (_gate)
+        {
+            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
+        }
+
+        for (int i = 0; i < retained.Length; i++)
+        {
+            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, attempts: 1).ConfigureAwait(false);
+            if (failure is not null && DatabaseTransience.IsBusy(failure))
+            {
+                logger.LogWarning("rested-state retry: the database is locked; {Remaining} retained characters wait for the next sweep", retained.Length - i);
+                return;
+            }
+        }
+    }
+
+    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, int attempts = MaxAttempts)
     {
         CharacterRestState state;
         int version;
@@ -269,7 +336,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             if (clearQueued)
@@ -279,7 +346,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
             if (onlyIfFailed && unsaved.Failure is null)
             {
-                return;
+                return null;
             }
 
             state = unsaved.State;
@@ -287,7 +354,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
 
         Exception? failure = null;
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
             try
             {
@@ -303,8 +370,8 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             catch (Exception ex)
             {
                 failure = ex;
-                logger.LogWarning(ex, "rested-state write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, MaxAttempts);
-                if (attempt < MaxAttempts)
+                logger.LogWarning(ex, "rested-state write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
+                if (attempt < attempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
@@ -315,7 +382,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             unsaved.Failure = failure;
@@ -327,7 +394,9 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failure is not null)
         {
-            logger.LogError(failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, MaxAttempts);
+            logger.LogError(failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
+
+        return failure;
     }
 }

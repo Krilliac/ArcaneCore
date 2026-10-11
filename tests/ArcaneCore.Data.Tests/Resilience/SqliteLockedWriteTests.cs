@@ -93,6 +93,39 @@ public sealed class SqliteLockedWriteTests : IDisposable
     }
 
     [Fact]
+    public async Task TheStartupSchemaLock_WaitsItsOwnTimeout_NotTheCharactersWriteBound()
+    {
+        string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, "schema.db"), Pooling = false, DefaultTimeout = 30 }.ToString();
+        await using ServiceProvider provider = Build(
+            ("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection),
+            ("Database:SqliteBusyTimeoutMs", "300"), ("Database:SqliteWriteTimeoutMs", "1000"));
+        await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+
+        await using var holder = new SqliteConnection(connection);
+        await holder.OpenAsync();
+        await ScalarAsync(holder, "BEGIN IMMEDIATE");
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        await db.Database.OpenConnectionAsync();
+        var sqlite = (SqliteConnection)db.Database.GetDbConnection();
+        Assert.Equal(1, sqlite.DefaultTimeout); // the characters write bound
+
+        var watch = Stopwatch.StartNew();
+        await Assert.ThrowsAsync<ArcaneCore.Data.Schema.SchemaMismatchException>(
+            () => ArcaneCore.Data.Schema.SchemaLock.AcquireAsync(db, "characters", TimeSpan.FromSeconds(3), CancellationToken.None));
+        watch.Stop();
+        // The lock asked for 3 s: it must wait its own timeout, not give up at the 1 s write bound.
+        Assert.InRange(watch.Elapsed, TimeSpan.FromSeconds(2.5), TimeSpan.FromSeconds(15));
+        Assert.Equal(1, sqlite.DefaultTimeout); // restored
+
+        await ScalarAsync(holder, "ROLLBACK");
+        await using (ArcaneCore.Data.Schema.SchemaLock held = await ArcaneCore.Data.Schema.SchemaLock.AcquireAsync(db, "characters", TimeSpan.FromSeconds(5), CancellationToken.None))
+        {
+            await held.CompleteAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task ASlowTransaction_IsLoggedAtWarn_NamingTheContextAndTheCallingCode()
     {
         var logs = new CaptureProvider();

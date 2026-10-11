@@ -272,6 +272,7 @@ internal sealed class RecordingStore : ISocialStore
     private readonly Dictionary<(int, int), int> _setCalls = [];
     private readonly Dictionary<int, GuildData> _guilds = [];
     private int _failures;
+    private int _locked;
 
     /// <summary>When set, a write of row (99, 99) waits for it (and announces itself on <see cref="GateEntered"/>).</summary>
     public TaskCompletionSource? Gate { get; set; }
@@ -287,7 +288,20 @@ internal sealed class RecordingStore : ISocialStore
         }
     }
 
-    public void Heal() => FailNext(0);
+    /// <summary>Make the next <paramref name="count"/> calls of any write fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
+    public void LockNext(int count)
+    {
+        lock (_lock)
+        {
+            _locked = count;
+        }
+    }
+
+    public void Heal()
+    {
+        FailNext(0);
+        LockNext(0);
+    }
 
     public int Attempts { get; private set; }
 
@@ -406,6 +420,12 @@ internal sealed class RecordingStore : ISocialStore
 
     private void ThrowIfFailing()
     {
+        if (_locked > 0)
+        {
+            _locked--;
+            throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
+        }
+
         if (_failures > 0)
         {
             if (_failures != int.MaxValue)

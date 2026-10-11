@@ -66,6 +66,9 @@ internal sealed class MemoryHonorStore : IHonorStore
     /// <summary>While set, every write throws <see cref="IOException"/> (the attempt is still counted).</summary>
     public volatile bool FailWrites;
 
+    /// <summary>The number of upcoming writes that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
+    public int LockedWrites;
+
     /// <summary>Write calls made so far, failed or not.</summary>
     public int WriteAttempts => Volatile.Read(ref _writeAttempts);
 
@@ -111,6 +114,17 @@ internal sealed class MemoryHonorStore : IHonorStore
     private void BeforeWrite(string what)
     {
         Interlocked.Increment(ref _writeAttempts);
+        int left;
+        do
+        {
+            left = Volatile.Read(ref LockedWrites);
+        }
+        while (left > 0 && Interlocked.CompareExchange(ref LockedWrites, left - 1, left) != left);
+        if (left > 0)
+        {
+            throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
+        }
+
         if (FailWrites)
         {
             throw new IOException("controlled honor storage failure");

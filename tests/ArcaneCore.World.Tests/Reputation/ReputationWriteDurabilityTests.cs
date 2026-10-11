@@ -150,6 +150,29 @@ public sealed class ReputationWriteDurabilityTests
     }
 
     [Fact]
+    public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
+    {
+        await using var fixture = await Fixture.CreateAsync(TimeSpan.FromMilliseconds(200));
+        int id = fixture.Ids[0];
+        fixture.Control.LockedWrites = 4; // three inline attempts fail, the first sweep fails, the second lands
+        fixture.Queue.SaveWatchedFaction(id, 0);
+        await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
+
+        Assert.True(fixture.Queue.HasRetainedFailure(id));
+        Assert.Equal(3, fixture.Control.AttemptsFor(id));
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (fixture.Queue.HasRetainedFailure(id))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the sweep");
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(5, fixture.Control.AttemptsFor(id));
+        Assert.Equal(0, (await fixture.LoadAsync(id)).WatchedFaction);
+    }
+
+    [Fact]
     public async Task DeleteWhileWriteInFlight_DoesNotResurrect()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -175,14 +198,17 @@ public sealed class ReputationWriteDurabilityTests
         private readonly DbContextOptions<CharacterDbContext> _options;
         private readonly ServiceProvider _services;
 
-        private Fixture(string path, DbContextOptions<CharacterDbContext> options, ServiceProvider services, Control control, int[] ids)
+        private Fixture(string path, DbContextOptions<CharacterDbContext> options, ServiceProvider services, Control control, int[] ids, TimeSpan? retryInterval)
         {
             _path = path;
             _options = options;
             _services = services;
             Control = control;
             Ids = ids;
-            Queue = new ReputationWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance);
+            Queue = new ReputationWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+            {
+                RetainedRetryInterval = retryInterval ?? TimeSpan.FromSeconds(30),
+            };
             Queue.Start();
         }
 
@@ -191,7 +217,7 @@ public sealed class ReputationWriteDurabilityTests
         public ReputationWriteQueue Queue { get; }
         public CharacterDbContext NewContext() => new(_options);
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(TimeSpan? retryInterval = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-reputation-durability-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -211,7 +237,7 @@ public sealed class ReputationWriteDurabilityTests
             services.AddScoped(_ => new CharacterDbContext(options));
             services.AddScoped<ICharacterReputationStore>(provider => new FaultingStore(
                 new EfCharacterReputationStore(provider.GetRequiredService<CharacterDbContext>()), control));
-            return new Fixture(path, options, services.BuildServiceProvider(), control, [.. ids]);
+            return new Fixture(path, options, services.BuildServiceProvider(), control, [.. ids], retryInterval);
         }
 
         /// <summary>The character row removal a real deletion commits before the queued reputation removal runs (the removal is conditional on it).</summary>
@@ -261,6 +287,9 @@ public sealed class ReputationWriteDurabilityTests
         private readonly ConcurrentDictionary<int, int> _attempts = new();
         private int _hold;
         public volatile bool FailWrites;
+
+        /// <summary>The number of upcoming writes that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
+        public int LockedWrites;
         public volatile bool LoseAcknowledgement;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -272,6 +301,17 @@ public sealed class ReputationWriteDurabilityTests
         public async Task BeforeAsync(int id)
         {
             _attempts.AddOrUpdate(id, 1, (_, n) => n + 1);
+            int left;
+            do
+            {
+                left = Volatile.Read(ref LockedWrites);
+            }
+            while (left > 0 && Interlocked.CompareExchange(ref LockedWrites, left - 1, left) != left);
+            if (left > 0)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
+            }
+
             if (Interlocked.Exchange(ref _hold, 0) == 1)
             {
                 Entered.TrySetResult();

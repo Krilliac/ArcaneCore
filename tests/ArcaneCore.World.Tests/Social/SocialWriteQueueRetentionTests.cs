@@ -41,6 +41,33 @@ public sealed class SocialWriteQueueRetentionTests
     }
 
     [Fact]
+    public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_ForRowsAndGuildsAlike()
+    {
+        await using Rig rig = Rig.Create(retryInterval: TimeSpan.FromMilliseconds(200));
+        rig.Store.LockNext(8); // row: 3 inline, guild: 3 inline, then two sweeps stop at the row, the third lands both
+
+        rig.Queue.SetSocial(1, 2, SocialFlags.Friend);
+        rig.Queue.SaveGuild(Guild(7, "retained"));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+
+        Assert.True(rig.Queue.HasRetainedFailure(1));
+        Assert.Equal(SocialFlags.None, rig.Store.Row(1, 2));
+        Assert.Empty(rig.Store.Guilds);
+        Assert.Equal(6, rig.Store.Attempts);
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (rig.Queue.HasRetainedFailure(1) || rig.Store.Guilds.Count == 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried by the sweep");
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(SocialFlags.Friend, rig.Store.Row(1, 2));
+        Assert.Equal("retained", rig.Store.Guilds[7].Motd);
+        Assert.Equal(10, rig.Store.Attempts);
+    }
+
+    [Fact]
     public async Task ANewerValueOfARetainedRow_ReplacesIt_SoTheFinalStateIsWhatPersists()
     {
         await using Rig rig = Rig.Create();
@@ -182,10 +209,13 @@ public sealed class SocialWriteQueueRetentionTests
     {
         private readonly ServiceProvider _services;
 
-        private Rig(SocialWriteQueueOptions options)
+        private Rig(SocialWriteQueueOptions options, TimeSpan? retryInterval)
         {
             _services = new ServiceCollection().AddScoped<ISocialStore>(_ => Store).BuildServiceProvider();
-            Queue = new SocialWriteQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, options);
+            Queue = new SocialWriteQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, options)
+            {
+                RetainedRetryInterval = retryInterval ?? TimeSpan.FromSeconds(30),
+            };
             Queue.Start();
         }
 
@@ -193,7 +223,7 @@ public sealed class SocialWriteQueueRetentionTests
 
         public SocialWriteQueue Queue { get; }
 
-        public static Rig Create(SocialWriteQueueOptions? options = null) => new(options ?? new SocialWriteQueueOptions { RetryDelayMs = 1 });
+        public static Rig Create(SocialWriteQueueOptions? options = null, TimeSpan? retryInterval = null) => new(options ?? new SocialWriteQueueOptions { RetryDelayMs = 1 }, retryInterval);
 
         public async ValueTask DisposeAsync()
         {

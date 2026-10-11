@@ -1,5 +1,7 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Reputation;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -28,12 +30,16 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 {
     private const int MaxAttempts = 3;
 
+    /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
     private Task? _consumer;
     private Task? _stop;
+    private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
     private int _pending;
 
@@ -44,6 +50,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         FlushCharacter,
         Retry,
         DrainAll,
+        Sweep,
     }
 
     /// <summary>Writes queued or in progress.</summary>
@@ -61,7 +68,17 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, () => RetainedCharacters.Count > 0, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _consumer = Task.Run(ConsumeAsync);
+        _retry.Start();
+    }
 
     public void SaveFactions(int characterId, IReadOnlyList<CharacterReputationRow> rows)
     {
@@ -182,6 +199,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        if (_retry is not null)
+        {
+            await _retry.StopAsync().ConfigureAwait(false);
+        }
+
         _channel.Writer.TryWrite(new Work(0, Kind.DrainAll, null));
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -307,6 +329,20 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         }
 
                         break;
+                    case Kind.Sweep:
+                        try
+                        {
+                            if (!_stopped)
+                            {
+                                await SweepRetainedAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            _retry?.SweepFinished();
+                        }
+
+                        break;
                     default:
                         work.Done?.TrySetResult();
                         break;
@@ -321,15 +357,38 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    /// <summary>
+    /// On the consumer: one attempt for each retained character, ascending, so a lock that outlasts the inline retries does not leave the write held
+    /// in memory with nobody to retry it. Stops at the first locked database (the rest would only wait out the same lock); any other failure does not stop it.
+    /// </summary>
+    private async Task SweepRetainedAsync()
+    {
+        int[] retained;
+        lock (_gate)
+        {
+            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
+        }
+
+        for (int i = 0; i < retained.Length; i++)
+        {
+            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, attempts: 1).ConfigureAwait(false);
+            if (failure is not null && DatabaseTransience.IsBusy(failure))
+            {
+                logger.LogWarning("reputation retry: the database is locked; {Remaining} retained characters wait for the next sweep", retained.Length - i);
+                return;
+            }
+        }
+    }
+
     /// <summary>Persist the character's overlay (nothing if there is none, or it is not failed and <paramref name="onlyIfFailed"/>).</summary>
-    private async Task ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued)
+    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, int attempts = MaxAttempts)
     {
         Snapshot snapshot;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             if (clearQueued)
@@ -340,7 +399,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             if ((onlyIfFailed && unsaved.Failure is null) || unsaved.IsEmpty)
             {
                 Release(characterId, unsaved);
-                return;
+                return null;
             }
 
             snapshot = new Snapshot(
@@ -351,7 +410,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
         try
         {
-            await WriteAsync(characterId, snapshot).ConfigureAwait(false);
+            await WriteAsync(characterId, snapshot, attempts).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -365,14 +424,14 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             }
 
             logger.LogError(ex, "reputation write for character {Character} failed; retained for retry", characterId);
-            return;
+            return ex;
         }
 
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             if (snapshot.DeleteGeneration is { } generation && unsaved.DeleteDone < generation)
@@ -396,6 +455,8 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             unsaved.Failure = null;
             Release(characterId, unsaved);
         }
+
+        return null;
     }
 
     /// <summary>Under <see cref="_gate"/>: forget an entry with nothing left to write or wait for.</summary>
@@ -407,7 +468,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    private async Task WriteAsync(int characterId, Snapshot snapshot)
+    private async Task WriteAsync(int characterId, Snapshot snapshot, int attempts)
     {
         for (int attempt = 1; ; attempt++)
         {
@@ -437,7 +498,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < MaxAttempts)
+            catch (Exception ex) when (attempt < attempts)
             {
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
