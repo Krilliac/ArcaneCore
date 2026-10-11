@@ -115,6 +115,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>How a following bot keeps up with its leader and catches up when it cannot walk (<c>World:Playerbots:Follow</c>; live).</summary>
+    public PlayerbotFollowOptions Follow { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -165,6 +168,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Follow is null) throw new InvalidOperationException($"{SectionName}:Follow is missing.");
+        Follow.Validate();
     }
 }
 
@@ -204,7 +209,10 @@ public sealed class PlayerbotPartyOptions
     /// <summary>Character names whose invitations a bot always accepts, whatever <see cref="InvitePolicy"/> says (case-insensitive).</summary>
     public string[] Allowlist { get; set; } = [];
 
-    /// <summary>Teleport to the master when it is more than 100 yards away or on another map (vmangos PartyBotAI .goname; on by default).</summary>
+    /// <summary>
+    /// Teleport to the master when the follower cannot keep up by walking (vmangos PartyBotAI .goname; on by default). Off: the
+    /// bot never teleports to its master, whatever <see cref="PlayerbotFollowOptions.CatchUpMode"/> says.
+    /// </summary>
     public bool TeleportToLeader { get; set; } = true;
 
     /// <summary>Revive a dead bot in place when vmangos <c>PartyBotAI::ShouldAutoRevive</c> says so (on by default); otherwise it runs back.</summary>

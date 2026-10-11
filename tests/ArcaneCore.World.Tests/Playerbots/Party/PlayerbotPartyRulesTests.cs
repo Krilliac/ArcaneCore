@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Party;
 using Xunit;
 
@@ -96,15 +97,67 @@ public sealed class PlayerbotPartyRulesTests
         => Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(20f) with { Mode = PlayerbotPartyMode.Passive }));
 
     /// <summary>
-    /// vmangos UpdateAI :795-817: the teleport to the leader sits inside the !IsInCombat() block. A bot in combat (its attacker out of
-    /// reach or no valid target) walks after a far master on its map, and waits for one on another map; out of combat it teleports.
+    /// vmangos UpdateAI :795-817: the teleport to the leader sits inside the !IsInCombat() block. A bot in combat beside a master who
+    /// fights too walks after him on its map and waits for him on another; out of combat it teleports. The one extension
+    /// (World:Playerbots:Follow:LeaderCombatRangeYards): a master out of combat and beyond that range (or on another map) has left
+    /// the fight, and the bot teleports out of it instead of dying in it alone.
     /// </summary>
     [Fact]
-    public void Follow_ABotInCombat_NeverTeleports()
+    public void Follow_ABotInCombat_TeleportsOnlyWhenItsMasterLeftTheFight()
     {
-        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = true }));
-        Assert.Equal(PlayerbotFollowAction.Wait, PlayerbotParty.DecideFollow(Facts(float.NaN) with { InCombat = true, SameMap = false }));
+        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = true, MasterInCombat = true }));
+        Assert.Equal(PlayerbotFollowAction.Wait,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { InCombat = true, MasterInCombat = true, SameMap = false }));
         Assert.Equal(PlayerbotFollowAction.Teleport, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = false }));
+        // The master left the fight: out of combat and beyond 50 yards, or on another map.
+        Assert.Equal(PlayerbotFollowAction.Teleport, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = true }));
+        Assert.Equal(PlayerbotFollowAction.Teleport, PlayerbotParty.DecideFollow(Facts(float.NaN) with { InCombat = true, SameMap = false }));
+        Assert.False(PlayerbotParty.MayTeleport(Facts(40f) with { InCombat = true }));
+        Assert.True(PlayerbotParty.MayTeleport(Facts(50.1f) with { InCombat = true }));
+        Assert.False(PlayerbotParty.MayTeleport(Facts(500f) with { InCombat = true, MasterInCombat = true }));
+        Assert.True(PlayerbotParty.MayTeleport(Facts(40f) with { InCombat = true, LeaderCombatRange = 30f }));
+    }
+
+    /// <summary>
+    /// The catch-up mode: Teleport keeps vmangos' 100-yard rule (at the configured distance); FightThrough and Auto walk after a far
+    /// master on the bot's map. FightThrough never teleports to another map: it walks into the entrance that leads there, or waits.
+    /// TeleportToLeader off forbids every teleport.
+    /// </summary>
+    [Fact]
+    public void Follow_CatchUpModes_DecideTheDistanceAndOtherMapTeleports()
+    {
+        Assert.Equal(PlayerbotFollowAction.Teleport, PlayerbotParty.DecideFollow(Facts(150f) with { CatchUp = PlayerbotCatchUpMode.Teleport }));
+        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(150f) with { TeleportDistance = 200f }));
+        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(500f) with { CatchUp = PlayerbotCatchUpMode.FightThrough }));
+        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(500f) with { CatchUp = PlayerbotCatchUpMode.Auto }));
+        Assert.Equal(PlayerbotFollowAction.Teleport,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { CatchUp = PlayerbotCatchUpMode.Auto, SameMap = false }));
+        Assert.Equal(PlayerbotFollowAction.WalkToEntrance,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { CatchUp = PlayerbotCatchUpMode.FightThrough, SameMap = false, EntranceToMaster = true }));
+        Assert.Equal(PlayerbotFollowAction.Wait,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { CatchUp = PlayerbotCatchUpMode.FightThrough, SameMap = false }));
+        Assert.False(PlayerbotParty.MayTeleport(Facts(500f) with { CatchUp = PlayerbotCatchUpMode.FightThrough }));
+        Assert.False(PlayerbotParty.MayTeleport(Facts(500f) with { TeleportToLeader = false, CatchUp = PlayerbotCatchUpMode.Auto }));
+    }
+
+    /// <summary>
+    /// An instance or map boundary is never crossed into a place the master cannot share: a map the bot may not be on is waited for
+    /// (the entrance walk too), and so is another instance of the bot's own map id, whatever the mode.
+    /// </summary>
+    [Theory]
+    [InlineData(PlayerbotCatchUpMode.Teleport)]
+    [InlineData(PlayerbotCatchUpMode.FightThrough)]
+    [InlineData(PlayerbotCatchUpMode.Auto)]
+    public void Follow_NeverCrossesIntoAMapOrInstanceTheMasterCannotShare(PlayerbotCatchUpMode mode)
+    {
+        Assert.Equal(PlayerbotFollowAction.Wait, PlayerbotParty.DecideFollow(Facts(float.NaN) with
+        {
+            CatchUp = mode, SameMap = false, MasterMapAllowed = false, EntranceToMaster = true,
+        }));
+        Assert.Equal(PlayerbotFollowAction.Wait, PlayerbotParty.DecideFollow(Facts(float.NaN) with
+        {
+            CatchUp = mode, SameMap = false, MasterInOtherInstance = true, EntranceToMaster = true,
+        }));
     }
 
     /// <summary>

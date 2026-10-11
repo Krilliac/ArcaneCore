@@ -318,6 +318,44 @@ internal static class PlayerbotMotion
     }
 
     /// <summary>
+    /// Step off an edge (a follower's drop, <see cref="Party.PlayerbotFollowDrop"/>): the heartbeat a client sends as it walks over the
+    /// edge and starts to fall, at <paramref name="stepOff"/> (the edge's height, one step out) with MOVEFLAG_FALLINGFAR. The server
+    /// records where the fall began (vmangos <c>Player::UpdateFallInformationIfNeed</c>, <see cref="FallObserver"/>). Unbudgeted, like
+    /// every movement report; the bot must not be moving along a route (the caller stops it first). True when the server stored it.
+    /// </summary>
+    internal static bool StartFall(WorldSession session, Player player, Vector3 stepOff, float heading)
+    {
+        MotionState state = Of(player);
+        state.World = session.World;
+        if (state.Active || !CanMove(player)) return false;
+        return Send(session, player, WorldOpcode.MsgMoveHeartbeat, stepOff, heading, walk: false, moving: true, session.World.NowMs,
+            budgeted: false, MovementFlags.FallingFar);
+    }
+
+    /// <summary>
+    /// Land after <see cref="StartFall"/>: MSG_MOVE_FALL_LAND at <paramref name="landing"/> with the time the fall took, as a client
+    /// sends it; the server applies vmangos' fall damage (<c>Player::HandleFall</c>). True when the bot stands there afterwards.
+    /// </summary>
+    internal static bool Land(WorldSession session, Player player, Vector3 landing, float heading, uint fallTimeMs)
+    {
+        Of(player).World = session.World;
+        return Send(session, player, WorldOpcode.MsgMoveFallLand, landing, heading, walk: false, moving: false, session.World.NowMs,
+            budgeted: false, fallTime: fallTimeMs);
+    }
+
+    /// <summary>
+    /// Stop refusing destinations near <paramref name="place"/> that a loop put on the blacklist: a follower's destination is its
+    /// leader, and refusing the leader for a minute only strands it (the follower has its own loop detection,
+    /// <see cref="Party.PlayerbotFollowProgress"/>).
+    /// </summary>
+    internal static void Forgive(Player player, Vector3 place)
+    {
+        if (!States.TryGetValue(player, out MotionState? state)) return;
+        state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(place)) <= SamePlaceYards * 2);
+        state.LoopPending = false;
+    }
+
+    /// <summary>
     /// Report the current route position with a heartbeat before something else is acknowledged with the stored
     /// movement block (speed/flag orders), so observers do not see the bot jump back to its last packet.
     /// </summary>
@@ -462,19 +500,20 @@ internal static class PlayerbotMotion
     /// server stored it.
     /// </summary>
     private static bool Send(WorldSession session, Player player, WorldOpcode opcode, Vector3 position, float heading,
-        bool walk, bool moving, uint now, bool budgeted)
+        bool walk, bool moving, uint now, bool budgeted, MovementFlags extra = MovementFlags.None, uint fallTime = 0)
     {
         MovementInfo movement = player.Movement;
         movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled | MovementFlags.WalkMode
             | MovementFlags.TurnLeft | MovementFlags.TurnRight);
         if (moving) movement.Flags |= MovementFlags.Forward;
         if (walk) movement.Flags |= MovementFlags.WalkMode;
+        movement.Flags |= extra;
         movement.X = position.X;
         movement.Y = position.Y;
         movement.Z = position.Z;
         movement.Orientation = Normalize(heading);
         movement.Time = now;
-        movement.FallTime = 0;
+        movement.FallTime = fallTime;
         movement.CorrectData();
         MotionState state = Of(player);
         bool packets = (state.Options ??= session.Services.GetService<IOptions<PlayerbotOptions>>()?.Value)?.MovementPackets ?? true;
