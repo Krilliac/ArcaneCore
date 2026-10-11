@@ -106,6 +106,24 @@ internal static class PlayerbotMotion
         PlayerbotAreaTriggers.Reset(player);
     }
 
+    /// <summary>
+    /// Forget the loop watch's history and the destinations it refuses (a death: <see cref="PlayerbotRecovery"/> at the first think of a
+    /// new death). The routes of a ghost and those of the living bot before it are not one errand going back and forth: live
+    /// 2026-10-11 (world.log 08:07-08:09, Wfbotfe), a bot revived by the Raven Hill spirit healer among the skeletons there retreated,
+    /// died, walked to the same healer again, and faulted with <see cref="PlayerbotRecovery.SpiritHealerFailed"/> 21 s after its third
+    /// death. In the world test that replays the sequence (PlayerbotUnsafeBodyRecoveryTests) the third walk to the healer completed an
+    /// A, B, A pattern with the retreats, the healer's place was refused for <see cref="LoopBlacklistMs"/>, the ghost could plan no
+    /// route to it, and the stuck bound faulted the recovery. A ghost's walk has its own bounds (the recovery's stuck and
+    /// no-progress bounds); a revived bot that loops again is caught again.
+    /// </summary>
+    internal static void ForgetLoops(Player player)
+    {
+        if (!States.TryGetValue(player, out MotionState? state)) return;
+        state.Loops.Reset();
+        state.Blacklist.Clear();
+        state.LoopPending = false;
+    }
+
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
     internal static bool IsBlacklisted(Player player, Vector3 destination)
     {

@@ -223,6 +223,47 @@ creatures the bot can take stand. Live 2026-10-11 05:45-06:00 UTC: the Westfall-
 skeletons and spiders, reclaimed its body there and died again, two death loops in fifteen minutes (`attackers=202/531/569`, then
 `202/217/569`); the healer came only with the third death of a loop (`PlayerbotUnsafeBodyRecoveryTests`).
 
+**Tightened (live 2026-10-11 08:04-08:10 UTC: 80 bodies given up in six minutes, 31 too strong, 10 died there, 39 outside the home).**
+`DiedHere` counts only while a creature that would attack the revived bot (`PlayerbotRecovery.Threats`, or a hazard) still stands in
+reach of the body; a cleared spot is reclaimed (the errand that led there is still set aside). `TooStrong` is strength, not worth: a
+creature counts only when `Assess` avoids it and `PlayerbotRiskModel.BeyondStrength` holds (one that kills outright, an elite 3+ levels
+above, or a risk at full health and mana above `Tolerance x 0.9`, the highest bar any pull is taken at). Before, the pull bar of a fight
+that gives no quest credit or loot refused level 9-13 Defias and gnolls to level-14 bots (entries 95, 474, 478, 504, 1118 in the log).
+`OutsideHome` counts only when the home return cannot teleport the revived bot home (`ReturnMode` `Walk`, or a return teleport less
+than `TeleportCooldownMs` ago): otherwise the body is reclaimed and the Auto return walks or teleports the bot home for nothing. A
+remaining source of over-firing is outside this change: the level-14 Westfall bots' `TooStrong` details imply an observed damage per
+second (`PlayerbotFightTracker.ObservedDps`) of about 5-6 against the level estimate of 27.
+
+**The healer's landing is judged too.** The spirit healer revives the bot at the graveyard of its body (vmangos `SendSpiritResurrect`),
+which can be as unsafe as the body: Raven Hill's graveyard stands among its level-24 Skeletal Horrors. Before the body is given up (an
+unsafe body or a death loop's request), the landing (`SpiritHealerLanding`) is asked of `PlayerbotRecovery.LandingUnsafe`
+(`PlayerbotRisk.TooStrongAt`: a creature beyond the bot's strength whose aggro reach covers the landing); when it is unsafe and a spot
+within the reclaim radius of the body is clear of every threat, the body is kept (`BodyKeptOverLanding`, logged once: `keeps its body
+... the spirit healer would revive it among creatures too strong for it`) and the corpse run revives the bot on that spot. When the
+healer is taken and revives the bot on an unsafe landing, the bot leaves in the same think, still out of combat (the activation is
+handled synchronously; the creatures aggro only in their own update): a homed bot teleports home (`PlayerbotHomeTeleportReason.UnsafeLanding`,
+past the 5-minute cooldown), an unhomed one (or one whose home teleport is refused) to its bind point (`TeleportToHomebind`, as the
+tram's way out). Live: Wfbotfe (homed, 08:07-08:09) and Dawnrover (unhomed, death loops at 08:23:32 and 08:27:47) were revived at
+that graveyard, attacked before their next think, and died there again and again; the home teleport was refused in combat.
+The landing is judged where the resurrection sends the bot: when the body's graveyard differs from the ghost's, `SendSpiritResurrect`
+teleports the revived bot there (`GraveyardRepopService.TeleportToCorpseGraveyard`), a near teleport still pending in that think, so
+the escape judges `TeleportService.DestinationOf` and replaces that teleport (an urgent `TryTeleport` never counts the server's own
+pending teleport as its escape). The creatures are those round the landing itself, seen by the bot or not
+(`PlayerbotRecovery.ThreatsAround`). A death loop's request for the healer is never overridden by a kept body: the healer is the way out
+of a body death loop and the escape covers its landing, so at most two bodies are kept per death-loop window. The keep-body answer is
+kept per body for 2 s. The unhomed bind-point escape is not rate-limited: it happens at most once per resurrection, and a bot that
+goes back to the same place has its errand set aside by the death watch.
+
+**Why the spirit-healer step faulted.** Not a server refusal: in the world test that replays Wfbotfe's sequence (revived at the healer
+among the skeletons, retreat, death, three times) the motion's loop watch (`PlayerbotMotion`, A, B, A within 30 s) counted the ghost's
+walks to the same healer and the living bot's retreats between them as one errand going back and forth, refused the healer's place for
+60 s, the ghost could plan no route to it, and the stuck bound (`StuckMs`, 10 s) faulted the recovery; live, the fault came 21 s after
+the death loop. The first think of every death now forgets the loop watch (`PlayerbotMotion.ForgetLoops`). A refused
+CMSG_SPIRIT_HEALER_ACTIVATE (the bot still dead after the synchronous handler) is logged at Information with the handler's rule
+(`QuestNpcServices.SpiritHealerRefusal`: alive, NPC state not ready, not interactable with the reason from `InteractableNpc`, not a
+ghost, a settlement pending), once per reason and death, and the fault itself is preceded by an Information line with the goal, its
+distance, whether a route existed and whether the goal is refused after a movement loop.
+
 **Waiting to recover without food.** After a retreat, or before a pull it is too hurt for, the bot waits for
 `World:Playerbots:Risk:RecoverHealthPct` (goal `Rest`, `PlayerbotRisk.KeepWaiting`, at most `MaxWaitMs` 90 s). With food or drink it
 eats or drinks; without, it now sits (`CMSG_STANDSTATECHANGE`; vmangos `Player::RegenerateHealth` gives half as much again per tick

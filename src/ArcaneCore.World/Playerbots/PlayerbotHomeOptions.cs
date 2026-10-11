@@ -42,6 +42,12 @@ public enum PlayerbotHomeTeleportReason
 
     /// <summary>The walk home was set aside as blocked (failed plans, no progress, or a stall).</summary>
     WalkBlocked,
+
+    /// <summary>
+    /// The spirit healer revived the bot among creatures too strong for it (<see cref="PlayerbotRecovery.EscapeLanding"/>): the
+    /// teleport is made in the think of the resurrection, before they aggro, and the cooldown does not hold it back.
+    /// </summary>
+    UnsafeLanding,
 }
 
 /// <summary>
@@ -127,6 +133,7 @@ internal static class PlayerbotHomeRules
         PlayerbotHomeTeleportReason.Distance => "too far to walk",
         PlayerbotHomeTeleportReason.Danger => "way home through a higher-level area",
         PlayerbotHomeTeleportReason.WalkBlocked => "walk home blocked",
+        PlayerbotHomeTeleportReason.UnsafeLanding => "revived by the spirit healer among creatures too strong for it",
         _ => "none",
     };
 }

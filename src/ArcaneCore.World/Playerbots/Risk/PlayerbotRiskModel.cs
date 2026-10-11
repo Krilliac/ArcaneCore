@@ -211,6 +211,29 @@ internal static class PlayerbotRiskModel
         return 0;
     }
 
+    /// <summary>
+    /// Whether a fight is beyond the bot's strength, whatever it would give: an enemy that kills outright, an elite
+    /// <see cref="EliteLevelMargin"/> or more levels above the bot (alone), or a risk at full health and mana above the highest share
+    /// any pull is ever taken at (<see cref="Acceptable"/> at its cap, a quest objective's bar: <c>Tolerance x 0.9</c>). Remembered
+    /// danger and the reward are not weighed. For a revival (<see cref="PlayerbotRisk.TooStrongNear"/>), where the bot does not choose
+    /// a pull for its reward but may have to live beside the creature. It judges the bot at full health and mana although a reclaim
+    /// revives it at half (vmangos HandleReclaimCorpseOpcode, <c>ResurrectPlayer(0.5f)</c>): a reclaim revives the ghost where it
+    /// stands, which the camped-body rule keeps out of every creature's reach (<see cref="PlayerbotRecovery.ChooseReviveSpot"/>), so
+    /// the bot can rest before such a fight; the half health matters only for a creature that would attack at once, and those are
+    /// judged by <see cref="Assess"/> at the half health first.
+    /// </summary>
+    internal static bool BeyondStrength(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        ArgumentNullException.ThrowIfNull(options);
+        if (facts.Enemies.Count == 0) return false;
+        if (facts.Enemies.Any(enemy => enemy.Lethal)) return true;
+        RiskEnemy target = facts.Enemies[0];
+        if (target.Elite && target.Level >= facts.BotLevel + EliteLevelMargin) return true;
+        float full = Risk(facts, facts.BotMaxHealth, facts.BotManaPct is null ? null : 100f, facts.Enemies);
+        return full > Acceptable(float.PositiveInfinity, options.Tolerance);
+    }
+
     /// <summary>The risk a reward justifies: <c>Tolerance x min(0.9, 0.4 + 0.2 x reward)</c>.</summary>
     internal static float Acceptable(float reward, float tolerance) => tolerance * MathF.Min(0.9f, 0.4f + (0.2f * MathF.Max(0f, reward)));
 
