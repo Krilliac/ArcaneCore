@@ -167,8 +167,18 @@ public sealed class PopulationBudgetControllerTests
         Assert.Equal(1, windows.Observe(300, 300, 75, options)); // 100 new ticks: the same burst, not a second window
         Assert.Equal(1, windows.Observe(399, 399, 75, options)); // 199 new
         Assert.Equal(0, windows.Observe(399, 399, 20, options)); // overlapped and on the other side: no count carried over
-        Assert.Equal(2, windows.Observe(400, 400, 75, options)); // 200 new ticks since the counted window
-        Assert.Equal(3, windows.Observe(4096, 4600, 75, options)); // a saturated ring still counts by the running total
+        Assert.Equal(1, windows.Observe(400, 400, 75, options)); // 200 new ticks since the counted window; the other-side reading restarted the count
+        Assert.Equal(2, windows.Observe(4096, 4600, 75, options)); // a saturated ring still counts by the running total
+    }
+
+    [Fact]
+    public void ANonFreshReadingOnTheOtherSide_StartsTheCountAgain_SoOverUnderOverDoesNotConfirm()
+    {
+        PlayerbotPopulationOptions options = Options(); // budget 60, resume line 48, 200 ticks
+        var windows = new PopulationBudgetWindows();
+        Assert.Equal(1, windows.Observe(200, 200, 75, options));
+        Assert.Equal(0, windows.Observe(200, 250, 20, options)); // non-fresh, under the resume line
+        Assert.Equal(1, windows.Observe(200, 400, 75, options)); // the next counted window is the first again, not the second
     }
 
     [Fact]

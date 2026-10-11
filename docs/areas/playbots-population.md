@@ -88,10 +88,13 @@ totals count every managed bot running, the operator's included; the bands count
 Four things stop it adding and parking in turns. **The band:** adding resumes only below `ResumeBelowPct` (default 80) of the
 budget and parking starts only above the budget, so with the default 60 ms budget a p95 between 48 and 60 ms changes nothing.
 **The reset:** the tick source is emptied after every change and the next decision needs `WindowTicks` (default 200, about ten
-seconds at 50 ms) fresh ticks, so a bot's own login or teleport cost cannot be read as the world's load, and the p95 never
-reflects ticks from before the last change. **The confirmation:** a park for the budget needs the p95 over it in `ConfirmWindows`
+seconds at 50 ms) fresh ticks, so a bot's own login cost cannot be read as the world's load, and the p95 never reflects ticks
+from before the last start, creation or park (a relocation resets nothing: it changes no bot count, so its teleport cost stays in
+the window). **The confirmation:** a park for the budget needs the p95 over it in `ConfirmWindows`
 (default 2) consecutive fresh windows, and an add needs as many under the resume line (`PopulationBudgetWindows`: a settling pass
 is no evidence and changes nothing; a window between the two lines, one on the other side, or a change starts the count again).
+With the defaults (`IntervalSeconds` 10, `WindowTicks` 200) a pass is often not fresh, since 200 ticks of 50 ms take as long as the
+interval or longer, so confirming takes about two intervals per window.
 A lowered target is honoured at once. **The minimum run time:** a bot the population started is not parked for the budget for
 `MinRunSeconds` (default 300) of world time.
 

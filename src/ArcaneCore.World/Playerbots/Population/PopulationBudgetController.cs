@@ -108,7 +108,7 @@ internal sealed class PopulationBudgetWindows
     /// at least <c>WindowTicks</c> ticks arrived since the last counted one (<paramref name="totalSamples"/>, the source's running
     /// total), so two windows never share a tick: the p95 reads the last <c>WindowTicks</c> ticks, and with a slow tick the passes come
     /// faster than a window fills, where one burst would otherwise be counted by several passes and confirm a park. A pass whose
-    /// window is not fresh counts nothing and returns the count only if its p95 is on the counted side (else 0), so the count of one
+    /// window is not fresh counts nothing and returns the count only if its p95 is on the counted side (else 0, and the count starts again), so the count of one
     /// side never confirms a decision made on the other.
     /// </summary>
     public int Observe(int samples, long totalSamples, double p95Ms, PlayerbotPopulationOptions options)
@@ -116,7 +116,13 @@ internal sealed class PopulationBudgetWindows
         ArgumentNullException.ThrowIfNull(options);
         if (samples < options.WindowTicks) return _count;
         int side = p95Ms > options.TickP95BudgetMs ? 1 : p95Ms < options.TickP95BudgetMs * options.ResumeBelowPct / 100.0 ? -1 : 0;
-        if (_counted && totalSamples - _countedAt < options.WindowTicks) return _count > 0 && side == _side ? _count : 0;
+        if (_counted && totalSamples - _countedAt < options.WindowTicks)
+        {
+            if (_count > 0 && side == _side) return _count;
+            _count = 0; // a reading on the other side (or between the lines) starts the count again, fresh or not
+            return 0;
+        }
+
         _count = _count > 0 && side == _side ? _count + 1 : 1;
         _side = side;
         _counted = true;
