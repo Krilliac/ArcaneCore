@@ -41,19 +41,21 @@ public sealed class PlayerbotTramNetworkTests
 
     [Theory]
     // Stormwind to the Commons, Goldshire to Kharanos, Eastvale to Kharanos, Stormwind to Thelsamar, Menethil Harbor to Stormwind.
-    [InlineData(-8354f, 524f, -4918.9f, -982.5f, true)]
-    [InlineData(-9460f, 60f, -5600f, -500f, true)]
-    [InlineData(-9400f, -1300f, -5600f, -500f, true)]
-    [InlineData(-8354f, 524f, -5400f, -2900f, true)]
-    [InlineData(-3700f, -800f, -8800f, 600f, true)]
+    [InlineData(-8354f, 524f, -4918.9f, -982.5f, 1519u, 1537u, true)]
+    [InlineData(-9460f, 60f, -5600f, -500f, 12u, 1u, true)]
+    [InlineData(-9400f, -1300f, -5600f, -500f, 12u, 1u, true)]
+    [InlineData(-8354f, 524f, -5400f, -2900f, 1519u, 38u, true)]
+    [InlineData(-3700f, -800f, -8800f, 600f, 11u, 1519u, true)]
     // Stormwind to Goldshire, Westfall to Elwynn, Ironforge to Loch Modan, Kharanos to Ironforge: one side.
-    [InlineData(-8354f, 524f, -9460f, 60f, false)]
-    [InlineData(-10500f, 1000f, -9460f, 60f, false)]
-    [InlineData(-4839f, -1317f, -5400f, -2900f, false)]
-    [InlineData(-5600f, -500f, -4918.9f, -982.5f, false)]
-    public void TheTram_IsTakenOnlyAcrossTheTwoCities(float botX, float botY, float goalX, float goalY, bool expected)
+    [InlineData(-8354f, 524f, -9460f, 60f, 1519u, 12u, false)]
+    [InlineData(-10500f, 1000f, -9460f, 60f, 40u, 12u, false)]
+    [InlineData(-4839f, -1317f, -5400f, -2900f, 1537u, 38u, false)]
+    [InlineData(-5600f, -500f, -4918.9f, -982.5f, 1u, 1537u, false)]
+    public void TheTram_IsTakenOnlyAcrossTheTwoCities(float botX, float botY, float goalX, float goalY,
+        uint sourceZone, uint goalZone, bool expected)
     {
-        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0, new Vector3(botX, botY, 0), new Vector3(goalX, goalY, 0));
+        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0, new Vector3(botX, botY, 0),
+            new Vector3(goalX, goalY, 0), sourceZone, goalZone);
         Assert.Equal(expected, leg is not null);
     }
 
@@ -62,10 +64,42 @@ public sealed class PlayerbotTramNetworkTests
     {
         // Live Coldridge bot position and ClassicDB quest-579 giver position. Zone 1 is Dun Morogh.
         (TramPlatform From, TramPlatform To)? leg = Network().Choose(0,
-            new Vector3(-6489.42f, 494.74f, 388.03f), new Vector3(-8344.69f, 418.89f, 122.36f), sourceZoneId: 1);
+            new Vector3(-6489.42f, 494.74f, 388.03f), new Vector3(-8344.69f, 418.89f, 122.36f),
+            sourceZoneId: 1, goalZoneId: 1519);
         Assert.NotNull(leg);
         Assert.Equal(2175u, leg.Value.From.Entrance.Id);
         Assert.Equal(2173u, leg.Value.To.Entrance.Id);
+    }
+
+    [Theory]
+    // All of these destinations remain on the Dun Morogh/Ironforge side despite their straight-line distance to Stormwind.
+    [InlineData(-6489.42f, 494.74f, -6222.47f, 688.97f)] // Coldridge to Talin Keeneye
+    [InlineData(-6489.42f, 494.74f, -6214.85f, 328.18f)] // Coldridge to Sten Stoutarm
+    [InlineData(-5600f, -500f, -6214.85f, 328.18f)]       // Kharanos to Anvilmar
+    public void DunMoroghGoals_DoNotStartAStormwindTrip(float botX, float botY, float goalX, float goalY)
+        => Assert.Null(Network().Choose(0, new Vector3(botX, botY, 0), new Vector3(goalX, goalY, 0),
+            sourceZoneId: 1, goalZoneId: 1));
+
+    [Fact]
+    public void GoldshireToColdridge_UsesTheStormwindEntrance()
+    {
+        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0,
+            new Vector3(-9460f, 60f, 56f), new Vector3(-6489.42f, 494.74f, 388.03f),
+            sourceZoneId: 12, goalZoneId: 1);
+        Assert.NotNull(leg);
+        Assert.Equal(2173u, leg.Value.From.Entrance.Id);
+        Assert.Equal(2175u, leg.Value.To.Entrance.Id);
+    }
+
+    [Fact]
+    public void DuskwoodToThoriumPoint_UsesTheStormwindEntrance()
+    {
+        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0,
+            new Vector3(-10500f, -1160f, 40f), new Vector3(-6524.04f, -1188.72f, 309.34f),
+            sourceZoneId: 10, goalZoneId: 51);
+        Assert.NotNull(leg);
+        Assert.Equal(2173u, leg.Value.From.Entrance.Id);
+        Assert.Equal(2175u, leg.Value.To.Entrance.Id);
     }
 
     [Fact]

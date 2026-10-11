@@ -9,6 +9,7 @@ using ArcaneCore.World.Npc;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
@@ -198,6 +199,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state)
     {
+        ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -235,7 +237,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (services.Quests.Get(id) is not { } quest
                     || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
                     continue;
-                if (_stage == Stage.None && !PlayerbotWorldDestinations.CanPursueStarter(player, quest)) continue;
+                if (_stage == Stage.None && !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot)) continue;
                 if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
                 if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
                     continue;

@@ -45,7 +45,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         PlayerbotOptions options = Options();
         var brain = new PlayerbotBrain(world.Session, options);
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)), "the trip did not begin");
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)), "the trip did not begin");
 
         var stages = new List<TramStage>();
         float southmost = float.MaxValue;
@@ -104,7 +104,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         await using TramTestWorld world = await TramTestWorld.StartAsync(configure: services => services.AddSingleton<ICreatureDataStore>(new CreatureStore(content)));
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         PlayerbotOptions options = Options();
-        var destinations = new PlayerbotWorldDestinations(world.Session, options);
+        var destinations = new PlayerbotWorldDestinations(world.Session, options) { TramZoneAt = TramTestData.ZoneAt };
         Assert.True(await world.OnWorldAsync(() => destinations.Update(world.Player, 6, 100)));
         Assert.Equal(TramStage.ToEntrance, await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)?.Stage));
         Assert.Equal(6u, destinations.TargetEntry);
@@ -134,9 +134,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
     {
         await using TramTestWorld world = await TramTestWorld.StartAsync();
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
-        Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, new Vector3(-9460f, 60f, 56f)))); // Goldshire
+        Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, new Vector3(-9460f, 60f, 56f), TramTestData.ZoneAt))); // Goldshire
         Assert.Null(await world.OnWorldAsync(() => PlayerbotAreaTriggers.TeleportTargetOf(world.Player)));
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
         Assert.Equal(TramTestData.Tram, await world.OnWorldAsync(() => PlayerbotAreaTriggers.TeleportTargetOf(world.Player)));
     }
 
@@ -187,7 +187,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         PlayerbotOptions options = Options();
         var brain = new PlayerbotBrain(world.Session, options);
-        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
         string? stall = null;
         for (int step = 0; step < 2_000 && stall is null; step++)
         {
@@ -208,7 +208,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         Assert.Equal(TramStage.Failed, stage);
         Assert.True(Vector2.Distance(new(at.X, at.Y), new(TramTestData.StormwindExitLanding.X, TramTestData.StormwindExitLanding.Y)) < 5f,
             $"out at {at}, not back at the Stormwind exit");
-        Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)), "retried at once");
+        Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)), "retried at once");
         Assert.Null(await world.OnWorldAsync(() => PlayerbotAreaTriggers.TeleportTargetOf(world.Player)));
     }
 

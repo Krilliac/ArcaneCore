@@ -50,6 +50,8 @@ internal sealed record TramPlatform(AreaTriggerTemplate Entrance, AreaTriggerTel
 /// </summary>
 internal sealed class TramNetwork
 {
+    private enum TramSide : byte { Unknown, Stormwind, Ironforge }
+
     /// <summary>The Deeprun Tram map.</summary>
     public const uint TramMapId = 369;
 
@@ -121,23 +123,36 @@ internal sealed class TramNetwork
 
     /// <summary>
     /// Whether a bot at <paramref name="bot"/> on <paramref name="mapId"/> goes to <paramref name="goal"/> (same map) by the tram, and from
-    /// which platform to which. It does when the goal lies on the other platform's side (nearer that platform's way out than this
-    /// platform's entrance). The straight line across the Dun Morogh/Elwynn mountains is not a walkable alternative, even when it is
-    /// shorter than the trip through Ironforge and the tram (as it is from Coldridge Valley to Stormwind).
+    /// which platform to which. Both positions must resolve to known, opposite sides of the tram. AreaTable.dbc zone IDs
+    /// identify the connected southern and northern regions; an unknown region does not guess from straight-line distance.
     /// </summary>
-    public (TramPlatform From, TramPlatform To)? Choose(uint mapId, Vector3 bot, Vector3 goal, uint sourceZoneId = 0)
+    public (TramPlatform From, TramPlatform To)? Choose(uint mapId, Vector3 bot, Vector3 goal,
+        uint sourceZoneId = 0, uint goalZoneId = 0)
     {
-        if (mapId != ContinentMap || !Finite(bot) || !Finite(goal)) return null;
-        TramPlatform from = Platforms.OrderBy(p => Vector2.DistanceSquared(Flat(p.EntranceCentre), Flat(bot))).First();
-        // AreaTable.dbc zone 1 is Dun Morogh. Coldridge is in that zone but lies closer in a straight line
-        // to the Stormwind entrance across the mountains. ClassicDB trigger 2175 is the Ironforge entrance.
-        if (sourceZoneId == 1 && Platforms.FirstOrDefault(p => p.Entrance.Id == 2175) is { } ironforge)
-            from = ironforge;
-        TramPlatform to = Other(from);
-        float goalToExit = Vector2.Distance(Flat(goal), Flat(to.Arrival));
-        if (goalToExit >= Vector2.Distance(Flat(goal), Flat(from.EntranceCentre))) return null;
-        return (from, to);
+        if (!CanConsider(mapId, bot, goal)) return null;
+        TramSide sourceSide = SideOf(sourceZoneId), goalSide = SideOf(goalZoneId);
+        if (sourceSide == TramSide.Unknown || goalSide == TramSide.Unknown || sourceSide == goalSide) return null;
+        // ClassicDB's two entrances; a modified network without the matching end fails closed.
+        uint entrance = sourceSide == TramSide.Stormwind ? 2173u : 2175u;
+        TramPlatform? from = Platforms.FirstOrDefault(p => p.Entrance.Id == entrance);
+        return from is null ? null : (from, Other(from));
     }
+
+    internal bool CanConsider(uint mapId, Vector3 bot, Vector3 goal)
+        => mapId == ContinentMap && Finite(bot) && Finite(goal);
+
+    /// <summary>Build-5875 AreaTable.dbc top-level zones of the southern (Stormwind) and northern (Ironforge) road networks.</summary>
+    private static TramSide SideOf(uint zoneId) => zoneId switch
+    {
+        // Stormwind, Elwynn, Westfall, Redridge, Duskwood, Deadwind, Burning Steppes, Swamp of Sorrows,
+        // Blasted Lands and Stranglethorn Vale.
+        1519 or 12 or 40 or 44 or 10 or 41 or 46 or 8 or 4 or 33 => TramSide.Stormwind,
+        // Ironforge, Dun Morogh, Loch Modan, Wetlands, Badlands, Searing Gorge, Arathi Highlands,
+        // Hinterlands, Hillsbrad, Alterac, the Plaguelands, Tirisfal, Silverpine and Undercity.
+        1537 or 1 or 38 or 11 or 3 or 51 or 45 or 47 or 267 or 36 or 28 or 139 or 85 or 130 or 1497
+            or 170 or 269 or 330 => TramSide.Ironforge,
+        _ => TramSide.Unknown,
+    };
 
     internal static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
 
@@ -269,7 +284,7 @@ internal static class PlayerbotTram
     /// Begin a trip towards <paramref name="goal"/> when the tram is the way there (<see cref="TramNetwork.Choose"/>), the world describes
     /// the tram and no trip failed lately. True when a trip is under way afterwards.
     /// </summary>
-    internal static bool TryBegin(WorldSession session, Player player, Vector3 goal)
+    internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
@@ -278,9 +293,11 @@ internal static class PlayerbotTram
         uint now = session.World.NowMs;
         if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
         if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network) return false;
-        uint zone = map.GetZoneAndAreaId(player.X, player.Y, player.Z).ZoneId;
-        if (zone == 0) zone = player.ZoneId;
-        if (network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal, zone) is not { } leg) return false;
+        Vector3 at = new(player.X, player.Y, player.Z);
+        if (!network.CanConsider(map.MapId, at, goal)) return false;
+        uint sourceZone = zoneAt is null ? map.GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId : zoneAt(at);
+        uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
+        if (network.Choose(map.MapId, at, goal, sourceZone, goalZone) is not { } leg) return false;
         uint? previous = PlayerbotAreaTriggers.TeleportTargetOf(player);
         var trip = new TramTrip(network, leg.From, leg.To, goal, now, previous);
         Trips.AddOrUpdate(player, trip);

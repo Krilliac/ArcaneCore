@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Maps;
@@ -20,6 +21,46 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWorldDestinationsTests
 {
+    [Theory]
+    [InlineData(813u, 4886u, 4u)] // Finding the Antidote: quest-only creature drops
+    [InlineData(410u, 3080u, 1u)] // The Dormant Shade: quest-only creature drop
+    public async Task RepeatableQuestWithAQuestGatedDrop_IsNotDeferred(uint questId, uint itemId, uint count)
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = questId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = itemId, ReqItemCount1 = count }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(questId)!, LootWith(itemId)));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task NonRepeatableDeliveryWithoutItems_IsNotDeferred()
+    {
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 810001, Method = 2, MinLevel = 1, QuestLevel = 1,
+                ReqItemId1 = 4886, ReqItemCount1 = 4 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(session.Player!, quests.Get(810001)!, LootContent.Empty));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task ItemOnlyRepeatableStarterNeedsItsTurnInItemBeforeBotTravels()
     {
@@ -37,9 +78,9 @@ public sealed class PlayerbotWorldDestinationsTests
             await host.World.InvokeAsync(() =>
             {
                 var player = session.Player!;
-                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!));
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886)));
                 Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3898, 1, out _));
-                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!, LootWith(4886)));
                 return true;
             });
         }
@@ -118,6 +159,44 @@ public sealed class PlayerbotWorldDestinationsTests
     }
 
     [Fact]
+    public async Task FarFailure_RetainsItsSpawnThroughAdvisoryBackoff_ThenTriesTheNextSpawn()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "far objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 22001, Entry = 6, MapId = 0, X = startX + 1600, Y = -132.49f, Z = 83.53f },
+             new CreatureSpawn { Guid = 22002, Entry = 6, MapId = 0, X = startX + 1800, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            PlayerbotWorldDestinations? destinations = null;
+            BlockEastPathfinder pathfinder = await host.OnWorldAsync(() =>
+            {
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Contains(pathfinder.Ends, end => MathF.Abs(end.X - (startX + 1600)) < 1f);
+                return pathfinder;
+            });
+            await host.World.AdvanceClockAsync(2_100);
+            await host.OnWorldAsync(() =>
+            {
+                destinations!.HasQuestCandidate(session.Player!); // the brain's advisory call before Update
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Contains(pathfinder.Ends, end => MathF.Abs(end.X - (startX + 1800)) < 1f);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task ObjectiveChange_ReplansTowardRealSpawnBeyondVisibilityUsingNormalMovement()
     {
         var content = new CreatureContent(
@@ -179,6 +258,9 @@ public sealed class PlayerbotWorldDestinationsTests
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
     }
 
+    private static LootContent LootWith(uint itemId) => new(
+        [(LootTableKind.Creature, new LootStoreRow(3127, itemId, -40f, 0, 1, 1))], []);
+
     private sealed class FlatFloor : ILineOfSight
     {
         public bool Enabled => true;
@@ -194,10 +276,12 @@ public sealed class PlayerbotWorldDestinationsTests
     {
         public bool Enabled => true;
         public int Calls { get; private set; }
+        public List<Vector3> Ends { get; } = [];
 
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             Calls++;
+            Ends.Add(end);
             return end.X > start.X ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
         }
     }

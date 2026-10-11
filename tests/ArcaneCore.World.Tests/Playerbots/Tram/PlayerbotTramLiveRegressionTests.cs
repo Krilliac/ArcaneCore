@@ -62,7 +62,7 @@ public sealed class PlayerbotTramLiveRegressionTests(ITestOutputHelper output)
             PlayerbotOptions options = LiveOptions();
             var brain = new PlayerbotBrain(session, options);
             Vector3 commons = new(-4918.9f, -982.5f, 501.5f);
-            Assert.True(await host.OnWorldAsync(() => PlayerbotTram.TryBegin(session, player, commons)), "the trip did not begin");
+            Assert.True(await host.OnWorldAsync(() => PlayerbotTram.TryBegin(session, player, commons, TramTestData.ZoneAt)), "the trip did not begin");
 
             TramStage? last = null;
             string? stall = null;
