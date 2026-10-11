@@ -52,8 +52,11 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
     {
         ArgumentNullException.ThrowIfNull(creature);
         float total = 0;
-        foreach (SpellAuraHolder holder in spells().GetAuras(creature))
+        // Runs on every aggro check: index the list rather than box its enumerator.
+        IReadOnlyList<SpellAuraHolder> holders = spells().GetAuras(creature);
+        for (int i = 0; i < holders.Count; i++)
         {
+            SpellAuraHolder holder = holders[i];
             if (holder.IsRemoved || holder.Spell.MaxTargetLevel < creature.Level) continue;
             foreach (SpellAura? aura in holder.AuraSpan)
             {
