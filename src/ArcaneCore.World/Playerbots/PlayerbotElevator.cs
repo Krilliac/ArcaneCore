@@ -152,18 +152,23 @@ internal sealed class ElevatorNetwork
     /// <summary>On a mesa lift, ground of the upper region this far or more below the top is the mesa's foot (<see cref="ElevatorRegions.MesaTop"/>).</summary>
     public const float MesaYards = 30f;
 
-    private static readonly ConditionalWeakTable<GameObjectContent, ConditionalWeakTable<TransportAnimationCatalog, ElevatorNetwork>> Cache = [];
+    /// <summary>The network built last for a content, with the animations it was built from (a world has one catalog).</summary>
+    private static readonly ConditionalWeakTable<GameObjectContent, Tuple<TransportAnimationCatalog, ElevatorNetwork>> Cache = [];
 
     private ElevatorNetwork(IReadOnlyList<ElevatorLift> lifts) => Lifts = lifts;
 
     public IReadOnlyList<ElevatorLift> Lifts { get; }
 
-    /// <summary>The network of a world's game object content and elevator animations.</summary>
+    /// <summary>The network of a world's game object content and elevator animations (no allocation once cached: asked every plan).</summary>
     public static ElevatorNetwork Of(GameObjectContent content, TransportAnimationCatalog animations)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(animations);
-        return Cache.GetValue(content, _ => []).GetValue(animations, a => Build(content.Spawns, content.FindTemplate, a));
+        if (Cache.TryGetValue(content, out Tuple<TransportAnimationCatalog, ElevatorNetwork>? cached) && ReferenceEquals(cached.Item1, animations))
+            return cached.Item2;
+        ElevatorNetwork network = Build(content.Spawns, content.FindTemplate, animations);
+        Cache.AddOrUpdate(content, Tuple.Create(animations, network));
+        return network;
     }
 
     /// <summary>
@@ -222,7 +227,9 @@ internal sealed class ElevatorNetwork
     public static ElevatorRegions? RegionsOf(ElevatorLift lift)
     {
         ArgumentNullException.ThrowIfNull(lift);
-        return ElevatorRegions.Known.FirstOrDefault(r => r.MapId == lift.MapId && Vector2.Distance(r.At, lift.Centre) <= ElevatorRegions.MatchYards);
+        foreach (ElevatorRegions row in ElevatorRegions.Known)
+            if (row.MapId == lift.MapId && Vector2.Distance(row.At, lift.Centre) <= ElevatorRegions.MatchYards) return row;
+        return null;
     }
 
     /// <summary>
@@ -437,10 +444,16 @@ internal static class PlayerbotElevator
     /// has no way to a goal within one route's reach without it, and no trip failed lately. True when a trip is under way afterwards.
     /// </summary>
     internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, PlayerbotOptions options)
+        => TryBegin(session, player, goal, options, out _);
+
+    /// <param name="walk">When false: the route the mesh check planned to the goal, when it reaches it (null when no check ran). The caller
+    /// walks it instead of planning again, so a think still costs one path query.</param>
+    internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? walk)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
+        walk = null;
         if (IsTraveling(player)) return true;
         if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map) return false;
         uint now = session.World.NowMs;
@@ -453,11 +466,14 @@ internal static class PlayerbotElevator
         if (Vector3.Distance(bot, goal) <= options.MaxRouteYards && PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? direct)
             && direct is { Points.Count: > 0 } && Vector2.Distance(ElevatorNetwork.Flat(direct.Points[^1]), ElevatorNetwork.Flat(goal)) <= ReachedYards
             && MathF.Abs(direct.Points[^1].Z - goal.Z) <= PlayerbotNavigation.ProjectedEndYards)
+        {
+            walk = direct;
             return false;
+        }
+
         Begin(session, player, choice.Lift, choice.From, goal);
         return true;
     }
-
     /// <summary>Begin a trip on <paramref name="lift"/> from <paramref name="from"/> (tests; <see cref="TryBegin"/> chooses).</summary>
     internal static ElevatorTrip Begin(WorldSession session, Player player, ElevatorLift lift, ElevatorLevel from, Vector3 goal)
     {
@@ -470,18 +486,90 @@ internal static class PlayerbotElevator
     }
 
     /// <summary>
-    /// Drop the trip (death, a controller taking the bot over). A bot aboard steps off where it is first (when it still can), so whatever
-    /// moves it next does not carry a stale transport.
+    /// Drop the trip (death, a controller taking the bot over: a party AI that moves it next). A bot on the car leaves it first
+    /// (<see cref="LeaveCar"/>): on a floor it steps off; between floors it falls to the floor below as <see cref="Drop"/> has it fall,
+    /// landed at once with the fall's whole time (nothing drives a fall after the trip is gone); dead, its corpse loses the transport.
+    /// Whatever moves the bot next never carries a stale transport or starts in mid-air.
     /// </summary>
     internal static void Cancel(Player player)
     {
         if (!Trips.TryGetValue(player, out ElevatorTrip? trip)) return;
         Trips.Remove(player);
-        if (trip.Stage == ElevatorStage.Aboard && player.IsAlive && player.Session is WorldSession session
-            && (player.Movement.Flags & MovementFlags.OnTransport) != 0)
-            PlayerbotMotion.SendStepOff(session, player, new Vector3(player.X, player.Y, player.Z), player.Orientation);
+        if (trip.Stage is ElevatorStage.Aboard or ElevatorStage.Falling && player.Session is WorldSession session)
+            LeaveCar(session, player, trip.Stage == ElevatorStage.Falling ? trip.FallLanding : null);
     }
 
+    /// <summary>
+    /// Off the car now: a corpse loses the transport (no packet: a dead client sends none; vmangos clears it with the movement info);
+    /// a living bot within <see cref="AirborneYards"/> of the floor steps off onto it; higher, it falls to it (<see cref="FallNow"/>).
+    /// </summary>
+    private static void LeaveCar(WorldSession session, Player player, Vector3? landing)
+    {
+        if (!player.IsAlive)
+        {
+            ClearTransport(player);
+            return;
+        }
+
+        if (!player.IsInWorld || player.Map is not { } map) return;
+        Vector3 at = new(player.X, player.Y, player.Z);
+        float floor = landing?.Z ?? FloorBelow(map, at);
+        if (float.IsFinite(floor) && at.Z - floor >= AirborneYards) FallNow(session, player, at, floor);
+        else if ((player.Movement.Flags & MovementFlags.OnTransport) != 0
+            && !PlayerbotMotion.SendStepOff(session, player, float.IsFinite(floor) ? at with { Z = floor } : at, player.Orientation))
+            ClearTransport(player);
+    }
+
+    /// <summary>
+    /// The fall of <see cref="Drop"/> in one go: off the car (when on it), MOVEFLAG_FALLINGFAR where it is, MSG_MOVE_FALL_LAND on the floor
+    /// with the time a fall of that height takes (the server takes the fall damage). Should a packet be refused, the transport is still
+    /// cleared so nothing moves the bot on a stale one.
+    /// </summary>
+    private static void FallNow(WorldSession session, Player player, Vector3 at, float floor)
+    {
+        uint fallMs = (uint)MathF.Ceiling(MathF.Sqrt(2f * MathF.Max(0f, at.Z - floor) / PlayerbotFollowDrop.Gravity) * 1000f);
+        bool off = (player.Movement.Flags & MovementFlags.OnTransport) == 0 || PlayerbotMotion.SendStepOff(session, player, at, player.Orientation);
+        if (!off || !PlayerbotMotion.StartFall(session, player, at, player.Orientation)
+            || !PlayerbotMotion.Land(session, player, at with { Z = floor }, player.Orientation, fallMs))
+            ClearTransport(player);
+    }
+
+    private static void ClearTransport(Player player)
+    {
+        // The stored movement without the transport block, at its own time (Unit.ApplyMovement; the position is unchanged).
+        MovementInfo movement = player.Movement;
+        movement.Flags &= ~MovementFlags.OnTransport;
+        movement.TransportGuid = 0;
+        movement.TransportX = movement.TransportY = movement.TransportZ = movement.TransportOrientation = 0;
+        player.ApplyMovement(movement, movement.Time);
+    }
+
+    private static readonly ConditionalWeakTable<Player, object> Settled = [];
+
+    /// <summary>
+    /// Once per login (per player object), at the first think without a trip: a bot standing in a lift's shaft (within the car's half
+    /// width of a car's spawn, flat) with the floor more than <see cref="AirborneYards"/> below it was saved mid-ride; it falls to that
+    /// floor (<see cref="FallNow"/>). Anywhere else nothing is probed: a floor the collision data misses must not drop a bot.
+    /// </summary>
+    private static void SettleAfterLogin(WorldSession session, Player player)
+    {
+        if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map || Settled.TryGetValue(player, out _)) return;
+        Settled.Add(player, new object());
+        if (NetworkOf(session) is not { } network) return;
+        Vector3 at = new(player.X, player.Y, player.Z);
+        foreach (ElevatorLift lift in network.Lifts)
+        {
+            if (lift.MapId != map.MapId || Vector2.Distance(lift.Centre, ElevatorNetwork.Flat(at)) > ElevatorNetwork.PairYards) continue;
+            foreach (ElevatorCar car in lift.Cars)
+            {
+                if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) > CarHalfYards) continue;
+                float floor = FloorBelow(map, at);
+                if (float.IsFinite(floor) && at.Z - floor >= AirborneYards) FallNow(session, player, at, floor);
+                else if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(player);
+                return;
+            }
+        }
+    }
     /// <summary>
     /// One think of the trip, before anything else the brain does. <see cref="ElevatorStep.Idle"/>: no trip (the brain goes on).
     /// <see cref="ElevatorStep.Arrived"/> and <see cref="ElevatorStep.Failed"/> are reported once; <paramref name="failure"/> then says why.
@@ -492,7 +580,11 @@ internal static class PlayerbotElevator
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
         failure = null;
-        if (!Trips.TryGetValue(player, out ElevatorTrip? trip) || trip.Stage is ElevatorStage.Done or ElevatorStage.Failed) return ElevatorStep.Idle;
+        if (!Trips.TryGetValue(player, out ElevatorTrip? trip) || trip.Stage is ElevatorStage.Done or ElevatorStage.Failed)
+        {
+            if (trip is null) SettleAfterLogin(session, player); // a bot saved mid-ride: on the floor before anything moves it
+            return ElevatorStep.Idle;
+        }
         if (!player.IsAlive)
         {
             Cancel(player);
@@ -516,7 +608,7 @@ internal static class PlayerbotElevator
         {
             case ElevatorStep.Arrived:
                 trip.Stage = ElevatorStage.Done;
-                trip.StageMs = now; // when it arrived (TryBegin's guard against riding straight back)
+                trip.StageMs = now; // when it arrived (inspection)
                 trip.Failure = null;
                 break;
             case ElevatorStep.Failed:
@@ -819,9 +911,28 @@ internal static class PlayerbotElevator
     private static bool SendAboard(WorldSession session, Player player, GameObject car, Vector3 carAt, Vector3 offset)
         => PlayerbotMotion.SendAboard(session, player, car.Guid.Value, PlayerbotTram.Seat(car, carAt, offset), player.Orientation, offset, 0f);
 
-    /// <summary>The car's object in the map (a grid object: only while a grid round it is loaded).</summary>
+    private static readonly ConditionalWeakTable<ElevatorCar, WeakReference<GameObject>> LiveCars = [];
+
+    /// <summary>
+    /// The car's object in the map (a grid object: only while a grid round it is loaded). The object found last is kept per car and reused
+    /// while it is still in this map's world; only then are the map's objects scanned.
+    /// </summary>
     private static GameObject? FindCar(GameObjectMapSystem system, ElevatorCar car)
-        => system.GameObjects.FirstOrDefault(go => go.IsInWorld && go.Spawn is { } spawn && spawn.Guid == car.SpawnGuid && go.Entry == car.Entry);
+    {
+        if (LiveCars.TryGetValue(car, out WeakReference<GameObject>? known) && known.TryGetTarget(out GameObject? cached) && IsCar(cached))
+            return cached;
+        foreach (GameObject go in system.GameObjects)
+        {
+            if (!IsCar(go)) continue;
+            LiveCars.AddOrUpdate(car, new WeakReference<GameObject>(go));
+            return go;
+        }
+
+        return null;
+
+        bool IsCar(GameObject go) => go.IsInWorld && ReferenceEquals(go.Map, system.Map) && go.Spawn is { } spawn && spawn.Guid == car.SpawnGuid
+            && go.Entry == car.Entry;
+    }
 
     /// <summary>
     /// The floor beside a car standing at <paramref name="stop"/> (<see cref="LandingRadii"/> from its centre, 16 directions, within

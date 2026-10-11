@@ -191,8 +191,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             // On the other level of a lift (the Great Lift between Thousand Needles and The Barrens, the Thunder Bluff lifts): the brain
-            // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator).
-            if (PlayerbotElevator.TryBegin(_session, player, destination, _options))
+            // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator). When the
+            // lift's own mesh check found the way on foot, that route is walked: still one path query this think.
+            if (PlayerbotElevator.TryBegin(_session, player, destination, _options, out PlayerbotRoute? walk))
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -200,7 +201,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 return true;
             }
 
-            if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
+            PlayerbotRoute? route = walk;
+            if (route is null && !PlayerbotNavigation.TryPlanToward(player, destination, _options, out route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);
                 return false; // Rotate to another indexed spawn on the next think; one path attempt per think.
