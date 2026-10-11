@@ -12733,6 +12733,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:MaxThinkSearchNodes",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "98304",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most navigation-mesh search nodes one bot think may have created when a fallback path query of it runs (the steep escape, the starts beside the bot, the hazard detours; `PlayerbotThinkProbe.NodeBudget`): past it a fallback runs with what is left, or not at all, and finds nothing. A plan's own query is never held to it. 0 = no bound, else 2048..10000000; three of the largest single searches (`PlayerbotNavigation.MaxSearchNodes`) by default. Live: `.reload config`.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:MoveSpeed",
       "section": "World:Playerbots",
       "type": "float",
@@ -13488,6 +13504,22 @@
       "reload": "start",
       "meaning": "Default bound of one WaitUntil step in seconds (1..300).",
       "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:SlowThinkLogMs",
+      "section": "World:Playerbots",
+      "type": "double",
+      "kind": "scalar",
+      "elementType": "double",
+      "enumValues": null,
+      "default": "50",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches (`PlayerbotSlowThinkLog`; 0 = off, 0..60000). Live: `.reload config` applies a change at once.",
+      "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

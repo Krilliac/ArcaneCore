@@ -48,15 +48,15 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
-    /// (<see cref="PlayerbotSlowThinkLog"/>; 0 = off, 0..60000). Read again from the configuration about once a second, so an edited
-    /// settings file takes effect without a restart.
+    /// (<see cref="PlayerbotSlowThinkLog"/>; 0 = off, 0..60000). Live: <c>.reload config</c> applies a change at once.
     /// </summary>
     public double SlowThinkLogMs { get; set; } = 50;
 
     /// <summary>
-    /// The most navigation-mesh search nodes one bot think may create over all its path queries (<see cref="PlayerbotThinkProbe.NodeBudget"/>;
-    /// 0 = no bound, else 2048..10000000). Three of the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by
-    /// default. Read again from the configuration about once a second, as <see cref="SlowThinkLogMs"/>.
+    /// The most navigation-mesh search nodes one bot think may have created when a fallback path query of it runs (the steep escape,
+    /// the starts beside the bot, the hazard detours; <see cref="PlayerbotThinkProbe.NodeBudget"/>): past it a fallback runs with what
+    /// is left, or not at all, and finds nothing. A plan's own query is never held to it. 0 = no bound, else 2048..10000000; three of
+    /// the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by default. Live: <c>.reload config</c>.
     /// </summary>
     public int MaxThinkSearchNodes { get; set; } = 3 * PlayerbotNavigation.MaxSearchNodes;
 

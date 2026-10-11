@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       328 keys
+#   WORLD                       330 keys
 #
 ###############################################################################
 
@@ -10299,6 +10299,23 @@ World.Playerbots.MaxRegisteredBots = 1000
 World.Playerbots.MaxRouteYards = 2000
 
 #
+#    World.Playerbots.MaxThinkSearchNodes
+#        Description: The most navigation-mesh search nodes one bot think may have created when a
+#                     fallback path query of it runs (the steep escape, the starts beside the bot,
+#                     the hazard detours; PlayerbotThinkProbe.NodeBudget): past it a fallback runs
+#                     with what is left, or not at all, and finds nothing. A plan's own query is
+#                     never held to it. 0 = no bound, else 2048..10000000; three of the largest
+#                     single searches (PlayerbotNavigation.MaxSearchNodes) by default. Live: .reload
+#                     config.
+#        Type: int
+#        Default: 98304
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxThinkSearchNodes = 98304
+
+#
 #    World.Playerbots.MoveSpeed
 #        Description: The bots' movement speed in yards per second, never above the player's run
 #                     speed (above 0, at most 100).
@@ -10801,6 +10818,19 @@ World.Playerbots.Scenarios.MaxDurationSeconds = 120
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Scenarios.StepTimeoutSeconds = 20
+
+#
+#    World.Playerbots.SlowThinkLogMs
+#        Description: A single bot think longer than this many milliseconds is logged with its bot,
+#                     goal, phases and path searches (PlayerbotSlowThinkLog; 0 = off, 0..60000).
+#                     Live: .reload config applies a change at once.
+#        Type: double
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.SlowThinkLogMs = 50
 
 #
 #    World.Playerbots.Social.Emotes.Enabled

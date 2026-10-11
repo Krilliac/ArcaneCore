@@ -506,7 +506,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         private readonly Dictionary<string, (int Count, double Ms)> _bySlowestPhase = new(StringComparer.Ordinal);
         private readonly Dictionary<string, (int Count, double Ms)> _byLargestSearch = new(StringComparer.Ordinal);
         private readonly List<(double Ms, string Line)> _slowest = [];
-        private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches;
+        private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches, _clamped, _refused;
         private double _slowQueryMs, _slowTotalMs;
 
         public void Add(PlayerbotThinkProbe probe)
@@ -518,6 +518,8 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _buckets[bucket]++;
             _allNodes += probe.Search.Nodes;
             _allSearches += probe.Search.Searches;
+            _clamped += probe.Clamped;
+            _refused += probe.Refused;
             if (ms < SlowMs) return;
             _slowTotalMs += ms;
             _slowSearches += probe.Search.Searches;
@@ -533,7 +535,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _byLargestSearch[search] = (c + 1, m + ms);
             if (_slowest.Count < 12 || ms > _slowest[^1].Ms)
             {
-                _slowest.Add((ms, string.Create(CultureInfo.InvariantCulture, $"{ms:F1} ms by {probe.Subject.Driver}, goal {probe.Subject.Goal} entry {probe.Subject.Entry} quest {probe.Subject.Quest}: {probe.Describe()}")));
+                _slowest.Add((ms, string.Create(CultureInfo.InvariantCulture, $"{ms:F1} ms by {probe.Subject.Driver}, goal {probe.Subject.Goal}: {probe.Describe()}")));
                 _slowest.Sort((a, b) => b.Ms.CompareTo(a.Ms));
                 if (_slowest.Count > 12) _slowest.RemoveAt(_slowest.Count - 1);
             }
@@ -544,7 +546,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             double[] sorted = [.. _ms.Order()];
             string P(double pct) => sorted.Length == 0 ? "-" : sorted[Math.Clamp((int)Math.Ceiling(pct / 100 * sorted.Length) - 1, 0, sorted.Length - 1)].ToString("F2", CultureInfo.InvariantCulture);
             yield return string.Create(CultureInfo.InvariantCulture,
-                $"thinks {sorted.Length}: p50 {P(50)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allSearches} searches, {_allNodes} nodes");
+                $"thinks {sorted.Length}: p50 {P(50)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allSearches} searches, {_allNodes} nodes; fallback queries cut short by the think budget {_clamped}, refused {_refused}");
             var buckets = new StringBuilder("think histogram (ms):");
             for (int i = 0; i < _buckets.Length; i++)
             {

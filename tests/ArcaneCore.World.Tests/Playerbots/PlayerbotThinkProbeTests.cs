@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -41,7 +40,7 @@ public sealed class PlayerbotThinkProbeTests
         var log = new PlayerbotSlowThinkLog(logger);
         PlayerbotThinkProbe probe = Think(questsMs: 60);
 
-        Assert.True(log.Observe(probe, thresholdMs: 50, nowMs: 1000, Bot, "Slowpoke", "brain", PlayerbotGoalKind.Quest, 1196, 179));
+        Assert.True(log.Observe(probe, thresholdMs: 50, nowMs: 1000, Bot, "Slowpoke", "brain", "Quest entry 1196 quest 179"));
 
         string line = Assert.Single(logger.Lines);
         Assert.Contains(Bot.ToString(), line);
@@ -61,8 +60,8 @@ public sealed class PlayerbotThinkProbeTests
         var logger = new ListLogger();
         var log = new PlayerbotSlowThinkLog(logger);
 
-        Assert.False(log.Observe(Think(questsMs: 1), thresholdMs: 50, nowMs: 0, Bot, "Quick", "brain", PlayerbotGoalKind.Explore, 0, 0));
-        Assert.False(log.Observe(Think(questsMs: 5), thresholdMs: 0, nowMs: 0, Bot, "Off", "brain", PlayerbotGoalKind.Explore, 0, 0));
+        Assert.False(log.Observe(Think(questsMs: 1), thresholdMs: 10_000, nowMs: 0, Bot, "Quick", "brain", "Explore entry 0 quest 0"));
+        Assert.False(log.Observe(Think(questsMs: 5), thresholdMs: 0, nowMs: 0, Bot, "Off", "brain", "Explore entry 0 quest 0"));
         Assert.Empty(logger.Lines);
         Assert.Equal(0, log.Slow);
     }
@@ -75,13 +74,13 @@ public sealed class PlayerbotThinkProbeTests
         PlayerbotThinkProbe probe = Think(questsMs: 3);
         int extra = 5;
         for (int i = 0; i < PlayerbotSlowThinkLog.MaxLinesPerWindow + extra; i++)
-            Assert.True(log.Observe(probe, thresholdMs: 1, nowMs: 10_000 + i, Bot, "Spiky", "brain", PlayerbotGoalKind.Grind, 0, 0));
+            Assert.True(log.Observe(probe, thresholdMs: 1, nowMs: 10_000 + i, Bot, "Spiky", "brain", "Grind entry 0 quest 0"));
 
         Assert.Equal(PlayerbotSlowThinkLog.MaxLinesPerWindow, logger.Lines.Count);
         Assert.Equal(PlayerbotSlowThinkLog.MaxLinesPerWindow + extra, log.Slow);
 
         // The next window: logged again, with the count left out of the last one.
-        log.Observe(probe, thresholdMs: 1, nowMs: 10_000 + PlayerbotSlowThinkLog.WindowMs, Bot, "Spiky", "brain", PlayerbotGoalKind.Grind, 0, 0);
+        log.Observe(probe, thresholdMs: 1, nowMs: 10_000 + PlayerbotSlowThinkLog.WindowMs, Bot, "Spiky", "brain", "Grind entry 0 quest 0");
         Assert.Equal(PlayerbotSlowThinkLog.MaxLinesPerWindow + 1, logger.Lines.Count);
         Assert.Contains($"({extra} slow thinks not logged before this one)", logger.Lines[^1]);
     }

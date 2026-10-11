@@ -1,5 +1,4 @@
 using System.Globalization;
-using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
@@ -32,8 +31,8 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     /// Judge one ended think (<paramref name="probe"/>) against <paramref name="thresholdMs"/> (0 or less: off) and log it when slow
     /// and the rate limit allows. Returns whether it was slow.
     /// </summary>
-    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver,
-        PlayerbotGoalKind goal, uint entry, uint quest)
+    /// <param name="goal">The bot's goal, target entry and quest ("n/a" when its brain did not drive this think).</param>
+    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver, string goal)
     {
         if (thresholdMs <= 0 || probe.ElapsedMs < thresholdMs) return false;
         Slow++;
@@ -54,8 +53,8 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
         string suppressed = _suppressed == 0 ? ""
             : string.Create(CultureInfo.InvariantCulture, $" ({_suppressed} slow thinks not logged before this one)");
         _suppressed = 0;
-        logger.LogWarning("Playerbot {BotId} ({Name}) slow think {ElapsedMs} ms (over {ThresholdMs} ms) by its {Driver}: goal {Goal} entry {Entry} quest {Quest}; slowest phase {Phase}; {Detail}{Suppressed}",
-            botId, name, Math.Round(probe.ElapsedMs, 1), thresholdMs, driver, goal, entry, quest, probe.SlowestPhase, probe.Describe(), suppressed);
+        logger.LogWarning("Playerbot {BotId} ({Name}) slow think {ElapsedMs} ms (over {ThresholdMs} ms) by its {Driver}: goal {Goal}; slowest phase {Phase}; {Detail}{Suppressed}",
+            botId, name, Math.Round(probe.ElapsedMs, 1), thresholdMs, driver, goal, probe.SlowestPhase, probe.Describe(), suppressed);
         return true;
     }
 }

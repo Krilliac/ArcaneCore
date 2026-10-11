@@ -13,8 +13,8 @@ namespace ArcaneCore.World.Playerbots;
 /// think and ends it after; the brain and the navigation mark phases and route their queries without a reference to it (the probe
 /// of the running think is thread-static). Off a think, <see cref="Phase"/> does nothing and <see cref="Find"/> only queries.
 /// <para>
-/// Cost: two <see cref="Stopwatch.GetTimestamp"/> calls per mark and per query, no allocation; the description is built only for
-/// a think the caller judges slow. Before (live-w24-r1, 2026-10-11 13:01:27) a 2 139 ms ManagedPlayerbotFeature tick named no bot,
+/// Cost: two <see cref="Stopwatch.GetTimestamp"/> calls per mark and per query and no allocation (except a clamped fallback query's
+/// options copy, <see cref="Find"/>); the description is built only for a think the caller judges slow. Before (live-w24-r1, 2026-10-11 13:01:27) a 2 139 ms ManagedPlayerbotFeature tick named no bot,
 /// goal or phase.
 /// </para>
 /// </summary>
@@ -36,11 +36,36 @@ internal sealed class PlayerbotThinkProbe
     internal static PlayerbotThinkProbe? Active => t_active;
 
     /// <summary>
-    /// The most A* nodes the think's queries may create (<see cref="PlayerbotOptions.MaxThinkSearchNodes"/>; 0 = no bound). A query
-    /// past it is given only what is left of it (<see cref="Clamped"/>), and once less than <see cref="MinQueryNodes"/> is left it is
-    /// answered no path without a search (<see cref="Refused"/>). Set before <see cref="Begin"/>.
+    /// The most A* nodes a think may have created when one of its fallback queries runs (<see cref="PlayerbotOptions.MaxThinkSearchNodes"/>;
+    /// 0 = no bound). Only the queries made inside a <see cref="Fallback"/> scope are held to it: the steep escape, the starts beside
+    /// the bot and the hazard detours of <see cref="PlayerbotNavigation"/>, which only try other ways after a plan's own query was
+    /// refused. A fallback query past the budget is given only what is left (<see cref="Clamped"/>), and with less than
+    /// <see cref="MinQueryNodes"/> left it is answered no path without a search (<see cref="Refused"/>): the fallback then finds
+    /// nothing, an answer it could always give. A plan's own query is never cut short, so no caller takes a starved search for an
+    /// unreachable goal and stores that (a blocked spawn, an unreachable target, a back-off, a risk verdict). Set before <see cref="Begin"/>.
     /// </summary>
     internal long NodeBudget { get; set; }
+
+    private int _fallbackDepth;
+
+    /// <summary>
+    /// The queries made until the returned scope is disposed are fallbacks, held to <see cref="NodeBudget"/>. Nothing off a think.
+    /// A struct: <c>using</c> it allocates nothing.
+    /// </summary>
+    internal static FallbackScope Fallback()
+    {
+        if (t_active is { } probe) probe._fallbackDepth++;
+        return new FallbackScope(t_active);
+    }
+
+    /// <summary>The scope of <see cref="Fallback"/>.</summary>
+    internal readonly struct FallbackScope(PlayerbotThinkProbe? probe) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (probe is not null && probe._fallbackDepth > 0) probe._fallbackDepth--;
+        }
+    }
 
     /// <summary>The smallest search a query is still run with under <see cref="NodeBudget"/>.</summary>
     internal const int MinQueryNodes = 64;
@@ -64,7 +89,7 @@ internal sealed class PlayerbotThinkProbe
     internal (long Nodes, long Ticks, string Phase, Vector3 From, Vector3 To, int MaxNodes) Largest { get; private set; }
 
     /// <summary>What drove the bot and its goal after the think (set by the feature after <see cref="End"/>; benchmarks).</summary>
-    internal (string Driver, ArcaneCore.Kernel.Characters.PlayerbotGoalKind Goal, uint Entry, uint Quest) Subject { get; set; }
+    internal (string Driver, string Goal) Subject { get; set; }
 
     /// <summary>The think's time in Stopwatch ticks (after <see cref="End"/>).</summary>
     internal long ElapsedTicks => _elapsed;
@@ -83,6 +108,7 @@ internal sealed class PlayerbotThinkProbe
         QueryTicks = 0;
         Clamped = 0;
         Refused = 0;
+        _fallbackDepth = 0;
         Largest = default;
         Search = default;
         _elapsed = 0;
@@ -144,20 +170,18 @@ internal sealed class PlayerbotThinkProbe
 
     /// <summary>
     /// One navigation query of a bot (every bot query goes through here: <see cref="PlayerbotNavigation"/>, the follow drop),
-    /// counted on the running think and held to its <see cref="NodeBudget"/>.
+    /// counted on the running think; a fallback query (<see cref="Fallback"/>) is held to the think's <see cref="NodeBudget"/>.
     /// <para>
-    /// The budget bounds one think whatever its goals ask: before it, a bot whose plan fell through to its fallbacks (the steep
-    /// escape, the starts beside it, the hazard detours) could run 40 searches of up to 32 768 nodes in one think, 557 ms on the
-    /// 200-bot terrain benchmark and 2 139 ms in one live tick (live-w24-r1). A query held short answers what a search out of
-    /// nodes answers (a partial path, or none): the caller refuses that route this think, as it refuses any it cannot use, and
-    /// plans again later.
+    /// Before, a bot whose plan fell through to its fallbacks could run 40 searches of up to 32 768 nodes in one think: 557 ms on the
+    /// 200-bot terrain benchmark, and most likely the 2 139 ms live tick of live-w24-r1. A clamped query allocates its narrowed
+    /// <see cref="PathOptions"/> copy; nothing else here allocates.
     /// </para>
     /// </summary>
     internal static PathResult Find(MapCollision collision, Vector3 from, Vector3 to, PathOptions options)
     {
         if (t_active is not { } probe) return collision.FindPath(from, to, options);
         long nodesBefore = PathSearchCounters.NodesCreated;
-        if (probe.NodeBudget > 0)
+        if (probe.NodeBudget > 0 && probe._fallbackDepth > 0)
         {
             long left = probe.NodeBudget - (nodesBefore - probe._searchBefore.Nodes);
             if (left < MinQueryNodes)
@@ -232,7 +256,7 @@ internal sealed class PlayerbotThinkProbe
         }
 
         if (Clamped > 0 || Refused > 0)
-            text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} queries cut short, {Refused} refused");
+            text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} fallback queries cut short, {Refused} refused");
         if (Search.TileLoads > 0)
             text.Append(CultureInfo.InvariantCulture, $"; tiles read {Search.TileLoads} ({Search.TileLoadMs:F1} ms)");
         return text.ToString();

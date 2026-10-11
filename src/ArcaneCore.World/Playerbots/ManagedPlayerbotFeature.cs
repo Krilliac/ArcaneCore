@@ -67,9 +67,6 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
-    private double _slowThinkMs = double.NaN;
-    private int _thinkSearchNodes;
-    private long _slowThinkReadMs = long.MinValue;
 
     /// <summary>
     /// Called after every think with the bot and the think's probe (world thread; benchmarks and tests). The probe is valid only
@@ -876,7 +873,6 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             { logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
         }
 
-        RefreshSlowThinkThreshold();
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
         // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
@@ -893,50 +889,36 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     }
 
     /// <summary>
-    /// <c>World:Playerbots:SlowThinkLogMs</c> and <c>World:Playerbots:MaxThinkSearchNodes</c>, read from the configuration again once a
-    /// second of world time (an edited settings file takes effect without a restart); the bound options' values when the configuration
-    /// has none or no valid one.
-    /// </summary>
-    private void RefreshSlowThinkThreshold()
-    {
-        long now = ClockMs;
-        if (_slowThinkReadMs != long.MinValue && now - _slowThinkReadMs < 1000) return;
-        _slowThinkReadMs = now;
-        Microsoft.Extensions.Configuration.IConfiguration? configuration = services.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
-        double threshold = _options.SlowThinkLogMs;
-        if (configuration?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.SlowThinkLogMs)] is { } text
-            && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double configured)
-            && double.IsFinite(configured) && configured is >= 0 and <= 60_000)
-            threshold = configured;
-        _slowThinkMs = threshold;
-        int nodes = _options.MaxThinkSearchNodes;
-        if (configuration?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.MaxThinkSearchNodes)] is { } nodesText
-            && int.TryParse(nodesText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int configuredNodes)
-            && (configuredNodes == 0 || configuredNodes is >= ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes and <= 10_000_000))
-            nodes = configuredNodes;
-        _thinkSearchNodes = nodes;
-    }
-
-    /// <summary>
-    /// One bot's think (world thread), measured (<see cref="PlayerbotThinkProbe"/>): a think over <c>World:Playerbots:SlowThinkLogMs</c>
-    /// is logged with its bot, driver, goal and phases (<see cref="PlayerbotSlowThinkLog"/>).
+    /// One bot's think (world thread), measured (<see cref="PlayerbotThinkProbe"/>) and with its fallback path searches held to
+    /// <see cref="PlayerbotOptions.MaxThinkSearchNodes"/>: a think over <see cref="PlayerbotOptions.SlowThinkLogMs"/> is logged with its
+    /// bot, driver, goal and phases (<see cref="PlayerbotSlowThinkLog"/>). Both are read from the shared options at each think, so
+    /// <c>.reload config</c> changes them at once (WorldConfigKeys).
     /// </summary>
     private void Think(ActiveBot active, ManagedActionBudget budget)
     {
-        if (double.IsNaN(_slowThinkMs)) RefreshSlowThinkThreshold();
-        _probe.NodeBudget = _thinkSearchNodes;
+        _probe.NodeBudget = _options.MaxThinkSearchNodes;
         _probe.Begin();
         string driver;
         try { driver = ThinkCore(active, budget); }
         finally { _probe.End(); }
-        (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, _slowThinkMs, ClockMs, active.Record.BotId, active.Name, driver,
-            active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
+        double slowMs = _options.SlowThinkLogMs;
+        bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
+        if (!slow && ThinkObserver is null) return; // the common case: nothing to describe, nothing allocated
+        string goal = GoalOf(active, driver);
+        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal);
         if (ThinkObserver is { } observer)
         {
-            _probe.Subject = (driver, active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
+            _probe.Subject = (driver, goal);
             observer(active.Record.BotId, _probe);
         }
     }
+
+    /// <summary>
+    /// The goal a think was about, for the slow-think line: the brain's goal, target entry and quest when the brain drove it; "n/a" for
+    /// another driver (party AI, bot-led group, battleground, controller), which holds the brain suspended with the goal it had before.
+    /// </summary>
+    private static string GoalOf(ActiveBot active, string driver)
+        => driver == "brain" ? $"{active.Brain.Goal} entry {active.Brain.TargetEntry} quest {active.Brain.QuestId}" : "n/a";
 
     /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain. Returns which drove it.</summary>
     private string ThinkCore(ActiveBot active, ManagedActionBudget budget)

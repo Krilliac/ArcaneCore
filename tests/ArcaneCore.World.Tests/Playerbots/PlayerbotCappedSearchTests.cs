@@ -59,6 +59,30 @@ public sealed class PlayerbotCappedSearchTests
     }
 
     /// <summary>
+    /// A real fragment (the bot's own search ran out of corridor, not of nodes) whose fallbacks then search towards the far goal and run
+    /// out of nodes: the first such refusal ends each fallback, since the next corner or start beside the bot, a few yards on, searches the
+    /// same ground. One plan: the bot's search, the steep escape's search, the walkable check of its corner, that corner's onward search
+    /// and the first start beside the bot; before, every start beside it was searched.
+    /// </summary>
+    [Fact]
+    public async Task OnAFragment_FallbacksThatRunOutOfNodes_StopAtTheFirst()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var fragment = new CappedEverywhere { CappedFrom = 2 }; // the first query (the bot's own) is not capped, every later one is
+            WorldCollision.Of(world.Host.World).Install(pathfinder: fragment);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+
+            Assert.False(PlayerbotNavigation.TryPlanToward(player, origin + new Vector3(1800, 0, 0), options, out _));
+            Assert.Equal(5, fragment.Queries);
+            return true;
+        });
+    }
+
+    /// <summary>
     /// A mesh on which every query ends three yards beside its start, short of its end and no closer to it (a partial answer: the
     /// visited polygon nearest the goal, beside the bot), each a search that used <see cref="NodesPerQuery"/> of its node bound and, when
     /// <see cref="Capped"/>, hit it (PathSearchCounters, as NavMeshQuery records it).
@@ -66,6 +90,9 @@ public sealed class PlayerbotCappedSearchTests
     internal sealed class CappedEverywhere : IPathfinder
     {
         public bool Capped { get; init; } = true;
+
+        /// <summary>When set, only the queries from this one on (1-based) are capped, whatever <see cref="Capped"/> says.</summary>
+        public int? CappedFrom { get; init; }
 
         public int NodesPerQuery { get; init; } = 512;
 
@@ -81,7 +108,7 @@ public sealed class PlayerbotCappedSearchTests
             Queries++;
             Budgets.Add(options.MaxSearchNodes);
             int nodes = Math.Min(NodesPerQuery, options.MaxSearchNodes);
-            PathSearchCounters.RecordSearch(nodes, nodes, Capped);
+            PathSearchCounters.RecordSearch(nodes, nodes, CappedFrom is { } from ? Queries >= from : Capped);
             if (start == end) return new PathResult(PathType.Normal, [start, end]); // OnWalkableMesh: the bot stands on the mesh
             Vector3 flat = new(end.X - start.X, end.Y - start.Y, 0);
             Vector3 toward = flat.Length() < 0.01f ? Vector3.UnitX : Vector3.Normalize(flat);

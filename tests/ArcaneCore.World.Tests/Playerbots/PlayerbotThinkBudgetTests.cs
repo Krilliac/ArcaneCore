@@ -16,19 +16,21 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotThinkBudgetTests
 {
     /// <summary>
-    /// Within a think, the queries share <see cref="PlayerbotOptions.MaxThinkSearchNodes"/>: past it a query runs only with what is
-    /// left, and with less than <see cref="PlayerbotThinkProbe.MinQueryNodes"/> left it is answered no path without a search. Off a
-    /// think (and with no budget) every query runs as asked.
+    /// Within a think, the fallback queries (<see cref="PlayerbotThinkProbe.Fallback"/>) are held to
+    /// <see cref="PlayerbotOptions.MaxThinkSearchNodes"/>: past it a fallback runs only with what is left, and with less than
+    /// <see cref="PlayerbotThinkProbe.MinQueryNodes"/> left it is answered no path without a search. A plan's own query is never held
+    /// to it (a starved search would be taken for an unreachable goal and stored), nor is any query off a think.
     /// </summary>
     [Fact]
-    public async Task ThinkNodeBudget_CutsTheLastQueryShort_ThenRefusesTheRest()
+    public async Task ThinkNodeBudget_CutsTheLastFallbackShort_RefusesTheRest_AndNeverTouchesAPlansOwnQuery()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         await world.OnWorldAsync(() =>
         {
             Player player = world.Player;
             var origin = new Vector3(player.X, player.Y, player.Z);
-            var search = new PlayerbotCappedSearchTests.CappedEverywhere { Capped = false, NodesPerQuery = int.MaxValue }; // each search uses all it is given
+            // Each search uses all the nodes it is given.
+            var search = new PlayerbotCappedSearchTests.CappedEverywhere { Capped = false, NodesPerQuery = int.MaxValue };
             WorldCollision.Of(world.Host.World).Install(pathfinder: search);
             MapCollision collision = player.Map!.Collision;
             var asked = new PathOptions { MaxSearchNodes = 32_768, AllowPartial = true };
@@ -36,23 +38,32 @@ public sealed class PlayerbotThinkBudgetTests
 
             var probe = new PlayerbotThinkProbe { NodeBudget = 40_000 };
             probe.Begin();
-            PathResult first = PlayerbotThinkProbe.Find(collision, origin, far, asked);
-            PathResult second = PlayerbotThinkProbe.Find(collision, origin, far, asked);
-            PathResult third = PlayerbotThinkProbe.Find(collision, origin, far, asked);
+            PathResult own = PlayerbotThinkProbe.Find(collision, origin, far, asked); // 32 768 spent
+            PathResult first, second, third;
+            using (PlayerbotThinkProbe.Fallback())
+            {
+                first = PlayerbotThinkProbe.Find(collision, origin, far, asked);  // 7 232 left: cut short
+                second = PlayerbotThinkProbe.Find(collision, origin, far, asked); // none left: refused
+            }
+
+            PathResult ownAgain = PlayerbotThinkProbe.Find(collision, origin, far, asked); // a plan's own query again: in full
+            using (PlayerbotThinkProbe.Fallback())
+                third = PlayerbotThinkProbe.Find(collision, origin, far, asked); // refused
             probe.End();
 
-            Assert.Equal([32_768, 40_000 - 32_768], search.Budgets);
-            Assert.True(first.HasPath);
-            Assert.True(second.HasPath); // the short search still answers (a partial path here)
+            Assert.Equal([32_768, 40_000 - 32_768, 32_768], search.Budgets);
+            Assert.True(own.HasPath && first.HasPath && ownAgain.HasPath); // the short search still answers (a partial path here)
+            Assert.False(second.HasPath);
             Assert.False(third.HasPath);
             Assert.Equal(1, probe.Clamped);
-            Assert.Equal(1, probe.Refused);
-            Assert.Equal(40_000, probe.Search.Nodes);
-            Assert.Contains("node budget 40000: 1 queries cut short, 1 refused", probe.Describe());
+            Assert.Equal(2, probe.Refused);
+            Assert.Equal((2 * 32_768) + (40_000 - 32_768), probe.Search.Nodes);
+            Assert.Contains("node budget 40000: 1 fallback queries cut short, 2 refused", probe.Describe());
 
-            // Off a think: no budget.
+            // Off a think: no budget, even inside a fallback scope.
             search.Budgets.Clear();
-            PlayerbotThinkProbe.Find(collision, origin, far, asked);
+            using (PlayerbotThinkProbe.Fallback())
+                PlayerbotThinkProbe.Find(collision, origin, far, asked);
             Assert.Equal([32_768], search.Budgets);
             return true;
         });

@@ -164,6 +164,8 @@ internal static class PlayerbotNavigation
         if (flat.Length() < 1f || player.Map is not { } map) return false;
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
+        // Other ways after the direct one was refused: held to the think's search budget (PlayerbotThinkProbe.Fallback).
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         foreach (float extra in HazardDetourYards)
             foreach (float sign in (float[])[1f, -1f])
             {
@@ -260,6 +262,8 @@ internal static class PlayerbotNavigation
                 ? OnWalkableMesh(map, start)
                 : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards || capped)
             return false;
+        // The ways off a patch, a fragment or steep ground are fallbacks, held to the think's search budget (PlayerbotThinkProbe.Fallback).
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route)) return true;
         // A fragment answers a partial corridor that ends where it began; a no-path answer (the bot off the mesh) is not one.
         if ((path.Type & PathType.NoPath) != 0) return false;
@@ -408,9 +412,10 @@ internal static class PlayerbotNavigation
                     || (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
                         || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards)))
                 {
-                    // Refused after running out of nodes: the other starts lie a few yards away and search the same ground, so they
-                    // end the same way (each up to 32 768 nodes).
-                    if (capped) return null;
+                    // Refused after running out of nodes short of the destination: the other starts lie a few yards away and search the
+                    // same ground, so they end the same way (each up to 32 768 nodes). A search that reached it despite the cap is no such
+                    // sign (refused for its length, say), and the next start is tried.
+                    if (capped && (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0) return null;
                     continue;
                 }
 
@@ -461,12 +466,15 @@ internal static class PlayerbotNavigation
             distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
-            if (Vector3.Distance(point, destination) > 1f
-                && !Usable(player, Query(map, point, destination, options, partial, steep: false, out bool capped), point, destination, goal, partial, options, out _))
+            if (Vector3.Distance(point, destination) > 1f)
             {
-                // Ran out of nodes on the way: the next corner, a few yards on, searches the same ground (see FromBeside).
-                if (capped) return false;
-                continue;
+                PathResult onward = Query(map, point, destination, options, partial, steep: false, out bool capped);
+                if (!Usable(player, onward, point, destination, goal, partial, options, out _))
+                {
+                    // Ran out of nodes short of the destination: the next corner, a few yards on, searches the same ground (see FromBeside).
+                    if (capped && (onward.Type & (PathType.Incomplete | PathType.NoPath)) != 0) return false;
+                    continue;
+                }
             }
             route = new PlayerbotRoute(steep.Points.Take(index + 1).ToArray(), distance, navigated: true);
             return true;
