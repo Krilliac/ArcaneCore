@@ -157,12 +157,17 @@ public sealed class ScarletMonasteryEncounterTests
         Player bystander = run.AddPlayer(2);
         Creature doan = run.Creature(DoanAi.Entry);
         Assert.True(run.Creatures.AttackStart(doan, run.Player));
-        run.Map.Combat.DealDamage(run.Player, doan, 10, direct: true);
+        // Not direct: direct damage starts the players' auto-attacks (MapCombat.DealDamage → Attack), whose swings roll on the shared
+        // combat random; a lucky swing could reorder the threat list (the Disciple of Naralex flake, ScriptFidelityTests). Without the
+        // swings the threat stays 10 / 1 and the tank is run.Player throughout.
+        run.Map.Combat.DealDamage(run.Player, doan, 10, direct: false);
         Ticks(run, 15_100);
+        Assert.Equal([run.Player], doan.Combat.Threat.Entries.Select(e => (Unit)e.Target));
         Assert.DoesNotContain(caster.Casts, c => c.Spell == 13323); // only the tank is on the threat list, and it is the top entry
 
-        run.Map.Combat.DealDamage(bystander, doan, 1, direct: true);
+        run.Map.Combat.DealDamage(bystander, doan, 1, direct: false);
         Ticks(run, 100);
+        Assert.Equal([run.Player, bystander], doan.Combat.Threat.Entries.Select(e => (Unit)e.Target));
         Assert.Contains(caster.Casts, c => c.Spell == 13323 && ReferenceEquals(c.Target, bystander));
         Assert.DoesNotContain(caster.Casts, c => c.Spell == 13323 && ReferenceEquals(c.Target, run.Player));
     }
