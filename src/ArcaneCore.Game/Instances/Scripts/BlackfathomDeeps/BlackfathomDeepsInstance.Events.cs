@@ -91,7 +91,7 @@ public sealed partial class BlackfathomDeepsInstance
         // after the last fire's five-second window, then every second until all die.
         if (_checkEventEndMs <= diffMs)
         {
-            if (_waveCount == Waves.Length && _waveMobs.Count == 0)
+            if (IsWaveEventFinished())
             {
                 SetData(TypeShrine, EncounterState.Done);
             }
@@ -122,6 +122,19 @@ public sealed partial class BlackfathomDeepsInstance
             SpawnWave(i);
         }
 
+    }
+
+    // vmangos instance_blackfathom_deeps::IsWaveEventFinished: a missing
+    // creature is no longer an active wave member (despawn or grid unload).
+    private bool IsWaveEventFinished()
+    {
+        if (_waveCount < Waves.Length)
+        {
+            return false;
+        }
+
+        CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+        return _waveMobs.All(guid => creatures?.FindCreature(guid) is not { IsAlive: true });
     }
 
     private void SpawnWave(int index)

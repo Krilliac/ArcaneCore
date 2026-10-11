@@ -44,12 +44,13 @@ public sealed class EvolvingEctoplasmAi(Creature creature) : ScriptedAI(creature
     public override void OnUpdate(uint diffMs)
     {
         // vmangos uses '<', so the auras expire on the first update after ten full seconds.
-        if (_immuneTimer < diffMs)
+        if (_immune && _immuneTimer < diffMs)
         {
             ClearElementalAuras();
+            _immuneTimer = 0;
             _immune = false;
         }
-        else
+        else if (_immune)
         {
             _immuneTimer -= diffMs;
         }
@@ -59,6 +60,10 @@ public sealed class EvolvingEctoplasmAi(Creature creature) : ScriptedAI(creature
 
     protected override void Reset()
     {
+        // vmangos EvolvingEctoplasmAI::Reset uses RemoveAllAuras, including
+        // unrelated buffs. Keep the individual removals for lightweight test
+        // spell casters that do not implement the full aura-reset seam.
+        System?.RemoveAllAuras(Me);
         ClearElementalAuras();
         _immuneTimer = 0;
         _immune = false;

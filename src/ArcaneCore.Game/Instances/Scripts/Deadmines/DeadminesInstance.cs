@@ -87,7 +87,7 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
             case GoIronCladDoor:
                 if (Encounters[TypeIronCladDoor] is EncounterState.InProgress or EncounterState.Done)
                 {
-                    go.State = GameObjectState.Active;
+                    go.State = GameObjectState.ActiveAlternative;
                 }
 
                 break;
@@ -143,9 +143,9 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
                 {
                     // vmangos instance_deadmines::SetData(TYPE_DEFIAS_ENDDOOR) opens
                     // the Ironclad door on cannon use, then waits 3 s for Smite's alarm.
-                    if (GetSingleGameObjectFromStorage(GoIronCladDoor) is { State: not GameObjectState.Active })
+                    if (GetSingleGameObjectFromStorage(GoIronCladDoor) is { State: GameObjectState.Ready })
                     {
-                        DoUseDoorOrButton(GoIronCladDoor);
+                        DoUseDoorOrButton(GoIronCladDoor, alternative: true);
                     }
 
                     _ironDoorTimer = 3_000;
@@ -291,10 +291,11 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
         public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
         public void Update(GameObjectMapSystem objects, GameObject go, uint diffMs) { }
 
-        // vmangos deadmines.cpp GOHello_go_door_lever_dm: the lever's normal
-        // action is allowed only after the Ironclad door is already open.
+        // vmangos deadmines.cpp GOHello_go_door_lever_dm: GO_STATE_READY is 1.
+        // False lets the closed door's normal/DB-script lever use proceed;
+        // true suppresses it when the door is already open or missing.
         public bool OnUse(GameObjectMapSystem objects, GameObject go, Unit user)
-            => instance.GetSingleGameObjectFromStorage(GoIronCladDoor)?.State != GameObjectState.Active;
+            => instance.GetSingleGameObjectFromStorage(GoIronCladDoor)?.State != GameObjectState.Ready;
     }
 
     private sealed class GunpowderAi(DeadminesInstance instance) : IGameObjectAi
@@ -357,7 +358,9 @@ public sealed class DeadminesInstance(Map map) : ScriptedInstance(map, 4)
         private static bool Near(Creature creature, float x, float y, float z)
         {
             float dx = creature.X - x, dy = creature.Y - y, dz = creature.Z - z;
-            return dx * dx + dy * dy + dz * dz <= 1f;
+            // After the point generator stops, allow a three-yard end gap so
+            // a terrain path that ends short does not stall this route.
+            return dx * dx + dy * dy + dz * dz <= 3f * 3f;
         }
     }
 }

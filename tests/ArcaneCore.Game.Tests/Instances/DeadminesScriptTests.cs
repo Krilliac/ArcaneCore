@@ -1,4 +1,5 @@
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
@@ -164,7 +165,7 @@ public sealed class DeadminesScriptTests
         Assert.Equal(GameObjectState.Active, run.Object(16399).State);
 
         Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(16398).Guid));
-        Assert.Equal(GameObjectState.Active, run.Object(16397).State);
+        Assert.Equal(GameObjectState.ActiveAlternative, run.Object(16397).State);
         Assert.Equal(EncounterState.InProgress, run.Script.GetData(3));
     }
 
@@ -179,12 +180,34 @@ public sealed class DeadminesScriptTests
         var guard = run.Creature(657);
         Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(16398).Guid));
         Assert.Equal(EncounterState.InProgress, run.Script.GetData(3));
-        Assert.Equal(GameObjectState.Active, run.Object(16397).State);
+        Assert.Equal(GameObjectState.ActiveAlternative, run.Object(16397).State);
         Assert.NotEqual(MovementGeneratorType.Point, guard.Motion.CurrentType);
         run.Script.Update(2_999);
         Assert.NotEqual(MovementGeneratorType.Point, guard.Motion.CurrentType);
         run.Script.Update(1);
         Assert.Equal(MovementGeneratorType.Point, guard.Motion.CurrentType);
+
+        // The button can be used again after it resets; the encounter must not
+        // close the alternative-open door or start the alarm a second time.
+        run.Script.Update(15_000);
+        guard.Motion.Clear();
+        Assert.Equal(GameObjectUseResult.Ok, run.Objects.ToggleDoorOrButton(run.Object(16398)));
+        Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(16398).Guid));
+        Assert.Equal(GameObjectState.ActiveAlternative, run.Object(16397).State);
+        run.Script.Update(3_000);
+        Assert.NotEqual(MovementGeneratorType.Point, guard.Motion.CurrentType);
+    }
+
+    [Fact]
+    public void IroncladDoorCreatedAfterSavedCompletionRestoresAlternativeCannonState()
+    {
+        using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),
+            [], [], [(16397, GameObjectType.Door)]);
+        run.Script.Load("0 0 0 3");
+        var door = run.Object(16397);
+        door.State = GameObjectState.Ready;
+        run.Script.OnObjectCreate(door);
+        Assert.Equal(GameObjectState.ActiveAlternative, door.State);
     }
 
     [Fact]
@@ -214,16 +237,54 @@ public sealed class DeadminesScriptTests
     }
 
     [Fact]
-    public void LeverAllowsItsNormalUseOnlyAfterIroncladDoorOpens()
+    public void LeverAllowsItsNormalUseOnlyWhileIroncladDoorIsClosed()
     {
-        // vmangos deadmines.cpp GOHello_go_door_lever_dm checks the Ironclad door's GO state.
+        // vmangos GOHello_go_door_lever_dm returns false only for GO_STATE_READY (1).
+        // False lets the ClassicDB on-use relay open the closed door.
         using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),
             [], [], [(16397, GameObjectType.Door), (101833, GameObjectType.Button)]);
         var lever = run.Object(101833);
         var ai = run.Objects.AiFor(lever);
         Assert.NotNull(ai);
-        Assert.True(ai.OnUse(run.Objects, lever, run.Player));
-        run.Object(16397).State = GameObjectState.Active;
         Assert.False(ai.OnUse(run.Objects, lever, run.Player));
+        int scriptUses = 0;
+        run.Objects.Used += (_, go) => { if (go.Guid == lever.Guid) scriptUses++; };
+        Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, lever.Guid));
+        Assert.Equal(1, scriptUses); // on-use relay can run for the closed door
+        run.Object(16397).State = GameObjectState.Active;
+        Assert.True(ai.OnUse(run.Objects, lever, run.Player));
+        run.Object(16397).State = GameObjectState.ActiveAlternative;
+        Assert.True(ai.OnUse(run.Objects, lever, run.Player));
+    }
+
+    [Fact]
+    public void GunpowderOutOfCombatSummonKeepsCountingDownAfterDeath()
+    {
+        // vmangos TemporarySummon.cpp TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT:
+        // a corpse is out of combat and does not reset the remaining timer.
+        using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),
+            [634], [], []);
+        Creature overseer = Assert.IsType<Creature>(run.Creatures.SummonFromGameObject(634, -14f, -383f, 61f, 0,
+            1_000, outOfCombat: true));
+        run.Tick(500);
+        run.Map.Combat.Kill(run.Player, overseer);
+        run.Tick(499);
+        Assert.Contains(overseer, run.Creatures.Creatures);
+        run.Tick(1);
+        Assert.DoesNotContain(overseer, run.Creatures.Creatures);
+    }
+
+    [Fact]
+    public void GunpowderOverseerContinuesRouteAfterStoppingWithinTwoYardsOfFirstPoint()
+    {
+        using var run = new DungeonScriptTestKit(map => new ArcaneCore.Game.Instances.Scripts.Deadmines.DeadminesInstance(map),
+            [634], [], [(17155, GameObjectType.Chest)]);
+        var powder = run.Object(17155);
+        Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, powder.Guid));
+        Creature overseer = run.Creature(634);
+        run.Creatures.NearTeleport(overseer, -127.425980f, -616.494629f, 13.532340f, 0);
+        overseer.Motion.Clear();
+        run.Objects.AiFor(powder)!.Update(run.Objects, powder, 50);
+        Assert.Equal(1u, Assert.IsType<PointMovementGenerator>(overseer.Motion.Top).Id);
     }
 }

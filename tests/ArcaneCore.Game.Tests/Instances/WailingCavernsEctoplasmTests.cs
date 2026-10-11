@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Instances.Scripts.Classic;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using Xunit;
 
@@ -6,6 +8,21 @@ namespace ArcaneCore.Game.Tests.Instances;
 
 public sealed class WailingCavernsEctoplasmTests
 {
+    [Fact]
+    public void IdleTicksDoNotRepeatedlyRemoveAuras_AndResetStripsEveryAura()
+    {
+        var caster = new ResetRecordingCaster();
+        using var run = new DungeonScriptTestKit(map => new WailingCavernsInstance(map),
+            [5776], [5776], [], aiServices: new CreatureAiServices { Spells = caster });
+        var ai = run.Creature(5776).AI!;
+        caster.Clear();
+        ai.OnUpdate(50);
+        ai.OnUpdate(50);
+        Assert.Empty(caster.Removed);
+        ai.OnRespawn();
+        Assert.Equal(1, caster.RemoveAllCalls);
+    }
+
     [Theory]
     [InlineData(5776u)]
     [InlineData(5777u)]
@@ -63,5 +80,21 @@ public sealed class WailingCavernsEctoplasmTests
         ectoplasm.AI.OnEvade();
         Assert.Contains(caster.Removed, c => c.Spell == 7943);
         Assert.Contains(caster.Removed, c => c.Spell == 7942);
+    }
+
+    private sealed class ResetRecordingCaster : ICreatureSpellCaster, ICreatureAuraReset
+    {
+        public List<uint> Removed { get; } = [];
+        public int RemoveAllCalls { get; private set; }
+        public event Action<Unit, Unit, SpellInfo>? SpellHit { add { } remove { } }
+        public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.Ok;
+        public bool IsCasting(Creature caster) => false;
+        public bool HasAura(Unit unit, uint spellId) => false;
+        public void RemoveAuras(Unit unit, uint spellId) => Removed.Add(spellId);
+        public void Interrupt(Creature caster) { }
+        public void OnCreatureRemoved(Creature creature) { }
+        public void ResetAuras(Creature creature, bool keepPositive) { }
+        public void RemoveAllAuras(Creature creature) => RemoveAllCalls++;
+        public void Clear() { Removed.Clear(); RemoveAllCalls = 0; }
     }
 }

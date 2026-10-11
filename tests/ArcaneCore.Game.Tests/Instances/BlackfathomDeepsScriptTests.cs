@@ -83,4 +83,28 @@ public sealed class BlackfathomDeepsScriptTests
         Assert.Equal(EncounterState.Done, script.GetData(BlackfathomDeepsInstance.TypeShrine));
         Assert.Equal(GameObjectState.Active, run.Object(21117).State);
     }
+
+    [Fact]
+    public void DespawnedWaveMobDoesNotHoldTheShrineOpenForever()
+    {
+        // vmangos IsWaveEventFinished ignores a GUID whose creature no longer exists.
+        using var run = new DungeonScriptTestKit(map => new BlackfathomDeepsInstance(map),
+            [4832, 4825, 4978, 4823, 4977], [4832],
+            [(21117, GameObjectType.Door), (21118, GameObjectType.Goober), (21119, GameObjectType.Goober),
+                (21120, GameObjectType.Goober), (21121, GameObjectType.Goober)]);
+        run.Script.SetData(BlackfathomDeepsInstance.TypeKelris, EncounterState.Done);
+        foreach (uint entry in new uint[] { 21118, 21119, 21120, 21121 })
+        {
+            Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(entry).Guid));
+            run.Tick(3_000);
+        }
+
+        var waves = run.Creatures.Creatures.Where(c => c.Entry is 4825 or 4978 or 4823 or 4977).ToArray();
+        Assert.Equal(19, waves.Length);
+        run.Creatures.Despawn(waves[0]);
+        foreach (var wave in waves.Skip(1)) run.Map.Combat.Kill(run.Player, wave);
+        run.Tick(2_000);
+        Assert.Equal(EncounterState.Done, run.Script.GetData(BlackfathomDeepsInstance.TypeShrine));
+        Assert.Equal(GameObjectState.Active, run.Object(21117).State);
+    }
 }

@@ -107,10 +107,11 @@ public abstract class ScriptedInstance : InstanceData
 
     /// <summary>
     /// SD2 <c>DoUseDoorOrButton(entry, withRestoreTime)</c> (sc_instance.cpp:15-43): the stored door or button of the entry is used when it is
-    /// ready and reset when it is active (<see cref="GameObjectMapSystem.ToggleDoorOrButton"/>); nothing happens when no such object was
+    /// ready and reset when it is active (<see cref="GameObjectMapSystem.ToggleDoorOrButton"/>); <paramref name="alternative"/> opens to
+    /// GO_STATE_ACTIVE_ALTERNATIVE; nothing happens when no such object was
     /// created yet.
     /// </summary>
-    protected void DoUseDoorOrButton(uint entry, uint withRestoreTimeSeconds = 0)
+    protected void DoUseDoorOrButton(uint entry, uint withRestoreTimeSeconds = 0, bool alternative = false)
     {
         if (GetSingleGameObjectFromStorage(entry) is not { } go || Instance.FindUpdater<GameObjectMapSystem>() is not { } objects)
         {
@@ -118,7 +119,7 @@ public abstract class ScriptedInstance : InstanceData
             return;
         }
 
-        objects.ToggleDoorOrButton(go, withRestoreTimeSeconds);
+        objects.ToggleDoorOrButton(go, withRestoreTimeSeconds, alternative);
     }
 
     /// <summary>A stored door that was created while its encounter is done starts open (each script's <c>OnObjectCreate</c>: <c>SetGoState(GO_STATE_ACTIVE)</c>).</summary>

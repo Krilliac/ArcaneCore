@@ -14,6 +14,8 @@ public sealed partial class ShadowfangKeepInstance
     private readonly HashSet<ObjectGuid> _hiddenWolfGuards = [];
     private uint _baronPatrolMs;
     private uint _commanderPatrolMs;
+    private int _baronPatrolRetries;
+    private int _commanderPatrolRetries;
     private Creature? _eventArugal;
     private uint _dialogueTimer;
     private int _dialogueStep = -1;
@@ -29,6 +31,8 @@ public sealed partial class ShadowfangKeepInstance
         _hiddenWolfGuards.Clear();
         _baronPatrolMs = 0;
         _commanderPatrolMs = 0;
+        _baronPatrolRetries = 0;
+        _commanderPatrolRetries = 0;
         _dialogueStep = -1;
         _dialogueTimer = 0;
         _introStep = -1;
@@ -70,7 +74,9 @@ public sealed partial class ShadowfangKeepInstance
                 && spawn.SpawnTimeMinSeconds == spawn.SpawnTimeMaxSeconds
                 && spawn.SpawnTimeMinSeconds is 7201 or 7202:
                 // vmangos instance_shadowfang_keep::OnCreatureCreate hides the
-                // patrols selected by these special respawn-delay markers.
+                // patrols selected by these special respawn-delay markers. The
+                // supplied ClassicDB has only a 7200 wolf guard, so hiding all
+                // 3854 as vmangos does would leave that normal spawn invisible.
                 creature.FactionTemplate = 35;
                 _hiddenWolfGuards.Add(creature.Guid);
                 break;
@@ -86,8 +92,16 @@ public sealed partial class ShadowfangKeepInstance
 
     public override void OnCreatureDeath(Creature creature)
     {
-        if (creature.Entry == 3887) _baronPatrolMs = 6_000;
-        if (creature.Entry == 4278) _commanderPatrolMs = 6_000;
+        if (creature.Entry == 3887 && HasHiddenWolfGuard(7201))
+        {
+            _baronPatrolMs = 6_000;
+            _baronPatrolRetries = 0;
+        }
+        if (creature.Entry == 4278 && HasHiddenWolfGuard(7202))
+        {
+            _commanderPatrolMs = 6_000;
+            _commanderPatrolRetries = 0;
+        }
 
         if (!_nandosPack.Remove(creature.Guid) || _nandosPack.Count != 0
             || GetSingleCreatureFromStorage(NpcNandos) is not { IsAlive: true } nandos || nandos.Combat.IsInCombat)
@@ -136,8 +150,8 @@ public sealed partial class ShadowfangKeepInstance
 
     public override void Update(uint diffMs)
     {
-        UpdateWolfPatrol(ref _baronPatrolMs, 3887, 7201, diffMs);
-        UpdateWolfPatrol(ref _commanderPatrolMs, 4278, 7202, diffMs);
+        UpdateWolfPatrol(ref _baronPatrolMs, ref _baronPatrolRetries, 3887, 7201, diffMs);
+        UpdateWolfPatrol(ref _commanderPatrolMs, ref _commanderPatrolRetries, 4278, 7202, diffMs);
         UpdateIntro(diffMs);
         if (_dialogueStep < 0)
         {
@@ -184,10 +198,22 @@ public sealed partial class ShadowfangKeepInstance
         }
     }
 
-    private void UpdateWolfPatrol(ref uint timer, uint bossEntry, uint spawnMarker, uint diffMs)
+    private bool HasHiddenWolfGuard(uint spawnMarker)
     {
-        if (timer == 0 || GetSingleCreatureFromStorage(bossEntry) is not { } boss)
+        if (_hiddenWolfGuards.Count == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
         {
+            return false;
+        }
+
+        return creatures.Creatures.Any(c => _hiddenWolfGuards.Contains(c.Guid) && c.Spawn is { } spawn
+            && spawn.SpawnTimeMinSeconds == spawnMarker && spawn.SpawnTimeMaxSeconds == spawnMarker);
+    }
+
+    private void UpdateWolfPatrol(ref uint timer, ref int retries, uint bossEntry, uint spawnMarker, uint diffMs)
+    {
+        if (timer == 0 || _hiddenWolfGuards.Count == 0 || GetSingleCreatureFromStorage(bossEntry) is not { } boss)
+        {
+            if (_hiddenWolfGuards.Count == 0) timer = 0;
             return;
         }
 
@@ -218,8 +244,8 @@ public sealed partial class ShadowfangKeepInstance
             revealed = true;
         }
 
-        // The vmangos timer keeps trying when its grid has not loaded a patrol yet.
-        timer = revealed ? 0u : 1u;
+        // A grid may arrive late, but never scan the map every tick forever.
+        timer = revealed || ++retries >= 5 ? 0u : 1_000u;
     }
 
     private void UpdateIntro(uint diffMs)

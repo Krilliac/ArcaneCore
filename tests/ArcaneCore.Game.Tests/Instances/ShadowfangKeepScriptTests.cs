@@ -14,6 +14,31 @@ namespace ArcaneCore.Game.Tests.Instances;
 public sealed class ShadowfangKeepScriptTests
 {
     [Fact]
+    public void UnmarkedClassicDbWolfGuardDoesNotArmAnEndlessPatrolRetry()
+    {
+        // The supplied ClassicDB has only 3854 spawn 3300044 with 7200/7200.
+        // No vmangos 7201/7202 patrol exists to reveal in that content.
+        using var run = new DungeonScriptTestKit(map => new ShadowfangKeepInstance(map),
+            [3887, 4278, 3854], [3887, 4278], [], extraSpawns:
+            [Spawn(3300044, 3854, -12f, -383.07f, 61.78f, mapId: InstanceFixture.Dungeon, respawnSeconds: 7200)]);
+        var script = (ShadowfangKeepInstance)run.Script;
+        var guard = run.Creature(3854);
+        Assert.Contains(guard.Guid, run.Player.VisibleObjects); // retain this ClassicDB guard as an ordinary spawn
+        run.Kill(3887);
+        run.Kill(4278);
+        run.Tick(6_000);
+        uint baron = (uint)typeof(ShadowfangKeepInstance)
+            .GetField("_baronPatrolMs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(script)!;
+        uint commander = (uint)typeof(ShadowfangKeepInstance)
+            .GetField("_commanderPatrolMs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(script)!;
+        Assert.Equal(0u, baron);
+        Assert.Equal(0u, commander);
+        Assert.Contains(guard.Guid, run.Player.VisibleObjects);
+    }
+
+    [Fact]
     public void WolfGuardPatrolsRevealSixSecondsAfterTheirRespectiveBossDeaths()
     {
         // vmangos instance_shadowfang_keep::OnCreatureDeath/Update keys the two

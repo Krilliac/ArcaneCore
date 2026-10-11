@@ -33,6 +33,10 @@ public sealed partial class CreatureMapSystem
         /// </summary>
         OutOfCombatUncharmed,
 
+        /// <summary>vmangos TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (TemporarySummon.cpp:53-66):
+        /// combat resets the lifetime; an out-of-combat corpse keeps counting down.</summary>
+        TimedDespawnOutOfCombat,
+
         /// <summary>
         /// cmangos TEMPSPAWN_TIMED_OOC_OR_CORPSE_DESPAWN (Entities/TemporarySpawn.cpp:107-127): combat restarts the whole lifetime and an
         /// alive creature out of combat counts it down; a dead one goes on the first update after it dies (the case opens with
@@ -107,6 +111,7 @@ public sealed partial class CreatureMapSystem
             {
                 SummonTimer.OutOfCombat or SummonTimer.AliveOutOfCombat => creature.Combat.IsInCombat || !creature.IsAlive,
                 SummonTimer.OutOfCombatUncharmed => creature.Combat.IsInCombat || !creature.IsAlive || !creature.CharmerGuid.IsEmpty,
+                SummonTimer.TimedDespawnOutOfCombat => creature.IsAlive && creature.Combat.IsInCombat,
                 SummonTimer.OutOfCombatOrCorpse => creature.IsAlive && creature.Combat.IsInCombat,
                 SummonTimer.CorpseTimed => creature.IsAlive,
                 _ => false,
@@ -248,7 +253,7 @@ public sealed partial class CreatureMapSystem
         }
 
         Creature creature = SpawnTemporary(template, x, y, z, orientation);
-        AddTimedSummon(creature, lifetimeMs, outOfCombat ? SummonTimer.OutOfCombatUncharmed : SummonTimer.Absolute);
+        AddTimedSummon(creature, lifetimeMs, outOfCombat ? SummonTimer.TimedDespawnOutOfCombat : SummonTimer.Absolute);
         return creature;
     }
 
