@@ -146,6 +146,12 @@ public static class WorldConfigKeys
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
+        // Not vmangos keys: the slow-think log threshold and the fallback search budget of one bot think (ManagedPlayerbotFeature reads
+        // both from the shared PlayerbotOptions at every think).
+        LivePlayerbotsValue("SlowThinkLogMs", o => o.SlowThinkLogMs, (o, v) => o.SlowThinkLogMs = v,
+            v => double.IsFinite(v) && v is >= 0 and <= 60_000 ? null : "must be 0..60000"),
+        LivePlayerbotsValue("MaxThinkSearchNodes", o => o.MaxThinkSearchNodes, (o, v) => o.MaxThinkSearchNodes = v,
+            v => v == 0 || v is >= Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes and <= 10_000_000 ? null : $"must be 0 or {Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000"),
 
         // Not vmangos keys: risk against reward and retreat (docs/areas/playbots-risk.md). PlayerbotRisk, PlayerbotRiskModel and the
         // party AI read the shared PlayerbotOptions.Risk at every decision.

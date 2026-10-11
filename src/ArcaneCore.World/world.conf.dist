@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       331 keys
+#   WORLD                       330 keys
 #
 ###############################################################################
 
@@ -10299,6 +10299,24 @@ World.Playerbots.MaxRegisteredBots = 1000
 World.Playerbots.MaxRouteYards = 2000
 
 #
+#    World.Playerbots.MaxThinkSearchNodes
+#        Description: The most navigation-mesh search nodes the fallback path queries of one bot
+#                     think may create together (the steep escape, the starts beside the bot, the
+#                     hazard detours; PlayerbotThinkProbe.NodeBudget): past it a fallback runs with
+#                     what is left, or not at all, and finds nothing (its plan may then fail, as
+#                     when no such way exists). A plan's own query is neither held to it nor
+#                     counted. 0 = no bound, else 2048..10000000; three of the largest single
+#                     searches (PlayerbotNavigation.MaxSearchNodes) by default. Live: .reload
+#                     config.
+#        Type: int
+#        Default: 98304
+#        Allowed: 0 (no bound), or a whole number from 2048 to 10000000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxThinkSearchNodes = 98304
+
+#
 #    World.Playerbots.MoveSpeed
 #        Description: The bots' movement speed in yards per second, never above the player's run
 #                     speed (above 0, at most 100).
@@ -10471,34 +10489,6 @@ World.Playerbots.Population.AllianceSharePct = 50
 # World.Playerbots.Population.Classes.6 = 8
 # World.Playerbots.Population.Classes.7 = 9
 # World.Playerbots.Population.Classes.8 = 11
-
-#
-#    World.Playerbots.Population.CreatureLevelMargin
-#        Description: A bot is not placed at a graveyard where most creatures hostile to its faction
-#                     within CreatureSurveyRadius are more than this many levels above it (0..10),
-#                     and is relocated from a zone where every graveyard of its faction is like
-#                     that. Uses the creature survey; without creature data or faction templates
-#                     nothing is surveyed and only the area floor counts.
-#        Type: int
-#        Default: 3
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Population.CreatureLevelMargin = 3
-
-#
-#    World.Playerbots.Population.CreatureSurveyRadius
-#        Description: The radius in yards around each graveyard the creature survey counts hostile
-#                     creature spawns in (0..300; 0 turns the survey off). The survey runs with the
-#                     graveyard terrain lookup, off the world thread, when the atlas is built.
-#        Type: int
-#        Default: 100
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Population.CreatureSurveyRadius = 100
 
 #
 #    World.Playerbots.Population.Enabled
@@ -10684,13 +10674,11 @@ World.Playerbots.Population.WindowTicks = 200
 
 #
 #    World.Playerbots.Population.ZoneLevelSlack
-#        Description: How many levels below a placement's floor a bot may be while the floor is at
-#                     most ZoneLevelSlackMaxFloor (0..10). The floor is the level of the sub-area
-#                     the graveyard stands in, or the zone's lowest sub-area level when the terrain
-#                     does not know; a starter zone's is level 4 to 7, so the default 4 lets a level
-#                     1 bot start there. Above ZoneLevelSlackMaxFloor the slack shrinks by one level
-#                     for every two floor levels, to 0. A bot below every place of its zone it could
-#                     have been put is relocated like an out-levelled one.
+#        Description: How many levels below a placement's floor a bot may be (0..10). The floor is
+#                     the level of the sub-area the graveyard stands in, or the zone's lowest
+#                     sub-area level when the terrain does not know; a starter zone's is level 4 or
+#                     5, so the default 4 lets a level 1 bot start there. A bot further below every
+#                     floor of its zone is relocated like an out-levelled one.
 #        Type: int
 #        Default: 4
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -10698,21 +10686,6 @@ World.Playerbots.Population.WindowTicks = 200
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.ZoneLevelSlack = 4
-
-#
-#    World.Playerbots.Population.ZoneLevelSlackMaxFloor
-#        Description: The highest placement floor that gets the whole ZoneLevelSlack (1..60). Above
-#                     it the slack shrinks by one level for every two floor levels (default: 3 at
-#                     floors 13-14, 2 at 15-16, 1 at 17-18, 0 from 19), so a level 38 bot is not
-#                     placed at a level 41 graveyard. 60 gives every floor the whole slack (the rule
-#                     before the taper).
-#        Type: int
-#        Default: 12
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Population.ZoneLevelSlackMaxFloor = 12
 
 #
 #    World.Playerbots.RestoreOnStartup
@@ -10846,6 +10819,19 @@ World.Playerbots.Scenarios.MaxDurationSeconds = 120
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Scenarios.StepTimeoutSeconds = 20
+
+#
+#    World.Playerbots.SlowThinkLogMs
+#        Description: A single bot think longer than this many milliseconds is logged with its bot,
+#                     goal, phases and path searches (PlayerbotSlowThinkLog; 0 = off, 0..60000).
+#                     Live: .reload config applies a change at once.
+#        Type: double
+#        Default: 50
+#        Allowed: a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.SlowThinkLogMs = 50
 
 #
 #    World.Playerbots.Social.Emotes.Enabled

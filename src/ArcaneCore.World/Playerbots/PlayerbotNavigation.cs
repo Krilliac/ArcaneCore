@@ -182,6 +182,8 @@ internal static class PlayerbotNavigation
 
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
+        // Other ways after the direct one was refused: held to the think's search budget (PlayerbotThinkProbe.Fallback).
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         foreach (float extra in HazardDetourYards)
             foreach (float sign in (float[])[1f, -1f])
             {
@@ -214,7 +216,7 @@ internal static class PlayerbotNavigation
     /// <summary>A further leg from <paramref name="from"/> (the navigation mesh's, else a stepped terrain line), or null.</summary>
     private static PlayerbotRoute? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
     {
-        PathResult path = map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+        PathResult path = PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true });
         if ((path.Type & PathType.NotUsingPath) != 0)
             return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
@@ -246,7 +248,7 @@ internal static class PlayerbotNavigation
         // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350) for a near destination, more for a far
         // one (SearchNodes). The old 512 polygons ran out on the real Dun Morogh mesh well inside the route bound: 200 yards from
         // Coldridge Valley to the Rockjaw Raiders (quest 179) answered no path with 512 and an 18-corner path with 2048.
-        PathResult path = Query(map, start, destination, options, partial, steep: false, searchNodes);
+        PathResult path = Query(map, start, destination, options, partial, steep: false, out bool capped, searchNodes);
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
@@ -269,11 +271,19 @@ internal static class PlayerbotNavigation
         }
 
         // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
-        // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by; any other refusal stays one.
+        // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by and the search ran out of corridor,
+        // not out of nodes; any other refusal stays one.
+        // A search that hit its node cap (PathSearchCounters) is no sign of a patch or a fragment: those are a few polygons, searched
+        // through long before any cap, while a capped search towards a far goal ends on the visited polygon nearest it, which may lie
+        // right beside the bot when the way starts off in another direction. Taken for a fragment, it ran the steep escape and the
+        // starts beside the bot, up to 34 more searches of up to 32 768 nodes: on the 200-bot terrain benchmark (2026-10-11) the bots
+        // in Coldridge Valley planning to a quest destination in Stormwind (1 800 yards) thought for up to 557 ms, 41 searches each.
         if ((path.Type & PathType.NoPath) != 0
                 ? OnWalkableMesh(map, start)
-                : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards)
+                : !partial || (path.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(path.End), Flat(start)) > SteepPatchYards || capped)
             return false;
+        // The ways off a patch, a fragment or steep ground are fallbacks, held to the think's search budget (PlayerbotThinkProbe.Fallback).
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route)) return true;
         // A fragment answers a partial corridor that ends where it began; a no-path answer (the bot off the mesh) is not one.
         if ((path.Type & PathType.NoPath) != 0) return false;
@@ -299,7 +309,20 @@ internal static class PlayerbotNavigation
     /// </summary>
     private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep,
         int? searchNodes = null)
-        => map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
+        => Query(map, from, to, options, partial, steep, out _, searchNodes);
+
+    /// <summary><see cref="Query"/>, and whether its search hit the node cap (<see cref="PathSearchCounters.CappedSearches"/>).</summary>
+    private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep, out bool capped,
+        int? searchNodes = null)
+    {
+        long before = PathSearchCounters.CappedSearches;
+        PathResult path = QueryOnce(map, from, to, options, partial, steep, searchNodes);
+        capped = PathSearchCounters.CappedSearches != before;
+        return path;
+    }
+
+    private static PathResult QueryOnce(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep, int? searchNodes)
+        => PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
             ExcludeFlags = steep ? NavTerrain.Empty : NavTerrain.SteepSlopes, AllowPartial = partial,
             MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true });
 
@@ -462,13 +485,20 @@ internal static class PlayerbotNavigation
                 if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
                 Vector3 beside = new(x, y, floor + 0.05f);
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
-                PathResult path = Query(map, beside, destination, options, partial, steep: false);
-                if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0) continue;
+                PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
                 // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
                 bool reaches = Reaches(path) || EndsAt(path, destination);
-                if (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
-                    || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards))
+                if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
+                    || (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
+                        || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards)))
+                {
+                    // Refused after running out of nodes short of the destination: the other starts lie a few yards away and search the
+                    // same ground, so they end the same way (each up to 32 768 nodes). A search that reached it despite the cap is no such
+                    // sign (refused for its length, say), and the next start is tried.
+                    if (capped && (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0) return null;
                     continue;
+                }
+
                 if (Bounded([start, .. path.Points], options, reaches) is not { } joined || joined.Points.Count > options.MaxPathPoints + 1) continue;
                 bool[] legs = [false, .. Enumerable.Repeat(true, joined.Points.Count - 2)];
                 return new PlayerbotRoute(joined.Points, joined.Distance, legs);
@@ -516,9 +546,16 @@ internal static class PlayerbotNavigation
             distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
-            if (Vector3.Distance(point, destination) > 1f
-                && !Usable(player, Query(map, point, destination, options, partial, steep: false), point, destination, goal, partial, options, out _))
-                continue;
+            if (Vector3.Distance(point, destination) > 1f)
+            {
+                PathResult onward = Query(map, point, destination, options, partial, steep: false, out bool capped);
+                if (!Usable(player, onward, point, destination, goal, partial, options, out _))
+                {
+                    // Ran out of nodes short of the destination: the next corner, a few yards on, searches the same ground (see FromBeside).
+                    if (capped && (onward.Type & (PathType.Incomplete | PathType.NoPath)) != 0) return false;
+                    continue;
+                }
+            }
             route = new PlayerbotRoute(steep.Points.Take(index + 1).ToArray(), distance, navigated: true);
             return true;
         }
@@ -531,7 +568,7 @@ internal static class PlayerbotNavigation
     /// locates no polygon there otherwise). One more query on a refused plan; a plan that succeeds never makes it.
     /// </summary>
     private static bool OnWalkableMesh(Map map, Vector3 point)
-        => (map.Collision.FindPath(point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
+        => (PlayerbotThinkProbe.Find(map.Collision, point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
             ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
 
     /// <summary>

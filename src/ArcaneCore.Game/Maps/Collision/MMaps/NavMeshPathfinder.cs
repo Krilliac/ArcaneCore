@@ -273,7 +273,10 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
 
         _queryLoads++;
-        if (!LoadTile(mapId, terrain.X, terrain.Y))
+        long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool loaded = LoadTile(mapId, terrain.X, terrain.Y);
+        PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted);
+        if (!loaded)
         {
             if (_noTile.Count < 16_384)
             {

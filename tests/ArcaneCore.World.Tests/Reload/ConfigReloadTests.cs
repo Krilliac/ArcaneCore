@@ -314,6 +314,28 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotThinkLimits_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // ManagedPlayerbotFeature reads SlowThinkLogMs and MaxThinkSearchNodes from this options object at every think.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "SlowThinkLogMs": 25, "MaxThinkSearchNodes": 65536 } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(25, playerbots.SlowThinkLogMs);
+        Assert.Equal(65_536, playerbots.MaxThinkSearchNodes);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxThinkSearchNodes": 1000 } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(65_536, playerbots.MaxThinkSearchNodes);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(50, playerbots.SlowThinkLogMs);
+        Assert.Equal(3 * PlayerbotNavigation.MaxSearchNodes, playerbots.MaxThinkSearchNodes);
+    }
+
+    [Fact]
     public async Task PlayerbotRisk_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // The brains and party AIs read World:Playerbots:Risk from this options object at every decision.
@@ -537,6 +559,8 @@ public sealed class ConfigReloadTests : IDisposable
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxRegisteredBots)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxBulkCommand)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SlowThinkLogMs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxThinkSearchNodes)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");

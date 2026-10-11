@@ -210,6 +210,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
+        PlayerbotThinkProbe.Phase("brain");
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
         _recovery.LandingUnsafe ??= (bot, at) => Risk.TooStrongAt(bot, at) is not null;
@@ -252,6 +253,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
+                PlayerbotThinkProbe.Phase("recovery");
                 Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
                 _recovery.Update(player, recoveryInterval);
             }
@@ -293,6 +295,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // trip (the goal that began it begins it again afterwards).
         if (player.IsAlive)
         {
+            PlayerbotThinkProbe.Phase("tram");
             if (player.Combat.IsInCombat && PlayerbotTram.TripOf(player) is { Stage: TramStage.ToEntrance }) PlayerbotTram.Cancel(player);
             TramStep tram = PlayerbotTram.Drive(_session, player, _options, interval, out string? tramFailure);
             if (tram == TramStep.Traveling)
@@ -312,6 +315,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
+        PlayerbotThinkProbe.Phase("stall watch");
         if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
@@ -339,11 +343,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+            PlayerbotThinkProbe.Phase("recovery");
             _recovery.Update(player, interval);
             return;
         }
 
         // A retreat owns the bot until nothing threatens it (PlayerbotRetreat); out of combat the bot lays the trail back.
+        PlayerbotThinkProbe.Phase("risk");
         if (Risk.UpdateRetreat(player, interval))
         {
             DropIntent();
@@ -382,6 +388,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
+        PlayerbotThinkProbe.Phase("quest return");
         uint completedReturn = _quests.CompletedReturnQuest(player);
         if (completedReturn != 0)
         {
@@ -401,12 +408,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             { TargetEntry = _quests.TargetEntry; return; }
             _target = null;
             _route = null;
+            PlayerbotThinkProbe.Phase("quest destinations");
             if (_destinations.Update(player, 0, interval, completedReturn)) TargetEntry = _destinations.TargetEntry;
             // Wait/retry at the real giver while combat or a normal interaction
             // refusal remains. A completed quest must not reopen opportunistic grind.
             return;
         }
 
+        PlayerbotThinkProbe.Phase("threats");
         Creature? outgoingVictim = player.Combat.Victim is Creature victim
             && player.Map is { } map && victim.IsInWorld && victim.IsAlive && ReferenceEquals(victim.Map, map)
             && map.Combat.Hooks.CanAttack(player, victim)
@@ -496,6 +505,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 Rest(player);
                 return;
             }
+            PlayerbotThinkProbe.Phase("equipment");
             if (_equipment.Update(player))
             {
                 _target = null;
@@ -507,20 +517,28 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
             // Class upkeep between fights (forms, buffs on the bot and its group, the pet, heals, stealth before a pull),
             // vmangos UpdateOutOfCombatAI_<Class>; the creature the bot is closing in on is its pull target.
+            PlayerbotThinkProbe.Phase("class upkeep");
             _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
             if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
+            PlayerbotThinkProbe.Phase("local plan");
             UpdateLocalPlan(player);
+            PlayerbotThinkProbe.Phase("home");
             if (_home is { } home && TryReturnHome(player, home, interval)) return;
+            PlayerbotThinkProbe.Phase("town");
             // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
             if (_modelChoice == "town" && _town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             QuestId = _quests.QuestId;
+            PlayerbotThinkProbe.Phase("town");
             if (_town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("trainers");
             if (_quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player))
             {
                 // An abandoned idle-grind target must not keep reopening combat instead
@@ -538,6 +556,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_trainers.Update(player, interval))
                 { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
             }
+            PlayerbotThinkProbe.Phase("quest destinations");
             if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null
                 && _destinations.HasQuestCandidate(player))
             {
@@ -558,11 +577,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                     return;
                 }
             }
-            if (_modelChoice == "explore") { _target = null; Explore(player, interval); return; }
+            if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
         if (_target is null || _target.Map != player.Map)
         {
+            PlayerbotThinkProbe.Phase("choose target");
             Creature? previousTarget = _target;
             uint preferred = _quests.PreferredCreatureEntry;
             _target = _options.Risk.Enabled
@@ -576,6 +596,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _lootOpened = false;
             if (_target is null)
             {
+                PlayerbotThinkProbe.Phase("grind destinations");
                 if (_destinations.Update(player, _quests.PreferredCreatureEntry, interval))
                 {
                     _route = null;
@@ -584,6 +605,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                     if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
                     return;
                 }
+                PlayerbotThinkProbe.Phase("explore");
                 Explore(player, interval);
                 return;
             }
@@ -595,6 +617,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         TargetEntry = target.Entry;
 
+        PlayerbotThinkProbe.Phase("combat");
         if (target.IsAlive)
         {
             // A losing fight is given up (PlayerbotRiskModel.Judge) before the next blow.
@@ -630,6 +653,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
+                PlayerbotThinkProbe.Phase("chase");
                 if (_route is null && !PlayerbotNavigation.TryPlan(player,
                         new System.Numerics.Vector3(target.X, target.Y, target.Z), _options, out _route))
                 {
