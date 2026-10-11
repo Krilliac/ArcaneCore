@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Playerbots.Combat;
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
@@ -454,6 +455,54 @@ internal sealed class PlayerbotRisk
         1 => player.Skills?.Has(SkinningSkill) == true ? 0.3f : 0.1f,
         _ => 0.05f,
     };
+
+    // --- a ghost's body ----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A creature round a ghost's body that the revived bot could not take even at full health, or null: the risk part of
+    /// <see cref="PlayerbotRecovery.JudgeBody"/>. The candidates are the creatures that would attack the revived bot on sight
+    /// (<see cref="PlayerbotRecovery.Threats"/>) and whose aggro reach covers part of the reclaim disc
+    /// (<see cref="CombatConstants.CorpseReclaimRadius"/> round the body, anywhere a reclaim may revive it). Each is weighed as a pull
+    /// is (<see cref="PlayerbotRiskModel.Assess"/>), with the creatures that would answer its call for assistance (vmangos
+    /// Creature::CallAssistance, as <see cref="Facts"/>), the bot at the health and mana a reclaim gives back (half: vmangos
+    /// HandleReclaimCorpseOpcode, <c>ResurrectPlayer(0.5f)</c>, <see cref="CombatConstants.CorpseReclaimRestorePercent"/>), no escape
+    /// counted (a ghost has none ready), and as a matter of strength only: no quest credit, no loot, no danger memory (the bot died to
+    /// these, and the memory alone would avoid every one of them). The model answers Rest for a fight that only needs full health and
+    /// mana first, so Avoid means not even then. Null with the estimate off.
+    /// </summary>
+    internal PlayerbotEngagement? TooStrongNear(Player player, Vector3 body)
+    {
+        if (!Enabled || player.Map is not { } map) return null;
+        CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
+        uint health = Math.Max(1u, (uint)(player.MaxHealth * CombatConstants.CorpseReclaimRestorePercent));
+        foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
+        {
+            if (threat.Source is not { } creature
+                || Vector3.Distance(threat.Position, body) >= CombatConstants.CorpseReclaimRadius + threat.Radius) continue;
+            var enemies = new List<RiskEnemy> { Enemy(creature, RiskJoin.Target, player) };
+            if (system is not null && system.AssistanceRadiusOf(creature.Template) is var assist && assist > 0)
+                foreach (ObjectGuid guid in player.VisibleObjects)
+                    if (map.FindObject(guid) is Creature helper && helper.Guid != creature.Guid && helper.IsAlive
+                        && system.CanAssist(helper, creature, player, assist))
+                        enemies.Add(Enemy(helper, RiskJoin.Assist, player));
+            var facts = new PlayerbotEngagementFacts
+            {
+                BotLevel = player.Level,
+                BotHealth = health,
+                BotMaxHealth = player.MaxHealth,
+                BotManaPct = mana,
+                ManaDependence = ManaDependence(player.Class),
+                BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level),
+                Enemies = enemies,
+            };
+            PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
+            if (verdict.Decision == PlayerbotEngageDecision.Avoid) return verdict;
+        }
+
+        return null;
+    }
 
     // --- hazards on the way -------------------------------------------------------------------------------------
 
