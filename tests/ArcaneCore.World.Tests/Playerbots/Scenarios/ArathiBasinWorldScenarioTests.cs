@@ -1,30 +1,37 @@
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Scenarios;
+using ArcaneCore.World.Spells;
+using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 
 /// <summary>
-/// Arathi Basin in the world: two managed bots queue at their battlemasters, port into one Arathi Basin match, and the stables banner is opened
-/// (the open-lock path a client's opening spell takes): the node is claimed, its banner events swap the neutral banner for the contested one a
-/// second later (the event spawn gate), a minute later the node is occupied and its banner appears five seconds after, and resources tick to
-/// the world state every client of the match receives. The Horde then assaults the node.
+/// Arathi Basin in the world, on the real classic-db shapes of the banners (<see cref="ArathiBasinTestContent"/>): two managed bots queue at
+/// their battlemasters and port into one Arathi Basin match, and the Alliance bot casts Opening (21651) on the neutral stables banner - a goober
+/// whose use casts its trigger spell 23932 at the user, which claims the node (vmangos spell_battleground_banner_trigger). The banner events
+/// swap the neutral banner for the contested one a second later (the event spawn gate), a minute later the node is occupied and its banner
+/// appears five seconds after, and resources tick to the world state every client of the match receives. The Horde then opens the occupied
+/// banner (a button with noDamageImmune): the node is assaulted.
 /// </summary>
 public sealed class ArathiBasinWorldScenarioTests
 {
-    private sealed class Scenario(Func<ScenarioContext, Task> body) : IPlayerbotScenario
+    private sealed class Scenario(string name, Func<ScenarioContext, Task> body) : IPlayerbotScenario
     {
-        public string Name => "ab-node";
+        public string Name => name;
 
         public string Description => Name;
 
@@ -35,7 +42,7 @@ public sealed class ArathiBasinWorldScenarioTests
     public async Task Ab_TheStablesBanner_IsClaimed_Occupied_TicksResources_AndIsAssaulted()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(ArathiBasinTestContent.Register);
-        ScenarioReport report = await world.RunAsync(new Scenario(async context =>
+        ScenarioReport report = await world.RunAsync(new Scenario("ab-node", async context =>
         {
             (ScenarioBot ally, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(BattlegroundType.ArathiBasin, "Scnabally", "Scnabhorde", TimeSpan.FromMinutes(3));
             var ab = (ArathiBasin)match;
@@ -48,8 +55,9 @@ public sealed class ArathiBasinWorldScenarioTests
             await context.StepAsync("the Alliance bot opens the neutral banner: the stables are claimed", async () =>
             {
                 await context.PlaceAsync(ally, 529, ArathiBasinTestContent.Stables.X + 1f, ArathiBasinTestContent.Stables.Y, ArathiBasinTestContent.Stables.Z);
-                GameObjectUseResult opened = await context.ReadAsync(() => OpenBanner(ally, ArathiBasinTestContent.NeutralBanner));
-                ScenarioContext.ExpectEqual(GameObjectUseResult.Ok, opened, "open-lock result");
+                (SpellCastResult opened, uint uses) = await context.ReadAsync(() => OpenBanner(context, ally, ArathiBasinTestContent.NeutralBanner));
+                ScenarioContext.ExpectEqual(SpellCastResult.CastOk, opened, "Opening cast result");
+                ScenarioContext.ExpectEqual(1u, uses, "neutral banner uses (the open reached the goober)");
                 ScenarioContext.ExpectEqual(ArathiBasin.StatusAllianceContested, await context.ReadAsync(() => ab.NodeStatus(ArathiBasin.NodeStables)), "stables status");
                 await horde.WaitForPacketAsync(WorldOpcode.SmsgUpdateWorldState, ScenarioBattlegrounds.WorldState, s => s.Field == 1767 + 2 && s.Value == 1, mark);
             });
@@ -73,8 +81,8 @@ public sealed class ArathiBasinWorldScenarioTests
             await context.StepAsync("the Horde bot assaults the occupied stables", async () =>
             {
                 await context.PlaceAsync(horde, 529, ArathiBasinTestContent.Stables.X - 1f, ArathiBasinTestContent.Stables.Y, ArathiBasinTestContent.Stables.Z);
-                GameObjectUseResult opened = await context.ReadAsync(() => OpenBanner(horde, ArathiBasinTestContent.AllianceBanner));
-                ScenarioContext.ExpectEqual(GameObjectUseResult.Ok, opened, "open-lock result");
+                (SpellCastResult opened, _) = await context.ReadAsync(() => OpenBanner(context, horde, ArathiBasinTestContent.AllianceBanner));
+                ScenarioContext.ExpectEqual(SpellCastResult.CastOk, opened, "Opening cast result");
                 ScenarioContext.ExpectEqual(ArathiBasin.StatusHordeContested, await context.ReadAsync(() => ab.NodeStatus(ArathiBasin.NodeStables)), "stables status");
                 ScenarioContext.ExpectEqual(1u, await context.ReadAsync(() => ((AbScore)ab.ScoreOf(horde.Guid)!).BasesAssaulted), "Horde bases assaulted");
             });
@@ -82,31 +90,118 @@ public sealed class ArathiBasinWorldScenarioTests
         Assert.True(report.Passed, report.ToString());
     }
 
+    /// <summary>
+    /// Every one of the five neutral banners (classic-db 180087-180091 at their classic-db spawns, each a goober with its own trigger spell:
+    /// 23932, 23936, 23935, 23938, 23937) is claimed by an Opening cast: all five nodes become Alliance-contested and the bot has five bases
+    /// assaulted.
+    /// </summary>
+    [Fact]
+    public async Task Ab_EveryNeutralBanner_IsClaimed_ByTheOpeningSpell()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(ArathiBasinTestContent.Register);
+        ScenarioReport report = await world.RunAsync(new Scenario("ab-neutral-banners", async context =>
+        {
+            (ScenarioBot ally, _, Battleground match) = await context.EnterMatchAsync(BattlegroundType.ArathiBasin, "Scnabnally", "Scnabnhorde", TimeSpan.FromMinutes(3));
+            var ab = (ArathiBasin)match;
+
+            for (int node = 0; node < ArathiBasin.NodeCount; node++)
+            {
+                (uint spawn, uint entry, (float X, float Y, float Z) at) = ArathiBasinTestContent.NeutralBanners[node];
+                int n = node;
+                await context.StepAsync($"node {n}: the neutral banner {entry} is opened and the node is claimed", async () =>
+                {
+                    await context.PlaceAsync(ally, 529, at.X + 1f, at.Y, at.Z);
+                    await context.WaitUntilAsync("the neutral banner stands", () => Spawned(ally, spawn));
+                    ScenarioContext.ExpectEqual(ArathiBasin.StatusNeutral, await context.ReadAsync(() => ab.NodeStatus(n)), "status before");
+                    (SpellCastResult opened, uint uses) = await context.ReadAsync(() => OpenBanner(context, ally, spawn));
+                    ScenarioContext.ExpectEqual(SpellCastResult.CastOk, opened, "Opening cast result");
+                    ScenarioContext.ExpectEqual(1u, uses, "banner uses (the open reached the goober)");
+                    ScenarioContext.ExpectEqual(ArathiBasin.StatusAllianceContested, await context.ReadAsync(() => ab.NodeStatus(n)), "status after");
+                });
+            }
+
+            await context.StepAsync("five bases assaulted", async ()
+                => ScenarioContext.ExpectEqual(5u, await context.ReadAsync(() => ((AbScore)ab.ScoreOf(ally.Guid)!).BasesAssaulted), "Alliance bases assaulted"));
+        }), new ScenarioRunOptions { StepTimeout = TimeSpan.FromSeconds(30), MaxDuration = TimeSpan.FromMinutes(5) });
+        Assert.True(report.Passed, report.ToString());
+    }
+
+    /// <summary>
+    /// The routing predicate on the real templates: the neutral goobers (trigger spells 23932, 23935-23938) and the faction/contested buttons
+    /// (noDamageImmune) reach the node click; the same goober with another spell, a button without noDamageImmune, a flag stand and a chest do not.
+    /// </summary>
+    [Fact]
+    public void RoutesBannerUse_TakesTheRealBannerShapes_AndNothingElse()
+    {
+        foreach (GameObjectTemplate banner in ArathiBasinTestContent.Templates)
+        {
+            Assert.True(ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(banner), $"{banner.Entry} {banner.Name}");
+        }
+
+        GameObjectTemplate neutral = ArathiBasinTestContent.Templates.First(t => t.Entry == 180087);
+        uint[] otherSpell = [.. neutral.Data];
+        otherSpell[10] = 23383; // Alliance Flag Click: a battleground spell, but not a banner trigger
+        Assert.False(ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(neutral with { Data = otherSpell }));
+        GameObjectTemplate button = ArathiBasinTestContent.Templates.First(t => t.Entry == 180058);
+        uint[] noImmune = [.. button.Data];
+        noImmune[4] = 0;
+        Assert.False(ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(button with { Data = noImmune }));
+        Assert.False(ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(neutral with { Type = (uint)GameObjectType.FlagStand }));
+        Assert.False(ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(neutral with { Type = (uint)GameObjectType.Chest }));
+    }
+
     private static GameObjectMapSystem Objects(ScenarioBot bot) => bot.RequirePlayer().Map!.FindUpdater<GameObjectMapSystem>()!;
 
     private static bool Spawned(ScenarioBot bot, uint spawnGuid) => Objects(bot).GameObjects.Any(g => g.Spawn?.Guid == spawnGuid && g.IsSpawned);
 
-    /// <summary>What the opening spell's open-lock effect does (Skills/GatheringSpells: <c>GameObjectMapSystem.OpenLock</c>).</summary>
-    private static GameObjectUseResult OpenBanner(ScenarioBot bot, uint spawnGuid)
+    /// <summary>
+    /// The bot casts Opening (21651) on the banner, as a client's click on a locked banner does once its cast bar ran (the cast is triggered so
+    /// the ten-second bar does not run): the open-lock effect opens lock 1479 and hands the banner to GameObjectMapSystem.OpenLock. Also returns
+    /// how often the banner was used once the cast returned, so a failure tells an open that never reached the object from a use that did not click.
+    /// </summary>
+    private static (SpellCastResult Result, uint Uses) OpenBanner(ScenarioContext context, ScenarioBot bot, uint spawnGuid)
     {
-        GameObjectMapSystem objects = Objects(bot);
-        GameObject banner = objects.GameObjects.Single(g => g.Spawn?.Guid == spawnGuid && g.IsSpawned);
-        return objects.OpenLock(bot.RequirePlayer(), banner.Guid, LockType.Open);
+        GameObject banner = Objects(bot).GameObjects.Single(g => g.Spawn?.Guid == spawnGuid && g.IsSpawned);
+        SpellSystem spells = context.Services.GetRequiredService<SpellFeature>().System;
+        SpellCastResult result = spells.CastSpell(bot.RequirePlayer(), ArathiBasinTestContent.OpeningSpell,
+            new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = banner.Guid }, triggered: true);
+        return (result, banner.UseCount);
     }
 }
 
 /// <summary>
-/// Synthetic Arathi Basin content: map 529, the start safe locations 890/889 and the stables graveyard 895, a template of one to fifteen players
-/// per team from level 1, the classic-db battlemasters 857 and 907, and the stables' three banners (buttons with <c>noDamageImmune</c>) on the
-/// events (0, 0) neutral, (0, 1) Alliance contested and (0, 3) Alliance occupied.
+/// Arathi Basin content with the real shapes of classic-db z2815 (Full_DB/ClassicDB_1_12_1_z2815.sql.gz) and the 5875 client's DBCs: map 529,
+/// the start safe locations 890/889 and the stables graveyard 895, a template of one to fifteen players per team from level 1, the battlemasters
+/// 857 and 907, the five neutral banners (<c>gameobject</c> 5290025-5290029, entries 180087-180091: goobers locked by 1479 whose data10 is the
+/// node's trigger spell) on the events (node, 0), and the stables' Alliance contested (5290010, 180059) and occupied (5290005, 180058) banners
+/// (buttons locked by 1479 with <c>noDamageImmune</c>) on (0, 1) and (0, 3); the Opening spell 21651, the trigger spells and lock 1479.
 /// </summary>
 internal static class ArathiBasinTestContent
 {
     public const uint NeutralBanner = 5290025;
-    public const uint AllianceContestedBanner = 5290015;
+    public const uint AllianceContestedBanner = 5290010;
     public const uint AllianceBanner = 5290005;
 
-    public static readonly (float X, float Y, float Z) Stables = (1166.79f, 1200.13f, -56.70f);
+    /// <summary>Opening (Spell.dbc 21651; classic-db playercreateinfo_spell gives it to every race and class).</summary>
+    public const uint OpeningSpell = BattlegroundBannerTestContent.OpeningSpell;
+
+    /// <summary>The lock of every Arathi Basin banner (gameobject_template data0 of 180087-180091, data1 of 180058/180059).</summary>
+    public const uint BannerLock = BattlegroundBannerTestContent.BannerLock;
+
+    public static readonly (float X, float Y, float Z) Stables = (1166.79f, 1200.13f, -56.7086f);
+
+    /// <summary>The neutral banners by node (classic-db gameobject and gameobject_battleground (guid, node, 0)).</summary>
+    public static readonly (uint Spawn, uint Entry, (float X, float Y, float Z) At)[] NeutralBanners =
+    [
+        (5290025, 180087, Stables),
+        (5290026, 180088, (977.016f, 1046.62f, -44.8092f)),
+        (5290027, 180089, (806.182f, 874.272f, -55.9937f)),
+        (5290028, 180090, (856.142f, 1148.9f, 11.1847f)),
+        (5290029, 180091, (1146.92f, 848.178f, -110.917f)),
+    ];
+
+    /// <summary>The banner templates (classic-db gameobject_template rows).</summary>
+    public static GameObjectTemplate[] Templates => Content.Templates;
 
     public static void Register(IServiceCollection services)
     {
@@ -116,6 +211,8 @@ internal static class ArathiBasinTestContent
         var store = new Content();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells(ScenarioTestContent.Spells())));
+        BattlegroundBannerTestContent.RegisterSkills(services);
         services.AddSingleton(new FactionTemplateCatalog(
         [
             new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
@@ -123,6 +220,52 @@ internal static class ArathiBasinTestContent
             new FactionTemplateRecord(12, 72, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),
             new FactionTemplateRecord(29, 76, 0, OwnMask: 4, FriendlyMask: 4, HostileMask: 8),
         ]));
+    }
+
+    /// <summary>
+    /// The spells the guard scenarios put on a player (the real ids and aura types of Spell.dbc 5875; Spirit of Redemption is reduced to the aura
+    /// the guard looks for): Divine Shield 642 (two SCHOOL_IMMUNITY effects, school masks 1 and 126: together every school), a Divine Shield
+    /// with only its mask-126 effect (not total), Spirit of Redemption 27827 and Feign Death 5384 (FEIGN_DEATH, 66).
+    /// </summary>
+    public const uint DivineShield = 642;
+    public const uint PartialImmunity = 991_642;
+    public const uint FeignDeath = 5384;
+
+    /// <summary>A minute: the guard auras outlast every step they are used in (a duration row of the test only).</summary>
+    private const uint GuardAuraDuration = 991_001;
+
+    private static SpellContent Spells(SpellContent baseline)
+    {
+        SpellContent banners = BattlegroundBannerTestContent.Extend(baseline);
+        SpellTemplateRow[] added =
+        [
+            new SpellTemplateRow
+            {
+                Id = DivineShield, SpellName = "Divine Shield", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 39, EffectMiscValue1 = 1,
+                Effect3 = 6, EffectImplicitTargetA3 = 1, EffectApplyAuraName3 = 39, EffectMiscValue3 = 126,
+            },
+            new SpellTemplateRow
+            {
+                Id = PartialImmunity, SpellName = "Partial Immunity", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 39, EffectMiscValue1 = 126,
+            },
+            new SpellTemplateRow
+            {
+                Id = BattlegroundConstants.SpellSpiritOfRedemption, SpellName = "Spirit of Redemption", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 4,
+            },
+            new SpellTemplateRow
+            {
+                Id = FeignDeath, SpellName = "Feign Death", RangeIndex = 1, DurationIndex = GuardAuraDuration, CastingTimeIndex = 1,
+                Effect1 = 6, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 66,
+            },
+        ];
+        return banners with
+        {
+            Spells = [.. banners.Spells.Where(s => added.All(a => a.Id != s.Id)), .. added],
+            Durations = [.. banners.Durations, new SpellDurationRow { Id = GuardAuraDuration, Duration = 60_000, MaxDuration = 60_000 }],
+        };
     }
 
     private sealed class Maps : IMapDataStore
@@ -153,7 +296,7 @@ internal static class ArathiBasinTestContent
             [new BattlegroundTemplateRecord(3, 1, 15, 1, 60, 890, 889, 75, 0)],
             [],
             [
-                new BattlegroundEventIndex(NeutralBanner, ArathiBasin.NodeStables, ArathiBasin.StatusNeutral),
+                .. NeutralBanners.Select((b, node) => new BattlegroundEventIndex(b.Spawn, (byte)node, ArathiBasin.StatusNeutral)),
                 new BattlegroundEventIndex(AllianceContestedBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceContested),
                 new BattlegroundEventIndex(AllianceBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceOccupied),
             ],
@@ -170,17 +313,28 @@ internal static class ArathiBasinTestContent
             ], [], [], []));
 
         Task<GameObjectContent> IGameObjectDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new GameObjectContent(
-            [Banner(180087, "Stable Banner"), Banner(180085, "Contested Banner"), Banner(180058, "Alliance Banner")],
+            Templates,
             [
-                Spawn(NeutralBanner, 180087),
-                Spawn(AllianceContestedBanner, 180085),
-                Spawn(AllianceBanner, 180058),
+                .. NeutralBanners.Select(b => Spawn(b.Spawn, b.Entry, b.At)),
+                Spawn(AllianceContestedBanner, 180059, Stables),
+                Spawn(AllianceBanner, 180058, Stables),
             ],
-            [], [], []));
+            [BattlegroundBannerTestContent.Lock()], [], []));
 
-        private static GameObjectSpawn Spawn(uint guid, uint entry) => new()
+        public static GameObjectTemplate[] Templates =>
+        [
+            NeutralBannerTemplate(180087, "Stable Banner", 23932),
+            NeutralBannerTemplate(180088, "Blacksmith Banner", 23936),
+            NeutralBannerTemplate(180089, "Farm Banner", 23935),
+            NeutralBannerTemplate(180090, "Lumber Mill Banner", 23938),
+            NeutralBannerTemplate(180091, "Mine Banner", 23937),
+            ButtonBannerTemplate(180059, 6252, "Contested Banner", 0, 180102),
+            ButtonBannerTemplate(180058, 6251, "Alliance Banner", 196608, 180100),
+        ];
+
+        private static GameObjectSpawn Spawn(uint guid, uint entry, (float X, float Y, float Z) at) => new()
         {
-            Guid = guid, Entry = entry, MapId = 529, X = Stables.X, Y = Stables.Y, Z = Stables.Z, SpawnTimeSeconds = 0,
+            Guid = guid, Entry = entry, MapId = 529, X = at.X, Y = at.Y, Z = at.Z, SpawnTimeSeconds = 0,
         };
 
         private static CreatureTemplate Master(uint entry, string name, uint faction) => new()
@@ -189,12 +343,84 @@ internal static class ArathiBasinTestContent
             MinLevel = 60, MaxLevel = 60, MinLevelHealth = 100, MaxLevelHealth = 100, ExtraFlags = Game.Creatures.Creature.ExtraFlagNoAggro,
         };
 
-        /// <summary>An Arathi Basin banner: a button whose data4 (<c>noDamageImmune</c>) is set (vmangos Spell::EffectOpenLock).</summary>
-        private static GameObjectTemplate Banner(uint entry, string name)
+        /// <summary>
+        /// A neutral node banner as classic-db has it: type 10 (goober), display 6271, faction 0, flags 0, data0 (lockId) 1479, data3
+        /// (autoCloseTime) 196608, data10 (spellId) the node's trigger spell, data11 (noDamageImmune) 1, data16 1.
+        /// </summary>
+        private static GameObjectTemplate NeutralBannerTemplate(uint entry, string name, uint triggerSpell)
         {
             uint[] data = new uint[GameObjectTemplate.DataCount];
-            data[4] = 1;
-            return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Button, DisplayId = 5651, Name = name, Data = data };
+            (data[0], data[3], data[10], data[11], data[16]) = (BannerLock, 196608, triggerSpell, 1, 1);
+            return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Goober, DisplayId = 6271, Name = name, Data = data };
+        }
+
+        /// <summary>
+        /// A faction banner as classic-db has it: type 1 (button), faction 83, flags 32, data1 (lockId) 1479, data2 (autoCloseTime), data3
+        /// (linkedTrap: the banner aura), data4 (noDamageImmune) 1, data5 1, data8 1.
+        /// </summary>
+        private static GameObjectTemplate ButtonBannerTemplate(uint entry, uint displayId, string name, uint autoClose, uint linkedTrap)
+        {
+            uint[] data = new uint[GameObjectTemplate.DataCount];
+            (data[1], data[2], data[3], data[4], data[5], data[8]) = (BannerLock, autoClose, linkedTrap, 1, 1, 1);
+            return new GameObjectTemplate
+            {
+                Entry = entry, Type = (uint)GameObjectType.Button, DisplayId = displayId, Name = name, Faction = 83, Flags = 32, Data = data,
+            };
         }
     }
+}
+
+/// <summary>
+/// What every battleground banner needs, from the 5875 client's DBCs and classic-db: Opening 21651 (OPEN_LOCK (33) of lock type 17 at the object
+/// target (23), cast time index 7 (10 s), range index 12 (5 yd), attributes 0x190, targets 0x4000, interrupt flags 31), the six banner trigger
+/// spells (SCRIPT_EFFECT (77) at TARGET_UNIT (25), cast time index 1, range index 6 (100 yd), attributes 0x100, attributesEx2 4), Lock.dbc 1479
+/// (case 1: LOCK_KEY_SKILL (2) of lock type 17, no skill), and the skill catalog the open-lock effect needs (GatheringSpells runs once one exists).
+/// </summary>
+internal static class BattlegroundBannerTestContent
+{
+    public const uint OpeningSpell = 21651;
+    public const uint BannerLock = 1479;
+
+    public static SpellContent Extend(SpellContent baseline)
+    {
+        SpellTemplateRow[] added =
+        [
+            new SpellTemplateRow
+            {
+                Id = OpeningSpell, SpellName = "Opening", Attributes = 0x190, Targets = 0x4000, CastingTimeIndex = 7, InterruptFlags = 31, RangeIndex = 12,
+                SpellVisual = 6139, Effect1 = 33, EffectDieSides1 = 1, EffectBaseDice1 = 1, EffectBasePoints1 = 99, EffectImplicitTargetA1 = 23,
+                EffectMiscValue1 = 17,
+            },
+            Trigger(23932, "A-Mid Trigger"),
+            Trigger(23935, "H-Mid Trigger"),
+            Trigger(23936, "Mid Trigger"),
+            Trigger(23937, "ALT -N Trigger"),
+            Trigger(23938, "ALT -S Trigger"),
+            Trigger(24677, "GY Mid Trigger"),
+        ];
+        SpellCastTimeRow[] castTimes = [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }];
+        SpellRangeRow[] ranges = [new SpellRangeRow { Id = 6, MaxRange = 100 }, new SpellRangeRow { Id = 12, MaxRange = 5 }];
+        return baseline with
+        {
+            Spells = [.. baseline.Spells.Where(s => added.All(a => a.Id != s.Id)), .. added],
+            CastTimes = [.. baseline.CastTimes.Where(c => castTimes.All(a => a.Id != c.Id)), .. castTimes],
+            Ranges = [.. baseline.Ranges.Where(r => ranges.All(a => a.Id != r.Id)), .. ranges],
+        };
+    }
+
+    /// <summary>The skills feature owns the open-lock effect of Opening (GatheringSpells); it runs once a skill catalog exists.</summary>
+    public static void RegisterSkills(IServiceCollection services) => services.AddSingleton(new SkillCatalog([], [], [], []));
+
+    public static LockEntry Lock()
+    {
+        uint[] types = new uint[LockEntry.Cases];
+        uint[] indexes = new uint[LockEntry.Cases];
+        (types[1], indexes[1]) = (2, 17);
+        return new LockEntry(BannerLock, types, indexes, new uint[LockEntry.Cases]);
+    }
+
+    private static SpellTemplateRow Trigger(uint id, string name) => new()
+    {
+        Id = id, SpellName = name, Attributes = 0x100, AttributesEx2 = 4, CastingTimeIndex = 1, RangeIndex = 6, Effect1 = 77, EffectImplicitTargetA1 = 25,
+    };
 }

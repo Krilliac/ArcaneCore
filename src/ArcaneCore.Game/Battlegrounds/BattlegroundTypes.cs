@@ -174,6 +174,15 @@ public static class BattlegroundConstants
     /// <summary>Spirit of Redemption, whose death does not count as a death (BattleGround.cpp:1784).</summary>
     public const uint SpellSpiritOfRedemption = 27827;
 
+    /// <summary>
+    /// The trigger spells of the neutral banners, goobers (type 10) whose use casts their goober.spellId (data10) at the user: Arathi Basin
+    /// 23932 A-Mid, 23935 H-Mid, 23936 Mid, 23937 ALT -N and 23938 ALT -S Trigger (classic-db gameobject_template 180087-180091) and Alterac
+    /// Valley 24677 GY Mid Trigger (180418, the Snowfall banner). Each is one SPELL_EFFECT_SCRIPT_EFFECT (77) at TARGET_UNIT (25) (Spell.dbc
+    /// 5875). vmangos gives them the <c>spell_battleground_banner_trigger</c> script (sql/migrations/20260831185741_world.sql:13-16), which hands
+    /// the use to the battleground as a click on the banner (src/scripts/battlegrounds/battleground.cpp:176-196).
+    /// </summary>
+    public static readonly uint[] BannerTriggerSpells = [23932, 23935, 23936, 23937, 23938, 24677];
+
     /// <summary>A respawn time that means "never": the object is despawned (vmangos <c>RESPAWN_NEVER</c>, BattleGroundDefines.h:127, one year in seconds).</summary>
     public const uint RespawnNeverSeconds = 31_536_000;
 
