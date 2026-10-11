@@ -20,7 +20,8 @@ public sealed record WardenVerdict(string Reason, WardenAction Action, bool IsPr
 /// in MODULE_CACHE chunks (once); a loaded module answers HASH_REQUEST with the expected 20 bytes, after which both RC4 directions switch
 /// to the module's keys and MODULE_INITIALIZE installs the client callbacks. From then on a CHEAT_CHECKS_REQUEST goes out at a random gap
 /// and every scan of the reply is checked (vmangos Warden::HandlePacket). Every awaited reply has a deadline; a protocol break or a late
-/// reply is <see cref="WardenOptions.ProtocolAction"/> (never above Kick), a failed scan its own action or <see cref="WardenOptions.Action"/>.
+/// reply is <see cref="WardenOptions.ProtocolAction"/>; Log retries the handshake or schedules another scan. A failed scan uses
+/// its own action or <see cref="WardenOptions.Action"/>.
 /// Thread-safe: the packet arrives on the session task, the update on the world thread.
 /// </summary>
 public sealed class WardenSession
@@ -96,17 +97,17 @@ public sealed class WardenSession
                 return; // nothing solicited yet: the stream is not advanced (MaNGOS Zero HandleEncrypted)
             }
 
-            if (State == WardenState.Ready)
-            {
-                Fail("unsolicited reply");
-                return;
-            }
-
             byte[] plain = encrypted.ToArray();
             _crypto.DecryptFromClient(plain);
             if (plain.Length == 0)
             {
                 Fail("empty reply");
+                return;
+            }
+
+            if (State == WardenState.Ready)
+            {
+                Fail("unsolicited reply");
                 return;
             }
 
@@ -215,7 +216,6 @@ public sealed class WardenSession
     private void HandleCheckResult(byte[] plain)
     {
         IReadOnlyList<WardenCheck> pending = _pending!;
-        _pending = null;
         List<WardenCheck>? failed = WardenCodec.CheckResult(plain, pending);
         if (failed is null)
         {
@@ -223,6 +223,7 @@ public sealed class WardenSession
             return;
         }
 
+        _pending = null;
         State = WardenState.Ready;
         ScheduleScan();
         foreach (WardenCheck check in failed)
@@ -246,10 +247,43 @@ public sealed class WardenSession
 
     private void Fail(string reason)
     {
-        State = WardenState.Failed;
+        WardenState failedState = State;
+        int pendingCount = _pending?.Count ?? 0;
         _pending = null;
-        WardenAction action = _options.ProtocolAction > WardenAction.Kick ? WardenAction.Kick : _options.ProtocolAction;
+        WardenAction action = _options.ProtocolAction;
+        if (action != WardenAction.Log)
+        {
+            State = WardenState.Failed;
+        }
+
         _report(new WardenVerdict(reason, action, true, null));
+        if (action != WardenAction.Log)
+        {
+            return;
+        }
+
+        // A Log verdict keeps the client online, so it must also leave a live Warden cycle.
+        // The received body was already decrypted; both RC4 directions remain aligned.
+        switch (failedState)
+        {
+            case WardenState.Ready:
+                // Unsolicited packets must not push an already scheduled scan into the future.
+                break;
+            case WardenState.AwaitingCheckResult:
+                // Re-run an unanswered batch instead of letting a malformed reply skip its checks.
+                _nextCheck = (_nextCheck - pendingCount + _checks.Count) % _checks.Count;
+                State = WardenState.Ready;
+                ScheduleScan();
+                break;
+            case WardenState.AwaitingHash:
+                SendPlain(WardenCodec.HashRequest());
+                Await(WardenState.AwaitingHash);
+                break;
+            case WardenState.AwaitingModuleStatus or WardenState.AwaitingTransferResult:
+                SendPlain(WardenCodec.ModuleUse(_module.Length));
+                Await(WardenState.AwaitingModuleStatus);
+                break;
+        }
     }
 
     private void SendPlain(byte[] plain)

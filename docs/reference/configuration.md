@@ -898,7 +898,7 @@ How to read the tables:
 | `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
 | `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `Warden:LoadFromDatabase` | `bool` | `true` | - | Warden:LoadFromDatabase: also run the scans of the world table `warden_checks` for this build. Default true. |
-| `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`. |
+| `Warden:ProtocolAction` | `WardenAction` | `Log` | - | Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Log retries without ending scans; Kick disconnects, and Ban bans and disconnects. Default Log. Values: `Log`, `Kick`, `Ban`. |
 | `Warden:ResponseTimeoutSeconds` | `uint` | `30` | - | Warden:ResponseTimeoutSeconds: every awaited reply must arrive within this (MaNGOS Zero WardenLimits.deadlineMs 30000). |
 | `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
 | `Warden:ScanIntervalMinSeconds` | `uint` | `30` | - | Warden:ScanIntervalMinSeconds: the shortest random gap between scan requests (MaNGOS Zero normal interval 30-60 s). |

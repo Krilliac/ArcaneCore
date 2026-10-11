@@ -8817,7 +8817,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log. Values: `Log`, `Kick`, `Ban`.",
+      "meaning": "Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Log retries without ending scans; Kick disconnects, and Ban bans and disconnects. Default Log. Values: `Log`, `Kick`, `Ban`.",
       "allowed": "Log | Kick | Ban",
       "docs": "docs/reference/configuration.md#warden",
       "isCollection": false

@@ -12,12 +12,12 @@ Ported from MaNGOS Zero `src/game/Warden/` (module delivery, handshake, RC4 keys
 3. HASH_REQUEST sends the seed. The client must answer with the expected 20 bytes. Both directions then switch to the module's keys, and MODULE_INITIALIZE installs the client callbacks.
 4. A CHEAT_CHECKS_REQUEST goes out every 30-60 s with up to `ScansPerRequest` scans, taken round-robin from `Warden:Checks`. Each reply is checked against its folded SHA-1 checksum.
 
-Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol failure.
+Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol failure. Under `ProtocolAction=Log`, a protocol failure is logged and the session keeps checking: a failed scan reply schedules the same scan batch again, an unsolicited reply preserves the existing scan deadline, and a handshake failure reissues the module offer or hash challenge. Received bodies are decrypted even when unsolicited so the RC4 stream stays aligned. The one-transfer limit still applies to module delivery. vmangos `src/game/Anticheat/WardenAnticheat/Warden.cpp`, `Warden::HandlePacket`, decrypts before dispatch and kicks on an unexpected opcode or a bad scan checksum (lines 517-532, 575-595, 661-665); ArcaneCore's Log recovery is required by its configurable action.
 
 ## Actions
 
 - `Action` (Log, Kick, Ban): applied when a scan fails. A check can override it with its own `Action`.
-- `ProtocolAction`: applied when the handshake fails, a reply is malformed or late, or the module fails to load. It is never above Kick.
+- `ProtocolAction`: applied when the handshake fails, a reply is malformed or late, or the module fails to load. Log records the failure and retries the current stage; Kick disconnects; Ban bans the account and disconnects.
 - `BanSeconds`: the ban length, 0 for permanent. The ban author is `Warden`.
 
 ## Checks

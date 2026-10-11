@@ -7142,9 +7142,9 @@ Warden.LoadFromDatabase = true
 #
 #    Warden.ProtocolAction
 #        Description: Warden:ProtocolAction, applied when the handshake or a reply breaks the
-#                     protocol (a wrong hash, a malformed or late reply, a failed module load).
-#                     Never above Kick: a broken handshake is not evidence of a cheat (vmangos
-#                     kicks, Warden.cpp:166-173). Default Log. Values: Log, Kick, Ban.
+#                     protocol (a wrong hash, a malformed or late reply, a failed module load). Log
+#                     retries without ending scans; Kick disconnects, and Ban bans and disconnects.
+#                     Default Log. Values: Log, Kick, Ban.
 #        Type: WardenAction
 #        Default: Log
 #        Allowed: Log | Kick | Ban

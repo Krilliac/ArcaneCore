@@ -96,7 +96,7 @@ public sealed class WardenOptions
 
     /// <summary>
     /// Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a
-    /// failed module load). Never above Kick: a broken handshake is not evidence of a cheat (vmangos kicks, Warden.cpp:166-173). Default Log.
+    /// failed module load). Log retries without ending scans; Kick disconnects, and Ban bans and disconnects. Default Log.
     /// </summary>
     public WardenAction ProtocolAction { get; set; } = WardenAction.Log;
 
