@@ -1,0 +1,226 @@
+using ArcaneCore.World.Playerbots.Qa;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots.Qa;
+
+/// <summary>
+/// A stall names the goal the bot held. Its <c>quest=</c> is only the last quest the brain remembers: for any goal but Quest it is not what the
+/// bot was doing (GitHub #154: every evidence line read <c>goal=Explore target=0 quest=109</c>, yet the title, the summary, the Quest row and the
+/// likely cause all spoke of quest 109, and the investigation went to the wrong quest). The fingerprint, and so the issue marker, is unchanged.
+/// </summary>
+public sealed class PlayerbotQaStallGoalTests : IDisposable
+{
+    /// <summary>The first evidence line of GitHub #154, as the server logged it (bot id and name are placeholders).</summary>
+    private const string Issue154Line = "stalled 120s: goal=Explore target=0 quest=109 at -10301.6,1431.5,39.4 map 0";
+
+    /// <summary>The marker of #154, <c>&lt;!-- arcanecore-bot-qa:0679c57a28dbea99 --&gt;</c> (read from the issue body on GitHub, and equal to sha256sum of the key).</summary>
+    private const string Issue154Id = "0679c57a28dbea99";
+
+    private const string Issue154Key = "v1|stall|goal=Explore|quest=109|target=0|map=0|cell=-207,28";
+
+    /// <summary>A real goal=Quest stall from a live log (bot-groups run).</summary>
+    private const string QuestLine = "stalled 123s: goal=Quest target=963 quest=11 at -9928.2,47.6,32.6 map 0";
+
+    private static readonly byte[] Salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+    private readonly string _directory = QaData.NewTempDirectory();
+
+    public void Dispose() => QaData.DeleteQuietly(_directory);
+
+    private static FakeFacts Gryan()
+    {
+        var facts = new FakeFacts();
+        facts.Titles[109] = "Report to Gryan Stoutmantle";
+        return facts;
+    }
+
+    private static QaFindingView IngestOne(string report, IQaContentFacts facts)
+    {
+        var aggregator = new PlayerbotQaAggregator(100, 5, Salt);
+        Assert.NotNull(aggregator.Ingest(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", report)), facts, QaData.T0));
+        return Assert.Single(aggregator.Snapshot());
+    }
+
+    [Fact]
+    public void ExploreStall_WithAStaleQuest_IsTitledByItsGoal_NotTheQuest()
+    {
+        QaFindingView f = IngestOne(Issue154Line, Gryan());
+
+        Assert.Equal("goal Explore map 0 near -10350,1400", f.Subject);
+        Assert.Equal("Explore", f.Goal);
+        QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, ["bot-qa"], "b", new PlayerbotQaRedactor());
+        Assert.Equal("[bot-qa] stall: goal Explore map 0 near -10350,1400", draft.Title);
+        Assert.DoesNotContain("Gryan", draft.Title, StringComparison.Ordinal);
+        Assert.DoesNotContain("109", draft.Title, StringComparison.Ordinal);
+
+        // The body: the summary line names the goal, a Goal row is shown, and the quest is labelled as what it is.
+        Assert.Contains("**stall** - goal Explore map 0 near -10350,1400", draft.Body, StringComparison.Ordinal);
+        Assert.Contains("| Goal | Explore |", draft.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("| Quest |", draft.Body, StringComparison.Ordinal);
+        Assert.Contains("| Last quest (not the goal) | 109 Report to Gryan Stoutmantle |", draft.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain(".lookup quest", draft.Body, StringComparison.Ordinal);
+        Assert.Contains("no missing content found for goal Explore", draft.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("found for quest", draft.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void QuestStall_StillNamesTheQuest_AfterTheGoal()
+    {
+        var facts = new FakeFacts();
+        facts.Titles[109] = "Report to Gryan Stoutmantle";
+        facts.Spawns[(0, 6747)] = 1;
+        facts.Templates[6747] = new QaTemplateFacts(0, 1, 1, string.Empty);
+        QaFindingView f = IngestOne("stalled 120s: goal=Quest target=6747 quest=109 at -10301.6,1431.5,39.4 map 0", facts);
+
+        Assert.Equal("goal Quest, quest 109 (Report to Gryan Stoutmantle) target 6747 map 0 near -10350,1400", f.Subject);
+        QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, ["bot-qa"], "b", new PlayerbotQaRedactor());
+        Assert.Equal("[bot-qa] stall: goal Quest, quest 109 (Report to Gryan Stoutmantle) target 6747 map 0 near -10350,1400", draft.Title);
+        Assert.Contains("| Goal | Quest |", draft.Body, StringComparison.Ordinal);
+        Assert.Contains("| Quest | 109 Report to Gryan Stoutmantle |", draft.Body, StringComparison.Ordinal);
+        Assert.Contains(".lookup quest Report to Gryan Stoutmantle", draft.Body, StringComparison.Ordinal);
+        Assert.Contains("no missing content found for quest 109 (Report to Gryan Stoutmantle)", draft.Body, StringComparison.Ordinal);
+
+        // The real live line, with no content loaded.
+        Assert.Equal("goal Quest, quest 11 target 963 map 0 near -9950,0", IngestOne(QuestLine, NoQaContentFacts.Instance).Subject);
+    }
+
+    [Fact]
+    public void Classifier_DoesNotBlameQuestContent_ForANonQuestGoal()
+    {
+        // Every objective creature of quest 109 lacks a spawn: for a Quest goal that is missing data, for an Explore goal it says nothing.
+        FakeFacts facts = Gryan();
+        facts.Objectives[109] = [6747];
+        QaSignal explore = QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", Issue154Line));
+        QaSignal quest = explore with { Goal = "Quest" };
+
+        QaClassification forQuest = PlayerbotQaClassifier.Classify(quest, facts);
+        Assert.Equal(QaCause.MissingData, forQuest.Cause);
+        Assert.Contains("quest objective creatures", forQuest.Detail, StringComparison.Ordinal);
+
+        QaClassification forExplore = PlayerbotQaClassifier.Classify(explore, facts);
+        Assert.Equal(QaCause.Unknown, forExplore.Cause);
+        Assert.Equal("no missing content found for goal Explore", forExplore.Detail);
+        Assert.DoesNotContain("109", forExplore.Detail, StringComparison.Ordinal);
+
+        // A Grind target is still checked as a creature, whatever quest the brain remembers.
+        QaSignal grind = explore with { Goal = "Grind", Target = 1196 };
+        QaClassification forGrind = PlayerbotQaClassifier.Classify(grind, facts);
+        Assert.Equal(QaCause.MissingData, forGrind.Cause);
+        Assert.Contains("creature entry 1196 has no spawn on map 0", forGrind.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An entry set-aside (Goal "Entry", no quest) is still checked as a creature: an entry with no template and no spawn is missing data, as
+    /// before the goal change (review of #168: treating every set-aside as a quest goal skipped the creature check and said Unknown).
+    /// </summary>
+    [Fact]
+    public void EntrySetAside_WithNoTemplateAndNoSpawn_IsStillMissingData()
+    {
+        QaSignal entry = QaData.Parse("Playerbots: 3 bots stalled on entry 4321 for 30 min; every bot sets it aside");
+        Assert.Equal("Entry", entry.Goal);
+
+        QaClassification c = PlayerbotQaClassifier.Classify(entry, new FakeFacts());
+        Assert.Equal(QaCause.MissingData, c.Cause);
+        Assert.Equal("creature entry 4321 has no spawn on any map and no creature_template row", c.Detail);
+    }
+
+    [Fact]
+    public void Fingerprints_OfExistingIssues_AreUnchanged()
+    {
+        // #154 (goal Explore, stale quest 109), #164 and #163 (goal Explore, quest 0): the markers read from GitHub.
+        QaSignal s154 = QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", Issue154Line));
+        Assert.Equal(Issue154Key, PlayerbotQaFingerprint.Key(s154));
+        Assert.Equal(Issue154Id, PlayerbotQaFingerprint.Of(s154));
+        Assert.Equal("f5e1a4226644961d", PlayerbotQaFingerprint.Of(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander",
+            "stalled 120s: goal=Explore target=0 quest=0 at -10314.9,1445.1,38.9 map 0"))));
+        Assert.Equal("d11119a0fdd72ae1", PlayerbotQaFingerprint.Of(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander",
+            "stalled 120s: goal=Explore target=0 quest=0 at -10319.2,1451.8,39.3 map 0"))));
+        // The golden quest stall of PlayerbotQaAggregatorTests.
+        Assert.Equal("428d6d853e162fd3", PlayerbotQaFingerprint.Of(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f)));
+    }
+
+    /// <summary>
+    /// A findings.json written before the goal was kept (no <c>Goal</c>, the old subject) still loads; the restored finding keeps its id and its
+    /// published issue, gets its goal and subject back from its key, and the next #154 stall folds into it: no second issue is filed.
+    /// </summary>
+    [Fact]
+    public void OldFindingsFile_StillLoads_KeepsIdAndIssue_AndGetsTheGoalSubject()
+    {
+        const string old = """
+            {
+              "FormatVersion": 1,
+              "SaltBase64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+              "Findings": [
+                {
+                  "Id": "0679c57a28dbea99",
+                  "Key": "v1|stall|goal=Explore|quest=109|target=0|map=0|cell=-207,28",
+                  "Kind": "Stall",
+                  "Subject": "quest 109 (Report to Gryan Stoutmantle) map 0 near -10350,1400",
+                  "Count": 8,
+                  "DistinctBots": 7,
+                  "FirstSeenUtc": "2026-10-11T05:07:52Z",
+                  "LastSeenUtc": "2026-10-11T07:06:59Z",
+                  "Samples": [
+                    { "AtUtc": "2026-10-11T07:06:59Z", "HasPosition": true, "Map": 0, "X": -10313.4, "Y": 1446.7, "Z": 38.7, "Attackers": [],
+                      "Message": "Playerbot <bot> stalled 120s: goal=Explore target=0 quest=109 at -10313.4,1446.7,38.7 map 0; it gives up that goal" }
+                  ],
+                  "Quest": 109,
+                  "Target": 0,
+                  "Map": 0,
+                  "QuestTitle": "Report to Gryan Stoutmantle",
+                  "Cause": "Unknown",
+                  "CauseDetail": "no missing content found for quest 109 (Report to Gryan Stoutmantle)",
+                  "Severity": 91.7,
+                  "Publication": { "State": "Published", "Issue": 154, "Reason": null },
+                  "LastCommentUtc": null,
+                  "OccurrencesReported": 8
+                }
+              ],
+              "Bots": {},
+              "Ledger": { "CreatesUtc": [], "CommentsUtc": [] }
+            }
+            """;
+        File.WriteAllText(Path.Combine(_directory, "findings.json"), old);
+        QaStoreFile loaded = new PlayerbotQaStore(_directory, new ListLogger()).Load()!;
+        Assert.NotNull(loaded);
+
+        var aggregator = new PlayerbotQaAggregator(100, 5, Salt);
+        Assert.Equal(0, aggregator.Restore(new QaAggregatorState(loaded.Findings, loaded.Bots)));
+        QaFindingView restored = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(Issue154Id, restored.Id);
+        Assert.Equal(Issue154Key, restored.Key);
+        Assert.Equal(new QaPublication(QaPublicationState.Published, 154), restored.Publication);
+        Assert.Equal("Explore", restored.Goal);
+        Assert.Equal("goal Explore map 0 near -10350,1400", restored.Subject);
+        Assert.Equal(PlayerbotQaIssueComposer.MarkerOf(Issue154Id),
+            PlayerbotQaIssueComposer.Compose(restored, ["bot-qa"], "b", new PlayerbotQaRedactor()).Marker);
+
+        // The next #154 stall is the same finding, still Published#154 (the publisher comments on it, it never creates a new issue).
+        string? id = aggregator.Ingest(QaData.Parse(QaData.BotLine(QaData.Bot2, "Graveweaver", Issue154Line)), Gryan(), QaData.T0);
+        Assert.Equal(Issue154Id, id);
+        QaFindingView after = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(9, after.Count);
+        Assert.Equal(new QaPublication(QaPublicationState.Published, 154), after.Publication);
+        Assert.Equal("no missing content found for goal Explore", after.CauseDetail);
+    }
+
+    [Fact]
+    public void Report_And_Chat_NameTheGoal_AndLabelTheLastQuest()
+    {
+        QaFindingView f = IngestOne(Issue154Line, Gryan());
+        var redactor = new PlayerbotQaRedactor();
+
+        string md = PlayerbotQaReport.RenderMarkdown([f], QaData.T0, "b", redactor);
+        Assert.Contains("## 1. stall: goal Explore map 0 near -10350,1400", md, StringComparison.Ordinal);
+        Assert.Contains("- Last quest 109 (not the goal): Report to Gryan Stoutmantle", md, StringComparison.Ordinal);
+        Assert.DoesNotContain("- Quest 109", md, StringComparison.Ordinal);
+
+        IReadOnlyList<string> show = PlayerbotQaReport.ChatShow(f, redactor);
+        Assert.Equal($"{f.Id} stall: goal Explore map 0 near -10350,1400", show[0]);
+        Assert.Contains("last quest 109 (not the goal): Report to Gryan Stoutmantle", show);
+        Assert.Contains("stall: goal Explore map 0 near -10350,1400", PlayerbotQaReport.ChatTop([f], 10, redactor)[1], StringComparison.Ordinal);
+
+        string json = PlayerbotQaReport.RenderJson([f], QaData.T0, "b", redactor);
+        Assert.Contains("\"Goal\": \"Explore\"", json, StringComparison.Ordinal);
+    }
+}

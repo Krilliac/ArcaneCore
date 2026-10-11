@@ -147,6 +147,28 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
     run may walk the tram map while its body lies there (`PlayerbotTram.AllowsWalkingOn`), reclaims it as anywhere else (no spirit healer
     stands on map 369, so the body is the way back), and the revived bot, on the tram map without a trip, leaves by the nearest platform's exit.
 
+**Live regression w22 (2026-10-11 08:05, `live-w22-r1`).** 67 dwarf and gnome bots homed in Westfall (1,879 to 2,913 yards from the
+Stormwind entrance; `before-start-characters.db`) began their trip at their first think and gave it up about 60 s later, every one
+still where it started, logged as `tram: the trip failed` without a reason. Two causes:
+* **The way was refused whole.** The trip walks to the entrance trigger's centre, which floats 4.8 yards above its floor. From Sentinel
+  Hill the real mesh finds the whole 2,314-yard way to the floor under it, but answers it as incomplete (its end is the centre projected
+  onto the mesh), and a route longer than `MaxRouteYards` (2000) was cut at the bound only when it was complete: an incomplete one was
+  refused, and `TryPlanToward` tries no shorter step after a refusal by the mesh. Now a partial answer whose end lies within a yard (flat)
+  and within `ProjectedEndYards` (6) vertically of the destination counts as reaching it (`PlayerbotNavigation.EndsAt`) and is cut at the
+  bound like a complete one; the bot walks the first 2,000 yards and plans the rest from there. This holds for every far bot walk, not
+  only the tram's, and for the routes planned from a step beside the bot (`FromBeside`). The height bound matters: an incomplete answer
+  is also a search that stopped short on the polygon nearest the goal, which can lie straight under a destination on a level the bot
+  cannot reach (a tower or cliff top, a bridge, an upper floor); such an end is no arrival (a complete path's end is found within 5 yards
+  vertically, the tram entrance's 4.75). Storeys of a building closer than 6 yards can still pass; the stall watch gives those goals up.
+* **The reason was lost.** A trip that failed on the continent noted its reason on the trip only; `PlayerbotTram.Drive` now always returns
+  it, and the log reads e.g. `tram: no way to the Deeprun Tram - Stormwind Instance entrance from -10193.8,1089.2,36.8; it gives up that
+  goal`.
+
+`PlayerbotTramLiveRegressionTests` (real terrain and DBCs) replays Wfbotak from its live start: through Elwynn to the Stormwind gate,
+the entrance at 328 s, aboard at 346 s, out at Ironforge at 427 s (before: still at Sentinel Hill, failed at 60.7 s with "tram: the trip
+failed"). `PlayerbotTramFarStartTests` is the same in the fixture world (a 2,330-yard incomplete way under the trigger; a trip with no way
+fails with its reason; the height bound for the partial and the exact planner: 4.75 yards under the destination accepted, 10 refused).
+
 Tests: `PlayerbotTramRouteTests` (the brain drives a bot from the Stormwind tram exit to Ironforge with the classic-db trigger and car
 rows, a synthetic animation and flat floors, with the anticheat judging the bot as a client: no fake transport, no speed; a destination of
 `PlayerbotWorldDestinations` on the Ironforge side begins the trip; a bot on the tram map without a trip plans nothing there and leaves by
@@ -200,6 +222,47 @@ crosses a higher-level area). A first death in a safe spot inside the home is re
 creatures the bot can take stand. Live 2026-10-11 05:45-06:00 UTC: the Westfall-homed level-14 Wfbotaz died among Raven Hill's level 20+
 skeletons and spiders, reclaimed its body there and died again, two death loops in fifteen minutes (`attackers=202/531/569`, then
 `202/217/569`); the healer came only with the third death of a loop (`PlayerbotUnsafeBodyRecoveryTests`).
+
+**Tightened (live 2026-10-11 08:04-08:10 UTC: 80 bodies given up in six minutes, 31 too strong, 10 died there, 39 outside the home).**
+`DiedHere` counts only while a creature that would attack the revived bot (`PlayerbotRecovery.Threats`, or a hazard) still stands in
+reach of the body; a cleared spot is reclaimed (the errand that led there is still set aside). `TooStrong` is strength, not worth: a
+creature counts only when `Assess` avoids it and `PlayerbotRiskModel.BeyondStrength` holds (one that kills outright, an elite 3+ levels
+above, or a risk at full health and mana above `Tolerance x 0.9`, the highest bar any pull is taken at). Before, the pull bar of a fight
+that gives no quest credit or loot refused level 9-13 Defias and gnolls to level-14 bots (entries 95, 474, 478, 504, 1118 in the log).
+`OutsideHome` counts only when the home return cannot teleport the revived bot home (`ReturnMode` `Walk`, or a return teleport less
+than `TeleportCooldownMs` ago): otherwise the body is reclaimed and the Auto return walks or teleports the bot home for nothing. A
+remaining source of over-firing is outside this change: the level-14 Westfall bots' `TooStrong` details imply an observed damage per
+second (`PlayerbotFightTracker.ObservedDps`) of about 5-6 against the level estimate of 27.
+
+**The healer's landing is judged too.** The spirit healer revives the bot at the graveyard of its body (vmangos `SendSpiritResurrect`),
+which can be as unsafe as the body: Raven Hill's graveyard stands among its level-24 Skeletal Horrors. Before the body is given up (an
+unsafe body or a death loop's request), the landing (`SpiritHealerLanding`) is asked of `PlayerbotRecovery.LandingUnsafe`
+(`PlayerbotRisk.TooStrongAt`: a creature beyond the bot's strength whose aggro reach covers the landing); when it is unsafe and a spot
+within the reclaim radius of the body is clear of every threat, the body is kept (`BodyKeptOverLanding`, logged once: `keeps its body
+... the spirit healer would revive it among creatures too strong for it`) and the corpse run revives the bot on that spot. When the
+healer is taken and revives the bot on an unsafe landing, the bot leaves in the same think, still out of combat (the activation is
+handled synchronously; the creatures aggro only in their own update): a homed bot teleports home (`PlayerbotHomeTeleportReason.UnsafeLanding`,
+past the 5-minute cooldown), an unhomed one (or one whose home teleport is refused) to its bind point (`TeleportToHomebind`, as the
+tram's way out). Live: Wfbotfe (homed, 08:07-08:09) and Dawnrover (unhomed, death loops at 08:23:32 and 08:27:47) were revived at
+that graveyard, attacked before their next think, and died there again and again; the home teleport was refused in combat.
+The landing is judged where the resurrection sends the bot: when the body's graveyard differs from the ghost's, `SendSpiritResurrect`
+teleports the revived bot there (`GraveyardRepopService.TeleportToCorpseGraveyard`), a near teleport still pending in that think, so
+the escape judges `TeleportService.DestinationOf` and replaces that teleport (an urgent `TryTeleport` never counts the server's own
+pending teleport as its escape). The creatures are those round the landing itself, seen by the bot or not
+(`PlayerbotRecovery.ThreatsAround`). A death loop's request for the healer is never overridden by a kept body: the healer is the way out
+of a body death loop and the escape covers its landing, so at most two bodies are kept per death-loop window. The keep-body answer is
+kept per body for 2 s. The unhomed bind-point escape is not rate-limited: it happens at most once per resurrection, and a bot that
+goes back to the same place has its errand set aside by the death watch.
+
+**Why the spirit-healer step faulted.** Not a server refusal: in the world test that replays Wfbotfe's sequence (revived at the healer
+among the skeletons, retreat, death, three times) the motion's loop watch (`PlayerbotMotion`, A, B, A within 30 s) counted the ghost's
+walks to the same healer and the living bot's retreats between them as one errand going back and forth, refused the healer's place for
+60 s, the ghost could plan no route to it, and the stuck bound (`StuckMs`, 10 s) faulted the recovery; live, the fault came 21 s after
+the death loop. The first think of every death now forgets the loop watch (`PlayerbotMotion.ForgetLoops`). A refused
+CMSG_SPIRIT_HEALER_ACTIVATE (the bot still dead after the synchronous handler) is logged at Information with the handler's rule
+(`QuestNpcServices.SpiritHealerRefusal`: alive, NPC state not ready, not interactable with the reason from `InteractableNpc`, not a
+ghost, a settlement pending), once per reason and death, and the fault itself is preceded by an Information line with the goal, its
+distance, whether a route existed and whether the goal is refused after a movement loop.
 
 **Waiting to recover without food.** After a retreat, or before a pull it is too hurt for, the bot waits for
 `World:Playerbots:Risk:RecoverHealthPct` (goal `Rest`, `PlayerbotRisk.KeepWaiting`, at most `MaxWaitMs` 90 s). With food or drink it

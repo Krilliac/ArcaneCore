@@ -328,6 +328,9 @@ internal sealed class PlayerbotHomeReturn
     /// <summary>The walk home was set aside as blocked (not a refused teleport): Auto teleports such a bot at once.</summary>
     internal bool WalkBlocked => State == PlayerbotHomeState.Blocked && _walkBlocked;
 
+    /// <summary>Whether <see cref="TeleportCooldownMs"/> has passed since the last return teleport (or there was none).</summary>
+    internal bool CanTeleportNow(uint nowMs) => Teleports == 0 || unchecked(nowMs - _lastTeleportAt) >= TeleportCooldownMs;
+
     internal void Reset()
     {
         State = PlayerbotHomeState.Inside;
@@ -418,13 +421,17 @@ internal sealed class PlayerbotHomeReturn
     /// teleported home less than <see cref="TeleportCooldownMs"/> ago, no teleport service, or the service refused it; a refusal is not
     /// retried for <see cref="BlockedMs"/>, and on the home map the return is set aside (state blocked: an unsafe walk is not taken instead).
     /// </summary>
+    /// <param name="urgent">
+    /// The escape from an unsafe spirit-healer landing (<see cref="PlayerbotHomeTeleportReason.UnsafeLanding"/>): neither the cooldown nor
+    /// the wait after a refusal holds it back (it happens at most once per resurrection); every other refusal stands.
+    /// </param>
     internal bool TryTeleport(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options,
-        PlayerbotHomeTeleportReason reason, uint nowMs)
+        PlayerbotHomeTeleportReason reason, uint nowMs, bool urgent = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(options);
         TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
-        if (_teleportRetryPending && unchecked((int)(nowMs - _teleportRetryAt)) < 0) return false;
+        if (!urgent && _teleportRetryPending && unchecked((int)(nowMs - _teleportRetryAt)) < 0) return false;
         _teleportRetryPending = false;
         // A bot in the air would land in the air at the other end, as the follower waits for a leader in the air: wait for the landing.
         if ((player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return false;
@@ -434,9 +441,11 @@ internal sealed class PlayerbotHomeReturn
             return false;
         }
 
-        // A teleport under way (this one, not yet acknowledged, or any other): wait for it, start nothing.
-        if (teleports!.IsBeingTeleported(player)) return true;
-        if (Teleports > 0 && unchecked(nowMs - _lastTeleportAt) < TeleportCooldownMs)
+        // A teleport under way (this one, not yet acknowledged, or any other): wait for it, start nothing. Not for the escape from an
+        // unsafe landing: the near teleport pending then is the resurrection's own, INTO the landing (the corpse's graveyard,
+        // GraveyardRepopService.TeleportToCorpseGraveyard), and a near teleport is replaced by the next one (TeleportService.TeleportTo).
+        if (teleports!.IsBeingTeleported(player) && !(urgent && teleports.IsBeingTeleportedNear(player))) return !urgent;
+        if (!urgent && !CanTeleportNow(nowMs))
         {
             Refuse(player, area, reason, "teleported home less than 5 minutes ago", nowMs);
             return false;

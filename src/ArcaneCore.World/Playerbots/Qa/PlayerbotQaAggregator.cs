@@ -83,6 +83,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             finding.QuestTitle = cause.QuestTitle ?? finding.QuestTitle;
             finding.Cause = cause.Cause;
             finding.CauseDetail = cause.Detail;
+            finding.Goal = signal.Goal;
             finding.Subject = Subject(signal, finding.QuestTitle);
             finding.Severity = PlayerbotQaClassifier.Severity(finding.Kind, finding.Count, finding.DistinctBots, finding.LastSeenUtc, now);
             _snapshot = null;
@@ -169,9 +170,14 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     continue;
                 }
 
+                // A stall's goal and subject come from its key (files before 2026-10-11 have no goal, and titled a stale quest as the subject);
+                // only a key that rebuilds to itself is trusted, otherwise the saved text stays. The key and so the id never change.
+                QaSignal? stall = view.Kind == QaSignalKind.Stall ? PlayerbotQaFingerprint.StallOfKey(view.Key) : null;
                 var finding = new QaFinding
                 {
-                    Id = view.Id, Key = view.Key, Kind = view.Kind, Subject = view.Subject ?? string.Empty, Count = Math.Max(0, view.Count),
+                    Id = view.Id, Key = view.Key, Kind = view.Kind, Count = Math.Max(0, view.Count),
+                    Subject = stall is not null ? Subject(stall, view.QuestTitle) : view.Subject ?? string.Empty,
+                    Goal = stall?.Goal ?? (string.IsNullOrEmpty(view.Goal) ? string.Empty : view.Goal),
                     FirstSeenUtc = view.FirstSeenUtc, LastSeenUtc = view.LastSeenUtc, Quest = view.Quest, Target = view.Target, Map = view.Map,
                     QuestTitle = view.QuestTitle, Cause = view.Cause, CauseDetail = view.CauseDetail ?? string.Empty, Severity = view.Severity,
                     Publication = view.Publication ?? QaPublication.Pending, LastCommentUtc = view.LastCommentUtc,
@@ -220,7 +226,10 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             : string.Empty;
         return s.Kind switch
         {
-            QaSignalKind.Stall => (s.Quest != 0 ? quest : $"goal {s.Goal}") + (s.Target != 0 ? string.Create(CultureInfo.InvariantCulture, $" target {s.Target}") : string.Empty) + near,
+            // A stall names its goal first. Its quest= is the last quest the brain remembers, which is the subject only of a Quest goal: for any
+            // other goal it is stale (GitHub #154: goal=Explore quest=109 was titled "quest 109 (Report to Gryan Stoutmantle)").
+            QaSignalKind.Stall => $"goal {s.Goal}" + (s.Quest != 0 && QaFindingView.QuestIsGoalOf(s.Kind, s.Goal) ? ", " + quest : string.Empty)
+                + (s.Target != 0 ? string.Create(CultureInfo.InvariantCulture, $" target {s.Target}") : string.Empty) + near,
             // "for every bot after N stalled": the line names the bots that stalled (BotsToShare), not every bot of the world.
             QaSignalKind.SharedSetAside => (s.Quest != 0 ? quest : string.Create(CultureInfo.InvariantCulture, $"entry {s.Target}"))
                 + string.Create(CultureInfo.InvariantCulture, $" set aside for every bot after {s.BotCount} stalled"),

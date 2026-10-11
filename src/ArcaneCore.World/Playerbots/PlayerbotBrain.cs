@@ -5,12 +5,14 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Globalization;
 
 namespace ArcaneCore.World.Playerbots;
@@ -209,6 +211,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!player.IsInWorld) return;
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
+        _recovery.LandingUnsafe ??= (bot, at) => Risk.TooStrongAt(bot, at) is not null;
+        _recovery.EscapeLanding ??= EscapeLanding;
 
         bool dead = !player.IsAlive;
         if (dead)
@@ -298,7 +302,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (tram == TramStep.Failed)
             {
-                _stall.ReportExternal(tramFailure ?? "tram: the trip failed");
+                _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
                 GiveUpStalledGoal(player, shareable: false);
                 return;
             }
@@ -1122,16 +1126,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// (<see cref="PlayerbotRecovery.SpiritHealerLanding"/>). Live 2026-10-11: Wfbotaz (level 14, homed at Sentinel Hill) reclaimed its
     /// body among Raven Hill's level 20+ skeletons and spiders again and again, two death loops in fifteen minutes (world.log
     /// 05:53:21 and 06:00:42, attackers 202/531/569 and 202/217/569).
+    /// <para>
+    /// Tightened after the live run of 2026-10-11 (08:04-08:10 UTC, world.log): 80 bodies were given up in six minutes (31 too strong,
+    /// 10 died there, 39 outside the home), each costing resurrection sickness and a quarter of the durability. A repeat death counts
+    /// only while a creature that would attack the revived bot still stands in reach of the body (a cleared spot is safe whatever
+    /// happened there; the third death is a death loop, which asks for the healer anyway). Too strong is a matter of strength, not of a
+    /// pull's worth (<see cref="PlayerbotRisk.TooStrongNear"/>). A body outside the home counts only when the home return could not
+    /// teleport the revived bot home (<see cref="PlayerbotHomeReturnMode.Walk"/>, or within <see cref="PlayerbotHomeReturn.TeleportCooldownMs"/>
+    /// of its last return teleport): otherwise the bot reclaims the body and the Auto return walks or teleports it home for nothing.
+    /// </para>
     /// </summary>
     private (PlayerbotUnsafeBody Reason, string? Detail) JudgeBody(Player player, Corpse corpse)
     {
         var body = new System.Numerics.Vector3(corpse.X, corpse.Y, corpse.Z);
         int deaths = _stall.DeathsNear(corpse.MapId, body, _session.World.NowMs);
-        bool diedHere = deaths >= 2;
+        bool diedHere = deaths >= 2 && PlayerbotRecovery.Threats(player).Concat(Risk.HazardThreats(player))
+            .Any(threat => threat.Reaches(body, PlayerbotRecovery.CampMarginYards));
         PlayerbotEngagement? strong = diedHere || !_options.Risk.Enabled ? null : Risk.TooStrongNear(player, body);
         bool outside = false, nearer = false;
         float bodyFromHome = float.NaN, healerFromHome = float.NaN;
-        if (!diedHere && strong is null && _home is { } home && corpse.MapId == home.MapId
+        bool teleportHome = _options.Home.ReturnMode != PlayerbotHomeReturnMode.Walk && _homeReturn.CanTeleportNow(_session.World.NowMs);
+        if (!diedHere && strong is null && !teleportHome && _home is { } home && corpse.MapId == home.MapId
             && !home.Contains(corpse.MapId, corpse.X, corpse.Y, corpse.Z))
         {
             outside = true;
@@ -1155,6 +1170,43 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _ => null,
         };
         return (reason, detail);
+    }
+
+    /// <summary>
+    /// The spirit healer just revived the bot among creatures too strong for it (<see cref="PlayerbotRecovery.EscapeLanding"/>), in the
+    /// same think, out of combat: a homed bot teleports to its home's centre (<see cref="PlayerbotHomeTeleportReason.UnsafeLanding"/>,
+    /// past the cooldown), a bot without a home (or whose home teleport is refused) to its bind point, where its hearthstone leads
+    /// (<see cref="TeleportService.TeleportToHomebind"/>, vmangos <c>Player::TeleportToHomebind</c>; the tram's way out uses the same).
+    /// The errand that led to the place was set aside at the death (<see cref="RecordDeath"/>). Live 2026-10-11: Wfbotfe (homed) and
+    /// Dawnrover (unhomed, death loops at Raven Hill at 08:23:32 and 08:27:47, then a fault at 08:30:25) were revived at the Raven Hill
+    /// graveyard among its Skeletal Horrors, attacked before their next think, and died there again and again. True when the bot was moved.
+    /// </summary>
+    private bool EscapeLanding(Player player)
+    {
+        uint now = _session.World.NowMs;
+        if (!player.IsAlive || player.Combat.IsInCombat) return false;
+        if (_home is { } home)
+        {
+            _homeReturn.Evaluate(player, home, now);
+            if (_homeReturn.TryTeleport(_session, player, home, _options, PlayerbotHomeTeleportReason.UnsafeLanding, now, urgent: true))
+            {
+                DropIntent();
+                _goal = PlayerbotGoalKind.Home;
+                return true;
+            }
+        }
+
+        TeleportService? teleports = _session.Services.GetService<ArcaneCore.World.Teleport.TeleportFeature>()?.Teleports;
+        HomeBind bind = player.Home;
+        if (teleports is null || bind == default) return false;
+        var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (!teleports.TeleportToHomebind(player)) return false;
+        DropIntent();
+        _goal = PlayerbotGoalKind.Explore;
+        _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>().LogInformation(
+            "Playerbot {Bot} was revived by the spirit healer among creatures too strong for it at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: teleports to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
+            player.Name, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
+        return true;
     }
 
     private void Explore(Player player, uint elapsedMs)

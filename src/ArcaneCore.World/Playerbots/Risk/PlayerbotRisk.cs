@@ -469,18 +469,39 @@ internal sealed class PlayerbotRisk
     /// counted (a ghost has none ready), and as a matter of strength only: no quest credit, no loot, no danger memory (the bot died to
     /// these, and the memory alone would avoid every one of them). The model answers Rest for a fight that only needs full health and
     /// mana first, so Avoid means not even then. Null with the estimate off.
+    /// <para>
+    /// Strength, not worth: a pull's bar falls with its reward (<see cref="PlayerbotRiskModel.Acceptable"/>), and a creature round a body
+    /// gives none here (no quest, no loot), so the pull bar refused ordinary same-zone creatures: in the first six minutes of the live
+    /// run of 2026-10-11 (08:04-08:10, world.log) 31 of 80 bodies were given up as "too strong", among them level 9-13 Defias and gnolls
+    /// against level-14 bots (entries 95, 474, 478, 504, 1118). A creature counts only when the model avoids it and it is beyond the bot's
+    /// strength (<see cref="PlayerbotRiskModel.BeyondStrength"/>): a creature that kills outright, an elite well above it, or a fight
+    /// whose risk at full health and mana is above the highest share any pull is ever taken at.
+    /// </para>
     /// </summary>
     internal PlayerbotEngagement? TooStrongNear(Player player, Vector3 body)
+        => TooStrongWithin(player, PlayerbotRecovery.Threats(player), body, CombatConstants.CorpseReclaimRadius);
+
+    /// <summary>
+    /// A creature too strong for the bot (<see cref="TooStrongNear"/>'s rule) whose aggro reach covers <paramref name="at"/> itself: one
+    /// that attacks a bot that comes to life there. The spirit healer's landing (<see cref="PlayerbotRecovery.LandingUnsafe"/>): the
+    /// creatures round the place itself, seen by the bot or not (<see cref="PlayerbotRecovery.ThreatsAround"/>; the landing can be a
+    /// graveyard out of the ghost's sight).
+    /// </summary>
+    internal PlayerbotEngagement? TooStrongAt(Player player, Vector3 at)
+        => TooStrongWithin(player, PlayerbotRecovery.ThreatsAround(player, at, PlayerbotRecovery.BodyThreatYards), at, 0f);
+
+    private PlayerbotEngagement? TooStrongWithin(Player player, IReadOnlyList<PlayerbotThreat> threats, Vector3 body, float radius)
     {
         if (!Enabled || player.Map is not { } map) return null;
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
         float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
         uint health = Math.Max(1u, (uint)(player.MaxHealth * CombatConstants.CorpseReclaimRestorePercent));
-        foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
+        foreach (PlayerbotThreat threat in threats)
         {
             if (threat.Source is not { } creature
-                || Vector3.Distance(threat.Position, body) >= CombatConstants.CorpseReclaimRadius + threat.Radius) continue;
+                || (radius > 0 ? Vector3.Distance(threat.Position, body) >= radius + threat.Radius
+                    : !threat.Reaches(body, PlayerbotRecovery.CampMarginYards))) continue;
             var enemies = new List<RiskEnemy> { Enemy(creature, RiskJoin.Target, player) };
             if (system is not null && system.AssistanceRadiusOf(creature.Template) is var assist && assist > 0)
                 foreach (ObjectGuid guid in player.VisibleObjects)
@@ -498,7 +519,7 @@ internal sealed class PlayerbotRisk
                 Enemies = enemies,
             };
             PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
-            if (verdict.Decision == PlayerbotEngageDecision.Avoid) return verdict;
+            if (verdict.Decision == PlayerbotEngageDecision.Avoid && PlayerbotRiskModel.BeyondStrength(facts, _options.Risk)) return verdict;
         }
 
         return null;

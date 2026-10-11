@@ -83,6 +83,7 @@ public sealed class ScourgeInvasionConditionTests
         GameEventFeature events = provider.GetRequiredService<GameEventFeature>();
         events.Attach(world);
         ScourgeInvasionFeature invasion = provider.GetRequiredService<ScourgeInvasionFeature>();
+        invasion.StoreOffload = work => work(); // the fake store completes synchronously: apply in the same tick
         invasion.Attach(world);
         ConditionFeature conditions = provider.GetRequiredService<ConditionFeature>();
         conditions.Attach(world);

@@ -474,6 +474,7 @@ public sealed class WarEffortSceneTests
             }
             _provider.GetRequiredService<GameEventFeature>().Attach(World);
             War = _provider.GetRequiredService<WarEffortFeature>();
+            War.StoreOffload = work => work(); // the fake store completes synchronously
             War.UtcNowUnix = clock;
             War.Attach(World);
         }

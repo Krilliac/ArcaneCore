@@ -30,6 +30,33 @@ internal static partial class PlayerbotQaFingerprint
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespacePattern();
 
+    [GeneratedRegex(@"^v1\|stall\|goal=(?<goal>\w{1,32})\|quest=(?<q>\d{1,10})\|target=(?<t>\d{1,10})(?:\|map=(?<m>\d{1,10})\|cell=(?<cx>-?\d{1,9}),(?<cy>-?\d{1,9}))?(?<out>\|outside)?$",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex StallKeyPattern();
+
+    /// <summary>
+    /// The content of a stall key as a signal (goal, quest, target, and the corner of its cell as the position), or null when the key is not a
+    /// stall key this version writes. Only a key that <see cref="Key"/> rebuilds exactly is returned, so the result never stands for another finding.
+    /// </summary>
+    internal static QaSignal? StallOfKey(string? key)
+    {
+        if (key is null || StallKeyPattern().Match(key) is not { Success: true } m) return null;
+        if (!uint.TryParse(m.Groups["q"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out uint quest)
+            || !uint.TryParse(m.Groups["t"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out uint target)) return null;
+        bool where = m.Groups["m"].Success;
+        uint map = 0;
+        int cx = 0, cy = 0;
+        if (where && (!uint.TryParse(m.Groups["m"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out map)
+            || !int.TryParse(m.Groups["cx"].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out cx)
+            || !int.TryParse(m.Groups["cy"].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out cy))) return null;
+        var signal = new QaSignal
+        {
+            Kind = QaSignalKind.Stall, Goal = m.Groups["goal"].Value, Quest = quest, Target = target, HasPosition = where, Map = map,
+            X = (float)cx * CellYards, Y = (float)cy * CellYards, OutsideHome = m.Groups["out"].Success,
+        };
+        return string.Equals(Key(signal), key, StringComparison.Ordinal) ? signal : null;
+    }
+
     /// <summary>The cell index of a coordinate.</summary>
     internal static int Cell(float coordinate) => (int)Math.Floor(coordinate / CellYards);
 

@@ -80,12 +80,16 @@ internal static class PlayerbotQaClassifier
         }
 
         uint target = s.Target;
+        // A stall's quest= is the last quest the brain remembers; it is checked only when the goal is that quest. A non-quest goal is classified
+        // by its own target (GitHub #154: an Explore stall was blamed on quest 109's content). A set-aside's goal is "Quest" for a quest one and
+        // "Entry" for an entry one, so an entry set-aside is still checked as a creature (review of #168).
+        bool questGoal = string.Equals(s.Goal, "Quest", StringComparison.Ordinal);
         if (facts.Available)
         {
-            IReadOnlyList<uint> objectives = s.Quest != 0 ? facts.QuestObjectiveCreatures(s.Quest) : [];
+            IReadOnlyList<uint> objectives = questGoal && s.Quest != 0 ? facts.QuestObjectiveCreatures(s.Quest) : [];
             QaTemplateFacts? template = target != 0 ? facts.Template(target) : null;
             // A quest goal's target may be a game object; it is a creature when it has a template or the quest names it as an objective creature.
-            bool creature = target != 0 && (!string.Equals(s.Goal, "Quest", StringComparison.Ordinal) || template is not null || objectives.Contains(target));
+            bool creature = target != 0 && (!questGoal || template is not null || objectives.Contains(target));
             if (creature && Spawns(s, facts, target) == 0)
             {
                 return new QaClassification(QaCause.MissingData, NoSpawns(s, target, template is null), title);
@@ -109,7 +113,7 @@ internal static class PlayerbotQaClassifier
             }
         }
 
-        string subject = s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
+        string subject = questGoal && s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
         return new QaClassification(QaCause.Unknown, "no missing content found for " + subject
             + (target != 0 ? string.Create(CultureInfo.InvariantCulture, $", target {target}") : string.Empty), title);
     }
