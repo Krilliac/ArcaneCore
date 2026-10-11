@@ -627,7 +627,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// Whether the objective a bot plays exists and the server plays it (cached until the object, trigger, spell or battleground content is
     /// reloaded): Warsong Gulch both flag stands on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects
     /// with a <c>gameobject_battleground</c> node event and a lock), every node's neutral banner one the match routes to the node click
-    /// (<see cref="ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse"/>: classic-db's neutral banners are goobers the server does not route yet), and the
+    /// (<see cref="ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse"/>: a banner button, or a goober whose spell is a banner trigger spell), and the
     /// banner spell 21651 itself. Without it bots do not queue (fail closed: <see cref="PlayerbotBattlegroundRefusal.MissingContent"/>).
     /// </summary>
     private bool HasObjectiveContent(BattlegroundFeature feature, BattlegroundType type)

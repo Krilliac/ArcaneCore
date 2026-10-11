@@ -30,9 +30,9 @@ namespace ArcaneCore.World.Tests.Playerbots.Battlegrounds;
 /// What is real and what is synthetic: the ids are the server's (maps 489/529/30, triggers 3646/3647, the flag stands and dropped flags, the
 /// flag auras 23333/23335, the AB banner entries 180087/180085/180058 and their node events, spell 21651 and lock 1479 as read from the
 /// 5875 client's Spell.dbc and Lock.dbc); the coordinates, the floor heights, the creature entries of the battlemasters, the battlemaster
-/// spawns and the one-player-per-team templates are test fixtures. The neutral stables banner is a button with <c>noDamageImmune</c> here
-/// as in <see cref="ArathiBasinTestContent"/> (classic-db's 180087 is a goober whose trigger spell 23932 the server does not script; see
-/// docs/areas/playbots-battlegrounds.md).
+/// spawns and the one-player-per-team templates are test fixtures. The neutral stables banner is by default a button with <c>noDamageImmune</c>
+/// (the simplest banner the match routes); <see cref="NeutralBannerShape.RealGoober"/> puts classic-db's goober 180087 there instead, whose use
+/// casts its trigger spell 23932 at the user (docs/areas/playbots-battlegrounds.md).
 /// </para>
 /// </summary>
 internal static class BattlegroundBotTestContent
@@ -87,29 +87,33 @@ internal static class BattlegroundBotTestContent
     /// <summary>Lock.dbc 5875 row 1479 (read 2026-10-10): case 1 is LOCK_KEY_SKILL (2) of lock type 17 (LOCKTYPE_SLOW_OPEN), no skill needed.</summary>
     public static readonly LockEntry BannerLock = new(1479, [0, 2, 0, 0, 0, 0, 0, 0], [0, 17, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
 
-    /// <param name="offered">The types whose battlemasters are spawned (every type's template, map and objectives are loaded regardless).</param>
-    /// <param name="realNeutralBanner">The stables' neutral banner as classic-db and vmangos have it (a goober, see <see cref="GooberBanner"/>).</param>
+    /// <summary>"A-Mid Trigger", the stables' banner trigger spell (classic-db 180087 data10; vmangos battleground.cpp:177-198).</summary>
+    public const uint StablesTrigger = 23932;
+
     /// <summary>
     /// The stables' neutral banner as the real data has it (vmangos sql/migrations/20260620100323_world.sql, 180087 patch 6; classic-db
     /// gameobject_template): a goober (type 10) whose lock (data0) is 1479 and whose spell (data10) is 23932 "A-Mid Trigger", with
-    /// <c>noDamageImmune</c> (data11) set. The server does not route its use to the node click (MatchRuntime.RoutesBannerUse).
+    /// <c>noDamageImmune</c> (data11) set. Its use casts 23932 at the user, whose script makes the node click (MatchRuntime.RoutesBannerUse,
+    /// OnBannerTriggered). <paramref name="spell"/> replaces data10 (a goober whose spell is not a banner trigger is not routed).
     /// </summary>
-    public static GameObjectTemplate GooberBanner()
+    public static GameObjectTemplate GooberBanner(uint spell = StablesTrigger)
     {
         uint[] data = new uint[GameObjectTemplate.DataCount];
         data[0] = BannerLock.Id;
         data[3] = 196608;
-        data[10] = 23932;
+        data[10] = spell;
         data[11] = 1;
         return new GameObjectTemplate { Entry = 180087, Type = (uint)GameObjectType.Goober, DisplayId = 6271, Name = "Stable Banner", Data = data };
     }
 
-    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, bool realNeutralBanner = false)
+    /// <param name="offered">The types whose battlemasters are spawned (every type's template, map and objectives are loaded regardless).</param>
+    /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
+    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button)
     {
         services.AddSingleton<IMapDataStore>(new Maps());
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
         services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds());
-        var store = new Content(offered, realNeutralBanner);
+        var store = new Content(offered, neutralBanner);
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells()));
@@ -150,15 +154,26 @@ internal static class BattlegroundBotTestContent
             Aura(BattlegroundConstants.SpellWaitingToResurrect, "Waiting to Resurrect", durationIndex: 21, attributes: 0x00800100),
             Aura(BattlegroundConstants.SpellDeserter, "Deserter", durationIndex: 4),
             BannerSpell(),
+            StablesTriggerSpell(),
         ],
-        [new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }],
+        [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }],
         [new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 }, new SpellDurationRow { Id = 4, Duration = 900_000, MaxDuration = 900_000 }],
-        [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MinRange = 0, MaxRange = 5 }],
+        [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 6, MaxRange = 100 }, new SpellRangeRow { Id = 12, MinRange = 0, MaxRange = 5 }],
         [],
         // classic-db playercreateinfo_spell: every race and class learns 21651 "Opening" (here the human and the orc warrior).
         [new PlayerCreateSpellRow { Race = 1, Class = 1, Spell = PlayerbotBattlegroundAI.BannerSpell, Note = "Opening" },
          new PlayerCreateSpellRow { Race = 2, Class = 1, Spell = PlayerbotBattlegroundAI.BannerSpell, Note = "Opening" }],
         []);
+
+    /// <summary>
+    /// Spell 23932 "A-Mid Trigger" with the banner trigger spells' 5875 Spell.dbc shape (as <see cref="BattlegroundBannerTestContent"/> has
+    /// them): SCRIPT_EFFECT (77) at TARGET_UNIT (25), cast time index 1, range index 6 (100 yards), attributes 0x100, attributesEx2 4.
+    /// </summary>
+    private static SpellTemplateRow StablesTriggerSpell() => new()
+    {
+        Id = StablesTrigger, SpellName = "A-Mid Trigger", Attributes = 0x100, AttributesEx2 = 4, CastingTimeIndex = 1, RangeIndex = 6, Effect1 = 77,
+        EffectImplicitTargetA1 = 25,
+    };
 
     private static SpellTemplateRow Aura(uint id, string name, uint durationIndex, uint attributes = 0) => new()
     {
@@ -230,7 +245,7 @@ internal static class BattlegroundBotTestContent
             ]));
     }
 
-    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, bool realNeutralBanner) : ICreatureDataStore, IGameObjectDataStore
+    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner) : ICreatureDataStore, IGameObjectDataStore
     {
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [
@@ -256,7 +271,12 @@ internal static class BattlegroundBotTestContent
                 Object(WarsongGulch.HordeFlagBaseEntry, GameObjectType.FlagStand, "Warsong Flag"),
                 Object(WarsongGulch.AllianceFlagGroundEntry, GameObjectType.FlagDrop, "Silverwing Flag"),
                 Object(WarsongGulch.HordeFlagGroundEntry, GameObjectType.FlagDrop, "Warsong Flag"),
-                realNeutralBanner ? GooberBanner() : Banner(180087, "Stable Banner"), Banner(180085, "Contested Banner"), Banner(180058, "Alliance Banner"),
+                neutralBanner switch
+                {
+                    NeutralBannerShape.RealGoober => GooberBanner(),
+                    NeutralBannerShape.UnroutedGoober => GooberBanner(WarsongGulch.SpellWarsongFlag),
+                    _ => Banner(180087, "Stable Banner"),
+                }, Banner(180085, "Contested Banner"), Banner(180058, "Alliance Banner"),
             ],
             [
                 new GameObjectSpawn { Guid = WsgAllianceStandSpawn, Entry = WarsongGulch.AllianceFlagBaseEntry, MapId = 489, X = AllianceFlag.X, Y = AllianceFlag.Y, Z = AllianceFlag.Z },
@@ -291,7 +311,7 @@ internal static class BattlegroundBotTestContent
             return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Button, DisplayId = 5651, Name = name, Data = data };
         }
 
-        private static GameObjectTemplate GooberBanner() => BattlegroundBotTestContent.GooberBanner();
+        private static GameObjectTemplate GooberBanner(uint spell = StablesTrigger) => BattlegroundBotTestContent.GooberBanner(spell);
 
         private static GameObjectSpawn BannerSpawn(uint guid, uint entry)
             => new() { Guid = guid, Entry = entry, MapId = 529, X = Stables.X, Y = Stables.Y, Z = Stables.Z };
@@ -303,10 +323,10 @@ internal static class BattlegroundBotTestWorld
 {
     /// <param name="offered">The types with battlemasters beside the starts (default: Warsong Gulch only, so two bots meet in one match).</param>
     public static Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, params BattlegroundType[] offered)
-        => StartAsync(configure, realNeutralBanner: false, offered);
+        => StartAsync(configure, NeutralBannerShape.Button, offered);
 
-    /// <param name="realNeutralBanner">The stables' neutral banner as the real data has it (<see cref="BattlegroundBotTestContent.GooberBanner"/>).</param>
-    public static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, bool realNeutralBanner, params BattlegroundType[] offered)
+    /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
+    public static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, params BattlegroundType[] offered)
     {
         var options = new PlayerbotOptions
         {
@@ -316,7 +336,7 @@ internal static class BattlegroundBotTestWorld
         configure?.Invoke(options);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
         {
-            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, realNeutralBanner);
+            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner);
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
         });
         await world.Host.OnWorldAsync(() =>
@@ -364,4 +384,17 @@ internal static class BattlegroundBotTestWorld
             return false;
         }
     }
+}
+
+/// <summary>The shape of the stables' neutral banner in <see cref="BattlegroundBotTestContent"/>.</summary>
+internal enum NeutralBannerShape
+{
+    /// <summary>A button with <c>noDamageImmune</c> (data4): opening it is the node click (MatchRuntime.OnObjectUsed).</summary>
+    Button,
+
+    /// <summary>classic-db's goober 180087 (<see cref="BattlegroundBotTestContent.GooberBanner"/>): opening it casts 23932, whose script clicks.</summary>
+    RealGoober,
+
+    /// <summary>A goober like 180087 whose spell (data10) is not a banner trigger spell: the match does not route it.</summary>
+    UnroutedGoober,
 }

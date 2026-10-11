@@ -539,14 +539,51 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     [Fact]
-    public async Task Ab_WithTheRealGooberNeutralBanner_IsRefused_NoBotQueues()
+    public async Task Ab_WithTheRealGooberNeutralBanner_AutonomousBotClaimsTheStables_ThroughTheTriggerSpell()
     {
-        // The real data's neutral banners are goobers the match does not route to the node click: a 21651 cast at one would claim nothing,
-        // so Arathi Basin is refused (MissingContent) and no bot queues, though a battlemaster stands beside it.
-        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, realNeutralBanner: true, BattlegroundType.ArathiBasin);
+        // The real data's neutral banner (classic-db 180087: a goober locked by 1479 whose data10 is 23932 "A-Mid Trigger") is routed
+        // (MatchRuntime.RoutesBannerUse), so the coordinator accepts Arathi Basin. A direct use of it is refused (the goober's use runs only
+        // through the opening spell), so the bot must cast Opening 21651 at it: the open-lock reaches the goober, whose use casts 23932 at the
+        // bot, whose script makes the node click (MatchRuntime.OnBannerTriggered).
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, NeutralBannerShape.RealGoober, BattlegroundType.ArathiBasin);
         await RunAsync(world, "bg-ab-goober", async context =>
         {
             ScenarioBot ally = await AutonomousAsync(context, "Bggooberally", race: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bggoobhorde", BattlegroundType.ArathiBasin, Content.HordeAbMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 529, park: null);
+            await context.StepAsync("Arathi Basin is accepted: the Alliance bot queues and is in the match", async () =>
+            {
+                await WaitExplainedAsync(context, "in the match", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch,
+                    TimeSpan.FromSeconds(60), ally);
+                ScenarioContext.Expect(!coordinator.Refusals.Any(r => r.Type == BattlegroundType.ArathiBasin), "Arathi Basin was refused");
+            });
+            var ab = (ArathiBasin)(await context.BattlegroundOfAsync(ally))!;
+            await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => ab.Status == BattlegroundStatus.InProgress, StartWait));
+
+            long mark = ally.Mark();
+            await context.StepAsync("the bot casts 21651 at the neutral goober banner, which casts 23932 at it: the stables are claimed", async () =>
+            {
+                await WaitExplainedAsync(context, "claimed", () => ab.NodeStatus(ArathiBasin.NodeStables) == ArathiBasin.StatusAllianceContested,
+                    TimeSpan.FromSeconds(90), ally);
+                ScenarioContext.Expect(ally.Received(WorldOpcode.SmsgSpellStart, SpellIdOf, mark).Contains(PlayerbotBattlegroundAI.BannerSpell), "no SMSG_SPELL_START of 21651");
+                ScenarioContext.Expect(ally.Received(WorldOpcode.SmsgSpellGo, SpellIdOf, mark).Contains(PlayerbotBattlegroundAI.BannerSpell), "no SMSG_SPELL_GO of 21651");
+                ScenarioContext.Expect(ally.Received(WorldOpcode.SmsgSpellGo, SpellIdOf, mark).Contains(Content.StablesTrigger), "no SMSG_SPELL_GO of the trigger spell 23932");
+                ScenarioContext.Expect(coordinator.Find(ally.BotId)?.AI?.BannerCasts >= 1, "the AI submitted no banner cast");
+                ScenarioContext.ExpectEqual(1u, await context.ReadAsync(() => ((AbScore)ab.ScoreOf(ally.Guid)!).BasesAssaulted), "the bot's bases assaulted");
+            });
+        });
+    }
+
+    [Fact]
+    public async Task Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues()
+    {
+        // A goober banner whose spell (data10) is not a banner trigger spell is not routed to the node click: a 21651 cast at it would claim
+        // nothing, so Arathi Basin is refused (MissingContent) and no bot queues, though a battlemaster stands beside it.
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, NeutralBannerShape.UnroutedGoober, BattlegroundType.ArathiBasin);
+        await RunAsync(world, "bg-ab-unrouted", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bgunrouteda", race: 1);
             PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
             await context.StepAsync("Arathi Basin is refused for missing content and nothing queues", async () =>
             {

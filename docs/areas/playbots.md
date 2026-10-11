@@ -45,9 +45,8 @@ manager (`World:Playerbots:Population`, off by default, live; `.playerbot popula
 
 Bots found guilds, fill and rank them, say a short line in guild chat and (off by default) wave at nearby real players
 (`World:Playerbots:Social`, live): `docs/areas/playbots-social.md`.
-Free bots near a battlemaster of their faction queue for Warsong Gulch and Arathi Basin (Arathi Basin only where the server routes
-its neutral banners; never Alterac Valley), fill the queues real
-players wait in, play the objective (the enemy flag, the node banners with spell 21651) and leave when the match ends:
+Free bots near a battlemaster of their faction queue for Warsong Gulch and Arathi Basin (Arathi Basin where the server routes its neutral
+banners, as it does the classic-db goobers; never Alterac Valley), fill the queues real players wait in, play the objective (the enemy flag, the node banners with spell 21651) and leave when the match ends:
 `PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
 `docs/areas/playbots-battlegrounds.md`.
 

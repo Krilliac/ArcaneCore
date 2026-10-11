@@ -396,7 +396,7 @@ internal sealed class PlayerbotBattlegroundAI
             || _session.Services.GetService<BattlegroundFeature>() is not { } feature) return banners;
         foreach (GameObject go in objects.GameObjects)
         {
-            // A banner the match does not route to the node click (a neutral goober) is never cast at: the cast would claim nothing.
+            // A banner the match does not route to the node click (a goober whose spell is no banner trigger) is never cast at: the cast would claim nothing.
             if (!go.IsSpawned || go.Spawn is not { } spawn || GameObjectLocks.LockIdOf(go.Template) == 0 || !MatchRuntime.RoutesBannerUse(go.Template)) continue;
             foreach ((byte e1, byte _) in feature.Events.ObjectEvents(spawn.Guid))
                 if (e1 < ArathiBasin.NodeCount) banners.Add((e1, go));

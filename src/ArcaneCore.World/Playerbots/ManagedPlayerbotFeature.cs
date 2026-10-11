@@ -508,9 +508,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>
     /// <c>.playerbot follow|stay</c> (world thread): leash the running autonomous bot to <paramref name="master"/>, a real player, with
-    /// no group (<see cref="PlayerbotPartyAI.Leash"/>). A member of a bot-led group leaves it first, exactly as when a controller takes
-    /// the bot over (<see cref="SetControllerAsync"/>). The bot is marked party-driven at once, so the bot-led group matching of the
-    /// same tick cannot take it back before its next think.
+    /// no group (<see cref="PlayerbotPartyAI.Leash"/>). A member of a bot-led group leaves it first, and the battlegrounds coordinator
+    /// lets go of the bot, exactly as when a controller takes the bot over (<see cref="SetControllerAsync"/>). The bot is marked
+    /// party-driven at once, so the bot-led group and battleground matching of the same tick cannot take it back before its next think.
     /// </summary>
     internal PlayerbotOperationResult Leash(Guid botId, Player master, bool stay)
     {
@@ -527,6 +527,11 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             bot.GroupDriven = false;
             bot.Brain.ResumeAfterGroup();
         }
+
+        // A bot with battleground business is let go where it stands, as when a controller takes it over (the server keeps its queue
+        // or match): the coordinator's drive comes first at each think (Think), so a leash it still held would be undone at once.
+        battlegrounds?.Forget(botId);
+        bot.BattlegroundDriven = false;
 
         bot.Session.ManagedBudget = null;
         bot.Party.Leash(player, master, stay);
@@ -1031,8 +1036,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     }
 
     /// <summary>
-    /// The home line of a running bot: none without a home, <c>suspended</c> while a scripted controller, a party AI, a bot-led group or the battlegrounds coordinator
-    /// drives it (they ignore the home), otherwise the brain's report (<see cref="PlayerbotHomeReturn.Report"/>).
+    /// The home line of a running bot: none without a home, <c>suspended</c> while a scripted controller, a party AI, a bot-led group or
+    /// the battlegrounds coordinator drives it (they ignore the home), otherwise the brain's report (<see cref="PlayerbotHomeReturn.Report"/>).
     /// </summary>
     private string? HomeLineOf(ActiveBot active) => !_homes.ContainsKey(active.Record.BotId) ? null
         : active.Controller is not null || active.PartyDriven || active.GroupDriven || active.BattlegroundDriven ? "suspended" : active.Brain.HomeReport;

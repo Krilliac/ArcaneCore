@@ -119,8 +119,8 @@ there is none. A defender holds within 8 yards of its own flag room.
 `EventPlayerClickedOnFlag`: `status == 0 || teamIndex == status % 2`). An attacker walks to the nearest such node's banner, stops within
 4 yards and casts 21651 at the banner (CMSG_CAST_SPELL with TARGET_FLAG_OBJECT; Spell.dbc: OPEN_LOCK lock type 17, 10 second cast,
 0-5 yards; lock 1479 is LOCK_KEY_SKILL of that type), standing still while it casts; a node a teammate is already casting at is left to
-it (vmangos `AtFlag`). The server's open-lock effect turns the opening of a banner button with `noDamageImmune` into the click
-(docs/areas/battlegrounds.md). A defender guards one of its team's nodes (spread by guid) and casts at it when the enemy contests it;
+it (vmangos `AtFlag`). The server's open-lock effect turns the opening of a banner button with `noDamageImmune` into the click, and
+the opening of a neutral goober banner into its trigger spell cast at the bot, which clicks (docs/areas/battlegrounds.md). A defender guards one of its team's nodes (spread by guid) and casts at it when the enemy contests it;
 with nothing to take, an attacker guards its nearest own node.
 
 ## Configuration (`World:Playerbots:Battlegrounds`, live)
@@ -156,9 +156,13 @@ where the group would be, the goal `Battleground` (or `Recover` on a corpse run)
   player's party in the tick its invitation arrives declines it and is never ported; an autonomous bot takes the Horde flag and captures it at 3646
   (`Wsg_AutonomousBot_TakesTheEnemyFlag_AndCapturesItAtItsOwnFlagRoom`); an autonomous bot claims the stables with its own 21651 cast
   (`Ab_AutonomousBot_ClaimsTheStables`: SMSG_SPELL_START and SMSG_SPELL_GO of 21651, the node contested by the Alliance, the bot's
-  bases-assaulted score); Arathi Basin with the real goober neutral banner is refused; Alterac Valley is refused and never queued.
-  With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, goober and managed-bot tests
-  go red.
+  bases-assaulted score); with the real goober neutral banner (classic-db 180087: lock 1479, data10 23932) Arathi Basin is accepted and an
+  autonomous bot claims the stables through 21651 and the trigger spell
+  (`Ab_WithTheRealGooberNeutralBanner_AutonomousBotClaimsTheStables_ThroughTheTriggerSpell`: SMSG_SPELL_GO of 21651 and of 23932, the node
+  contested by the Alliance); a goober banner whose spell is no banner trigger is refused and never queued
+  (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); Alterac Valley is refused and never queued.
+  With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, unrouted-goober and
+  managed-bot tests go red.
 
 The test world's battleground maps are flat with open paths, laid out compactly, with one-player-per-team templates; the battlemasters of
 both factions stand beside the human start, where the scenario world logs every race in; the ids (maps, triggers, flag and banner entries,
@@ -171,13 +175,15 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   reinforcements), its NPC fights and its 40-player scale have no bot AI here; it is refused in the eligibility check (`Unsupported`,
   logged once), so no bot ever queues for it, whatever the template, the battlemasters and the content say. No configuration key turns
   it on.
-* **Arathi Basin is refused with the real world data today.** classic-db and vmangos make the five neutral banners (180087-180091) goobers
-  whose use casts a trigger spell (23932, 23935-23938) that vmangos scripts into the click (`BattlegroundBannerTriggerScript`). This
-  server routes only the banner buttons with `noDamageImmune` (the contested and faction banners) to the match (`MatchRuntime.RoutesBannerUse`):
-  a 21651 cast at a neutral banner would open its lock and claim nothing. The coordinator decides with that same rule, so with the real data
-  Arathi Basin is `MissingContent` and no bot queues for it (`Ab_WithTheRealGooberNeutralBanner_IsRefused_NoBotQueues`); the match AI never
-  casts at a banner the rule does not route. When the server routes the goober banners (that rule extended), bots play Arathi Basin with no
-  change here. The objective test models the neutral stables banner as a routed button.
+* **Arathi Basin banners: only what the server routes.** classic-db and vmangos make the five neutral banners (180087-180091) goobers
+  whose use casts a trigger spell (23932, 23935-23938) that vmangos scripts into the click (`BattlegroundBannerTriggerScript`); the server
+  routes them (`MatchRuntime.RoutesBannerUse`: a button with `noDamageImmune`, or a goober whose data10 is a banner trigger spell), so with
+  the real data the coordinator accepts Arathi Basin. A direct use (CMSG_GAMEOBJ_USE) of a routed banner is refused, so the match AI only
+  ever casts 21651 at a banner; the open-lock uses the goober, which casts its trigger spell at the bot, which clicks the node. The
+  coordinator decides with that same rule: content whose neutral banners the rule does not route (a goober with another spell) is
+  `MissingContent` and no bot queues for it, and the match AI never casts at a banner the rule does not route. Only the stables node is
+  exercised end to end with the goober shape (one bot, one node); the other four neutral banners are covered by the match tests
+  (docs/areas/battlegrounds.md).
 * **Opening a banner needs the skills feature.** The open-lock effect of 21651 is installed by the skills feature only when it has its skill
   catalog (`Skills:*DbcPath`, docs/areas/skills.md); without one the cast completes and nothing opens, for bots and players alike.
 * **Navigation needs the battleground maps' mmaps** (489, 529; 30 for Alterac Valley would be needed if it were in scope). Without a
