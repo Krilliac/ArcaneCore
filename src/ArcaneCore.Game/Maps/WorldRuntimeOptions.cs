@@ -37,6 +37,18 @@ public sealed class WorldRuntimeOptions
     /// <summary>Periodic save of online characters, in milliseconds (vmangos PlayerSave.Interval default 900000). 0 disables.</summary>
     public int AutosaveIntervalMs { get; set; } = 15 * 60 * 1000;
 
+    /// <summary>
+    /// The character save queue warns (at most every 30 s) while this many characters or more have a snapshot waiting
+    /// or being written. 0 disables the depth check. Default 1000 (docs/areas/persistence.md).
+    /// </summary>
+    public int SaveQueueWarnDepth { get; set; } = 1000;
+
+    /// <summary>
+    /// The character save queue warns while its oldest waiting snapshot has waited this many milliseconds. 0 disables the age
+    /// check. Default 5000, the quest settlement budget (docs/areas/persistence.md).
+    /// </summary>
+    public int SaveQueueWarnAgeMs { get; set; } = 5000;
+
     /// <summary>Characters an account may have on this realm (vmangos CharactersPerRealm: default 10, at most 10).</summary>
     public int CharactersPerRealm { get; set; } = 10;
 

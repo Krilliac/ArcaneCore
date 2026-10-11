@@ -4,6 +4,7 @@ using System.Text.Json;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
@@ -354,6 +355,113 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 rewardStoreAttempts = hold.Attempts,
             }));
         }
+    }
+
+    [Fact]
+    public async Task Settlement_UnderADeepSaveQueueOfOtherCharacters_CompletesWithinBudget()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        CancellationToken token = deadline.Token;
+        var slowSaves = new SlowOtherSaves();
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
+            services.AddScoped<ICharacterStore>(provider => new SlowOtherCharactersStore(
+                new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()), slowSaves)), token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        CharacterSaveQueue queue = server.Services.GetRequiredService<CharacterSaveQueue>();
+        await using OwnedClient hero = await CreateClientAsync(server, "DEEPQUEUE", "Deephero", token);
+        try
+        {
+            await MockScenarios.AcceptRewardQuestAsync(server, hero.Connection, hero.Guid, token);
+            await MockScenarios.KillRewardTargetAsync(server, hero.Connection, hero.Guid, SyntheticArcaneServer.FirstTargetGuid, 1, token);
+            await MockScenarios.KillRewardTargetAsync(server, hero.Connection, hero.Guid, SyntheticArcaneServer.SecondTargetGuid, 2, token);
+            await server.FlushCharacterAsync(checked((int)hero.Guid), token);
+
+            // 120 other characters, each snapshot taking 50 ms to write: six seconds of backlog, longer than the production
+            // five-second settlement budget (which is left at its default). A strict FIFO queue puts the hero's pre-reward
+            // save behind all of it, the budget expires while it waits, and the reward is never granted.
+            Assert.True(feature.Options.SettlementBudgetSeconds <= 5, "this test relies on the production settlement budget");
+            slowSaves.Armed = true;
+            const int OtherCharacters = 120;
+            for (int index = 0; index < OtherCharacters; index++)
+            {
+                queue.Enqueue(new CharacterState(SlowOtherCharactersStore.FirstOtherId + index, 0, 12, 0, 0, 0, 0, 1, 10));
+            }
+
+            await WaitUntilAsync(() => queue.Pending >= OtherCharacters / 2, token);
+            long start = Stopwatch.GetTimestamp();
+            await MockScenarios.ChooseRewardAsync(hero.Connection, 1, token);
+            MockQuestComplete rewarded = ScenarioWire.QuestComplete(await hero.Connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverQuestComplete, token));
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+            int stillQueued = queue.Pending;
+            output.WriteLine($"settlement answered after {elapsed.TotalMilliseconds:F0} ms with {stillQueued} snapshots still queued");
+
+            Assert.Equal(SyntheticArcaneServer.RewardQuestId, rewarded.QuestId);
+            Assert.Equal(SyntheticArcaneServer.RewardMoney, rewarded.Money);
+            Assert.True(elapsed < TimeSpan.FromSeconds(feature.Options.SettlementBudgetSeconds), $"settlement took {elapsed.TotalMilliseconds:F0} ms");
+            Assert.True(stillQueued > OtherCharacters / 4, $"only {stillQueued} snapshots were left: the settlement waited for the queue instead of overtaking it");
+            await feature.WaitForSettlementAsync(checked((int)hero.Guid), token);
+            await MockScenarios.ValidatePersistedRewardAsync(server, hero.Guid, rewarded: true, count: 2, token);
+        }
+        finally
+        {
+            slowSaves.Armed = false; // let the remaining backlog drain at once so the server stops promptly
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken token)
+    {
+        while (!condition())
+        {
+            await Task.Delay(10, token);
+        }
+    }
+
+    private sealed class SlowOtherSaves
+    {
+        private volatile bool _armed;
+
+        public bool Armed
+        {
+            get => _armed;
+            set => _armed = value;
+        }
+    }
+
+    /// <summary>Saves of characters that do not exist take 50 ms while armed; everything else goes straight to the real store.</summary>
+    private sealed class SlowOtherCharactersStore(ICharacterStore inner, SlowOtherSaves slow) : ICharacterStore
+    {
+        public const int FirstOtherId = 900_000;
+
+        public Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(int accountId, CancellationToken cancellationToken = default) => inner.GetByAccountAsync(accountId, cancellationToken);
+
+        public Task<CharacterRecord?> GetByIdAsync(int id, CancellationToken cancellationToken = default) => inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<bool> IsNameTakenAsync(string name, CancellationToken cancellationToken = default) => inner.IsNameTakenAsync(name, cancellationToken);
+
+        public Task<int> CountByAccountAsync(int accountId, CancellationToken cancellationToken = default) => inner.CountByAccountAsync(accountId, cancellationToken);
+
+        public Task<CharacterRecord> CreateAsync(CharacterRecord character, CancellationToken cancellationToken = default) => inner.CreateAsync(character, cancellationToken);
+
+        public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default) => inner.DeleteAsync(id, accountId, cancellationToken);
+
+        public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
+        {
+            if (state.Id >= FirstOtherId)
+            {
+                if (slow.Armed)
+                {
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            await inner.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default) => inner.GetActionButtonsAsync(characterId, cancellationToken);
+
+        public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default) => inner.GetAllIdentitiesAsync(cancellationToken);
     }
 
     private static async Task MeasureAsync(Func<CancellationToken, Task> action, List<double> samples, CancellationToken token)

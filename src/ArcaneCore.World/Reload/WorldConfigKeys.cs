@@ -89,6 +89,9 @@ public static class WorldConfigKeys
         // Live: read from the shared options object at each use.
         LiveNonNegative("UpdateCompressionThreshold", o => o.UpdateCompressionThreshold, (o, v) => o.UpdateCompressionThreshold = v),
         LiveNonNegative("AutosaveIntervalMs", o => o.AutosaveIntervalMs, (o, v) => o.AutosaveIntervalMs = v),
+        // CharacterSaveQueue.MaybeReport reads both thresholds from the shared options at each backlog check (once a second; 0 disables that check).
+        LiveNonNegative("SaveQueueWarnDepth", o => o.SaveQueueWarnDepth, (o, v) => o.SaveQueueWarnDepth = v),
+        LiveNonNegative("SaveQueueWarnAgeMs", o => o.SaveQueueWarnAgeMs, (o, v) => o.SaveQueueWarnAgeMs = v),
         Live("MaxCommandsPerTick", o => o.MaxCommandsPerTick, (o, v) => o.MaxCommandsPerTick = v,
             value => value > 0 ? null : "must be positive"),
         LiveNonNegative("CommandTimeBudgetMs", o => o.CommandTimeBudgetMs, (o, v) => o.CommandTimeBudgetMs = v),

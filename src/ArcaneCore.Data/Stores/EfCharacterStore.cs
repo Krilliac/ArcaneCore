@@ -280,14 +280,39 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
         if (state.ActionButtons is { } buttons)
         {
-            db.ActionButtons.RemoveRange(
-                await db.ActionButtons.Where(b => b.CharacterId == state.Id).ToListAsync(cancellationToken).ConfigureAwait(false));
+            // A diff, not delete-and-reinsert: the rows are loaded tracked, a button whose action and type are unchanged issues
+            // no statement (EF marks a property modified only when its value differs), a removed one is deleted, a new one inserted.
+            List<ActionButtonRow> existing = await db.ActionButtons.Where(b => b.CharacterId == state.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
+            var rows = new Dictionary<byte, ActionButtonRow>(existing.Count);
+            foreach (ActionButtonRow row in existing)
+            {
+                rows[row.Button] = row;
+            }
+
+            var wanted = new HashSet<byte>();
             foreach (ActionButton button in buttons)
             {
-                db.ActionButtons.Add(new ActionButtonRow
+                wanted.Add(button.Button);
+                if (rows.TryGetValue(button.Button, out ActionButtonRow? row))
                 {
-                    CharacterId = state.Id, Button = button.Button, Action = button.Action, Type = button.Type,
-                });
+                    row.Action = button.Action;
+                    row.Type = button.Type;
+                }
+                else
+                {
+                    rows[button.Button] = db.ActionButtons.Add(new ActionButtonRow
+                    {
+                        CharacterId = state.Id, Button = button.Button, Action = button.Action, Type = button.Type,
+                    }).Entity;
+                }
+            }
+
+            foreach (ActionButtonRow row in existing)
+            {
+                if (!wanted.Contains(row.Button))
+                {
+                    db.ActionButtons.Remove(row);
+                }
             }
         }
 

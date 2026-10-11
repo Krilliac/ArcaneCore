@@ -56,7 +56,75 @@ public readonly record struct TickPhases(long CommandsMicros, long MapsMicros, l
     public long CommandsBytes { get; init; }
     public long MapsBytes { get; init; }
     public long FeaturesBytes { get; init; }
+
+    /// <summary>Of <see cref="FeaturesMicros"/>, the world-tick handlers (game events, rest, the watchdog ...) and the script hooks; the rest is the per-tick feature updates.</summary>
+    public long WorldTickMicros { get; init; }
+
+    /// <summary>The periodic character-save pass that ends a tick (zero in the ticks that do not autosave) and the snapshots it queued.</summary>
+    public long AutosaveMicros { get; init; }
+    public int AutosaveSnapshots { get; init; }
+
+    /// <summary>Posted world commands run this tick.</summary>
+    public int CommandsRun { get; init; }
+
+    /// <summary>The split as one log fragment: commands, world-tick handlers, per-tick feature updates, maps, autosave.</summary>
+    public string Format() => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        $"commands {CommandsMicros / 1000} ms ({CommandsRun} run), world-tick handlers {WorldTickMicros / 1000} ms, features {Math.Max(0, FeaturesMicros - WorldTickMicros) / 1000} ms, maps {MapsMicros / 1000} ms, autosave {AutosaveMicros / 1000} ms ({AutosaveSnapshots} snapshots)");
 }
+
+/// <summary>Where the world thread is inside a tick (<see cref="WorldRuntime.CurrentPosition"/>).</summary>
+public enum TickPhase
+{
+    /// <summary>Between ticks (waiting for the next one), or the world thread is not running.</summary>
+    Idle = 0,
+    Commands,
+    WorldTick,
+    Maps,
+    Features,
+    Autosave,
+}
+
+/// <summary>
+/// The world thread's position, read from any thread: the phase, the handler or command running in it (a delegate, a
+/// <see cref="Map"/>, or null) and the <see cref="Stopwatch.GetTimestamp"/> at which that work began.
+/// The three values are read separately, so a read taken as the thread moves on may pair a phase with the next item.
+/// </summary>
+public readonly record struct TickPosition(TickPhase Phase, object? Work, long SinceTimestamp)
+{
+    /// <summary>The feature, command source or map the position names ("SyntheticSlowFeature", "map 0 instance 0").</summary>
+    public string DescribeWork() => Work switch
+    {
+        null => "(nothing)",
+        Map map => $"map {map.MapId} instance {map.InstanceId}",
+        Delegate handler => TickWorkNames.Of(handler),
+        _ => Work.GetType().Name,
+    };
+}
+
+/// <summary>Stable, readable names for the delegates the world loop runs.</summary>
+public static class TickWorkNames
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, string> Cache = new();
+
+    /// <summary>The class a handler belongs to; a lambda's compiler-generated closure type is replaced by the class that declares it.</summary>
+    public static string Of(Delegate handler)
+    {
+        Type? type = handler.Method.DeclaringType;
+        return type is null ? handler.Method.Name : Cache.GetOrAdd(type, static t =>
+        {
+            Type current = t;
+            while (current.DeclaringType is { } outer && current.Name.Contains('<', StringComparison.Ordinal))
+            {
+                current = outer;
+            }
+
+            return current.Name;
+        });
+    }
+}
+
+/// <summary>One tick that ran far over its interval, kept for the hang log (<see cref="TickStats.SlowTicks"/>).</summary>
+public sealed record SlowTickInfo(long Sequence, long Timestamp, long DurationMicros, TickPhases Phases, IReadOnlyList<(string Name, long Micros)> TopFeatures);
 
 /// <summary>
 /// Fixed-size ring of recent world-tick durations and allocated bytes. One writer (the world
@@ -79,6 +147,18 @@ public sealed class TickStats
     private readonly Dictionary<string, double> _featureMeans = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _featureBytes = new(StringComparer.Ordinal);
     private const double FeatureSmoothing = 0.02;
+
+    /// <summary>Features kept per slow tick, slowest first.</summary>
+    public const int TopFeatureCount = 5;
+
+    /// <summary>Slow ticks kept; when full, the fastest of them (or one older than <see cref="SlowTickRetention"/>) is replaced.</summary>
+    public const int SlowTickCapacity = 8;
+
+    /// <summary>How long a slow tick stays eligible for the hang log.</summary>
+    public static readonly TimeSpan SlowTickRetention = TimeSpan.FromSeconds(60);
+
+    private readonly SlowTickEntry?[] _slowTicks = new SlowTickEntry?[SlowTickCapacity];
+    private long _slowSequence;
     private long _total;
     private long _overruns;
     private long _frameOverruns;
@@ -160,6 +240,102 @@ public sealed class TickStats
                 ? bytes + (FeatureSmoothing * (allocatedBytes - bytes))
                 : allocatedBytes;
         }
+    }
+
+    /// <summary>
+    /// Remember a tick whose body ran over its interval, with its phase split and its slowest features, for the watchdog's hang log
+    /// (world thread; allocation-free once the ring has filled). Of the <see cref="SlowTickCapacity"/> kept, the slowest are
+    /// retained: a new tick replaces an expired one, else the fastest kept one if it is slower than that.
+    /// </summary>
+    public void RecordSlowTick(in TickPhases phases, ReadOnlySpan<string?> featureNames, ReadOnlySpan<long> featureMicros, int featureCount, long durationMicros)
+    {
+        long stamp = Stopwatch.GetTimestamp();
+        lock (_gate)
+        {
+            int target = -1;
+            for (int i = 0; i < _slowTicks.Length; i++)
+            {
+                if (_slowTicks[i] is null)
+                {
+                    target = i;
+                    break;
+                }
+            }
+
+            if (target < 0)
+            {
+                int oldest = 0, fastest = 0;
+                for (int i = 1; i < _slowTicks.Length; i++)
+                {
+                    if (_slowTicks[i]!.Timestamp < _slowTicks[oldest]!.Timestamp) oldest = i;
+                    if (_slowTicks[i]!.DurationMicros < _slowTicks[fastest]!.DurationMicros) fastest = i;
+                }
+
+                if (Stopwatch.GetElapsedTime(_slowTicks[oldest]!.Timestamp, stamp) > SlowTickRetention)
+                {
+                    target = oldest;
+                }
+                else if (durationMicros > _slowTicks[fastest]!.DurationMicros)
+                {
+                    target = fastest;
+                }
+                else
+                {
+                    return;
+                }
+            }
+
+            SlowTickEntry entry = _slowTicks[target] ??= new SlowTickEntry();
+            entry.Sequence = ++_slowSequence;
+            entry.Timestamp = stamp;
+            entry.DurationMicros = durationMicros;
+            entry.Phases = phases;
+            entry.Count = Math.Min(Math.Min(featureCount, TopFeatureCount), Math.Min(featureNames.Length, featureMicros.Length));
+            for (int i = 0; i < entry.Count; i++)
+            {
+                entry.Names[i] = featureNames[i];
+                entry.Micros[i] = featureMicros[i];
+            }
+        }
+    }
+
+    /// <summary>The slow ticks recorded within <paramref name="within"/>, slowest first (any thread).</summary>
+    public IReadOnlyList<SlowTickInfo> SlowTicks(TimeSpan within)
+    {
+        long now = Stopwatch.GetTimestamp();
+        var result = new List<SlowTickInfo>();
+        lock (_gate)
+        {
+            foreach (SlowTickEntry? entry in _slowTicks)
+            {
+                if (entry is null || Stopwatch.GetElapsedTime(entry.Timestamp, now) > within)
+                {
+                    continue;
+                }
+
+                var top = new (string Name, long Micros)[entry.Count];
+                for (int i = 0; i < entry.Count; i++)
+                {
+                    top[i] = (entry.Names[i] ?? "?", entry.Micros[i]);
+                }
+
+                result.Add(new SlowTickInfo(entry.Sequence, entry.Timestamp, entry.DurationMicros, entry.Phases, top));
+            }
+        }
+
+        result.Sort(static (a, b) => b.DurationMicros.CompareTo(a.DurationMicros));
+        return result;
+    }
+
+    private sealed class SlowTickEntry
+    {
+        public long Sequence;
+        public long Timestamp;
+        public long DurationMicros;
+        public TickPhases Phases;
+        public int Count;
+        public readonly string?[] Names = new string?[TopFeatureCount];
+        public readonly long[] Micros = new long[TopFeatureCount];
     }
 
     /// <summary>Copy the ring and compute nearest-rank percentiles.</summary>

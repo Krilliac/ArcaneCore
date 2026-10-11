@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Persistence;
@@ -51,7 +54,10 @@ public sealed class CharacterSaveQueueTests
             Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
                 new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
         };
+        // The earlier snapshot is written (and fails all three attempts) before the newer one exists: snapshots that wait
+        // together coalesce, so the retained-failure merge is what carries its optional sections forward.
         kit.Queue.Enqueue(earlier);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
         kit.Queue.Enqueue(State(1, 22));
         await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
         CharacterState saved = Assert.Single(kit.Store.Saved);
@@ -185,12 +191,13 @@ public sealed class CharacterSaveQueueTests
         Assert.False(trusted.IsCompleted);
         release.TrySetResult();
         await trusted.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(new uint[] { 11, 12, 33 }, kit.Store.Saved.Select(s => s.Money));
+        // The waiting 12 was superseded by the settlement's 33 (a newer snapshot replaces a waiting one); 11 was already being written.
+        Assert.Equal(new uint[] { 11, 33 }, kit.Store.Saved.Select(s => s.Money));
         Assert.True(kit.Queue.IsHeld(1));
         kit.Queue.ResumeCharacter(1);
         kit.Queue.Enqueue(State(1, 55));
         await kit.Queue.FlushCharacterAsync(1);
-        Assert.Equal(new uint[] { 11, 12, 33, 55 }, kit.Store.Saved.Select(s => s.Money));
+        Assert.Equal(new uint[] { 11, 33, 55 }, kit.Store.Saved.Select(s => s.Money));
         Assert.False(kit.Queue.IsHeld(1));
         await kit.Queue.StopAsync();
     }
@@ -266,6 +273,7 @@ public sealed class CharacterSaveQueueTests
             Home = new HomeBind(1, 2, 3, 4, 5),
         };
         kit.Queue.Enqueue(earlier);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1)); // fails every attempt: retained
         kit.Queue.HoldCharacter(1);
         await kit.Queue.SaveForSettlementAsync(State(1, 22)).WaitAsync(TimeSpan.FromSeconds(5));
         CharacterState saved = Assert.Single(kit.Store.Saved);
@@ -331,15 +339,359 @@ public sealed class CharacterSaveQueueTests
         await kit.Queue.StopAsync();
     }
 
+    [Fact]
+    public async Task PendingSnapshotsOfOneCharacterCoalesceLatestWins()
+    {
+        await using var kit = new Kit();
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        kit.Queue.Enqueue(State(1, 10));
+        kit.Queue.Enqueue(State(1, 20));
+        kit.Queue.Enqueue(State(1, 30));
+        Assert.True(kit.Queue.IsPending(1));
+        Assert.Equal(2, kit.Queue.Pending); // characters, not snapshots: 99 in flight, 1 waiting
+        release.TrySetResult();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(30u, Assert.Single(kit.Store.Saved, s => s.Id == 1).Money);
+        Assert.Single(kit.Store.Attempts, s => s.Id == 1);
+        Assert.False(kit.Queue.IsPending(1));
+        Assert.Equal(0, kit.Queue.Pending);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task InFlightSnapshotIsNotReplacedAndTheNewerOneFollowsIt()
+    {
+        await using var kit = new Kit();
+        var (entered, release) = BlockOn(kit, id: 1, money: 11);
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(kit.Queue.IsPending(1)); // being written is not waiting
+        kit.Queue.Enqueue(State(1, 22));
+        kit.Queue.Enqueue(State(1, 33));
+        Assert.True(kit.Queue.IsPending(1));
+        Assert.Equal(1, kit.Queue.Pending);
+        release.TrySetResult();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new uint[] { 11, 33 }, kit.Store.Saved.Select(s => s.Money));
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task CoalescedSnapshotKeepsOptionalSectionsOfTheSupersededOne()
+    {
+        await using var kit = new Kit();
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        CharacterState older = State(1, 11) with
+        {
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23, new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+        };
+        kit.Queue.Enqueue(older);
+        kit.Queue.Enqueue(State(1, 22) with { Home = new HomeBind(9, 8, 7, 6, 5) });
+        release.TrySetResult();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        CharacterState saved = Assert.Single(kit.Store.Saved, s => s.Id == 1);
+        Assert.Equal(22u, saved.Money);
+        Assert.Equal(older.ActionButtons, saved.ActionButtons);
+        Assert.Equal(new HomeBind(9, 8, 7, 6, 5), saved.Home); // the newer section wins where it has one
+        Assert.Equal(4u, Assert.Single(saved.Inventory!.Items).Item.Count);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task InterleavedEnqueueAndDequeueNeverPersistsAnOlderSnapshotAfterANewerOne()
+    {
+        const int characters = 50;
+        const int snapshots = 20_000;
+        await using var kit = new Kit();
+        var random = new Random(7);
+        var delays = new int[256];
+        for (int i = 0; i < delays.Length; i++)
+        {
+            delays[i] = random.Next(0, 2001); // microseconds
+        }
+
+        int call = 0;
+        kit.Store.OnSave = async (_, _) =>
+        {
+            await Task.Yield();
+            long until = System.Diagnostics.Stopwatch.GetTimestamp()
+                + (delays[Interlocked.Increment(ref call) & 255] * System.Diagnostics.Stopwatch.Frequency / 1_000_000);
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < until)
+            {
+                Thread.SpinWait(50);
+            }
+        };
+        kit.Queue.Start();
+        var last = new uint[characters + 1];
+        var producer = Task.Run(() =>
+        {
+            for (int n = 1; n <= snapshots; n++)
+            {
+                int id = 1 + (n % characters);
+                last[id] = (uint)n;
+                kit.Queue.Enqueue(State(id, (uint)n));
+                if (n % 64 == 0)
+                {
+                    Thread.Yield();
+                }
+            }
+        });
+        await producer.WaitAsync(TimeSpan.FromSeconds(60));
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        foreach (IGrouping<int, CharacterState> group in kit.Store.Saved.GroupBy(s => s.Id))
+        {
+            uint[] money = [.. group.Select(s => s.Money)];
+            for (int i = 1; i < money.Length; i++)
+            {
+                Assert.True(money[i] > money[i - 1], $"character {group.Key}: {money[i - 1]} was persisted before the newer {money[i]} was not newer");
+            }
+
+            Assert.Equal(last[group.Key], money[^1]);
+        }
+
+        Assert.Equal(characters, kit.Store.Saved.Select(s => s.Id).Distinct().Count());
+        Assert.True(kit.Store.Saved.Count < snapshots, "nothing coalesced: the test did not exercise supersession");
+        Assert.Equal(0, kit.Queue.Pending);
+    }
+
+    [Fact]
+    public async Task FailureBetweenWritesRetainsTheNewestSnapshotAndStorageNeverRegresses()
+    {
+        var durable = new ConcurrentDictionary<int, uint>();
+        var history = new ConcurrentQueue<uint>();
+        bool down = false;
+        Func<CharacterState, CancellationToken, Task> store = (state, _) =>
+        {
+            if (Volatile.Read(ref down))
+            {
+                return Task.FromException(new IOException("injected outage"));
+            }
+
+            bool known = durable.TryGetValue(state.Id, out uint was);
+            Assert.True(!known || state.Money > was, $"durable {was} regressed to {state.Money}");
+            durable[state.Id] = state.Money;
+            history.Enqueue(state.Money);
+            return Task.CompletedTask;
+        };
+
+        await using var kit = new Kit();
+        kit.Store.OnSave = store;
+        kit.Queue.Enqueue(State(1, 1));
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1u, durable[1]);
+
+        // Storage is down for the write of 2 (every attempt, whether or not a barrier is attached) and then recovers: the failed
+        // snapshot is retained and the newer 3 is merged over it, so storage moves 1 -> 3 and never back.
+        Volatile.Write(ref down, true);
+        kit.Queue.Enqueue(State(1, 2));
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
+        Volatile.Write(ref down, false);
+        kit.Queue.Enqueue(State(1, 3));
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(3u, durable[1]);
+
+        // A persistent outage with many newer snapshots pending: shutdown reports it; storage still holds 3.
+        Volatile.Write(ref down, true);
+        for (uint n = 4; n <= 40; n++)
+        {
+            kit.Queue.Enqueue(State(1, n));
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
+        Assert.Equal(3u, durable[1]);
+
+        // The outage ends. A second queue over the same backing store writes the newest snapshot; storage only ever moved forward.
+        Volatile.Write(ref down, false);
+        await using var second = new Kit();
+        second.Store.OnSave = store;
+        second.Queue.Enqueue(State(1, 40));
+        await second.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(40u, durable[1]);
+        Assert.Equal(new uint[] { 1, 3, 40 }, history.ToArray());
+        await second.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task SettlementSaveOvertakesADeepQueueOfOtherCharacters()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = async (state, _) =>
+        {
+            if (state.Id != 1000)
+            {
+                await Task.Delay(20);
+            }
+        };
+        for (int id = 1; id <= 300; id++)
+        {
+            kit.Queue.Enqueue(State(id, 5));
+        }
+
+        kit.Queue.Start();
+        kit.Queue.HoldCharacter(1000);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await kit.Queue.SaveForSettlementAsync(State(1000, 77)).WaitAsync(TimeSpan.FromSeconds(10));
+        TimeSpan waited = clock.Elapsed;
+        int stillQueued = kit.Queue.Pending;
+        Assert.True(waited < TimeSpan.FromMilliseconds(500), $"the settlement waited {waited.TotalMilliseconds:F0} ms behind other characters");
+        Assert.True(stillQueued > 150, $"only {stillQueued} other snapshots were still queued: the settlement did not overtake them");
+        Assert.Equal(77u, Assert.Single(kit.Store.Saved, s => s.Id == 1000).Money);
+        await kit.Queue.StopAsync();
+        Assert.Equal(301, kit.Store.Saved.Count);
+    }
+
+    [Fact]
+    public async Task CancelledSettlementWaitLeavesItsSnapshotQueuedNotFailed()
+    {
+        var logger = new CaptureLogger();
+        await using var kit = new Kit(logger: logger);
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        kit.Queue.HoldCharacter(1);
+        using var budget = new CancellationTokenSource();
+        Task settlement = kit.Queue.SaveForSettlementAsync(State(1, 42), budget.Token);
+        Assert.False(settlement.IsCompleted);
+        await budget.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => settlement.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(settlement.IsCanceled);
+        Assert.True(kit.Queue.IsPending(1)); // still queued, as an ordinary snapshot
+        release.TrySetResult();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(42u, Assert.Single(kit.Store.Saved, s => s.Id == 1).Money);
+        Assert.DoesNotContain(logger.Entries, entry => entry.Level >= LogLevel.Warning);
+        Assert.Equal(0, kit.Queue.Pending);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task PriorityLaneCannotStarveOrdinarySnapshots()
+    {
+        await using var kit = new Kit();
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        kit.Queue.Enqueue(State(1, 10));
+        var settlements = new List<Task>();
+        for (int id = 100; id < 130; id++)
+        {
+            kit.Queue.HoldCharacter(id);
+            settlements.Add(kit.Queue.SaveForSettlementAsync(State(id, 7)));
+        }
+
+        release.TrySetResult();
+        await Task.WhenAll(settlements).WaitAsync(TimeSpan.FromSeconds(10));
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        int[] order = [.. kit.Store.Saved.Select(s => s.Id).Where(id => id != 99)];
+        int position = Array.IndexOf(order, 1);
+        Assert.True(position is >= 0 and <= 7, $"the ordinary snapshot was written at position {position} of {order.Length}: the priority lane starved it");
+        Assert.Equal(31, order.Length);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ReportsDepthAndOldestPendingAgeAndWarnsPastThresholds()
+    {
+        var logger = new CaptureLogger();
+        await using var kit = new Kit(new WorldRuntimeOptions { SaveQueueWarnDepth = 3, SaveQueueWarnAgeMs = 0 }, logger);
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        for (int id = 1; id <= 5; id++)
+        {
+            kit.Queue.Enqueue(State(id, 5));
+        }
+
+        Assert.Equal(6, kit.Queue.Pending);
+        await Task.Delay(120);
+        Assert.True(kit.Queue.OldestPendingAge >= TimeSpan.FromMilliseconds(100), $"oldest age {kit.Queue.OldestPendingAge}");
+        await WaitUntilAsync(() => logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("character save backlog:", StringComparison.Ordinal)),
+            () => kit.Queue.Enqueue(State(6, 5)));
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("oldest waiting", StringComparison.Ordinal));
+        release.TrySetResult();
+        await WaitUntilAsync(() => logger.Entries.Any(e => e.Message.Contains("character save backlog cleared", StringComparison.Ordinal)), () => { });
+        Assert.Equal(0, kit.Queue.Pending);
+        Assert.Equal(TimeSpan.Zero, kit.Queue.OldestPendingAge);
+        await kit.Queue.StopAsync();
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, Action poke)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the condition was not reached in 10 s");
+            poke();
+            await Task.Delay(100);
+        }
+    }
+
+    private static (TaskCompletionSource Entered, TaskCompletionSource Release) BlockOn(Kit kit, int id, uint? money = null)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Id == id && (money is null || state.Money == money))
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        return (entered, release);
+    }
+
+    private sealed class CaptureLogger : ILogger<CharacterSaveQueue>
+    {
+        private readonly Lock _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _entries];
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                _entries.Add((logLevel, formatter(state, exception)));
+            }
+        }
+    }
+
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
 
     private sealed class Kit : IAsyncDisposable
     {
         private readonly ServiceProvider _services;
-        public Kit()
+        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
-            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
+            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(),
+                logger ?? NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()));
         }
 
         public RecordingStore Store { get; } = new();

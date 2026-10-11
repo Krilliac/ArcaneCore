@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
@@ -138,5 +139,92 @@ public sealed class TickWatchdogFeatureTests
         await Task.Delay(100);
         Assert.Equal(0, monitor.Ring.Count);
         Assert.Null(host.WorldServices.GetRequiredService<TickWatchdogFeature>().Monitor);
+    }
+
+    /// <summary>A world feature that stalls the tick; the watchdog must name it by its class.</summary>
+    private sealed class SyntheticSlowFeature(int sleepMs)
+    {
+        public void OnUpdate(uint diffMs) => Thread.Sleep(sleepMs);
+    }
+
+    /// <summary>A world feature that holds the tick until released.</summary>
+    private sealed class BlockingFeature(ManualResetEventSlim entered, ManualResetEventSlim release)
+    {
+        public void OnUpdate(uint diffMs)
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(20));
+        }
+    }
+
+    [Fact]
+    public async Task ASyntheticSlowFeature_AppearsByNameInTheHangLog_WithThePhaseSplitAndSaveQueue()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        Assert.NotNull(monitor.HangDetail);
+
+        var slow = new SyntheticSlowFeature(80);
+        host.World.Updated += slow.OnUpdate;
+        await WorldTestHost.WaitForAsync(() => host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)).Count > 0, "a recorded slow tick");
+        host.World.Updated -= slow.OnUpdate;
+
+        string detail = monitor.HangDetail!(false);
+        Assert.Contains("slowest tick body", detail);
+        Assert.Contains("top features: ", detail);
+        Assert.Contains("SyntheticSlowFeature", detail);
+        Assert.Contains("commands ", detail);
+        Assert.Contains("world-tick handlers ", detail);
+        Assert.Contains("maps ", detail);
+        Assert.Contains("autosave ", detail);
+        Assert.Contains("save queue depth ", detail);
+        Assert.Contains("oldest pending ", detail);
+
+        // The slowest recorded body is at least the 80 ms the feature slept.
+        SlowTickInfo worst = host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60))[0];
+        Assert.True(worst.DurationMicros >= 70_000, $"slow tick {worst.DurationMicros} us");
+        Assert.Equal("SyntheticSlowFeature", worst.TopFeatures[0].Name);
+        Assert.True(worst.TopFeatures[0].Micros >= 70_000);
+    }
+
+    [Fact]
+    public async Task AHangInProgress_NamesThePhaseAndTheRunningFeature()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var blocking = new BlockingFeature(entered, release);
+        host.World.Updated += blocking.OnUpdate;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            TickPosition position = host.World.CurrentPosition;
+            Assert.Equal(TickPhase.Features, position.Phase);
+            Assert.Equal("BlockingFeature", position.DescribeWork());
+
+            string detail = monitor.HangDetail!(true);
+            Assert.Contains("phase=Features", detail);
+            Assert.Contains("running=BlockingFeature", detail);
+            Assert.Contains(" ms; save queue depth ", detail);
+        }
+        finally
+        {
+            host.World.Updated -= blocking.OnUpdate;
+            release.Set();
+        }
+
+        // Released: the world thread goes back to waiting between ticks.
+        await WorldTestHost.WaitForAsync(() => host.World.CurrentPosition.Phase == TickPhase.Idle, "the world thread idle between ticks");
+        Assert.Equal("(nothing)", host.World.CurrentPosition.DescribeWork());
+    }
+
+    [Fact]
+    public async Task AQuietWorld_ReportsThatNoTickBodyWasRecorded()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        Assert.Empty(host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)));
+        Assert.Contains("the stall was outside the tick body", monitor.HangDetail!(false));
     }
 }

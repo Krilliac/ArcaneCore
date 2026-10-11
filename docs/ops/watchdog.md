@@ -66,6 +66,27 @@ recorder are appended to each line so both views are on one line.
   tick-body p50/p99/max (event `TickOverrun`, 7101). Overruns in between are counted and appear in the next line.
 - **Hang**: a frame longer than `HangMs`. Two `Critical` lines (event `TickHang`, 7102): one while the tick is still running past the threshold
   (repeated every `WarnIntervalSeconds` while it stays hung), one when it completes, with the slowest recent frame. Never rate-limited away.
+- **Hang detail** (`TickMonitor.HangDetail`, set by `TickWatchdogFeature`): the `TickHang` and `TickOverrun` lines end with a `; ` suffix that
+  says *where* the time went, so a stall is attributable from the log alone. It is built on the watchdog thread, only when a line is about
+  to be logged, and a failing callback shows as `; hang detail unavailable (<ExceptionType>)` instead of losing the line. Two modes:
+  - **In progress** (the first hang line, while the tick is still running): `phase=<Phase>, running=<work> for <N> ms`. The phase is one of
+    `Commands`, `WorldTick`, `Maps`, `Features`, `Autosave` (read from `WorldRuntime.CurrentPosition`, which the world thread publishes with
+    volatile stores at each phase change and before each command, world-tick handler, map and feature update); `running` names the posted
+    command's declaring class, the handler's class (a lambda is named after the class that declares it), or `map <id> instance <id>`.
+    Between ticks it says `world thread is between ticks (not inside a tick body)`, which means the stall is outside the tick body
+    (the sleep, the GC, a suspended process). The three values are read separately, so a read taken as the thread moves on may pair a
+    phase with the next item.
+  - **After the fact** (the completion hang line and the overrun line): `slowest tick body <N> ms: commands <a> ms (<n> run), world-tick
+    handlers <b> ms, features <c> ms, maps <d> ms, autosave <e> ms (<k> snapshots); top features: <Name> <ms> ms, ...`, the phase split of the
+    slowest tick body recorded in the **60 s slow-tick window** (`TickStats.SlowTickRetention`) and its five slowest features, named
+    `WorldTick:<Type>` for world-tick handlers. `TickStats` keeps the eight slowest tick bodies that ran over the tick interval, each for
+    60 s, recorded by the world thread without allocating once its ring is full. When none was recorded the suffix says `no tick body over the
+    interval was recorded in the last 60 s (the stall was outside the tick body)`: a frame can be long while the body is short, for example
+    when the OS did not schedule the world thread or a collection paused it.
+  Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
+  (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
+  `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion
+  per feature, no lock and no allocation (the slow-tick record takes the stats lock only for ticks over the interval).
 - **Summary**: every `SummaryIntervalSeconds` an `Information` line (event `TickSummary`, 7103) with p50/p90/p99/max over the ring, overruns, hangs
   and frames since start. 0 disables it.
 - **Heartbeat gate**: with `GatesHeartbeat` (default true) the tick monitor is a liveness source: while a tick has run longer than `HangMs`

@@ -373,9 +373,25 @@ public sealed class GmFirstLoginToolsTests
         public Task RemoveAsync(int characterId, uint spell, CancellationToken cancellationToken = default) => _inner.RemoveAsync(characterId, spell, cancellationToken);
         public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => _inner.DeleteCharacterAsync(characterId, cancellationToken);
 
-        public Task AddAsync(int characterId, IReadOnlyCollection<uint> spells, CancellationToken cancellationToken = default)
-            => FailGrant && spells.Contains(_failSpell)
-                ? Task.FromException(new IOException("selected grant storage unavailable"))
-                : _inner.AddAsync(characterId, spells, cancellationToken);
+        // The spellbook writer batches the spells learned in one tick into one AddAsync call, so the failing spell no longer arrives
+        // alone. The store models a NON-atomic backend: the spells of the batch before the failing one are stored, then it throws. That is
+        // the partial state the recovery contract has to repair (a transactional store would store none of them, which the retry
+        // also repairs); the old per-spell fake only produced it because each spell was its own call.
+        public async Task AddAsync(int characterId, IReadOnlyCollection<uint> spells, CancellationToken cancellationToken = default)
+        {
+            if (!FailGrant || !spells.Contains(_failSpell))
+            {
+                await _inner.AddAsync(characterId, spells, cancellationToken);
+                return;
+            }
+
+            uint[] before = [.. spells.TakeWhile(spell => spell != _failSpell)];
+            if (before.Length > 0)
+            {
+                await _inner.AddAsync(characterId, before, cancellationToken);
+            }
+
+            throw new IOException("selected grant storage unavailable");
+        }
     }
 }

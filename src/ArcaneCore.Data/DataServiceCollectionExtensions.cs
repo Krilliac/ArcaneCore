@@ -1,10 +1,12 @@
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.EntityFrameworkCore;
@@ -25,7 +27,7 @@ public static class DataServiceCollectionExtensions
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
         services.AddDbContext<AuthDbContext>((provider, builder) =>
-            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.Auth)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth)));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
@@ -39,7 +41,7 @@ public static class DataServiceCollectionExtensions
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
-            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.Characters)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters)));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
@@ -53,12 +55,35 @@ public static class DataServiceCollectionExtensions
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
         services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
-            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.World)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World)));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
         DataModules.AddServices(services, DatabaseComponent.World);
         return services;
+    }
+
+    /// <summary>
+    /// The component's configured connection options, with the SQLite busy timeout CLAMPED (not rejected) to the database guard's
+    /// per-call deadline (<c>Resilience:Database:QueryTimeoutMs</c>) when the guard is registered, enabled and has a deadline.
+    /// Why: against a locked file the guard's pessimistic timeout (<see cref="DatabaseGuard.TimeoutStrategyFor"/>) answers on time, but
+    /// the abandoned call keeps waiting inside SQLite's busy handler and disposing its scope blocks until it returns, so a busy timeout
+    /// longer than the deadline lengthens every refusal by the difference. The clamp is silent because the configured value stays
+    /// valid on its own (it is simply bounded by the stricter deadline); hosts without a guard keep the configured value.
+    /// </summary>
+    private static DatabaseConnectionOptions ResolveGuarded(IServiceProvider provider, DatabaseComponent component)
+    {
+        DatabaseConnectionOptions resolved = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(component);
+        DatabaseResilienceOptions? guard = provider.GetService<IOptions<ResilienceOptions>>()?.Value.Database;
+        if (resolved.Provider == DatabaseProvider.Sqlite && guard is { Enabled: true, QueryTimeoutMs: > 0 } && resolved.SqliteBusyTimeoutMs is { } busy && busy > guard.QueryTimeoutMs)
+        {
+            return new DatabaseConnectionOptions
+            {
+                Provider = resolved.Provider, ConnectionString = resolved.ConnectionString, SqliteBusyTimeoutMs = guard.QueryTimeoutMs,
+            };
+        }
+
+        return resolved;
     }
 
     /// <summary>Point a context at its configured engine.</summary>
@@ -84,7 +109,8 @@ public static class DataServiceCollectionExtensions
                 break;
 
             case DatabaseProvider.Sqlite:
-                builder.UseSqlite(options.ConnectionString);
+                builder.UseSqlite(options.ConnectionString)
+                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs));
                 break;
 
             default:
