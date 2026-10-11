@@ -291,7 +291,7 @@ internal static class PlayerbotNavigation
             return false;
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
         // place given up after a loop. An end projected from above or below the destination stays at its spot and is exact.
-        if (partial && (path.Type & PathType.Incomplete) != 0 && Vector2.Distance(Flat(path.End), Flat(destination)) > 1f
+        if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
             && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(from), Flat(goal)) - PartialProgressYards
                 || PlayerbotMotion.IsBlacklisted(player, path.End)))
             return false;
@@ -306,10 +306,27 @@ internal static class PlayerbotNavigation
     /// An area trigger's centre floats above its floor: the Stormwind tram entrance (2173) is 4.8 yards above it, so the mesh answered
     /// its 2,314-yard way from Sentinel Hill as incomplete, the bound refused it whole, and 67 Westfall bots stood still for a minute
     /// and gave their tram trip up (live-w22-r1, 2026-10-11 08:05).
+    /// <para>
+    /// Only within <see cref="ProjectedEndYards"/> vertically: <see cref="PathType.Incomplete"/> is also the answer of a search that stopped
+    /// short, ending on the visited polygon nearest the goal, which may lie straight under a destination on a level the bot cannot reach
+    /// (a tower top, a cliff top, a bridge, an upper floor; the end is searched up to 200 yards vertically). Such an end is no arrival.
+    /// Storeys closer than that (some buildings' floors) can still pass; the stall watch gives those goals up.
+    /// </para>
     /// </summary>
-    private static bool EndsAt(PathResult path, Vector3 destination)
+    internal static bool EndsAt(PathResult path, Vector3 destination)
         => path.HasPath && (path.Type & PathType.Incomplete) != 0 && (path.Type & (PathType.NotUsingPath | PathType.NoPath)) == 0
-            && Vector2.Distance(Flat(path.End), Flat(destination)) <= 1f;
+            && AtDestination(path.End, destination);
+
+    /// <summary>
+    /// How far above or below the destination a mesh answer's end may lie and still be the destination's spot: a complete path already
+    /// accepts an end found up to 5 yards off vertically (NavMeshPathfinder NearExtents Y = 5), and the Stormwind tram entrance's centre
+    /// floats 4.75 yards above its floor.
+    /// </summary>
+    internal const float ProjectedEndYards = 6f;
+
+    /// <summary>Whether <paramref name="end"/> is <paramref name="destination"/>'s spot: within a yard flat and <see cref="ProjectedEndYards"/> vertically.</summary>
+    private static bool AtDestination(Vector3 end, Vector3 destination)
+        => Vector2.Distance(Flat(end), Flat(destination)) <= 1f && MathF.Abs(end.Z - destination.Z) <= ProjectedEndYards;
 
     /// <summary>
     /// The route along <paramref name="points"/>, or null when a point is not finite or it is longer than
@@ -368,7 +385,8 @@ internal static class PlayerbotNavigation
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0) continue;
-                bool reaches = Reaches(path);
+                // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
+                bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
                     || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards))
                     continue;

@@ -65,21 +65,48 @@ public sealed class PlayerbotTramFarStartTests
         Assert.StartsWith("tram: no way to the Deeprun Tram - Stormwind Instance entrance from", stall);
     }
 
-    /// <summary>The mesh's answer to the entrance: a road bending 600 yards south (2,330 yards), ending on the floor under the centre.</summary>
-    private sealed class RoadUnderTheTrigger : IPathfinder
+    /// <summary>
+    /// The arrival rule's height bound (<see cref="PlayerbotNavigation.ProjectedEndYards"/>): a way longer than the route bound whose
+    /// incomplete end lies within a yard of the destination flat but 10 yards under it (a search that stopped short below a level the bot
+    /// cannot reach) is no arrival and is refused whole, by the partial planner and by an exact one (TryPlan); 4.75 yards under it (the
+    /// tram entrance's floor) is one, for both.
+    /// </summary>
+    [Theory]
+    [InlineData(4.75f, true, true)]
+    [InlineData(4.75f, false, true)]
+    [InlineData(10f, true, false)]
+    [InlineData(10f, false, false)]
+    public async Task AnIncompleteWayEndingUnderTheDestination_ReachesItOnlyWithinTheHeightBound(float below, bool partialPlanner, bool accepted)
+    {
+        await using TramTestWorld world = await TramTestWorld.StartAsync(pathfinder: new RoadUnderTheTrigger(below, incompleteAlways: true));
+        await world.PlaceAsync(0, Westfall);
+        PlayerbotOptions options = LiveOptions();
+        float length = await world.OnWorldAsync(() =>
+            (partialPlanner
+                ? PlayerbotNavigation.TryPlanToward(world.Player, Entrance, options, out PlayerbotRoute? route)
+                : PlayerbotNavigation.TryPlan(world.Player, Entrance, options, out route)) ? route!.Distance : -1f);
+        if (accepted) Assert.InRange(length, 1500f, options.MaxRouteYards);
+        else Assert.Equal(-1f, length);
+    }
+
+    /// <summary>
+    /// The mesh's answer to the entrance: a road bending 600 yards south (2,330 yards), ending <paramref name="below"/> yards under the
+    /// trigger's centre; incomplete for a partial query (an exact one gets no path), or always (<paramref name="incompleteAlways"/>).
+    /// </summary>
+    private sealed class RoadUnderTheTrigger(float below = 4.75f, bool incompleteAlways = false) : IPathfinder
     {
         public bool Enabled => true;
 
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             if (Vector2.Distance(new(end.X, end.Y), new(Entrance.X, Entrance.Y)) > 1f) return PathResult.StraightLine(start, end, PathType.Normal);
-            Vector3 floor = end with { Z = end.Z - 4.75f };
+            Vector3 floor = end with { Z = end.Z - below };
             Vector3 bend = Vector3.Lerp(start, floor, 0.5f) + new Vector3(0, -600f, 0);
             var points = new List<Vector3>();
             for (int i = 0; i <= 20; i++) points.Add(Vector3.Lerp(start, bend, i / 20f));
             for (int i = 1; i <= 20; i++) points.Add(Vector3.Lerp(bend, floor, i / 20f));
-            return new PathResult((options?.AllowPartial ?? false) ? PathType.Incomplete : PathType.NoPath,
-                (options?.AllowPartial ?? false) ? points : [start, end]);
+            bool incomplete = incompleteAlways || (options?.AllowPartial ?? false);
+            return new PathResult(incomplete ? PathType.Incomplete : PathType.NoPath, incomplete ? points : [start, end]);
         }
     }
 

@@ -154,8 +154,12 @@ still where it started, logged as `tram: the trip failed` without a reason. Two 
   Hill the real mesh finds the whole 2,314-yard way to the floor under it, but answers it as incomplete (its end is the centre projected
   onto the mesh), and a route longer than `MaxRouteYards` (2000) was cut at the bound only when it was complete: an incomplete one was
   refused, and `TryPlanToward` tries no shorter step after a refusal by the mesh. Now a partial answer whose end lies within a yard (flat)
-  of the destination counts as reaching it (`PlayerbotNavigation.EndsAt`) and is cut at the bound like a complete one; the bot walks the
-  first 2,000 yards and plans the rest from there. This holds for every far bot walk, not only the tram's.
+  and within `ProjectedEndYards` (6) vertically of the destination counts as reaching it (`PlayerbotNavigation.EndsAt`) and is cut at the
+  bound like a complete one; the bot walks the first 2,000 yards and plans the rest from there. This holds for every far bot walk, not
+  only the tram's, and for the routes planned from a step beside the bot (`FromBeside`). The height bound matters: an incomplete answer
+  is also a search that stopped short on the polygon nearest the goal, which can lie straight under a destination on a level the bot
+  cannot reach (a tower or cliff top, a bridge, an upper floor); such an end is no arrival (a complete path's end is found within 5 yards
+  vertically, the tram entrance's 4.75). Storeys of a building closer than 6 yards can still pass; the stall watch gives those goals up.
 * **The reason was lost.** A trip that failed on the continent noted its reason on the trip only; `PlayerbotTram.Drive` now always returns
   it, and the log reads e.g. `tram: no way to the Deeprun Tram - Stormwind Instance entrance from -10193.8,1089.2,36.8; it gives up that
   goal`.
@@ -163,7 +167,7 @@ still where it started, logged as `tram: the trip failed` without a reason. Two 
 `PlayerbotTramLiveRegressionTests` (real terrain and DBCs) replays Wfbotak from its live start: through Elwynn to the Stormwind gate,
 the entrance at 328 s, aboard at 346 s, out at Ironforge at 427 s (before: still at Sentinel Hill, failed at 60.7 s with "tram: the trip
 failed"). `PlayerbotTramFarStartTests` is the same in the fixture world (a 2,330-yard incomplete way under the trigger; a trip with no way
-fails with its reason).
+fails with its reason; the height bound for the partial and the exact planner: 4.75 yards under the destination accepted, 10 refused).
 
 Tests: `PlayerbotTramRouteTests` (the brain drives a bot from the Stormwind tram exit to Ironforge with the classic-db trigger and car
 rows, a synthetic animation and flat floors, with the anticheat judging the bot as a client: no fake transport, no speed; a destination of
