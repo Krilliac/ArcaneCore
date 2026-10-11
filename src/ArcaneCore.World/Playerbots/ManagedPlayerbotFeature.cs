@@ -72,6 +72,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
+
+    // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
+    private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
+    private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
@@ -100,6 +104,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
+        {
+            _homeStore = true;
+            foreach (PlayerbotHome home in await homeStore.LoadAllAsync(cancellationToken).ConfigureAwait(false))
+                _homes[home.BotId] = home;
+        }
+
         var stopped = new List<PlayerbotStatus>();
         foreach (ManagedPlayerbot bot in registered)
         {
@@ -107,7 +118,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 .GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
             if (character is null) continue;
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
-                bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode));
+                bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode, Home: StoppedHome(bot.BotId)));
         }
         lock (_snapshotGate)
         {
@@ -342,6 +353,139 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             : new(false, "accept-refused", bot.Record.BotId, player.Name);
     }
 
+    /// <summary>Whether homes can be set: the characters database provides <see cref="IManagedPlayerbotHomeStore"/>.</summary>
+    internal bool HomesAvailable => _homeStore;
+
+    /// <summary>The persisted home of a bot (tests and inspection), null when it has none.</summary>
+    internal PlayerbotHome? HomeOf(Guid botId) => _homes.GetValueOrDefault(botId);
+
+    /// <summary>Whether a home may be set on <paramref name="mapId"/>: the maps bots may enter (<see cref="PlayerbotOptions.AllowedMaps"/>).</summary>
+    internal bool AllowsHomeMap(uint mapId) => PlayerbotMapPolicy.Allows(_options.AllowedMaps, mapId, null, current: false);
+
+    /// <summary>
+    /// The bots a <c>.playerbot home</c> selector names (<see cref="PlayerbotHomeSelector"/>): one bot by id or name, or every bot
+    /// whose name starts with the prefix, running or not. False for a selector that is none of those.
+    /// </summary>
+    internal bool TryMatchBots(string selector, out IReadOnlyList<PlayerbotStatus> matches)
+    {
+        matches = [];
+        if (!PlayerbotHomeSelector.TryParse(selector, out PlayerbotHomeSelector parsed)) return false;
+        matches = [.. Snapshot().Where(parsed.Matches).OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)];
+        return true;
+    }
+
+    /// <summary>Where a running bot stands (world thread; false when it is not running or has no map).</summary>
+    internal bool TryGetPosition(Guid botId, out uint mapId, out System.Numerics.Vector3 position)
+    {
+        mapId = 0;
+        position = default;
+        if (!_active.TryGetValue(botId, out ActiveBot? active) || active.Paused
+            || active.Session.Player is not { Map: { } map } player) return false;
+        mapId = map.MapId;
+        position = new(player.X, player.Y, player.Z);
+        return true;
+    }
+
+    /// <summary>One bot's home centre for <see cref="SetHomesAsync"/>.</summary>
+    internal readonly record struct HomeTarget(Guid BotId, uint MapId, System.Numerics.Vector3 Centre);
+
+    /// <summary>What <see cref="SetHomesAsync"/> did: homes stored and applied, and bots it could not store a home for.</summary>
+    internal readonly record struct HomeOutcome(int Set, int Failed);
+
+    /// <summary>
+    /// Store the homes (characters schema 56) and apply them to the running brains on the world thread. A home that cannot be stored
+    /// is not applied (fail closed) and counted as failed. Throws when no home store is available or the radius is out of bounds.
+    /// </summary>
+    internal async Task<HomeOutcome> SetHomesAsync(IReadOnlyList<HomeTarget> targets, float radius, string? place,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
+        if (!float.IsFinite(radius) || radius < PlayerbotHomeBounds.MinRadius || radius > PlayerbotHomeBounds.MaxRadius)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        string? cleanPlace = place is null ? null : place.Length > PlayerbotHomeBounds.MaxPlaceLength ? place[..PlayerbotHomeBounds.MaxPlaceLength] : place;
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        IManagedPlayerbotHomeStore store = scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>()
+            ?? throw new InvalidOperationException("playerbot-home-unavailable");
+        IManagedPlayerbotStore bots = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
+        var saved = new List<PlayerbotHome>(targets.Count);
+        int failed = 0;
+        foreach (HomeTarget target in targets)
+        {
+            try
+            {
+                ManagedPlayerbot? bot = await bots.FindAsync(target.BotId, cancellationToken).ConfigureAwait(false);
+                if (bot is null) { failed++; continue; }
+                var home = new PlayerbotHome(target.BotId, bot.CharacterId, target.MapId, target.Centre.X, target.Centre.Y, target.Centre.Z,
+                    radius, cleanPlace, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                await store.SetAsync(home, cancellationToken).ConfigureAwait(false);
+                saved.Add(home);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                failed++;
+                logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
+            }
+        }
+
+        foreach (PlayerbotHome home in saved) _homes[home.BotId] = home;
+        if (saved.Count != 0)
+        {
+            await world.InvokeAsync(() =>
+            {
+                foreach (PlayerbotHome home in saved)
+                    if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused) active.Brain.Home = AreaOf(home.BotId);
+                lock (_snapshotGate) _snapshotEpoch++;
+                return true;
+            }).ConfigureAwait(false);
+        }
+
+        return new(saved.Count, failed);
+    }
+
+    /// <summary>Remove the homes of these bots (store and running brains); returns how many bots had one.</summary>
+    internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        IManagedPlayerbotHomeStore store = scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>()
+            ?? throw new InvalidOperationException("playerbot-home-unavailable");
+        int cleared = 0;
+        List<Guid> done = new(botIds.Count);
+        try
+        {
+            foreach (Guid botId in botIds)
+            {
+                bool stored = await store.ClearAsync(botId, cancellationToken).ConfigureAwait(false);
+                done.Add(botId);
+                if (_homes.TryRemove(botId, out _) || stored) cleared++;
+            }
+        }
+        finally
+        {
+            // A store failure partway must not leave the bots already cleared with a live brain home (they would keep walking home
+            // while status shows no home=): the world-thread step always runs for the ids done so far; the failure then propagates.
+            if (done.Count != 0)
+                await world.InvokeAsync(() =>
+                {
+                    foreach (Guid botId in done)
+                        if (_active.TryGetValue(botId, out ActiveBot? active)) active.Brain.Home = null;
+                    lock (_snapshotGate) _snapshotEpoch++;
+                    return true;
+                }).ConfigureAwait(false);
+        }
+
+        return cleared;
+    }
+
+    /// <summary>
+    /// The party AI of a running bot whether or not it drives the bot (null when not running): the persona and the chat delivery of the
+    /// bot's own announcements (<see cref="BotSocial.PlayerbotSocialFeature"/>).
+    /// </summary>
+    internal PlayerbotPartyAI? FindPartyAI(Guid botId)
+        => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Party : null;
+
     /// <summary>The ordinary session of a running bot (scenario harness; null when not running).</summary>
     internal WorldSession? FindSession(Guid botId)
         => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;
@@ -438,7 +582,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 AcceptsBotGroup = (member, inviter) => coordinator?.AcceptsInvite(member, inviter) == true,
                 GroupLootVote = (member, item) => coordinator?.LootVote(member, item),
             };
-            var active = new ActiveBot(bot, scope, session, NewBrain(session), party)
+            var active = new ActiveBot(bot, scope, session, NewBrain(session, bot.BotId), party)
             { Controller = controller };
             // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
             active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
@@ -517,7 +661,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
-    private PlayerbotBrain NewBrain(WorldSession session) => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides);
+    private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
+        => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+
+    /// <summary>The bot's home as a brain's area, or null when it has none.</summary>
+    private PlayerbotHomeArea? AreaOf(Guid botId)
+        => _homes.TryGetValue(botId, out PlayerbotHome? home)
+            ? new PlayerbotHomeArea(home.MapId, new System.Numerics.Vector3(home.X, home.Y, home.Z), home.Radius, home.Place) : null;
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
@@ -819,14 +969,26 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         string? error = closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b);
         string? risk = RiskOf(b);
         string? group = coordinator?.Describe(b.Record.BotId);
+        string? home = HomeLineOf(b);
         if (b.Status is { } last && last.BotId == b.Record.BotId && last.State == state && last.DesiredEnabled == b.Record.DesiredEnabled
             && last.Goal == goal && last.TargetEntry == target && last.QuestId == quest && last.MapId == b.MapId && last.Health == health
             && string.Equals(last.Name, b.Name, StringComparison.Ordinal) && string.Equals(last.ErrorCode, error, StringComparison.Ordinal)
-            && string.Equals(last.Risk, risk, StringComparison.Ordinal) && string.Equals(last.Group, group, StringComparison.Ordinal))
+            && string.Equals(last.Risk, risk, StringComparison.Ordinal) && string.Equals(last.Group, group, StringComparison.Ordinal)
+            && string.Equals(last.Home, home, StringComparison.Ordinal))
             return last;
         return new PlayerbotStatus(b.Record.BotId, b.Name, state, b.Record.DesiredEnabled, goal, target, quest, b.MapId, health, error, risk,
-            group);
+            group, home);
     }
+
+    /// <summary>
+    /// The home line of a running bot: none without a home, <c>suspended</c> while a scripted controller, a party AI or a bot-led group
+    /// drives it (they ignore the home), otherwise the brain's report (<see cref="PlayerbotHomeReturn.Report"/>).
+    /// </summary>
+    private string? HomeLineOf(ActiveBot active) => !_homes.ContainsKey(active.Record.BotId) ? null
+        : active.Controller is not null || active.PartyDriven || active.GroupDriven ? "suspended" : active.Brain.HomeReport;
+
+    /// <summary>The home line of a bot that is not running.</summary>
+    private string? StoppedHome(Guid botId) => _homes.ContainsKey(botId) ? "stopped" : null;
 
     /// <summary>The risk line of a running bot (its party AI's while that drives it); none for a scripted bot.</summary>
     private string? RiskOf(ActiveBot active) => active.Controller is not null ? null
@@ -841,7 +1003,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private void ReplaceBrain(ActiveBot active)
     {
         active.Brain.Stop();
-        active.Brain = NewBrain(active.Session);
+        active.Brain = NewBrain(active.Session, active.Record.BotId);
     }
 
     /// <summary>
@@ -1003,7 +1165,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     private void PublishStopped(ManagedPlayerbot bot, string name, uint mapId)
     {
-        PlayerbotStatus next = new(bot.BotId, name, bot.State, bot.DesiredEnabled, bot.Goal, bot.TargetEntry, bot.QuestId, mapId, 0, bot.ErrorCode);
+        PlayerbotStatus next = new(bot.BotId, name, bot.State, bot.DesiredEnabled, bot.Goal, bot.TargetEntry, bot.QuestId, mapId, 0, bot.ErrorCode,
+            Home: StoppedHome(bot.BotId));
         lock (_snapshotGate)
         {
             PlayerbotStatus[] current = Volatile.Read(ref _snapshot);

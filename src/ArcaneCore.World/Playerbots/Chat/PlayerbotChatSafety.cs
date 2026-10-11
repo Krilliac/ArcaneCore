@@ -29,8 +29,8 @@ internal sealed record BotChatPlayerSafety(ulong PlayerGuid, string PlayerName, 
 
 /// <summary>The safety line of <c>.playerbot chat status</c>.</summary>
 internal sealed record BotChatSafetyStatus(
-    bool Screening, long Screened, long Flagged, long ModerationFlagged, long OutputFlagged, long BuiltinOnly, long Cutoffs, int CutOffNow,
-    long AutoMutes, int OptedOut, int OptedIn, long Disclosed, int Terms, int Patterns);
+    bool Screening, long Screened, long Flagged, long ModerationFlagged, long OutputFlagged, long BuiltinOnly, long TimedOut, long Cutoffs,
+    int CutOffNow, long AutoMutes, int OptedOut, int OptedIn, long Disclosed, int Terms, int Patterns);
 
 /// <summary>
 /// The state of bot chat safety (docs/areas/playbots.md, Safety and provider policies): the local filter (the shipped list and the
@@ -72,13 +72,27 @@ internal sealed class PlayerbotChatSafety
     private long _cutoffs;
     private long _autoMutes;
     private long _disclosures;
+    private long _timedOut;
+    private long _timeoutsNotWarned;
+    private DateTimeOffset _timeoutWarnedUntil = DateTimeOffset.MinValue;
 
     internal PlayerbotChatSafety(Func<PlayerbotChatOptions> options, TimeProvider time, ILogger logger)
     {
         _options = options;
         _time = time;
         _logger = logger;
+        _ = Warm(_filter); // on the thread pool: the first player line after start does not pay the patterns' first-match cost
     }
+
+    /// <summary>
+    /// Start <paramref name="filter"/>'s warm-up (on the thread pool, never the caller's thread) and, when it is done, log one warning
+    /// if it met an unexpected error (the error's type only). The returned task is that check, for tests.
+    /// </summary>
+    internal Task Warm(PlayerbotChatSafetyFilter filter) => filter.Warmed.ContinueWith(_ =>
+    {
+        if (filter.WarmUpError is { } error)
+            _logger.LogWarning("Bot chat safety: the filter warm-up failed ({Error}); lines are screened without it (slower first matches)", error);
+    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
     private PlayerbotChatSafetyOptions Options => _options().Safety;
 
@@ -96,20 +110,24 @@ internal sealed class PlayerbotChatSafety
         PlayerbotChatSafetyOptions options = Options;
         string file = options.TermsFile?.Trim() ?? string.Empty;
         bool replace = options.ReplaceDefaultTerms;
+        TimeSpan timeout = options.PatternTimeout;
         DateTimeOffset now = _time.GetUtcNow();
         lock (_filterGate)
         {
-            bool sameKeys = _filterSource.File == file && _filterSource.Replace == replace;
+            bool sameKeys = _filterSource.File == file && _filterSource.Replace == replace && _filter.MatchTimeout == timeout;
             if (sameKeys && (file.Length == 0 || now - _filterCheckedAt < TermsFileCheck)) return _filter;
             _filterCheckedAt = now;
             DateTime written = file.Length == 0 ? default : WrittenAt(file);
             if (sameKeys && written == _filterSource.Written) return _filter;
-            PlayerbotChatSafetyFilter filter = file.Length == 0 ? PlayerbotChatSafetyFilter.Default : PlayerbotChatSafetyFilter.Load(file, replace);
+            PlayerbotChatSafetyFilter filter = file.Length == 0 && timeout == PlayerbotChatSafetyFilter.PatternTimeout
+                ? PlayerbotChatSafetyFilter.Default
+                : PlayerbotChatSafetyFilter.Load(file.Length == 0 ? null : file, replace, timeout);
             foreach (string problem in filter.Problems) _logger.LogWarning("Bot chat safety: {Problem}", problem);
             if (file.Length > 0)
                 _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
                     filter.Size.Terms, filter.Size.Patterns, replace ? file : "the shipped list and " + file);
             _filter = filter;
+            _ = Warm(filter); // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
             _filterSource = (file, replace, written);
             return filter;
         }
@@ -122,14 +140,65 @@ internal sealed class PlayerbotChatSafety
     }
 
     /// <summary>Screen a player's line (counted in the status).</summary>
-    internal SafetyVerdict ScreenInput(string text)
+    internal SafetyVerdict ScreenInput(string text) => ScreenInput(text, Filter());
+
+    /// <summary>Screen a player's line with <paramref name="filter"/> (the one a worker awaited the warm-up of).</summary>
+    internal SafetyVerdict ScreenInput(string text, PlayerbotChatSafetyFilter filter)
     {
         Interlocked.Increment(ref _screened);
-        return Filter().Screen(text, Options.Categories);
+        return Counted(filter.Screen(text, Options.Categories), "input");
     }
 
     /// <summary>Screen a model's reply.</summary>
-    internal SafetyVerdict ScreenOutput(string text) => Filter().Screen(text, Options.Categories);
+    internal SafetyVerdict ScreenOutput(string text) => Counted(Filter().Screen(text, Options.Categories), "output");
+
+    /// <summary>How long a "screening ran out of time" warning silences the next ones (they are counted, and the next warning says how many).</summary>
+    internal static readonly TimeSpan TimeoutWarningInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// <paramref name="text"/> with personal data replaced (what is sent to a model, and flag excerpts). A personal-data pattern out of
+    /// time removes the whole text (<c>[removed]</c>) and is counted as a <c>strip</c> timeout.
+    /// </summary>
+    internal string StripPersonalData(string text)
+    {
+        string stripped = Filter().StripPersonalData(text, out string? timedOutOn);
+        if (timedOutOn is not null) CountTimeout("strip", timedOutOn);
+        return stripped;
+    }
+
+    private SafetyVerdict Counted(SafetyVerdict verdict, string kind)
+    {
+        if (verdict.TimedOut) CountTimeout(kind, verdict.TimedOutOn);
+        return verdict;
+    }
+
+    /// <summary>
+    /// A screening (<c>input</c>, <c>output</c>) or a personal-data strip (<c>strip</c>) that ran out of time: counted (status
+    /// <c>timed-out=</c>, metric <c>arcanecore.playerbot.chat.screening_timeouts{kind}</c>) and logged at most once per
+    /// <see cref="TimeoutWarningInterval"/>, naming the pattern and never the text.
+    /// </summary>
+    private void CountTimeout(string kind, string? timedOutOn)
+    {
+        long total = Interlocked.Increment(ref _timedOut);
+        PlayerbotChatMeters.CountScreeningTimeout(kind);
+        DateTimeOffset now = _time.GetUtcNow();
+        long suppressed;
+        lock (_gate)
+        {
+            if (now < _timeoutWarnedUntil)
+            {
+                _timeoutsNotWarned++;
+                return;
+            }
+
+            _timeoutWarnedUntil = now + TimeoutWarningInterval;
+            suppressed = _timeoutsNotWarned;
+            _timeoutsNotWarned = 0;
+        }
+
+        _logger.LogWarning("Bot chat safety: {Kind} screening ran out of time on {Pattern} ({Total} so far, {Suppressed} more since the last warning)",
+            kind, timedOutOn ?? "a pattern", total, suppressed);
+    }
 
     // --- who may reach a model provider -----------------------------------------------------------------------------------
 
@@ -273,9 +342,9 @@ internal sealed class PlayerbotChatSafety
     };
 
     /// <summary>At most <see cref="ExcerptLength"/> characters of <paramref name="text"/>, one line, emails and phone numbers removed.</summary>
-    internal static string Excerpt(string text)
+    internal string Excerpt(string text)
     {
-        string clean = PlayerbotChatSafetyFilter.StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
+        string clean = StripPersonalData(PlayerbotChatPrompts.Clean(text, 1024));
         return clean.Length <= ExcerptLength ? clean : clean[..(ExcerptLength - 3)] + "...";
     }
 
@@ -343,7 +412,7 @@ internal sealed class PlayerbotChatSafety
         lock (_gate)
         {
             return new BotChatSafetyStatus(options.Enabled, Interlocked.Read(ref _screened), Interlocked.Read(ref _flagged),
-                Interlocked.Read(ref _moderationFlagged), Interlocked.Read(ref _outputFlagged), Interlocked.Read(ref _builtinOnly), _cutoffs,
+                Interlocked.Read(ref _moderationFlagged), Interlocked.Read(ref _outputFlagged), Interlocked.Read(ref _builtinOnly), Interlocked.Read(ref _timedOut), _cutoffs,
                 _players.Values.Count(state => state.CutoffUntil > now), _autoMutes, _players.Values.Count(state => state.AiReplies == false),
                 _players.Values.Count(state => state.AiReplies == true), Interlocked.Read(ref _disclosures), terms, patterns);
         }

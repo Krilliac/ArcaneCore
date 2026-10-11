@@ -1,0 +1,425 @@
+using System.Globalization;
+using System.Numerics;
+using ArcaneCore.Data.World.Instances;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Features;
+using ArcaneCore.World.Instances;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.World.Playerbots.Groups;
+
+/// <summary>How a run's group moves between places: the seam for the follow-pathing lane's catch-up policy.</summary>
+internal enum PlayerbotGroupTravelPolicy : byte
+{
+    /// <summary>Path and engage what is in the way; never teleport (a follower that lags walks and fights to catch up).</summary>
+    FightThrough,
+
+    /// <summary>The group is moved to its approach point (<see cref="PlayerbotRunOptions.TeleportToEntrance"/>).</summary>
+    Teleport,
+}
+
+/// <summary>
+/// Dungeon and raid runs (docs/areas/playbots-groups.md, "Dungeon and raid runs"): free autonomous bots whose level fits an instance
+/// wing of <see cref="PlayerbotRunCatalogue"/> are matched into a group of the instance's size (five, or a raid of 10, 20 or 40) with the
+/// roles the content needs, travel to the entrance fighting what is in the way, enter through the ordinary area trigger and kill the
+/// wing's bosses in order, pulling one pack of trash at a time; a wipe is recovered from and retried until
+/// <see cref="PlayerbotRunOptions.MaxWipes"/>. All the decisions here read <see cref="PlayerbotGroupOptions.DungeonRuns"/> live.
+/// <para>
+/// <b>Prerequisites.</b> A bot is matched for a wing only when it passes the very check a player walking into the entrance passes
+/// (<see cref="AreaTriggerRequirements.Check"/>: the entrance level, the key item, the attunement quest, the conditions table), and a raid
+/// also never takes a bot with a permanent bind to the raid map (it would enter its own save, not the group's). With
+/// <see cref="PlayerbotRaidRunOptions.SkipPrerequisites"/> the key item, quest and condition are skipped for matching and the server
+/// lets the members of a bot raid run through their raid's own entrance without them (<see cref="Waives"/>); the level never is.
+/// </para>
+/// </summary>
+public sealed partial class PlayerbotGroupCoordinator
+{
+    /// <summary>The group is given this long after the last boss died to loot before it walks out.</summary>
+    internal const uint LootSettleMs = 20_000;
+
+    /// <summary>A run given up for lack of a path or an entrance is not tried again by its bots for this long.</summary>
+    internal const uint NoPathSetAsideMs = 3_600_000;
+
+    private readonly Dictionary<(Guid Bot, uint Map, int Segment), uint> _runSetAside = [];
+    private readonly Dictionary<(uint Map, int Segment, AreaTriggerRequirement Kind), int> _rejectionsNoted = [];
+    private IReadOnlyList<InstanceEncounter> _encounters = [];
+    private PlayerbotRunCatalogue _catalogue = PlayerbotRunCatalogue.Empty;
+    private MapRegistry? _catalogueRegistry;
+    private object? _catalogueTriggers;
+    private CreatureContent? _catalogueCreatures;
+    private int _catalogueVersion = -1;
+    private IReadOnlyList<InstanceEncounter>? _catalogueEncounters;
+    private int _runsCompleted;
+    private int _runsGivenUp;
+
+    /// <summary>The start roll (0..1): a run starts when it is below the scan's share of <see cref="PlayerbotRunOptions.StartChancePerMinute"/> (tests replace it).</summary>
+    internal Func<double> RunRoll { get; set; } = () => Random.Shared.NextDouble();
+
+    /// <summary>The runs completed and given up so far (status and tests).</summary>
+    internal (int Completed, int GivenUp) RunTotals => (_runsCompleted, _runsGivenUp);
+
+    /// <summary>
+    /// The encounters in force: the <c>instance_encounter</c> table as read at startup (<see cref="Attach"/>) or by the last
+    /// <c>.reload instance_encounter</c> (<see cref="ReplaceEncounters"/>).
+    /// </summary>
+    internal IReadOnlyList<InstanceEncounter> Encounters => _encounters;
+
+    /// <summary>
+    /// Swap the encounters in force (world thread, from <c>.reload instance_encounter</c>); the catalogue is rebuilt from them at the next
+    /// scan. Runs already under way keep the plan they were formed with. Returns the encounters replaced (the reload's rollback).
+    /// </summary>
+    internal IReadOnlyList<InstanceEncounter> ReplaceEncounters(IReadOnlyList<InstanceEncounter> encounters)
+    {
+        ArgumentNullException.ThrowIfNull(encounters);
+        IReadOnlyList<InstanceEncounter> previous = _encounters;
+        _encounters = encounters;
+        return previous;
+    }
+
+    /// <summary>Read the <c>instance_encounter</c> rows (startup; blocking, as the other content loads of <c>Attach</c>). An empty table is an empty catalogue, logged.</summary>
+    private void LoadEncounters()
+    {
+        if (services.GetService<IServiceScopeFactory>() is not { } scopes) return;
+        try
+        {
+            using IServiceScope scope = scopes.CreateScope();
+            if (scope.ServiceProvider.GetService<IInstanceEncounterStore>() is not { } store)
+            {
+                logger.LogInformation("Playerbot runs: no instance_encounter store is registered; no dungeon or raid runs");
+                return;
+            }
+
+            _encounters = store.LoadAsync().GetAwaiter().GetResult();
+            if (_encounters.Count == 0)
+                logger.LogInformation("Playerbot runs: the instance_encounter table is empty (refresh the world database from a classic-db dump); no dungeon or raid runs");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogWarning(ex, "Playerbot runs: the instance_encounter table could not be read ({Type}: {Message}); no dungeon or raid runs", ex.GetType().Name, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The runnable dungeons and raids of the world data in force, rebuilt when the maps, area triggers, creatures or encounters change.
+    /// The instances left out are logged once per build with their reason.
+    /// </summary>
+    internal PlayerbotRunCatalogue Catalogue()
+    {
+        if (_world is null || services.GetService<CreatureWorldFeature>()?.Content is not { } creatures) return PlayerbotRunCatalogue.Empty;
+        WorldMaps maps = WorldMaps.Of(_world);
+        IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
+        if (ReferenceEquals(_catalogueRegistry, maps.Registry) && ReferenceEquals(_catalogueTriggers, triggers)
+            && ReferenceEquals(_catalogueCreatures, creatures) && _catalogueVersion == creatures.DefinitionsVersion
+            && ReferenceEquals(_catalogueEncounters, _encounters))
+            return _catalogue;
+
+        _catalogue = PlayerbotRunCatalogue.Build(maps.Registry, triggers,
+            triggers.Select(t => maps.FindAreaTriggerTeleport(t.Id)).OfType<AreaTriggerTeleport>(), creatures, _encounters);
+        _catalogueRegistry = maps.Registry;
+        _catalogueTriggers = triggers;
+        _catalogueCreatures = creatures;
+        _catalogueVersion = creatures.DefinitionsVersion;
+        _catalogueEncounters = _encounters;
+        _rejectionsNoted.Clear();
+        logger.LogInformation("Playerbot runs: {Plans} dungeon and raid wings can be run, {Excluded} left out", _catalogue.Plans.Count, _catalogue.Exclusions.Count);
+        foreach (PlayerbotRunExclusion exclusion in _catalogue.Exclusions)
+            logger.LogInformation("Playerbot runs: {Map} ({MapId}) wing {Segment} is not run: {Reason}", exclusion.MapName, exclusion.MapId, exclusion.Segment, exclusion.Reason);
+        return _catalogue;
+    }
+
+    // --- starting a run ------------------------------------------------------------------------------------------------
+
+    private readonly record struct RunCandidate(PlayerbotGroupBot Bot, Player Player);
+
+    /// <summary>
+    /// Every scan: when a dungeon or raid slot is free and the start roll succeeds, pick the wing with the most eligible free bots that
+    /// can fill its roles and form its group.
+    /// </summary>
+    private void StartRuns()
+    {
+        PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+        uint now = Now;
+        // Dictionary.Remove during enumeration is defined since .NET Core 3.0 (it does not invalidate the enumerator): no snapshot per scan.
+        foreach (((Guid, uint, int) key, uint until) in _runSetAside)
+            if (unchecked((int)(until - now)) <= 0) _runSetAside.Remove(key);
+        if (!runs.Enabled || runs.StartChancePerMinute <= 0d || _world is null || _groups.Count >= _options.Groups.MaxGroups) return;
+        if (GroupManagerOrNull() is not { } groupManager) return;
+
+        int dungeonRuns = 0, raidRuns = 0;
+        foreach (BotGroup group in _groups)
+            if (group.Run is { } running)
+            {
+                if (running.Plan.Raid) raidRuns++;
+                else dungeonRuns++;
+            }
+
+        bool dungeonsOpen = dungeonRuns < runs.MaxConcurrentRuns;
+        bool raidsOpen = runs.Raids.Enabled && raidRuns < runs.Raids.MaxConcurrentRaids;
+        if (!dungeonsOpen && !raidsOpen) return;
+        PlayerbotRunCatalogue catalogue = Catalogue();
+        if (catalogue.Plans.Count == 0) return;
+        double chance = 1d - Math.Pow(1d - runs.StartChancePerMinute, ScanMs / 60_000d);
+        if (RunRoll() >= chance) return;
+
+        WorldMaps maps = WorldMaps.Of(_world);
+        var free = new List<RunCandidate>();
+        foreach (PlayerbotGroupBot bot in _bots.Values.OrderBy(b => b.BotId))
+        {
+            if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || _waiting.ContainsKey(bot.BotId)
+                || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player
+                || (player.Flags & PlayerFlags.Ghost) != 0 || player.Combat.IsInCombat) continue;
+            if (maps.Registry.Find(player.MapId) is not { IsContinent: true }) continue;
+            if (groupManager.GetGroup(player.Guid) is not null || groupManager.GetInvite(player.Guid) is not null) continue;
+            free.Add(new RunCandidate(bot, player));
+        }
+
+        if (free.Count < 2) return;
+
+        // The same check a player walking into the entrance passes (TeleportHandlers.HandleAreaTrigger).
+        IWorldFeature[] features = [.. services.GetServices<IWorldFeature>()];
+        IConditionEvaluator? conditions = features.OfType<IConditionEvaluator>().FirstOrDefault();
+        IAreaTriggerGate[] gates = [.. features.OfType<IAreaTriggerGate>()];
+        InstanceFeature? instances = features.OfType<InstanceFeature>().FirstOrDefault();
+
+        var offers = new List<(PlayerbotRunPlan Plan, List<RunCandidate> Eligible)>();
+        foreach (PlayerbotRunPlan plan in catalogue.Plans)
+        {
+            if (plan.Raid ? !raidsOpen : !dungeonsOpen) continue;
+            if (maps.FindAreaTriggerTeleport(plan.EntranceTrigger) is not { } teleport) continue;
+            (byte min, byte max) = plan.Band(runs);
+            AreaTriggerWaivers waivers = plan.Raid && runs.Raids.SkipPrerequisites
+                ? AreaTriggerWaivers.Item | AreaTriggerWaivers.Quest | AreaTriggerWaivers.Condition : AreaTriggerWaivers.None;
+            var rejected = new Dictionary<AreaTriggerRequirement, int>();
+            int locked = 0;
+            var eligible = new List<RunCandidate>();
+            foreach (RunCandidate candidate in free)
+            {
+                Player player = candidate.Player;
+                if (player.MapId != plan.EntranceMap || player.Level < min || player.Level > max || IsRunSetAside(candidate.Bot.BotId, plan)
+                    || Vector3.Distance(new Vector3(player.X, player.Y, player.Z), plan.Entrance) > runs.MaxTravelYards) continue;
+                AreaTriggerCheck check = AreaTriggerRequirements.Check(player, teleport, conditions, gates, waivers);
+                if (!check.Verdict.Allowed)
+                {
+                    rejected[check.Failed] = rejected.GetValueOrDefault(check.Failed) + 1;
+                    continue;
+                }
+
+                // A bot with a permanent bind to the raid map would enter its own save, not the group's (InstanceManager.GetBoundSaveForSelfOrGroup).
+                if (plan.Raid && instances?.Instances.GetPlayerBind(player.Guid, plan.MapId) is { Permanent: true })
+                {
+                    locked++;
+                    continue;
+                }
+
+                eligible.Add(candidate);
+            }
+
+            NoteRejections(plan, rejected, locked);
+            if (eligible.Count >= plan.Size) offers.Add((plan, eligible));
+        }
+
+        foreach ((PlayerbotRunPlan plan, List<RunCandidate> eligible) in offers.OrderByDescending(o => o.Eligible.Count).ThenBy(o => o.Plan.MapId).ThenBy(o => o.Plan.Segment))
+        {
+            (int tanks, int healers) = PlayerbotGroupContent.RunRoleNeeds(plan.Size, plan.Raid, _options.Groups);
+            foreach (var team in eligible.GroupBy(e => e.Player.Team).OrderByDescending(g => g.Count()).ThenBy(g => (int)g.Key))
+            {
+                if (team.Count() < plan.Size) continue;
+                List<PlayerbotGroupCandidate> candidates = [.. team.Select(e => Candidate(e.Bot.BotId, e.Player, now))];
+                if (PlayerbotGroupContent.Match(candidates, plan.Size, _options.Groups, (tanks, healers)) is not { } formed) continue;
+                FormRun(plan, formed, runs);
+                return;
+            }
+        }
+    }
+
+    private void FormRun(PlayerbotRunPlan plan, PlayerbotGroupPlan formed, PlayerbotRunOptions runs)
+    {
+        (byte min, _) = plan.Band(runs);
+        PlayerbotRunBoss first = plan.Bosses[0];
+        var goal = new PlayerbotGroupGoal(plan.Raid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, 0, first.Entry, plan.MapId,
+            plan.EntranceMap, plan.Entrance, plan.EntranceTrigger, first.Position, plan.Size, min, "run");
+        var machine = new PlayerbotRunMachine(plan, plan.Raid ? runs.Raids.MaxWipes : runs.MaxWipes);
+        Form(goal, formed, machine);
+        Note($"run {plan.Label}: {plan.Bosses.Count} bosses ({string.Join(", ", plan.Bosses.Select(b => b.Name))}), {plan.Scripted.Count} scripted");
+    }
+
+    private void NoteRejections(PlayerbotRunPlan plan, Dictionary<AreaTriggerRequirement, int> rejected, int locked)
+    {
+        foreach ((AreaTriggerRequirement kind, int count) in rejected)
+        {
+            if (_rejectionsNoted.TryGetValue((plan.MapId, plan.Segment, kind), out int noted) && noted == count) continue;
+            _rejectionsNoted[(plan.MapId, plan.Segment, kind)] = count;
+            Note($"run {plan.Label}: {count} bots in the level band lack the {kind.ToString().ToLowerInvariant()} requirement");
+        }
+
+        _rejectionsNoted.TryGetValue((plan.MapId, plan.Segment, AreaTriggerRequirement.None), out int lockedNoted);
+        if (locked != lockedNoted)
+        {
+            _rejectionsNoted[(plan.MapId, plan.Segment, AreaTriggerRequirement.None)] = locked;
+            if (locked > 0) Note($"run {plan.Label}: {locked} bots are locked to the raid");
+        }
+    }
+
+    private bool IsRunSetAside(Guid botId, PlayerbotRunPlan plan)
+        => _runSetAside.TryGetValue((botId, plan.MapId, plan.Segment), out uint until) && unchecked((int)(until - Now)) > 0;
+
+    private void SetRunAside(Guid botId, PlayerbotRunMachine run, string reason)
+    {
+        uint ms = reason.Contains("path", StringComparison.Ordinal) || reason.Contains("entrance", StringComparison.Ordinal) ? NoPathSetAsideMs : SetAsideMs;
+        _runSetAside[(botId, run.Plan.MapId, run.Plan.Segment)] = unchecked(Now + ms);
+    }
+
+    /// <summary>Whether <paramref name="botId"/> set the wing aside (tests and status).</summary>
+    internal bool IsRunSetAside(Guid botId, uint mapId, int segment)
+        => _runSetAside.TryGetValue((botId, mapId, segment), out uint until) && unchecked((int)(until - Now)) > 0;
+
+    // --- the run's life -------------------------------------------------------------------------------------------------
+
+    /// <summary>The live limits of the run's wipe count (the options change under the running group).</summary>
+    private void SyncRun(BotGroup group)
+    {
+        if (group.Run is { } run) run.MaxWipes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxWipes : _options.Groups.DungeonRuns.MaxWipes;
+    }
+
+    private uint GoalTimeoutOf(BotGroup group)
+    {
+        if (group.Run is not { } run) return GoalTimeoutMs;
+        int minutes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxRunMinutes : _options.Groups.DungeonRuns.MaxRunMinutes;
+        return (uint)Math.Max(1, minutes) * 60_000u;
+    }
+
+    private uint StepLimitOf(BotGroup group)
+        => group.Run is not null && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Regrouping
+            ? (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u
+            : StepTimeoutMs;
+
+    /// <summary>The Engaging state of a run: bosses die, a boss may be absent, the group wipes or finishes and loots.</summary>
+    internal void AdvanceRun(BotGroup group, Player leader, PlayerbotRunMachine run, uint now)
+    {
+        if (run.Step == PlayerbotRunStep.Leave)
+        {
+            if (group.RunDoneMs == 0) group.RunDoneMs = Math.Max(1u, now);
+            bool busy = group.InFight(now) || group.Members.Any(m => m.AI is { Looting: true });
+            if (busy && unchecked(now - group.RunDoneMs) <= LootSettleMs) return;
+            Note($"group {group.Id} completed {run.Plan.Label}");
+            group.Succeeded = true;
+            Enter(group, leader.MapId == group.Goal.MapId ? PlayerbotGroupState.Leaving : PlayerbotGroupState.Disbanding);
+            return;
+        }
+
+        group.UpdateObjective(_world!);
+        if (group.ObjectiveKilled && group.ObjectiveCreature != 0)
+        {
+            uint entry = group.ObjectiveCreature;
+            string name = run.Plan.Bosses.FirstOrDefault(b => b.Entry == entry)?.Name ?? entry.ToString(CultureInfo.InvariantCulture);
+            run.Apply(PlayerbotRunSignal.BossDead(entry));
+            group.ClearObjective();
+            Note($"group {group.Id} killed {name} ({run.Killed}/{run.BossCount})");
+            if (run.Step == PlayerbotRunStep.Leave) group.RunDoneMs = Math.Max(1u, now);
+            return;
+        }
+
+        if (CheckWipe(group, leader)) return;
+        if (!group.Objective.IsEmpty && run.Step == PlayerbotRunStep.Clear) run.Apply(PlayerbotRunSignal.BossEngaged);
+
+        // At the boss's spawn with none of it alive in sight: killed already (a saved instance), or gone. Counted as done.
+        if (run.CurrentBoss is { } current && ObjectiveMissing(group, leader, now))
+        {
+            run.Apply(PlayerbotRunSignal.BossDead(current.Entry));
+            group.ClearObjective();
+            Note($"group {group.Id}: {current.Name} is not at its spawn, counted as done ({run.Killed}/{run.BossCount})");
+            if (run.Step == PlayerbotRunStep.Leave) group.RunDoneMs = Math.Max(1u, now);
+        }
+    }
+
+    /// <summary>With <see cref="PlayerbotRunOptions.TeleportToEntrance"/>, the group's living members on the entrance's continent are moved to the approach point.</summary>
+    private void TeleportToEntranceIfConfigured(BotGroup group)
+    {
+        if (group.Run is null || !_options.Groups.DungeonRuns.TeleportToEntrance || _world is null
+            || services.GetService<TeleportFeature>()?.Teleports is not { } teleports) return;
+        foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
+            if (_world.FindOnlinePlayer(member.Guid) is { IsAlive: true } player && player.MapId == group.Goal.MeetingMap && !teleports.IsBeingTeleported(player)
+                && Vector3.Distance(new Vector3(player.X, player.Y, player.Z), group.Approach) > GatherYards)
+                teleports.TeleportTo(player, group.Goal.MeetingMap, group.Approach.X, group.Approach.Y, group.Approach.Z, 0f);
+        Note($"group {group.Id} was moved to the entrance of {group.Run.Plan.Label} (TeleportToEntrance)");
+    }
+
+    private void NoteRunEnded(BotGroup group)
+    {
+        if (group.Run is not { } run) return;
+        if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
+        if (run.Complete) _runsCompleted++;
+        else _runsGivenUp++;
+    }
+
+    // --- the policy seam and the entry waiver --------------------------------------------------------------------------
+
+    /// <summary>
+    /// How <paramref name="botId"/>'s group moves, or null when it is not on a run. The follow-pathing lane's catch-up consults this: a
+    /// run's followers never teleport to catch up (<see cref="PlayerbotGroupTravelPolicy.FightThrough"/>) unless the run was told to
+    /// move the group to its entrance.
+    /// </summary>
+    internal PlayerbotGroupTravelPolicy? TravelPolicyFor(Guid botId)
+        => _memberOf.TryGetValue(botId, out BotGroup? group) && group.Run is not null
+            ? _options.Groups.DungeonRuns.TeleportToEntrance ? PlayerbotGroupTravelPolicy.Teleport : PlayerbotGroupTravelPolicy.FightThrough
+            : null;
+
+    /// <summary>
+    /// The entry requirements skipped for <paramref name="player"/> entering through <paramref name="teleport"/>
+    /// (<see cref="TeleportHandlers"/> asks every <see cref="IAreaTriggerWaiver"/>): the key item, the quest and the conditions-table
+    /// reference, and only when ALL hold: <see cref="PlayerbotRaidRunOptions.SkipPrerequisites"/> is on, the player is a managed bot, it
+    /// is a joined bot member of a group on a raid run, and the teleport leads into that run's raid. A real player, a bot outside a raid
+    /// run, a dungeon run's bot and any other teleport are checked as always; the level is never waived.
+    /// </summary>
+    public AreaTriggerWaivers Waives(Player player, AreaTriggerTeleport teleport)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(teleport);
+        PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+        if (!runs.Enabled || !runs.Raids.Enabled || !runs.Raids.SkipPrerequisites || player.Session is not WorldSession { IsManaged: true }) return AreaTriggerWaivers.None;
+        foreach (BotGroup group in _groups)
+        {
+            if (group.Run is not { Plan.Raid: true } || teleport.TargetMap != group.Goal.MapId) continue;
+            foreach (Member member in group.Members)
+                if (member.Guid == player.Guid && member.Joined && !member.Real)
+                    return AreaTriggerWaivers.Item | AreaTriggerWaivers.Quest | AreaTriggerWaivers.Condition;
+        }
+
+        return AreaTriggerWaivers.None;
+    }
+
+    // --- the report -----------------------------------------------------------------------------------------------------
+
+    private string? RunSummary()
+    {
+        PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+        int dungeons = 0, raids = 0;
+        foreach (BotGroup group in _groups)
+            if (group.Run is { } run)
+            {
+                if (run.Plan.Raid) raids++;
+                else dungeons++;
+            }
+
+        return string.Create(CultureInfo.InvariantCulture,
+            $"runs {(runs.Enabled ? "enabled" : "disabled")}: dungeon {dungeons}/{runs.MaxConcurrentRuns} raid {raids}/{(runs.Raids.Enabled ? runs.Raids.MaxConcurrentRaids : 0)} completed {_runsCompleted} given-up {_runsGivenUp}; {_catalogue.Plans.Count} wings known, {_catalogue.Exclusions.Count} left out.");
+    }
+
+    private static string DescribeRun(PlayerbotRunMachine run)
+    {
+        PlayerbotRunPlan plan = run.Plan;
+        int shown = run.AllBossesDead ? run.BossCount : run.Killed + 1;
+        string boss = run.CurrentBoss?.Name ?? plan.Bosses[^1].Name;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"run={plan.MapName}({plan.MapId}):{plan.Segment} boss={shown}/{run.BossCount}({boss}) scripted={plan.Scripted.Count} wipes={run.Wipes}/{run.MaxWipes} step={run.StepName} pulls-left={run.PullsLeft}");
+    }
+}

@@ -21,6 +21,7 @@ public sealed class PlayerbotChatSafetyWorldTests
         options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
         options.Chat.Enabled = true;
         options.Chat.PerPlayerCooldownSeconds = 0;
+        ChatSamples.NoScreeningDeadline(options.Chat);
         options.Chat.Providers = [new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.Anthropic, ApiKeyEnvironmentVariable = "TEST_CHAT_KEY" }];
         configure?.Invoke(options);
     }, services =>
@@ -98,6 +99,32 @@ public sealed class PlayerbotChatSafetyWorldTests
         await player.SendChatAsync(ChatType.Whisper, Language.Common, "what level are you?", "Chatsafe");
         Assert.Matches(@"\b1\b", (await ReadThroughWhisperAsync(player, bot))[^1].Text);
         Assert.Single(client.Calls);
+    }
+
+    /// <summary>
+    /// The production deadline (100 ms per pattern match, wall-clock) on a real world: the filter is warmed at start, so the first
+    /// line screened in the process is not a cold match and the model answers. The other tests here run without the deadline.
+    /// </summary>
+    [Fact]
+    public async Task WithTheProductionScreeningDeadline_TheFirstWhisperGetsTheModelReply_AndNothingTimesOut()
+    {
+        var client = new FakeBotChatClient();
+        await using WorldTestHost host = Start(client, options => options.Chat.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout);
+        await PartyTestHost.StartBotAsync(host, "Chatreal");
+        await using WorldTestClient player = await host.EnterWorldAsync("CHATREALP", "Chatrealp");
+        ulong bot = (await host.PlayerStateAsync("Chatreal", p => p.Guid)).Value;
+        PlayerbotChatSafety safety = PartyTestHost.Feature(host).Chat!.Safety;
+        Assert.Same(PlayerbotChatSafetyFilter.Default, safety.Filter());
+
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "hello there", "Chatreal");
+        Assert.Equal("fake reply", (await ReadThroughWhisperAsync(player, bot))[^1].Text);
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "what are you up to?", "Chatreal");
+        Assert.Equal("fake reply", (await ReadThroughWhisperAsync(player, bot))[^1].Text);
+
+        Assert.True(PlayerbotChatSafetyFilter.Default.Warmed.IsCompletedSuccessfully);
+        Assert.Equal(PlayerbotChatSafetyFilter.Default.AllPatterns.Count(), PlayerbotChatSafetyFilter.Default.WarmedPatterns);
+        Assert.Equal(0, safety.Status().TimedOut);
+        Assert.Equal(2, client.Calls.Count);
     }
 
     [Fact]

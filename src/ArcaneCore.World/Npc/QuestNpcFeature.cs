@@ -254,6 +254,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
 
     public void OnAreaTrigger(Player player, uint triggerId) => Services.AreaTriggerReached(player, triggerId);
 
+    /// <inheritdoc/>
+    public AreaTriggerRequirement Requirement => AreaTriggerRequirement.Quest;
+
     /// <summary>
     /// <c>areatrigger_teleport.required_quest_done</c>: the quest must be turned in (<see cref="QuestNpcServices.IsRewarded"/>, so a
     /// repeatable quest never counts, as in the reference). A player whose journal is not loaded yet is refused (fail closed).

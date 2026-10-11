@@ -24,6 +24,9 @@ dungeon logs back into it instead of being refused (`login-refused`, quarantine)
 walks out through the exit (`PlayerbotGroupCoordinator`). An autonomous living bot does not get into a dungeon on its own (area
 triggers, below) unless its bot group takes it in; the scenarios below always bring their bot back out.
 
+Dungeon and raid **runs** (`docs/areas/playbots-groups.md`, "Dungeon and raid runs") are such bot groups: they pick a wing from the
+encounter data, walk to the entrance fighting what is in the way, and go in through the ordinary area trigger below.
+
 ## Area triggers like a client (`PlayerbotAreaTriggers`)
 
 While a bot follows a route, `PlayerbotMotion.Pump` checks every world tick whether the bot's route position has entered an
@@ -31,7 +34,7 @@ While a bot follows a route, `PlayerbotMotion.Pump` checks every world tick whet
 `IsPointInAreaTriggerZone`, the exact volume without the server's 5-yard tolerance). On entry it reports where the bot is (a heartbeat
 at the current route position, so observers see no jump) and sends **CMSG_AREATRIGGER once**; the volume fires again only after the
 bot has left it. The server half is the ordinary handler (`TeleportHandlers.HandleAreaTrigger`, vmangos MiscHandler.cpp:653-800, with
-the ghost rules of `GhostEntryRules`, MiscHandler.cpp:712-756): zone check with tolerance, listeners (quests, inns), requirements,
+the ghost rules of `GhostEntryRules`, MiscHandler.cpp:712-756): zone check with tolerance, listeners (quests, inns), requirements (with the entry waivers, last bullet),
 teleport.
 
 * A bot that **arrives** inside a volume without walking into it (teleport, login, scenario placement) does not fire it: the first
@@ -54,6 +57,11 @@ teleport.
   reloaded. The per-tick check of a moving bot tests only the volumes of its cell, rejects a point outside a volume's bounding sphere
   before the box rotation, and allocates nothing unless a trigger is entered.
 * CMSG_AREATRIGGER is never refused for lack of the shared action budget (a client always reports its own triggers).
+* **Entry waivers.** Before the requirements are checked, `TeleportHandlers.HandleAreaTrigger` asks every `IAreaTriggerWaiver`
+  which of the key item, the quest and the conditions-table reference to skip (`AreaTriggerRequirements.Check` with
+  `AreaTriggerWaivers`; the level and an instance script's block are never skipped). Only `PlayerbotGroupCoordinator.Waives` implements
+  it: a joined managed bot of a group on a raid run, at that raid's own entrance, with `World:Playerbots:Groups:DungeonRuns:Raids:SkipPrerequisites` on.
+  Real players and every other bot are checked as always.
 
 ### Far transfers
 

@@ -20,14 +20,21 @@ equip would show:
 
 1. **Level.** `LevelCommands.ApplyLevel` (shared with `.levelup`; clears experience). When the requested level equals the character's level the step
    is skipped, so a re-boost does not reset experience.
-2. **Spells.** Every class-trainer spell available at the new level (the `.learn all_trainer` loop, repeated until a rank unlocks nothing more), then
+2. **Gray quests.** The incomplete (or failed) quests in the log that the new level made gray are abandoned, through the same path as
+   CMSG_QUESTLOG_REMOVE_QUEST (`QuestNpcServices.AbandonQuest`: source items are taken back, the change is saved), and the reply reports the count
+   (`N gray quests dropped`). A quest is gray when its quest level is at or below `ExperienceFormulas.GrayLevel` of the new level (mangos-classic
+   `MaNGOS::XP::GetGrayLevel`: to level 5 zero, to 39 level - 5 - level/10, from 40 level - 1 - level/5; at level 14 that is 8, so quests of level 1 to 8
+   go and level 9 stays). A quest of level 0 stands for the player's own level and is never gray; a **completed** quest is kept so its reward can still be
+   turned in. This happens on a boost only: a level-up by play or `.levelup` leaves the log alone. A boosted character would otherwise carry its
+   starting-zone log into a level where it pays nothing and a managed bot would follow those quests back across the map. Code: `BoostQuestPruner`.
+3. **Spells.** Every class-trainer spell available at the new level (the `.learn all_trainer` loop, repeated until a rank unlocks nothing more), then
    the spells the character's class and race would have earned from class quests up to the level. Both through `SpellSystem.LearnSpell`.
-3. **Skills** to their maximum for the level (`.maxskill`).
-4. **Gear**, below. Whatever was worn in a slot that changes moves to the bags, never destroyed. A two-hander moves the off hand to the bags.
-5. **Ammo.** A character wearing a bow, gun or crossbow gets one stack of the best obtainable ammo that fits it, and selects it.
-6. **Action bars**, below.
-7. **Money**: 100 copper per level squared (1g 96s at level 14), never lowering a larger purse.
-8. Save. The reply lists the counts, any slot with no candidate and any slot left unchanged with the refusal.
+4. **Skills** to their maximum for the level (`.maxskill`).
+5. **Gear**, below. Whatever was worn in a slot that changes moves to the bags, never destroyed. A two-hander moves the off hand to the bags.
+6. **Ammo.** A character wearing a bow, gun or crossbow gets one stack of the best obtainable ammo that fits it, and selects it.
+7. **Action bars**, below.
+8. **Money**: 100 copper per level squared (1g 96s at level 14), never lowering a larger purse.
+9. Save. The reply lists the counts, any slot with no candidate and any slot left unchanged with the refusal.
 
 Running it again at the same level changes nothing (kept items, no new buttons, no new spells, experience and a larger purse untouched).
 
@@ -38,6 +45,17 @@ Running it again at the same level changes nothing (kept items, no new buttons, 
   (not shirt, tabard, bag, quiver, ammo), **and obtainable**: sold by a vendor (`npc_vendor`), offered by a quest (reward choices and rewards) or
   dropped by a loot row (`mincountOrRef >= 0`). The live `item_template` never sets the unobtainable flag and carries test and monster-only entries,
   so a source is required.
+* **Event-bound sources do not count.** The rewards of a quest listed in `game_event_quest`, and the wares of a creature entry whose every spawn is listed
+  under a positive event in `game_event_creature`, are not sources (`BoostEventBinding`; a negative event number removes a permanent creature during the
+  event and binds nothing). An item that a permanent vendor, quest or loot row also offers stays. This keeps holiday cosmetics out of the kit: the
+  Crown and Mantle of the Fire Festival (items 23323 and 23324) are Midsummer quest rewards, "obtainable" and with better stats than anything a level 14
+  vendor sells, so they were equipped as head and shoulders before the exclusion. Loot rows are not filtered by event (the loot table to creature link is
+  not resolved here). If the game-event feature is present but its service is not loaded yet, the boost is refused ("game events are not loaded yet")
+  rather than guess.
+* **Cosmetic quest rewards are dropped.** An item whose only source is a quest reward (not sold by a vendor that is there outside events, not in a
+  loot row; `BoostItemSources.QuestOnly`) and that has no stat, resistance, spell or weapon damage is not a candidate (`BoostGearPlanner.IsCosmeticQuestReward`).
+  Such a piece could only win a slot on item level or as the last resort, and it is a trophy, not gear. It is never used as a fallback either: a slot
+  whose only candidate is one stays empty and is reported as empty. An item with any stat, resistance, spell or damage, or with a second source, is unaffected.
 * **Proficiency.** Whether the character may wear an item is the server's own rule, `PlayerInventory.CanUseItem` (class and race masks, weapon and
   armor skill, level), passed to the planner. An item the character has no skill for is never a candidate, however strong; the slot falls back to the
   best usable item or is reported empty. Covered by the integration test with a stronger axe and no Axes skill.

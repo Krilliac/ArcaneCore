@@ -129,15 +129,21 @@ internal static partial class PlayerbotBuiltinChat
         var candidates = new List<string>();
         foreach (string variant in Variants(key, p))
         {
-            if (!PlayerbotChatTemplates.Lines.TryGetValue(variant, out string[]? lines)) continue;
-            foreach (string line in lines)
-                if (Fill(line, ask) is { } filled && PlayerbotChatPrompts.Sanitize(filled) is { } clean) candidates.Add(clean);
+            // The chat templates, then the social ones (guild and greeting lines, BotSocial.PlayerbotSocialTemplates).
+            if (PlayerbotChatTemplates.Lines.TryGetValue(variant, out string[]? lines)) AddFilled(candidates, lines, ask);
+            if (BotSocial.PlayerbotSocialTemplates.Lines.TryGetValue(variant, out string[]? social)) AddFilled(candidates, social, ask);
         }
 
         if (candidates.Count == 0) return null;
         List<string> fresh = candidates.Where(line => !string.Equals(line, lastLine, StringComparison.Ordinal)).ToList();
         List<string> from = fresh.Count > 0 ? fresh : candidates;
         return from[random.Next(from.Count)];
+    }
+
+    private static void AddFilled(List<string> candidates, string[] lines, BotChatAsk ask)
+    {
+        foreach (string line in lines)
+            if (Fill(line, ask) is { } filled && PlayerbotChatPrompts.Sanitize(filled) is { } clean) candidates.Add(clean);
     }
 
     private static IEnumerable<string> Variants(string key, BotChatPersona p)
@@ -168,8 +174,18 @@ internal static partial class PlayerbotBuiltinChat
             result = result.Replace(name, value, StringComparison.Ordinal);
         }
 
+        // An announcement's placeholders (BotChatTopic.Values): a phrasing that names one the topic has no value for is not used.
+        foreach (string name in TopicPlaceholders)
+        {
+            if (!result.Contains(name, StringComparison.Ordinal)) continue;
+            if (ask.Topic?.Values.GetValueOrDefault(name[1..^1]) is not { Length: > 0 } value) return null;
+            result = result.Replace(name, value, StringComparison.Ordinal);
+        }
+
         return result;
     }
+
+    private static readonly string[] TopicPlaceholders = ["{guild}", "{who}", "{newlevel}", "{boss}", "{battleground}", "{instance}"];
 
     private static PlayerbotPartyCommand? Order(string line)
     {

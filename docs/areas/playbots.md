@@ -32,10 +32,19 @@ Before a pull the brain weighs each candidate's risk against its reward, and in 
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line.
 
+Bots also use the faction auction house and the mailbox: they list loot they have no use for, buy one gear upgrade within a budget
+and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.
+
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
 live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
+
+A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
+manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
+
+Bots found guilds, fill and rank them, say a short line in guild chat and (off by default) wave at nearby real players
+(`World:Playerbots:Social`, live): `docs/areas/playbots-social.md`.
 
 ### Autonomous and scripted mode
 
@@ -126,6 +135,44 @@ every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerO
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
 
+### Home area
+
+A managed bot can be anchored to an area. Without one it follows its own goals anywhere on the map (its starting-zone quest log, trainers,
+corpse runs, risk-weighted pulls); 200 bots teleported into Westfall spread over five zones within ten minutes. This is an ArcaneCore feature:
+no reference server anchors a bot, so every number here is an ArcaneCore choice. Code: `Playerbots/PlayerbotHome.cs`, the brain's
+`TryReturnHome`, `PlayerbotQuestGoals` and `PlayerbotWorldDestinations`. Tests: `PlayerbotHomeTests`, `ManagedPlayerbotHomeTests`,
+`ManagedPlayerbotHomeStoreTests`.
+
+* **Setting it.** `.playerbot home $name|$prefix* <$tele|here> [#radius]` and `.playerbot home $name|$prefix* clear` (Administrator). A selector is one
+  bot by name or id, or every bot (running or not) whose name starts with a prefix of 2 to 11 letters and one trailing `*` (`Wfbot*`), so a stray `a*`
+  cannot anchor the fleet. `$tele` is a `game_tele` name (its map and position are the centre); `here` is each running bot's own position. The map must be
+  one bots may enter (`World:Playerbots:AllowedMaps`). The reply is `accepted` at once and the result line (`N set ... M skipped ... K failed`) follows.
+* **Radius.** In yards, two-dimensional distance, **50 to 5000, default 600** (`PlayerbotHomeBounds`). A value outside is refused before anything changes.
+* **Storage.** `managed_playerbot_home` (characters schema 56), one row per bot, separate from the bot revision. A home that cannot be stored is not applied
+  (fail closed) and is counted as failed. It is re-applied when the bot starts.
+* **Staying inside.** Goal selection ignores creatures outside the circle (`IsSkipped`; a bot still fights back against whatever attacks it), new quests are
+  taken only from a giver inside the circle and only if every creature that ends the quest and every creature it asks to kill has a spawn inside
+  (`QuestInside`), and the destinations of the world walks (quest givers, enders, kill spawns) are the ones inside.
+* **Walking home.** A bot on the home map outside the radius, with no errand, drops its intent and walks to the centre through the ordinary route planner
+  (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the
+  radius and stops at **0.75** (`ReturnFraction`), so it does not oscillate at the edge; an exploring bot beyond **0.8** of the radius (`ExploreFraction`)
+  aims its next leg at the centre instead of further out. A stall reported by `PlayerbotStallWatch` sets the walk aside for 30 s at once (state
+  `blocked`); the brain's own no-movement stalls (the bot stands still for the stuck time on a route) and failed route plans count instead, and the
+  third in a row sets it aside. The goals carry on while it is set aside.
+* **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
+  `PlayerbotTrainerDestinations.HasCandidate`), a quest exchange already under way, and the turn-in of a completed quest (the way to its ender is never
+  restricted) may take the bot anywhere; the bot walks home afterwards. Combat, looting, rest, retreat and the ghost recovery run before the home check and
+  are not touched; a dead bot recovers its corpse and walks home after the resurrection.
+* **Off-map policy.** Bots have no teleport, taxi or hearthstone logic, so a bot on another map than its home does not move itself: it is reported
+  `off-map` and left alone. An operator brings it back with `.tele name <Name> <place>`. This is deliberate: nothing in the brain may cross a map.
+  While off-map the in-area filters are **off** (`PlayerbotBrain.SyncHomeFilters`): the circle has no meaning on another map, and applying it would skip
+  every creature and take no quest, starving the bot. It behaves as a bot with no home (normal autonomous grinding, questing and exploring on the map
+  it is on) and the filters apply again the moment it is on the home map.
+* **Scripted and party bots.** A scripted controller, a party AI or a bot-led group drives the bot and ignores its home (shown as `suspended`).
+* **Seeing it.** `.playerbot status` appends `home=inside:120`, `returning:810`, `off-map` or `blocked:810` (distance rounded to 10 yards);
+  `.playerbot inspect` prints the place, map, centre, radius, exact distance and state.
+* **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
+
 ### Faults and quarantine
 
 An exception out of a bot's update (brain, scripted controller or `PlayerbotMotion`) is an
@@ -173,14 +220,14 @@ where the master goes.
   one (the old one's routes and targets belong to another place). When every real player of the group is offline or gone, the
   bot waits `MasterTimeoutSeconds` (60, 1..3600), then leaves the group (CMSG_GROUP_DISBAND, vmangos `requestRemoval`).
 - **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
-  through `PlayerbotConsumables` while its master is within 30 yards, and teleports to a master more than 100 yards away or on
-  another map (`TeleportToLeader`, default on; vmangos `.goname`, only while the bot is out of combat, as vmangos does it inside
-  its `!IsInCombat()` block; in combat it walks after a far master on its map) through the teleport service the GM
-  `.goname`/`.namego` commands use, so the map resolver's instance rules and the group's instance bind decide where it lands
-  (into the master's instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to
-  fall. A master on a map outside `AllowedMaps`, on a taxi flight (vmangos idles then), or in another instance of the bot's own
-  map id (the service teleports within one map id by a near teleport, which keeps the bot's instance) is waited for, not
-  followed. A refused teleport is retried after 10 s.
+  through `PlayerbotConsumables` while its master is within 30 yards, and catches up with a master it cannot simply walk to as
+  [Following and catch-up](#following-and-catch-up) describes: by default it teleports (vmangos `.goname`) to a master more than 100
+  yards away or on another map, and to one it has no reasonable way to, through the teleport service the GM `.goname`/`.namego`
+  commands use, so the map resolver's instance rules and the group's instance bind decide where it lands (into the master's
+  instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to fall. A master on a map
+  the bot may not be on (outside `AllowedMaps` and no dungeon or raid, `PlayerbotMapPolicy`), on a taxi flight (vmangos idles
+  then), or in another instance of the bot's own map id (the service teleports within one map id by a near teleport, which keeps
+  the bot's instance) is waited for, not followed. A refused teleport is retried after 10 s.
 - **Combat** (vmangos `SelectAttackTarget`/`SelectPartyAttackTarget`): the target the master ordered, else the master's
   victim, else whoever attacks the bot, else whoever attacks another member within 50 yards; `PlayerbotCombatSpells`, then a
   chase to 4 yards and CMSG_ATTACKSWING.
@@ -277,6 +324,80 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 | `not-leashed` | `dismiss`: the bot was not following or staying. |
 
 `start` and `stop` list the operation's own failure code instead (for example `playerbot-capacity`) under `failed=`.
+
+#### Following and catch-up
+
+`Playerbots/Party/PlayerbotFollower.cs` (rules in `PlayerbotFollowRules.cs`, the drop in `PlayerbotFollowDrop.cs`), configured under
+`World:Playerbots:Follow` (every key live through `.reload config`). The party AI drives it; it takes a session and a leader, so any
+other follow of a managed bot can drive it the same way.
+
+The live report behind it (2026-10-10, build a88f6135): the master dropped into the Moonbrook mine just short of the Deadmines portal
+(landing at -11138.0, 1506.9, 24.4) and his bots, following, ran round the mine through its Defias and died or looped. On the real
+mmaps the follow planner's way from the mine ledge 11.9 yards above him is 89.5 yards for 16.4 yards of straight distance, past an
+elite Defias Conjurer; from the Moonbrook surface above it is 320.6 yards for 22.6; no off-mesh (drop) connection exists in the nine
+navigation tiles round the mine. The 100-yard teleport never fired, so the bots walked; and a party bot whose master went into the
+Deadmines waited outside, because the master's map had to be in `AllowedMaps` ([0, 1] on the live server).
+`PlayerbotFollowDeadminesTests` replays both places.
+
+Each think the follower first takes the reference decision (`PlayerbotParty.DecideFollow`, vmangos `PartyBotAI::UpdateAI`
+:795-817 and :884-891): hold within 5 yards; wait for a master between maps, on a taxi flight, in another instance of the bot's map
+id or on a map it may not be on; teleport to a master on another map or, in `Teleport` mode, more than `TeleportDistanceYards` (100,
+vmangos `IsWithinDistInMap(pLeader, 100.0f)`) away; otherwise walk. A walking follower plans to the point beside its master and judges
+every fresh plan (`PlayerbotFollowRules.Judge`). The way is **no way** when:
+
+- the navigation mesh has no route (`NoRoute`);
+- the master is within 50 yards across and 30 yards or more above or below (`Vertical`: mangoszero's playerbot
+  `MovementAction::Follow`, `AiPlayerbot.SightDistance` 50 and `SpellDistance` 30, teleports then);
+- the route passes inside the aggro radius of a hostile `DangerLevelMargin` (3) levels or more above the bot, or of an elite (rank 1
+  to 3) at or above its level (`Danger`; the radius is the server's own, `PlayerbotRecovery.Threats`);
+- the route is longer than `MaxPathRatio` (3) times the straight distance and more than `MinDetourYards` (40) longer than it
+  (`Detour`);
+- the follower made no progress towards a master standing still for `NoProgressSeconds` (8) twice in a row (`Stalled`). The first
+  such window re-plans from where the bot stands (and forgives the motion's loop blacklist round the master); progress is the way
+  left shrinking by 2 yards, and a master who moves more than 5 yards starts a new window, so trailing a running master never
+  stalls.
+
+A good way is walked. Otherwise a **drop** is taken in every mode when the master is at least 3 yards below and within 40 yards
+across (`PlayerbotFollowDrop`): the floor is followed towards him (and in a fan up to 90 degrees either side) to its edge; past it the
+floor beneath must lie at least 3 yards lower, the way over the edge and the column down must be clear, the vmangos fall damage
+(`Player::HandleFall`: nothing under 14.57 yards; gravity `Movement::gravity`, vmangos `spline/util.cpp:24`) must cost less than `MaxFallHealthPercent` (50) of the bot's current health, and
+the floor it lands on must lead to the master by the mesh within twice the straight distance plus 10 yards. The bot walks to the edge,
+reports the step off it as a client does (MSG_MOVE_HEARTBEAT with MOVEFLAG_FALLINGFAR one step out) and, the free-fall time later
+(vmangos gravity 19.29 yd/s²), MSG_MOVE_FALL_LAND with that fall time: the server applies the fall damage. In the Deadmines it drops
+12.4 yards from the ledge (no damage) and stands beside its master 2.2 s after he landed. A fall always ends on the ground or is
+forgotten: an order that stops the follow mid-air (stay, a fight, leaving the group) lands it first; a bot that dies or is
+teleported away mid-air is not landed afterwards. A drop searched for in vain is searched for again only after 2 s. Then by
+`CatchUpMode`:
+
+- `Teleport` (default, the reference behaviour: vmangos PartyBotAI and mangoszero's playerbot both teleport a follower): teleport for
+  any of the reasons above. From the Moonbrook surface the follower teleports at once instead of running the 320-yard mine.
+- `FightThrough`: never teleport, on the bot's map or to another: walk the way it has (a partial way towards the master when there is
+  no route), drop where a drop leads down, engage the hostiles whose aggro reaches the next 40 yards of the way (after the ordinary
+  targets: the ordered one, the master's, the bot's and the group's attackers; never when passive), and, with the master on another
+  map, walk into the area trigger on the bot's map that leads there (a dungeon entrance or exit; the bot may take the triggers that
+  lead to its master's map, and only those, whatever `AllowedMaps` says); with no such trigger it waits. A blocker the bot failed
+  to reach three times is left alone. Stalls re-plan for ever. A follower that keeps dying stays a corpse-run
+  follower.
+- `Auto`: teleport only for `NoRoute` or `Stalled` (and to another map); otherwise as `FightThrough`.
+
+A catch-up teleport needs `World:Playerbots:Party:TeleportToLeader` (off: never), a server-owned session with no teleport pending (the client half
+acknowledges near and far teleports every tick: `PlayerbotMovementControl.Update`, `PlayerbotMotion.Pump`), a master on the ground
+(not in the air), the bot not duelling (vmangos `PartyBotAI.cpp:808`, `!IsInDuel()`), and the bot out of combat (vmangos teleports only inside its `!IsInCombat()` block) unless its master left the
+fight: out of combat himself and farther than `LeaderCombatRangeYards` (50, vmangos' party assist range) or on another map. The
+master's map counts as one the bot may be on when `AllowedMaps` lists it (an empty list allows every map) or when it is a dungeon or
+raid (`PlayerbotMapPolicy`; the login gate lets a bot stay in the instance it is in). Each catch-up teleport and drop is logged at
+Information by `PlayerbotFollower` with its reason and the measured way.
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `CatchUpMode` | `Teleport` | `Teleport`, `FightThrough`, `Auto` | How a follower catches up (above). |
+| `TeleportDistanceYards` | 100 | 10..1000 | `Teleport` mode: a master farther away on the bot's map is teleported to (vmangos). |
+| `MaxPathRatio` | 3 | 1.5..20 | A way longer than this times the straight distance (and `MinDetourYards` longer) is a detour. |
+| `MinDetourYards` | 40 | 0..500 | A way at most this much longer than the straight distance is always walked. |
+| `DangerLevelMargin` | 3 | 0..60 | A hostile this many levels above the bot (or an elite at its level) on the way makes it no way. |
+| `LeaderCombatRangeYards` | 50 | 0..1000 | A bot in combat teleports only to a master out of combat and farther than this. |
+| `NoProgressSeconds` | 8 | 2..120 | The no-progress window of the loop detection. |
+| `MaxFallHealthPercent` | 50 | 0..99 | A drop is taken when the fall costs less than this % of the bot's health (0: only harmless falls). |
 
 ### Bot chat
 
@@ -398,7 +519,12 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
      spaced-out letters (`k y s`) and repeated letters (`kiiill`); terms match whole words, and a trailing `*` matches longer words.
      Patterns are compiled with `RegexOptions.NonBacktracking` (matching time linear in the line, whatever the pattern: an
      operator's pattern with a back-reference or lookaround is skipped with a warning) and a 100 ms timeout; a line the filter
-     cannot judge in time goes to no model (the built-in provider answers) but costs no strike.
+     cannot judge in time goes to no model (the built-in provider answers) but costs no strike. The timeout is wall-clock time, so a
+     process pause during a match (a garbage collection, a starved CPU) can trip it on a harmless line. A pattern's first match is
+     the slow one (its matcher is built then), so every pattern is run once on the thread pool when the filter is loaded, at start
+     and after a reload, and a line waits for that warm-up rather than paying it. A timed-out screening is counted
+     (`timed-out=` in the status, metric `arcanecore_playerbot_chat_screening_timeouts_total{kind}`) and logged as a warning at
+     most once a minute, naming the pattern (`Harassment pattern #2`, `personal data (phone)`), never the line.
   2. each provider's optional **moderation step** (`Moderation` on the provider entry, `None` by default): `Endpoint` posts the
      line to an OpenAI-compatible `/moderations` endpoint (`ModerationBaseUrl`, default the provider's own `BaseUrl`;
      `ModerationModel`, default `omni-moderation-latest`; `ModerationApiKeyEnvironmentVariable`, default the provider's key), so an
@@ -412,7 +538,11 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
   remembered either, so it is never sent later as conversation memory.
 - **Screening what a model says** (`ScreenOutput`, on). A model's reply is run through the same local filter before the bot says
   it; a hit is never said: the built-in provider answers the player's line instead (`OnOutputFlagged`: `BuiltinReply`) or nothing
-  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player.
+  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player. A reply the filter cannot judge in
+  time fails closed: it is never said either and takes the same path (`OnOutputFlagged`), with no flag record (nothing was found,
+  even when a personal-data pattern ran out of time, which on a player's line counts as personal data) and no strike; it is
+  counted and warned as an `output` timeout. If the filter's warm-up meets an unexpected error, one warning names the error's
+  type and lines are screened without it.
 - **Flags, strikes and cut-off.** Every flag is kept in an in-memory ring of `FlagLogSize` (200) records and logged as a warning:
   the character's name and GUID, the account id, the bot, the category, the source (local filter, moderation or output
   screening), the time, and, while `StoreExcerpt` is on, at most 60 characters of the line with emails, phone numbers and addresses
@@ -426,7 +556,7 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **GM.** `.playerbot chat flags [player]` lists the newest 15 flag records (one player's when named, after a line with their
   strikes, remaining cut-off and AI choice); `.playerbot chat pardon <player>` clears a player's strikes and cut-off (not a mute).
   `.playerbot chat status` ends with `Bot chat safety: screening=on screened=.. flagged=.. moderation-flagged=..
-  output-flagged=.. builtin-only=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
+  output-flagged=.. builtin-only=.. timed-out=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
   filter's size.
 - **Disclosure and choice.** While a model provider is configured, a player who talks to a bot gets, once per login and before
   the first reply, a system message: `DisclosureText` ("Bot replies on this server may be written by an AI service, which
@@ -437,7 +567,9 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **What is sent.** A model request carries the bot's facts, the bounded memory (`MemoryExchanges`) and the current line, with
   players named only by character name: never an account name, an address or a GUID. With `StripPersonalData` (on), email
   addresses, phone numbers and street addresses in the line and the memory are replaced by `[email]`, `[phone]` and `[address]`
-  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far).
+  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far). If
+  one of those patterns runs out of time, the whole text is sent as `[removed]` (fails closed), counted and warned as a `strip`
+  timeout. The excerpt of a flag record is stripped the same way, and its timeouts count as `strip` too.
 
 **Operator responsibilities.** Read and follow the usage policies of every provider you configure, and keep the server's own
 rules in line with them. Keep `Enabled` on whenever a model provider is configured (the start log warns when it is off). Review

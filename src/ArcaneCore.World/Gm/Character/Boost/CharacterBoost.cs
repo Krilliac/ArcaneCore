@@ -4,6 +4,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -17,6 +18,7 @@ using ArcaneCore.World.Packets;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
 using Item = ArcaneCore.Game.Items.Item;
@@ -32,7 +34,8 @@ internal sealed record BoostEnvironment(
     SkillCatalog Skills,
     CreatureContent Creatures,
     ItemTemplateStore Items,
-    HashSet<uint> Sources)
+    HashSet<uint> Sources,
+    HashSet<uint> QuestOnly)
 {
     /// <summary>
     /// Resolves the environment, or returns null with the first thing that is missing in <paramref name="missing"/>. Item
@@ -54,38 +57,47 @@ internal sealed record BoostEnvironment(
         if (creatures is null) { missing = "creature content is not available"; return null; }
         if (items?.LoadedStore is not ItemTemplateStore { Count: > 0 } store) { missing = "item templates are not loaded"; return null; }
 
+        // Event-bound quests and vendors must not count as obtainable (holiday cosmetics). A world that has no event feature has no
+        // events; one that has the feature but not yet its service cannot say, so the boost refuses rather than guess.
+        GameEventFeature? eventFeature = services.GetService<GameEventFeature>();
+        if (eventFeature is not null && eventFeature.Service is null) { missing = "game events are not loaded yet, so holiday items cannot be told from permanent ones"; return null; }
+        GameEventRows eventRows = eventFeature?.Service?.Rows ?? GameEventRows.Empty;
+
         LootContent loot = services.GetService<GameObjectLootFeature>()?.LootContent ?? LootContent.Empty;
-        HashSet<uint> sources = CachedSources(quests.Services.Npcs, quests.Services.Quests, loot);
+        (HashSet<uint> sources, HashSet<uint> questOnly) = CachedSources(quests.Services.Npcs, quests.Services.Quests, loot, eventRows, creatures.Content);
         if (sources.Count == 0)
         {
             missing = "no vendor, quest or loot data is loaded to choose obtainable items from";
             return null;
         }
 
-        return new BoostEnvironment(progression, spells, quests.Services, skills.Catalog, creatures.Content, store, sources);
+        return new BoostEnvironment(progression, spells, quests.Services, skills.Catalog, creatures.Content, store, sources, questOnly);
     }
 
     /// <summary>The last sources set with the content objects it was built from; a content reload replaces those objects, so a hit is always current.</summary>
-    private sealed record SourcesCache(NpcStore Npcs, QuestStore Quests, LootContent Loot, HashSet<uint> Sources);
+    private sealed record SourcesCache(NpcStore Npcs, QuestStore Quests, LootContent Loot, GameEventRows Events, CreatureContent Creatures, HashSet<uint> Sources, HashSet<uint> QuestOnly);
 
     private static SourcesCache? _sourcesCache;
 
     /// <summary>
     /// The obtainable-item set, built once per content load instead of once per command (it walks every vendor row, quest and loot
     /// row). The cached set is shared and never mutated after <see cref="BoostItemSources.Build"/> returns. Keyed by reference
-    /// identity of the three immutable content objects; the swap of the single immutable record is atomic.
+    /// identity of the five content objects (the event rows and creature content are replaced, not mutated, on a reload); the swap of the single immutable record is atomic.
     /// </summary>
-    private static HashSet<uint> CachedSources(NpcStore npcs, QuestStore quests, LootContent loot)
+    private static (HashSet<uint> Sources, HashSet<uint> QuestOnly) CachedSources(NpcStore npcs, QuestStore quests, LootContent loot, GameEventRows events, CreatureContent creatures)
     {
         SourcesCache? cached = _sourcesCache;
-        if (cached is not null && ReferenceEquals(cached.Npcs, npcs) && ReferenceEquals(cached.Quests, quests) && ReferenceEquals(cached.Loot, loot))
+        if (cached is not null && ReferenceEquals(cached.Npcs, npcs) && ReferenceEquals(cached.Quests, quests) && ReferenceEquals(cached.Loot, loot)
+            && ReferenceEquals(cached.Events, events) && ReferenceEquals(cached.Creatures, creatures))
         {
-            return cached.Sources;
+            return (cached.Sources, cached.QuestOnly);
         }
 
-        HashSet<uint> built = BoostItemSources.Build(npcs, quests, loot);
-        _sourcesCache = new SourcesCache(npcs, quests, loot, built);
-        return built;
+        BoostEventBinding binding = BoostEventBinding.From(events, creatures);
+        HashSet<uint> built = BoostItemSources.Build(npcs, quests, loot, binding);
+        HashSet<uint> questOnly = BoostItemSources.QuestOnly(npcs, quests, loot, binding);
+        _sourcesCache = new SourcesCache(npcs, quests, loot, events, creatures, built, questOnly);
+        return (built, questOnly);
     }
 }
 
@@ -99,6 +111,9 @@ internal sealed class BoostReport
     public int Kept { get; set; }
     public int MovedToBags { get; set; }
     public int ButtonsSet { get; set; }
+
+    /// <summary>Incomplete quests of the log that the new level made gray (see <see cref="BoostQuestPruner"/>) and the boost abandoned.</summary>
+    public int QuestsDropped { get; set; }
     public uint Money { get; set; }
     public uint AmmoEntry { get; set; }
     public List<byte> EmptySlots { get; } = [];
@@ -107,7 +122,7 @@ internal sealed class BoostReport
 
 /// <summary>
 /// The mutation steps of <c>.character boost</c>, in order: level, class-trainer spells, class-quest spells, skills to their
-/// maximum, gear, ammo, action bars, money, save. Every step goes through the server's own paths (level via
+/// maximum, gear, ammo, action bars, money, save (and, right after the level, the incomplete quests it made gray are abandoned). Every step goes through the server's own paths (level via
 /// <see cref="LevelCommands.ApplyLevel"/>, spells via <see cref="SpellSystem.LearnSpell"/>, items via
 /// <see cref="PlayerInventory.AddItemAt"/> and <see cref="PlayerInventory.SwapItem"/>, buttons via
 /// <see cref="Player.SetActionButton"/> and SMSG_ACTION_BUTTONS), so the client and a managed bot's caches see what a normal
@@ -151,6 +166,10 @@ internal static class CharacterBoost
             LevelCommands.ApplyLevel(context, target, env.Progression.Progression, level);
         }
 
+        // Quests the new level made gray are dropped here and only here (a level-up by play keeps them): a boosted character would
+        // otherwise carry its starting-zone log into a level where it pays nothing.
+        report.QuestsDropped = BoostQuestPruner.DropGrayQuests(target, env.Quests, level);
+
         report.SpellsLearned += BoostSpellLearner.LearnClassTrainerSpells(target, env.Spells, env.Quests, env.Creatures, env.Skills);
         report.SpellsLearned += BoostSpellLearner.LearnClassQuestSpells(target, level, env.Spells, env.Quests, env.Items);
 
@@ -178,7 +197,7 @@ internal static class CharacterBoost
         PlayerbotStatWeights weights = WeightsFor(target);
         IReadOnlyList<ItemTemplate> pool = Candidates(env, level).Gear;
         BoostGearPlan plan = BoostGearPlanner.Plan(pool, weights, target.Class, inventory.Requirements.CanDualWield(inventory),
-            template => inventory.CanUseItem(template) == InventoryResult.Ok);
+            template => inventory.CanUseItem(template) == InventoryResult.Ok, env.QuestOnly);
         report.EmptySlots.AddRange(plan.EmptySlots);
 
         foreach ((byte slot, ItemTemplate template) in plan.Picks)

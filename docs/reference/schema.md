@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 55 | `characters` |
-| `world` | 51 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 57 | `characters` |
+| `world` | 52 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -80,6 +80,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 53 | `Characters.WorldState.SilithystDataModule` | creates `world_silithyst` | yes |
 | 54 | `Characters.ServerMail.ServerMailDataModule` | creates `mail_server_template`, `mail_server_template_items`, `mail_server_template_conditions`, `mail_server_character` | yes |
 | 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | yes |
+| 56 | `Characters.Playerbots.ManagedPlayerbotHomeDataModule` | creates `managed_playerbot_home` | yes |
+| 57 | `Characters.Playerbots.PlayerbotPopulationDataModule` | creates `playerbot_population_member` | yes |
 
 ## `world`
 
@@ -135,5 +137,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 49 | `World.Warden.WardenDataModule` | creates `warden_checks` |
 | 50 | `Economy.AuctionBotItemWorldDataModule` | creates `ahbot_items` |
 | 51 | `World.Creatures.SmartScriptConditionDataModule` | adds columns `smart_scripts.ConditionId` |
+| 52 | `World.Instances.InstanceEncounterDataModule` | creates `instance_encounter` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

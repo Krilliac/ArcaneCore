@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|groups|scenario|summon|send|follow|stay|dismiss|near|revive>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|scenario|summon|send|follow|stay|dismiss|near|revive>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -29,6 +30,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot inspect $id|$name\nRead actual target, victim, cast and nearby trainer facts.", Inspect),
                 new ChatCommand("invite", AccountSecurity.GameMaster,
                     "Syntax: .playerbot invite $id|$name\nPut a running bot into your group; it follows you and takes your commands.", Invite),
+                new ChatCommand("home", AccountSecurity.Administrator,
+                    "Syntax: .playerbot home $name|$prefix* <$tele|here> [#radius]\n.playerbot home $name|$prefix* clear\nAnchor bots to an area: a game_tele place (or each bot's own position with here) and a radius in yards (50 to 5000, default 600). A prefix such as Wfbot* names every bot whose name starts with it. clear removes the home.", Home),
                 new ChatCommand("chat", AccountSecurity.GameMaster,
                     "Syntax: .playerbot chat <status|flags|pardon>\nThe bots' chat replies and their safety screening.",
                     Children:
@@ -150,7 +153,7 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         Chat.BotChatSafetyStatus s = status.Safety;
         yield return string.Create(c,
-            $"Bot chat safety: screening={(s.Screening ? "on" : "off")} screened={s.Screened} flagged={s.Flagged} moderation-flagged={s.ModerationFlagged} output-flagged={s.OutputFlagged} builtin-only={s.BuiltinOnly} cut-offs={s.Cutoffs} cut-off-now={s.CutOffNow} auto-mutes={s.AutoMutes} opted-out={s.OptedOut} opted-in={s.OptedIn} disclosed={s.Disclosed} filter={s.Terms} terms/{s.Patterns} patterns");
+            $"Bot chat safety: screening={(s.Screening ? "on" : "off")} screened={s.Screened} flagged={s.Flagged} moderation-flagged={s.ModerationFlagged} output-flagged={s.OutputFlagged} builtin-only={s.BuiltinOnly} timed-out={s.TimedOut} cut-offs={s.Cutoffs} cut-off-now={s.CutOffNow} auto-mutes={s.AutoMutes} opted-out={s.OptedOut} opted-in={s.OptedIn} disclosed={s.Disclosed} filter={s.Terms} terms/{s.Patterns} patterns");
     }
 
     private static bool Create(CommandContext context, string text)
@@ -193,7 +196,10 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            foreach (PlayerbotStatus item in service.Snapshot()) context.Reply(Format(item));
+            IReadOnlyList<PlayerbotStatus> all = service.Snapshot();
+            foreach (PlayerbotStatus item in all) context.Reply(Format(item));
+            // The terminator: tools that wait for the whole reply (tools/ops/OpsLib.ps1) match it, so a bot that is missing does not hide the end.
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"{StatusTerminator}{all.Count}"));
         }
         else
         {
@@ -246,6 +252,126 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>
+    /// <c>.playerbot home $name|$prefix* &lt;$tele|here&gt; [#radius]</c> and <c>... clear</c> (Administrator; world thread, where commands
+    /// run). The selector is one bot or every bot whose name starts with the prefix, running or not. A tele name is a
+    /// <c>game_tele</c> row (the place's map and position become the centre); <c>here</c> is each matched running bot's own position.
+    /// A trailing number is the radius in yards. The command is accepted at once and the homes are stored (characters schema 56) and
+    /// applied to the running brains off the world thread, as the other lifecycle commands are.
+    /// </summary>
+    private static bool Home(CommandContext context, string text)
+    {
+        string[] tokens = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2) return false;
+        ManagedPlayerbotFeature? service = context.Session.Services.GetService<ManagedPlayerbotFeature>();
+        if (service is null || !service.HomesAvailable)
+        {
+            context.Reply("Playerbot homes are unavailable.");
+            return true;
+        }
+
+        if (!service.TryMatchBots(tokens[0], out IReadOnlyList<PlayerbotStatus> matches))
+        {
+            context.Reply("Playerbot home: name a bot, give its id, or use a prefix of 2 to 11 letters with one trailing * (Wfbot*).");
+            return true;
+        }
+
+        if (matches.Count == 0)
+        {
+            context.Reply("Playerbot not found.");
+            return true;
+        }
+
+        string[] rest = tokens[1..];
+        if (rest.Length == 1 && rest[0].Equals("clear", StringComparison.OrdinalIgnoreCase))
+        {
+            Guid[] ids = [.. matches.Select(match => match.BotId)];
+            context.Reply("Playerbot home accepted.");
+            _ = Task.Run(async () =>
+            {
+                try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+            });
+            return true;
+        }
+
+        float radius = PlayerbotHomeBounds.DefaultRadius;
+        if (rest.Length >= 2 && float.TryParse(rest[^1], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed))
+        {
+            radius = parsed;
+            rest = rest[..^1];
+        }
+
+        if (!float.IsFinite(radius) || radius < PlayerbotHomeBounds.MinRadius || radius > PlayerbotHomeBounds.MaxRadius)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"Playerbot home: the radius must be between {PlayerbotHomeBounds.MinRadius:F0} and {PlayerbotHomeBounds.MaxRadius:F0} yards."));
+            return true;
+        }
+
+        string place = string.Join(' ', rest);
+        var targets = new List<ManagedPlayerbotFeature.HomeTarget>(matches.Count);
+        int skipped = 0;
+        string? placeName;
+        string description;
+        if (place.Equals("here", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (PlayerbotStatus match in matches)
+            {
+                if (service.TryGetPosition(match.BotId, out uint map, out System.Numerics.Vector3 position) && service.AllowsHomeMap(map))
+                    targets.Add(new(match.BotId, map, position));
+                else
+                    skipped++;
+            }
+
+            placeName = null;
+            description = string.Create(CultureInfo.InvariantCulture, $"here, radius {radius:F0}");
+            if (targets.Count == 0)
+            {
+                context.Reply($"Playerbot home: 0 set, {skipped} skipped (not running).");
+                return true;
+            }
+        }
+        else
+        {
+            ArcaneCore.Kernel.WorldData.GameTele? tele;
+            try { tele = context.Session.Services.GetService<Teleport.TeleportFeature>()?.Maps.FindGameTele(place); }
+            catch (InvalidOperationException) { context.Reply("Playerbot homes are unavailable."); return true; }
+            if (tele is null)
+            {
+                context.Reply(Gm.Core.GmStrings.TeleNotFound);
+                return true;
+            }
+
+            if (!service.AllowsHomeMap(tele.MapId))
+            {
+                context.Reply($"Playerbot home: map {tele.MapId} is not a map playerbots may enter.");
+                return true;
+            }
+
+            foreach (PlayerbotStatus match in matches)
+                targets.Add(new(match.BotId, tele.MapId, new System.Numerics.Vector3(tele.X, tele.Y, tele.Z)));
+            placeName = tele.Name;
+            description = string.Create(CultureInfo.InvariantCulture,
+                $"{tele.Name} map {tele.MapId} at {tele.X:F1},{tele.Y:F1},{tele.Z:F1} radius {radius:F0}");
+        }
+
+        context.Reply("Playerbot home accepted.");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                ManagedPlayerbotFeature.HomeOutcome outcome = await service.SetHomesAsync(targets, radius, placeName).ConfigureAwait(false);
+                context.Reply($"Playerbot home: {outcome.Set} set ({description}), {skipped} skipped (not running)"
+                    + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+        });
+        return true;
+    }
+
     private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id)
     {
         try { await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false); }
@@ -263,6 +389,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply($"BOTINSPECT stall={value.Stall ?? "none"}");
         context.Reply($"BOTINSPECT {value.Risk ?? "decision=none"}");
         context.Reply($"BOTINSPECT {value.Group ?? "group=none"}");
+        context.Reply($"BOTINSPECT home={value.Home ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
@@ -356,10 +483,14 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>The last line of the full <c>.playerbot status</c>/<c>list</c> reply, followed by the bot count.</summary>
+    internal const string StatusTerminator = "Playerbot status end: ";
+
     private static string Format(PlayerbotStatus status)
         => string.Create(CultureInfo.InvariantCulture,
             $"{status.BotId} {status.Name} state={status.State} desired={status.DesiredEnabled} goal={status.Goal} "
             + $"target={status.TargetEntry} quest={status.QuestId} map={status.MapId} health={status.Health} "
             + $"error={status.ErrorCode ?? "none"}{(status.Risk is { } risk ? " " + risk : string.Empty)}"
-            + $"{(status.Group is { } group ? " " + group : string.Empty)}");
+            + $"{(status.Group is { } group ? " " + group : string.Empty)}"
+            + $"{(status.Home is { } home ? " home=" + home : string.Empty)}");
 }

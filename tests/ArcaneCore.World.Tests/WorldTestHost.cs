@@ -40,6 +40,14 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly List<WorldTestClient> _clients = [];
     private readonly Task _acceptLoop;
 
+    /// <summary>
+    /// Test seam for the harness itself (null everywhere else): the next <see cref="Start"/>'s accept loop awaits this once, after
+    /// its cancellation check and before its first accept, so a test can hold the loop exactly where a dispose used to race it.
+    /// </summary>
+    public static readonly AsyncLocal<Func<Task>?> AcceptGate = new();
+
+    private Func<Task>? _acceptGate;
+
     private readonly WorldSessionOptions _sessionOptions;
     private readonly ILogger _sessionLogger;
     private readonly WireOracle? _wireOracle;
@@ -107,6 +115,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _acceptGate = AcceptGate.Value;
         _acceptLoop = Task.Run(AcceptLoopAsync);
     }
 
@@ -253,15 +262,22 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // Cancel, let the accept loop end, and only then stop the listener (WorldServer's order). Stopping it first raced the loop:
+        // a loop the thread pool had not yet run past its cancellation check (a host disposed within milliseconds of its start on
+        // a loaded machine) then called AcceptTcpClientAsync on a stopped listener and threw InvalidOperationException ("Not
+        // listening"), which failed the test in its dispose.
         _stop.Cancel();
-        _listener.Stop();
         try
         {
             await _acceptLoop;
         }
         catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
         {
-            // listener stopped
+            // cancelled
+        }
+        finally
+        {
+            _listener.Stop();
         }
 
         WorldTestClient[] clients;
@@ -334,6 +350,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
+            if (Interlocked.Exchange(ref _acceptGate, null) is { } gate) await gate();
             TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
             var entry = new SessionEntry();
             Task session = Task.Run(async () =>

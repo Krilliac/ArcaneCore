@@ -1,0 +1,178 @@
+using ArcaneCore.Game;
+using ArcaneCore.Game.Economy;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.World.Playerbots.Progression;
+
+namespace ArcaneCore.World.Playerbots;
+
+/// <summary>An item of the bot's general bags as the planner sees it (the world side fills it from the live <c>Item</c>).</summary>
+/// <param name="Transferable">The inventory lets the item leave the bot (<c>CanTransferOut</c>: not bound, conjured, timed).</param>
+/// <param name="Reserved">The bot keeps it: a consumable it uses, or an item an open quest asks for.</param>
+internal sealed record PlayerbotBagItem(ObjectGuid Guid, ItemTemplate Template, uint Count, bool Transferable, bool Reserved);
+
+/// <summary>What the bot asks for one item: buyout, start bid and the deposit it pays now.</summary>
+internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Deposit);
+
+/// <summary>The auction the bot buys out and the gain its slot sees.</summary>
+internal sealed record PlayerbotUpgradeChoice(PlayerbotAuctionRow Row, float Gain);
+
+/// <summary>
+/// The economy bot's decisions, pure and deterministic over plain values: which items to list, how many listings a visit may add, the
+/// price and whether it pays, which upgrade to buy within the visit budget. The world side (<see cref="PlayerbotEconomy"/>) only supplies
+/// the facts and carries the decisions out through ordinary client packets.
+/// </summary>
+internal static class PlayerbotEconomyPlanner
+{
+    /// <summary>The smallest budget (copper) worth a trip for an upgrade alone.</summary>
+    internal const uint MinimumUpgradeBudget = 100;
+
+    /// <summary>Whether the bot lists <paramref name="item"/>: vendor trash stays with the vendors (<c>PlayerbotTownGoals</c> sells poor quality items and white junk).</summary>
+    /// <param name="upgradeGain">What wearing the item would gain (<c>PlayerbotGearScoreSeam</c>); null when the bot cannot use it.</param>
+    /// <remarks>
+    /// Listed: an unbound-able (none or bind-on-equip) green, blue or epic weapon or armor that is no upgrade for the bot, and any Trade Goods
+    /// item above poor quality. Never listed: poor quality or white items, items that cannot leave the bot, reserved items, quest items and
+    /// reagents, bags and ammunition (<c>BagFamily</c>), food, quest starters, profession tools, and items with no vendor price.
+    /// </remarks>
+    internal static bool IsListable(PlayerbotBagItem item, float? upgradeGain)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ItemTemplate template = item.Template;
+        if (!item.Transferable || item.Reserved || item.Count == 0 || template.SellPrice == 0 || template.Quality == 0) return false;
+        if (template.Bonding is not (0 or 2) || template.BagFamily != 0 || template.StartQuest != 0 || template.FoodType != 0
+            || template.RequiredSkill != 0 || (ItemClass)template.Class is ItemClass.Quest or ItemClass.Reagent)
+            return false;
+        if ((ItemClass)template.Class == ItemClass.TradeGoods) return true;
+        return template.Quality is >= 2 and <= 4 && (ItemClass)template.Class is ItemClass.Weapon or ItemClass.Armor
+            && (upgradeGain is not { } gain || gain <= PlayerbotItemScore.MinimumGain);
+    }
+
+    /// <summary>The items to list, the most valuable stack first (reference price times count), the lowest GUID first among equals; given-up entries left out.</summary>
+    internal static IReadOnlyList<PlayerbotBagItem> Listables(IEnumerable<PlayerbotBagItem> bag, Func<ItemTemplate, float?> upgradeGain,
+        PlayerbotRelistMemory? memory = null)
+    {
+        ArgumentNullException.ThrowIfNull(bag);
+        ArgumentNullException.ThrowIfNull(upgradeGain);
+        return [.. bag
+            .Where(item => memory?.IsGivenUp(item.Template.Entry) != true && IsListable(item, upgradeGain(item.Template)))
+            .OrderByDescending(item => (ulong)PlayerbotAuctionPricing.ReferencePerUnit(item.Template) * item.Count)
+            .ThenBy(item => item.Guid.Value)];
+    }
+
+    /// <summary>The visit's one roll: lists at all this visit (0 never, 100 always).</summary>
+    internal static bool RollsToList(PlayerbotEconomyOptions options, Random random)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(random);
+        if (options.ListChancePerVisit <= 0 || options.MaxListingsPerBot <= 0) return false;
+        return options.ListChancePerVisit >= 100 || random.Next(100) < options.ListChancePerVisit;
+    }
+
+    /// <summary>The listings the bot may still add given what the house counts as its own (the owner list's total).</summary>
+    internal static int FreeListingSlots(PlayerbotEconomyOptions options, uint ownerTotal)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return (int)Math.Max(0L, options.MaxListingsPerBot - (long)ownerTotal);
+    }
+
+    /// <summary>The listings one visit may add: the free slots when the visit's roll succeeds, else none.</summary>
+    internal static int ListingSlots(PlayerbotEconomyOptions options, uint ownerTotal, Random random)
+        => RollsToList(options, random) ? FreeListingSlots(options, ownerTotal) : 0;
+
+    /// <summary>What a visit may spend in all: the money held at its start times <see cref="PlayerbotEconomyOptions.BuyUpgradeBudgetFraction"/>, rounded down.</summary>
+    internal static uint VisitBudget(uint startMoney, float fraction)
+        => !float.IsFinite(fraction) || fraction <= 0f ? 0u : (uint)Math.Min(Math.Floor(startMoney * (double)Math.Min(fraction, 1f)), startMoney);
+
+    /// <summary>What is left of <paramref name="budget"/> after <paramref name="spent"/>.</summary>
+    internal static uint Remaining(uint budget, uint spent) => spent >= budget ? 0u : budget - spent;
+
+    /// <summary>
+    /// The price plan for listing <paramref name="item"/>, or null when it does not pay or does not fit the budget left (a deposit is spent
+    /// money: it counts against the visit's budget).
+    /// </summary>
+    internal static PlayerbotListingPlan? PlanListing(PlayerbotBagItem item, IReadOnlyList<PlayerbotAuctionRow> competitors, ulong self,
+        AuctionHouseEntry house, uint depositMinimum, float depositRate, float cutRate, uint remainingBudget)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(house);
+        uint buyout = PlayerbotAuctionPricing.ListingPrice(item.Template, item.Count, competitors, self, house, cutRate);
+        if (buyout == 0) return null;
+        uint deposit = PlayerbotAuctionPricing.Deposit(house, item.Template, item.Count, depositMinimum, depositRate);
+        if (!PlayerbotAuctionPricing.IsWorthListing(item.Template, item.Count, buyout, deposit, house, cutRate, remainingBudget)) return null;
+        return new PlayerbotListingPlan(buyout, PlayerbotAuctionPricing.StartBid(buyout), deposit);
+    }
+
+    /// <summary>
+    /// The auction to buy out: of the rows the bot can pay (a buyout, not its own, within the budget left and the money in hand) the one
+    /// whose item gains the most for its slot, then the lower buyout, then the lower auction id. Null when nothing gains.
+    /// </summary>
+    /// <param name="startMoney">The money held when the visit began (the budget's base).</param>
+    /// <param name="money">The money held now.</param>
+    /// <param name="spent">What this visit has spent so far (deposits and buyouts).</param>
+    /// <param name="gain">The gain of wearing an item; null when the bot cannot use it.</param>
+    /// <param name="isRefused">Auctions the house refused to sell to the bot lately.</param>
+    internal static PlayerbotUpgradeChoice? ChooseUpgrade(IEnumerable<PlayerbotAuctionRow> rows, ulong self, uint startMoney, uint money,
+        uint spent, float fraction, Func<uint, ItemTemplate?> templates, Func<ItemTemplate, float?> gain, Func<uint, bool>? isRefused = null)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(templates);
+        ArgumentNullException.ThrowIfNull(gain);
+        uint limit = Math.Min(Remaining(VisitBudget(startMoney, fraction), spent), money);
+        PlayerbotUpgradeChoice? best = null;
+        foreach (PlayerbotAuctionRow row in rows)
+        {
+            if (row.Buyout == 0 || row.Buyout > limit || row.Owner == self || isRefused?.Invoke(row.Id) == true) continue;
+            if (templates(row.Entry) is not { } template || gain(template) is not { } value || value <= PlayerbotItemScore.MinimumGain) continue;
+            if (best is null || value > best.Gain
+                || (value == best.Gain && (row.Buyout < best.Row.Buyout || (row.Buyout == best.Row.Buyout && row.Id < best.Row.Id))))
+                best = new PlayerbotUpgradeChoice(row, value);
+        }
+
+        return best;
+    }
+
+    /// <summary>The entry and action of an auction house letter's subject <c>"entry:0:action"</c> (<see cref="MailRules.AuctionSubject"/>).</summary>
+    internal static bool TryParseAuctionSubject(string subject, out uint entry, out AuctionMailAction action)
+    {
+        entry = 0;
+        action = default;
+        string[] parts = (subject ?? string.Empty).Split(':');
+        if (parts.Length != 3 || !uint.TryParse(parts[0], out entry) || parts[1] != "0"
+            || !int.TryParse(parts[2], out int raw) || !Enum.IsDefined((AuctionMailAction)raw))
+            return false;
+        action = (AuctionMailAction)raw;
+        return true;
+    }
+}
+
+/// <summary>
+/// Which item entries came back expired, so the bot does not list the same unsold thing again and again: an entry that expired
+/// <see cref="GiveUpAfter"/> times is given up (a sale forgets it). In memory, bounded to <see cref="MaxEntries"/> entries (the oldest go
+/// first); lost on restart, which only lets the bot try once more.
+/// </summary>
+internal sealed class PlayerbotRelistMemory
+{
+    internal const int MaxEntries = 64;
+    internal const int GiveUpAfter = 2;
+
+    private readonly Dictionary<uint, (int Seen, long Order)> _expiries = [];
+    private long _next;
+
+    internal int Count => _expiries.Count;
+
+    internal void NoteExpired(uint entry)
+    {
+        if (_expiries.TryGetValue(entry, out (int Seen, long Order) known))
+        {
+            _expiries[entry] = (known.Seen + 1, known.Order);
+            return;
+        }
+
+        if (_expiries.Count >= MaxEntries) _expiries.Remove(_expiries.MinBy(pair => pair.Value.Order).Key);
+        _expiries[entry] = (1, _next++);
+    }
+
+    internal void NoteSold(uint entry) => _expiries.Remove(entry);
+
+    internal bool IsGivenUp(uint entry) => _expiries.TryGetValue(entry, out (int Seen, long Order) known) && known.Seen >= GiveUpAfter;
+}

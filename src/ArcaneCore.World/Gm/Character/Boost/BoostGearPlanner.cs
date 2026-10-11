@@ -78,17 +78,35 @@ internal static class BoostGearPlanner
     }
 
     /// <summary>
+    /// Whether a template is a cosmetic quest reward: its only source is a quest (<paramref name="questOnly"/>, see
+    /// <see cref="BoostItemSources.QuestOnly"/>) and it carries no stat, resistance, spell or weapon damage. Such a piece can only
+    /// win a slot as a fallback or on item level alone, so the planner never offers it, even when the slot would stay empty.
+    /// </summary>
+    public static bool IsCosmeticQuestReward(ItemTemplate t, IReadOnlySet<uint> questOnly)
+    {
+        ArgumentNullException.ThrowIfNull(t);
+        ArgumentNullException.ThrowIfNull(questOnly);
+        return questOnly.Contains(t.Entry)
+            && !t.Stats.Any(s => s.Value != 0)
+            && t.HolyRes == 0 && t.FireRes == 0 && t.NatureRes == 0 && t.FrostRes == 0 && t.ShadowRes == 0 && t.ArcaneRes == 0
+            && !t.Spells.Any(s => s.SpellId != 0)
+            && !t.Damages.Any(d => d.Max > 0f);
+    }
+
+    /// <summary>
     /// The kit: for each slot in <see cref="SlotOrder"/> the best candidate by score times style factor, then item level, then
     /// the lower entry. <paramref name="canUse"/> is the server's wear rule; <paramref name="canDualWield"/> offers one-hand
     /// weapons to the off hand. A slot with no candidate is listed in <see cref="BoostGearPlan.EmptySlots"/>; the off hand is
-    /// skipped (not listed) when the main hand is a two-hander.
+    /// skipped (not listed) when the main hand is a two-hander. A cosmetic quest reward (<see cref="IsCosmeticQuestReward"/>, when
+    /// <paramref name="questOnly"/> is given) is never a candidate.
     /// </summary>
     public static BoostGearPlan Plan(
         IEnumerable<ItemTemplate> pool,
         PlayerbotStatWeights weights,
         Class playerClass,
         bool canDualWield,
-        Func<ItemTemplate, bool> canUse)
+        Func<ItemTemplate, bool> canUse,
+        IReadOnlySet<uint>? questOnly = null)
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentNullException.ThrowIfNull(weights);
@@ -99,7 +117,7 @@ internal static class BoostGearPlanner
         foreach (ItemTemplate template in pool)
         {
             byte[] slots = [.. template.AllowedEquipSlots(playerClass, canDualWield).Where(s => s < InventorySlots.EquipmentEnd)];
-            if (slots.Length == 0 || !canUse(template))
+            if (slots.Length == 0 || (questOnly is not null && IsCosmeticQuestReward(template, questOnly)) || !canUse(template))
             {
                 continue;
             }

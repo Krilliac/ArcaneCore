@@ -23,6 +23,7 @@ public sealed class PlayerbotChatWorldTests
         options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
         options.Chat.Enabled = true;
         options.Chat.PerPlayerCooldownSeconds = 0;
+        ChatSamples.NoScreeningDeadline(options.Chat);
         configure?.Invoke(options);
     }, services =>
     {

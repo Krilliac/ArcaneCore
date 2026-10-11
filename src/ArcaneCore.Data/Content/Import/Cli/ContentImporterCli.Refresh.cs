@@ -9,6 +9,7 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.World.Battlegrounds;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.Instances;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Rest;
 using ArcaneCore.Data.World.Pools;
@@ -99,6 +100,7 @@ public static partial class ContentImporterCli
         var graveyards = new GraveyardDumpImporter();
         var battlegrounds = new BattlegroundDumpImporter();
         var taverns = new AreaTriggerTavernDumpImporter();
+        var encounters = new InstanceEncounterDumpImporter();
         var transports = new TransportDumpImporter();
         var relays = new CreatureDumpImporter();
         var instances = new InstanceTemplateDumpImporter();
@@ -120,6 +122,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             taverns.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            encounters.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -304,6 +311,7 @@ public static partial class ContentImporterCli
         Count("exploration_basexp", worldState.BaseXp.Count, worldState.BaseXp.Count > 0);
         Count("game_weather", worldState.Weather.Count, worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0);
         Count(AreaTriggerTavernDataModule.Table, taverns.Ids.Count, taverns.SawTable);
+        Count(InstanceEncounterDataModule.Table, encounters.Rows.Count, encounters.SawTable);
         Count(TransportWorldDataModule.Table, transports.Rows.Count, transports.SawTable);
         Count("gameobject_template (type 15)", transports.Ships.Count, transports.Ships.Count > 0);
         Count(SpellProcEventDataModule.Table, procs?.Content.Count ?? 0, procs is not null);
@@ -408,6 +416,7 @@ public static partial class ContentImporterCli
                     }
 
                     await taverns.ReplaceAsync(db, token).ConfigureAwait(false);
+                    await encounters.ReplaceAsync(db, token).ConfigureAwait(false);
                     await transports.ReplaceAsync(db, token).ConfigureAwait(false);
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);

@@ -98,8 +98,9 @@ internal sealed class GroupTestWorld : IAsyncDisposable
 
     /// <param name="quests">The quests the giver offers.</param>
     /// <param name="dungeon">The Deadmines content (map 36, its triggers), the giver at <see cref="EntranceArea"/>.</param>
+    /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null)
     {
         var options = new PlayerbotOptions
         {
@@ -107,7 +108,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon);
+        var content = new GroupContent(quests, dungeon, extraCreatures ?? []);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
@@ -226,7 +227,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     }
 
     /// <summary>The giver, the creatures and the quests (a later registration replaces the scenario content's stores).</summary>
-    private sealed class GroupContent(uint[] quests, bool dungeon) : ICreatureDataStore, IQuestContentStore, ILootDataStore
+    private sealed class GroupContent(uint[] quests, bool dungeon, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra) : ICreatureDataStore, IQuestContentStore, ILootDataStore
     {
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [
@@ -248,6 +249,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Hostile(WarlordEntry, "Group Warlord", level: 10, health: 1500, minDamage: 6, maxDamage: 9, rank: 1),
                 Hostile(BruteEntry, "Group Brute", level: 1, health: 150, minDamage: 1, maxDamage: 1, rank: 0),
                 Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
+                .. extra.Select(e => e.Template),
             ],
             [
                 new CreatureSpawn { Guid = GiverSpawn, Entry = GiverEntry, MapId = 0, X = Home.X + 3f, Y = Home.Y, Z = Home.Z, Orientation = MathF.PI },
@@ -255,6 +257,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 new CreatureSpawn { Guid = WarlordSpawn, Entry = WarlordEntry, MapId = 0, X = StartX - 70f, Y = StartY, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 new CreatureSpawn { Guid = BruteSpawn, Entry = BruteEntry, MapId = 0, X = StartX, Y = StartY + 70f, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 new CreatureSpawn { Guid = BossSpawn, Entry = BossEntry, MapId = 36, X = -16.4f, Y = -343.07f, Z = DeadminesTestContent.InsideFloor, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
+                .. extra.Select(e => e.Spawn),
             ], [], [], []));
 
         Task<QuestContent> IQuestContentStore.LoadAsync(CancellationToken cancellationToken)

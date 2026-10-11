@@ -134,6 +134,13 @@ public sealed class PlayerbotChatSafetyOptions
     /// <summary>Replace emails, phone numbers and street addresses in what is sent to a model provider with a placeholder (on).</summary>
     public bool StripPersonalData { get; set; } = true;
 
+    /// <summary>
+    /// The local filter's time limit per pattern match (<see cref="PlayerbotChatSafetyFilter.PatternTimeout"/>). Not a configuration
+    /// key: a test that is not about the guard sets <see cref="System.Text.RegularExpressions.Regex.InfiniteMatchTimeout"/>, so a
+    /// process pause during a match (wall-clock time) cannot turn a clean line into one kept from the models.
+    /// </summary>
+    internal TimeSpan PatternTimeout { get; set; } = PlayerbotChatSafetyFilter.PatternTimeout;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Chat:Safety";

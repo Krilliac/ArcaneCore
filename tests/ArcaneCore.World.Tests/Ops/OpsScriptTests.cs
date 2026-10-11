@@ -252,9 +252,223 @@ public sealed class OpsScriptTests
             ".tele name Wfbotd Goldshire",
             "#wait 30",
             ".playerbot status",
+            @"#waitfor 10 \bPlayerbot status end: \d+",   // the reply is many chat lines: the runner polls the log for its terminator, not the last bot's line
         ];
         Assert.Equal(expected, Strings(r.GetProperty("lines")));
         Assert.Equal(["Wfbota", "Wfbotb", "Wfbotc", "Wfbotd"], Strings(r.GetProperty("names")));
+    }
+
+    [PwshFact]
+    public void ProvisionScript_WithHome_AnchorsEveryBotToItsPlace_AfterTheTeleports_AndBeforeTheStatus()
+    {
+        JsonElement r = Eval("""
+            $p = New-OpsProvisionScript -Count 3 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall=2,Elwynn Forest=1' -AnchorHome -HomeRadius 450 -StatusWaitSeconds 0
+            @($p.Lines)
+            """);
+        string[] lines = Strings(r);
+
+        string[] tail = [.. lines.SkipWhile(l => !l.StartsWith(".tele name ", StringComparison.Ordinal))];
+        Assert.Equal(
+        [
+            ".tele name Wfbota Westfall",
+            ".tele name Wfbotb Elwynn Forest",
+            ".tele name Wfbotc Westfall",
+            "# anchor every bot to its place: the brain walks back when it strays past the radius",
+            ".playerbot home Wfbota Westfall 450",
+            ".playerbot home Wfbotb Elwynn Forest 450",
+            ".playerbot home Wfbotc Westfall 450",
+            "#wait 20",
+            ".playerbot status",   // -StatusWaitSeconds 0: no trailing wait
+        ], tail);
+
+        // Without the switch there is no home line (the default provision is unchanged).
+        JsonElement plain = Eval("@((New-OpsProvisionScript -Count 3 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall').Lines)");
+        Assert.DoesNotContain(Strings(plain), l => l.StartsWith(".playerbot home", StringComparison.Ordinal));
+    }
+
+    [PwshFact]
+    public void ProvisionScript_RefusesAHomeRadiusOutsideTheServersBounds_AndANegativeStatusWait()
+    {
+        Assert.Contains("outside 50..5000", EvalError("New-OpsProvisionScript -Count 2 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall' -AnchorHome -HomeRadius 49"));
+        Assert.Contains("outside 50..5000", EvalError("New-OpsProvisionScript -Count 2 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall' -AnchorHome -HomeRadius 5001"));
+        Assert.Contains("outside 0..600", EvalError("New-OpsProvisionScript -Count 2 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall' -StatusWaitSeconds -1"));
+        // The bounds are the edges: 50 and 5000 are accepted.
+        Assert.Contains(".playerbot home Wfbota Westfall 50", Strings(Eval("@((New-OpsProvisionScript -Count 1 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall' -AnchorHome -HomeRadius 50).Lines)")));
+        Assert.Contains(".playerbot home Wfbota Westfall 5000", Strings(Eval("@((New-OpsProvisionScript -Count 1 -Level 14 -NamePrefix 'Wfbot' -TeleSpec 'Westfall' -AnchorHome -HomeRadius 5000).Lines)")));
+    }
+
+    [PwshFact]
+    public void BoostRetry_SelectsOnlyBotsNotBoosted_WhoseRefusalIsTransientOrAbsent()
+    {
+        string[] log =
+        [
+            "Boost Wfbota: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
+            "Boost refused for Wfbotb: the character is in combat.",
+            "Boost refused for Wfbotc: the character is dead.",
+            "Boost refused for Wfbotd: the character is level 20, above 14.",          // permanent: never retried
+            "Boost refused for Wfbote: the character is settling a quest reward.",
+            "Boost refused for Wfbotf: the character is not in the world.",
+            "Boost refused for Wfbotg: the character is in combat.",                   // refused first, boosted later
+            "Boost Wfbotg: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
+            "Boost refused for Wfbotj: progression is not available.",                 // permanent
+        ];
+        // Wfboth has no reply at all (a dropped line): it is tried again, and the final verification still decides.
+        JsonElement r = EvalWith("@(Get-OpsBoostRetryNames -LogLines $in.log -Names $in.names -Level 14)",
+            new { log, names = new[] { "Wfbota", "Wfbotb", "Wfbotc", "Wfbotd", "Wfbote", "Wfbotf", "Wfbotg", "Wfboth", "Wfbotj" } });
+
+        Assert.Equal(["Wfbotb", "Wfbotc", "Wfbote", "Wfbotf", "Wfboth"], Strings(r));
+    }
+
+    [PwshFact]
+    public void BoostRetry_Script_WaitsFirst_BoostsEachNamedBot_AndEndsWithAStatusAndItsWait()
+    {
+        JsonElement r = Eval("@(New-OpsBoostRetryScript -Names @('Wfbotb','Wfbotc') -Level 14 -WaitSeconds 45 -StatusWaitSeconds 12)");
+
+        Assert.Equal(
+        [
+            "# boost retry for 2 bots",
+            "#wait 45",
+            ".character boost Wfbotb 14",
+            ".character boost Wfbotc 14",
+            ".playerbot status",
+            @"#waitfor 12 \bPlayerbot status end: \d+",
+        ], Strings(r));
+        Assert.Contains("at least one bot", EvalError("New-OpsBoostRetryScript -Names @() -Level 14"));
+        Assert.Contains("outside 1..255", EvalError("New-OpsBoostRetryScript -Names @('Wfbotb') -Level 0"));
+    }
+
+    [PwshFact]
+    public void BoostRetry_Script_RevivesTheBotsRefusedAsDead_BeforeTheWaitAndTheBoost()
+    {
+        JsonElement r = Eval("@(New-OpsBoostRetryScript -Names @('Wfbotb','Wfbotc','Wfbotd') -Level 14 -WaitSeconds 45 -StatusWaitSeconds 0 -ReviveNames @('Wfbotc','Wfbotd'))");
+        string[] lines = Strings(r);
+
+        Assert.Equal(
+        [
+            "# boost retry for 3 bots",
+            "# 2 bots were refused as dead: revive them first",
+            ".revive Wfbotc",
+            ".revive Wfbotd",
+            "#wait 45",
+            ".character boost Wfbotb 14",
+            ".character boost Wfbotc 14",
+            ".character boost Wfbotd 14",
+            ".playerbot status",
+        ], lines);
+        Assert.True(Array.IndexOf(lines, ".revive Wfbotd") < Array.IndexOf(lines, "#wait 45"));
+        Assert.Contains("not one of the bots", EvalError("New-OpsBoostRetryScript -Names @('Wfbotb') -Level 14 -ReviveNames @('Wfbotz')"));
+
+        // The line is sendable as the runner checks it.
+        Assert.Equal(JsonValueKind.Null, Eval("Test-OpsCommandLine -Line '.revive Wfbotc'").ValueKind);
+    }
+
+    [PwshFact]
+    public void BoostDeadNames_AreTheBotsWhoseLastRefusalIsDead_AndNotBoostedLater()
+    {
+        string[] log =
+        [
+            "Boost refused for Wfbotb: the character is dead.",
+            "Boost refused for Wfbotc: the character is in combat.",
+            "Boost refused for Wfbotd: the character is dead.",
+            "Boost Wfbotd: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
+        ];
+        JsonElement r = EvalWith("@(Get-OpsBoostDeadNames -LogLines $in.log -Names $in.names -Level 14)",
+            new { log, names = new[] { "Wfbotb", "Wfbotc", "Wfbotd", "Wfbote" } });
+
+        Assert.Equal("Wfbotb", r.GetString());   // one name: PowerShell unrolls a single-element array
+    }
+
+    [PwshFact]
+    public void WaitFor_IsAcceptedWithATimeoutAndAValidPattern_RefusedOtherwise()
+    {
+        string[] lines =
+        [
+            @"#waitfor 10 \bWfbotd state=",   // 0 ok
+            "#waitfor",                       // 1 bad
+            "#waitfor 0 x",                   // 2 bad: no zero timeout
+            "#waitfor abc x",                 // 3 bad
+            "#waitfor 10",                    // 4 bad: no pattern
+            "#waitfor 10 (",                  // 5 bad: the pattern does not compile
+            "#waitfor 100000 x",              // 6 bad
+        ];
+        JsonElement r = EvalWith("@($in.lines | ForEach-Object { [pscustomobject]@{ reason = (Test-OpsCommandLine -Line $_) } })", new { lines });
+        string?[] reasons = r.EnumerateArray().Select(e => e.GetProperty("reason").GetString()).ToArray();
+
+        Assert.Null(reasons[0]);
+        for (int i = 1; i < lines.Length; i++)
+        {
+            Assert.Contains("waitfor", reasons[i]);
+        }
+    }
+
+    [PwshFact]
+    public void WaitForLog_MatchesOnlyTextAfterTheOffset_AndFailsClosedAtTheTimeout()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "arcane-ops-wait-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string log = Path.Combine(dir, "session.log");
+            string old = "1 Wfbotd state=Running desired=True goal=none error=none\n";
+            File.WriteAllText(log, old);
+            object input = new { log, offset = old.Length };
+
+            // The reply from an earlier command is before the offset: it must not satisfy the wait, and the timeout is a $false, not a pass.
+            JsonElement stale = EvalWith("Wait-OpsLogMatch -Path $in.log -Pattern '\\bWfbotd state=' -TimeoutSeconds 1 -StartOffset $in.offset -PollMilliseconds 50", input);
+            Assert.False(stale.GetBoolean());
+
+            // Text appended afterwards (the writer keeps the file open in the real run) satisfies it.
+            File.AppendAllText(log, "2 Wfbotd state=Running desired=True goal=none error=none\n");
+            JsonElement fresh = EvalWith("Wait-OpsLogMatch -Path $in.log -Pattern '\\bWfbotd state=' -TimeoutSeconds 5 -StartOffset $in.offset -PollMilliseconds 50", input);
+            Assert.True(fresh.GetBoolean());
+
+            // A dead session stops the wait early.
+            JsonElement dead = EvalWith("Wait-OpsLogMatch -Path $in.log -Pattern 'never' -TimeoutSeconds 60 -StartOffset 0 -IsAlive { $false } -PollMilliseconds 50", input);
+            Assert.False(dead.GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [PwshFact]
+    public void HomeSetCount_SumsTheServersConfirmations_AndIsZeroForAnUnconfirmedRun()
+    {
+        string[] log =
+        [
+            "Playerbot home accepted.",   // accepted is not set: only the second kind of reply counts
+            "Playerbot home: 1 set (Westfall map 0 at -9461.0,63.0,56.0 radius 600), 0 skipped (not running).",
+            "Playerbot home: 1 set (Westfall map 0 at -9461.0,63.0,56.0 radius 600), 0 skipped (not running), 1 failed.",
+            "Playerbot home: 0 cleared.",
+            "Playerbot home failed: TimeoutException.",
+        ];
+        Assert.Equal(2, EvalWith("Get-OpsHomeSetCount -LogLines $in.log", new { log }).GetInt32());
+        Assert.Equal(0, EvalWith("Get-OpsHomeSetCount -LogLines @('')", new { }).GetInt32());
+    }
+
+    [PwshFact]
+    public void ProvisionBots_DryRun_AcceptsTheHomeSwitch_AndAddsOneHomeLinePerBot()
+    {
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string account = sandbox.FakeTool("account-tool");
+        string mock = sandbox.FakeTool("mock-tool");
+        string provision = Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "provision-bots.ps1");
+        string[] common = ["-File", provision, "-ProfileDirectory", profile, "-BinDirectory", bin, "-AccountTool", account, "-MockTool", mock, "-Count", "2", "-DryRun"];
+
+        (int plainCode, string plain) = Pwsh(common);
+        (int homeCode, string home) = Pwsh([.. common, "-Home", "-HomeRadius", "300"]);
+
+        Assert.Equal(0, plainCode);
+        Assert.Equal(0, homeCode);
+        // create 2 + start 2 + boost 2 + tele 2 + status 1 = 9 commands; the switch adds one home line per bot.
+        Assert.Contains("9 commands", plain);
+        Assert.DoesNotContain("home radius", plain);
+        Assert.Contains("11 commands", home);
+        Assert.Contains("home radius 300", home);
+        Assert.False(File.Exists(sandbox.MarkerPath), "a tool was started during -DryRun");
     }
 
     [PwshFact]
@@ -292,13 +506,13 @@ public sealed class OpsScriptTests
             "",   // a real session log has blank lines
             "1 Wfbota state=Starting desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",
             "1 Wfbota state=Running desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",
-            "Boost Wfbota: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, money 5000.",
+            "Boost Wfbota: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
             "2 Wfbotb state=Running desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",
             "Boost refused for Wfbotb: the target is not a character.",
             "3 Wfbotc state=Failed desired=True goal=Idle target=0 quest=0 map=0 health=0 error=login_failed",
-            "Boost Wfbotc: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, money 5000.",
+            "Boost Wfbotc: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
             "4 Wfbotd state=Running desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",
-            "Boost Wfbotd: level 1->13, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, money 5000.",
+            "Boost Wfbotd: level 1->13, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
             "5 Wfbotae state=Running desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",   // other bot, must not match Wfbota
         ];
         JsonElement r = EvalWith("""
@@ -323,6 +537,22 @@ public sealed class OpsScriptTests
 
         Assert.Equal("(missing)", e.GetProperty("State").GetString());   // never seen: never a pass
         Assert.False(e.GetProperty("Ok").GetBoolean());
+    }
+
+    [PwshFact]
+    public void ProvisionLog_ALogEndingInTheStatusTerminatorWithoutTheLastBot_ReportsThatBotMissing()
+    {
+        string[] log =
+        [
+            "1 Wfbota state=Running desired=True goal=Idle target=0 quest=0 map=0 health=100 error=none",
+            "Boost Wfbota: level 1->14, 120 spells learned, 14 items equipped (0 kept, 3 moved to bags), 24 action buttons set, 0 gray quests dropped, money 5000.",
+            "Playerbot status end: 1",   // the reply ended; Wfbotb (the last planned bot) was never created
+        ];
+        JsonElement r = EvalWith("@(Test-OpsProvisionLog -LogLines $in.log -Names $in.names -Level 14)", new { log, names = new[] { "Wfbota", "Wfbotb" } });
+        Assert.True(r[0].GetProperty("Ok").GetBoolean());
+        Assert.Equal("(missing)", r[1].GetProperty("State").GetString());
+        Assert.False(r[1].GetProperty("Ok").GetBoolean());   // per-bot failure (exit 5), not "nothing verified" (exit 1)
+        Assert.DoesNotContain("Wfbotb", Eval("Get-OpsStatusWaitLine -Seconds 10").GetString());
     }
 
     [PwshFact]
@@ -401,6 +631,47 @@ public sealed class OpsScriptTests
 
         Assert.Equal(2, code);
         Assert.Contains("nothing to send", output);
+    }
+
+    [PwshFact]
+    public void RunGmCommands_WaitFor_CountsAReplyLoggedDuringThePaceSleep()
+    {
+        // The fake session answers a sent line within ~20 ms, far inside the 450 ms pace sleep, so the reply is already in the log
+        // when the runner reaches '#waitfor'. The wait must scan from before the command was sent, not from the moment it is reached.
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        string mock = Path.Combine(toolDir, "mock.ps1");
+        File.WriteAllText(account, """
+            if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }
+            exit 0
+            """);
+        File.WriteAllText(mock, """
+            function Get-Arg([string]$Name) { $i = [array]::IndexOf($args_, $Name); $args_[$i + 1] }
+            $args_ = $args
+            $scriptFile = Get-Arg '--script-file'
+            $stopFile = Get-Arg '--stop-file'
+            $deadline = (Get-Date).AddSeconds([int](Get-Arg '--duration-s'))
+            Write-Output 'IN WORLD as Opsgm'
+            $seen = 0
+            while (-not (Test-Path -LiteralPath $stopFile) -and (Get-Date) -lt $deadline) {
+                $sent = @(Get-Content -LiteralPath $scriptFile)
+                while ($seen -lt $sent.Count) { Write-Output 'Wfbotd state=Running desired=True goal=none error=none'; $seen++ }
+                Start-Sleep -Milliseconds 20
+            }
+            exit 0
+            """);
+
+        string commands = Path.Combine(toolDir, "commands.txt");
+        File.WriteAllText(commands, ".playerbot status\n#waitfor 5 \\bWfbotd state=\n");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", commands, "-PaceMilliseconds", "450");
+
+        Assert.True(code == 0, $"exit {code}: {output}");
+        Assert.Contains("sent 1 of 1 commands", output);
+        Assert.DoesNotContain("no log line matched", output);
     }
 
     // ---- harness -------------------------------------------------------------------------------------------------------

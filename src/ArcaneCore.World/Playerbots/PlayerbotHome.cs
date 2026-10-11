@@ -1,0 +1,327 @@
+using System.Globalization;
+using System.Numerics;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Net;
+
+namespace ArcaneCore.World.Playerbots;
+
+/// <summary>
+/// A bot's home area: a circle on one map (centre, radius in yards, two-dimensional distance). ArcaneCore's own feature, set by
+/// <c>.playerbot home</c> and kept in <c>managed_playerbot_home</c>; no reference server anchors a bot to an area, so the 0.75
+/// return hysteresis and the radius bounds (<see cref="ArcaneCore.Kernel.Characters.PlayerbotHomeBounds"/>) are ArcaneCore choices.
+/// <para>
+/// Thread affinity: world thread only (the quest and entry caches are plain dictionaries). The area itself is immutable; a bot whose
+/// home changes gets a new instance, which is also how the caches of <see cref="PlayerbotWorldDestinations"/> notice the change.
+/// </para>
+/// </summary>
+internal sealed class PlayerbotHomeArea(uint mapId, Vector3 centre, float radius, string? place)
+{
+    /// <summary>A walking-back bot stops once it is inside this fraction of the radius, so it does not oscillate at the edge.</summary>
+    internal const float ReturnFraction = 0.75f;
+
+    /// <summary>Beyond this fraction of the radius an exploring bot aims its next leg at the centre.</summary>
+    internal const float ExploreFraction = 0.8f;
+
+    private readonly Dictionary<uint, bool> _quests = [];
+    private readonly Dictionary<uint, bool> _entries = [];
+    private CreatureContent? _cachedContent;
+    private QuestStore? _cachedQuests;
+    private int _cachedVersion = -1;
+
+    internal uint MapId { get; } = mapId;
+    internal Vector3 Centre { get; } = centre;
+    internal float Radius { get; } = radius;
+    internal string? Place { get; } = place;
+
+    /// <summary>The distance from the centre a walking-back bot stops at.</summary>
+    internal float ReturnRadius => Radius * ReturnFraction;
+
+    /// <summary>The distance from the centre beyond which an exploring bot heads for the centre.</summary>
+    internal float ExploreRadius => Radius * ExploreFraction;
+
+    /// <summary>The two-dimensional distance from the centre.</summary>
+    internal float DistanceTo(float x, float y)
+    {
+        float dx = x - Centre.X, dy = y - Centre.Y;
+        return MathF.Sqrt((dx * dx) + (dy * dy));
+    }
+
+    /// <summary>Whether a point on <paramref name="map"/> lies inside the circle (another map: never).</summary>
+    internal bool Contains(uint map, float x, float y)
+        => map == MapId && float.IsFinite(x) && float.IsFinite(y) && DistanceTo(x, y) <= Radius;
+
+    internal bool Contains(Unit unit) => Contains(unit.MapId, unit.X, unit.Y);
+
+    /// <summary>Whether a creature spawn of the home map lies inside the circle.</summary>
+    internal bool Contains(CreatureSpawn spawn) => Contains(MapId, spawn.X, spawn.Y);
+
+    /// <summary>Whether any spawn of creature <paramref name="entry"/> on the home map lies inside the circle (cached).</summary>
+    internal bool HasSpawnInside(CreatureContent content, uint entry)
+    {
+        Sync(content, null);
+        if (_entries.TryGetValue(entry, out bool known)) return known;
+        bool inside = false;
+        foreach (CreatureSpawn spawn in content.GetSpawns(MapId, entry))
+        {
+            if (!Contains(spawn)) continue;
+            inside = true;
+            break;
+        }
+
+        return _entries[entry] = inside;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="quest"/> is worth doing inside the area: every creature that ends it, and every creature it asks the
+    /// bot to kill, has at least one spawn inside. A quest nobody ends by creature counts as outside. Item and object objectives are
+    /// not checked. Cached per quest, dropped when the creature content or the quest store changes.
+    /// </summary>
+    internal bool QuestInside(QuestStore quests, CreatureContent content, Quest quest)
+    {
+        Sync(content, quests);
+        if (_quests.TryGetValue(quest.Id, out bool known)) return known;
+        bool inside = true;
+        IReadOnlyList<uint> enders = quests.CreatureEndersOf(quest.Id);
+        if (enders.Count == 0) inside = false;
+        foreach (uint ender in enders)
+        {
+            if (inside && !HasSpawnInside(content, ender)) inside = false;
+        }
+
+        for (int index = 0; inside && index < quest.ReqCreatureOrGOId.Count; index++)
+        {
+            int objective = quest.ReqCreatureOrGOId[index];
+            if (objective > 0 && !HasSpawnInside(content, (uint)objective)) inside = false;
+        }
+
+        return _quests[quest.Id] = inside;
+    }
+
+    /// <summary>Drop the caches when the creature content or the quest store changed since they were filled.</summary>
+    private void Sync(CreatureContent content, QuestStore? quests)
+    {
+        if (ReferenceEquals(_cachedContent, content) && _cachedVersion == content.DefinitionsVersion
+            && (quests is null || ReferenceEquals(_cachedQuests, quests))) return;
+        _entries.Clear();
+        _quests.Clear();
+        _cachedContent = content;
+        _cachedVersion = content.DefinitionsVersion;
+        if (quests is not null) _cachedQuests = quests;
+    }
+}
+
+/// <summary>Where a bot stands against its home area (<see cref="PlayerbotHomeReturn.Evaluate"/>).</summary>
+internal enum PlayerbotHomeState : byte
+{
+    /// <summary>Inside the radius (or walking back and already inside the return radius).</summary>
+    Inside,
+
+    /// <summary>Outside the radius with no errand: walking back to the centre.</summary>
+    Returning,
+
+    /// <summary>On another map than the home: the bot does not move itself; an operator teleports it (<c>.tele name</c>).</summary>
+    OffMap,
+
+    /// <summary>The way back could not be planned or followed: set aside for <see cref="PlayerbotHomeReturn.BlockedMs"/>.</summary>
+    Blocked,
+}
+
+/// <summary>
+/// The walk back to a bot's home. Bots have no teleport, taxi or hearth logic, so a bot on the home map walks, however far, through
+/// <see cref="PlayerbotNavigation.TryPlanToward"/> in route-sized chunks with the hazard guard and risk model of every other walk.
+/// A bot on another map is reported (<see cref="PlayerbotHomeState.OffMap"/>) and left alone.
+/// <para>Thread affinity: world thread, owned by one <see cref="PlayerbotBrain"/>.</para>
+/// </summary>
+internal sealed class PlayerbotHomeReturn
+{
+    /// <summary>A walking-back bot that has not moved for this long plans again.</summary>
+    internal const uint StuckMs = 5_000;
+
+    /// <summary>How long a bot whose way home failed leaves the walk alone before trying again.</summary>
+    internal const uint BlockedMs = 30_000;
+
+    /// <summary>Failed plans (or stalls) in a row before the walk is set aside.</summary>
+    internal const int MaxFailures = 3;
+
+    private PlayerbotRoute? _route;
+    private Vector3 _lastPosition;
+    private uint _stuckMs;
+    private int _failures;
+    private uint _blockedUntil;
+
+    internal PlayerbotHomeState State { get; private set; }
+
+    /// <summary>The two-dimensional distance to the centre at the last <see cref="Evaluate"/> (NaN off the home map).</summary>
+    internal float Distance { get; private set; } = float.NaN;
+
+    internal void Reset()
+    {
+        State = PlayerbotHomeState.Inside;
+        Distance = float.NaN;
+        _route = null;
+        _stuckMs = 0;
+        _failures = 0;
+        _blockedUntil = 0;
+    }
+
+    /// <summary>Decide where the bot stands against <paramref name="area"/>; keeps the hysteresis of a walk in progress.</summary>
+    internal PlayerbotHomeState Evaluate(Player player, PlayerbotHomeArea area, uint nowMs)
+    {
+        uint map = player.Map?.MapId ?? player.MapId;
+        if (map != area.MapId)
+        {
+            _route = null;
+            Distance = float.NaN;
+            return State = PlayerbotHomeState.OffMap;
+        }
+
+        Distance = area.DistanceTo(player.X, player.Y);
+        if (State == PlayerbotHomeState.Blocked)
+        {
+            if (Distance <= area.Radius) { _route = null; _failures = 0; return State = PlayerbotHomeState.Inside; }
+            if (unchecked((int)(nowMs - _blockedUntil)) < 0) return State;
+            _failures = 0;
+            State = PlayerbotHomeState.Returning;
+        }
+
+        bool returning = State == PlayerbotHomeState.Returning;
+        if (Distance <= (returning ? area.ReturnRadius : area.Radius))
+        {
+            _route = null;
+            _failures = 0;
+            return State = PlayerbotHomeState.Inside;
+        }
+
+        return State = PlayerbotHomeState.Returning;
+    }
+
+    /// <summary>
+    /// One think of the walk home. True when a step was attempted (the bot is busy), false when no route could be planned (the goals
+    /// carry on; after <see cref="MaxFailures"/> the walk is set aside for <see cref="BlockedMs"/>).
+    /// </summary>
+    internal bool Update(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options, uint elapsedMs, uint nowMs)
+    {
+        if (State != PlayerbotHomeState.Returning || elapsedMs == 0) return false;
+        Vector3 position = new(player.X, player.Y, player.Z);
+        if (_route is { Complete: false })
+        {
+            if (Vector3.DistanceSquared(position, _lastPosition) < 0.0025f) _stuckMs += elapsedMs;
+            else { _stuckMs = 0; _failures = 0; }
+            if (_stuckMs >= StuckMs)
+            {
+                _route = null;
+                _stuckMs = 0;
+                if (Fail(nowMs)) return false;
+            }
+        }
+
+        _lastPosition = position;
+        if (_route is null or { Complete: true })
+        {
+            if (!PlayerbotNavigation.TryPlanToward(player, area.Centre, options, out _route))
+            {
+                _route = null;
+                PlayerbotMovementControl.Stop(session, player);
+                Fail(nowMs);
+                return false;
+            }
+
+            _stuckMs = 0;
+        }
+
+        if (!PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, nowMs)) _route = null;
+        return true;
+    }
+
+    /// <summary>A stall on the walk (<see cref="PlayerbotStallWatch"/>): set it aside at once.</summary>
+    internal void MarkBlocked(uint nowMs)
+    {
+        _route = null;
+        _stuckMs = 0;
+        State = PlayerbotHomeState.Blocked;
+        _blockedUntil = unchecked(nowMs + BlockedMs);
+    }
+
+    private bool Fail(uint nowMs)
+    {
+        if (++_failures < MaxFailures) return false;
+        MarkBlocked(nowMs);
+        return true;
+    }
+
+    /// <summary>
+    /// The short form of the status line: <c>inside:120</c>, <c>returning:810</c>, <c>off-map</c> or <c>blocked:810</c>; the distance is
+    /// rounded to 10 yards so a walking bot does not change its status line at every step. The text is rebuilt only when it changes
+    /// (the feature reads it every tick for every bot).
+    /// </summary>
+    internal string Report
+    {
+        get
+        {
+            int rounded = float.IsNaN(Distance) ? -1 : (int)(MathF.Round(Distance / 10f) * 10f);
+            if (_report is null || _reportState != State || _reportRounded != rounded)
+            {
+                _reportState = State;
+                _reportRounded = rounded;
+                _report = State switch
+                {
+                    PlayerbotHomeState.OffMap => "off-map",
+                    PlayerbotHomeState.Returning => string.Create(CultureInfo.InvariantCulture, $"returning:{rounded}"),
+                    PlayerbotHomeState.Blocked => string.Create(CultureInfo.InvariantCulture, $"blocked:{rounded}"),
+                    _ => rounded < 0 ? "inside" : string.Create(CultureInfo.InvariantCulture, $"inside:{rounded}"),
+                };
+            }
+
+            return _report;
+        }
+    }
+
+    private string? _report;
+    private PlayerbotHomeState _reportState;
+    private int _reportRounded;
+
+    /// <summary>The long form for inspection: place, map, centre, radius, distance and state.</summary>
+    internal string Describe(PlayerbotHomeArea area)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"place={area.Place ?? "none"} map={area.MapId} centre={area.Centre.X:F1},{area.Centre.Y:F1},{area.Centre.Z:F1} radius={area.Radius:F0} distance={(float.IsNaN(Distance) ? "n/a" : Distance.ToString("F1", CultureInfo.InvariantCulture))} state={State.ToString().ToLowerInvariant()}");
+}
+
+/// <summary>
+/// Which bots a <c>.playerbot home</c> names: one bot by id or name, or every bot whose name starts with a prefix (<c>Wfbot*</c>).
+/// A prefix is 2 to 11 letters and one trailing <c>*</c>, so a stray <c>a*</c> cannot anchor the whole fleet. Matching ignores case
+/// and covers stopped bots too.
+/// </summary>
+internal readonly record struct PlayerbotHomeSelector(string Text, bool Prefix, Guid? Id)
+{
+    internal const int MinPrefixLength = 2;
+    internal const int MaxPrefixLength = 11;
+
+    /// <summary>The longest bot name (a character name is at most 12 letters).</summary>
+    internal const int MaxNameLength = 12;
+
+    internal static bool TryParse(string? text, out PlayerbotHomeSelector selector)
+    {
+        selector = default;
+        string value = text?.Trim() ?? string.Empty;
+        if (value.Length == 0) return false;
+        if (Guid.TryParse(value, out Guid id)) { selector = new(value, false, id); return true; }
+        if (value[^1] == '*')
+        {
+            string prefix = value[..^1];
+            if (prefix.Length is < MinPrefixLength or > MaxPrefixLength || !prefix.All(char.IsLetter)) return false;
+            selector = new(prefix, true, null);
+            return true;
+        }
+
+        if (value.Length > MaxNameLength || value.Contains('*', StringComparison.Ordinal)) return false;
+        selector = new(value, false, null);
+        return true;
+    }
+
+    internal bool Matches(PlayerbotStatus status)
+        => Id is { } id ? status.BotId == id
+            : Prefix ? status.Name.StartsWith(Text, StringComparison.OrdinalIgnoreCase)
+            : status.Name.Equals(Text, StringComparison.OrdinalIgnoreCase);
+}

@@ -87,6 +87,9 @@ public sealed class ReloadAllMembershipTests
 
         // chat_word_filter (world schema 47) is an ArcaneCore table; it joins all only when World:Chat:WordFilter is on and a store is registered.
         ["chat_word_filter"] = false,
+
+        // instance_encounter (DungeonEncounter.dbc through classic-db) is an ArcaneCore table, the playerbot dungeon and raid runs' catalogue source.
+        ["instance_encounter"] = false,
     };
 
     /// <summary>
@@ -104,7 +107,7 @@ public sealed class ReloadAllMembershipTests
     };
 
     /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
-    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter" };
+    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter", "instance_encounter" };
 
     private static ReloadCoordinator Coordinator(WorldTestHost host) => host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator;
 

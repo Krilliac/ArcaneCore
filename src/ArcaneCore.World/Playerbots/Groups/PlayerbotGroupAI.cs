@@ -82,6 +82,9 @@ internal sealed class PlayerbotGroupAI
     private readonly float _followDistance;
     private bool _retreatStarted;
     private long _resurrectAtMs;
+    private PlayerbotRoute? _runRoute;
+    private long _runRouteAtMs;
+    private long _stuckSinceMs, _stuckLastMs;
 
     internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options)
     {
@@ -121,6 +124,9 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>Resting (eating or drinking) now.</summary>
     internal bool Resting => _restUntilMs != 0;
+
+    /// <summary>Walking to a corpse, or opening and emptying its loot (a run waits for it after the last boss).</summary>
+    internal bool Looting => _lootActions.Count > 0 || !_lootOpened.IsEmpty || Goal == PlayerbotGoalKind.Loot;
 
     /// <summary>The last resurrection cast (inspection and tests: the dead member's name).</summary>
     internal string? LastResurrection { get; private set; }
@@ -229,6 +235,7 @@ internal sealed class PlayerbotGroupAI
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
         {
+            if (isLeader && group.Run is { } run) NoteBossFight(group, run, target);
             Fight(player, target, interval);
             return;
         }
@@ -260,6 +267,7 @@ internal sealed class PlayerbotGroupAI
     private void Lead(Player player, PlayerbotGroupCoordinator.BotGroup group, uint interval)
     {
         Goal = PlayerbotGoalKind.Group;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
             case PlayerbotGroupState.Forming:
@@ -270,10 +278,10 @@ internal sealed class PlayerbotGroupAI
                 Hold(player);
                 return;
             case PlayerbotGroupState.Travelling:
-                if (player.MapId != group.Goal.MeetingMap) { Hold(player); return; }
-                if (MembersBehind(player, group) || group.AnyResting(_session.World)) { Hold(player); return; }
+                if (player.MapId != group.Goal.MeetingMap) { HoldRun(player); return; }
+                if (MembersBehind(player, group) || group.AnyResting(_session.World)) { HoldRun(player); return; }
                 PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? _risk : null); // the leader keeps out of known hazards
-                WalkTo(player, TravelPoint(group), interval, toward: true);
+                NoteRunProgress(group, WalkTo(player, TravelPoint(group), interval, toward: true));
                 return;
             case PlayerbotGroupState.Entering:
                 if (player.MapId == group.Goal.MapId) { Hold(player); return; }
@@ -281,8 +289,9 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 return;
             case PlayerbotGroupState.Engaging:
-                if (MembersBehind(player, group) || group.AnyResting(_session.World) || !Ready(player)) { Hold(player); return; }
-                WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
+                if (group.Run is { CurrentBoss: null }) { HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
+                if (MembersBehind(player, group) || group.AnyResting(_session.World) || !Ready(player)) { HoldRun(player); return; }
+                NoteRunProgress(group, WalkTo(player, ObjectivePoint(player, group), interval, toward: true));
                 return;
             case PlayerbotGroupState.Leaving:
                 // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
@@ -294,6 +303,13 @@ internal sealed class PlayerbotGroupAI
         }
     }
 
+    /// <summary>The leader holds still while the run waits (members behind, a rest, a wait for loot): no attempt to walk was made, so no stretch of failed planning goes on.</summary>
+    private void HoldRun(Player player)
+    {
+        _stuckSinceMs = _stuckLastMs = 0;
+        Hold(player);
+    }
+
     /// <summary>Where the leader walks to before the content: the objective's spawn (stopping in reach of it) or the instance entrance.</summary>
     private static Vector3 TravelPoint(PlayerbotGroupCoordinator.BotGroup group) => group.Approach;
 
@@ -301,17 +317,57 @@ internal sealed class PlayerbotGroupAI
     private Vector3 ObjectivePoint(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
         if (FindObjectiveCreature(player, group) is { } creature) return new Vector3(creature.X, creature.Y, creature.Z);
-        return group.Goal.Objective;
+
+        // A run's boss out of sight (it patrols away from its spawn): walk to where it is.
+        if (group.Run is not null && PlayerbotGroupCoordinator.FindLivingOnMap(player, group.ObjectiveEntry) is { } patrolling)
+            return new Vector3(patrolling.X, patrolling.Y, patrolling.Z);
+        return group.ObjectivePosition;
+    }
+
+    /// <summary>How long the leader may fail to plan a way before the run gives up (no path to the entrance or the boss).</summary>
+    internal const long RunStuckMs = 30_000;
+
+    /// <summary>A run's leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the run.</summary>
+    private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
+    {
+        if (group.Run is null) return;
+        if (NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now))
+            group.RunFault ??= group.State == PlayerbotGroupState.Engaging ? "no-path-to-boss" : "no-path-to-entrance";
+    }
+
+    /// <summary>
+    /// A planning failure that comes after a pause longer than this (a rest, a fight, a wait for the group: the leader did not try to walk
+    /// meanwhile) starts a new stretch: only time spent failing to plan a way counts towards <see cref="RunStuckMs"/>.
+    /// </summary>
+    internal const long RunStuckGapMs = 5_000;
+
+    /// <summary>
+    /// Account one walking attempt. <paramref name="since"/> is when the current unbroken stretch of failed attempts began and
+    /// <paramref name="last"/> when the latest failed one was made (0: none). Returns true when the stretch has lasted more than
+    /// <see cref="RunStuckMs"/>. A planned way ends the stretch; so does a gap of more than <see cref="RunStuckGapMs"/> between two failures.
+    /// </summary>
+    internal static bool NoteStuck(ref long since, ref long last, bool planned, long now)
+    {
+        if (planned)
+        {
+            since = 0;
+            last = 0;
+            return false;
+        }
+
+        if (since == 0 || now - last > RunStuckGapMs) since = now;
+        last = now;
+        return now - since > RunStuckMs;
     }
 
     private static Creature? FindObjectiveCreature(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
-        if (player.Map is not { } map || group.Goal.ObjectiveEntry == 0) return null;
+        if (player.Map is not { } map || group.ObjectiveEntry == 0) return null;
         Creature? best = null;
         float nearest = float.MaxValue;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.Goal.ObjectiveEntry) continue;
+            if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.ObjectiveEntry) continue;
             if (!map.Combat.Hooks.CanAttack(player, creature)) continue;
             float distance = Distance(player, creature);
             if (distance < nearest) { nearest = distance; best = creature; }
@@ -420,9 +476,17 @@ internal sealed class PlayerbotGroupAI
         }
 
         // The leader pulls: the objective, or what stands in its way.
+        if (isLeader && group.Run is not null && group.State == PlayerbotGroupState.Travelling && player.MapId == group.Goal.MeetingMap
+            && !MembersBehind(player, group) && !group.AnyResting(_session.World) && Ready(player))
+        {
+            // A run fights its way to the entrance: what stands in the way is cleared by the group, never run past or teleported over.
+            return current ?? FindObstacle(player, group);
+        }
+
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
             && Ready(player))
         {
+            if (group.Run is { } run) return SelectRunTarget(player, group, run, current);
             if (current is not null) return current;
             if (FindObjectiveCreature(player, group) is { } objective && Distance(player, objective) <= 60f)
             {
@@ -434,6 +498,58 @@ internal sealed class PlayerbotGroupAI
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The leader fights a boss of the wing that is not the objective noted (one met on the way to an earlier boss, or one that came with
+    /// a pull): its death is credited to the run, whichever boss the route has reached.
+    /// </summary>
+    internal static void NoteBossFight(PlayerbotGroupCoordinator.BotGroup group, PlayerbotRunMachine run, Creature target)
+    {
+        if (group.Objective.IsEmpty && !run.IsKilled(target.Entry) && run.Plan.IsBoss(target.Entry)) group.NoteObjective(target);
+    }
+
+    /// <summary>
+    /// A run's leader inside the instance pulls one pack at a time along the way to the current boss
+    /// (<see cref="PlayerbotRunRoute.NextPull"/>), the boss last once the way is clear and it is in reach.
+    /// </summary>
+    private Creature? SelectRunTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotRunMachine run, Creature? current)
+    {
+        if (current is not null) return current;
+        if (run.CurrentBoss is not { } boss || player.Map is not { } map) return null;
+        IReadOnlyList<Vector3> points = RunRoutePoints(player, boss.Position);
+        var seen = new List<PlayerbotRunCreature>();
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (map.FindObject(guid) is not Creature creature || !IsValidTarget(player, creature) || !map.Combat.Hooks.IsHostileTo(creature, player)
+                || creature.Template.NpcFlags != 0 || creature.Template.CreatureType == 8 || PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) continue;
+            seen.Add(new PlayerbotRunCreature(creature.Guid.Value, creature.Entry, new Vector3(creature.X, creature.Y, creature.Z), creature.IsAlive,
+                Hostile: true, creature.Combat.IsInCombat));
+        }
+
+        PlayerbotRunPull? pull = PlayerbotRunRoute.NextPull(points, 0, seen, boss.Entry, run.Plan.BossEntries);
+        run.PullsLeft = pull?.PacksAhead ?? 0;
+        if (pull is not null && map.FindObject(new ObjectGuid(pull.Lead.Guid)) is Creature lead) return lead;
+        if (FindObjectiveCreature(player, group) is { } objective && Distance(player, objective) <= 60f)
+        {
+            group.NoteObjective(objective);
+            return objective;
+        }
+
+        return null;
+    }
+
+    /// <summary>The path from the leader to the boss, planned again every few seconds (the points a pull is chosen along).</summary>
+    private IReadOnlyList<Vector3> RunRoutePoints(Player player, Vector3 bossPosition)
+    {
+        long now = Now;
+        if (_runRoute is null || now - _runRouteAtMs > 3_000)
+        {
+            _runRouteAtMs = now;
+            _runRoute = PlayerbotNavigation.TryPlanToward(player, bossPosition, _options, out PlayerbotRoute? planned) ? planned : null;
+        }
+
+        return _runRoute?.Points ?? [];
     }
 
     /// <summary>The nearest hostile creature within <see cref="ClearYards"/> of the leader that would attack the group (the way is cleared).</summary>

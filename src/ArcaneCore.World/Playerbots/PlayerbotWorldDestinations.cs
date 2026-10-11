@@ -29,6 +29,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private QuestRewardMode _rewardMode;
     private uint[] _rewardQuestIds = [];
     private uint _level;
+    private PlayerbotHomeArea? _cachedHome;
     private uint _preferredEntry = uint.MaxValue;
     private uint _returnQuestId;
     private PlayerbotRoute? _route;
@@ -41,6 +42,12 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
+
+    /// <summary>
+    /// The bot's home area, or null. With one, the givers and enders of the quests worth a trip and the spawns of an objective to hunt
+    /// are only those inside it; the way to a completed quest's ender is never restricted.
+    /// </summary>
+    internal PlayerbotHomeArea? Home { get; set; }
 
     /// <summary>Quests not worth a trip: the server refused their exchange lately (<see cref="PlayerbotQuestGoals.IsRefused"/>).</summary>
     internal Func<uint, bool>? SkipQuest { get; set; }
@@ -223,6 +230,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint level = player.Level;
         if (_mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion
             && ReferenceEquals(_quests, quests) && _preferredEntry == preferredCreatureEntry
+            && ReferenceEquals(_cachedHome, Home)
             && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
             && _rewardQuestIds.SequenceEqual(allowed)) return;
         ClearRoute();
@@ -234,6 +242,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _returnQuestId = returnQuestId;
         _rewardMode = mode;
         _level = level;
+        _cachedHome = Home;
         _rewardQuestIds = [.. allowed];
         _entries.Clear();
         _blockedSpawns.Clear();
@@ -247,6 +256,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // reward or level gain and is rechecked for every movement decision.
                 foreach (CreatureSpawn spawn in content.GetSpawns(mapId, entry)
                     .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
+                    .Where(spawn => returnQuestId != 0 || Home is not { } home || home.Contains(spawn))
                     .OrderBy(spawn => DistanceSquared(player, spawn)).Take(MaxEntryScan - _entries.Count))
                     _entries.Add(new DestinationEntry(entry, spawn));
                 if (_entries.Count >= MaxEntryScan) break;
@@ -257,14 +267,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         // Quest givers and enders of the quests the server settles (Quests:RewardMode): every supported quest by default,
         // the allowlist only under AllowlistOnly. The nearest spawns win, whatever the quest ids.
         HashSet<uint> givers = [];
+        PlayerbotHomeArea? area = Home;
         foreach (uint questId in CandidateQuests(services, level))
         {
+            if (area is not null && (services.Quests.Get(questId) is not { } candidate || !area.QuestInside(quests, content, candidate))) continue;
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
         foreach (DestinationEntry entry in givers.Order()
             .SelectMany(entry => content.GetSpawns(mapId, entry)
-                .Where(spawn => IsDestinationEntry(content, quests, spawn, 0))
+                .Where(spawn => IsDestinationEntry(content, quests, spawn, 0) && (area is null || area.Contains(spawn)))
                 .Select(spawn => new DestinationEntry(entry, spawn)))
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
             .Take(MaxEntryScan))

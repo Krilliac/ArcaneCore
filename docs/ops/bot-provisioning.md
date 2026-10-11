@@ -26,6 +26,18 @@ pwsh -NoProfile -File tools/ops/provision-bots.ps1 -ProfileDirectory D:\arcane\p
 * Exit code 0 means every bot is Running at the level; 5 means the list printed names bots that are not (a bot missing from the status output counts
   as failed). Pacing is 600 ms per line, so 200 bots take a few minutes. Create the file given by `-StopFile` to stop between two lines; bots
   already created stay (`.playerbot stop <Name>`).
+* **`-Home`** anchors every bot to the place it was teleported to (`.playerbot home <Name> <place> <radius>`, after the teleports), so the brain
+  keeps it in that area instead of following its quests across the map ([home area](../areas/playbots.md#home-area)). `-HomeRadius` is in yards,
+  50 to 5000, default 600. The run then also requires the server to have confirmed one `Playerbot home: N set` per bot, else the exit code is 5.
+  A bot that ends up on another map is reported `off-map` in `.playerbot status` and is not moved by the bot; teleport it with `.tele name`.
+* **Boost retry.** A boost the server refuses because the character is in combat, dead, settling a quest reward or not yet in the world is retried:
+  up to `-BoostRetries` more passes (default 3), each after `-RetryWaitSeconds` (default 30), each boosting only the bots still not boosted. Bots refused as dead are revived (`.revive <Name>`) at the start of the retry pass, before their boost. Every pass
+  is its own session with its own log (`provision-<stamp>-retry<N>.log` next to the main one) and the verdict reads all of them. A permanent refusal
+  (a level above the character's, missing content) is never retried and fails the bot. The boost reply also reports the gray quests it dropped.
+* **Status reply.** The final `.playerbot status` is followed by a wait of `-StatusWaitSeconds` (default 10): the status of 200 bots is many chat lines
+  and the session closes shortly after the last command, so without the wait the check could read a truncated list and report bots missing. The
+  runner waits for the `Playerbot status end: N` line the server prints after the last bot, so a bot that was never created still reaches the per-bot
+  verification (exit 5). If that line does not arrive within `-StatusWaitSeconds`, the run fails with exit 1 (nothing verified).
 * Re-running boosts again safely: levels, gear and bars are idempotent and experience is kept.
 
 ## Make a boosted character for an account via .pdump

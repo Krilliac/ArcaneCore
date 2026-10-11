@@ -87,8 +87,15 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
 
         // Level, items, quest and condition requirements; a game master passes them all (AreaTriggerRequirements).
         IEnumerable<IWorldFeature> features = session.Services.GetServices<IWorldFeature>();
-        AreaTriggerVerdict verdict = AreaTriggerRequirements.Evaluate(player, teleport,
-            features.OfType<IConditionEvaluator>().FirstOrDefault(), features.OfType<IAreaTriggerGate>());
+        // Waivers (IAreaTriggerWaiver, e.g. the bot raid runs) skip the key item, quest and condition requirements, never the level.
+        AreaTriggerWaivers waivers = AreaTriggerWaivers.None;
+        foreach (IAreaTriggerWaiver waiver in features.OfType<IAreaTriggerWaiver>())
+        {
+            waivers |= waiver.Waives(player, teleport);
+        }
+
+        AreaTriggerVerdict verdict = AreaTriggerRequirements.Check(player, teleport,
+            features.OfType<IConditionEvaluator>().FirstOrDefault(), features.OfType<IAreaTriggerGate>(), waivers).Verdict;
         if (!verdict.Allowed)
         {
             if (verdict.Message is { } text)
