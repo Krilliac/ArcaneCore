@@ -23,6 +23,10 @@ public sealed partial class EconomyFeature
     /// <summary>World thread: an auction remains reserved until fresh storage reads repair its cache.</summary>
     public bool IsAuctionQuarantined(uint auctionId) => _auctionRecoveries.ContainsKey(auctionId);
 
+    /// <summary>World-thread test probe for the recovery deadline after a completed read.</summary>
+    internal long? AuctionRecoveryNotBeforeMs(uint auctionId)
+        => _auctionRecoveries.TryGetValue(auctionId, out AuctionRecovery? recovery) ? recovery.NotBeforeMs : null;
+
     private long NowMs => _clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     private void QuarantineAuction(uint auctionId, IReadOnlyList<EconomyChange> changes)
@@ -76,7 +80,7 @@ public sealed partial class EconomyFeature
     private static bool EscrowMatches(AuctionRecord auction, ItemInstanceData item)
         => item.Guid == auction.ItemGuid && item.Entry == auction.ItemEntry && item.Count == auction.ItemCount;
 
-    private void RecoverAuctions()
+    internal void RecoverAuctions()
     {
         if (_stopping)
         {

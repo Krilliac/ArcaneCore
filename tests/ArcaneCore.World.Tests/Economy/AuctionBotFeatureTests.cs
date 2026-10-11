@@ -45,11 +45,10 @@ public sealed class AuctionBotFeatureTests
     [Fact]
     public async Task Sell_mints_each_listing_once_as_seller_zero_and_the_ledger_balances()
     {
-        await using var fixture = await Fixture.CreateAsync();
+        await using var fixture = await Fixture.CreateAsync(extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
         int started = await fixture.OnWorld(() => fixture.Bot.Sell(House));
         Assert.Equal(3, started); // the daily item budget
-        await fixture.Economy.DrainAsync().WaitAsync(Fixture.Budget);
-        await fixture.WaitUntilAsync(() => fixture.Bot.Ledger.Pending.Count() == 0);
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
 
         await using CharacterDbContext db = fixture.NewContext();
         List<AuctionRow> bot = await db.Set<AuctionRow>().AsNoTracking().Where(a => a.SellerId == 0).ToListAsync();
@@ -113,11 +112,10 @@ public sealed class AuctionBotFeatureTests
     [Fact]
     public async Task Buy_buys_out_a_cheap_player_auction_once_and_pays_the_seller()
     {
-        await using var fixture = await Fixture.CreateAsync();
+        await using var fixture = await Fixture.CreateAsync(extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
         int started = await fixture.OnWorld(() => fixture.Bot.Buy(House));
         Assert.Equal(1, started);
-        await fixture.Economy.DrainAsync().WaitAsync(Fixture.Budget);
-        await fixture.WaitUntilAsync(() => fixture.Bot.Ledger.Pending.Count() == 0);
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
 
         Assert.Equal(0, await fixture.CountAsync<AuctionRow>(a => a.Id == 1));
         Assert.Equal(0, await fixture.CountAsync<ItemInstanceRow>(i => i.Guid == Fixture.PlayerItemGuid));
@@ -230,11 +228,15 @@ public sealed class AuctionBotFeatureTests
     public async Task Bot_bid_stands_without_a_bidder_and_wins_at_expiry_destroying_the_item_and_paying_the_seller()
     {
         var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var stalls = new StallingCommitReads(0, stalledCommits: 1);
         // Buy.Value 40 %: the bot values the greaves at 720-880, under the 1000 buyout but over the 500 start bid.
-        await using var fixture = await Fixture.CreateAsync(clock: clock, extra: new() { ["AuctionHouseBot:BuyValuePercent"] = "40" });
+        await using var fixture = await Fixture.CreateAsync(clock: clock, wrapStore: stalls.Wrap,
+            extra: new() { ["AuctionHouseBot:BuyValuePercent"] = "40", ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
         Assert.Equal(1, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
-        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any());
-        AuctionBotCustodyRow bid = Assert.Single(fixture.Bot.Ledger.Rows);
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+        Assert.Equal(AuctionBotCustodyState.TerminalBack, Assert.Single(fixture.Bot.Ledger.Rows).State);
+        // The first commit was cancelled by its own budget before storage began. A later bot pass retries the still-open auction.
+        AuctionBotCustodyRow bid = await fixture.BuyUntilCommittedAsync();
         Assert.Equal((AuctionBotCustodyRole.Bid, AuctionBotCustodyState.TerminalOk, 500u), (bid.Role, bid.State, bid.Amount));
         await using (CharacterDbContext db = fixture.NewContext())
         {
@@ -336,9 +338,10 @@ public sealed class AuctionBotFeatureTests
     /// The first <c>stalls</c> operation-ledger reads never answer before their budget runs out (what a starved thread pool or a busy
     /// disk does to a loaded host); every other call goes straight to the real store.
     /// </summary>
-    private sealed class StallingCommitReads(int stalls)
+    private sealed class StallingCommitReads(int stalls, int stalledCommits = 0)
     {
         private readonly int _stalls = stalls;
+        private int _remainingCommits = stalledCommits;
         private int _remaining = stalls;
         private int _expired;
         private readonly TaskCompletionSource _allExpired = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -370,8 +373,15 @@ public sealed class AuctionBotFeatureTests
                 return await inner.IsCommittedAsync(operationId, cancellationToken);
             }
 
-            public Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
-                => inner.CommitAsync(request, cancellationToken);
+            public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+            {
+                if (Interlocked.Decrement(ref owner._remainingCommits) >= 0)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+
+                return await inner.CommitAsync(request, cancellationToken);
+            }
 
             public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
                 => inner.GetMailsAsync(receiverId, cancellationToken);
@@ -456,6 +466,8 @@ public sealed class AuctionBotFeatureTests
             using var timeout = new CancellationTokenSource(Budget);
             while (!await OnWorld(() =>
                    {
+                       Assert.Equal(0u, Bot.Options.SellChance);
+                       Assert.Equal(0u, Bot.Options.BuyChance);
                        if (predicate())
                        {
                            return true;
@@ -465,6 +477,40 @@ public sealed class AuctionBotFeatureTests
                        return false;
                    }).WaitAsync(timeout.Token))
             {
+                await Task.Delay(50, timeout.Token);
+            }
+        }
+
+        public async Task<AuctionBotCustodyRow> BuyUntilCommittedAsync()
+        {
+            using var timeout = new CancellationTokenSource(Budget);
+            while (true)
+            {
+                AuctionBotCustodyRow? committed = await OnWorld(() =>
+                {
+                    Assert.Equal(0u, Bot.Options.SellChance);
+                    Assert.Equal(0u, Bot.Options.BuyChance);
+                    AuctionBotCustodyRow? standing = Bot.Ledger.Rows.SingleOrDefault(r =>
+                        r.Role == AuctionBotCustodyRole.Bid && r.State == AuctionBotCustodyState.TerminalOk);
+                    if (standing is not null)
+                    {
+                        return standing;
+                    }
+
+                    Economy.RecoverAuctions();
+                    if (!Bot.Ledger.Pending.Any() && !Bot.HasUnsavedChanges && !Economy.IsAuctionBusy(1))
+                    {
+                        Assert.Equal(1, Bot.Buy(House));
+                    }
+
+                    Bot.Tick();
+                    return null;
+                }).WaitAsync(timeout.Token);
+                if (committed is not null)
+                {
+                    return committed;
+                }
+
                 await Task.Delay(50, timeout.Token);
             }
         }
