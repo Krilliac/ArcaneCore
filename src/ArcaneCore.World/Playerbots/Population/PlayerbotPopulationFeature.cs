@@ -103,6 +103,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly WorldTickWindow _window = new();
     private readonly PopulationProvisioner _provisioner = new(services);
+
+    /// <summary>The provisioner the passes use (tests replace its area-level source).</summary>
+    internal PopulationProvisioner Provisioner => _provisioner;
     private readonly Random _random = new();
     private readonly PopulationNames _names = PopulationNames.Create();
     private readonly CancellationTokenSource _stop = new();
@@ -459,9 +462,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (ctx.Input.RunningAll + started + created >= _options.MaxBots) { stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
-            PopulationPlan? plan = PopulationBandPlanner.Plan(pop, ctx.Desired, ctx.Have, ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned,
-                ctx.Input.BoostAvailable, _random);
-            if (plan is null) { stoppedBecause = "no band has a zone and a race and class to place a new bot (see the zone counts and boost line)"; break; }
+            PopulationPlan? plan = await _world!.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, ctx.Have,
+                ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
+                (location, level, faction) => _provisioner.IsSafe(_world!, location, level, faction)), ct).ConfigureAwait(false);
+            if (plan is null) { stoppedBecause = "no safe zone, level and race-class placement is available"; break; }
 
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
@@ -491,14 +495,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             ctx.RunningNow.Add(botId);
             _startedAt[botId] = ctx.Input.ClockMs;
 
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location,
-                plan.Placement.Zone.LocationsFor(plan.Team)), ct).ConfigureAwait(false);
+            string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
-                // The bot stays owned and stopped; the next pass restarts it where it stands (its race's starting area).
+                // The plan was safe when it was made (a content reload can change that before the teleport). The bot stays owned
+                // and stopped, but is no longer a population member: it must not be restarted in its race's starting area and
+                // counted as filling the band it was created for.
                 Fail($"placement of {made.Name} refused: {refusal}");
                 await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
                 ctx.RunningNow.Remove(botId);
+                await ctx.Store.DeleteAsync(botId, ct).ConfigureAwait(false);
+                ctx.Members.Remove(botId);
                 break;
             }
 
@@ -577,10 +584,15 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 continue;
             }
 
-            PopulationPlacement? placement = atlas.Pick(bot.Level, bot.Level, bot.Team, pop.ZoneLevelSlack, ctx.Assigned, _random);
-            if (placement is null) continue;
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location,
-                placement.Zone.LocationsFor(bot.Team)), ct).ConfigureAwait(false);
+            PopulationSafeSelection? selected = await _world!.InvokeAsync(() =>
+            {
+                Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
+                return player is null ? null : atlas.PickSafe(bot.Level, bot.Level, bot.Team, pop.ZoneLevelSlack, ctx.Assigned, _random,
+                    (location, level) => _provisioner.IsSafe(_world!, location, checked((byte)level), player.FactionTemplate));
+            }, ct).ConfigureAwait(false);
+            if (selected is null) continue;
+            PopulationPlacement placement = selected.Placement;
+            string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };

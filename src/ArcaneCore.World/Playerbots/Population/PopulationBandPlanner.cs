@@ -11,13 +11,21 @@ internal sealed class PopulationRaceClassCache
     public static readonly IReadOnlyList<byte> Races = [1, 2, 3, 4, 5, 6, 7, 8];
 
     private readonly HashSet<(byte Race, byte Class)> _valid;
+    private readonly IReadOnlyDictionary<byte, uint> _raceFactions;
 
-    public PopulationRaceClassCache(IEnumerable<(byte Race, byte Class)> valid) => _valid = [.. valid];
+    public PopulationRaceClassCache(IEnumerable<(byte Race, byte Class)> valid, IReadOnlyDictionary<byte, uint>? raceFactions = null)
+    {
+        _valid = [.. valid];
+        _raceFactions = raceFactions is null ? new Dictionary<byte, uint>() : new Dictionary<byte, uint>(raceFactions);
+    }
 
     /// <summary>The key a cache was built for (the class list, in order).</summary>
     public string Key { get; init; } = string.Empty;
 
     public int Count => _valid.Count;
+
+    /// <summary>The faction template the ordinary character-create data gives this race (0 when the source is incomplete).</summary>
+    public uint FactionTemplateOf(byte race) => _raceFactions.GetValueOrDefault(race);
 
     /// <summary>Alliance races are human, dwarf, night elf and gnome; the others are Horde (<see cref="Player.Team"/>).</summary>
     public static Team TeamOf(byte race) => (Race)race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome ? Team.Alliance : Team.Horde;
@@ -29,10 +37,14 @@ internal sealed class PopulationRaceClassCache
     {
         ArgumentNullException.ThrowIfNull(store);
         var valid = new List<(byte, byte)>();
+        var factions = new Dictionary<byte, uint>();
+        foreach (byte race in Races)
+            if (await store.GetRaceInfoAsync(race, 0, cancellationToken).ConfigureAwait(false) is { } info)
+                factions[race] = info.FactionTemplate;
         foreach (uint cls in classes)
             foreach (byte race in Races)
                 if (await store.IsValidRaceClassAsync(race, (byte)cls, cancellationToken).ConfigureAwait(false)) valid.Add((race, (byte)cls));
-        return new PopulationRaceClassCache(valid) { Key = KeyOf(classes) };
+        return new PopulationRaceClassCache(valid, factions) { Key = KeyOf(classes) };
     }
 
     /// <summary>The classes that have at least one valid race of the team, among <paramref name="classes"/>.</summary>
@@ -163,6 +175,50 @@ internal static class PopulationBandPlanner
             int level = random.Next(placement.LowLevel, placement.HighLevel + 1);
             return new PopulationPlan(band, team, raceClass.Value.Race, raceClass.Value.Class, placement, level);
         }
+
+        return null;
+    }
+
+    /// <summary>
+    /// World-thread planner: every level and location in a fitting zone is tested before creation. An unsafe least-assigned
+    /// zone never monopolizes the next attempt; when both teams are enabled, the other team is considered as well.
+    /// </summary>
+    internal static PopulationPlan? PlanSafe(PlayerbotPopulationOptions options, int[] desired, int[] have, int alliance, int horde,
+        PopulationRaceClassCache cache, PopulationZoneAtlas atlas, IReadOnlyDictionary<uint, int> assigned, bool boostAvailable,
+        Random random, Func<WorldSafeLoc, byte, uint, bool> safe)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(safe);
+        Team preferred = ChooseTeam(options, alliance, horde);
+        Team[] teams = options.Factions == PopulationFactions.Both
+            ? [preferred, preferred == Team.Alliance ? Team.Horde : Team.Alliance] : [preferred];
+        int[] deficits = Deficits(desired, have);
+        foreach (Team team in teams)
+            foreach (int band in Enumerable.Range(0, options.Bands.Length)
+                .Where(i => deficits[i] > 0 && (boostAvailable || options.Bands[i].MinLevel <= 1))
+                .OrderByDescending(i => deficits[i]).ThenBy(i => i))
+            {
+                IReadOnlyList<byte> classes = cache.ClassesFor(team, options.Classes);
+                if (classes.Count == 0) continue;
+                int firstClass = random.Next(classes.Count);
+                for (int ci = 0; ci < classes.Count; ci++)
+                {
+                    byte cls = classes[(firstClass + ci) % classes.Count];
+                    IReadOnlyList<byte> races = cache.RacesFor(team, cls);
+                    int firstRace = random.Next(races.Count);
+                    for (int ri = 0; ri < races.Count; ri++)
+                    {
+                        byte race = races[(firstRace + ri) % races.Count];
+                        uint faction = cache.FactionTemplateOf(race);
+                        int minLevel = boostAvailable ? options.Bands[band].MinLevel : 1;
+                        int maxLevel = boostAvailable ? options.Bands[band].MaxLevel : 1;
+                        PopulationSafeSelection? selected = atlas.PickSafe(minLevel, maxLevel, team, options.ZoneLevelSlack,
+                            assigned, random, (location, level) => safe(location, checked((byte)level), faction));
+                        if (selected is not null)
+                            return new PopulationPlan(band, team, race, cls, selected.Placement, selected.Level);
+                    }
+                }
+            }
 
         return null;
     }

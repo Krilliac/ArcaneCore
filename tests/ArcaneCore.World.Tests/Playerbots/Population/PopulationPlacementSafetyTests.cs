@@ -1,13 +1,56 @@
+using ArcaneCore.Data.Content.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
+using ArcaneCore.World.Tests.Playerbots;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
 
 public sealed class PopulationPlacementSafetyTests
 {
+    [RealAreaTerrainFact]
+    public void RealTerrain_EachRaceStarterGraveyardAcceptsALevelOneBot()
+    {
+        string dbc = Environment.GetEnvironmentVariable("ARCANECORE_TEST_DBC_DIR")!;
+        string root = Environment.GetEnvironmentVariable("ARCANECORE_TEST_TERRAIN_DIR")!;
+        var terrain = new TerrainManager(root)
+        {
+            Areas = new AreaTable(AreaTableDbcReader.Read(Path.Combine(dbc, "AreaTable.dbc")).Select(r => new AreaTemplate(
+                r.Entry, r.MapId, r.ZoneId, r.ExploreFlag, r.Flags, r.AreaLevel, r.Name, r.Team, r.LiquidTypeId)), MapRegistry.Default),
+        };
+        // world_safe_locs rows linked to the six 1.12.1 starting zones; one for each race's starting area.
+        WorldSafeLoc[] starters =
+        [
+            new(105, 0, -8935.33f, -188.65f, 80.42f, 2.72f, "Northshire"),
+            new(94, 0, 1882.94f, 1629.11f, 94.42f, 4.64f, "Deathknell"),
+            new(100, 0, -6164.23f, 336.32f, 399.79f, 2.06f, "Coldridge"),
+            new(709, 1, -634.64f, -4296.03f, 40.53f, 4.12f, "Valley of Trials"),
+            new(93, 1, 10384.80f, 811.53f, 1317.54f, 1.12f, "Shadowglen"),
+            new(34, 1, -2944.56f, -153.21f, 65.79f, 1.88f, "Camp Narache"),
+        ];
+        uint[] factions = [1, 5, 3, 2, 4, 6];
+        for (int i = 0; i < starters.Length; i++)
+        {
+            WorldSafeLoc at = starters[i];
+            PlayerbotAreaLevelLookup lookup = PlayerbotAreaLevelLookup.FromTerrain(terrain, at.MapId);
+            int area = lookup.LevelAt(at.X, at.Y, at.Z);
+            Assert.NotEqual((ushort)0, terrain.For(at.MapId).GetAreaFlag(at.X, at.Y, at.Z)); // the lookup resolved a real area
+            Assert.True(PopulationPlacementSafety.Choose(at, [at], 1, factions[i],
+                loc => lookup.LevelAt(loc.X, loc.Y, loc.Z), CreatureContent.Empty, FactionTemplateCatalog.Empty) is not null,
+                $"{at.Name} at area level {area} was refused for level one");
+            Console.WriteLine($"starter {at.Name}: area level {area} flag {terrain.For(at.MapId).GetAreaFlag(at.X, at.Y, at.Z)} zone {terrain.For(at.MapId).GetZoneAndAreaId(at.X, at.Y, at.Z)}");
+        }
+
+        var goldshire = new WorldSafeLoc(106, 0, -9339.46f, 171.41f, 61.56f, 4.57f, "Goldshire");
+        PlayerbotAreaLevelLookup elwynn = PlayerbotAreaLevelLookup.FromTerrain(terrain, 0);
+        Console.WriteLine($"Goldshire graveyard: area level {elwynn.LevelAt(goldshire.X, goldshire.Y, goldshire.Z)}");
+    }
+
     private static readonly WorldSafeLoc DireMaul = new(849, 1, -4590.41f, 1632.08f, 93.97f, 0, "Dire Maul");
     private static readonly WorldSafeLoc CampMojache = new(310, 1, -4439.97f, 370.15f, 51.36f, 3.11f, "Camp Mojache");
     private static readonly WorldSafeLoc AeriePeak = new(349, 0, 323.51f, -2227.20f, 137.62f, 2.58f, "Aerie Peak");
@@ -88,6 +131,39 @@ public sealed class PopulationPlacementSafetyTests
     {
         Assert.Null(PopulationPlacementSafety.Choose(DireMaul, [DireMaul], 38, 2,
             _ => 45, CreatureContent.Empty, Factions()));
+    }
+
+    [Fact]
+    public void UnknownFactionAndEntryZeroPool_AreUnsafeUnlessEveryPossibleEntryIsKnownSafe()
+    {
+        CreatureTemplate unknown = new() { Entry = 990011, Name = "unknown faction", Faction = 990099, MinLevel = 20, MaxLevel = 20 };
+        CreatureContent ordinary = new([unknown],
+            [new CreatureSpawn { Guid = 990011, Entry = unknown.Entry, MapId = 0, X = Arathi.X + 20, Y = Arathi.Y, Z = Arathi.Z }],
+            [], [], []);
+        Assert.Null(PopulationPlacementSafety.Choose(Arathi, [Arathi], 1, 2, _ => 0, ordinary, Factions()));
+
+        CreatureContent pooled = new([unknown],
+            [new CreatureSpawn { Guid = 990012, Entry = 0, MapId = 0, X = Arathi.X + 20, Y = Arathi.Y, Z = Arathi.Z }],
+            [], [], [], spawnEntries: [(990012u, unknown.Entry)]);
+        Assert.Null(PopulationPlacementSafety.Choose(Arathi, [Arathi], 1, 2, _ => 0, pooled, Factions()));
+        Assert.Null(PopulationPlacementSafety.Choose(Arathi, [Arathi], 1, 2, _ => 0, ordinary, FactionTemplateCatalog.Empty));
+    }
+
+    [Fact]
+    public void KnownFriendlyGuardAndPassiveSpiritHealer_DoNotVetoAStarterGraveyard()
+    {
+        CreatureContent content = new(
+            [
+                new CreatureTemplate { Entry = 7865, Name = "Wildhammer Sentry", Faction = 1054, MinLevel = 55, MaxLevel = 55 },
+                new CreatureTemplate { Entry = 6491, Name = "Spirit Healer", Faction = 35, MinLevel = 60, MaxLevel = 60,
+                    ExtraFlags = 2 },
+            ],
+            [
+                new CreatureSpawn { Guid = 990021, Entry = 7865, MapId = 0, X = AeriePeak.X + 20, Y = AeriePeak.Y, Z = AeriePeak.Z },
+                new CreatureSpawn { Guid = 990022, Entry = 6491, MapId = 0, X = AeriePeak.X + 2, Y = AeriePeak.Y, Z = AeriePeak.Z },
+            ], [], [], []);
+        Assert.Equal(AeriePeak.Id, PopulationPlacementSafety.Choose(AeriePeak, [AeriePeak], 1, 1,
+            _ => 5, content, Factions())?.Id);
     }
 
     // Exact build-5875 FactionTemplate.dbc fields 0-5, plus the one nonzero explicit friend of 16/1054.

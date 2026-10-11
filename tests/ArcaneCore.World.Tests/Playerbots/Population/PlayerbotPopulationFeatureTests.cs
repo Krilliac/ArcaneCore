@@ -1,5 +1,12 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +20,100 @@ namespace ArcaneCore.World.Tests.Playerbots.Population;
 /// </summary>
 public sealed class PlayerbotPopulationFeatureTests
 {
+    private const uint SafeStarterZone = 9001;
+
+    [Fact]
+    public async Task UnsafeLeastAssignedZone_IsSkippedForAnotherZoneInTheSamePass()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2,
+            configureServices: UnsafeStarterServices);
+        await AddSafeStarterZoneAsync(world);
+
+        // One operator bot assigned to the safe zone makes the unsafe Elwynn zone strictly least assigned.
+        PlayerbotOperationResult operatorResult = await world.Bots.CreateAsync("Safeseed", 1, 1);
+        Guid operatorId = Assert.IsType<Guid>(operatorResult.BotId);
+        Assert.True((await world.Bots.StartAsync(operatorId.ToString())).Success);
+        await world.Host.World.InvokeAsync(() =>
+        {
+            world.Bots.FindSession(operatorId)!.Player!.ZoneId = SafeStarterZone;
+            return true;
+        });
+        world.Ticks.Set(200, 10);
+
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("created 1", status.Reason);
+        Assert.Single(world.Members.Snapshot);
+        Assert.Equal(SafeStarterZone, world.Members.Snapshot[0].ZoneId);
+        Assert.Equal(2, world.RunningCount);
+        Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count); // no throwaway bot in a starting area
+    }
+
+    [Fact]
+    public async Task AllUnsafeZones_CreateNoCharacterAndLeaveNoStoppedBandMember()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: UnsafeStarterServices);
+        world.Ticks.Set(200, 10);
+
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("created 0", status.Reason);
+        Assert.Empty(world.Members.Snapshot);
+        Assert.Empty(await world.Owners.LoadAllAsync());
+    }
+
+    [Fact]
+    public async Task PlacementRefusedAfterCreation_LeavesNoPopulationMember_AndRecordsTheRefusal()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        // Safe when the plan is made; unsafe once the new member row exists (a content reload between plan and teleport).
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Count == 0 ? 0 : 60;
+        world.Ticks.Set(200, 10);
+
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("placement-unsafe", world.Feature.Status.LastError ?? string.Empty);
+        Assert.Empty(world.Members.Snapshot);
+        Assert.Equal(0, world.RunningCount);
+        Assert.Contains("created 1", status.Reason);
+    }
+
+    private static void UnsafeStarterServices(IServiceCollection services)
+    {
+        services.AddSingleton(new FactionTemplateCatalog([
+            new FactionTemplateRecord(1, 1, 72, 3, 2, 12),
+            new FactionTemplateRecord(14, 14, 0, 8, 0, 1),
+        ]));
+        services.AddSingleton<ICreatureDataStore>(new FixedCreatureStore());
+    }
+
+    private static Task AddSafeStarterZoneAsync(PopulationTestHost world) => world.Host.World.InvokeAsync(() =>
+    {
+        WorldMaps maps = WorldMaps.Of(world.Host.World);
+        maps.Terrain.Areas = new AreaTable([
+            .. maps.Areas.All,
+            new AreaTemplate(SafeStarterZone, 0, 0, SafeStarterZone, 0, 0, "Safe Woods", AreaTeams.Ally, 0),
+            new AreaTemplate(9002, 0, SafeStarterZone, 9002, 0, 5, "Safe Meadow", 0, 0),
+            new AreaTemplate(9003, 0, SafeStarterZone, 9003, 0, 10, "Safe Grove", 0, 0),
+        ], maps.Registry);
+        WorldGraveyards.Of(world.Host.World).Load(new GraveyardContent(
+        [
+            new WorldSafeLoc(1, 0, -8913.23f, -133f, 81f, 0f, "Elwynn"),
+            new WorldSafeLoc(9901, 0, -8200f, -700f, 90f, 0f, "Safe Woods"),
+        ], [new GraveyardLink(1, PopulationTestHost.Elwynn, 0), new GraveyardLink(9901, SafeStarterZone, 0)]), null);
+        return true;
+    });
+
+    private sealed class FixedCreatureStore : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CreatureContent(
+            [new CreatureTemplate
+            {
+                Entry = 990001, Name = "test hostile", Faction = 14, MinLevel = 20, MaxLevel = 20,
+                MinLevelHealth = 300, MaxLevelHealth = 300, DisplayIds = [49],
+            }],
+            [new CreatureSpawn { Guid = 990001, Entry = 990001, MapId = 0, X = -8880f, Y = -133f, Z = 81f }],
+            [], [], []));
+    }
+
     [Fact]
     public async Task TheControlLoop_Adds_ThenHolds_ThenParks_ThenRestarts_AndResetsTheWindowAfterEachChange()
     {
