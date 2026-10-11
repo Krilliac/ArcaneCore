@@ -905,6 +905,58 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task Relocations_DoNotResetTheConfirmWindows_AnAddStillHappensWhileEveryPassMovesAMisfit()
+    {
+        // A levelling population keeps producing zone misfits. A pass that only moved bots used to reset the confirmation windows, so with
+        // ConfirmWindows 2 two quiet windows in a row never came and no bot was ever added.
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+        world.Population.ExcludedZones = [];
+        world.Population.ConfirmWindows = 2;
+        world.Population.TargetOnline = 2;
+
+        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn);
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("under-budget-confirming", status.State);
+        Assert.Contains("moved 1", status.Reason);
+
+        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn); // a misfit again
+        world.Ticks.Set(200, 10);
+        status = await world.PassAsync();
+        Assert.Equal("under-budget", status.State);
+        Assert.Contains("moved 1", status.Reason);
+        Assert.Matches("started 1|created 1", status.Reason);
+    }
+
+    [Fact]
+    public async Task OneBurstOfSlowTicks_IsNotCountedByTwoPasses_WhenTheRingStillHoldsItsTicks()
+    {
+        // With IntervalSeconds 10 and WindowTicks 200 a tick slower than 50 ms makes consecutive passes read the same ticks. Every pass
+        // reading 200 samples was a window, so one burst confirmed a park. Only WindowTicks new ticks make the next window (20 here).
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.ConfirmWindows = 2);
+        var ring = new WorldTickWindow();
+        world.Feature.TickSource = ring;
+        void Feed(int count, long micros) { for (int i = 0; i < count; i++) ring.Add(micros); }
+
+        Feed(20, 10_000);
+        Assert.Equal("under-budget-confirming", (await world.PassAsync()).State);
+        Feed(20, 10_000);
+        Assert.Contains("created 2", (await world.PassAsync()).Reason);
+        await world.WaitForSettledAsync(2);
+
+        Feed(20, 80_000);
+        Assert.Equal("over-budget-confirming", (await world.PassAsync()).State);
+        Feed(10, 80_000); // ten new ticks: the last 20 are the same burst, 10 of them already counted
+        Assert.Equal("over-budget-confirming", (await world.PassAsync()).State);
+        Assert.Equal(2, world.RunningCount);
+        Feed(10, 80_000); // twenty new ticks since the counted window: a second window
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 1", status.Reason);
+    }
+
+    [Fact]
     public async Task AntiChurn_ABotStartedLessThanMinRunSecondsAgo_IsNotParkedForTheBudget()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.MinRunSeconds = 300);

@@ -227,6 +227,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions Pop,
         PopulationBand[] Bands,
         int Samples,
+        long TotalSamples,
         double P95Ms,
         int RunningAll,
         IReadOnlyList<PopulationBotFacts> Running,
@@ -280,7 +281,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         IPopulationTickSource source = Source;
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
-        return new PassInput(pop, pop.Bands, samples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
+        return new PassInput(pop, pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
             ClockMs, managed, terrainHold);
     }
 
@@ -500,7 +501,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int[] desired = new int[input.Bands.Length];
         int[] have = new int[input.Bands.Length];
         int operatorRunning = 0, ownedTarget = 0;
-        int windows = _windows.Observe(input.Samples, input.P95Ms, pop);
+        int windows = _windows.Observe(input.Samples, input.TotalSamples, input.P95Ms, pop);
 
         PopulationDecision decision = new(PopulationAction.Hold, 0, "error", "the pass did not complete");
         int ownedRunning = 0, ownedParked = 0;
@@ -520,6 +521,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
                 else await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
             }
+
+            // A member that is gone no longer needs its start and park times.
+            foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
+            foreach (Guid gone in _parkedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _parkedAt.Remove(gone);
 
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
@@ -555,8 +560,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             else if (relocate)
             {
                 int moved = await RelocateAsync(ctx, ct).ConfigureAwait(false);
-                changed += moved;
-                pass.Moved = moved;
+                pass.Moved = moved; // not counted in changed: a move leaves the count of running bots, and so the tick load the windows measure, alone
                 if (moved > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"moved {moved}";
             }
 

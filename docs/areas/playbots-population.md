@@ -44,8 +44,12 @@ thread starts a pass, if the previous one has finished:
    `PopulationBudgetController.Decide`, then adds, parks and relocates through `IPlayerbotService` (start, create, stop) and
    `world.InvokeAsync` (boost and teleport). It never blocks the world thread, and the world thread never waits on it. One pass
    runs at a time; a pass that is still running when the next interval comes is not doubled.
-3. **Reset.** After any start, creation, park or relocation the task asks the world thread to `Reset()` the tick source, so the
-   next decision sees only ticks measured after the change, and forgets the confirmed windows.
+3. **Reset.** After any start, creation or park the task asks the world thread to `Reset()` the tick source, so the
+   next decision sees only ticks measured after the change, and forgets the confirmed windows. A relocation alone does neither: it
+   changes no count of running bots, and a levelling population that moves a misfit every pass would otherwise never see
+   `ConfirmWindows` quiet windows in a row and never add a bot. A confirmation window needs `WindowTicks` ticks that no counted window
+   used (the tick source's running total), so passes that come faster than a window fills (slow ticks, short interval) do not count
+   one burst twice.
 4. **Publish.** `PlayerbotPopulationFeature.Status` is replaced by an immutable `PopulationStatus` (readable from any thread; the
    command prints it).
 5. **Log.** A pass that parked, started, created or moved bots adds that to the action log, which writes one information line at

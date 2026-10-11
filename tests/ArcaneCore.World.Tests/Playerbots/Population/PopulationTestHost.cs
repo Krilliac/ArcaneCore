@@ -22,8 +22,11 @@ internal sealed class FakeTickSource : IPopulationTickSource
     private int _samples;
     private double _p95;
     private int _resets;
+    private long _total;
 
     public int Samples => Volatile.Read(ref _samples);
+
+    public long TotalSamples => Interlocked.Read(ref _total);
 
     public int Resets => Volatile.Read(ref _resets);
 
@@ -35,9 +38,10 @@ internal sealed class FakeTickSource : IPopulationTickSource
         Interlocked.Increment(ref _resets);
     }
 
-    /// <summary>The next decision sees <paramref name="samples"/> ticks with this p95.</summary>
+    /// <summary>The next decision sees <paramref name="samples"/> fresh ticks with this p95 (each call is a new window: the running total grows by that many).</summary>
     public void Set(int samples, double p95Ms)
     {
+        Interlocked.Add(ref _total, samples);
         Volatile.Write(ref _p95, p95Ms);
         Volatile.Write(ref _samples, samples);
     }

@@ -90,32 +90,45 @@ internal static class PopulationBudgetController
 /// <summary>
 /// Counts the consecutive fresh windows whose p95 fell on the same side of the hysteresis band (over the budget, under the resume
 /// line, or between them), for <see cref="PopulationBudgetController.Decide"/>. A pass with fewer than <c>WindowTicks</c> fresh ticks
-/// (settling) is no evidence and leaves the count alone; <see cref="Reset"/> follows every change, together with the tick window.
+/// (settling) is no evidence and leaves the count alone; <see cref="Reset"/> follows every start, creation and park, together with the tick window.
 /// <para>Thread affinity: the population pass (one at a time).</para>
 /// </summary>
 internal sealed class PopulationBudgetWindows
 {
     private int _side;
     private int _count;
+    private bool _counted;
+    private long _countedAt;
 
     /// <summary>The count so far (0 after a reset, until a full window is seen).</summary>
     public int Count => _count;
 
-    /// <summary>Record this pass's window and return the count, this window included (unchanged while settling).</summary>
-    public int Observe(int samples, double p95Ms, PlayerbotPopulationOptions options)
+    /// <summary>
+    /// Record this pass's window and return the count, this window included (unchanged while settling). A window is counted only when
+    /// at least <c>WindowTicks</c> ticks arrived since the last counted one (<paramref name="totalSamples"/>, the source's running
+    /// total), so two windows never share a tick: the p95 reads the last <c>WindowTicks</c> ticks, and with a slow tick the passes come
+    /// faster than a window fills, where one burst would otherwise be counted by several passes and confirm a park. A pass whose
+    /// window is not fresh counts nothing and returns the count only if its p95 is on the counted side (else 0), so the count of one
+    /// side never confirms a decision made on the other.
+    /// </summary>
+    public int Observe(int samples, long totalSamples, double p95Ms, PlayerbotPopulationOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (samples < options.WindowTicks) return _count;
         int side = p95Ms > options.TickP95BudgetMs ? 1 : p95Ms < options.TickP95BudgetMs * options.ResumeBelowPct / 100.0 ? -1 : 0;
+        if (_counted && totalSamples - _countedAt < options.WindowTicks) return _count > 0 && side == _side ? _count : 0;
         _count = _count > 0 && side == _side ? _count + 1 : 1;
         _side = side;
+        _counted = true;
+        _countedAt = totalSamples;
         return _count;
     }
 
-    /// <summary>Forget the windows seen (after a start, creation, park or relocation: the load they measured is gone).</summary>
+    /// <summary>Forget the windows seen (after a start, creation or park: the load they measured is gone; a relocation changes no count of bots, so it keeps them).</summary>
     public void Reset()
     {
         _count = 0;
         _side = 0;
+        _counted = false;
     }
 }
