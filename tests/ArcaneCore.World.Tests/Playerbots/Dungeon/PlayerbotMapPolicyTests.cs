@@ -49,6 +49,23 @@ public sealed class PlayerbotMapPolicyTests
     public void Allows(uint[] allowed, uint mapId, MapTemplate? template, bool current, bool expected)
         => Assert.Equal(expected, PlayerbotMapPolicy.Allows(allowed, mapId, template, current));
 
+    public static TheoryData<uint[], uint, MapTemplate?, bool, bool, bool> BattlegroundMatrix => new()
+    {
+        // allowed maps, map, template, current map, participant of the match there -> walkable
+        { [0, 1], 489, Battleground, true, true, true },     // a participant on its match's map
+        { [0, 1], 489, Battleground, true, false, false },   // anyone else there (a match that let the bot go)
+        { [0, 1], 489, Battleground, false, true, false },   // a battleground is never open-world travel
+        { [0, 1], 489, null, true, true, false },            // a map the registry does not know is no battleground
+        { [0, 1], 490, Battleground, true, true, false },    // a template for another map id never counts
+        { [0, 1], 36, Dungeon, true, false, true },          // the participant flag changes nothing for a dungeon
+        { [0, 1], 0, Continent, true, false, true },
+    };
+
+    [Theory]
+    [MemberData(nameof(BattlegroundMatrix))]
+    public void Allows_ABattleground_OnlyToItsParticipants(uint[] allowed, uint mapId, MapTemplate? template, bool current, bool participant, bool expected)
+        => Assert.Equal(expected, PlayerbotMapPolicy.Allows(allowed, mapId, template, current, participant));
+
     public static TheoryData<uint[]?, uint?, bool, bool, bool> Triggers => new()
     {
         // allowed maps, teleport target (null: none), controller opted in, ghost's body behind it -> reported

@@ -37,6 +37,12 @@ Content one bot cannot do (elite, dungeon and raid quests, objectives inside ins
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
 live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
 
+Free bots near a battlemaster of their faction queue for Warsong Gulch and Arathi Basin (Arathi Basin only where the server routes
+its neutral banners; never Alterac Valley), fill the queues real
+players wait in, play the objective (the enemy flag, the node banners with spell 21651) and leave when the match ends:
+`PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
+`docs/areas/playbots-battlegrounds.md`.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
