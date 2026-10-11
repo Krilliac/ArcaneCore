@@ -67,7 +67,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     public bool Persistent => _persistent;
 
     /// <summary>Whether ledger changes are still waiting to be written (or being written).</summary>
-    public bool HasUnsavedChanges => _flushing || Ledger.HasChanges || _awaitingDurable.Count > 0;
+    public bool HasUnsavedChanges => _persistent && (_flushing || Ledger.HasChanges || _awaitingDurable.Count > 0);
 
     private long Now => _clock.GetUtcNow().ToUnixTimeSeconds();
 
