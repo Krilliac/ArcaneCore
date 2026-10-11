@@ -108,6 +108,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>Bots queue for, play and leave battlegrounds (<c>World:Playerbots:Battlegrounds</c>; live).</summary>
+    public Battlegrounds.PlayerbotBattlegroundOptions Battlegrounds { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -157,6 +160,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Battlegrounds is null) throw new InvalidOperationException($"{SectionName}:Battlegrounds is missing.");
+        Battlegrounds.Validate();
     }
 }
 

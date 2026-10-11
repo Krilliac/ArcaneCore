@@ -175,6 +175,19 @@ public static class WorldConfigKeys
         LivePlayerbots("Groups:RaidsEnabled", o => o.Groups.RaidsEnabled, (o, v) => o.Groups.RaidsEnabled = v),
         LivePlayerbots("Groups:InvitePlayers", o => o.Groups.InvitePlayers, (o, v) => o.Groups.InvitePlayers = v),
 
+        // Not vmangos keys: autonomous bots in battlegrounds (docs/areas/playbots-battlegrounds.md). PlayerbotBattlegroundCoordinator
+        // reads the shared PlayerbotOptions.Battlegrounds at every decision.
+        LivePlayerbots("Battlegrounds:Enabled", o => o.Battlegrounds.Enabled, (o, v) => o.Battlegrounds.Enabled = v),
+        LivePlayerbotsValue("Battlegrounds:QueueChancePerMinute", o => o.Battlegrounds.QueueChancePerMinute, (o, v) => o.Battlegrounds.QueueChancePerMinute = v,
+            v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbotsValue("Battlegrounds:MaxBotsPerBattleground", o => o.Battlegrounds.MaxBotsPerBattleground, (o, v) => o.Battlegrounds.MaxBotsPerBattleground = v,
+            v => v is >= 0 and <= 80 ? null : "must be 0..80"),
+        LivePlayerbots("Battlegrounds:PreferFillingRealPlayerQueues", o => o.Battlegrounds.PreferFillingRealPlayerQueues, (o, v) => o.Battlegrounds.PreferFillingRealPlayerQueues = v),
+        LivePlayerbotsValue("Battlegrounds:MaxTravelYards", o => o.Battlegrounds.MaxTravelYards, (o, v) => o.Battlegrounds.MaxTravelYards = v,
+            v => v is >= 100 and <= 20_000 ? null : "must be 100..20000"),
+        LivePlayerbotsValue("Battlegrounds:MaxQueueWaitMinutes", o => o.Battlegrounds.MaxQueueWaitMinutes, (o, v) => o.Battlegrounds.MaxQueueWaitMinutes = v,
+            v => v is >= 1 and <= 240 ? null : "must be 1..240"),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,

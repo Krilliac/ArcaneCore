@@ -12,6 +12,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Playerbots.Battlegrounds;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +44,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// <summary>Bot-led groups for group content (<see cref="PlayerbotGroupCoordinator"/>; absent in a minimal host).</summary>
     private PlayerbotGroupCoordinator? coordinator => _coordinator ??= services.GetService<PlayerbotGroupCoordinator>();
     private PlayerbotGroupCoordinator? _coordinator;
+
+    /// <summary>Bots in battlegrounds (<see cref="PlayerbotBattlegroundCoordinator"/>; absent in a minimal host).</summary>
+    private PlayerbotBattlegroundCoordinator? battlegrounds => _battlegrounds ??= services.GetService<PlayerbotBattlegroundCoordinator>();
+    private PlayerbotBattlegroundCoordinator? _battlegrounds;
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly ConcurrentDictionary<Guid, ActiveBot> _active = new();
     private PlayerbotStatus[] _snapshot = [];
@@ -134,7 +139,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 : _active.Values.FirstOrDefault(value => value.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
             if (bot is null) return null;
             PlayerbotInspection? inspection = PlayerbotInspector.Capture(bot.Session, bot.Brain, bot.PartyDriven ? bot.Party : null);
-            return inspection is null ? null : inspection with { Group = coordinator?.Describe(bot.Record.BotId) };
+            return inspection is null ? null : inspection with { Group = coordinator?.Describe(bot.Record.BotId) ?? battlegrounds?.Describe(bot.Record.BotId) };
         }).WaitAsync(cancellationToken);
     }
 
@@ -285,6 +290,17 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 coordinator?.Forget(botId);
                 active.GroupDriven = false;
                 active.Brain.ResumeAfterGroup();
+            }
+            if (controller is not null)
+            {
+                // A controller takes over a bot with battleground business: the coordinator lets it go where it stands (the server keeps
+                // its queue or match; the controller decides), and the brain resumes when the controller detaches.
+                battlegrounds?.Forget(botId);
+                if (active.BattlegroundDriven)
+                {
+                    active.BattlegroundDriven = false;
+                    active.Brain.ResumeAfterGroup();
+                }
             }
             active.Session.ManagedBudget = null;
             if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
@@ -484,7 +500,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>The goal the bot reports and persists: its party AI's while that drives it, otherwise the brain's.</summary>
     private (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId) GoalOf(ActiveBot active)
-        => active.GroupDriven && coordinator?.GoalOf(active.Record.BotId) is { } group ? (group.Goal, group.TargetEntry, active.Brain.QuestId)
+        => active.BattlegroundDriven && battlegrounds?.GoalOf(active.Record.BotId) is { } bg ? (bg.Goal, bg.TargetEntry, active.Brain.QuestId)
+            : active.GroupDriven && coordinator?.GoalOf(active.Record.BotId) is { } group ? (group.Goal, group.TargetEntry, active.Brain.QuestId)
             : active.PartyDriven ? (active.Party.Goal, active.Party.TargetEntry, active.Brain.QuestId)
             : (active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
 
@@ -496,7 +513,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_active.TryGetValue(bot.BotId, out ActiveBot? active))
         {
             active.Paused = true;
-            if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); return true; });
+            if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
             try
@@ -573,10 +590,24 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             var running = new List<PlayerbotGroupCoordinator.PlayerbotGroupBot>(bots.Length);
             foreach (ActiveBot active in bots)
                 if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
-                    running.Add(new(active.Record.BotId, active.Session, active.Brain, active.Controller is null && !active.PartyDriven));
+                    running.Add(new(active.Record.BotId, active.Session, active.Brain,
+                        active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true));
             try { groups.Update(running, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             { logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+        }
+        // Battlegrounds (PlayerbotBattlegroundCoordinator): the queue machines, the demand and the free bots' choices, after the groups
+        // so a bot a group took this tick is not free here.
+        if (battlegrounds is { } fields)
+        {
+            var running = new List<PlayerbotBattlegroundCoordinator.PlayerbotBattlegroundBot>(bots.Length);
+            foreach (ActiveBot active in bots)
+                if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
+                    running.Add(new(active.Record.BotId, active.Session, active.Brain,
+                        active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
+            try { fields.Update(running, elapsedMs); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
         }
 
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
@@ -612,9 +643,22 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 else if (active.Session.Player is { } driven)
                 {
                     active.Session.ManagedBudget = budget;
+                    // A bot the battlegrounds coordinator drives (to a battlemaster, into, through and out of a match) follows it, even
+                    // inside a battleground raid with a real player in it (the party AI never takes it there); the brain resumes after.
+                    if (battlegrounds?.Drives(active.Record.BotId) == true)
+                    {
+                        if (active.PartyDriven)
+                        {
+                            active.Party.Disengage(driven);
+                            active.PartyDriven = false;
+                        }
+
+                        active.BattlegroundDriven = true;
+                        battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                    }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
                     // quests and memories (its routes and targets belong to another place).
-                    if (coordinator?.Drives(active.Record.BotId) == true)
+                    else if (coordinator?.Drives(active.Record.BotId) == true)
                     {
                         if (active.PartyDriven)
                         {
@@ -630,6 +674,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         if (active.GroupDriven)
                         {
                             active.GroupDriven = false;
+                            active.Brain.ResumeAfterGroup();
+                        }
+
+                        if (active.BattlegroundDriven)
+                        {
+                            active.BattlegroundDriven = false;
                             active.Brain.ResumeAfterGroup();
                         }
 
@@ -775,7 +825,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         uint health = b.Session.Player?.Health ?? 0;
         string? error = closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b);
         string? risk = RiskOf(b);
-        string? group = coordinator?.Describe(b.Record.BotId);
+        string? group = coordinator?.Describe(b.Record.BotId) ?? battlegrounds?.Describe(b.Record.BotId);
         if (b.Status is { } last && last.BotId == b.Record.BotId && last.State == state && last.DesiredEnabled == b.Record.DesiredEnabled
             && last.Goal == goal && last.TargetEntry == target && last.QuestId == quest && last.MapId == b.MapId && last.Health == health
             && string.Equals(last.Name, b.Name, StringComparison.Ordinal) && string.Equals(last.ErrorCode, error, StringComparison.Ordinal)
@@ -787,12 +837,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>The risk line of a running bot (its party AI's while that drives it); none for a scripted bot.</summary>
     private string? RiskOf(ActiveBot active) => active.Controller is not null ? null
+        : active.BattlegroundDriven ? "decision=battleground"
         : active.GroupDriven ? coordinator?.FindAI(active.Record.BotId) is { Retreat.Active: true } ai
             ? $"retreat reason={ai.Retreat.Reason}" : "decision=group"
         : active.PartyDriven ? active.Party.RiskReport : active.Brain.RiskReport;
 
     /// <summary>A running bot's current stall (<see cref="PlayerbotStallWatch"/>), shown where a fault would be.</summary>
-    private static string? StallOf(ActiveBot active) => active.PartyDriven || active.GroupDriven || active.Controller is not null ? null
+    private static string? StallOf(ActiveBot active) => active.PartyDriven || active.GroupDriven || active.BattlegroundDriven || active.Controller is not null ? null
         : active.Brain.StallReport is { } stall ? active.StallCode(stall) : null;
 
     private void ReplaceBrain(ActiveBot active)
@@ -979,6 +1030,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;
         public bool GroupDriven;
+        public bool BattlegroundDriven;
         public string Name = session.Player!.Name;
         public uint MapId = session.Player!.Map!.MapId;
         public uint LastUpdateMs = session.World.NowMs;
