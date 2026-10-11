@@ -358,6 +358,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         long now = (long)session.World.Uptime.TotalMilliseconds;
+        // A new death no think saw coming (a revival and a death between two thinks, the brain's reset unseen): the body this recovery
+        // saw released is gone (reclaimed, or bones after the healer) or another one lies in its place. It starts afresh, as after a reset.
+        if (_deathBody != default && (player.Combat.Corpse?.Guid ?? default) != _deathBody)
+            Reset();
+        if ((player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is { } ownBody) _deathBody = ownBody.Guid;
         if (_progressMs < 0)
         {
             // The first think of a new death: the loop watch starts afresh (PlayerbotMotion.ForgetLoops), so the routes of the living
@@ -486,6 +491,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _healerRequested = false;
         _healerGraveyard = default;
         _corpseRunResumedFor = default;
+        _deathBody = default;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
@@ -978,6 +984,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     /// <summary>The graveyard the spirit-healer fallback last walked to, and the body of the death it was for (<see cref="HealerGraveyard"/>).</summary>
     private (ObjectGuid Body, WorldSafeLoc? Loc) _healerGraveyard;
+
+    /// <summary>The body this recovery saw released (a different one, or none while dead, is a new death the brain's reset missed).</summary>
+    private ObjectGuid _deathBody;
 
     /// <summary>The body the spirit-healer fallback already went back to (<see cref="PlayerbotSpiritHealerStep.ResumeCorpseRun"/>), once per death.</summary>
     private ObjectGuid _corpseRunResumedFor;

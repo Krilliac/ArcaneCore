@@ -234,8 +234,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         else
         {
-            // Alive again: the next death is a new one, even when pending movement orders hold this update below.
+            // Alive again: the next death is a new one, even when pending movement orders hold this update below. The recovery is
+            // reset here too, before that early return: a death in the window it held would otherwise start in the last death's
+            // spirit-healer fallback (PlayerbotRecovery.Update goes straight to it), never release its new body, and fault.
             _deathIntentRetired = false;
+            _recovery.Reset();
             RememberAttackers(player);
         }
         // Death cleanup must happen before this seam, but pending movement orders still

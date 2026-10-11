@@ -319,12 +319,13 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     }
 
     /// <summary>
-    /// The kept graveyard belongs to one body: a revival and a new death between two thinks of the recovery (no think sees the bot
-    /// alive, so nothing resets it) leave a new body, 400 yards south, where no graveyard is known. The ghost does not walk on to the
-    /// old death's graveyard: with nothing to go to and its new body on its map, it goes back to that body.
+    /// A new death is judged afresh even when no think saw the bot alive in between (review of 986e558f): the ghost walking on its
+    /// kept graveyard is revived and dies again 400 yards south, where no graveyard is known, before the recovery thinks again. The
+    /// new body is no longer the one the recovery released, so it starts afresh: no spirit-healer fallback carried over from the last
+    /// death (no kept graveyard, no resumed corpse run, no healer request), the ghost runs to its new body and reclaims it.
     /// </summary>
     [Fact]
-    public async Task AKeptGraveyard_IsDropped_ForANewBody_EvenWithoutAThinkWhileAlive()
+    public async Task ANewBody_IsJudgedAfresh_EvenWithoutAThinkWhileAlive()
     {
         var clock = new TestDeathClock(1_000);
         (DungeonBotHost host, PlayerbotBrain brain, Vector3 start) = await StartForTheKeptGraveyardAsync(clock);
@@ -340,15 +341,59 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         });
         await host.TeleportAsync(0, start.X, start.Y - 400f, start.Z);
         await host.KillAndReleaseAsync();
-        Run after = await RunAsync(host, brain, clock, p => false, thinks: 1);
+        await host.OnWorldAsync(() => Assert.NotEqual(oldBody, host.Player.Combat.Corpse!.Guid));
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 60);
+
+        Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.False(run.Healer, "the last death's spirit-healer fallback carried over: " + run.Trail);
+        Assert.True(run.Reclaimed, "the new body was not reclaimed: " + run.Trail);
+        // No step of the last death's fallback, not even the one that gives it up (ResumeCorpseRun): the new death never entered it.
+        Assert.DoesNotContain("SpiritHealer", run.Trail, StringComparison.Ordinal);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// The brain resets the recovery at its first update alive even when pending movement orders hold the rest of that update (review
+    /// of 986e558f): the ghost walking on its kept graveyard is revived, a near teleport is pending, and the alive update only
+    /// acknowledges it. Before, the reset came after that early return: the recovery kept the last death's spirit-healer fallback, and
+    /// the next death went straight to it (PlayerbotRecovery.Update), never released its new body, and faulted as stalled.
+    /// </summary>
+    [Fact]
+    public async Task ARevivalHeldByAPendingTeleport_ResetsTheRecovery_AndTheNextBodyIsReleasedAndReclaimed()
+    {
+        var clock = new TestDeathClock(1_000);
+        (DungeonBotHost host, PlayerbotBrain brain, Vector3 start) = await StartForTheKeptGraveyardAsync(clock);
+        await using DungeonBotHost owned = host;
+        Run walking = await RunAsync(host, brain, clock, p => OnTheKeptGraveyard(brain, p, start), thinks: 200);
+        Assert.True(walking.Done, "the ghost never walked on the kept graveyard: " + walking.Trail);
+        var spot = new Vector3(start.X, start.Y - 400f, start.Z);
 
         await host.OnWorldAsync(() =>
         {
-            Assert.NotEqual(oldBody, host.Player.Combat.Corpse!.Guid);
-            Assert.True(brain.Recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun,
-                $"{brain.Recovery.LastSpiritHealerStep}: " + after.Trail);
-            brain.Stop();
+            Assert.True(brain.Recovery.UsingSpiritHealer);
+            host.Player.Map!.Combat.ResurrectPlayer(host.Player, 0.5f, applySickness: false);
+            ArcaneCore.Game.Teleport.TeleportService teleports =
+                host.Host.WorldServices.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(host.Player, 0, spot.X, spot.Y, spot.Z, 0), "teleport refused");
+            Assert.NotNull(teleports.StageOf(host.Player)); // pending until the bot acknowledges it
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            brain.Update(500); // alive: the movement control acknowledges the teleport and holds the rest of the update
+            Assert.False(brain.Recovery.UsingSpiritHealer, "the alive update held by the pending teleport did not reset the recovery");
         });
+        await host.AcknowledgeUntilAsync(p => Vector2.Distance(new(p.X, p.Y), new(spot.X, spot.Y)) < 1f, "the bot arrives");
+        await KillAsync(host, brain);
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+
+        Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.StartsWith("Recover/Release", run.Trail, StringComparison.Ordinal);
+        Assert.False(run.Healer, "the last death's spirit-healer fallback carried over: " + run.Trail);
+        Assert.True(run.Reclaimed, "the new body was not reclaimed: " + run.Trail);
+        Assert.DoesNotContain("SpiritHealer", run.Trail, StringComparison.Ordinal);
+        await host.OnWorldAsync(brain.Stop);
     }
 
     /// <summary>The ghost walks to the healer's graveyard where its own cell knows none: the kept graveyard is what it walks on.</summary>
