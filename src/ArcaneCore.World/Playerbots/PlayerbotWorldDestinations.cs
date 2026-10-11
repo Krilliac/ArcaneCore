@@ -190,6 +190,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 return true;
             }
 
+            // On the other level of a lift (the Great Lift between Thousand Needles and The Barrens, the Thunder Bluff lifts): the brain
+            // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator).
+            if (PlayerbotElevator.TryBegin(_session, player, destination, _options))
+            {
+                ClearRoute();
+                TargetEntry = entry.Entry;
+                QuestId = questId;
+                return true;
+            }
+
             if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);

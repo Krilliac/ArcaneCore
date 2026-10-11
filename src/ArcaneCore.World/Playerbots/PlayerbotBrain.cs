@@ -227,6 +227,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
                 PlayerbotTram.Cancel(player);
+                PlayerbotElevator.Cancel(player); // and a lift ride (a bot that fell to its death off a car among them)
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -303,6 +304,26 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (tram == TramStep.Failed)
             {
                 _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
+                GiveUpStalledGoal(player, shareable: false);
+                return;
+            }
+
+            // A lift ride (PlayerbotElevator) owns the bot the same way, until it stands on the other level; a fight on the way to the
+            // landing ends it. A failed ride is the bot's own set-aside, like a failed tram trip: the lift did not carry it.
+            if (player.Combat.IsInCombat && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop }) PlayerbotElevator.Cancel(player);
+            ElevatorStep lift = PlayerbotElevator.Drive(_session, player, _options, interval, out string? liftFailure);
+            if (lift == ElevatorStep.Traveling)
+            {
+                _stall.Reset();
+                _target = null;
+                _route = null;
+                _attacking = false;
+                return;
+            }
+
+            if (lift == ElevatorStep.Failed)
+            {
+                _stall.ReportExternal(liftFailure ?? "elevator: the ride failed (no reason recorded)");
                 GiveUpStalledGoal(player, shareable: false);
                 return;
             }
