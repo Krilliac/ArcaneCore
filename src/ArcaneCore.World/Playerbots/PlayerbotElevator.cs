@@ -634,8 +634,8 @@ internal static class PlayerbotElevator
 
                     state.Due = false;
                     if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(session, player);
-                    Rescue(session, player, map, lift, at, out _,
-                        $"elevator: in the shaft of {lift.Name} at login, its car not in the world after {SettleWaitMs / 1000}s");
+                    string lost = $"elevator: in the shaft of {lift.Name} at login, its car not in the world after {SettleWaitMs / 1000}s";
+                    if (!Rescue(session, player, map, lift, at, out _, lost)) LogRescueRefused(session, player, lost);
                     return false;
                 }
 
@@ -643,8 +643,9 @@ internal static class PlayerbotElevator
                 var carAt = new Vector3(position.X, position.Y, position.Z);
                 if (MathF.Abs(at.Z - carAt.Z) <= OnCarYards) return BoardFound(session, player, system, lift, car, live, carAt, at, now);
                 if ((player.Movement.Flags & MovementFlags.OnTransport) != 0) ClearTransport(session, player);
-                Rescue(session, player, map, lift, at, out _, string.Create(CultureInfo.InvariantCulture,
-                    $"elevator: logged in hanging in the shaft of {lift.Name} at z {at.Z:F1} with the car at z {carAt.Z:F1}"));
+                string hanging = string.Create(CultureInfo.InvariantCulture,
+                    $"elevator: logged in hanging in the shaft of {lift.Name} at z {at.Z:F1} with the car at z {carAt.Z:F1}");
+                if (!Rescue(session, player, map, lift, at, out _, hanging)) LogRescueRefused(session, player, hanging);
                 return false;
             }
         }
@@ -728,6 +729,14 @@ internal static class PlayerbotElevator
 
         return sent;
     }
+
+    /// <summary>
+    /// A settle's rescue was refused (every teleport: TeleportService.Check). Settle does not try again (its turn is spent); the warning
+    /// is the trace of a bot left where it stands.
+    /// </summary>
+    private static void LogRescueRefused(WorldSession session, Player player, string why)
+        => session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogWarning(
+            "Playerbot {Bot}: {Why}; the rescue teleport was refused, the bot is left where it stands", player.Name, why);
 
     /// <summary>
     /// One think of the trip, before anything else the brain does. <see cref="ElevatorStep.Idle"/>: no trip (the brain goes on); without
@@ -985,7 +994,8 @@ internal static class PlayerbotElevator
     /// Off a car that is gone, that never stands at a level, or that the bot was knocked off: the trip fails with <paramref name="why"/>.
     /// On a known floor (within <see cref="AirborneYards"/>) the bot steps off there; above a known floor it falls to it
     /// (<see cref="ElevatorStage.Falling"/>) only when the fall costs less than <see cref="MaxFallHealthPercent"/> percent of its health
-    /// (<see cref="Survivable"/>); otherwise, or over no known floor, it is placed on a landing (<see cref="Rescue"/>), retried while the
+    /// (<see cref="Survivable"/>) and is not a pit's bottom (<see cref="InPit"/>); otherwise, or over no known floor, it is placed on a
+    /// landing (<see cref="Rescue"/>), retried while the
     /// teleport is refused, up to <see cref="MaxRescueTries"/> times.
     /// </summary>
     private static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
@@ -993,7 +1003,8 @@ internal static class PlayerbotElevator
         trip.Failure ??= why;
         Vector3 at = new(player.X, player.Y, player.Z);
         float floor = FloorBelow(map, at);
-        if (float.IsFinite(floor) && at.Z - floor < AirborneYards)
+        bool pit = float.IsFinite(floor) && InPit(trip.Lift, at, floor);
+        if (!pit && float.IsFinite(floor) && at.Z - floor < AirborneYards)
         {
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0
                 && !PlayerbotMotion.SendStepOff(session, player, at with { Z = floor }, player.Orientation))
@@ -1001,7 +1012,7 @@ internal static class PlayerbotElevator
             return ElevatorStep.Failed;
         }
 
-        if (!float.IsFinite(floor) || !Survivable(session, player, at.Z - floor))
+        if (pit || !float.IsFinite(floor) || !Survivable(session, player, at.Z - floor))
         {
             if (Rescue(session, player, map, trip.Lift, at, out string placed, trip.Failure))
             {
@@ -1033,6 +1044,26 @@ internal static class PlayerbotElevator
         trip.Failure = string.Create(CultureInfo.InvariantCulture, $"{trip.Failure}; fell {trip.FallYards:F1} yards");
         return ElevatorStep.Failed;
     }
+
+    /// <summary>
+    /// Whether <paramref name="floor"/>, under <paramref name="at"/>, is the bottom of a shaft below its car's lowest stop: inside a car's
+    /// footprint (<see cref="CarHalfYards"/> of its shaft, flat) and more than <see cref="PitYards"/> under the car's lower level. The real
+    /// Great Lift's foot is such a pit (the static floor at -49.4, 5.3 to 5.5 yards under the stops; an enclosed recess no way leads out
+    /// of): a bot dropped into it would stay there until its next login, so <see cref="Drop"/> places it on the landing instead.
+    /// </summary>
+    private static bool InPit(ElevatorLift lift, Vector3 at, float floor)
+    {
+        foreach (ElevatorCar car in lift.Cars)
+        {
+            if (Vector2.Distance(ElevatorNetwork.Flat(car.Low), ElevatorNetwork.Flat(at)) <= CarHalfYards && floor < car.Low.Z - PitYards)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>A floor in a car's footprint this far (or more) under its lower stop is a pit (<see cref="InPit"/>).</summary>
+    internal const float PitYards = 1f;
 
     /// <summary>
     /// Whether a fall of <paramref name="yards"/> costs the bot less than <see cref="MaxFallHealthPercent"/> percent of its current health:

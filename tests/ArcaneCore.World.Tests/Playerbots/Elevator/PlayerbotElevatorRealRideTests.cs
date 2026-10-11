@@ -351,6 +351,45 @@ public sealed class PlayerbotElevatorRealRideTests(ITestOutputHelper output)
         AssertOnALanding(lift, at, "after the login");
     }
 
+    /// <summary>
+    /// R8: the car leaves the world under a bot aboard at the foot. The static floor under it is the pit at the shaft's bottom (R1: 5.3 to
+    /// 5.5 yards down, an enclosed recess no way leads out of): the bot is placed on the foot's landing, never dropped into the pit.
+    /// </summary>
+    [RealLiftRideFact]
+    public async Task R8_TheCarLeavesTheWorldAtTheFoot_TheBotIsPlacedOnTheLanding_NotInThePit()
+    {
+        await using ElevatorTestWorld world = await StartAsync();
+        await world.PlaceAsync(Foot);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        PlayerbotOptions options = Options();
+        await world.OnWorldAsync(() => PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestData.Dizzywig));
+        await BoardAsync(world, options);
+        (uint healthBefore, float boardedZ) = await world.OnWorldAsync(() =>
+        {
+            // To the middle of the car (a bot boards at its edge, over the ground beside the recess): over the pit.
+            ElevatorTrip trip = PlayerbotElevator.TripOf(world.Player)!;
+            GameObject car = trip.CarObject!;
+            var carAt = world.Objects()!.ElevatorPosition(car)!.Value;
+            trip.Offset = Vector3.Zero;
+            Assert.True(PlayerbotMotion.SendAboard(world.Session, world.Player, car.Guid.Value, new Vector3(carAt.X, carAt.Y, carAt.Z),
+                world.Player.Orientation, Vector3.Zero, 0f), "the move to the car's middle was refused");
+            float under = world.Host.World.GetMap(ElevatorTestData.Kalimdor).Collision.GetHeight(carAt.X, carAt.Y, carAt.Z + 0.5f, useModels: true, maxSearchDistance: 500f);
+            Assert.True(under < carAt.Z - 3f, $"no pit under the car's middle: the floor is at {under:F1}");
+            Assert.True(world.Objects()!.Remove(car), "the car was not removed");
+            return (world.Player.Health, world.Player.Z);
+        });
+        await DriveToTheEndAsync(world, options);
+        await AcknowledgeAsync(world);
+        (Vector3 at, bool aboard, _, uint health, bool alive) = await world.OnWorldAsync(() => State(world));
+        string? failure = await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)?.Failure);
+        output.WriteLine($"aboard at z {boardedZ:F1}; {failure}; now at {at}, health {healthBefore} -> {health}");
+        Assert.True(alive, "dead");
+        Assert.False(aboard);
+        Assert.True(at.Z > lift.LowZ - 3f, $"at {at}: in the pit");
+        AssertOnALanding(lift, at, "after the car left");
+        Assert.Equal(healthBefore, health);
+    }
+
     /// <summary>R7: a bot killed aboard: an observer is told the corpse is off the transport, at its world position.</summary>
     [RealLiftRideFact]
     public async Task R7_ADeathAboard_ObserversSeeTheCorpseOffTheTransport()

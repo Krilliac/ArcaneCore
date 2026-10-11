@@ -25,6 +25,9 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
     internal static async Task RideIntoTheShaftAsync(ElevatorTestWorld world, PlayerbotOptions options, float above)
     {
         ElevatorLift lift = await world.GreatLiftAsync();
+        // The login settle first (one think without a trip; the bot stands outside every car's footprint): it is spent, so nothing but
+        // the ride under test can board or move the bot afterwards.
+        await world.OnWorldAsync(() => PlayerbotElevator.Drive(world.Session, world.Player, options, 100, out _));
         await world.OnWorldAsync(() => PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet));
         float z = float.MinValue;
         ElevatorStage? stage = null;
