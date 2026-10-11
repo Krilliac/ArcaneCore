@@ -298,7 +298,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (tram == TramStep.Failed)
             {
-                _stall.ReportExternal(tramFailure ?? "tram: the trip failed");
+                _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
                 GiveUpStalledGoal(player, shareable: false);
                 return;
             }
