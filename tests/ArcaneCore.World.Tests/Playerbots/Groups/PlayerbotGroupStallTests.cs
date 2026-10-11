@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
@@ -98,6 +99,91 @@ public sealed class PlayerbotGroupStallTests
             Assert.Equal(BruteQuest, signal.Quest);
             Assert.Equal(0u, signal.Map);
             Assert.True(signal.Seconds >= 30, $"stalled {signal.Seconds}s");
+        });
+    }
+
+    /// <summary>
+    /// Once the group has formed (still gathering or already travelling), puts every bot on the side of the meeting point opposite the
+    /// approach point, <paramref name="flatYards"/> from it and <paramref name="rise"/> above its height. The approach point is fixed at
+    /// formation, on the side the leader stood on then, so from here the leader never walks to it.
+    /// </summary>
+    private static async Task<PlayerbotGroupCoordinator.BotGroup> FormThenMoveToTheFarSideAsync(GroupTestWorld world, (Guid Id, string Name)[] bots, float flatYards, float rise)
+    {
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        await world.OnWorldAsync(() =>
+        {
+            Vector3 meeting = group.Goal.Meeting;
+            Vector3 away = Vector3.Normalize(new Vector3(meeting.X - group.Approach.X, meeting.Y - group.Approach.Y, 0));
+            Vector3 spot = meeting + (away * flatYards) + new Vector3(0, 0, rise);
+            foreach ((Guid id, _) in bots)
+                world.Player(id).Relocate(spot.X, spot.Y, spot.Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+        return group;
+    }
+
+    private static float Flat(Player player, Vector3 point) => MathF.Sqrt(((player.X - point.X) * (player.X - point.X)) + ((player.Y - point.Y) * (player.Y - point.Y)));
+
+    [Fact]
+    public async Task ALeaderOnTheFarSideOfTheObjective_WithinTheRing_StartsEngaging_WithoutComingNearTheCreature()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options => options.Risk.Tolerance = 0.25f);
+        var warrior = await world.AddBotAsync("Farwar", Human, Warrior, 1, []);
+        var mage = await world.AddBotAsync("Farmage", Human, Mage, 1, [Fireball]);
+        // 33 yards flat from the brute on its far side: outside the 30-yard approach, inside the ring (30 + the slack of 5).
+        PlayerbotGroupCoordinator.BotGroup group = await FormThenMoveToTheFarSideAsync(world, [warrior, mage], 33f, 0f);
+
+        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.Equal(PlayerbotGroupState.Engaging, group.State);
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = world.Player(group.LeaderBotId);
+            float flat = Flat(leader, group.Goal.Meeting);
+            Assert.InRange(flat, 28f, 34f);
+            Assert.False(leader.Combat.IsInCombat, world.Trace());
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ALeaderWithinTheRingFlat_ButOnAnotherFloor_StaysTravelling()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options => options.Risk.Tolerance = 0.25f);
+        var warrior = await world.AddBotAsync("Highwar", Human, Warrior, 1, []);
+        var mage = await world.AddBotAsync("Highmage", Human, Mage, 1, [Fireball]);
+        PlayerbotGroupCoordinator.BotGroup group = await FormThenMoveToTheFarSideAsync(world, [warrior, mage], 33f, 30f);
+
+        await world.RunAsync(1_500);
+        Assert.Equal(PlayerbotGroupState.Travelling, group.State);
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = world.Player(group.LeaderBotId);
+            Assert.True(Flat(leader, group.Goal.Meeting) <= PlayerbotGroupCoordinator.QuestApproachYards + PlayerbotGroupCoordinator.ApproachSlackYards, "flat distance is inside the ring");
+            Assert.True(leader.Z - group.Goal.Meeting.Z > PlayerbotGroupCoordinator.ApproachHeightYards, "the leader is above the height bound");
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ALeaderOnTheFarSideOfAnEntrance_WithinTheRing_StartsEntering_BeforeItWalksIn()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 30, dungeon: true);
+        var tank = await world.AddBotAsync("Ringtank", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Ringprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Ringmage", Human, Mage, 12, [Fireball], EntranceArea);
+        // 18 yards flat from the entrance on its far side: outside the 15-yard approach, inside the ring (15 + 5).
+        PlayerbotGroupCoordinator.BotGroup group = await FormThenMoveToTheFarSideAsync(world, [tank, healer, mage], 18f, 0f);
+
+        Assert.True(await world.RunUntilAsync(5_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), world.Trace());
+        Assert.Equal(PlayerbotGroupState.Entering, group.State);
+        await world.OnWorldAsync(() =>
+        {
+            // Not through the door yet: it was the ring that moved the group on, not the walk to the approach point past the entrance.
+            Player leader = world.Player(group.LeaderBotId);
+            Assert.Equal(0u, leader.MapId);
+            Assert.InRange(Flat(leader, group.Goal.Meeting), 14f, 19f);
+            return true;
         });
     }
 

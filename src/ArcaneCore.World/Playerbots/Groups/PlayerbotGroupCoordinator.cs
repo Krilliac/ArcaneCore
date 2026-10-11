@@ -943,8 +943,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         float yards = (group.Goal.InInstance ? ApproachYards : QuestApproachYards) + ApproachSlackYards;
         float dx = leader.X - group.Goal.Meeting.X, dy = leader.Y - group.Goal.Meeting.Y;
-        return (dx * dx) + (dy * dy) <= yards * yards;
+        return (dx * dx) + (dy * dy) <= yards * yards && MathF.Abs(leader.Z - group.Goal.Meeting.Z) <= ApproachHeightYards;
     }
+
+    /// <summary>
+    /// How far above or below the meeting point (the objective spawn's or the entrance trigger's own height) the leader may stand and
+    /// still be in <see cref="WithinApproachRing"/>: slopes inside the ring rise a few yards, a cliff top or another floor does not count.
+    /// </summary>
+    internal const float ApproachHeightYards = 10f;
 
     /// <summary>How far inside the approach point's distance from the meeting point the leader counts as arrived (<see cref="WithinApproachRing"/>).</summary>
     internal const float ApproachSlackYards = 5f;
