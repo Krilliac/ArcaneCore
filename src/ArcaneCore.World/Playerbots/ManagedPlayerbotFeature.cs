@@ -815,6 +815,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>The goal the bot reports and persists: its party AI's while that drives it, otherwise the brain's.</summary>
     private (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId) GoalOf(ActiveBot active)
+    {
+        GoalReadProbe?.Invoke();
+        return GoalCore(active);
+    }
+
+    /// <summary>Test seam: runs on whichever thread reads a bot's goal, so a test can assert that thread is the world thread.</summary>
+    internal Action? GoalReadProbe { get; set; }
+
+    private (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId) GoalCore(ActiveBot active)
         => active.BattlegroundDriven && battlegrounds?.GoalOf(active.Record.BotId) is { } bg ? (bg.Goal, bg.TargetEntry, active.Brain.QuestId)
             : active.GroupDriven && coordinator?.GoalOf(active.Record.BotId) is { } group ? (group.Goal, group.TargetEntry, active.Brain.QuestId)
             : active.PartyDriven ? (active.Party.Goal, active.Party.TargetEntry, active.Brain.QuestId)
@@ -829,6 +838,24 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_world is not { } world || world.IsStopped || world.IsWorldThread) return GoalOf(active);
         try { return await world.InvokeAsync(() => GoalOf(active)).ConfigureAwait(false); }
         catch (TaskCanceledException) when (world.IsStopped) { return GoalOf(active); }
+    }
+
+    /// <summary>
+    /// The goals of <paramref name="bots"/> (same order), read in one world-thread hop: the checkpoint runs on a pool thread, and the
+    /// coordinators' member maps are mutated by the world thread. A stopped world is read in place (see <see cref="GoalOnWorldThreadAsync"/>).
+    /// </summary>
+    private async Task<(PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[]> GoalsOnWorldThreadAsync(ActiveBot[] bots)
+    {
+        (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[] ReadAll()
+        {
+            var goals = new (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[bots.Length];
+            for (int i = 0; i < bots.Length; i++) goals[i] = GoalOf(bots[i]);
+            return goals;
+        }
+
+        if (bots.Length == 0 || _world is not { } world || world.IsStopped || world.IsWorldThread) return ReadAll();
+        try { return await world.InvokeAsync(ReadAll).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { return ReadAll(); }
     }
 
     private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
@@ -1208,8 +1235,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (!await _operations.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
-            foreach (ActiveBot active in _active.Values.ToArray())
+            ActiveBot[] bots = _active.Values.ToArray();
+            // One world-thread hop for every bot's goal (the coordinators' collections are world-thread owned).
+            (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[] goals = await GoalsOnWorldThreadAsync(bots).ConfigureAwait(false);
+            for (int i = 0; i < bots.Length; i++)
             {
+                ActiveBot active = bots[i];
                 if (active.Record.State == ManagedPlayerbotState.Faulted) continue;
                 if (active.Session.State == SessionState.Closed)
                 {
@@ -1222,7 +1253,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     continue;
                 }
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
-                { Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId }, CancellationToken.None).ConfigureAwait(false);
+                { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }, CancellationToken.None).ConfigureAwait(false);
                 await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             }
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
