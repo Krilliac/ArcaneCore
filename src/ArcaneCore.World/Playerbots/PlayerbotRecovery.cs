@@ -919,27 +919,41 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         var found = new List<PlayerbotThreat>();
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
-        foreach (Creature creature in candidates)
-        {
-            if (!creature.IsInWorld || !creature.IsAlive
-                || !ReferenceEquals(creature.Map, map) || !map.Combat.Hooks.IsHostileTo(creature, player))
-                continue;
-            var at = new Vector3(creature.X, creature.Y, creature.Z);
-            if (system is null)
-            {
-                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0, creature));
-                continue;
-            }
+        foreach (Creature creature in candidates) AddThreat(player, map, system, creature, found);
+        return found;
+    }
 
-            if (!system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player)) continue;
-            float radii = creature.BoundingRadius + player.BoundingRadius;
-            float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
-            if (radius <= 0) continue;
-            bool flyer = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR: no height limit
-            found.Add(new PlayerbotThreat(at, radius, flyer, radii, creature));
+    /// <summary>
+    /// <see cref="Threats(Player)"/> into <paramref name="found"/> (cleared first), without a new list or an enumerator allocation: the
+    /// hazard scan of every bot every 2 seconds (<see cref="PlayerbotRisk.ScanHazards"/>).
+    /// </summary>
+    internal static void Threats(Player player, List<PlayerbotThreat> found)
+    {
+        found.Clear();
+        if (player.Map is not { } map) return;
+        CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
+        foreach (ObjectGuid guid in player.VisibleObjects)
+            if (map.FindObject(guid) is Creature creature) AddThreat(player, map, system, creature, found);
+    }
+
+    private static void AddThreat(Player player, Map map, CreatureMapSystem? system, Creature creature, List<PlayerbotThreat> found)
+    {
+        if (!creature.IsInWorld || !creature.IsAlive
+            || !ReferenceEquals(creature.Map, map) || !map.Combat.Hooks.IsHostileTo(creature, player))
+            return;
+        var at = new Vector3(creature.X, creature.Y, creature.Z);
+        if (system is null)
+        {
+            found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0, creature));
+            return;
         }
 
-        return found;
+        if (!system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player)) return;
+        float radii = creature.BoundingRadius + player.BoundingRadius;
+        float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
+        if (radius <= 0) return;
+        bool flyer = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR: no height limit
+        found.Add(new PlayerbotThreat(at, radius, flyer, radii, creature));
     }
 
     /// <summary>

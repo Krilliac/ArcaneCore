@@ -115,7 +115,7 @@ internal sealed class PlayerbotPartyAI
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _combatSpells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
-        _risk = new PlayerbotRisk(session, options, _combatSpells);
+        _risk = new PlayerbotRisk(session, options, _combatSpells) { AvoidsStrongCreatures = false };
         _follower = new PlayerbotFollower(session, options);
         _random = new Random(session.AccountId);
         _chat = chat;
@@ -500,6 +500,9 @@ internal sealed class PlayerbotPartyAI
                 break;
         }
     }
+
+    /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
+    internal PlayerbotRisk Risk => _risk;
 
     /// <summary>The retreat (inspection and tests): a party bot retreats only from a wiping group.</summary>
     internal PlayerbotRetreat Retreat => _risk.Retreat;

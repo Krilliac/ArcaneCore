@@ -355,6 +355,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Every walk of this bot keeps out of its hazards (PlayerbotHazards), unless the estimate is off.
         PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? Risk : null);
 
+        // The way out of a ring of strong creatures (PlayerbotRisk.Refused) owns the bot, out of combat, until walked or bounded.
+        if (!player.Combat.IsInCombat && Risk.EscapeRoute is { } escape)
+        {
+            DropIntent();
+            _goal = PlayerbotGoalKind.Escape;
+            if (!PlayerbotNavigation.TryAdvance(_session, escape, _options, interval, _session.World.NowMs)) Risk.EndEscape();
+            return;
+        }
+
         if (_lootOpened && _target is { } pendingLoot)
         {
             if (!PlayerbotMovementControl.Stop(_session, player)) return;

@@ -89,9 +89,18 @@ internal static class PlayerbotNavigation
             && path.Points.All(Finite) && float.IsFinite(path.Length)
             && path.Length <= maxDistance;
 
+    /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
+    /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route)
-        => Plan(player, destination, destination, options, partial: false, out route, out _);
+        out PlayerbotRoute? route, bool trial = false)
+        => Plan(player, destination, destination, options, partial: false, trial, out route, out _);
+
+    /// <summary>
+    /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
+    /// (<see cref="PlayerbotRisk.Refused"/>), which checks the route against every other hazard itself.
+    /// </summary>
+    internal static bool TryPlanUnguarded(Player player, Vector3 destination, PlayerbotOptions options, out PlayerbotRoute? route)
+        => PlanDirect(player, destination, destination, options, partial: false, out route, out _) && route is not null;
 
     /// <summary>
     /// <see cref="TryPlan"/> with an explicit search budget (up to <see cref="MaxSearchNodes"/>) whatever the straight distance: for a
@@ -99,7 +108,7 @@ internal static class PlayerbotNavigation
     /// bounds (<see cref="PlayerbotOptions.MaxRouteYards"/>, <see cref="PlayerbotOptions.MaxPathPoints"/>) still hold.
     /// </summary>
     internal static bool TryPlanFar(Player player, Vector3 destination, PlayerbotOptions options, int searchNodes, out PlayerbotRoute? route)
-        => Plan(player, destination, destination, options, partial: false, out route, out _, Math.Clamp(searchNodes, 1, MaxSearchNodes));
+        => Plan(player, destination, destination, options, partial: false, trial: false, out route, out _, Math.Clamp(searchNodes, 1, MaxSearchNodes));
 
     /// <summary>Closer than this to its goal, a partial route ends near enough to count (<see cref="TryPlanToward"/>).</summary>
     internal const float PartialProgressYards = 2f;
@@ -133,7 +142,7 @@ internal static class PlayerbotNavigation
         // the refusal: one plan attempt costs one query, as before. Only an unloaded tile or no mesh (a refused straight line) goes on.
         if (distance > chunk && distance <= options.MaxRouteYards)
         {
-            if (Plan(player, goal, goal, options, partial: true, out route, out bool goalStraightRefused)) return true;
+            if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused)) return true;
             if (!goalStraightRefused) return false;
         }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
@@ -144,7 +153,7 @@ internal static class PlayerbotNavigation
         for (; ; chunk /= 2)
         {
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
-            if (Plan(player, destination, goal, options, partial: true, out route, out bool straightRefused)) return true;
+            if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused)) return true;
             if (!straightRefused || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
@@ -158,7 +167,7 @@ internal static class PlayerbotNavigation
     /// </summary>
     /// <param name="straightRefused">The mesh had no corridor to offer, only a straight line (an unloaded tile, or no mesh), and the terrain
     /// stepper refused that line.</param>
-    private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
+    private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null)
     {
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
@@ -169,7 +178,8 @@ internal static class PlayerbotNavigation
         route = null;
         Vector3 start = direct.Points[0], end = direct.Points[^1];
         Vector3 flat = new(end.X - start.X, end.Y - start.Y, 0);
-        if (flat.Length() < 1f || player.Map is not { } map) return false;
+        if (flat.Length() < 1f || player.Map is not { } map) return false; // no way to judge: not evidence of a ring
+
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
         foreach (float extra in HazardDetourYards)
@@ -196,6 +206,8 @@ internal static class PlayerbotNavigation
                 return true;
             }
 
+        // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
+        if (!trial) risk.Refused(player, hazard);
         return false;
     }
 
@@ -567,7 +579,7 @@ internal static class PlayerbotNavigation
         if (Guards.TryGetValue(player, out PlayerbotRisk? risk))
         {
             List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
-            if (risk.Blocking(player, rest) is not null)
+            if (risk.Blocking(player, rest, strong: !risk.IsEscape(route)) is not null)
             {
                 PlayerbotMovementControl.Stop(session, player);
                 return false;

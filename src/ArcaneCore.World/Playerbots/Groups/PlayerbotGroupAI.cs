@@ -94,7 +94,7 @@ internal sealed class PlayerbotGroupAI
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
-        _risk = new PlayerbotRisk(session, options, _spells);
+        _risk = new PlayerbotRisk(session, options, _spells) { AvoidsStrongCreatures = false };
         _recovery.Hazards = _risk.HazardThreats;
         _random = new Random(session.AccountId);
         _followAngle = (float)(_random.NextDouble() * MathF.Tau);
@@ -111,6 +111,9 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>What the bot did at its last think (inspection, the group stall line): <c>lead:hold-not-ready</c>, <c>fight:114:hold</c>, ...</summary>
     internal string Step { get; private set; } = "none";
+
+    /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
+    internal PlayerbotRisk Risk => _risk;
 
     /// <summary>The bot's retreat (a wiping group).</summary>
     internal PlayerbotRetreat Retreat => _risk.Retreat;

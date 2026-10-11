@@ -124,8 +124,38 @@ same way into the same creatures after its revive.
 ## Hazards on every walk
 
 `PlayerbotHazards` holds, for `DangerMemorySeconds`: each creature with a spell that kills the bot outright (its aggro reach plus 8
-yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), the place of each death (25 yards)
-and of each retreat (20). The brain looks the visible creatures over every 2 seconds, alive or a ghost.
+yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), each creature beyond the bot's
+strength alone (`strong`: `PlayerbotRiskModel.BeyondStrength` on the creature by itself, at full health and mana; its reach plus 3,
+dropped at the next look once the bot can take it), the place of each death (25 yards) and of each retreat (20). The brain looks the
+visible creatures over every 2 seconds, alive or a ghost. The `strong` kind is for a bot on its own: a bot-led group's leader and a
+party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Strong hazards are
+kept apart (their own cap of 64, so they never push a death or retreat place out), updated in place at each look, dropped when a look
+no longer sees the creature alive and strong, and lapse 6 seconds after the last look (a ghost, or a bot whose brain a bot-led
+group drives, keeps none).
+
+A bot ringed by them (a low-level bot revived among higher creatures, their reaches overlapping round it) walks out by a bounded
+escape (`PlayerbotRisk.Refused`, ring-escape spec of 2026-10-11):
+* **Gate.** Only a goal's walk refused for a strong hazard counts; the trial plans of the pull estimate and of detours do not. The bot
+  must have stayed within 10 yards of where the clock started for 6 seconds of world time (`BoxedMs`; any number of refusals in one
+  tick count for nothing), and no straight line round it may be clear for its first 40 yards. Two creatures guarding a destination
+  leave open lines: no escape, the goal backs off and the stall watch sets it aside as before. Each bot waits a further 0-2 seconds
+  by its guid, so bots revived together do not all run the fan on one tick. At most one escape per 6 seconds, and at most 3 per
+  5 minutes (a bot that never gets clear leaves its goal to the stall watch).
+* **Exit.** `PlayerbotHazards.TryFindGap`: a fan of 48 lines (7.5 degrees), each scored by how deep its 2-yard samples lie inside the
+  creatures' own aggro reach up to 5 yards past the last strong hazard on it; a line touching a death, retreat, lethal or fled
+  hazard on the way is unusable; the least exposed wins (the gap between two creatures), ties to the nearer exit. One fan gives
+  the best 3 lines; each is planned on the navigation, checked again against the non-strong hazards, and held to its line
+  (`RouteExposure`): a route the navigation bent deeper into the reaches than its straight line is taken only when no route keeps
+  to its line. No allocation; one attempt's fan costs about 0.2 ms at 64 strong and 10 other hazards (1.3-1.45 ms when it ran the
+  fan once per planned line, `PlayerbotStrongHazardCostTests`).
+* **Walk.** The route is pinned (`EscapeRoute`, goal `Escape`), walked by the brain before any goal, for at most 20 seconds
+  (`EscapeLifeMs`); `TryAdvance` exempts that one route from strong hazards only. Combat or a death ends it, and a death resets
+  the clock.
+* **Invariants.** Death, retreat, lethal and fled hazards always block, the escape route included. An ordinary route never has
+  strong hazards relaxed. One look at 64 strong creatures costs about 32 us and
+allocates nothing (`PlayerbotStrongHazardCostTests`; 272-300 us and 47 KB before). Live w23 2026-10-11:
+five level 1-3 bots without a home, revived at the Goldshire spirit healer, gave 58 bodies up in 38 minutes among level 5-6 Defias
+Cutpurses and Mangy Wolves that the pull estimate rightly avoided (`reason=too-strong`), attacked on sight on their walks past them.
 
 Every route a living bot is given (`PlayerbotNavigation.TryPlan` / `TryPlanToward`: quest givers and objectives, trainers, vendors,
 quest travel, exploring, approaches) is checked, sampled every 2 yards, against the hazards it does not already stand in. One that
