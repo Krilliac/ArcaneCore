@@ -420,11 +420,12 @@ public sealed class PlayerbotElevatorSafetyTests(ITestOutputHelper output)
         await using ElevatorPartyWorld world = await ElevatorPartyWorld.StartAsync("Liftparty");
         await world.RideIntoTheShaftAsync(above: 40f);
         await world.InviteAsync();
-        (bool partyDrove, Vector3 handedOverAt, bool aboardAtHandOver, float lowest) = await world.WatchHandOverAsync();
-        output.WriteLine($"handed over at {handedOverAt}, aboard {aboardAtHandOver}, lowest z after the invite {lowest:F1}");
+        (bool partyDrove, bool aboardAtHandOver, float lowest, bool held, Vector3? offCarElsewhere) = await world.WatchHandOverAsync();
+        output.WriteLine($"party drove {partyDrove}, aboard at hand-over {aboardAtHandOver}, held for the landing {held}, lowest z {lowest:F1}");
         Assert.True(partyDrove, "the party never took the bot over");
+        Assert.True(held, "the feature never held the bot for the landing");
         Assert.False(aboardAtHandOver, "the party took the bot over on the car");
-        Assert.True(MathF.Abs(handedOverAt.Z - ElevatorTestWorld.TopFloor) < 1f, $"handed over at {handedOverAt}: not on the plateau");
+        Assert.True(offCarElsewhere is null, $"the bot stood off the car at {offCarElsewhere}: not on the plateau");
         Assert.True(lowest > ElevatorTestWorld.BottomFloor + 30f, $"went down to z {lowest:F1} after the invite");
     }
 }

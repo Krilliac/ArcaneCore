@@ -84,22 +84,33 @@ internal sealed class ElevatorPartyWorld : IAsyncDisposable
 
     public Task InviteAsync() => Master.SendAsync(WorldOpcode.CmsgGroupInvite, PartyTestHost.CString(BotName));
 
-    /// <summary>Until the party AI drives the bot: where it stood then, whether it was on the car, and the lowest it went meanwhile.</summary>
-    public async Task<(bool PartyDrove, Vector3 At, bool Aboard, float Lowest)> WatchHandOverAsync()
+    /// <summary>
+    /// Until the party AI drives the bot: whether it did, whether it was on the car when it first did, the lowest the bot went, whether the
+    /// feature held it for a landing meanwhile, and any sample of the held bot standing off the car away from the top plateau.
+    /// Every sample is taken on the world thread in one step with the hand-off flag, so a slow poll (a loaded machine) cannot pair a stale
+    /// position with a later hand-off. The position at the hand-off itself is not observable from here: the party AI moves the bot (it
+    /// is summoned to its master on another map) in the same tick that takes it over.
+    /// </summary>
+    public async Task<(bool PartyDrove, bool Aboard, float Lowest, bool Held, Vector3? OffCarElsewhere)> WatchHandOverAsync()
     {
         ManagedPlayerbotFeature feature = PartyTestHost.Feature(Host);
         float lowest = float.MaxValue;
+        bool held = false;
+        Vector3? offCarElsewhere = null;
         DateTime deadline = DateTime.UtcNow + Patience;
         while (DateTime.UtcNow < deadline)
         {
-            (Vector3 at, bool aboard) = await Host.OnWorldAsync(() =>
-                (new Vector3(Bot.X, Bot.Y, Bot.Z), (Bot.Movement.Flags & MovementFlags.OnTransport) != 0));
+            (Vector3 at, bool aboard, bool driven, bool holding) = await Host.OnWorldAsync(() =>
+                (new Vector3(Bot.X, Bot.Y, Bot.Z), (Bot.Movement.Flags & MovementFlags.OnTransport) != 0, feature.IsPartyDriven(BotId),
+                    PlayerbotElevator.HoldsForLanding(Bot)));
             lowest = MathF.Min(lowest, at.Z);
-            if (feature.IsPartyDriven(BotId)) return (true, at, aboard, lowest);
-            await Task.Delay(20);
+            if (driven) return (true, aboard, lowest, held, offCarElsewhere);
+            held |= holding;
+            if (!aboard && MathF.Abs(at.Z - ElevatorTestWorld.TopFloor) >= 1f) offCarElsewhere ??= at;
+            await Task.Delay(5);
         }
 
-        return (false, default, false, lowest);
+        return (false, false, lowest, held, offCarElsewhere);
     }
 
     private static async Task WaitAsync(WorldTestHost host, Func<bool> condition, string what)
