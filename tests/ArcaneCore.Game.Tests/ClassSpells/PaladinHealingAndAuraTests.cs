@@ -127,6 +127,10 @@ public sealed class PaladinHealingAndAuraTests : IDisposable
         Assert.True(holyLightBlessed - holyLightAlone > flashBlessed - flashAlone); // 210 versus 60 through the same coefficient
         Assert.Equal(210, BlessingOfLightRules.TakenBonus(_kit.System, _friend, _kit.Store.Get(HolyLightScript.HolyLightHeal)!));
         Assert.Equal(60, BlessingOfLightRules.TakenBonus(_kit.System, _friend, _kit.Store.Get(HolyLightScript.FlashOfLightHeal)!));
+
+        _kit.System.RemoveAuras(_friend, BlessingOfLight);
+        Assert.Equal(0, BlessingOfLightRules.TakenBonus(_kit.System, _friend, _kit.Store.Get(HolyLightScript.HolyLightHeal)!));
+        Assert.Equal(0, BlessingOfLightRules.TakenBonus(_kit.System, _friend, _kit.Store.Get(HolyLightScript.FlashOfLightHeal)!));
     }
 
     private int Shadow => _friend.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Shadow);

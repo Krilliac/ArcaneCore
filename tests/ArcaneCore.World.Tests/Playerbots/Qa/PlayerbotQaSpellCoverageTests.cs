@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Spells;
@@ -51,6 +52,22 @@ public sealed class PlayerbotQaSpellCoverageTests : IDisposable
         var system = new SpellSystem(new SpellStore(Spells(), [], []), () => 0);
         new ScriptEffectModule().Register(system);
         return system;
+    }
+
+    [Fact]
+    public void BlessingOfLightDummyAuras_AreReadByTheHealingBonusRule()
+    {
+        SpellInfo blessing = Spell(19977,
+            Effect(SpellEffectName.ApplyAura, 210, aura: AuraType.Dummy),
+            Effect(SpellEffectName.ApplyAura, 60, aura: AuraType.Dummy)) with
+        {
+            SpellFamilyName = PaladinSpells.Family,
+            SpellFamilyFlags = 1UL << BlessingOfLightRules.BlessingsBit,
+            SpellVisual = BlessingOfLightRules.BlessingOfLightVisual,
+        };
+        var system = new SpellSystem(new SpellStore([blessing], [], []), () => 0);
+
+        Assert.Empty(new PlayerbotQaSpellGapAnalyzer(system).Of(blessing));
     }
 
     [Fact]

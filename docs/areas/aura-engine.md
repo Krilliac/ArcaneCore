@@ -50,7 +50,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 
 Levels: `Handler` = a handler is registered with the spell system; `Referenced` = no handler, but code outside the aura files names the type (this does
 not mean every vmangos consumer exists); `Unsupported` = nothing acts on it. The column "consumers" lists up to three source files that mention the type.
-Counts: Handler 139, Referenced 26, Unsupported 27, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
+Counts: Handler 140, Referenced 27, Unsupported 25, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
 disagrees with the live registrations of a composed world host.
 
 | Value | Aura type | Level | vmangos handler | Consumers | Owner of the gap |
@@ -146,7 +146,7 @@ disagrees with the live registrations of a composed world host.
 | 88 | ModHealthRegenPercent | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:153) | HealthRegenPercentAuras.cs, MapCombat.Regen.cs |  |
 | 89 | PeriodicDamagePercent | Handler | `HandlePeriodicDamagePCT` (SpellAuras.cpp:154) | SpellInfoRuleExtensions.cs, SpellPackets.cs, SpellSystem.Auras.cs |  |
 | 90 | ModResistChance | Unsupported | `HandleUnused` (SpellAuras.cpp:155) |  |  |
-| 91 | ModDetectRange | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:156) |  |  |
+| 91 | ModDetectRange | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:156) | CreatureMapSystem.Aggro.cs |  |
 | 92 | PreventsFleeing | Referenced | `HandlePreventFleeing` (SpellAuras.cpp:157) | CcAuraHandlers.cs, CcState.cs |  |
 | 93 | ModUnattackable | Unsupported | `HandleModUnattackable` (SpellAuras.cpp:158) |  |  |
 | 94 | InterruptRegen | Referenced | `HandleInterruptRegen` (SpellAuras.cpp:159) | MapCombat.Regen.cs |  |
@@ -155,7 +155,7 @@ disagrees with the live registrations of a composed world host.
 | 97 | ManaShield | Referenced | `HandleManaShield` (SpellAuras.cpp:162) | SpellSystem.Mitigation.cs |  |
 | 98 | ModSkillTalent | Handler | `HandleAuraModSkill` (SpellAuras.cpp:163) | SkillAuras.cs |  |
 | 99 | ModAttackPower | Handler | `HandleAuraModAttackPower` (SpellAuras.cpp:164) | StatAuras.cs |  |
-| 100 | AurasVisible | Unsupported | `HandleAurasVisible` (SpellAuras.cpp:165) |  |  |
+| 100 | AurasVisible | Handler | `HandleAurasVisible` (SpellAuras.cpp:165) | VisualAuras.cs |  |
 | 101 | ModResistancePct | Handler | `HandleModResistancePercent` (SpellAuras.cpp:166) | PercentStatAuras.cs |  |
 | 102 | ModMeleeAttackPowerVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:167) |  |  |
 | 103 | ModTotalThreat | Handler | `HandleAuraModTotalThreat` (SpellAuras.cpp:168) | ThreatAuras.cs |  |
