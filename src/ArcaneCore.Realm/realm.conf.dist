@@ -27,7 +27,7 @@
 # SECTIONS
 #
 #   AUTH                        15 keys
-#   DATABASE                    6 keys
+#   DATABASE                    8 keys
 #   DIAGNOSTICS                 6 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
@@ -276,6 +276,19 @@ Database.Auth.ConnectionString = ""
 Database.Auth.Provider = MariaDb
 
 #
+#    Database.Auth.SqliteBusyTimeoutMs
+#        Description: SQLite only: this component's busy timeout in milliseconds (0..60000),
+#                     overriding Database:SqliteBusyTimeoutMs. Unset inherits it. Other engines
+#                     ignore it.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.SqliteBusyTimeoutMs =
+
+#
 #    Database.ConnectionString
 #        Description: The connection string for any component that has no Database:<Component>
 #                     sub-section of its own. The shipped Realm file uses this single-database form.
@@ -300,6 +313,25 @@ Database.ConnectionString = ""
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Provider = MariaDb
+
+#
+#    Database.SqliteBusyTimeoutMs
+#        Description: SQLite only: how long (0..60000 ms, default 5000) a connection waits inside
+#                     SQLite for another connection's write lock before reporting "database is
+#                     locked", set as PRAGMA busy_timeout on every connection (never more than the
+#                     connection string's Default Timeout, and clamped to
+#                     Resilience:Database:QueryTimeoutMs when the database guard is on, so a refused
+#                     call never outlives its deadline in SQLite's busy handler). Without it a
+#                     waiting writer retries only every 150 ms, so the many background writers on
+#                     one SQLite file starve each other. 0 disables the pragma. MariaDB, MySQL and
+#                     PostgreSQL ignore it (docs/areas/persistence.md).
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SqliteBusyTimeoutMs = 5000
 
 #
 #    Database.Upgrade.LockTimeoutSeconds

@@ -38,7 +38,7 @@
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
-#   DATABASE                    10 keys
+#   DATABASE                    14 keys
 #   DIAGNOSTICS                 9 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       234 keys
+#   WORLD                       259 keys
 #
 ###############################################################################
 
@@ -2724,6 +2724,19 @@ Database.Auth.ConnectionString = ""
 Database.Auth.Provider = MariaDb
 
 #
+#    Database.Auth.SqliteBusyTimeoutMs
+#        Description: SQLite only: this component's busy timeout in milliseconds (0..60000),
+#                     overriding Database:SqliteBusyTimeoutMs. Unset inherits it. Other engines
+#                     ignore it.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.SqliteBusyTimeoutMs =
+
+#
 #    Database.Characters.ConnectionString
 #        Description: The connection string of this component's database. The shipped files carry
 #                     the development placeholder user arcane; change it for any real deployment.
@@ -2747,6 +2760,19 @@ Database.Characters.ConnectionString = ""
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Characters.Provider = MariaDb
+
+#
+#    Database.Characters.SqliteBusyTimeoutMs
+#        Description: SQLite only: this component's busy timeout in milliseconds (0..60000),
+#                     overriding Database:SqliteBusyTimeoutMs. Unset inherits it. Other engines
+#                     ignore it.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.SqliteBusyTimeoutMs =
 
 #
 #    Database.ConnectionString
@@ -2773,6 +2799,25 @@ Database.ConnectionString = ""
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Provider = MariaDb
+
+#
+#    Database.SqliteBusyTimeoutMs
+#        Description: SQLite only: how long (0..60000 ms, default 5000) a connection waits inside
+#                     SQLite for another connection's write lock before reporting "database is
+#                     locked", set as PRAGMA busy_timeout on every connection (never more than the
+#                     connection string's Default Timeout, and clamped to
+#                     Resilience:Database:QueryTimeoutMs when the database guard is on, so a refused
+#                     call never outlives its deadline in SQLite's busy handler). Without it a
+#                     waiting writer retries only every 150 ms, so the many background writers on
+#                     one SQLite file starve each other. 0 disables the pragma. MariaDB, MySQL and
+#                     PostgreSQL ignore it (docs/areas/persistence.md).
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SqliteBusyTimeoutMs = 5000
 
 #
 #    Database.Upgrade.LockTimeoutSeconds
@@ -2825,6 +2870,19 @@ Database.World.ConnectionString = ""
 #        Docs: docs/reference/configuration.md#database
 #
 Database.World.Provider = MariaDb
+
+#
+#    Database.World.SqliteBusyTimeoutMs
+#        Description: SQLite only: this component's busy timeout in milliseconds (0..60000),
+#                     overriding Database:SqliteBusyTimeoutMs. Unset inherits it. Other engines
+#                     ignore it.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.World.SqliteBusyTimeoutMs =
 
 ###############################################################################
 # DIAGNOSTICS
@@ -7522,6 +7580,32 @@ World.Port = 8085
 World.PreAuthTimeout = 00:00:10
 
 #
+#    World.SaveQueueWarnAgeMs
+#        Description: The character save queue warns while its oldest waiting snapshot has waited
+#                     this many milliseconds. 0 disables the age check. Default 5000, the quest
+#                     settlement budget (docs/areas/persistence.md).
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.SaveQueueWarnAgeMs = 5000
+
+#
+#    World.SaveQueueWarnDepth
+#        Description: The character save queue warns (at most every 30 s) while this many characters
+#                     or more have a snapshot waiting or being written. 0 disables the depth check.
+#                     Default 1000 (docs/areas/persistence.md).
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.SaveQueueWarnDepth = 1000
+
+#
 #    World.StrictMovementFiniteness
 #        Description: Hardening beyond retail: also require pitch, jump speeds/angles and spline
 #                     elevation to be finite before a movement block is stored and relayed. Retail
@@ -9618,6 +9702,19 @@ World.Playerbots.MaxActionsPerTick = 4
 World.Playerbots.MaxBots = 8
 
 #
+#    World.Playerbots.MaxBulkCommand
+#        Description: The most bots one bulk command (.playerbot summon|send|start|stop ... all or a
+#                     prefix) moves or starts without force (1..MaxBotsCeiling). A selection larger
+#                     than this, with no smaller count, is refused. Live through .reload config.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxBulkCommand = 50
+
+#
 #    World.Playerbots.MaxFaults
 #        Description: The faults within FaultWindowSeconds that disable a bot for good
 #                     (DesiredEnabled off; 1..100).
@@ -9924,6 +10021,273 @@ World.Playerbots.StallSeconds = 120
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkIntervalMs = 500
+
+#----------------------------------------------------------------------------
+# World:Playerbots:Qa
+#----------------------------------------------------------------------------
+
+#
+#    World.Playerbots.Qa.Directory
+#        Description: The folder of the findings file, the exports (report.md, report.json) and the
+#                     dry-run issues (pending-issues/): relative to the profile folder, or absolute.
+#        Type: string
+#        Default: "qa"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.Directory = "qa"
+
+#
+#    World.Playerbots.Qa.Enabled
+#        Description: Aggregate the bot stall, death-loop, fault and missing-data warnings into
+#                     findings (on by default; it is cheap and never touches the world thread).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.Enabled = true
+
+#
+#    World.Playerbots.Qa.ExportIntervalSeconds
+#        Description: Seconds between two passes that save the findings, write the exports and
+#                     publish (10..86400).
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.ExportIntervalSeconds = 300
+
+#
+#    World.Playerbots.Qa.GitHub.CommentIntervalHours
+#        Description: At most one comment per finding in this many hours (1..720).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.CommentIntervalHours = 24
+
+#
+#    World.Playerbots.Qa.GitHub.Enabled
+#        Description: Report findings to GitHub (off by default). Enabled without Publish is a dry
+#                     run: no network call is made.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.Enabled = false
+
+#
+#    World.Playerbots.Qa.GitHub.GhPassToken
+#        Description: For GhCli only: hand the token from TokenEnvironmentVariable to gh as GH_TOKEN
+#                     (off by default: GITHUB_TOKEN and GH_TOKEN are removed from the child so gh
+#                     uses its own login).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.GhPassToken = false
+
+#
+#    World.Playerbots.Qa.GitHub.GhPath
+#        Description: The gh executable for Transport = GhCli: a file name looked up on PATH (gh) or
+#                     a full path (1..260 characters).
+#        Type: string
+#        Default: "gh"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.GhPath = "gh"
+
+#
+#    World.Playerbots.Qa.GitHub.Labels
+#        Description: The labels put on created issues; the first one is also how existing issues
+#                     are listed (1..10 labels; a configured list replaces the default).
+#        Type: string[]
+#        Default: 0 = bot-qa
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+# These entries are the default list. They are commented out because a list you write is appended to the default list, not
+# substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
+# World.Playerbots.Qa.GitHub.Labels.0 = "bot-qa"
+
+#
+#    World.Playerbots.Qa.GitHub.MaxCommentsPerHour
+#        Description: The most comments added per rolling hour (0..1000; 0 adds none).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MaxCommentsPerHour = 10
+
+#
+#    World.Playerbots.Qa.GitHub.MaxIssuesPerHour
+#        Description: The most issues created per rolling hour (0..1000; 0 creates none); the rest
+#                     stay pending.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MaxIssuesPerHour = 5
+
+#
+#    World.Playerbots.Qa.GitHub.MaxListPages
+#        Description: The most 100-issue pages read when looking for an existing issue (1..100).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MaxListPages = 10
+
+#
+#    World.Playerbots.Qa.GitHub.MinDistinctBots
+#        Description: A finding caused by bots is reported once this many different bots met it
+#                     (1..10000); data findings of creature scripts are exempt.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MinDistinctBots = 2
+
+#
+#    World.Playerbots.Qa.GitHub.MinOccurrences
+#        Description: A finding is reported once it was seen this many times (1..1000000).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.MinOccurrences = 3
+
+#
+#    World.Playerbots.Qa.GitHub.Publish
+#        Description: Really create issues and comments (off by default = dry run: the would-be
+#                     issues are written to qa/pending-issues/ and logged, nothing is sent).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.Publish = false
+
+#
+#    World.Playerbots.Qa.GitHub.ReopenClosed
+#        Description: Reopen a finding's issue when it was closed and the finding keeps happening
+#                     (off by default: a closed issue is recorded as known and left alone).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.ReopenClosed = false
+
+#
+#    World.Playerbots.Qa.GitHub.Repository
+#        Description: The repository, owner/repo (required while enabled).
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.Repository = ""
+
+#
+#    World.Playerbots.Qa.GitHub.RequestTimeoutSeconds
+#        Description: Seconds one GitHub request may take (1..120).
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.RequestTimeoutSeconds = 15
+
+#
+#    World.Playerbots.Qa.GitHub.TokenEnvironmentVariable
+#        Description: The name of the environment variable that holds a fine-grained token with
+#                     Issues read and write on the repository (the value is never read from
+#                     configuration and never logged).
+#        Type: string
+#        Default: "ARCANECORE_GITHUB_TOKEN"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.TokenEnvironmentVariable = "ARCANECORE_GITHUB_TOKEN"
+
+#
+#    World.Playerbots.Qa.GitHub.Transport
+#        Description: How issues are read and written: Rest (default; the GitHub REST API with the
+#                     token from TokenEnvironmentVariable) or GhCli (runs the gh tool with an
+#                     argument list and no shell, using the login of the user the server runs as;
+#                     the token variable is not needed). Values: Rest, GhCli.
+#        Type: PlayerbotQaGitHubTransport
+#        Default: Rest
+#        Allowed: Rest | GhCli
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.Transport = Rest
+
+#
+#    World.Playerbots.Qa.MaxFindings
+#        Description: The most findings kept (10..100000); beyond it the lowest-severity unpublished
+#                     finding is dropped.
+#        Type: int
+#        Default: 2000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.MaxFindings = 2000
+
+#
+#    World.Playerbots.Qa.MaxSamples
+#        Description: The newest evidence samples kept per finding (1..20).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.MaxSamples = 5
+
+#
+#    World.Playerbots.Qa.SignalQueueCapacity
+#        Description: Warnings waiting for the aggregator at once (64..1000000); a full queue drops
+#                     the oldest and counts it.
+#        Type: int
+#        Default: 4096
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.SignalQueueCapacity = 4096
 
 #----------------------------------------------------------------------------
 # World:Social

@@ -5,8 +5,10 @@ namespace ArcaneCore.Kernel.Configuration.Conf;
 /// <summary>
 /// Decides which configuration values are secrets and masks them for <c>write-config --current</c>. A key is secret when the last
 /// segment of its path ends with <c>ConnectionString</c> (the password inside is masked, the rest stays readable) or contains
-/// <c>Password</c>, <c>Pwd</c>, <c>Secret</c>, <c>Token</c> or <c>ApiKey</c> (the whole value is masked). Independently of the key
-/// name, a <c>Password=</c> or <c>Pwd=</c> component inside any value is masked. Pure functions, thread-safe, no I/O.
+/// <c>Password</c>, <c>Pwd</c>, <c>Secret</c>, <c>Token</c> or <c>ApiKey</c> (the whole value is masked), except a segment ending with
+/// <c>EnvironmentVariable</c>, which holds the name of the variable a secret is read from, not the secret. A <c>true</c> or <c>false</c>
+/// value is never masked: a switch such as <c>GhPassToken</c> is no secret. Independently of the key name, a <c>Password=</c> or
+/// <c>Pwd=</c> component inside any value is masked. Pure functions, thread-safe, no I/O.
 /// </summary>
 public static class ConfSecrets
 {
@@ -28,7 +30,7 @@ public static class ConfSecrets
     {
         if (IsWholeValueSecret(path))
         {
-            return value.Length == 0 ? value : Placeholder;
+            return value.Length == 0 || IsSwitch(value) ? value : Placeholder;
         }
 
         return MaskPasswordComponents(value);
@@ -45,9 +47,17 @@ public static class ConfSecrets
 
     private static bool IsConnectionString(string path) => LastSegment(path).EndsWith("ConnectionString", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsSwitch(string value) =>
+        value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) || value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsWholeValueSecret(string path)
     {
         string segment = LastSegment(path);
+        if (segment.EndsWith("EnvironmentVariable", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         foreach (string marker in WholeValueMarkers)
         {
             if (segment.Contains(marker, StringComparison.OrdinalIgnoreCase))
