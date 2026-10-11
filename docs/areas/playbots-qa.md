@@ -90,8 +90,8 @@ content is not loaded.
 
 * **MissingData**: the stall target has no spawn on that map, no `creature_template` row, or names a `ScriptName` the server does not
   have; none of a quest's objective creatures has a spawn; a relay script is missing or its waypoint path does not exist.
-* **BehaviourBug**: an action fault, a quarantine or a disabled bot; a death loop with no attacker.
-* **ContentDifficulty**: a death loop against an elite, rare or boss, against attackers three or more levels above the quest, or
+* **BehaviourBug**: an action fault, a quarantine or a disabled bot; a repeated environmental or self-inflicted death. Its detail names a recorded fatal source (fall, drowning, fatigue, lava, slime or fire) when known. A death with a player killer, a periodic tick whose caster is unavailable, a null killing-blow source or a missed observer is Unknown rather than asserted to be a bot movement bug. Historical warnings with no source keep their original BehaviourBug classification.
+* **ContentDifficulty**: a death loop against an elite, rare or boss, a guard observed hostile to the bot, against attackers three or more levels above the bot (the quest level is used only for old warnings without a bot level), or
   against three or more different attackers.
 * **OutsideHome**: a stall logged as made outside the bot's home area (checked first). Expected for a homed bot on its way back or on an
   errand out of its home; it set the goal aside for that bot only. Such a stall is its own finding (its key ends `|outside`; the keys of
@@ -109,6 +109,8 @@ remembered quest was checked, titled and explained as that quest (GitHub #154: e
 Severity ranks findings: a weight per kind (quarantine/disabled 45, fault 40, set-aside 35, death loop 30, spell unsupported 30, spell no
 effect 28, relay data 25, spell refused 20, stall 15),
 plus `10 * log2(1 + count)`, plus 5 per distinct bot (at most 20), plus 10 for a finding seen in the last hour.
+
+New stall and death-loop evidence samples include the bot's level, race, team, class, reported goal and quest, and the release graveyard id and straight-line distance when a death's release selected a location on the death's map. A living stall has no release graveyard; a cross-map release has no comparable distance. Death samples retain the source of each death in the loop and each observed creature attacker's actual level, template level range, rank, guard flag and reaction to that bot. The map kill event supplies the actual killer even when it attacked from outside the bot's last combat scan; fatal environmental damage supplies its type. The reporter waits until the release hook has run, including a scheduled release after movement acknowledgment, before logging a death-loop sample. These fields live on samples, not on the fingerprint: one issue can still aggregate several bots with different levels or graveyards.
 
 ## Report and exports
 

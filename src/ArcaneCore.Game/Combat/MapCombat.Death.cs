@@ -95,6 +95,7 @@ public sealed partial class MapCombat
         c.DeathTimer = 0;
         SetDeathState(player, DeathState.Dead);
         player.NeedsVisibilityUpdate = true; // a ghost sees and is seen differently (GhostVisibilityRule)
+        player.RepopDestinationResolved = false;
 
         if (leaving)
         {
@@ -105,6 +106,7 @@ public sealed partial class MapCombat
         {
             c.RepopPending = false;
             Hooks.RepopAtGraveyard(player);
+            player.RepopDestinationResolved = true;
         }
         else
         {
@@ -129,6 +131,7 @@ public sealed partial class MapCombat
 
         c.RepopPending = false;
         Hooks.RepopAtGraveyard(player);
+        player.RepopDestinationResolved = true;
     }
 
     private byte[] BuildCorpseQueryFor(Player player) => Death.Travel.CorpseQuery.Build(player, _world);

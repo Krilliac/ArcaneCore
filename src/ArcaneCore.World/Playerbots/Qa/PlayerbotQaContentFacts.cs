@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Playerbots.Qa;
 
 /// <summary>The creature template facts the classifier uses.</summary>
-internal readonly record struct QaTemplateFacts(uint Rank, byte MinLevel, byte MaxLevel, string ScriptName);
+internal readonly record struct QaTemplateFacts(uint Rank, byte MinLevel, byte MaxLevel, string ScriptName, bool Guard = false);
 
 /// <summary>
 /// What the loaded content says about the ids a finding mentions (read-only, any thread). <see cref="Available"/> is false while the content is
@@ -95,7 +95,9 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
     }
 
     public QaTemplateFacts? Template(uint entry)
-        => Creatures?.Content.FindTemplate(entry) is { } t ? new QaTemplateFacts(t.Rank, t.MinLevel, t.MaxLevel, t.ScriptName) : null;
+        => Creatures?.Content.FindTemplate(entry) is { } t
+            ? new QaTemplateFacts(t.Rank, t.MinLevel, t.MaxLevel, t.ScriptName,
+                (t.Behaviour & CreatureBehaviourFlags.Guard) != 0) : null;
 
     public bool HasWaypointPath(uint entry, uint pathId)
     {

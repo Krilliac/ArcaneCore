@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
@@ -26,6 +27,69 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotDeathLoopTests
 {
     private static readonly Vector3 Here = new(-9130f, 305f, 95f);
+
+    [Fact]
+    public async Task CreatureKillingBlowBeforeFirstBrainUpdate_IsAttributed()
+    {
+        const uint entry = 993903;
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            Creature killer = await SpawnAsync(host, session, entry, 401);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.ObserveKillingBlows(player); // registration when a managed session enters the world
+                player.Health = 1;
+                player.Map!.Combat.DealDamage(killer, player, 2);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                string context = brain.QaReportContext(player, $"death loop: attackers={entry}");
+                Assert.Contains("source=Creature", context, StringComparison.Ordinal);
+                Assert.Contains($"attackerFacts={entry}:", context, StringComparison.Ordinal);
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task FatalFall_IsRecordedFromTheEnvironmentalDamagePath()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500); // register the actual kill observer
+                player.Health = 1;
+                EnvironmentalDamage.Apply(host.World, player, EnvironmentalDamageType.Fall, 1);
+                Assert.False(player.IsAlive);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Contains("source=Fall", brain.QaReportContext(player, "death loop: attackers=none"), StringComparison.Ordinal);
+                Assert.Contains("deathSources=Fall", brain.QaReportContext(player, "death loop: attackers=none"), StringComparison.Ordinal);
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
 
     /// <summary>A lethal creature hit between bot updates still has a known killer after combat clears attackers.</summary>
     [Fact]
@@ -50,6 +114,10 @@ public sealed class PlayerbotDeathLoopTests
                     Assert.False(player.IsAlive);
                     session.ManagedBudget = new ManagedActionBudget(4);
                     brain.Update(500);
+                    string context = brain.QaReportContext(player, $"death loop: attackers={Entry}");
+                    Assert.Contains("source=Creature", context, StringComparison.Ordinal);
+                    Assert.Contains($"attackerFacts={Entry}:", context, StringComparison.Ordinal);
+                    Assert.Contains(death == 0 ? "deathSources=Creature]" : "deathSources=Creature/Creature]", context, StringComparison.Ordinal);
                     player.Map!.RemoveObject(killer);
                     if (death == 0) player.Map!.Combat.ResurrectPlayer(player, 1f, applySickness: false);
                     return true;
