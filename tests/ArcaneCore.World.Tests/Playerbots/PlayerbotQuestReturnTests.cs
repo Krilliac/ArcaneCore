@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Npc;
@@ -186,6 +187,75 @@ public sealed class PlayerbotQuestReturnTests
             Assert.Equal(0u, goals.CompletedReturnQuest(fixture.Session.Player!));
             return true;
         });
+    }
+
+    [Fact]
+    public async Task CompletedOutOfHomeBreadcrumb_IsAbandonedThroughTheQuestHandler()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: false);
+        await fixture.AcceptAndCompleteAsync();
+        var brain = new PlayerbotBrain(fixture.Session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await fixture.Host.World.InvokeAsync(() =>
+            {
+                var player = fixture.Session.Player!;
+                player.SetPosition(player.X + 3_000f, player.Y, player.Z, 0);
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X, player.Y, player.Z), 750, "test home");
+                fixture.Session.ManagedBudget = new ManagedActionBudget(1);
+                brain.Update(500);
+                Assert.Equal(QuestStatus.None, fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Status);
+                return true;
+            });
+            await fixture.Feature.Persistence.FlushCharacterAsync((int)fixture.Session.Player!.Guid.Low);
+            await using var scope = fixture.Host.WorldServices.CreateAsyncScope();
+            CharacterQuestData saved = await scope.ServiceProvider.GetRequiredService<ICharacterQuestStore>()
+                .LoadAsync((int)fixture.Session.Player!.Guid.Low);
+            Assert.Equal((byte)QuestStatus.None, saved.Quests.Single(q => q.Quest == QuestInteractionFixture.QuestId).Status);
+        }
+        finally { brain.Stop(); }
+    }
+
+    [Fact]
+    public async Task RefusedDistantAbandon_DoesNotHoldTheBrainOrRepeatEveryThink()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: false);
+        await fixture.AcceptAndCompleteAsync();
+        var brain = new PlayerbotBrain(fixture.Session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await fixture.Host.World.InvokeAsync(() =>
+            {
+                // The managed dispatch reports InWorld even when an ordinary handler refuses the operation.
+                OpcodeTable opcodes = fixture.Host.Opcodes;
+                var refused = new OpcodeTable();
+                refused.OnWorld(WorldOpcode.CmsgQuestlogRemoveQuest, (_, _, _) => { });
+                OpcodeTable replacement = opcodes.TrySwap([WorldOpcode.CmsgQuestlogRemoveQuest], refused, out string? error)!;
+                Assert.Null(error);
+                opcodes.Replace(replacement);
+
+                int attempts = 0;
+                fixture.Session.ManagedDispatchObserver = opcode =>
+                {
+                    if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) attempts++;
+                };
+                var player = fixture.Session.Player!;
+                player.SetPosition(player.X + 3_000f, player.Y, player.Z, 0);
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X, player.Y, player.Z), 750, "test home");
+                for (int i = 0; i < 2; i++)
+                {
+                    fixture.Session.ManagedBudget = new ManagedActionBudget(1);
+                    brain.Update(500);
+                }
+
+                Assert.Equal(QuestStatus.Complete, fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Status);
+                Assert.True(brain.QuestGoals.IsRefused(QuestInteractionFixture.QuestId));
+                Assert.Equal(1, attempts);
+                Assert.NotEqual(PlayerbotGoalKind.Quest, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); }
     }
 
     private sealed class ReturnFixture(WorldTestHost host, WorldSession session) : IAsyncDisposable
