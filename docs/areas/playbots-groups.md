@@ -154,8 +154,10 @@ logged on the leader in the brains' shape (`Playerbot <id> (<name>) stalled 120s
 it gives up that goal`), which bot QA parses as a stall with goal `Group`. A further bound without progress gives the goal up (reason
 `stalled`, set aside for every member) and dissolves the group. The coordinator's warning and the events name the leader's last step
 (`PlayerbotGroupAI.Step`: `lead:hold-not-ready`, `fight:114:hold:20yd`, ...). Never a group with a real player in it, a stranded bot
-walking out, or the forming, wiped and disbanding states, nor while the leader waits at the objective's spawn (that has its own two
-minutes).
+walking out, or the forming, wiped, leaving and disbanding states (leaving has its own bound: the step timeout, then the stuck members
+are brought out), nor while the leader waits at the objective's spawn (that has its own two minutes). Outside engaging the stall line
+names target 0. The leader's own new target right after a re-target (within 5 s) keeps the strike, so a group with several unreachable
+targets still dissolves on the second bound.
 
 ## Few bots and stray cases
 
@@ -346,7 +348,9 @@ logged in again there (the login gate), walking out (`PlayerbotGroupWorldTests`,
 `PlayerbotGroupStallTests`: a pair led by a priest healer without an attack spell pulls and completes, with no stall line; a pair whose
 objective no path reaches re-targets after one stall bound, dissolves after the next (`stalled`, the goal set aside for both) and logs a
 stall line `PlayerbotQaSignalParser` reads as goal `Group`; the watch's bounds, a healthy group never stalling, and a target dropped and
-taken again counting as no progress.
+taken again counting as no progress; a finished run leaving with a member stuck inside brought out, not dissolved; several unreachable
+targets still dissolving on the second strike, while a new target long after the re-target or movement starts over; a group with a real
+player never touched; and target 0 outside engaging, in the shape bot QA parses.
 
 Runs: `PlayerbotRunFixesTests` (the stuck clock counting only continuous failure, bosses never pulled as trash, early-kill credit, the
 patrolling boss, a quest group's objective still judged by sight, and `.reload instance_encounter` replacing the encounters and the
