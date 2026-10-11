@@ -28,6 +28,11 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     private bool _hasStore;
     private GameEventService? _events;
     private uint _reloadMs;
+    private OffThreadStoreWork? _store;
+    private Func<Func<Task>, Task>? _offload;
+    private WarEffortPhase? _queuedPhase;
+    private bool _refreshDue;
+    private bool _wake;
     private readonly HashSet<CreatureMapSystem> _bossSystems = [];
     private readonly HashSet<int> _pendingBossDeaths = [];
     private readonly List<GameObject> _gates = [];
@@ -47,10 +52,29 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
 
     public WarEffortSnapshot Snapshot => Volatile.Read(ref _snapshot);
 
+    /// <summary>
+    /// Test seam for where realm-store work runs (<see cref="OffThreadStoreWork.Offload"/>). Production leaves it null: the
+    /// thread pool, never the world thread. Tests whose fake stores complete synchronously pass <c>work =&gt; work()</c>.
+    /// </summary>
+    internal Func<Func<Task>, Task>? StoreOffload
+    {
+        get => _offload;
+        set
+        {
+            _offload = value;
+            if (_store is not null && value is not null) _store.Offload = value;
+        }
+    }
+
+    /// <summary>The single-flight store runner (null before <see cref="Attach"/>).</summary>
+    internal OffThreadStoreWork? StoreWork => _store;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        _store = new OffThreadStoreWork(world);
+        if (_offload is not null) _store.Offload = _offload;
         using (IServiceScope scope = scopes.CreateScope())
         {
             if (scope.ServiceProvider.GetService<IWarEffortStateStore>() is { } store)
@@ -84,9 +108,11 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
 
     public void OnEventChanged(ushort eventId, bool active, bool resume)
     {
-        if (!_hasStore || eventId != WarEffortCatalog.GatheringEvent || !active || Snapshot.Phase != WarEffortPhase.Disabled)
-            return;
-        SetPhase(WarEffortPhase.Gathering, 0);
+        if (!_hasStore || eventId != WarEffortCatalog.GatheringEvent || !active || Snapshot.Phase != WarEffortPhase.Disabled
+            || _queuedPhase is not null) return;
+        _queuedPhase = WarEffortPhase.Gathering;
+        _wake = true;
+        TryLaunch();
     }
 
     private void Wire(GameEventService service)
@@ -112,30 +138,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         if (!_hasStore || boss.Map?.MapId != 1 || WarEffortCatalog.BossIndex(boss.Entry) is not { } bossIndex)
             return;
         _pendingBossDeaths.Add(bossIndex);
-        FlushBossDeaths();
-    }
-
-    private void FlushBossDeaths()
-    {
-        if (_pendingBossDeaths.Count == 0) return;
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
-            foreach (int bossIndex in _pendingBossDeaths.ToArray())
-            {
-                store.MarkBossKilledAsync(bossIndex).GetAwaiter().GetResult();
-                _pendingBossDeaths.Remove(bossIndex);
-            }
-            Reload();
-            SyncPhaseEvent();
-        }
-        catch (Exception ex)
-        {
-            // A storage outage must not interrupt CreatureMapSystem.OnCreatureDied before it sets corpse state.
-            // Keep the idempotent flag in memory and retry on the next five-second refresh.
-            logger.LogError(ex, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
-        }
+        _wake = true;
+        TryLaunch();
     }
 
     private void OnTick(uint diffMs)
@@ -144,46 +148,123 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         _reloadMs = _reloadMs > diffMs ? _reloadMs - diffMs : 0;
         if (_reloadMs == 0)
         {
-            try
+            _refreshDue = true;
+            _wake = true;
+            _reloadMs = 5_000;
+        }
+        TryLaunch();
+    }
+
+    /// <summary>What one store job did, filled off the world thread and read by <see cref="ApplyRefresh"/> on it.</summary>
+    private sealed class RefreshResult
+    {
+        public readonly List<int> FlushedBossDeaths = [];
+        public Exception? BossDeathFailure;
+        public WarEffortSnapshot? Snapshot;
+    }
+
+    /// <summary>
+    /// Starts the next store job when one is wanted and none is in flight. Quest turn-ins write the counters from their own
+    /// transactions, so the five-second refresh still reloads the durable state, but every store call now runs off the world
+    /// thread (<see cref="RunStoreAsync"/>) and only the loaded snapshot is applied on it.
+    /// </summary>
+    private void TryLaunch()
+    {
+        if (!_wake || _store is null || _store.Busy) return;
+        _wake = false;
+        int[] deaths = [.. _pendingBossDeaths];
+        WarEffortPhase? phase = _queuedPhase;
+        bool full = _refreshDue;
+        _refreshDue = false;
+        if (!full && deaths.Length == 0 && phase is null) return;
+        long now = UtcNowUnix();
+        var result = new RefreshResult();
+        _store.TryRun(() => RunStoreAsync(phase, deaths, full, now, result),
+            () =>
             {
-                FlushBossDeaths();
-                Reload();
-                WarEffortSnapshot state = Snapshot;
-                long now = UtcNowUnix();
-                if (state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0
-                    && state.PhaseEndsAtUnix <= now)
-                    SetPhase(WarEffortPhase.Gong, 0);
-                else if (state.Phase == WarEffortPhase.TenHourWar && state.PhaseEndsAtUnix > 0
-                    && state.PhaseEndsAtUnix <= now)
-                    SetPhase(WarEffortPhase.Done, 0);
-                SyncPhaseEvent();
+                if (_queuedPhase == phase) _queuedPhase = null;
+                ApplyRefresh(result, full, syncEvent: full || deaths.Length > 0);
+            },
+            ex =>
+            {
+                if (_queuedPhase == phase) _queuedPhase = null;
+                foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
+                logger.LogError(ex, "could not refresh AQ war-effort state");
+            });
+    }
+
+    private async Task RunStoreAsync(WarEffortPhase? phase, int[] deaths, bool full, long now, RefreshResult result)
+    {
+        using IServiceScope scope = scopes.CreateScope();
+        IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
+        if (phase is { } start) await store.SetPhaseAsync(start, 0).ConfigureAwait(false);
+        try
+        {
+            foreach (int bossIndex in deaths)
+            {
+                await store.MarkBossKilledAsync(bossIndex).ConfigureAwait(false);
+                result.FlushedBossDeaths.Add(bossIndex);
+            }
+        }
+        catch (Exception ex)
+        {
+            // A storage outage must not interrupt CreatureMapSystem.OnCreatureDied before it sets corpse state.
+            // Keep the idempotent flag in memory and retry on the next five-second refresh.
+            result.BossDeathFailure = ex;
+        }
+        WarEffortSnapshot state = await store.LoadAsync().ConfigureAwait(false);
+        result.Snapshot = state;
+        if (!full) return;
+        WarEffortPhase? next = state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0 && state.PhaseEndsAtUnix <= now
+            ? WarEffortPhase.Gong
+            : state.Phase == WarEffortPhase.TenHourWar && state.PhaseEndsAtUnix > 0 && state.PhaseEndsAtUnix <= now
+                ? WarEffortPhase.Done
+                : null;
+        if (next is { } advance)
+        {
+            await store.SetPhaseAsync(advance, 0).ConfigureAwait(false);
+            result.Snapshot = await store.LoadAsync().ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyRefresh(RefreshResult result, bool full, bool syncEvent)
+    {
+        foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
+        if (result.BossDeathFailure is { } failure)
+            logger.LogError(failure, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
+        if (result.Snapshot is { } current) Volatile.Write(ref _snapshot, current);
+        if (_queuedPhase is not null)
+        {
+            // .event start 120 was queued after this job began: its stale phase would stop the event just started.
+            if (full) _refreshDue = true;
+            _wake = true;
+            TryLaunch();
+            return;
+        }
+        try
+        {
+            if (syncEvent) SyncPhaseEvent();
+            if (full)
+            {
                 FindGates();
                 AnnounceChampion();
                 SyncPiles();
                 PublishCapitalStates();
             }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "could not refresh AQ war-effort state");
-            }
-
-            _reloadMs = 5_000;
         }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "could not refresh AQ war-effort state");
+        }
+        TryLaunch();
     }
 
+    /// <summary>Synchronous reload for tests that change the fake store between ticks; the world tick never calls it.</summary>
     internal void Reload()
     {
         using IServiceScope scope = scopes.CreateScope();
         IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
         Volatile.Write(ref _snapshot, store.LoadAsync().GetAwaiter().GetResult());
-    }
-
-    private void SetPhase(WarEffortPhase phase, long endsAtUnix)
-    {
-        using IServiceScope scope = scopes.CreateScope();
-        IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
-        store.SetPhaseAsync(phase, endsAtUnix).GetAwaiter().GetResult();
-        Reload();
     }
 
     private void SyncPhaseEvent()

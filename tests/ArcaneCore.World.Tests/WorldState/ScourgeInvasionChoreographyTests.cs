@@ -148,6 +148,7 @@ public sealed class ScourgeInvasionChoreographyTests
             Invasion = _provider.GetRequiredService<ScourgeInvasionFeature>();
             Invasion.Random = new Random(20261010);
             Invasion.NowUnix = () => Now;
+            Invasion.StoreOffload = work => work(); // the fake store completes synchronously: apply in the same tick
             Invasion.Attach(World);
         }
 

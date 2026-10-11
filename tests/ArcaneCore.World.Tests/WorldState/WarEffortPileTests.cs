@@ -201,6 +201,7 @@ public sealed class WarEffortPileTests
             EasternKingdoms.AddUpdater(EkObjects);
             _provider.GetRequiredService<GameEventFeature>().Attach(World);
             War = _provider.GetRequiredService<WarEffortFeature>();
+            War.StoreOffload = work => work(); // the fake store completes synchronously
             War.Attach(World);
         }
 

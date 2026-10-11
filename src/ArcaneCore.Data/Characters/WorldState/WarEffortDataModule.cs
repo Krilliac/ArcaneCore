@@ -62,8 +62,8 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
 {
     public async Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        // Polled every five seconds: a read snapshot, never the write lock the save queue needs.
+        await using ReadSnapshot transaction = await ReadSnapshot.BeginAsync(db, cancellationToken).ConfigureAwait(false);
         WarEffortPhaseRow? phase = await db.Set<WarEffortPhaseRow>().AsNoTracking()
             .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
         long[] counters = new long[WarEffortCatalog.ResourceCount];

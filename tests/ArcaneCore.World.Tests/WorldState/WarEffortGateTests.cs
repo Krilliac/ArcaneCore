@@ -173,6 +173,7 @@ public sealed class WarEffortGateTests
             Events = _provider.GetRequiredService<GameEventFeature>();
             Events.Attach(World);
             War = _provider.GetRequiredService<WarEffortFeature>();
+            War.StoreOffload = work => work(); // the fake store completes synchronously
             War.Attach(World);
         }
 

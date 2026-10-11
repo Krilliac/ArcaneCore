@@ -76,8 +76,8 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
 {
     public async Task<ScourgeInvasionSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        // Polled every five seconds: a read snapshot, never the write lock the save queue needs.
+        await using ReadSnapshot transaction = await ReadSnapshot.BeginAsync(db, cancellationToken).ConfigureAwait(false);
         ScourgeInvasionStateRow? state = await db.Set<ScourgeInvasionStateRow>().AsNoTracking()
             .SingleOrDefaultAsync(r => r.Id == 1, cancellationToken).ConfigureAwait(false);
         var stored = await db.Set<ScourgeInvasionZoneRow>().AsNoTracking()
