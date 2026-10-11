@@ -182,17 +182,15 @@ public sealed partial class GameObjectMapSystem
         float xx = 2 * qx * qx, yy = 2 * qy * qy, zz = 2 * qz * qz;
         float xy = 2 * qx * qy, xz = 2 * qx * qz, yz = 2 * qy * qz;
         float wx = 2 * qw * qx, wy = 2 * qw * qy, wz = 2 * qw * qz;
-        float[,] m =
-        {
-            { 1 - (yy + zz), xy - wz, xz + wy },
-            { xy + wz, 1 - (xx + zz), yz - wx },
-            { xz - wy, yz + wx, 1 - (xx + yy) },
-        };
+        // Locals, not an array: this runs for every car sample of a bot's tram planning and every rider's anticheat claim.
+        float m00 = 1 - (yy + zz), m01 = xy - wz, m02 = xz + wy;
+        float m10 = xy + wz, m11 = 1 - (xx + zz), m12 = yz - wx;
+        float m20 = xz - wy, m21 = yz + wx, m22 = 1 - (xx + yy);
 
         // Vector3 * Matrix3 (G3D: the row vector on the left).
-        float rx = (offset.X * m[0, 0]) + (offset.Y * m[1, 0]) + (offset.Z * m[2, 0]);
-        float ry = (offset.X * m[0, 1]) + (offset.Y * m[1, 1]) + (offset.Z * m[2, 1]);
-        float rz = (offset.X * m[0, 2]) + (offset.Y * m[1, 2]) + (offset.Z * m[2, 2]);
+        float rx = (offset.X * m00) + (offset.Y * m10) + (offset.Z * m20);
+        float ry = (offset.X * m01) + (offset.Y * m11) + (offset.Z * m21);
+        float rz = (offset.X * m02) + (offset.Y * m12) + (offset.Z * m22);
         return (go.X + rx, go.Y - ry, go.Z + rz);
     }
 }

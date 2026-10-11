@@ -41,6 +41,28 @@ public sealed class TramCarVisibilityTests
         Assert.Equal(6, seen);
     }
 
+    /// <summary>
+    /// A car taken out of the world and respawned (a script, a GM) comes back map-wide: active and seen from the other platform. Before,
+    /// <c>Respawn</c> re-added it as a grid object while it was still listed as map-wide.
+    /// </summary>
+    [Fact]
+    public async Task ARespawnedCar_IsMapWideAgain()
+    {
+        await using TramTestWorld world = await TramTestWorld.StartAsync();
+        await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform);
+        await world.AdvanceAsync(200);
+        GameObject car = await world.OnWorldAsync(() => world.TramObjects()!.GameObjects.Single(g => g.Entry == 176080)); // Ironforge side
+        await world.OnWorldAsync(() => world.Player.Map!.RemoveObject(car));
+        await world.AdvanceAsync(200);
+        Assert.False(await world.OnWorldAsync(() => world.Player.VisibleObjects.Contains(car.Guid)));
+
+        await world.OnWorldAsync(() => world.TramObjects()!.ForceRespawn(car));
+        await world.AdvanceAsync(200);
+        (bool mapWide, bool seen) = await world.OnWorldAsync(() => (world.Player.Map!.IsMapWide(car), world.Player.VisibleObjects.Contains(car.Guid)));
+        Assert.True(mapWide, "the respawned car is a grid object");
+        Assert.True(seen, "the respawned car is not seen from the other platform");
+    }
+
     [Fact]
     public async Task ARiderHalfwayThroughTheTunnel_KeepsTheCarUnderIt()
     {

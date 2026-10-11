@@ -299,11 +299,17 @@ internal static class PlayerbotTram
             if (map.MapId != TramNetwork.TramMapId || !player.IsAlive) return TramStep.Idle;
             if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network)
             {
-                // No platforms in the data: nothing to walk to. The way out is the bot's bind point (TeleportToHomebind).
-                failure = "tram: on the Deeprun Tram map, but the world data describes no platforms; sent to its bind point";
-                if (session.Services.GetService<TeleportFeature>()?.Teleports is not { } teleports
-                    || teleports.IsBeingTeleported(player) || !teleports.TeleportToHomebind(player))
-                    return TramStep.Traveling;
+                // No platforms in the data: nothing to walk to. The way out is the bot's bind point (TeleportToHomebind). Reported once per
+                // RetryAfterFailureMs, sent or refused: a refused teleport leaves the bot to the brain (it cannot move on this map), whose
+                // stall watch reports it again later; it never loops here silently.
+                TeleportService? homebind = session.Services.GetService<TeleportFeature>()?.Teleports;
+                if (homebind?.IsBeingTeleported(player) == true) return TramStep.Traveling;
+                if (FailedAt.TryGetValue(player, out StrongBox<uint>? lately) && unchecked(now - lately.Value) < RetryAfterFailureMs)
+                    return TramStep.Idle;
+                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                failure = homebind is not null && homebind.TeleportToHomebind(player)
+                    ? "tram: on the Deeprun Tram map, but the world data describes no platforms; sent to its bind point"
+                    : "tram: on the Deeprun Tram map, but the world data describes no platforms, and the bind-point teleport was refused";
                 return TramStep.Failed;
             }
 
@@ -344,9 +350,10 @@ internal static class PlayerbotTram
         {
             // Through the entrance: from here only the ride's own consent is needed (the exits lead back to the continent).
             PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+            // The landing of the entrance taken: its platform is where the bot boards, the other one where it gets off.
             TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
-            if (!ReferenceEquals(here, trip.From)) trip.To = trip.Network.Other(here);
-            Enter(trip, ReferenceEquals(here, trip.To) ? TramStage.ToExit : TramStage.ToPlatform, now);
+            trip.To = trip.Network.Other(here);
+            Enter(trip, TramStage.ToPlatform, now);
             trip.PlatformSinceMs = now;
             return TramStep.Traveling;
         }

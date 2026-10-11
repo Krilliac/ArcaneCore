@@ -1124,7 +1124,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.RespawnAtMs = 0;
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
-        Map.AddObject(go);
+        if (_mapWideElevators.Contains(go))
+        {
+            // A map-wide elevator (a Deeprun Tram car) comes back as one: active, seen by every player on the map.
+            Map.AddObject(go, active: true);
+            Map.AddMapWideObject(go);
+        }
+        else
+        {
+            Map.AddObject(go);
+        }
+
         if (go.Spawn is { SpawnTimeSeconds: >= 0 })
         {
             // AzerothCore reaches AI()->Reset() only for m_spawnedByDefault objects (GameObject.cpp:656-665): a negative spawntimesecs object

@@ -4,6 +4,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
@@ -208,6 +210,46 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
             $"out at {at}, not back at the Stormwind exit");
         Assert.False(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal)), "retried at once");
         Assert.Null(await world.OnWorldAsync(() => PlayerbotAreaTriggers.TeleportTargetOf(world.Player)));
+    }
+
+    /// <summary>
+    /// On the tram map with no tram in the data (no triggers) and a bind point the server refuses: the failure is reported once as a stall
+    /// with its reason, and the bot does not loop on it silently (no further report every think, the stall watch not reset forever).
+    /// With a bind point that works, the bot is sent there.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnTheTramMap_WithoutTramData_TheBotFailsClosedOnce(bool bindWorks)
+    {
+        await using TramTestWorld world = await TramTestWorld.StartAsync(configure: services => services.AddSingleton<IMapDataStore>(new NoTriggers()));
+        await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform);
+        await world.OnWorldAsync(() => world.Player.Home = bindWorks
+            ? new HomeBind(0, 1519, TramTestData.StormwindExitLanding.X, TramTestData.StormwindExitLanding.Y, TramTestData.StormwindExitLanding.Z)
+            : new HomeBind(9999, 0, 0, 0, 0));
+        var brain = new PlayerbotBrain(world.Session, Options());
+        var reports = new List<string>();
+        for (int step = 0; step < 100; step++)
+        {
+            string? report = await world.TickAsync(() =>
+            {
+                int before = brain.StallCount;
+                brain.Update(100);
+                return brain.StallCount != before ? brain.StallReport : null;
+            });
+            if (report is not null) reports.Add(report);
+        }
+
+        output.WriteLine(string.Join(" | ", reports));
+        Assert.Single(reports);
+        Assert.Contains(bindWorks ? "sent to its bind point" : "the bind-point teleport was refused", reports[0]);
+        Assert.Equal(bindWorks ? 0u : TramTestData.Tram, await world.OnWorldAsync(() => world.Player.MapId));
+    }
+
+    private sealed class NoTriggers : IMapDataStore
+    {
+        public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new MapContent(TramTestData.Maps, [], [], [], []));
     }
 
     /// <summary>The entrance is taken only while a trip heads there: a bot walking through it without one stays on the continent.</summary>
