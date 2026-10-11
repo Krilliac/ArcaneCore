@@ -1260,6 +1260,9 @@ public sealed class DataDrivenEscortTests
             for (int elapsed = 0; elapsed < 1_800_000 && quests.Completed.Count == 0; elapsed += 100)
             {
                 player.Relocate(remulos.X, remulos.Y, remulos.Z, 0, 0);
+                // The test player walks with Remulos while Eranikus flies over the lake out of its active cells (vmangos
+                // Map::UpdateActiveCellsSynch); on the live event the raid fighting him keeps his cells active.
+                if (ai.Eranikus is { IsInWorld: true } flying && !map.Grids.IsActive(flying)) map.SetActive(flying, true);
                 world.RunTick(100);
                 maxTurns = Math.Max(maxTurns, ai.SummonTurns);
                 foreach (Creature shade in system.Creatures.Where(c => c.Entry == 15629 && c.IsAlive).ToArray())
@@ -1472,6 +1475,8 @@ public sealed class DataDrivenEscortTests
             map.Combat.Kill(null, both[0]);
             Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.KerlonianAI.QuestSleeperAwakened), Assert.Single(quests.Failed));
 
+            // The player jumps 500 yards: keep the follower updated outside the player's active cells (vmangos Map::AddToActive).
+            map.SetActive(both[1], true);
             player.Relocate(500, 0, both[1].Z, 0, 0);
             Run(world, 3_000);
             Assert.False(both[1].IsInWorld && both[1].IsAlive && system.Creatures.Contains(both[1]));
@@ -1650,8 +1655,11 @@ public sealed class DataDrivenEscortTests
             new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests, ZoneAndAreaOf = _ => (0, areaId) });
         (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
         player.Relocate(first.X, first.Y, first.Z, 0, 0);
-        return new Rig(world, map, system, player, session, Assert.Single(system.Creatures, c => c.Entry == entry), quests,
-            summons);
+        Creature escort = Assert.Single(system.Creatures, c => c.Entry == entry);
+        // The leave test moves the player 300 yards in one step: an active object (vmangos Map::AddToActive) keeps the escort
+        // updated outside the player's active cells (Map::UpdateActiveCellsSynch) so its own range check sees the player gone.
+        map.SetActive(escort, true);
+        return new Rig(world, map, system, player, session, escort, quests, summons);
     }
 
     private sealed record Rig(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player,

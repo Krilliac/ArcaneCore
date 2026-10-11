@@ -122,6 +122,15 @@ public enum CreatureBehaviourFlags : uint
     /// and makes the creature flee when it enters combat (cmangos CreatureDefines.h:49).
     /// </summary>
     NoMeleeFlee = 1u << 27,
+
+    /// <summary>Static flag LARGE_AOI (0x80000000, both engines): a large area of interest; vmangos makes it an active object.</summary>
+    LargeAoi = 1u << 28,
+
+    /// <summary>vmangos GIGANTIC_AOI (0x100): a gigantic area of interest; vmangos makes it an active object.</summary>
+    GiganticAoi = 1u << 29,
+
+    /// <summary>vmangos INFINITE_AOI (0x200): seen map-wide; vmangos makes it an active object.</summary>
+    InfiniteAoi = 1u << 30,
 }
 
 /// <summary>Decodes the dialect-specific template flag columns into <see cref="CreatureBehaviourFlags"/>.</summary>
@@ -136,6 +145,7 @@ public static class CreatureBehaviour
     private const uint StaticOnlyAttackPvpEnabling = 0x04000000;
     private const uint StaticCallsGuards = 0x08000000;
     private const uint Static2ForceRaidCombat = 0x00000002;
+    private const uint StaticLargeAoi = 0x80000000;
 
     public static CreatureBehaviourFlags Normalize(
         CreatureExtraFlagsDialect dialect, uint extraFlags, uint staticFlags1, uint staticFlags2, bool civilian)
@@ -175,6 +185,8 @@ public static class CreatureBehaviour
                 Set(ref flags, extraFlags, 0x00001000, CreatureBehaviourFlags.KeepPositiveAurasOnEvade);
                 Set(ref flags, extraFlags, 0x00010000, CreatureBehaviourFlags.NoAssist);
                 Set(ref flags, extraFlags, 0x00020000, CreatureBehaviourFlags.NoTarget);
+                Set(ref flags, extraFlags, 0x00000100, CreatureBehaviourFlags.GiganticAoi);
+                Set(ref flags, extraFlags, 0x00000200, CreatureBehaviourFlags.InfiniteAoi);
                 break;
         }
 
@@ -184,6 +196,7 @@ public static class CreatureBehaviour
         Set(ref flags, staticFlags1, StaticIgnoreCombat, CreatureBehaviourFlags.IgnoreCombat);
         Set(ref flags, staticFlags1, StaticOnlyAttackPvpEnabling, CreatureBehaviourFlags.OnlyAttackPvpEnabling);
         Set(ref flags, staticFlags1, StaticCallsGuards, CreatureBehaviourFlags.CallsGuards);
+        Set(ref flags, staticFlags1, StaticLargeAoi, CreatureBehaviourFlags.LargeAoi);
         Set(ref flags, staticFlags2, Static2ForceRaidCombat, CreatureBehaviourFlags.AggroZone);
 
         if (civilian)

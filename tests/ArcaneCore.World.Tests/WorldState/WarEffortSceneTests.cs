@@ -455,6 +455,10 @@ public sealed class WarEffortSceneTests
             World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
                 new CharacterSaveQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
                 NullLogger<WorldRuntime>.Instance);
+            // The scenes run troops, formations and Saurfang across Silithus with at most one test player near any of them; the
+            // continent rule that updates only the cells around players (vmangos Map::UpdateActiveCellsSynch) has its own tests
+            // (ActiveCellUpdateTests), so this rig updates every creature, as a live raid around the scene would keep it.
+            World.Options.Maps.UpdateActiveCellsOnly = false;
             Map kalimdor = World.GetMap(1);
             Creatures = new CreatureMapSystem(kalimdor, new CreatureContent(
                 WarEffortTroopCatalog.Creatures.Select(t => t.Entry).Append(Saurfang).Concat(WarEffortFeature.ColossusResearchers).Append(WarEffortCatalog.ColossusOfAshi).Distinct().Select(Template).ToArray(),

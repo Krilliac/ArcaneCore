@@ -84,18 +84,19 @@ public sealed class FishingExtravaganzaFeature(IServiceScopeFactory scopes, Game
         }
     }
 
-    private void Save()
+    private StateSaveQueue<int, FishingExtravaganzaState>? _saves;
+
+    /// <summary>The state's writer: off the world thread (Riggle's AI saved on it whenever it was built).</summary>
+    internal StateSaveQueue<int, FishingExtravaganzaState> Saves => _saves ??= new(async state =>
     {
-        try
-        {
-            using IServiceScope scope = scopes.CreateScope();
-            scope.ServiceProvider.GetService<IFishingExtravaganzaStore>()?.SaveAsync(State).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "could not save the Fishing Extravaganza state");
-        }
-    }
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IFishingExtravaganzaStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
+    }, logger, "Fishing Extravaganza");
+
+    private void Save() => Saves.Save(0, State);
+
+    /// <summary>Writes every queued state before shutdown completes.</summary>
+    public Task StopAsync() => _saves?.FlushAsync() ?? Task.CompletedTask;
 
     private void HookQuestRewards()
     {

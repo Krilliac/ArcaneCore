@@ -28,6 +28,50 @@ public sealed class RelayScriptExtraCommandTests
         Entry = Sword, Class = 2, SubClass = 7, DisplayId = 7420, Material = 1, InventoryType = 13, Sheath = 3,
     };
 
+    // --- 21 SET_ACTIVEOBJECT -----------------------------------------------------------------
+
+    /// <summary>
+    /// vmangos Map::ScriptCommand_SetActiveObject (Maps/ScriptCommands.cpp:831-845): the creature becomes an active object, so it
+    /// keeps being updated (and keeps its cells active) after it walks out of every player's active cells; datalong 0 ends it.
+    /// </summary>
+    [Fact]
+    public void SetActiveObject_KeepsAScriptedCreatureUpdatedOutOfThePlayersCells_AndZeroEndsIt()
+    {
+        foreach (bool scripted in new[] { true, false })
+        {
+            using Town t = Start(scripted ? [Step(0, 21, dataLong: 1, flags: FlagReverse)] : []);
+            t.Wave();
+            Assert.Equal(scripted, t.Map.Grids.IsActive(t.Elly));
+            t.System.MoveTo(t.Elly, t.Elly.X + 220, t.Elly.Y, t.Elly.Z, run: true, finalOrientation: null);
+            float goal = t.Elly.X + 220;
+            for (int i = 0; i < 400; i++) Run(t.World, 100); // 40 s: the 220-yard run (8 yd/s) is long over
+            if (scripted)
+                Assert.True(Math.Abs(goal - t.Elly.X) < 0.5f, $"start {goal - 220} goal {goal} at {t.Elly.X} spline {t.Elly.Spline is not null} active {t.Map.Grids.IsActive(t.Elly)} incell {t.Map.Grids.IsInActiveCell(t.Elly)}"); // updated all the way
+            else
+                Assert.True(t.Elly.X < goal - 50, $"an ordinary creature froze at the edge of the active cells, not at {t.Elly.X}");
+        }
+
+        using Town off = Start([Step(0, 21, dataLong: 1, flags: FlagReverse), Step(100, 21, dataLong: 0, flags: FlagReverse)]);
+        off.Wave();
+        Assert.True(off.Map.Grids.IsActive(off.Elly));
+        Run(off.World, 200);
+        Assert.False(off.Map.Grids.IsActive(off.Elly));
+    }
+
+    [Fact]
+    public void SetActiveObject_TheMarkOutlivesADeathAndComesBackWithTheRespawn()
+    {
+        // vmangos keeps m_isActiveObject on the creature: SetActiveObjectState is not undone by a death.
+        using Town t = Start([Step(0, 21, dataLong: 1, flags: FlagReverse)]);
+        t.Wave();
+        Assert.True(t.Map.Grids.IsActive(t.Elly));
+        t.System.KillCreature(t.Elly);
+        for (int i = 0; i < 4000 && !(t.Elly.IsAlive && t.Elly.IsInWorld); i++) Run(t.World, 100); // corpse decay, then the respawn
+        Assert.True(t.Elly.IsAlive && t.Elly.IsInWorld, "Elly did not respawn");
+        Run(t.World, 100); // the queued activation applies before the next creature update
+        Assert.True(t.Map.Grids.IsActive(t.Elly));
+    }
+
     // --- 52 SET_GOSSIP_MENU ---------------------------------------------------------------
 
     [Fact]

@@ -390,12 +390,14 @@ public sealed partial class Player : Unit
     /// </summary>
     public void ApplyClientMovement(in MovementInfo movement, uint serverTimeMs)
     {
-        bool moved = movement.X != X || movement.Y != Y || movement.Z != Z;
+        bool moved = movement.X != X || movement.Y != Y;
         ApplyMovement(movement, serverTimeMs);
-        if (moved)
+        if (moved && Map is null)
         {
             NeedsVisibilityUpdate = true;
         }
+        // In a map, SetPosition reaches Map.OnObjectMoved, which schedules the pass past the relocation lower limit
+        // (vmangos Unit::OnRelocated); a pure height change does not alter the 2D visibility test.
     }
 
     /// <summary>Counter for forced movement changes (SMSG_FORCE_MOVE_ROOT etc.).</summary>
