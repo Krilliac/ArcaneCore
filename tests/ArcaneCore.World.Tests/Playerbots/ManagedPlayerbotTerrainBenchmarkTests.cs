@@ -51,7 +51,7 @@ internal sealed class BotTerrainBenchmarkFactAttribute : FactAttribute
 /// unloaded and the time their handlers took), the managed-bot feature, the world thread's allocation, GC and the slowest ticks.
 /// Optional: <c>ARCANECORE_BOT_BENCH_SETTINGS</c> (a settings file without a <c>Database</c> section: client DBC paths),
 /// <c>ARCANECORE_BOT_BENCH_CSV</c> (append one row per step), <c>ARCANECORE_BOT_BENCH_ALLOC_TYPES=1</c> (allocation sample by type),
-/// <c>ARCANECORE_BOT_BENCH_LABEL</c> (a label for the rows).
+/// <c>ARCANECORE_BOT_BENCH_LABEL</c> (a label for the rows), <c>ARCANECORE_BOT_BENCH_VIS_LIMIT</c> (the visibility relocation lower limit, yards).
 /// </para>
 /// </summary>
 [Collection("Managed bot scale")]
@@ -113,6 +113,9 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
                 options.TickIntervalMs = 50;
                 options.AutosaveIntervalMs = 10_000; // the live profile's World:AutosaveIntervalMs
                 options.Maps.DataDirectory = terrain;
+                // A/B of the visibility relocation lower limit (World:Maps:VisibilityRelocationLowerLimit; 0 = a pass on every move).
+                if (Environment.GetEnvironmentVariable("ARCANECORE_BOT_BENCH_VIS_LIMIT") is { Length: > 0 } limit)
+                    options.Maps.VisibilityRelocationLowerLimit = float.Parse(limit, CultureInfo.InvariantCulture);
             },
             configureServices: services =>
             {

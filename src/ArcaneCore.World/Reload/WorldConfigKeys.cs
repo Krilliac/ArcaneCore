@@ -115,6 +115,7 @@ public static class WorldConfigKeys
         Live("Maps:GridUnload", o => o.Maps.GridUnload, (o, v) => o.Maps.GridUnload = v),
         LiveNonNegative("Maps:GridCleanUpDelayMs", o => o.Maps.GridCleanUpDelayMs, (o, v) => o.Maps.GridCleanUpDelayMs = v),
         LiveNonNegative("Maps:GridActivationDistance", o => o.Maps.GridActivationDistance, (o, v) => o.Maps.GridActivationDistance = v),
+        LiveNonNegative("Maps:VisibilityRelocationLowerLimit", o => o.Maps.VisibilityRelocationLowerLimit, (o, v) => o.Maps.VisibilityRelocationLowerLimit = v),
         LiveNonNegative("Maps:GridPrefetchDistance", o => o.Maps.GridPrefetchDistance, (o, v) => o.Maps.GridPrefetchDistance = v),
 
         // The cross-faction rules, read from the shared SocialOptions at each use. Keys map to vmangos

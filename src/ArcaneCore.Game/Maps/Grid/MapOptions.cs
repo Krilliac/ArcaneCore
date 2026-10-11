@@ -26,6 +26,14 @@ public sealed class MapOptions
     public float GridActivationDistance { get; set; } = Map.VisibilityRange;
 
     /// <summary>
+    /// How far (yards, 3D) an object must move from where its last movement-triggered visibility pass was scheduled before
+    /// the next one is (vmangos <c>Visibility.RelocationLowerLimit</c>, default 10, World.cpp:830; Unit::OnRelocated). Moves
+    /// within it keep the visible sets of the last pass; the grey distance (<see cref="Map.VisibilityGreyDistance"/>) and the
+    /// next pass cover the difference. 0 runs a pass on every move.
+    /// </summary>
+    public float VisibilityRelocationLowerLimit { get; set; } = 10f;
+
+    /// <summary>
     /// How far beyond <see cref="GridActivationDistance"/> a player (or active object) looks for grids that do not exist yet, so
     /// their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created
     /// (<see cref="GridContainer.GridApproaching"/>); other objects look half as far. 0 turns the prefetch off. An ArcaneCore

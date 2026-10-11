@@ -9169,6 +9169,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Maps:VisibilityRelocationLowerLimit",
+      "section": "World",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "How far (yards, 3D) an object must move from where its last movement-triggered visibility pass was scheduled before the next one is (vmangos `Visibility.RelocationLowerLimit`, default 10, World.cpp:830; Unit::OnRelocated). Moves within it keep the visible sets of the last pass; the grey distance (`Map.VisibilityGreyDistance`) and the next pass cover the difference. 0 runs a pass on every move.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#world",
+      "isCollection": false
+    },
+    {
       "path": "World:MaxCommandsPerTick",
       "section": "World",
       "type": "int",

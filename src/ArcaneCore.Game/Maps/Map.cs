@@ -864,7 +864,16 @@ public sealed class Map
             return;
         }
 
+        // vmangos Unit::OnRelocated: the AI notify is scheduled on every relocation, the visibility pass only past the
+        // relocation lower limit (World:Maps:VisibilityRelocationLowerLimit).
         ObjectRelocated?.Invoke(obj);
+
+        float limit = _grid.Options.VisibilityRelocationLowerLimit;
+        if (!obj.TakeRelocationNotify(limit > 0 ? limit * limit : 0f))
+        {
+            RelocationsWithoutVisibility++;
+            return;
+        }
 
         if (obj is Player player)
         {
@@ -881,6 +890,9 @@ public sealed class Map
             viewer.NeedsVisibilityUpdate = true;
         }
     }
+
+    /// <summary>Moves that stayed within the relocation lower limit and so scheduled no visibility pass (diagnostics, tests).</summary>
+    public long RelocationsWithoutVisibility { get; private set; }
 
     /// <summary>
     /// Unload every grid (objects are evicted, grid/terrain events run) and refuse further

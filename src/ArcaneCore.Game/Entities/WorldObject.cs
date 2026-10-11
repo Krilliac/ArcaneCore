@@ -93,7 +93,46 @@ public abstract class WorldObject
     public float Orientation { get; set; }
 
     /// <summary>The map this object is in, or null when not in the world.</summary>
-    public Map? Map { get; internal set; }
+    public Map? Map
+    {
+        get;
+        internal set
+        {
+            field = value;
+            _hasNotifiedPosition = false; // a new map computes visibility from scratch
+        }
+    }
+
+    private float _notifiedX;
+    private float _notifiedY;
+    private float _notifiedZ;
+    private bool _hasNotifiedPosition;
+
+    /// <summary>
+    /// vmangos Unit::OnRelocated (Unit.cpp:10151-10167): a move schedules a visibility pass only once the object is more than
+    /// the relocation lower limit (<c>Visibility.RelocationLowerLimit</c>, 10 yards; <c>World::m_relocation_lower_limit_sq</c>)
+    /// from where the last pass was scheduled (<c>m_lastNotifiedPosition</c>, 3D). True when this move passes, and then the
+    /// position is recorded. A limit of 0 passes every move.
+    /// </summary>
+    internal bool TakeRelocationNotify(float lowerLimitSq)
+    {
+        if (_hasNotifiedPosition)
+        {
+            float dx = _notifiedX - X;
+            float dy = _notifiedY - Y;
+            float dz = _notifiedZ - Z;
+            if (dx * dx + dy * dy + dz * dz <= lowerLimitSq)
+            {
+                return false;
+            }
+        }
+
+        _notifiedX = X;
+        _notifiedY = Y;
+        _notifiedZ = Z;
+        _hasNotifiedPosition = true;
+        return true;
+    }
 
     public bool IsInWorld => Map is not null;
 
