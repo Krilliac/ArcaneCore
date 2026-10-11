@@ -71,6 +71,42 @@ public sealed class PlayerbotRecoveryDecisionTests
     public void DecideSpiritHealer(bool healer, bool inReach, bool graveyard, bool stalled, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
 
+    /// <summary>
+    /// An unsafe body (<see cref="PlayerbotRecovery.JudgeBody"/>): a repeat death there, a creature too strong for the bot round it,
+    /// or a body outside the home with the healer nearer home; outside the home alone, or the healer nearer home alone, is not.
+    /// </summary>
+    [Theory]
+    // died here before, too strong, body outside home, healer nearer home -> reason
+    [InlineData(false, false, false, false, "None")]
+    [InlineData(false, false, true, false, "None")]      // outside, but the healer would leave it no nearer home
+    [InlineData(false, false, false, true, "None")]      // inside the home: nothing to bring it back to
+    [InlineData(true, false, false, false, "DiedHere")]
+    [InlineData(false, true, false, false, "TooStrong")]
+    [InlineData(false, false, true, true, "OutsideHome")]
+    [InlineData(true, true, true, true, "DiedHere")]
+    [InlineData(false, true, true, true, "TooStrong")]
+    public void JudgeBody(bool diedHere, bool tooStrong, bool outside, bool nearer, string expected)
+        => Assert.Equal(Enum.Parse<PlayerbotUnsafeBody>(expected), PlayerbotRecovery.JudgeBody(diedHere, tooStrong, outside, nearer));
+
+    /// <summary>
+    /// The death memory the repeat-death rule reads (<see cref="PlayerbotStallWatch.DeathsNear"/>): deaths inside the window
+    /// (<see cref="PlayerbotStallWatch.DeathLoopWindowMs"/>) within <see cref="PlayerbotStallWatch.DeathLoopYards"/> on the same map,
+    /// the latest included.
+    /// </summary>
+    [Fact]
+    public void DeathsNear_CountsTheDeathsInsideTheWindowAndTheRadius()
+    {
+        var watch = new PlayerbotStallWatch();
+        var body = new Vector3(-10627.8f, 383.2f, 33.2f);
+        watch.RecordDeath(1_000, 0, body, []);
+        Assert.Equal(1, watch.DeathsNear(0, body, 1_000));
+        watch.RecordDeath(60_000, 0, body + new Vector3(40f, 0, 0), []);
+        watch.RecordDeath(61_000, 0, body + new Vector3(80f, 0, 0), []); // beyond 60 yards of the body
+        watch.RecordDeath(62_000, 1, body, []);                           // another map
+        Assert.Equal(2, watch.DeathsNear(0, body, 62_000));
+        Assert.Equal(1, watch.DeathsNear(0, body, 1_000 + PlayerbotStallWatch.DeathLoopWindowMs + 1)); // the first has run out
+    }
+
     /// <summary>A threat with a same-level aggro radius (20 yards) unless given, on the ground (the height limit applies).</summary>
     private static PlayerbotThreat Threat(float x, float y, float radius = 20f, float z = 0f, bool flyer = false)
         => new(new Vector3(x, y, z), radius, flyer, Radii: 0f);

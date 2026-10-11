@@ -71,6 +71,11 @@ public sealed class Map
     private readonly List<Player> _viewerExtras = [];
     private readonly List<Player> _viewerMergeScratch = [];
 
+    // Objects every player of the map has, whatever the distance (vmangos Map::m_transports: SendInitTransports at map entry, never
+    // out of range while on the map): the elevators whose animation carries them out of the visibility range of their spawn.
+    private readonly HashSet<WorldObject> _mapWide = new(ReferenceEqualityComparer.Instance);
+    private readonly List<WorldObject> _mapWideOrder = [];
+
     /// <summary>Tests only: build visibility candidates by collecting and sorting (the pre-wave-18 path) instead of merging.</summary>
     internal bool UseReferenceVisibilityOrder { get; set; }
     private bool _visibilityScratchInUse;
@@ -486,6 +491,39 @@ public sealed class Map
 
         _grid.SetActive(obj, active);
     }
+
+    /// <summary>
+    /// Make a non-player object of this map visible to every player on the map, at any distance, and never out of range while both are on
+    /// it (vmangos keeps its transports in <c>Map::m_transports</c> instead of the grid, sends them at map entry, Map.cpp:520-553 and
+    /// 1720-1733, and a visibility pass never sends them out of range). Used for the trams of the Deeprun Tram
+    /// (<see cref="GameObjects.GameObjectMapSystem"/>): a passenger rides 2,480 yards away from the car's spawn. Every player already on the
+    /// map re-evaluates its visibility at the next update.
+    /// </summary>
+    public void AddMapWideObject(WorldObject obj)
+    {
+        EnsureWorldThread();
+        if (obj is Player || !ReferenceEquals(obj.Map, this))
+        {
+            throw new InvalidOperationException($"{obj.Guid} is not a non-player object of map {MapId}");
+        }
+
+        if (!_mapWide.Add(obj))
+        {
+            return;
+        }
+
+        _mapWideOrder.Add(obj);
+        foreach (WorldObject other in _objects.Values)
+        {
+            if (other is Player player)
+            {
+                player.NeedsVisibilityUpdate = true;
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="obj"/> is seen map-wide (<see cref="AddMapWideObject"/>).</summary>
+    public bool IsMapWide(WorldObject obj) => _mapWide.Contains(obj);
 
     /// <summary>
     /// Relay a movement packet (packed mover GUID + movement block) to every player whose client
@@ -1028,6 +1066,14 @@ public sealed class Map
                 }
             }
 
+            foreach (WorldObject mapWide in _mapWideOrder)
+            {
+                if (!_grid.IsCollectedIn(mapWide, area))
+                {
+                    extras.Add(mapWide);
+                }
+            }
+
             if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
             {
                 float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
@@ -1073,6 +1119,8 @@ public sealed class Map
                 float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
                 _grid.CollectObjects(eye.X, eye.Y, eyeRadius, candidates);
             }
+
+            candidates.AddRange(_mapWideOrder);
         }
 
         if (_observers.TryGetValue(center.Guid, out HashSet<Player>? observers))
@@ -1155,7 +1203,7 @@ public sealed class Map
 
         // vmangos Player::UpdateVisibilityOf(viewPoint, target): distance from the camera, and the camera's own body is always in range.
         WorldObject eye = viewer.ViewPoint;
-        bool inRange = ReferenceEquals(eye, target) || IsWithinVisibilityDistance(eye, target, inVisibleList);
+        bool inRange = ReferenceEquals(eye, target) || _mapWide.Contains(target) || IsWithinVisibilityDistance(eye, target, inVisibleList);
         bool allowed = PassesVisibilityRules(viewer, target, inVisibleList);
 
         if (inVisibleList && (!inRange || !allowed))
@@ -1230,6 +1278,11 @@ public sealed class Map
     {
         _objects.Remove(obj.Guid);
         if (obj is Unit) _heartbeatSnapshotDirty = true;
+        if (_mapWide.Remove(obj))
+        {
+            _mapWideOrder.Remove(obj);
+        }
+
         _grid.Remove(obj);
         _movedObjects.Remove(obj);
         _newObjects.Remove(obj.Guid);

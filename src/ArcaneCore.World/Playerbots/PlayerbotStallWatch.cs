@@ -112,6 +112,15 @@ internal sealed class PlayerbotStallWatch
     }
 
     /// <summary>
+    /// The deaths recorded inside <see cref="DeathLoopWindowMs"/> within <see cref="DeathLoopYards"/> of <paramref name="position"/>
+    /// on <paramref name="map"/>, the latest one included (<see cref="RecordDeath"/> is called as the bot dies, before its recovery
+    /// asks). Two mean the bot already died once where its body lies now (<see cref="PlayerbotRecovery.JudgeBody"/>).
+    /// </summary>
+    internal int DeathsNear(uint map, Vector3 position, uint nowMs)
+        => _deaths.Count(death => unchecked(nowMs - death.AtMs) <= DeathLoopWindowMs && death.Map == map
+            && Vector3.Distance(death.Position, position) <= DeathLoopYards);
+
+    /// <summary>
     /// Look at the bot once per think. True when a new stall begins, and again after every further stall bound without progress
     /// (the caller gives up the goal it holds then); the stall stays reported, and counted once, until the bot makes progress.
     /// Before, the goal was given up only when the stall began: a bot whose next goal held it just the same was reported stalled
@@ -149,6 +158,20 @@ internal sealed class PlayerbotStallWatch
         LastReport = _stallReport;
         Count++;
         return true;
+    }
+
+    /// <summary>
+    /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
+    /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
+    /// </summary>
+    internal void ReportExternal(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        _stallReport = reason;
+        LastReport = reason;
+        Count++;
+        GiveUps++;
+        _started = false;
     }
 
     private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers);

@@ -11,6 +11,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using System.Globalization;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -207,6 +208,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
         SyncHomeFilters(player);
+        _recovery.UnsafeBody ??= JudgeBody;
 
         bool dead = !player.IsAlive;
         if (dead)
@@ -218,6 +220,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 RecordDeath(player);
                 RetireDeathIntent();
+                // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
+                // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
+                PlayerbotTram.Cancel(player);
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -274,6 +279,30 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
+
+        // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
+        // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
+        // trip (the goal that began it begins it again afterwards).
+        if (player.IsAlive)
+        {
+            if (player.Combat.IsInCombat && PlayerbotTram.TripOf(player) is { Stage: TramStage.ToEntrance }) PlayerbotTram.Cancel(player);
+            TramStep tram = PlayerbotTram.Drive(_session, player, _options, interval, out string? tramFailure);
+            if (tram == TramStep.Traveling)
+            {
+                _stall.Reset();
+                _target = null;
+                _route = null;
+                _attacking = false;
+                return;
+            }
+
+            if (tram == TramStep.Failed)
+            {
+                _stall.ReportExternal(tramFailure ?? "tram: the trip failed");
+                GiveUpStalledGoal(player, shareable: false);
+                return;
+            }
+        }
 
         if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
@@ -690,12 +719,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// ended at Sentinel Hill inside every bot's home, was set aside for all of them by bots stalled in Redridge and at Raven Hill).
     /// Its own set-aside is unchanged. <see cref="StallOutsideHome"/> tells the feature's log line (and so bot QA) which it was.
     /// </para>
+    /// <para>
+    /// A failed tram trip (<see cref="PlayerbotTram"/>, <paramref name="shareable"/> false) is the bot's own too: it says the tram did not
+    /// carry the bot (no car, no stop, no way to the car's side), not that the goal beyond it is unreachable, and the place it is reported
+    /// (the exit the bot left by) is not where the goal failed. Shared, three bots behind one stopped car would set every bot's goal on the
+    /// other side aside, and bot QA would read it as that quest's fault. Its log line is never marked outside the home either
+    /// (ManagedPlayerbotFeature.LogStall marks only "stalled" lines).
+    /// </para>
     /// </summary>
-    internal void GiveUpStalledGoal(Player player)
+    internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
         StallOutsideHome = _home is { } home && !home.Contains(player);
-        if (!StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
+        if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
                 new System.Numerics.Vector3(player.X, player.Y, player.Z)) is { } everyone)
             SharedSetAside = everyone;
         switch (_goal)
@@ -1040,7 +1076,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// for the goals, and a death loop takes the spirit healer for this death instead of the body in the same place again, and sets
     /// aside the errand it was last travelling for (its quest and NPC, every trainer for a trainer visit): the route to it led
     /// through the place (replay of the 2026-10-08 rehearsal: without that, Dawnrover walked from the Goldshire graveyard to its
-    /// next trainer in Stormwind past the Scourge invasion point and died on the road again).
+    /// next trainer in Stormwind past the Scourge invasion point and died on the road again). A second death within
+    /// <see cref="PlayerbotStallWatch.DeathLoopYards"/> of an earlier one in the window sets the errand aside the same way (its
+    /// recovery takes the spirit healer when one can be had, <see cref="JudgeBody"/>).
     /// </summary>
     private void RecordDeath(Player player)
     {
@@ -1052,7 +1090,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attackers.Clear();
         foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
         if (loop) StallOutsideHome = false; // the death loop is the report now; the mark was the last living stall's
-        if (!loop)
+        // A second death where the bot already died (the repeat death that sends a ghost to the spirit healer, JudgeBody) sets the
+        // errand that led there aside as a death loop does, so the revived bot does not walk straight back.
+        bool repeat = loop || _stall.DeathsNear(player.MapId, new System.Numerics.Vector3(player.X, player.Y, player.Z), now) >= 2;
+        if (!repeat)
         {
             if (_options.Risk.Enabled && _errand.Entry != 0 && unchecked(now - _errand.AtMs) <= DeadlyErrandMs)
             {
@@ -1064,11 +1105,56 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
-        _recovery.TakeSpiritHealer();
+        if (loop) _recovery.TakeSpiritHealer();
         if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
         if (_errand.Goal == PlayerbotGoalKind.Train) _suspensions.SuspendTraining(now);
         _suspensions.SuspendEntry(_errand.Entry, now);
         _errand = default;
+    }
+
+    /// <summary>
+    /// Whether this ghost's body is unsafe to reclaim (<see cref="PlayerbotRecovery.UnsafeBody"/>, <see cref="PlayerbotRecovery.JudgeBody"/>):
+    /// the bot already died within <see cref="PlayerbotStallWatch.DeathLoopYards"/> of it inside the death watch's window (this death
+    /// and an earlier one, <see cref="PlayerbotStallWatch.DeathsNear"/>: the third would be a death loop, which takes the healer
+    /// already); a creature round it is too strong for the bot (<see cref="PlayerbotRisk.TooStrongNear"/>, with the estimate on); or it
+    /// lies outside the home while the spirit healer leaves the bot inside the home or at least
+    /// <see cref="PlayerbotRecovery.OutsideHomeGainYards"/> nearer its centre
+    /// (<see cref="PlayerbotRecovery.SpiritHealerLanding"/>). Live 2026-10-11: Wfbotaz (level 14, homed at Sentinel Hill) reclaimed its
+    /// body among Raven Hill's level 20+ skeletons and spiders again and again, two death loops in fifteen minutes (world.log
+    /// 05:53:21 and 06:00:42, attackers 202/531/569 and 202/217/569).
+    /// </summary>
+    private (PlayerbotUnsafeBody Reason, string? Detail) JudgeBody(Player player, Corpse corpse)
+    {
+        var body = new System.Numerics.Vector3(corpse.X, corpse.Y, corpse.Z);
+        int deaths = _stall.DeathsNear(corpse.MapId, body, _session.World.NowMs);
+        bool diedHere = deaths >= 2;
+        PlayerbotEngagement? strong = diedHere || !_options.Risk.Enabled ? null : Risk.TooStrongNear(player, body);
+        bool outside = false, nearer = false;
+        float bodyFromHome = float.NaN, healerFromHome = float.NaN;
+        if (!diedHere && strong is null && _home is { } home && corpse.MapId == home.MapId
+            && !home.Contains(corpse.MapId, corpse.X, corpse.Y, corpse.Z))
+        {
+            outside = true;
+            bodyFromHome = home.DistanceTo(corpse.X, corpse.Y);
+            if (_recovery.SpiritHealerLanding(player, corpse) is { } landing)
+            {
+                healerFromHome = home.DistanceTo(landing.X, landing.Y);
+                nearer = home.Contains(home.MapId, landing.X, landing.Y, landing.Z)
+                    || healerFromHome + PlayerbotRecovery.OutsideHomeGainYards <= bodyFromHome;
+            }
+        }
+
+        PlayerbotUnsafeBody reason = PlayerbotRecovery.JudgeBody(diedHere, strong is not null, outside, nearer);
+        string? detail = reason switch
+        {
+            PlayerbotUnsafeBody.DiedHere => string.Create(CultureInfo.InvariantCulture,
+                $"{deaths} deaths within {PlayerbotStallWatch.DeathLoopYards:F0} yd in {PlayerbotStallWatch.DeathLoopWindowMs / 1000}s"),
+            PlayerbotUnsafeBody.TooStrong => strong.ToString(),
+            PlayerbotUnsafeBody.OutsideHome => string.Create(CultureInfo.InvariantCulture,
+                $"body {bodyFromHome:F0} yd from the home's centre, healer {healerFromHome:F0} yd"),
+            _ => null,
+        };
+        return (reason, detail);
     }
 
     private void Explore(Player player, uint elapsedMs)

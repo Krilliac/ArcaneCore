@@ -46,7 +46,9 @@ teleport.
   * the bot is a **ghost whose body lies on the target map**, or in a dungeon nested in it (`PlayerbotMapPolicy.LeadsTo`, the non-zero
     parent chain of `GhostEntryRules`): the corpse run through an entrance; or
   * a **controller opted in** (`PlayerbotAreaTriggers.AllowTeleports(player, true)`): a scenario or party controller that brings the
-    bot back out itself. The consent survives teleports; `ScenarioDungeonBots.BringBackAsync` takes it away.
+    bot back out itself. The consent survives teleports; `ScenarioDungeonBots.BringBackAsync` takes it away; or
+  * the bot's **tram trip** heads for the Deeprun Tram (`PlayerbotTram`, map 369 only, while the trip walks to its entrance;
+    docs/areas/playbots.md "Travel by the Deeprun Tram").
 
   Anything else is walked through without a packet. Without this rule an autonomous bot was teleported by every trigger it crossed:
   the Deeprun Tram entrances (map 369, `MapType 0` in vmangos `map_template`, neither in AllowedMaps nor a dungeon: the bot could not

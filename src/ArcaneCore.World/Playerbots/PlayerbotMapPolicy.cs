@@ -33,9 +33,14 @@ internal static class PlayerbotMapPolicy
         return template.IsDungeon || (template.IsBattleground && participant);
     }
 
-    /// <summary>Whether <paramref name="player"/> may plan and walk on the map it is on now (navigation and route following).</summary>
+    /// <summary>
+    /// Whether <paramref name="player"/> may plan and walk on the map it is on now (navigation and route following). Besides the policy
+    /// itself, the Deeprun Tram map (369) is walkable while the bot's tram trip is under way (<see cref="PlayerbotTram.AllowsWalkingOn"/>),
+    /// and only then: the map stays off AllowedMaps, and a bot there without a trip goes nowhere but out (<see cref="PlayerbotTram.Drive"/>).
+    /// </summary>
     internal static bool MayMoveOn(Player player, PlayerbotOptions options)
-        => player.Map is { } map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map));
+        => player.Map is { } map && (Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map))
+            || PlayerbotTram.AllowsWalkingOn(player, map));
 
     /// <summary>
     /// Whether <paramref name="player"/> takes part in the battleground match of <paramref name="map"/>: the server binds it to a match
@@ -90,6 +95,19 @@ internal static class PlayerbotMapPolicy
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
-        return player.Map is Map map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map));
+        return player.Map is Map map && (Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map))
+            || MayLogInOnTram(player, map, options));
     }
+
+    /// <summary>
+    /// A bot saved on the Deeprun Tram map (on its way through) logs back in there, when the tram is how its continent's cities are joined
+    /// (a continent of AllowedMaps, <see cref="TramNetwork.ContinentMap"/>): the brain takes it out by the nearest platform's exit at its
+    /// first think (<see cref="PlayerbotTram.Drive"/>). Refused at the login gate, it was quarantined, and three refusals disabled it.
+    /// </summary>
+    internal static bool MayLogInOnTram(Player player, Map map, PlayerbotOptions options)
+        => map.MapId == TramNetwork.TramMapId
+            && options.AllowedMaps is { Length: > 0 } allowed
+            && map.Template is { IsDungeon: false, IsBattleground: false }
+            && player.Session is WorldSession session
+            && TramNetwork.Of(WorldMaps.Of(session.World)) is { } network && allowed.Contains(network.ContinentMap);
 }

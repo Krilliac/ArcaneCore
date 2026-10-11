@@ -21,7 +21,8 @@ namespace ArcaneCore.World.Playerbots;
 /// Unlike a player, a bot does not take every teleport it walks into (<see cref="PlayerbotMapPolicy.AllowsTrigger"/>): a trigger
 /// whose <c>areatrigger_teleport</c> leads off <see cref="PlayerbotOptions.AllowedMaps"/> (a dungeon entrance, the Deeprun Tram) is
 /// skipped, because nothing would bring the bot back and the login gate refuses it there at the next start. A ghost on its way to
-/// its body through that entrance takes it, and so does a bot whose controller opted in (<see cref="AllowTeleports"/>). Triggers
+/// its body through that entrance takes it, and so does a bot whose controller opted in (<see cref="AllowTeleports"/>), or whose tram
+/// trip heads for the Deeprun Tram (<see cref="PlayerbotTram"/>, through <see cref="AllowTeleportsTo"/>). Triggers
 /// that teleport nowhere (taverns, quest exploration) are always reported.
 /// </para>
 /// <para>
@@ -89,6 +90,10 @@ internal static class PlayerbotAreaTriggers
         ArgumentNullException.ThrowIfNull(player);
         Trackers.GetValue(player, _ => new PlayerbotTriggerTracker()).TeleportTarget = targetMap;
     }
+
+    /// <summary>The one map whose teleports the bot may take besides its AllowedMaps (<see cref="AllowTeleportsTo"/>), or null.</summary>
+    internal static uint? TeleportTargetOf(Player player)
+        => Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker) ? tracker.TeleportTarget : null;
 
     /// <summary>Forget what the bot is inside (teleport, death): the next position seen sets it again without firing.</summary>
     internal static void Reset(Player player)
