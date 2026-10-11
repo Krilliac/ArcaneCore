@@ -11,6 +11,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using System.Globalization;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -207,6 +208,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
         SyncHomeFilters(player);
+        _recovery.UnsafeBody ??= JudgeBody;
 
         bool dead = !player.IsAlive;
         if (dead)
@@ -1069,6 +1071,49 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_errand.Goal == PlayerbotGoalKind.Train) _suspensions.SuspendTraining(now);
         _suspensions.SuspendEntry(_errand.Entry, now);
         _errand = default;
+    }
+
+    /// <summary>
+    /// Whether this ghost's body is unsafe to reclaim (<see cref="PlayerbotRecovery.UnsafeBody"/>, <see cref="PlayerbotRecovery.JudgeBody"/>):
+    /// the bot already died within <see cref="PlayerbotStallWatch.DeathLoopYards"/> of it inside the death watch's window (this death
+    /// and an earlier one, <see cref="PlayerbotStallWatch.DeathsNear"/>: the third would be a death loop, which takes the healer
+    /// already); a creature round it is too strong for the bot (<see cref="PlayerbotRisk.TooStrongNear"/>, with the estimate on); or it
+    /// lies outside the home while the spirit healer leaves the bot inside the home or nearer its centre
+    /// (<see cref="PlayerbotRecovery.SpiritHealerLanding"/>). Live 2026-10-11: Wfbotaz (level 14, homed at Sentinel Hill) reclaimed its
+    /// body among Raven Hill's level 20+ skeletons and spiders again and again, two death loops in fifteen minutes (world.log
+    /// 05:53:21 and 06:00:42, attackers 202/531/569 and 202/217/569).
+    /// </summary>
+    private (PlayerbotUnsafeBody Reason, string? Detail) JudgeBody(Player player, Corpse corpse)
+    {
+        var body = new System.Numerics.Vector3(corpse.X, corpse.Y, corpse.Z);
+        int deaths = _stall.DeathsNear(corpse.MapId, body, _session.World.NowMs);
+        bool diedHere = deaths >= 2;
+        PlayerbotEngagement? strong = diedHere || !_options.Risk.Enabled ? null : Risk.TooStrongNear(player, body);
+        bool outside = false, nearer = false;
+        float bodyFromHome = float.NaN, healerFromHome = float.NaN;
+        if (!diedHere && strong is null && _home is { } home && corpse.MapId == home.MapId
+            && !home.Contains(corpse.MapId, corpse.X, corpse.Y, corpse.Z))
+        {
+            outside = true;
+            bodyFromHome = home.DistanceTo(corpse.X, corpse.Y);
+            if (_recovery.SpiritHealerLanding(player, corpse) is { } landing)
+            {
+                healerFromHome = home.DistanceTo(landing.X, landing.Y);
+                nearer = home.Contains(home.MapId, landing.X, landing.Y, landing.Z) || healerFromHome < bodyFromHome;
+            }
+        }
+
+        PlayerbotUnsafeBody reason = PlayerbotRecovery.JudgeBody(diedHere, strong is not null, outside, nearer);
+        string? detail = reason switch
+        {
+            PlayerbotUnsafeBody.DiedHere => string.Create(CultureInfo.InvariantCulture,
+                $"{deaths} deaths within {PlayerbotStallWatch.DeathLoopYards:F0} yd in {PlayerbotStallWatch.DeathLoopWindowMs / 1000}s"),
+            PlayerbotUnsafeBody.TooStrong => strong.ToString(),
+            PlayerbotUnsafeBody.OutsideHome => string.Create(CultureInfo.InvariantCulture,
+                $"body {bodyFromHome:F0} yd from the home's centre, healer {healerFromHome:F0} yd"),
+            _ => null,
+        };
+        return (reason, detail);
     }
 
     private void Explore(Player player, uint elapsedMs)

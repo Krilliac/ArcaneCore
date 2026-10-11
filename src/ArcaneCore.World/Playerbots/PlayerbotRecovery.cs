@@ -10,6 +10,9 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Numerics;
 
 namespace ArcaneCore.World.Playerbots;
@@ -59,6 +62,24 @@ internal enum PlayerbotRecoveryStep
 
     /// <summary>A body that cannot even be released: the recovery faults (<see cref="PlayerbotRecovery.Stalled"/>).</summary>
     Fault,
+}
+
+/// <summary>
+/// Why a ghost's body is not worth reclaiming, so its recovery takes the spirit healer at once (<see cref="PlayerbotRecovery.JudgeBody"/>).
+/// </summary>
+internal enum PlayerbotUnsafeBody
+{
+    /// <summary>The body may be reclaimed.</summary>
+    None,
+
+    /// <summary>The bot already died near the body recently: reviving there would repeat it.</summary>
+    DiedHere,
+
+    /// <summary>A creature round the body is too strong for the bot even at full health (the risk estimate avoids it).</summary>
+    TooStrong,
+
+    /// <summary>The body lies outside the bot's home, and the spirit healer leaves it nearer home than the body would.</summary>
+    OutsideHome,
 }
 
 /// <summary>What a ghost that took the spirit-healer fallback does next (<see cref="PlayerbotRecovery.DecideSpiritHealer"/>).</summary>
@@ -114,6 +135,33 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// in reach of a creature that kills outright, is camped, and the revive spot is chosen outside them (set by the brain).
     /// </summary>
     internal Func<Player, IEnumerable<PlayerbotThreat>>? Hazards { get; set; }
+
+    /// <summary>
+    /// Whether the ghost's body on its own map is unsafe to reclaim, and why (a detail for the log): asked at every think of a ghost
+    /// whose body lies on its map until it is revived; anything but <see cref="PlayerbotUnsafeBody.None"/> takes the spirit healer
+    /// for this death (<see cref="TakeSpiritHealer"/>). Set by the brain of a bot that plays alone (<see cref="PlayerbotBrain"/>); a
+    /// party, group or battleground bot keeps its body run. Null: every body is reclaimed as before.
+    /// </summary>
+    internal Func<Player, Corpse, (PlayerbotUnsafeBody Reason, string? Detail)>? UnsafeBody { get; set; }
+
+    /// <summary>Why this death's body was given up for the spirit healer (<see cref="UnsafeBody"/>), or None (inspection and tests).</summary>
+    internal PlayerbotUnsafeBody UnsafeReason { get; private set; }
+
+    /// <summary>
+    /// Whether a body is unsafe to reclaim, free of world state: the bot already died near it inside the death watch's window
+    /// (<paramref name="diedHereBefore"/>, <see cref="PlayerbotStallWatch.DeathsNear"/>); a creature round it is too strong for the
+    /// bot even at full health (<paramref name="hostilesTooStrong"/>, <see cref="PlayerbotRisk.TooStrongNear"/>); or it lies outside
+    /// the bot's home (<paramref name="bodyOutsideHome"/>, <see cref="PlayerbotHomeArea.Contains(uint, float, float, float)"/>) while
+    /// the spirit healer leaves the bot nearer home (<paramref name="healerNearerHome"/>). A body in a safe spot inside the home, at
+    /// the first death there, is reclaimed as always: the spirit healer costs resurrection sickness and a quarter of the durability
+    /// (vmangos WorldSession::SendSpiritResurrect, NPCHandler.cpp:430-471).
+    /// </summary>
+    internal static PlayerbotUnsafeBody JudgeBody(bool diedHereBefore, bool hostilesTooStrong, bool bodyOutsideHome, bool healerNearerHome)
+    {
+        if (diedHereBefore) return PlayerbotUnsafeBody.DiedHere;
+        if (hostilesTooStrong) return PlayerbotUnsafeBody.TooStrong;
+        return bodyOutsideHome && healerNearerHome ? PlayerbotUnsafeBody.OutsideHome : PlayerbotUnsafeBody.None;
+    }
 
     internal const long NoProgressMs = 60_000;
     internal const long StuckMs = 10_000;
@@ -270,6 +318,19 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotCorpsePlace place = corpse is null ? PlayerbotCorpsePlace.None
             : corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map) ? PlayerbotCorpsePlace.ThisMap
             : PlayerbotCorpsePlace.OtherMap;
+        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody?.Invoke(player, corpse!) is
+            { Reason: not PlayerbotUnsafeBody.None } verdict)
+        {
+            // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
+            // take the spirit healer now rather than revive where the bot would die again.
+            _preferSpiritHealer = true;
+            UnsafeReason = verdict.Reason;
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} takes the spirit healer instead of its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Reason}{Detail}",
+                player.Name, corpse!.X, corpse.Y, corpse.Z, corpse.MapId, Describe(verdict.Reason),
+                verdict.Detail is { Length: > 0 } detail ? " (" + detail + ")" : string.Empty);
+        }
+
         AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
@@ -335,6 +396,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _thinksSinceProgress = 0;
         _spiritHealer = false;
         _preferSpiritHealer = false;
+        UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
     }
@@ -649,17 +711,45 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>The graveyard of the ghost's position on its own map (a spirit healer stands at it), or null.</summary>
-    private WorldSafeLoc? Graveyard(Player player)
+    private WorldSafeLoc? Graveyard(Player player) => GraveyardAt(player, player.X, player.Y, player.Z);
+
+    /// <summary>The graveyard of a position on the ghost's own map, or null.</summary>
+    private WorldSafeLoc? GraveyardAt(Player player, float x, float y, float z)
     {
         if (player.Map is not { } map) return null;
         GraveyardCatalog catalog = WorldGraveyards.Of(session.World).Catalog;
         if (catalog.SafeLocCount == 0) return null;
-        (uint zone, uint area) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+        (uint zone, uint area) = map.GetZoneAndAreaId(x, y, z);
         uint team = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
         WorldSafeLoc? graveyard = GraveyardSelector.FindClosest(catalog, WorldMaps.Of(session.World).Registry, map.MapId,
-            player.X, player.Y, player.Z, zone, area, team);
+            x, y, z, zone, area, team);
         return graveyard?.MapId == map.MapId ? graveyard : null;
     }
+
+    /// <summary>
+    /// Where the spirit healer would leave the bot whose body lies on its map: the graveyard of the body's position, which the
+    /// resurrection teleports to (vmangos SendSpiritResurrect, NPCHandler.cpp:430-471: the corpse's graveyard when it differs from the
+    /// ghost's; <see cref="GraveyardRepopService.TeleportToCorpseGraveyard"/>), else the nearest spirit healer the ghost sees (no
+    /// graveyard: the bot stays at the healer). Null when neither is known.
+    /// </summary>
+    internal Vector3? SpiritHealerLanding(Player player, Corpse corpse)
+    {
+        if (GraveyardAt(player, corpse.X, corpse.Y, corpse.Z) is { } graveyard) return new Vector3(graveyard.X, graveyard.Y, graveyard.Z);
+        return NearestSpiritHealer(player) is { } healer ? new Vector3(healer.X, healer.Y, healer.Z) : null;
+    }
+
+    private static string Describe(PlayerbotUnsafeBody reason) => reason switch
+    {
+        PlayerbotUnsafeBody.DiedHere => "it already died there",
+        PlayerbotUnsafeBody.TooStrong => "a creature there is too strong for it",
+        PlayerbotUnsafeBody.OutsideHome => "the body lies outside its home and the healer is nearer home",
+        _ => "none",
+    };
+
+    private ILogger? _logger;
+
+    private ILogger LoggerOf()
+        => _logger ??= session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotRecovery>() ?? NullLogger<PlayerbotRecovery>.Instance;
 
     private static bool WithinReclaimDistance(Player player, Corpse corpse)
     {

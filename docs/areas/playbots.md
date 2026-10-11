@@ -109,6 +109,24 @@ with world updates of up to 8.7 s): Graveweaver's ghost faulted with `playerbot-
 minutes, each time at its first think after a gap, and was disabled. At the ordinary 500 ms think interval a bound spans 20 or more
 thinks, so nothing changes there (`PlayerbotRecoveryThinkGapTests`).
 
+**An unsafe body is given up for the spirit healer at once.** A bot playing alone (the brain sets `PlayerbotRecovery.UnsafeBody`; party,
+group and battleground bots keep their body run) asks at every think of a ghost whose body lies on its map whether the body is worth
+reclaiming (`PlayerbotRecovery.JudgeBody`, in this order): `DiedHere`, the bot already died within `DeathLoopYards` (60) of the body
+inside the death watch's window (600 s; `PlayerbotStallWatch.DeathsNear`, this death and an earlier one; the third is a death loop,
+which takes the healer already); `TooStrong`, with the risk estimate on, a creature that would attack the revived bot and whose aggro
+reach covers part of the reclaim disc is one the bot could not take even at full health (`PlayerbotRisk.TooStrongNear`: the creature
+and its assistance weighed by `PlayerbotRiskModel.Assess` at the half health and mana a reclaim gives, strength only: no quest credit,
+loot or danger memory; `Avoid`, not `Rest`); `OutsideHome`, the body lies outside the bot's home (`PlayerbotHomeArea.Contains`, the
+zone clip included) and the spirit healer leaves the bot inside the home or nearer its centre than the body
+(`PlayerbotRecovery.SpiritHealerLanding`: the graveyard of the body's position, where vmangos `SendSpiritResurrect` teleports the
+revived bot, else the healer the ghost sees). Any of them takes the spirit healer for this death (resurrection sickness and 25%
+durability, vmangos NPCHandler.cpp:430-471) and logs `Playerbot X takes the spirit healer instead of its body at (...): reason (detail)`
+at Information; the home return then takes the revived bot home as after any resurrection (Auto: a teleport when the way is far or
+crosses a higher-level area). A first death in a safe spot inside the home is reclaimed as before, and so is a body round which only
+creatures the bot can take stand. Live 2026-10-11 05:45-06:00 UTC: the Westfall-homed level-14 Wfbotaz died among Raven Hill's level 20+
+skeletons and spiders, reclaimed its body there and died again, two death loops in fifteen minutes (`attackers=202/531/569`, then
+`202/217/569`); the healer came only with the third death of a loop (`PlayerbotUnsafeBodyRecoveryTests`).
+
 **Waiting to recover without food.** After a retreat, or before a pull it is too hurt for, the bot waits for
 `World:Playerbots:Risk:RecoverHealthPct` (goal `Rest`, `PlayerbotRisk.KeepWaiting`, at most `MaxWaitMs` 90 s). With food or drink it
 eats or drinks; without, it now sits (`CMSG_STANDSTATECHANGE`; vmangos `Player::RegenerateHealth` gives half as much again per tick
