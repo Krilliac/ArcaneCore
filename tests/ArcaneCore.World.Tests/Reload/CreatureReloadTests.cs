@@ -1,5 +1,8 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.World.Npc;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -219,6 +222,42 @@ public sealed class CreatureReloadTests
         Assert.Equal(0, CreatureContent.Empty.TemplateCount);
         Assert.Equal("Young Wolf", feature.Content.FindTemplate(WolfEntry)?.Name);
         Assert.NotNull(await host.OnWorldAsync(() => feature.FindSystem(0)));
+    }
+
+    /// <summary>
+    /// vmangos reads vendor_id from the creature template whenever a vendor window opens (Creature.cpp:3423-3427), so a changed
+    /// <c>VendorTemplateId</c> is live after <c>.reload creature_template</c>; the shared stock rows are only re-read by
+    /// <c>.reload npc_vendor</c>, so a stock row changed in the database since the last load stays as loaded.
+    /// </summary>
+    [Fact]
+    public async Task TheReload_RefreshesTheLiveVendorTemplateLinks_ButNotTheSharedStockRows()
+    {
+        await using WorldTestHost host = Start(ContentOf(Wolf()), out CreatureTestContext context);
+        QuestNpcFeature npcs = host.WorldServices.GetRequiredService<QuestNpcFeature>();
+        npcs.Services.ReplaceNpcs(new NpcStore(NpcContent.Empty with
+        {
+            VendorTemplateIds = new Dictionary<uint, uint> { [WolfEntry] = 133 },
+            VendorTemplateItems = [new VendorItem { Entry = 133, Item = 301 }, new VendorItem { Entry = 134, Item = 302 }],
+        }));
+        Assert.Equal([301u], npcs.Services.Npcs.VendorItems(WolfEntry).Select(v => v.Item));
+
+        var database = new ReloadContentFixture();
+        database.VendorTemplateIds[WolfEntry] = 134;
+        database.VendorTemplateItems.Add(new VendorItem { Entry = 134, Item = 999 });
+        IServiceProvider services = new ServiceCollection()
+            .AddSingleton(context.Feature!)
+            .AddSingleton<ICreatureDataStore>(new FixedStore(ContentOf(Wolf())))
+            .AddSingleton(npcs)
+            .AddSingleton<INpcContentStore>(database)
+            .BuildServiceProvider();
+        var coordinator = new ReloadCoordinator(NullLogger.Instance);
+        coordinator.Attach(host.World);
+        coordinator.Register(new CreatureContentReloadable(services));
+
+        ReloadResult result = await coordinator.ReloadAsync("creature_template");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal([302u], npcs.Services.Npcs.VendorItems(WolfEntry).Select(v => v.Item));
     }
 
     [Fact]

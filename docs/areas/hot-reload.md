@@ -115,7 +115,14 @@ and all_gossips (`ServerCommands.cpp:925-933`, `985-994`); `npc_text` is in neit
   `10604-10607`, `10784-10787`, `9083`, `10933`, `11015`), so an empty table empties the rows; `HotReload:EmptyTables = KeepLoaded`
   keeps them (as for `item_template`).
 - vmangos also reloads `npc_trainer_template` with `npc_trainer` and `npc_vendor_template` with `npc_vendor`
-  (`ServerCommands.cpp:1282-1301`); ArcaneCore has no template tables (an entry's list is one list), so there is nothing more to read.
+  (`ServerCommands.cpp:1282-1301`). ArcaneCore has no trainer template table (an entry's list is one list). `npc_vendor_template` (world
+  schema 53) is reloaded with `.reload npc_vendor` together with the creature links (`creature_template.VendorTemplateId`). vmangos reads
+  `vendor_id` from the template whenever a vendor window opens (`Creature.cpp:3423-3427`), so `.reload creature_template` also
+  rebuilds the live vendor links from the database; the shared stock rows themselves are only re-read by `.reload npc_vendor`. Template
+  rows that fail the vmangos load checks (maxcount/incrtime pairing, duplicates, more than 254 items, a creature `vendor_id` with no
+  rows, rows no creature uses; `ObjectMgr.cpp:10836-10862`, `11262-11330`) are logged (startup) or noted (`.reload npc_vendor`) and skipped;
+  `.reload creature_template` rebuilds only the links and does not report them. Direct `npc_vendor` rows get no load-time maxcount/incrtime
+  or item-cap check; the vendor window sends at most `MaxVendorItems` (150) entries.
 **Loot tables** (`LootContentReloadables`: `all_loot`, the eight per-table `*_loot_template` reloadables and
 `skill_fishing_base_level`; `LootContent.Rows` and friends, `GameObjectLootFeature.ReplaceLootContent`, `LootService.ReplaceContent`):
 the whole `LootContent` is read through `ILootDataStore` off the world thread and the next immutable content is composed from it and

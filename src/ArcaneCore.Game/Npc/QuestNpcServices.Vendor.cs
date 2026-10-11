@@ -272,7 +272,7 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    /// <summary>vmangos WorldSession::SendListInventory (npc_vendor rows; vendor templates are not modelled).</summary>
+    /// <summary>vmangos WorldSession::SendListInventory (the creature's own npc_vendor rows, then its shared npc_vendor_template rows; NpcStore merges them).</summary>
     internal void SendListInventory(PlayerNpcState s, ObjectGuid guid)
     {
         Player player = s.Quests.Player;

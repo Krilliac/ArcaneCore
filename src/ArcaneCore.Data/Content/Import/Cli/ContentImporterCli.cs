@@ -642,6 +642,7 @@ public static partial class ContentImporterCli
         imported["gossip_menu_option"] = npcReport.GossipOptions;
         imported["npc_text"] = npcReport.NpcTexts;
         imported["npc_vendor"] = npcReport.Vendors;
+        imported["npc_vendor_template"] = npcReport.VendorTemplates;
         imported["npc_trainer"] = npcReport.Trainers;
         imported["conditions"] = conditionsReport.Conditions;
         imported["battleground_template"] = battlegroundReport.Templates;
@@ -938,6 +939,7 @@ public static partial class ContentImporterCli
                 ("creature_loot_info", await db.Set<CreatureLootInfoRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("item_template", await db.Set<ItemTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("quest_template", await db.Set<QuestTemplate>().CountAsync(ct).ConfigureAwait(false)),
+                ("npc_vendor_template", await db.Set<VendorTemplateItemRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_questrelation", await db.Set<CreatureQuestStarterRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
