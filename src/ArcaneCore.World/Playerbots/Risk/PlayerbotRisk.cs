@@ -478,22 +478,26 @@ internal sealed class PlayerbotRisk
     /// whose risk at full health and mana is above the highest share any pull is ever taken at.
     /// </para>
     /// </summary>
-    internal PlayerbotEngagement? TooStrongNear(Player player, Vector3 body) => TooStrongWithin(player, body, CombatConstants.CorpseReclaimRadius);
+    internal PlayerbotEngagement? TooStrongNear(Player player, Vector3 body)
+        => TooStrongWithin(player, PlayerbotRecovery.Threats(player), body, CombatConstants.CorpseReclaimRadius);
 
     /// <summary>
     /// A creature too strong for the bot (<see cref="TooStrongNear"/>'s rule) whose aggro reach covers <paramref name="at"/> itself: one
-    /// that attacks a bot that comes to life there. The spirit healer's landing (<see cref="PlayerbotRecovery.LandingUnsafe"/>).
+    /// that attacks a bot that comes to life there. The spirit healer's landing (<see cref="PlayerbotRecovery.LandingUnsafe"/>): the
+    /// creatures round the place itself, seen by the bot or not (<see cref="PlayerbotRecovery.ThreatsAround"/>; the landing can be a
+    /// graveyard out of the ghost's sight).
     /// </summary>
-    internal PlayerbotEngagement? TooStrongAt(Player player, Vector3 at) => TooStrongWithin(player, at, 0f);
+    internal PlayerbotEngagement? TooStrongAt(Player player, Vector3 at)
+        => TooStrongWithin(player, PlayerbotRecovery.ThreatsAround(player, at, PlayerbotRecovery.BodyThreatYards), at, 0f);
 
-    private PlayerbotEngagement? TooStrongWithin(Player player, Vector3 body, float radius)
+    private PlayerbotEngagement? TooStrongWithin(Player player, IReadOnlyList<PlayerbotThreat> threats, Vector3 body, float radius)
     {
         if (!Enabled || player.Map is not { } map) return null;
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
         float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
         uint health = Math.Max(1u, (uint)(player.MaxHealth * CombatConstants.CorpseReclaimRestorePercent));
-        foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
+        foreach (PlayerbotThreat threat in threats)
         {
             if (threat.Source is not { } creature
                 || (radius > 0 ? Vector3.Distance(threat.Position, body) >= radius + threat.Radius

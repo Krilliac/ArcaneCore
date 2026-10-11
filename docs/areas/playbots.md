@@ -223,6 +223,14 @@ handled synchronously; the creatures aggro only in their own update): a homed bo
 past the 5-minute cooldown), an unhomed one (or one whose home teleport is refused) to its bind point (`TeleportToHomebind`, as the
 tram's way out). Live: Wfbotfe (homed, 08:07-08:09) and Dawnrover (unhomed, death loops at 08:23:32 and 08:27:47) were revived at
 that graveyard, attacked before their next think, and died there again and again; the home teleport was refused in combat.
+The landing is judged where the resurrection sends the bot: when the body's graveyard differs from the ghost's, `SendSpiritResurrect`
+teleports the revived bot there (`GraveyardRepopService.TeleportToCorpseGraveyard`), a near teleport still pending in that think, so
+the escape judges `TeleportService.DestinationOf` and replaces that teleport (an urgent `TryTeleport` never counts the server's own
+pending teleport as its escape). The creatures are those round the landing itself, seen by the bot or not
+(`PlayerbotRecovery.ThreatsAround`). A death loop's request for the healer is never overridden by a kept body: the healer is the way out
+of a body death loop and the escape covers its landing, so at most two bodies are kept per death-loop window. The keep-body answer is
+kept per body for 2 s. The unhomed bind-point escape is not rate-limited: it happens at most once per resurrection, and a bot that
+goes back to the same place has its errand set aside by the death watch.
 
 **Why the spirit-healer step faulted.** Not a server refusal: in the world test that replays Wfbotfe's sequence (revived at the healer
 among the skeletons, retreat, death, three times) the motion's loop watch (`PlayerbotMotion`, A, B, A within 30 s) counted the ghost's

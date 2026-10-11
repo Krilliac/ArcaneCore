@@ -11,6 +11,8 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Teleport;
+using ArcaneCore.Game.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -348,6 +350,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             BodyKeptOverLanding = false;
             EscapedLanding = false;
             _refusal = null;
+            _keepBody = default;
         }
         // A think without budget does nothing, and is no attempt the bounds may count (MinBoundThinks).
         if (session.ManagedBudget is { Remaining: <= 0 }) return false;
@@ -369,25 +372,24 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             : PlayerbotCorpsePlace.OtherMap;
         // A death loop's request (TakeSpiritHealer): taken at once without a body on this map (the healer is the only way back
         // anyway, as before), and with one only while a healer can be had; otherwise the corpse run goes on and it is asked again.
-        // A body on this map whose spirit healer would revive the bot among creatures too strong for it (LandingUnsafe), while a spot
-        // inside the reclaim radius of the body is clear of every threat: the body is the safer of the two, whatever made it look unsafe,
-        // and the corpse run revives the bot on that spot (the camped-body rule, ChooseReviveSpot). Live 2026-10-11 08:07-08:09 and
-        // 08:23-08:30 (Wfbotfe, homed; Dawnrover, unhomed): bodies near Raven Hill were given up for the healer, which revived the bots
-        // at the Raven Hill graveyard among the Skeletal Horrors; they died there again and again.
-        bool keepBody = ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer
-            && (_healerRequested || UnsafeBody is not null) && KeepBodyOverLanding(player, corpse!);
-
-        // A death loop's request (TakeSpiritHealer): taken at once without a body on this map (the healer is the only way back
-        // anyway, as before), and with one only while a healer can be had; otherwise the corpse run goes on and it is asked again.
-        if (_healerRequested && !_preferSpiritHealer && ghost && !keepBody
+        // Never overridden by the landing (KeepBodyOverLanding): the healer is the way out of a body death loop, and an unsafe landing
+        // is left at once after the resurrection (EscapeLanding).
+        if (_healerRequested && !_preferSpiritHealer && ghost
             && (place != PlayerbotCorpsePlace.ThisMap || HealerOutcomeKnown(player, corpse!)))
             _preferSpiritHealer = true;
 
         // Only when the spirit healer can be had at all (one in sight, or a graveyard for this place, where one stands): with
         // neither, giving the body up would leave the ghost waiting for a healer until the fallback faults (SpiritHealerFailed);
         // vmangos leaves a spirit with no linked graveyard where it died (Player::RepopAtGraveyard), and the body is its way back.
-        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && !keepBody && UnsafeBody is { } judge
-            && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict)
+        // A body judged unsafe whose spirit healer would revive the bot among creatures too strong for it (LandingUnsafe), while a spot
+        // inside the reclaim radius of the body is clear of every threat, is kept: the body is the safer of the two, and the corpse run
+        // revives the bot on that spot (the camped-body rule, ChooseReviveSpot). Live 2026-10-11 08:07-08:09 and 08:23-08:30 (Wfbotfe,
+        // homed; Dawnrover, unhomed): bodies near Raven Hill were given up for the healer, which revived the bots at the Raven Hill
+        // graveyard among the Skeletal Horrors; they died there again and again. A third death there is a death loop, whose request
+        // above takes the healer whatever the landing: at most two kept bodies per death-loop window.
+        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
+            && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
+            && !KeepBodyOverLanding(player, corpse!))
         {
             // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
@@ -568,11 +570,23 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             _refusal is { } refusal ? "; last refusal: " + refusal : string.Empty);
     }
 
-    /// <summary>Right after the spirit healer revived the bot: an unsafe landing is left at once (<see cref="EscapeLanding"/>).</summary>
+    /// <summary>
+    /// Right after the spirit healer revived the bot: an unsafe landing is left at once (<see cref="EscapeLanding"/>). The landing is
+    /// where the resurrection puts the bot, not where it stands: when the body's graveyard differs from the ghost's, vmangos
+    /// <c>SendSpiritResurrect</c> teleports the revived bot there (<see cref="GraveyardRepopService.TeleportToCorpseGraveyard"/>), a near
+    /// teleport pending until the bot acknowledges it (<see cref="TeleportService.DestinationOf"/>). The escape replaces that teleport.
+    /// </summary>
     private void LeaveLanding(Player player)
     {
         if (LandingUnsafe is not { } unsafeAt || EscapeLanding is not { } escape) return;
-        var at = new Vector3(player.X, player.Y, player.Z);
+        Vector3 at = new(player.X, player.Y, player.Z);
+        if (session.Services.GetService<TeleportFeature>()?.Teleports.DestinationOf(player) is { } destination)
+        {
+            // A far teleport (another map) is no landing among these creatures; the next think judges the bot where it arrives.
+            if (destination.MapId != player.MapId) return;
+            at = new Vector3(destination.X, destination.Y, destination.Z);
+        }
+
         if (!unsafeAt(player, at)) return;
         EscapedLanding = escape(player);
         if (!EscapedLanding)
@@ -581,30 +595,49 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 player.Name, at.X, at.Y, at.Z, player.MapId);
     }
 
+    /// <summary>How long a <see cref="KeepBodyOverLanding"/> answer is kept for one body (it is asked at every think of the ghost).</summary>
+    private const long KeepBodyRecheckMs = 2_000;
+
+    private (ObjectGuid Body, long AtMs, bool Keep) _keepBody;
+
     /// <summary>
-    /// Whether to keep the corpse run although the body was judged unsafe or a death loop asked for the healer: the healer's landing
-    /// (<see cref="SpiritHealerLanding"/>) is unsafe (<see cref="LandingUnsafe"/>) and a spot inside the reclaim radius of the body is
-    /// clear of every threat the ghost sees (<see cref="FindReviveSpot"/>, its geometry; the corpse run then asks the navigation mesh).
-    /// Logged once per death.
+    /// Whether to keep the corpse run although the body was judged unsafe: the healer's landing (<see cref="SpiritHealerLanding"/>) is
+    /// unsafe (<see cref="LandingUnsafe"/>, which looks at the creatures round the landing itself, seen or not) and a spot inside the
+    /// reclaim radius of the body is clear of every threat round it (<see cref="FindReviveSpot"/>, its geometry; the corpse run then asks
+    /// the navigation mesh). Never asked for a death loop's request. Kept per body for <see cref="KeepBodyRecheckMs"/>; logged once per death.
     /// </summary>
     private bool KeepBodyOverLanding(Player player, Corpse corpse)
     {
-        if (LandingUnsafe is not { } unsafeAt || SpiritHealerLanding(player, corpse) is not { } landing || !unsafeAt(player, landing))
-            return false;
-        var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
-        List<PlayerbotThreat> hostiles = [.. Threats(player), .. Hazards?.Invoke(player) ?? []];
-        if (FindReviveSpot(body, body, hostiles, candidate => candidate) is null) return false;
-        if (!BodyKeptOverLanding)
+        long now = (long)session.World.Uptime.TotalMilliseconds;
+        if (_keepBody.Body == corpse.Guid && _keepBody.AtMs >= 0 && now - _keepBody.AtMs < KeepBodyRecheckMs) return _keepBody.Keep;
+        bool keep = false;
+        Vector3? landingAt = null;
+        if (LandingUnsafe is { } unsafeAt && SpiritHealerLanding(player, corpse) is { } landing && unsafeAt(player, landing))
+        {
+            var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+            List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
+            keep = FindReviveSpot(body, body, hostiles, candidate => candidate) is not null;
+            landingAt = landing;
+        }
+
+        _keepBody = (corpse.Guid, now, keep);
+        if (keep && !BodyKeptOverLanding && landingAt is { } shown)
         {
             BodyKeptOverLanding = true;
             LoggerOf().LogInformation(
                 "Playerbot {Bot} keeps its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: the spirit healer would revive it among creatures too strong for it at ({LX:F1}, {LY:F1}, {LZ:F1}), and a spot near the body is clear",
-                player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId, landing.X, landing.Y, landing.Z);
+                player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId, shown.X, shown.Y, shown.Z);
         }
 
-        return true;
+        return keep;
     }
 
+    /// <summary>
+    /// How far round a place the creatures are looked at by <see cref="ThreatsAround"/>: the reclaim radius and 50 yards more for the
+    /// aggro reach of a creature standing outside it (an ArcaneCore bound: a reach is the detection range, 18 yards by default, plus the
+    /// level difference, CreatureMapSystem.GetAttackDistance).
+    /// </summary>
+    internal const float BodyThreatYards = CombatConstants.CorpseReclaimRadius + 50f;
     /// <summary>
     /// Walk towards <paramref name="goal"/> (identified by <paramref name="key"/>) in bounded chunks. Two things count as closing for
     /// the stuck bound (<see cref="StuckMs"/>): a straight-line distance to the goal shorter than any before, and, on the route being
@@ -748,12 +781,32 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal static List<PlayerbotThreat> Threats(Player player)
     {
+        if (player.Map is not { } map) return [];
+        return Threats(player, map, player.VisibleObjects.Select(map.FindObject).OfType<Creature>());
+    }
+
+    /// <summary>
+    /// <see cref="Threats(Player)"/> for the creatures of the map within <paramref name="radius"/> yards (2D) of <paramref name="at"/>,
+    /// whether the bot sees them or not: a spirit healer's landing at a graveyard out of the ghost's sight, or the body from afar. The
+    /// creature system's own spawns (a linear pass over the map's creatures: asked once per resurrection, and per body at most every
+    /// <see cref="KeepBodyRecheckMs"/>); without a creature system, the visible creatures.
+    /// </summary>
+    internal static List<PlayerbotThreat> ThreatsAround(Player player, Vector3 at, float radius)
+    {
+        if (player.Map is not { } map) return [];
+        if (map.FindUpdater<CreatureMapSystem>() is not { } system) return Threats(player);
+        float radiusSq = radius * radius;
+        return Threats(player, map, system.Creatures.Where(c =>
+            ((c.X - at.X) * (c.X - at.X)) + ((c.Y - at.Y) * (c.Y - at.Y)) <= radiusSq));
+    }
+
+    private static List<PlayerbotThreat> Threats(Player player, Map map, IEnumerable<Creature> candidates)
+    {
         var found = new List<PlayerbotThreat>();
-        if (player.Map is not { } map) return found;
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
-        foreach (ObjectGuid guid in player.VisibleObjects)
+        foreach (Creature creature in candidates)
         {
-            if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
+            if (!creature.IsInWorld || !creature.IsAlive
                 || !ReferenceEquals(creature.Map, map) || !map.Combat.Hooks.IsHostileTo(creature, player))
                 continue;
             var at = new Vector3(creature.X, creature.Y, creature.Z);

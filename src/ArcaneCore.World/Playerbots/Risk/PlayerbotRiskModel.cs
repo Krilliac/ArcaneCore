@@ -216,7 +216,11 @@ internal static class PlayerbotRiskModel
     /// <see cref="EliteLevelMargin"/> or more levels above the bot (alone), or a risk at full health and mana above the highest share
     /// any pull is ever taken at (<see cref="Acceptable"/> at its cap, a quest objective's bar: <c>Tolerance x 0.9</c>). Remembered
     /// danger and the reward are not weighed. For a revival (<see cref="PlayerbotRisk.TooStrongNear"/>), where the bot does not choose
-    /// a pull for its reward but may have to live beside the creature.
+    /// a pull for its reward but may have to live beside the creature. It judges the bot at full health and mana although a reclaim
+    /// revives it at half (vmangos HandleReclaimCorpseOpcode, <c>ResurrectPlayer(0.5f)</c>): a reclaim revives the ghost where it
+    /// stands, which the camped-body rule keeps out of every creature's reach (<see cref="PlayerbotRecovery.ChooseReviveSpot"/>), so
+    /// the bot can rest before such a fight; the half health matters only for a creature that would attack at once, and those are
+    /// judged by <see cref="Assess"/> at the half health first.
     /// </summary>
     internal static bool BeyondStrength(PlayerbotEngagementFacts facts, PlayerbotRiskOptions options)
     {

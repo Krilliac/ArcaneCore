@@ -213,27 +213,61 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     /// Reputation eligibility is separate from hostility: an Unfriendly NPC is not hostile,
     /// but refuses interaction. Ghost visibility remains the creature lookup owner's check.
     /// </remarks>
-    public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags) => InteractableNpc(player, guid, flags, out _);
+    public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags) => Interactable(player, guid, flags, out _, out _);
 
     /// <summary>
     /// <see cref="InteractableNpc(Player, ObjectGuid, NpcFlags)"/>, with the rule that refused it in <paramref name="refusal"/> (null
-    /// when the NPC is interactable): the same checks in the same order, for a refusal that is reported rather than silent.
+    /// when the NPC is interactable): the same checks in the same order, for a refusal that is reported rather than silent. The text is
+    /// built only here; the plain overload (asked by bots at every think) allocates nothing for a refusal.
     /// </summary>
     public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags, out string? refusal)
     {
-        // Player.cpp CanInteractWithNPC rejects lost control / inability to react.
-        const UnitFlags unavailable = UnitFlags.TaxiFlight | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing;
-        if (guid.IsEmpty || !player.IsInWorld || (player.UnitFlags & unavailable) != 0)
+        NpcInfo? npc = Interactable(player, guid, flags, out InteractRefusal code, out float distance);
+        refusal = code switch
         {
-            refusal = guid.IsEmpty ? "no NPC" : !player.IsInWorld ? "the player is not in the world"
-                : $"the player cannot act (unit flags {player.UnitFlags & unavailable})";
+            InteractRefusal.None => null,
+            InteractRefusal.NoNpc => "no NPC",
+            InteractRefusal.NotInWorld => "the player is not in the world",
+            InteractRefusal.CannotAct => $"the player cannot act (unit flags {player.UnitFlags & UnavailableFlags})",
+            InteractRefusal.NotFound => "the NPC is not found or not visible to the player",
+            InteractRefusal.SpiritServiceAlive => "a spirit service and the player is alive",
+            InteractRefusal.DeadNotSpiritService => "the player is dead and the NPC is no spirit service",
+            InteractRefusal.MissingFlag => $"the NPC lacks the {flags} flag",
+            InteractRefusal.NotHunter => "a stable master and the player is no hunter",
+            InteractRefusal.NpcDead => "the NPC is dead",
+            InteractRefusal.Hostile => "the NPC is hostile",
+            InteractRefusal.InCombat => "the NPC is in combat",
+            InteractRefusal.NotSelectable => "the NPC is not selectable",
+            InteractRefusal.Reputation => "the player's reputation with the NPC is Unfriendly or worse",
+            InteractRefusal.OutOfRange => $"out of interaction range ({distance:F1} yd)",
+            _ => code.ToString(),
+        };
+        return npc;
+    }
+
+    /// <summary>Why <see cref="Interactable"/> refused (no allocation; the text is <see cref="InteractableNpc(Player, ObjectGuid, NpcFlags, out string?)"/>'s).</summary>
+    private enum InteractRefusal : byte
+    {
+        None, NoNpc, NotInWorld, CannotAct, NotFound, SpiritServiceAlive, DeadNotSpiritService, MissingFlag, NotHunter, NpcDead, Hostile,
+        InCombat, NotSelectable, Reputation, OutOfRange,
+    }
+
+    // Player.cpp CanInteractWithNPC rejects lost control / inability to react.
+    private const UnitFlags UnavailableFlags = UnitFlags.TaxiFlight | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing;
+
+    private NpcInfo? Interactable(Player player, ObjectGuid guid, NpcFlags flags, out InteractRefusal refusal, out float distance)
+    {
+        distance = float.NaN;
+        if (guid.IsEmpty || !player.IsInWorld || (player.UnitFlags & UnavailableFlags) != 0)
+        {
+            refusal = guid.IsEmpty ? InteractRefusal.NoNpc : !player.IsInWorld ? InteractRefusal.NotInWorld : InteractRefusal.CannotAct;
             return null;
         }
 
         NpcInfo? npc = Deps.Creatures?.Find(player, guid);
         if (npc is null || npc.MapId != player.MapId)
         {
-            refusal = "the NPC is not found or not visible to the player";
+            refusal = InteractRefusal.NotFound;
             return null;
         }
 
@@ -242,26 +276,26 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         bool spiritService = (npc.NpcFlags & (NpcFlags.SpiritHealer | NpcFlags.SpiritGuide)) != 0;
         if (player.IsAlive == spiritService)
         {
-            refusal = spiritService ? "a spirit service and the player is alive" : "the player is dead and the NPC is no spirit service";
+            refusal = spiritService ? InteractRefusal.SpiritServiceAlive : InteractRefusal.DeadNotSpiritService;
             return null;
         }
 
         if (flags != NpcFlags.None && (npc.NpcFlags & flags) == 0)
         {
-            refusal = $"the NPC lacks the {flags} flag";
+            refusal = InteractRefusal.MissingFlag;
             return null;
         }
 
         if (flags == NpcFlags.StableMaster && player.Class != Class.Hunter)
         {
-            refusal = "a stable master and the player is no hunter";
+            refusal = InteractRefusal.NotHunter;
             return null;
         }
 
         if (!npc.IsAlive || npc.IsHostile || npc.IsInCombat || npc.IsNotSelectable)
         {
-            refusal = !npc.IsAlive ? "the NPC is dead" : npc.IsHostile ? "the NPC is hostile"
-                : npc.IsInCombat ? "the NPC is in combat" : "the NPC is not selectable";
+            refusal = !npc.IsAlive ? InteractRefusal.NpcDead : npc.IsHostile ? InteractRefusal.Hostile
+                : npc.IsInCombat ? InteractRefusal.InCombat : InteractRefusal.NotSelectable;
             return null;
         }
 
@@ -270,7 +304,7 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         if (npc.FactionId != 0 && Deps.Reputation is { } reputation
             && reputation.GetReputationRank(player, npc.FactionId) <= (byte)ReputationRank.Unfriendly)
         {
-            refusal = "the player's reputation with the NPC is Unfriendly or worse";
+            refusal = InteractRefusal.Reputation;
             return null;
         }
 
@@ -278,24 +312,26 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         float dy = npc.Y - player.Y;
         float dz = npc.Z - player.Z;
         float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+        bool inReach;
         if (npc.IsGameObject)
         {
             // vmangos GameObject::IsAtInteractDistance (GameObject.cpp:2584-2609), no-bounds branch:
             // GetDistance3dToCenter <= GetInteractionDistance() (GameObjectDefines.h:759-785; 5.55556 for quest givers).
             // The display-bounds oriented box branch is a documented limit (see GameObjectMapSystem.InteractionDistanceFor).
             float reach = npc.GameObjectInteractionDistance;
-            bool inReach = float.IsFinite(reach) && reach >= 0 && distSq <= reach * reach;
-            refusal = inReach ? null : $"out of interaction range ({MathF.Sqrt(distSq):F1} yd)";
-            return inReach ? npc : null;
+            inReach = float.IsFinite(reach) && reach >= 0 && distSq <= reach * reach;
+        }
+        else
+        {
+            // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison.
+            float range = InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
+            inReach = float.IsFinite(range) && range > 0 && distSq < range * range;
         }
 
-        // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison.
-        float range = InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
-        bool within = float.IsFinite(range) && range > 0 && distSq < range * range;
-        refusal = within ? null : $"out of interaction range ({MathF.Sqrt(distSq):F1} yd, reach {range:F1})";
-        return within ? npc : null;
+        refusal = inReach ? InteractRefusal.None : InteractRefusal.OutOfRange;
+        if (!inReach) distance = MathF.Sqrt(distSq);
+        return inReach ? npc : null;
     }
-
     /// <summary>A creature the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE…)), without interaction checks.</summary>
     private NpcInfo? FindNpc(Player player, ObjectGuid guid)
         => guid.IsEmpty || Deps.Creatures?.Find(player, guid) is not { } npc || npc.MapId != player.MapId ? null : npc;

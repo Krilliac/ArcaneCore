@@ -4,9 +4,11 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -398,6 +400,115 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         Assert.True(run.Done, "the bot did not end at home, alive: " + run.Trail);
         Assert.Equal(1, run.Revivals);
         await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// A death loop's request for the healer is never overridden by the landing (review of PR #167): the camp of the live case covers
+    /// the landing, and a clear spot near the body would make an unsafe body worth keeping, but the bot has died there three times, and
+    /// the healer is the way out of a body death loop. It takes the healer, and leaves the unsafe landing at once (home, alive).
+    /// </summary>
+    [Fact]
+    public async Task ADeathLoop_WithAnUnsafeLandingAndAClearSpot_StillTakesTheHealer_AndEscapes()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, at: CampedBody, configure: services =>
+            services.AddSingleton<ICreatureDataStore>(new HealerAmongSkeletons(CampAtTheGraveyard)));
+        var home = new PlayerbotHomeArea(0, new Vector3(CampedBody.X + 2000f, CampedBody.Y, CampedBody.Z), 100f, "Farhome");
+        PlayerbotBrain brain = await BrainAsync(host, home);
+        await KillAsync(host, brain);
+        await host.OnWorldAsync(() => brain.Recovery.TakeSpiritHealer()); // the death loop's request (PlayerbotBrain.RecordDeath)
+        await SeeTheCampAsync(host, CampAtTheGraveyard.Length);
+        bool kept = false;
+
+        Run run = await RunAsync(host, brain, clock, p =>
+        {
+            kept |= brain.Recovery.BodyKeptOverLanding;
+            return p.IsAlive && home.Contains(p);
+        }, thinks: 400);
+
+        Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
+        Assert.False(kept, "the body was kept over the death loop's request: " + run.Trail);
+        Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
+        Assert.False(run.Reclaimed, run.Trail);
+        Assert.True(run.Done, "the bot did not end at home, alive: " + run.Trail);
+        Assert.Equal(1, run.Revivals);
+        await host.OnWorldAsync(() =>
+        {
+            Assert.True(brain.Recovery.EscapedLanding, "the revived bot was not taken away from the landing");
+            Assert.Equal(PlayerbotHomeTeleportReason.UnsafeLanding, brain.HomeReturn.LastTeleport);
+            brain.Stop();
+        });
+    }
+
+    /// <summary>
+    /// The real landing is the body's graveyard (review of PR #167): when it differs from the ghost's, the resurrection teleports the
+    /// revived bot there (vmangos SendSpiritResurrect; GraveyardRepopService.TeleportToCorpseGraveyard), a near teleport pending until
+    /// the bot acknowledges it. Here the body lies at graveyard A among the skeletons (out of the healer's sight), the ghost is released
+    /// there and walks to the healer at graveyard B, 70 yards east, which is safe. The bot is judged where the resurrection sends it (A),
+    /// not where it stood (B), and the escape replaces the pending teleport: it ends at home, alive, never at A.
+    /// </summary>
+    [Fact]
+    public async Task AHealerAtASafeGraveyard_WhoseResurrectionSendsTheBotToAnUnsafeOne_EscapesFromTheRealLanding()
+    {
+        var clock = new TestDeathClock(1_000);
+        Vector3 graveA = new(Healer.X - 70f, Healer.Y, Healer.Z);
+        Vector3 body = new(graveA.X - 10f, graveA.Y, graveA.Z);
+        (float X, float Y)[] camp = [.. CampOverBodyAndHealer.Select(o => (o.X - 70f, o.Y))]; // over the body and graveyard A
+        await using DungeonBotHost host = await StartAsync(clock, at: body, configure: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new HealerAmongSkeletons(camp));
+            services.AddSingleton<IGraveyardDataStore>(new TwoGraveyards(graveA));
+        });
+        var home = new PlayerbotHomeArea(0, new Vector3(body.X + 2000f, body.Y, body.Z), 100f, "Farhome");
+        PlayerbotBrain brain = await BrainAsync(host, home);
+        // The test terrain knows no zones, so the graveyards are linked at run time (the outdoor PvP seam, IGraveyardLinkSource), and
+        // the selector keeps the closest one to a position: A for the body, B for the ghost at the healer. The bot's own prediction
+        // of the landing (SpiritHealerLanding) reads only the static links and sees none: it takes the healer in sight, B, for the
+        // landing, which is safe; only the server's resurrection knows the bot goes to A.
+        await host.OnWorldAsync(() => Assert.IsType<GraveyardRepopService>(DeathSeams.Find(host.Host.World)!.Graveyards)
+            .AddLinkSource(new LinkBoth()));
+        await KillAsync(host, brain);
+        await SeeTheCampAsync(host, camp.Length);
+        bool everAtA = false;
+
+        Run run = await RunAsync(host, brain, clock, p =>
+        {
+            everAtA |= p.IsAlive && Vector2.Distance(new(p.X, p.Y), new(graveA.X, graveA.Y)) < 5f;
+            return p.IsAlive && home.Contains(p);
+        }, thinks: 400);
+
+        Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
+        Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
+        Assert.True(run.Done, "the bot did not end at home, alive: " + run.Trail);
+        Assert.Equal(1, run.Revivals);
+        Assert.False(everAtA, "the revived bot stood at the unsafe graveyard: " + run.Trail);
+        await host.OnWorldAsync(() =>
+        {
+            Assert.True(brain.Recovery.EscapedLanding, "the revived bot was not taken away from the real landing: " + run.Trail);
+            Assert.Equal(PlayerbotHomeTeleportReason.UnsafeLanding, brain.HomeReturn.LastTeleport);
+            Assert.False(host.Player.Combat.IsInCombat);
+            brain.Stop();
+        });
+    }
+
+    /// <summary>
+    /// Two safe locations (no static links: the test terrain knows no zones): A, where the skeletons stand, and B, the spirit healer's
+    /// (<see cref="Healer"/>). <see cref="LinkBoth"/> links them at run time.
+    /// </summary>
+    private sealed class TwoGraveyards(Vector3 graveA) : IGraveyardDataStore
+    {
+        public Task<GraveyardContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new GraveyardContent(
+            [
+                new WorldSafeLoc(9101, 0, graveA.X, graveA.Y, graveA.Z, 0f, "Camped graveyard"),
+                new WorldSafeLoc(9102, 0, Healer.X, Healer.Y, Healer.Z, 0f, "Healer's graveyard"),
+            ],
+            []));
+    }
+
+    /// <summary>Both graveyards of <see cref="TwoGraveyards"/> for every position (GraveyardRepopService keeps the closest).</summary>
+    private sealed class LinkBoth : IGraveyardLinkSource
+    {
+        public IEnumerable<uint> ExtraLinks(Player player, uint zoneId, uint areaId) => [9101u, 9102u];
     }
 
     /// <summary>
