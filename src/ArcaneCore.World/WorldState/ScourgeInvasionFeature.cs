@@ -300,9 +300,11 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             await _store.InFlight.ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Logged by the job's failure path when it was applied; the queued work below is still written.
+            // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
+            // The queued work below is still written.
+            logger.LogWarning(ex, "the Scourge invasion store job in flight at shutdown failed");
         }
 
         StoreOp[] ops = [.. _ops];

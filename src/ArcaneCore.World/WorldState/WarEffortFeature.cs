@@ -150,9 +150,11 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         {
             await _store.InFlight.ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
+            logger.LogWarning(ex, "the AQ war-effort store job in flight at shutdown failed");
         }
 
         WarEffortPhase? phase = _queuedPhase == _inFlightPhase ? null : _queuedPhase;

@@ -59,6 +59,37 @@ public sealed class VisibilityRelocationLowerLimitTests(ITestOutputHelper output
     }
 
     [Fact]
+    public void AGameObjectKeepsAPassOnEveryMove()
+    {
+        // The lower limit is a Unit rule (Unit::OnRelocated / m_lastNotifiedPosition): a moving game object (an elevator, a
+        // transport) is re-evaluated on every move.
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new SilentSession(1)));
+        var template = new ArcaneCore.Kernel.WorldData.GameObjects.GameObjectTemplate
+        {
+            Entry = 1, Type = 5, DisplayId = 1, Name = "Lift", Size = 1f,
+            Data = new uint[ArcaneCore.Kernel.WorldData.GameObjects.GameObjectTemplate.DataCount],
+        };
+        var lift = new ArcaneCore.Game.GameObjects.GameObject(1, template, null);
+        lift.SetPosition(50, 0, 0, 0);
+        map.AddObject(lift);
+        map.Update(50);
+        long skippedBefore = map.RelocationsWithoutVisibility;
+        int passes = 0;
+        for (int step = 1; step <= 20; step++)
+        {
+            long before = map.ObjectVisibilityCandidates;
+            lift.SetPosition(50 - (step * 0.5f), 0, 0, 0);
+            map.Update(50);
+            if (map.ObjectVisibilityCandidates != before) passes++;
+        }
+
+        Assert.Equal(20, passes);
+        Assert.Equal(skippedBefore, map.RelocationsWithoutVisibility);
+    }
+
+    [Fact]
     public void ALimitOfZeroRunsAPassOnEveryMove()
     {
         using WorldRuntime world = TestWorld.CreateRuntime();

@@ -871,11 +871,12 @@ public sealed class Map
         }
 
         // vmangos Unit::OnRelocated: the AI notify is scheduled on every relocation, the visibility pass only past the
-        // relocation lower limit (World:Maps:VisibilityRelocationLowerLimit).
+        // relocation lower limit (World:Maps:VisibilityRelocationLowerLimit). It is a Unit rule (OnRelocated and
+        // m_lastNotifiedPosition are Unit members, Unit.cpp:10151): a game object (a transport, an elevator) keeps a pass on every move.
         ObjectRelocated?.Invoke(obj);
 
         float limit = _grid.Options.VisibilityRelocationLowerLimit;
-        if (!obj.TakeRelocationNotify(limit > 0 ? limit * limit : 0f))
+        if (obj is Unit && !obj.TakeRelocationNotify(limit > 0 ? limit * limit : 0f))
         {
             RelocationsWithoutVisibility++;
             return;
@@ -898,11 +899,12 @@ public sealed class Map
     }
 
     /// <summary>
-    /// Whether this map updates creatures only in the active cells (<see cref="MapOptions.UpdateActiveCellsOnly"/>): continents
-    /// (vmangos Map::IsContinent; a map without a loaded template counts as one when it is 0 or 1). Instances and battlegrounds
-    /// update every creature of their loaded grids: vmangos activates 170 yards there (Visibility.Distance.Instances) and 180 in
-    /// battlegrounds where ArcaneCore has the one 100-yard <see cref="MapOptions.GridActivationDistance"/>, and their scripted
-    /// encounters run far from the players.
+    /// Whether this map updates creatures only in the active cells (<see cref="MapOptions.UpdateActiveCellsOnly"/>). vmangos uses
+    /// the active cells on every map (Map::Update → UpdateCells); this server limits it to continents as a deliberate deviation
+    /// (a map without a loaded template counts as one when it is 0 or 1): vmangos activates 170 yards in instances
+    /// (Visibility.Distance.Instances) and 180 in battlegrounds, where ArcaneCore has only the one 100-yard
+    /// <see cref="MapOptions.GridActivationDistance"/>, so instances and battlegrounds keep updating every creature of their loaded
+    /// grids rather than freezing scripted encounters at a radius vmangos does not use there.
     /// </summary>
     internal bool UpdatesActiveCellsOnly
         => _grid.Options.UpdateActiveCellsOnly && (Template is { } template ? !template.Instanceable : MapId is 0 or 1);

@@ -26,10 +26,11 @@ public sealed class MapOptions
     public float GridActivationDistance { get; set; } = Map.VisibilityRange;
 
     /// <summary>
-    /// How far (yards, 3D) an object must move from where its last movement-triggered visibility pass was scheduled before
-    /// the next one is (vmangos <c>Visibility.RelocationLowerLimit</c>, default 10, World.cpp:830; Unit::OnRelocated). Moves
-    /// within it keep the visible sets of the last pass; the grey distance (<see cref="Map.VisibilityGreyDistance"/>) and the
-    /// next pass cover the difference. 0 runs a pass on every move.
+    /// How far (yards, 3D) a unit (player or creature) must move from where its last movement-triggered visibility pass was
+    /// scheduled before the next one is (vmangos <c>Visibility.RelocationLowerLimit</c>, default 10, World.cpp:830;
+    /// Unit::OnRelocated). Moves within it keep the visible sets of the last pass; the grey distance
+    /// (<see cref="Map.VisibilityGreyDistance"/>) and the next pass cover the difference. Game objects get a pass on every move.
+    /// 0 runs a pass on every move.
     /// </summary>
     public float VisibilityRelocationLowerLimit { get; set; } = 10f;
 

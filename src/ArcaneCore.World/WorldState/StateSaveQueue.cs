@@ -19,12 +19,6 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
     private Task _drain = Task.CompletedTask;
     private bool _draining;
 
-    /// <summary>
-    /// Test seam: true writes inside <see cref="Save"/> (fake stores that complete synchronously, asserted right after the
-    /// change). Production leaves it false: the world thread never waits for the database.
-    /// </summary>
-    internal bool Inline { get; set; }
-
     /// <summary>Writes completed (diagnostics, tests).</summary>
     public long Written => Interlocked.Read(ref _written);
 
@@ -33,12 +27,6 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
     /// <summary>Queue <paramref name="state"/> as the value to store for <paramref name="key"/>; never blocks on storage.</summary>
     public void Save(TKey key, TState state)
     {
-        if (Inline)
-        {
-            Write(state).GetAwaiter().GetResult();
-            return;
-        }
-
         lock (_gate)
         {
             if (!_pending.ContainsKey(key)) _order.Add(key);
