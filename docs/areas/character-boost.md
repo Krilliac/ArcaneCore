@@ -40,11 +40,17 @@ Running it again at the same level changes nothing (kept items, no new buttons, 
 
 ## Gear selection
 
-* **Pool.** Item templates of quality green or lower, required level and item level at most the level, no random property, not deprecated or flagged
+* **Pool.** Item templates of quality white through blue by default (configurable with `World:GmCommands:Boost:MaxQuality`, clamped to 1-4),
+  required level at most the character's level and item level at most five above it, not deprecated or flagged
   unobtainable, no skill, spell, reputation, honor, city-rank, quest-start, duration, area or map bound, not quest-bound, an equippable inventory type
   (not shirt, tabard, bag, quiver, ammo), **and obtainable**: sold by a vendor (`npc_vendor`), offered by a quest (reward choices and rewards) or
   dropped by a loot row (`mincountOrRef >= 0`). The live `item_template` never sets the unobtainable flag and carries test and monster-only entries,
-  so a source is required.
+  so a source is required. vmangos `Player::CanUseItem` checks required level rather than item level (`Player.cpp:10058-10101`); the extra five item
+  levels are an ArcaneCore near-level policy that admits ordinary usable greens and dungeon blues.
+* **Random properties.** A green with `random_property` is eligible only when the loaded `item_enchantment_template`,
+  `ItemRandomProperties.dbc`, `SpellItemEnchantment.dbc`, and spell catalog can identify a real roll and its stats. The planner chooses the
+  highest scoring roll for the build, records its property id, and equips the item with that property. Without those data, the item is skipped
+  rather than given without its suffix (vmangos `Item::SetItemRandomProperties`, `Player::ApplyEnchantment`).
 * **Event-bound sources do not count.** The rewards of a quest listed in `game_event_quest`, and the wares of a creature entry whose every spawn is listed
   under a positive event in `game_event_creature`, are not sources (`BoostEventBinding`; a negative event number removes a permanent creature during the
   event and binds nothing). An item that a permanent vendor, quest or loot row also offers stays. This keeps holiday cosmetics out of the kit: the
@@ -60,11 +66,14 @@ Running it again at the same level changes nothing (kept items, no new buttons, 
   armor skill, level), passed to the planner. An item the character has no skill for is never a candidate, however strong; the slot falls back to the
   best usable item or is reported empty. Covered by the integration test with a stronger axe and no Axes skill.
 * **Choice per slot.** Stat-weight score times a style factor (`PlayerbotItemScore`), then item level, then the lower entry. This is a deliberate
-  choice over "highest item level at or below the level": the kit follows the build's weights (a managed bot uses its own talent build; other
+  choice over "highest available item level": the kit follows the build's weights (a managed bot uses its own talent build; other
   characters use a fixed table by class), so a priest gets spirit and intellect and a warrior strength and stamina, and item level only breaks ties.
   Slots are chosen in a fixed order, hands first, because the off hand depends on the main hand (a shield tank takes a one-hander and a shield; a
   two-hand build takes a two-hander when one is usable; dual wielders fill the off hand only if the character can dual wield, and never with a second
-  copy of a unique item).
+  copy of a unique item). In the eight armor slots, the highest armor type the character can actually wear and the content can supply is chosen
+  first, then the best scoring piece within it. This follows the armor-proficiency order in vmangos `Player::GetHighestKnownArmorProficiency`
+  (`Player.cpp:8561-8571`) while falling back if that armor type has no usable piece in a slot. Any armor or weapon without the character's
+  trained proficiency is rejected by `PlayerInventory.CanUseItem`.
 * **Cost.** The obtainable set and the per-level candidate lists are built once per content load and level, not per command; a content reload
   replaces the content objects and so invalidates them.
 
@@ -74,6 +83,14 @@ Attack (6603) goes first, then the class's spells by the spell level of their fi
 spell whose higher rank is known is upgraded in place, and item and macro buttons are kept. The primary page is buttons 0-11 (the warrior's Battle
 Stance page is 72-83, from the ClassicDB start rows); further spells go to buttons 12-23. After the writes the full 120 values are sent as
 SMSG_ACTION_BUTTONS and the buttons are saved with the character.
+
+## Observed content limits
+
+* **Low-level accessory content.** In the imported ClassicDB world used for the 10/20/30/40/50/60 kit sweep, levels 10 and 20 still have
+  no useful head piece; level 10 also lacks shoulders and a second trinket. An empty slot is reported instead of a test, deprecated or purely
+  cosmetic item. Level-1 utility accessories can still fill a neck or trinket slot and should not be mistaken for strong combat gear.
+* **Supplies.** The boost gives a compatible stack of ammo when it equips a bow, gun or crossbow. It does not currently grant bags, potions,
+  food or water.
 
 ## UNVERIFIED limits
 

@@ -43,9 +43,11 @@ public sealed partial class PlayerInventory
     /// Create <paramref name="count"/> new items of <paramref name="entry"/> at the named position and
     /// tell the client (StoreNewItem or EquipNewItem + AutoUnequipOffhandIfNeed, then SendNewItem;
     /// Player.cpp:18455-18496, 18521). All or nothing: on a refusal nothing changes and the result is
-    /// returned for the caller's SendEquipError.
+    /// returned for the caller's SendEquipError. <paramref name="randomPropertyId"/> (non-zero, a property <see cref="RandomProperties"/> knows)
+    /// gives the new item that random property (vmangos StoreNewItem's randomPropertyId; an equipped new item is otherwise created without one,
+    /// as EquipNewItem does, and a stored one rolls as StoreNewItem's callers do).
     /// </summary>
-    public InventoryResult AddItemAt(byte bag, byte slot, uint entry, uint count, out Item? item, bool received = false)
+    public InventoryResult AddItemAt(byte bag, byte slot, uint entry, uint count, out Item? item, bool received = false, int? randomPropertyId = null)
     {
         item = null;
         if (Player is { CanMutateQuestSettlementState: false })
@@ -63,7 +65,13 @@ public sealed partial class PlayerInventory
         if (!IsStorePosition(bag, slot))
         {
             CanEquipItem(slot, out byte wearer, template, null, swap: false);
-            item = EquipItem(wearer, Item.Create(NextGuid(), template, _ownerGuid));
+            Item created = Item.Create(NextGuid(), template, _ownerGuid);
+            if (randomPropertyId is { } property and not 0)
+            {
+                ApplyNewItemRandomProperty(created, property);
+            }
+
+            item = EquipItem(wearer, created);
             ItemCountChanged?.Invoke(entry, 1);
             AutoUnequipOffhandIfNeeded();
         }
@@ -71,7 +79,7 @@ public sealed partial class PlayerInventory
         {
             var dest = new List<ItemPosCount>();
             CanStoreItem(bag, slot, dest, template, count, null, swap: false, out _, out _);
-            item = StoreNewItem(dest, template, count);
+            item = StoreNewItem(dest, template, count, randomPropertyId);
         }
 
         if (Player is { IsInWorld: true } player)
