@@ -27,6 +27,74 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotQuestGoalsTests
 {
     [Fact]
+    public async Task QuestGiverWithinServerRadiusAdjustedReach_IsQueriedWithoutAnotherPath()
+    {
+        // vmangos Object::IsWithinDist and QuestNpcServices use 5 yards plus both bounding radii. At the
+        // last mesh point beside Je'neu Sancrea (#218), the centres are 5.6 yards apart, within that range.
+        await using QuestHost quest = await QuestHost.StartAsync();
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            NpcInfo npc = quest.Feature.Services.Deps.Creatures!.Find(player, giver.Guid)!;
+            float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
+            Assert.True(reach > QuestNpcServices.InteractionDistance);
+            float distance = (reach + QuestNpcServices.InteractionDistance) / 2f;
+            giver.SetPosition(player.X + distance, player.Y, player.Z, 0);
+            int queries = 0;
+            quest.Session.ManagedDispatchObserver = opcode =>
+            {
+                if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++;
+            };
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            goals.Update(player, 500);
+            Assert.Equal(1, queries);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            goals.Update(player, 500);
+            Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task CrossContinentEnder_DoesNotBecomeAVisibleStarterGoal()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
+            Assert.False(new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }).HasCandidate(player));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task PreviouslyCompletedCrossContinentDelivery_IsAbandonedByAnUnhomedBot()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.NotEqual(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task VisibleRepeatableQuestWithQuestGatedDrops_RemainsAnAcceptableGoal()
     {
         var items = new ItemTestContent();

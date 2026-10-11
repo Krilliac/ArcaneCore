@@ -306,7 +306,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         TargetEntry = entry;
         QuestId = questId;
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
-        if (times >= AbandonAfterSetAsides && TryAbandon(player, questId))
+        if (times >= AbandonAfterSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
         {
             _setAsides.Remove(questId);
             log?.LogWarning(
@@ -320,16 +320,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         log?.LogWarning(
             "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route climbs {Ascent:F1} yards of steep ground",
             player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, ascent);
-    }
-
-    /// <summary>Abandon <paramref name="questId"/> with the client's own packet (journal, source items and saves follow the player path).</summary>
-    private bool TryAbandon(Player player, uint questId)
-    {
-        if (_session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is not { Loaded: true } state) return false;
-        int slot = state.Quests.FindSlot(questId);
-        if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
-            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
-        return state.Quests.Get(questId) is not { Status: QuestStatus.Complete, Rewarded: false };
     }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
@@ -393,7 +383,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         PlayerbotHomeArea? area = Home;
         foreach (uint questId in CandidateQuests(services, level))
         {
-            if (area is not null && (services.Quests.Get(questId) is not { } candidate || !area.QuestInside(quests, content, candidate))) continue;
+            if (services.Quests.Get(questId) is not { } candidate
+                || RequiresIntercontinentTravel(mapId, quests, content, questId)
+                || area is not null && !area.QuestInside(quests, content, candidate)) continue;
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
@@ -420,6 +412,33 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .Where(quest => quest.MinLevel <= level && (quest.QuestLevel <= 0 || quest.QuestLevel > gray))
             .Select(quest => quest.Id).Order()
             .Where(services.IsRewardable);
+    }
+
+    /// <summary>
+    /// A bot has no route between the two continents: its tram and elevator trips stay on one continent. A quest whose
+    /// static creature enders are exclusively on the other continent cannot be finished by this bot. Unknown or scripted
+    /// enders, and instance enders, retain their existing eligibility; this only rejects a proven map-0/map-1 handoff.
+    /// </summary>
+    internal static bool RequiresIntercontinentTravel(uint mapId, QuestStore quests, CreatureContent content, uint questId)
+    {
+        if (mapId is not (0 or 1)) return false;
+        IReadOnlyList<uint> enders = quests.CreatureEndersOf(questId);
+        if (enders.Count == 0) return false;
+        bool otherContinent = false;
+        foreach (uint entry in enders)
+        {
+            bool knownSpawn = false;
+            foreach (uint spawnMap in content.MapsWithSpawns)
+            {
+                if (!content.GetSpawns(spawnMap, entry).Any(IsFiniteDestination)) continue;
+                knownSpawn = true;
+                if (spawnMap == mapId) return false;
+                if (spawnMap is not (0 or 1)) return false;
+                otherContinent = true;
+            }
+            if (!knownSpawn) return false;
+        }
+        return otherContinent;
     }
 
     /// <summary>
