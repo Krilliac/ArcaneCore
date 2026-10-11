@@ -51,10 +51,26 @@ public sealed class WardenTests
         }
     }
 
-    /// <summary>A seeded Random whose rotation start (<c>Next(int)</c>) is always the first check, so a test reads the checks in table order.</summary>
+    /// <summary>
+    /// A seeded Random that pins only the rotation start to the first check, so a test reads the checks in table order.
+    /// The rotation start is the first <c>Next(int)</c> call, made in the WardenSession constructor. Every later call goes to the
+    /// seeded base. That matters because a derived Random routes <c>NextInt64</c> through <c>Next(int)</c>, so pinning every call
+    /// would also pin the scan seeds, the scan gap and the first-scan offset.
+    /// </summary>
     private sealed class RotationStartsAtFirst(int seed) : Random(seed)
     {
-        public override int Next(int maxValue) => 0;
+        private bool _rotationDrawn;
+
+        public override int Next(int maxValue)
+        {
+            if (_rotationDrawn)
+            {
+                return base.Next(maxValue);
+            }
+
+            _rotationDrawn = true;
+            return 0;
+        }
     }
 
     private sealed class Rig
@@ -64,8 +80,8 @@ public sealed class WardenTests
         public readonly Client Client = new();
         public readonly WardenSession Warden;
 
-        public Rig(WardenOptions? options = null)
-            => Warden = new WardenSession(SessionKey, options ?? new WardenOptions { Enabled = true }, Sent.Add, Verdicts.Add, new RotationStartsAtFirst(7));
+        public Rig(WardenOptions? options = null, Random? random = null)
+            => Warden = new WardenSession(SessionKey, options ?? new WardenOptions { Enabled = true }, Sent.Add, Verdicts.Add, random ?? new RotationStartsAtFirst(7));
 
         public byte[] Next() => Client.Read(Sent[^1]);
 
@@ -627,7 +643,7 @@ public sealed class WardenTests
     }
 
     [Fact]
-    public void TheFirstScan_StartsAtARandomOffset_ThenKeepsTheFullGap()
+    public void TheFirstScan_StartsAtARandomOffset()
     {
         var firstScanSeconds = new HashSet<int>();
         for (int seed = 1; seed <= 24; seed++)
@@ -708,17 +724,25 @@ public sealed class WardenTests
     [Fact]
     public void ARetriedBatch_RunsTheSameCheckAgain_FromARandomStart()
     {
-        WardenOptions options = Scans([.. Enumerable.Range(0, 5).Select(i => new WardenCheckOptions
-            { Id = (uint)(i + 1), Kind = WardenCheckKind.Memory, Address = (uint)(0x00401000 + i), Expected = "90" })]);
-        options.ScansPerRequest = 1;
-        options.ProtocolAction = WardenAction.Log;
-        var rig = new Rig(options);
-        rig.Handshake();
-        rig.Warden.Update(10_000);
-        uint first = BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4));
-        rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult)); // malformed: the batch is retried
-        rig.Warden.Update(10_000);
-        Assert.Equal(first, BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4)));
+        // Real seeded starts, not the pinned one: the retry rewinds the rotation from wherever it began, including a wrap past the end.
+        var firstChecks = new HashSet<uint>();
+        for (int seed = 1; seed <= 16; seed++)
+        {
+            WardenOptions options = Scans([.. Enumerable.Range(0, 5).Select(i => new WardenCheckOptions
+                { Id = (uint)(i + 1), Kind = WardenCheckKind.Memory, Address = (uint)(0x00401000 + i), Expected = "90" })]);
+            options.ScansPerRequest = 1;
+            options.ProtocolAction = WardenAction.Log;
+            var rig = new Rig(options, new Random(seed));
+            rig.Handshake();
+            rig.Warden.Update(10_000);
+            uint first = BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4));
+            firstChecks.Add(first);
+            rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult)); // malformed: the batch is retried
+            rig.Warden.Update(10_000);
+            Assert.Equal(first, BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4)));
+        }
+
+        Assert.True(firstChecks.Count > 2, $"the retried batches did not start at different checks: {string.Join(",", firstChecks)}");
     }
 
     [Fact]
