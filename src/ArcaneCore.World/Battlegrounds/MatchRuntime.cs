@@ -12,6 +12,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Npc;
@@ -243,12 +244,26 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     }
 
     /// <summary>
-    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner (a button whose
-    /// <c>noDamageImmune</c>, data4, is set) is a click on it.
+    /// Whether opening (or using) an object of <paramref name="template"/> in an Arathi Basin or Alterac Valley match reaches the match as a click
+    /// on its banner (<see cref="Battleground.EventPlayerClickedOnFlag"/>). Routed today: a button whose <c>noDamageImmune</c> (data4) is set,
+    /// which vmangos Spell::EffectOpenLock turns into the click (SpellEffects.cpp:2120-2131): the contested and faction banners. Not routed: the
+    /// neutral Arathi Basin banners (goobers, classic-db 180087-180091) whose trigger spells vmangos scripts into the click
+    /// (scripts/battlegrounds/battleground.cpp:177-198, 23932 and 23935-23938). The bots decide whether they can play Arathi Basin with this
+    /// rule (<see cref="Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator"/>), so a template this rule learns to route lights them up.
+    /// </summary>
+    internal static bool RoutesBannerUse(GameObjectTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return (GameObjectType)template.Type == GameObjectType.Button && template.GetData(4) != 0;
+    }
+
+    /// <summary>
+    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner the match routes
+    /// (<see cref="RoutesBannerUse"/>) is a click on it.
     /// </summary>
     private void OnObjectUsed(Player player, GameObject go)
     {
-        if (go.Type == GameObjectType.Button && go.Template.GetData(4) != 0
+        if (RoutesBannerUse(go.Template)
             && Type is BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley && CanUseBattlegroundObject(player))
         {
             Battleground.EventPlayerClickedOnFlag(player.Guid, UseOf(player, go));

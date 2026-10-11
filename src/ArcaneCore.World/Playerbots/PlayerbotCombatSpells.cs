@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Protocol;
@@ -244,6 +245,20 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         ArgumentNullException.ThrowIfNull(corpse);
         return session.Services.GetService<SpellFeature>() is { } feature
             && Cast(player, feature, spell, new SpellCastTargets { Mask = SpellCastTargetFlags.CorpseAlly, Corpse = corpse.Guid });
+    }
+
+    /// <summary>
+    /// Submit <paramref name="spell"/> at a game object the way a 1.12 client does when the player clicks a locked object it opens with a
+    /// spell (an Arathi Basin banner and spell 21651, vmangos BattleBotWaypoints.cpp:169-205): CMSG_CAST_SPELL with TARGET_FLAG_OBJECT
+    /// (0x0800) and the object's guid (vmangos SpellCastTargets::read). True when the server took it.
+    /// </summary>
+    internal bool CastAtObject(Player player, SpellInfo spell, GameObject gameObject)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(spell);
+        ArgumentNullException.ThrowIfNull(gameObject);
+        return session.Services.GetService<SpellFeature>() is { } feature
+            && Cast(player, feature, spell, new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = gameObject.Guid });
     }
 
     private PlayerbotClassRotation? Rotation(Player player, SpellFeature feature)
