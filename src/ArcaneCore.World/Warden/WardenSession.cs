@@ -75,6 +75,7 @@ public sealed class WardenSession
         }
 
         _checks = checks.Count > 0 ? checks : [WardenCheck.Timing];
+        _nextCheck = _random.Next(_checks.Count); // a random start in the rotation, so a short session does not always run the same leading checks
     }
 
     public WardenState State { get; private set; } = WardenState.NotStarted;
@@ -360,7 +361,9 @@ public sealed class WardenSession
     /// </summary>
     private void Forgive()
     {
-        ReportSuppressed(); // a valid reply ends the failure streak: report the held count now, ahead of any verdict from this reply
+        // A valid reply ends the failure streak: report the held count now, ahead of any verdict from this reply. Unlike the Update path this
+        // does not restart the report interval; a valid reply comes at most once per request the server made, so it cannot flood.
+        ReportSuppressed();
         if (_strikes > 0)
         {
             _strikes--;

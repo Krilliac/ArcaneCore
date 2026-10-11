@@ -51,6 +51,12 @@ public sealed class WardenTests
         }
     }
 
+    /// <summary>A seeded Random whose rotation start (<c>Next(int)</c>) is always the first check, so a test reads the checks in table order.</summary>
+    private sealed class RotationStartsAtFirst(int seed) : Random(seed)
+    {
+        public override int Next(int maxValue) => 0;
+    }
+
     private sealed class Rig
     {
         public readonly List<byte[]> Sent = [];
@@ -59,7 +65,7 @@ public sealed class WardenTests
         public readonly WardenSession Warden;
 
         public Rig(WardenOptions? options = null)
-            => Warden = new WardenSession(SessionKey, options ?? new WardenOptions { Enabled = true }, Sent.Add, Verdicts.Add, new Random(7));
+            => Warden = new WardenSession(SessionKey, options ?? new WardenOptions { Enabled = true }, Sent.Add, Verdicts.Add, new RotationStartsAtFirst(7));
 
         public byte[] Next() => Client.Read(Sent[^1]);
 
@@ -661,6 +667,86 @@ public sealed class WardenTests
         Assert.Equal(sent, rig.Sent.Count);
         rig.Warden.Update(1);
         Assert.Equal(sent + 1, rig.Sent.Count);
+    }
+
+    [Fact]
+    public void TheScanRotation_StartsAtADifferentCheckPerSession_AndStillWrapsInOrder()
+    {
+        const int Count = 6;
+        WardenCheckOptions[] checks = [.. Enumerable.Range(0, Count).Select(i => new WardenCheckOptions
+            { Id = (uint)(i + 1), Kind = WardenCheckKind.Memory, Address = (uint)(0x00401000 + i), Expected = "90" })];
+        var starts = new HashSet<int>();
+        for (int seed = 1; seed <= 24; seed++)
+        {
+            WardenOptions options = Scans(checks);
+            options.ScansPerRequest = 1;
+            var sent = new List<byte[]>();
+            var session = new WardenSession(SessionKey, options, sent.Add, _ => { }, new Random(seed));
+            var client = new Client();
+            session.Start();
+            session.Handle(client.Write((byte)WardenClientCommand.ModuleOk));
+            session.Handle(client.Write([(byte)WardenClientCommand.HashResult, .. WardenModuleProfile.ClientKeySeedHash]));
+            client.SwitchToModuleKeys();
+            client.Read(sent[^1]); // MODULE_INITIALIZE
+            int first = -1;
+            for (int scan = 0; scan < Count + 1; scan++)
+            {
+                session.Update(10_000);
+                // No string table: command, 0, opcode, module index 0, then the u32 address.
+                int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(client.Read(sent[^1]).AsSpan(4)) - 0x00401000;
+                first = scan == 0 ? index : first;
+                Assert.Equal((first + scan) % Count, index);
+                session.Handle(client.Write(CheckResultBody(0, 0x90)));
+            }
+
+            starts.Add(first);
+        }
+
+        Assert.True(starts.Count > 2, $"rotations did not start at different checks: {string.Join(",", starts)}");
+    }
+
+    [Fact]
+    public void ARetriedBatch_RunsTheSameCheckAgain_FromARandomStart()
+    {
+        WardenOptions options = Scans([.. Enumerable.Range(0, 5).Select(i => new WardenCheckOptions
+            { Id = (uint)(i + 1), Kind = WardenCheckKind.Memory, Address = (uint)(0x00401000 + i), Expected = "90" })]);
+        options.ScansPerRequest = 1;
+        options.ProtocolAction = WardenAction.Log;
+        var rig = new Rig(options);
+        rig.Handshake();
+        rig.Warden.Update(10_000);
+        uint first = BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4));
+        rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult)); // malformed: the batch is retried
+        rig.Warden.Update(10_000);
+        Assert.Equal(first, BinaryPrimitives.ReadUInt32LittleEndian(rig.Next().AsSpan(4)));
+    }
+
+    [Fact]
+    public async Task APacketAfterTheSessionClosed_StillReportsTheHeldCount()
+    {
+        // A tick interval far beyond the test keeps the world tick from removing the closed session first: the packet below is the
+        // one that raced the tick's flush.
+        await using var host = WorldTestHost.Start(configure: o => o.TickIntervalMs = 600_000, configureServices: services => services.AddSingleton<IOptions<WardenOptions>>(
+            Options.Create(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log, LoadFromDatabase = false,
+                MaxProtocolFailures = 100, ProtocolReportIntervalSeconds = 3600 })));
+        WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+        var verdicts = new System.Collections.Concurrent.ConcurrentQueue<WardenVerdict>();
+        feature.Verdict += (_, verdict) => verdicts.Enqueue(verdict);
+        byte[] key = await host.AddAccountAsync("wardenlate");
+        WorldTestClient connection = await host.ConnectAsync();
+        await connection.AuthenticateAsync("wardenlate", key);
+        WorldSession session = Assert.Single(host.Registry.Sessions);
+        var warden = new Client(key);
+        await connection.SendAsync(WorldOpcode.CmsgWardenData, warden.Write(0xFF)); // reported at once
+        WardenSession scanner = feature.Find(session)!;
+        await WorldTestHost.WaitForAsync(() => !verdicts.IsEmpty, "the first failure to be reported");
+        await connection.DisposeAsync();
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session to close");
+
+        feature.Handle(session, warden.Write(0xFF)); // throttled: held, then reported because the session is closed
+
+        Assert.Equal(0, scanner.HeldVerdicts);
+        Assert.Contains(verdicts, v => v.Reason.StartsWith("1 more", StringComparison.Ordinal));
     }
 
     [Theory]
