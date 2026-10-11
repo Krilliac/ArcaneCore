@@ -357,9 +357,9 @@ validates and applies them on its own tick. Common rules (planned):
 
 1. **Boundary.** Warden is per connection and reads no world state. The session's
    two RC4 streams are derived from the 40-byte session key K
-   (`Warden/WardenSession.cs:52-77`, `Warden/WardenCrypto.cs`). The handshake
+   (`Warden/WardenSession.cs:53-78`, `Warden/WardenCrypto.cs`). The handshake
    state machine, deadlines, scan batches and checksum checks
-   (`WardenSession.cs:4-13`, `:187-277`) run where the client connection and K
+   (`WardenSession.cs:4-13`, `:209-299`) run where the client connection and K
    already live: the World session today (`Net/WorldSession.cs:833-841`), and the
    gateway in cluster mode (the gateway owns the cipher, above). A separate Warden
    process would need K or both RC4 states, and every CMSG/SMSG_WARDEN_DATA body,
@@ -367,25 +367,25 @@ validates and applies them on its own tick. Common rules (planned):
    a scan is one request every 30-60 s with up to 3 checks
    (`Warden/WardenOptions.cs:113-119`). Decision: there is no `Remote` mode.
    Managed playerbots have no client connection and are exempt by construction
-   (`Warden/WardenFeature.cs:106`).
+   (`Warden/WardenFeature.cs:115`).
 2. **Contract.** The gateway hosts Warden and keeps the `warden_checks` set loaded
-   from the world database (`WardenFeature.cs:81-98`). A verdict is advisory to
+   from the world database (`WardenFeature.cs:90-107`). A verdict is advisory to
    the game: the gateway applies it through existing authorities. Log stays
    local. Kick requests the normal session close from the worker, so logout and
    saves keep their order, and then closes the client. Ban writes through
-   `IBanStore` to shared auth storage, as today (`WardenFeature.cs:151-168`),
+   `IBanStore` to shared auth storage, as today (`WardenFeature.cs:164-181`),
    then kicks. The gateway reports `WardenVerdict(session generation, account,
    reason, action, check id)` to operators. Idempotency: a verdict belongs to
    one session generation, so a stale generation is ignored.
 3. **Failure.** A Warden failure is the session's protocol failure, and
-   `ProtocolAction` applies (never above Kick, `WardenSession.cs:283-284`).
+   `ProtocolAction` applies (never above Kick, `WardenSession.cs:305-306`).
    Today, Warden enabled with a missing or corrupt module logs an error and runs
    unscanned (`WardenFeature.cs:47-51`). In cluster mode (planned), a gateway with
    `Warden:Enabled` true reports not ready unless its module is usable. All
    gateways of a realm must publish the same Warden manifest (module digest,
    options, check revision), so a client cannot pick an unscanned gateway. The
    check-catalogue load failure keeps today's fallback to the configured checks
-   (`WardenFeature.cs:94-97`). Admission is as today: play is not held for the
+   (`WardenFeature.cs:103-106`). Admission is as today: play is not held for the
    handshake. Gating world entry on a completed handshake is a separate decision.
 4. **Value and cost.** Nothing to scale: the CPU per session is negligible at
    the default cadence. The value is correctness: Warden keeps working under
