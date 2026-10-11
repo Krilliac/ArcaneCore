@@ -410,6 +410,65 @@ public sealed class PlayerbotRingEscapeTests
         });
     }
 
+    /// <summary>
+    /// 7e. When the navigation bends every gap's way into a reach, the escape still goes, by the least exposed of the bent routes
+    /// (a bot left boxed in for good would only die there or stall): granted, and marked as straying.
+    /// </summary>
+    [Fact]
+    public async Task WhenEveryEscapeRouteIsBent_TheLeastExposedIsStillTaken()
+    {
+        (RiskTestWorld world, Creature[] ring) = await GapRingAsync();
+        await using RiskTestWorld owned = world;
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(pathfinder: new BendAllPathfinder(
+                new Vector3(player.X, player.Y, player.Z), [.. ring.Select(c => new Vector3(c.X, c.Y, c.Z))]));
+            return true;
+        });
+        await EscapeAsync(world);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.Equal(1, world.Brain.Risk.Escapes);
+            Assert.NotNull(world.Brain.Risk.EscapeRoute);
+            Assert.True(world.Brain.Risk.LastEscapeStrays, "the escape route was not one of the bent ones");
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A navigation that bends every way ending 40 to 70 yards from the ring's centre (every escape exit, about 51 yards out) past the
+    /// ring creature nearest its end, 4 yards from it; every other way (the 90-yard goal walks) is straight.
+    /// </summary>
+    private sealed class BendAllPathfinder(Vector3 centre, Vector3[] creatures) : ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end,
+            ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            float out_ = Flat(end, centre);
+            if (out_ < 40f || out_ > 70f) return new(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, end]);
+            Vector3 near = creatures.MinBy(c => Flat(c, end));
+            Vector3 towards = Vector3.Normalize(new Vector3(start.X - near.X, start.Y - near.Y, 0));
+            Vector3 corner = new(near.X + (towards.X * 4f), near.Y + (towards.Y * 4f), start.Z);
+            return new(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, corner, end]);
+        }
+    }
+
+    /// <summary>The gate's phase by guid is under <see cref="PlayerbotRisk.MaxBoxedPhaseMs"/> and spreads bots (two guids, two phases).</summary>
+    [Fact]
+    public void TheGatePhase_IsBounded_AndSpreadsBots()
+    {
+        uint first = PlayerbotRisk.BoxedPhaseMs(1), second = PlayerbotRisk.BoxedPhaseMs(2);
+        Assert.InRange(first, 0u, PlayerbotRisk.MaxBoxedPhaseMs - 1);
+        Assert.InRange(second, 0u, PlayerbotRisk.MaxBoxedPhaseMs - 1);
+        Assert.NotEqual(first, second);
+        var phases = Enumerable.Range(1, 1000).Select(g => PlayerbotRisk.BoxedPhaseMs((ulong)g)).ToHashSet();
+        Assert.True(phases.Count > 500, $"{phases.Count} distinct phases among 1000 bots");
+        Assert.All(phases, p => Assert.InRange(p, 0u, PlayerbotRisk.MaxBoxedPhaseMs - 1));
+    }
+
     /// <summary>A navigation that bends every way to <c>bentEnd</c> past <c>near</c> (4 yards from it); every other way is straight.</summary>
     private sealed class BendingPathfinder(Vector3 bentEnd, Vector3 near) : ArcaneCore.Game.Maps.Collision.IPathfinder
     {

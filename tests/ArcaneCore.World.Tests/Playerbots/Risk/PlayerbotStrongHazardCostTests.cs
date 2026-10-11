@@ -71,7 +71,8 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The escape fan (<see cref="PlayerbotHazards.TryFindGap"/>) at its worst: 64 strong hazards closing a ring round the bot (no line
+    /// The escape fan (<see cref="PlayerbotHazards.TryFindGap"/>, one line, and <see cref="PlayerbotHazards.FindGaps"/>, the best
+    /// <see cref="PlayerbotRisk.MaxEscapePlans"/> lines as one escape attempt asks) at its worst: 64 strong hazards closing a ring round the bot (no line
     /// open, so every line is scored) and 10 other hazards: no allocation, well under 2 ms a call.
     /// </summary>
     [Fact]
@@ -111,14 +112,22 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         Assert.True(micros < 2_000, $"{micros:F1} us per call");
 
         // One escape attempt as PlayerbotRisk.Refused makes it: one fan for its best MaxEscapePlans lines.
+        // Warmed up as the single fan is (tiered compilation may still be at work), then the least of three repeats: a strict zero.
         Span<PlayerbotGap> best = stackalloc PlayerbotGap[PlayerbotRisk.MaxEscapePlans];
-        before = GC.GetAllocatedBytesForCurrentThread();
-        watch.Restart();
         int lines = 0;
-        for (int i = 0; i < Calls; i++) lines = hazards.FindGaps(0, from, 2_000, 0, best);
-        watch.Stop();
-        allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        double attempt = watch.Elapsed.TotalMicroseconds / Calls;
+        for (int i = 0; i < 20; i++) lines = hazards.FindGaps(0, from, 2_000, 0, best);
+        allocated = long.MaxValue;
+        double attempt = double.PositiveInfinity;
+        for (int repeat = 0; repeat < 3; repeat++)
+        {
+            before = GC.GetAllocatedBytesForCurrentThread();
+            watch.Restart();
+            for (int i = 0; i < Calls; i++) lines = hazards.FindGaps(0, from, 2_000, 0, best);
+            watch.Stop();
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+            attempt = Math.Min(attempt, watch.Elapsed.TotalMicroseconds / Calls);
+        }
+
         output.WriteLine($"escape attempt (one fan, best {lines}): {attempt:F1} us, {allocated} bytes over {Calls}");
         Console.WriteLine($"escape attempt (one fan, best {lines}): {attempt:F1} us, {allocated} bytes over {Calls}");
         Assert.Equal(PlayerbotRisk.MaxEscapePlans, lines);

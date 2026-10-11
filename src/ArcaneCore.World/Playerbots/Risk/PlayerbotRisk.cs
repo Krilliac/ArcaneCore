@@ -696,7 +696,7 @@ internal sealed class PlayerbotRisk
     /// <see cref="BoxedProgressYards"/> from where the clock started for <see cref="BoxedMs"/> of world time plus a phase of up to
     /// <see cref="MaxBoxedPhaseMs"/> by its guid (bots revived together do not all run the fan on one tick; any number of refusals in
     /// one tick count for nothing), and no straight line round it is clear for its first <see cref="PlayerbotHazards.GapOpenYards"/>
-    /// (<see cref="PlayerbotHazards.TryFindGap"/>; two creatures guarding a quest giver leave open lines: the goal backs off and the
+    /// (<see cref="PlayerbotHazards.FindGaps"/>; two creatures guarding a quest giver leave open lines: the goal backs off and the
     /// stall watch sets it aside, as before);</item>
     /// <item>the least exposed way out: one fan (<see cref="PlayerbotHazards.FindGaps"/>) gives the <see cref="MaxEscapePlans"/> lines
     /// that pass least deep into the creatures' aggro reach (the gaps between them), never through a death, retreat, lethal or fled
@@ -722,7 +722,7 @@ internal sealed class PlayerbotRisk
         }
 
         // Bots revived together would reach the gate on the same tick: each waits a little longer, by its guid (0 to 2 s).
-        uint phase = (uint)((player.Guid.Low * 2654435761UL) % MaxBoxedPhaseMs);
+        uint phase = BoxedPhaseMs(player.Guid.Low);
         if (unchecked(now - _boxedSinceMs) < BoxedMs + phase) return;
         _boxedSinceMs = Math.Max(1u, now);
         if (!MayEscape(now)) return;
@@ -764,6 +764,9 @@ internal sealed class PlayerbotRisk
     }
 
     private readonly uint[] _escapeTimes = new uint[MaxEscapesPerWindow];
+
+    /// <summary>The bot's extra wait at the boxed-in gate (0 to <see cref="MaxBoxedPhaseMs"/>, by its guid: a Knuth multiplicative hash).</summary>
+    internal static uint BoxedPhaseMs(ulong guidLow) => (uint)((guidLow * 2654435761UL) % MaxBoxedPhaseMs);
 
     /// <summary>Whether the last escape's route strayed into more aggro reach than its straight line (inspection, tests).</summary>
     internal bool LastEscapeStrays { get; private set; }
