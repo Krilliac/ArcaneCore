@@ -7,9 +7,13 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
@@ -97,17 +101,97 @@ public sealed class PlayerbotPopulationFeatureTests
             Assert.Empty(await world.Owners.LoadAllAsync());
         }
 
-        PopulationStatus paused = await PassWithTicksAsync(world);
-        Assert.Contains("creation paused", paused.Reason);
-        Assert.Contains("created 0", paused.Reason);
-        Assert.Empty(await world.Owners.LoadAllAsync());
+        for (int pass = 4; pass <= 13; pass++)
+        {
+            PopulationStatus paused = await PassWithTicksAsync(world);
+            Assert.Contains("creation paused", paused.Reason);
+            Assert.Contains("created 0", paused.Reason);
+            Assert.Empty(await world.Owners.LoadAllAsync());
+        }
+
+        // Ten paused passes later the pause lifts by itself and the next pass plans (and is refused) again.
+        PopulationStatus resumed = await PassWithTicksAsync(world);
+        Assert.Contains("created 1", resumed.Reason);
+        Assert.DoesNotContain("creation paused", resumed.Reason);
 
         // The pause lifts on its own after a number of passes, and the next plan places the bot.
         placeable = true;
-        PopulationStatus last = paused;
-        for (int pass = 0; pass < 12 && world.Members.Snapshot.Count == 0; pass++) last = await PassWithTicksAsync(world);
+        for (int pass = 0; pass < 12 && world.Members.Snapshot.Count == 0; pass++) await PassWithTicksAsync(world);
         Assert.Single(world.Members.Snapshot);
         Assert.Single(await world.Owners.LoadAllAsync());
+    }
+
+    [Fact]
+    public async Task PlacementRefused_AndBotDeleteRefused_KeepsThePendingMember_AndALaterPassDeletesIt()
+    {
+        var hook = new SwitchableDeleteHook { Refuse = true };
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<ICharacterDeleteHook>(hook));
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Any(m => m.Band != PlayerbotPopulationFeature.PendingDeleteBand) ? 60 : 0;
+
+        PopulationStatus first = await PassWithTicksAsync(world);
+        Assert.Contains("created 1", first.Reason);
+        // The character delete was refused: the registry row stays and so does the member, marked pending; nothing restarts it.
+        Assert.Single(await world.Owners.LoadAllAsync());
+        PlayerbotPopulationMember pending = Assert.Single(world.Members.Snapshot);
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, pending.Band);
+        Assert.Equal(0, world.RunningCount);
+
+        hook.Refuse = false;
+        await PassWithTicksAsync(world);
+        // The pending bot is deleted at the start of the next pass; that pass's own new bot is refused and deleted too.
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Members.Snapshot);
+    }
+
+    [Fact]
+    public async Task PlacementRefused_AndCancelledDuringTheDelete_KeepsThePendingMember_AndALaterPassDeletesIt()
+    {
+        System.Reflection.FieldInfo stop = typeof(PlayerbotPopulationFeature).GetField("_stop",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        PlayerbotPopulationFeature? feature = null;
+        var shutdown = new CancelOnRefusalLogger(() => ((CancellationTokenSource)stop.GetValue(feature)!).Cancel());
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(shutdown));
+        feature = world.Feature;
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Any(m => m.Band != PlayerbotPopulationFeature.PendingDeleteBand) ? 60 : 0;
+
+        await PassWithTicksAsync(world);
+        // The shutdown arrived right after the refusal, before the bot could be stopped and deleted.
+        Assert.True(shutdown.Fired);
+        Assert.Single(await world.Owners.LoadAllAsync());
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, Assert.Single(world.Members.Snapshot).Band);
+
+        shutdown.Armed = false;
+        stop.SetValue(world.Feature, new CancellationTokenSource());
+        await PassWithTicksAsync(world);
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Members.Snapshot);
+    }
+
+    private sealed class CancelOnRefusalLogger(Action cancel) : Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>
+    {
+        public bool Armed { get; set; } = true;
+        public bool Fired { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (!Armed || !formatter(state, exception).Contains("placement of", StringComparison.Ordinal)) return;
+            Fired = true;
+            cancel();
+        }
+    }
+
+    private sealed class SwitchableDeleteHook : ICharacterDeleteHook
+    {
+        public volatile bool Refuse;
+
+        public Task<bool> CanDeleteCharacterAsync(WorldSession session, CharacterRecord character) => Task.FromResult(!Refuse);
     }
 
     private static Task<PopulationStatus> PassWithTicksAsync(PopulationTestHost world)

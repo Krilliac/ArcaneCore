@@ -118,6 +118,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
     private int _placementRefusals;
     private long _pausedAtPass;
+    // A member row whose Band is this value is pending deletion: its bot was created and could not be placed. The row is written
+    // before the bot is deleted and removed after, so a failed or interrupted deletion is retried by the next pass (ReconcileAsync)
+    // and the bot is never restarted or counted meanwhile (a real band index is below the configured band count).
+    internal const byte PendingDeleteBand = byte.MaxValue;
     private const int MaxPlacementRefusals = 3;
     private const int PauseLiftsAfterPasses = 10;
     private bool _stopping;
@@ -337,6 +341,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 else await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
             }
 
+            // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose.
+            foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
+            {
+                members.Remove(pending.BotId);
+                await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
+            }
+
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
             decision = PopulationBudgetController.Decide(input.Samples, input.P95Ms, input.RunningAll, ownedRunning, effectiveTarget, pop);
@@ -460,7 +471,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         // 2. New bots, within the rate limit, the registry and the running cap.
         if (!ctx.Input.TeleportAvailable) stoppedBecause = "the teleport service is not available";
-        else if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass >= PauseLiftsAfterPasses)
+        else if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass > PauseLiftsAfterPasses)
             _placementRefusals = 0; // the pause lifts on its own: content may have been reloaded
         while (remaining > 0 && stoppedBecause is null)
         {
@@ -512,19 +523,18 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 // cannot be placed is deleted rather than left in its race's starting area, where it would hold a registry slot and
                 // count towards a band; the next pass plans again.
                 Fail($"placement of {made.Name} refused: {refusal}");
-                ctx.RunningNow.Remove(botId);
-                ctx.Members.Remove(botId);
-                _startedAt.Remove(botId);
-                await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
-                await ctx.Store.DeleteAsync(botId, ct).ConfigureAwait(false);
-                PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
-                if (!deleted.Success) Fail($"delete of unplaced bot {made.Name} refused: {deleted.Code}");
                 if (++_placementRefusals >= MaxPlacementRefusals)
                 {
                     _pausedAtPass = Volatile.Read(ref _passes);
                     stoppedBecause = $"creation paused: {MaxPlacementRefusals} placements refused in a row";
                 }
 
+                ctx.RunningNow.Remove(botId);
+                ctx.Members.Remove(botId);
+                _startedAt.Remove(botId);
+                // Mark first (not cancellable: a shutdown must not lose the mark), then delete the bot, then the row.
+                await ctx.Store.UpsertAsync(member with { Band = PendingDeleteBand, UpdatedUnix = NowUnix() }, CancellationToken.None).ConfigureAwait(false);
+                await TryDeletePendingAsync(managed, ctx.Store, botId, made.Name, ct).ConfigureAwait(false);
                 break;
             }
 
@@ -540,6 +550,33 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         ctx.Note = stoppedBecause;
         return (started, created);
+    }
+
+    /// <summary>
+    /// Delete the bot of a pending-deletion member (character, then registry row) and only then the member row. Any failure, a
+    /// cancellation included, leaves the marked row for the next pass. True when the member is gone.
+    /// </summary>
+    private async Task<bool> TryDeletePendingAsync(ManagedPlayerbotFeature managed, IPlayerbotPopulationStore store, Guid botId, string? name, CancellationToken ct)
+    {
+        try
+        {
+            await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
+            PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
+            // "bot-not-found" means the registry row is already gone (a deletion that finished before a crash).
+            if (!deleted.Success && deleted.Code != "bot-not-found")
+            {
+                Fail($"delete of unplaced bot {name ?? botId.ToString()} refused: {deleted.Code}; retried next pass");
+                return false;
+            }
+
+            await store.DeleteAsync(botId, CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried next pass");
+            return false;
+        }
     }
 
     private static bool IsStartable(PassContext ctx, PlayerbotPopulationMember member)

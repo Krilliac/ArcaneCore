@@ -117,6 +117,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
 
         var stopped = new List<PlayerbotStatus>();
+        var orphans = new HashSet<Guid>();
         foreach (ManagedPlayerbot bot in registered)
         {
             CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
@@ -126,6 +127,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 // A registry row whose character is gone owns nothing; leaving it would hold a MaxRegisteredBots slot for good.
                 await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                     .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                _homes.TryRemove(bot.BotId, out _);
+                orphans.Add(bot.BotId);
                 continue;
             }
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
@@ -138,7 +141,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
-            foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled).Take(_options.MaxBots))
+            foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId)).Take(_options.MaxBots))
                 await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore).ConfigureAwait(false);
     }
 
@@ -740,7 +743,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 finally
                 {
                     session.Kick();
-                    await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                    // A close that is slow after a committed deletion must not skip the cleanup below.
+                    try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
+                    catch (TimeoutException) { logger.LogWarning("Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
                 }
             }
 
