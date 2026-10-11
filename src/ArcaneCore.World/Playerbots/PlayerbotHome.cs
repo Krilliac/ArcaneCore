@@ -2,9 +2,17 @@ using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -81,6 +89,12 @@ internal sealed class PlayerbotHomeArea
 
     /// <summary>Whether the area is clipped to the zone of its centre (the default for a new home; <c>nozone</c> turns it off).</summary>
     internal bool ZoneClipped { get; }
+
+    /// <summary>
+    /// The area levels of the home map, for the danger check of an Auto walk home (<see cref="PlayerbotHomeOptions.DangerLevelMargin"/>),
+    /// or null: no level is known and no way home counts as dangerous (the distance and the other rules still apply).
+    /// </summary>
+    internal PlayerbotAreaLevelLookup? AreaLevels { get; init; }
 
     /// <summary>The AreaTable zone of the centre for a clipped home; 0 when unclipped or not known. World thread.</summary>
     internal uint ZoneId
@@ -239,20 +253,30 @@ internal enum PlayerbotHomeState : byte
     /// <summary>Inside the radius (or walking back and already inside the return radius), and in the home's zone when it is clipped.</summary>
     Inside,
 
-    /// <summary>Outside the radius, or out of a clipped home's zone, with no errand: walking back to the centre.</summary>
+    /// <summary>Outside the radius, or out of a clipped home's zone, with no errand: walking (or teleporting) back to the centre.</summary>
     Returning,
 
-    /// <summary>On another map than the home: the bot does not move itself; an operator teleports it (<c>.tele name</c>).</summary>
+    /// <summary>
+    /// On another map than the home. <see cref="PlayerbotHomeReturnMode.Walk"/>: the bot does not move itself and an operator brings it
+    /// back (<c>.playerbot send</c>); the other modes teleport it home when the home map is allowed.
+    /// </summary>
     OffMap,
 
-    /// <summary>The way back could not be planned or followed: set aside for <see cref="PlayerbotHomeReturn.BlockedMs"/>.</summary>
+    /// <summary>The way back could not be planned, followed or teleported: set aside for <see cref="PlayerbotHomeReturn.BlockedMs"/>.</summary>
     Blocked,
 }
 
 /// <summary>
-/// The walk back to a bot's home. Bots have no teleport, taxi or hearth logic, so a bot on the home map walks, however far, through
-/// <see cref="PlayerbotNavigation.TryPlanToward"/> in route-sized chunks with the hazard guard and risk model of every other walk.
-/// A bot on another map is reported (<see cref="PlayerbotHomeState.OffMap"/>) and left alone.
+/// The way back to a bot's home: a walk through <see cref="PlayerbotNavigation.TryPlanToward"/> in route-sized chunks with the hazard
+/// guard and risk model of every other walk, or a teleport to the centre (<see cref="PlayerbotHomeOptions.ReturnMode"/>,
+/// <see cref="PlayerbotHomeRules.Decide"/>). The teleport is the one the follower's catch-up and <c>.playerbot send</c> use: the
+/// ordinary <see cref="TeleportService.TeleportTo(Player, uint, float, float, float, float)"/> (vmangos <c>Player::TeleportTo</c>), its
+/// near and far acknowledgements answered by <see cref="PlayerbotMovementControl"/> as a client's would be.
+/// <para>
+/// Why the teleport exists: Westfall-homed level-14 bots that had drifted to the Darkshire road in Duskwood (about -10703,-918) and to
+/// Loch Modan (about -5886,-2951) walked home across higher-level zones and died in death loops on the way (live world.log 2026-10-11,
+/// Wfbotfk "death loop ... attackers=202/531/569"), until the operator sent them home by hand (<c>.playerbot send Wfbot* SentinelHill</c>).
+/// </para>
 /// <para>Thread affinity: world thread, owned by one <see cref="PlayerbotBrain"/>.</para>
 /// </summary>
 internal sealed class PlayerbotHomeReturn
@@ -271,11 +295,28 @@ internal sealed class PlayerbotHomeReturn
     private uint _stuckMs;
     private int _failures;
     private uint _blockedUntil;
+    private bool _walkBlocked;
+    private int? _highestAreaLevel;
+    private uint _teleportRetryAt;
+    private bool _teleportRetryPending;
+    private ILogger? _logger;
 
     internal PlayerbotHomeState State { get; private set; }
 
     /// <summary>The two-dimensional distance to the centre at the last <see cref="Evaluate"/> (NaN off the home map).</summary>
     internal float Distance { get; private set; } = float.NaN;
+
+    /// <summary>Return teleports made so far (kept across <see cref="Reset"/>: shown by <c>.playerbot status</c> and inspection).</summary>
+    internal int Teleports { get; private set; }
+
+    /// <summary>Why the last return teleport was made, or <see cref="PlayerbotHomeTeleportReason.None"/>.</summary>
+    internal PlayerbotHomeTeleportReason LastTeleport { get; private set; }
+
+    /// <summary>The last return decision (<see cref="Judge"/>; tests and inspection).</summary>
+    internal PlayerbotHomeTeleportReason LastJudgement { get; private set; }
+
+    /// <summary>The walk home was set aside as blocked (not a refused teleport): Auto teleports such a bot at once.</summary>
+    internal bool WalkBlocked => State == PlayerbotHomeState.Blocked && _walkBlocked;
 
     internal void Reset()
     {
@@ -285,6 +326,9 @@ internal sealed class PlayerbotHomeReturn
         _stuckMs = 0;
         _failures = 0;
         _blockedUntil = 0;
+        _walkBlocked = false;
+        _highestAreaLevel = null;
+        _teleportRetryPending = false;
     }
 
     /// <summary>Decide where the bot stands against <paramref name="area"/>; keeps the hysteresis of a walk in progress.</summary>
@@ -294,6 +338,7 @@ internal sealed class PlayerbotHomeReturn
         if (map != area.MapId)
         {
             _route = null;
+            _highestAreaLevel = null;
             Distance = float.NaN;
             return State = PlayerbotHomeState.OffMap;
         }
@@ -305,22 +350,125 @@ internal sealed class PlayerbotHomeReturn
         bool zoneOk = area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z);
         if (State == PlayerbotHomeState.Blocked)
         {
-            if (Distance <= area.Radius && zoneOk) { _route = null; _failures = 0; return State = PlayerbotHomeState.Inside; }
+            if (Distance <= area.Radius && zoneOk) return Arrived();
             if (unchecked((int)(nowMs - _blockedUntil)) < 0) return State;
             _failures = 0;
+            _walkBlocked = false;
             State = PlayerbotHomeState.Returning;
         }
 
         bool returning = State == PlayerbotHomeState.Returning;
-        if (Distance <= (returning ? area.ReturnRadius : area.Radius) && zoneOk)
-        {
-            _route = null;
-            _failures = 0;
-            return State = PlayerbotHomeState.Inside;
-        }
-
+        if (Distance <= (returning ? area.ReturnRadius : area.Radius) && zoneOk) return Arrived();
         return State = PlayerbotHomeState.Returning;
     }
+
+    private PlayerbotHomeState Arrived()
+    {
+        _route = null;
+        _failures = 0;
+        _walkBlocked = false;
+        _highestAreaLevel = null;
+        return State = PlayerbotHomeState.Inside;
+    }
+
+    /// <summary>
+    /// Whether this return is a teleport, and why (<see cref="PlayerbotHomeRules.Decide"/>), after <see cref="Evaluate"/>. The area
+    /// levels on the straight line home (Auto, within <see cref="PlayerbotHomeOptions.TeleportDistanceYards"/>) are read once per return.
+    /// </summary>
+    internal PlayerbotHomeTeleportReason Judge(Player player, PlayerbotHomeArea area, PlayerbotHomeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        bool onMap = State != PlayerbotHomeState.OffMap;
+        int highest = 0;
+        if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && Distance <= options.TeleportDistanceYards
+            && area.AreaLevels is { } levels)
+            highest = _highestAreaLevel ??= levels.HighestOnLine(new Vector3(player.X, player.Y, player.Z), area.Centre);
+        var facts = new PlayerbotHomeFacts(onMap, Distance, highest, (int)player.Level, WalkBlocked);
+        return LastJudgement = PlayerbotHomeRules.Decide(facts, options);
+    }
+
+    /// <summary>
+    /// Teleport the bot to the home's centre. True when a teleport started or is still under way (the bot is busy). False when the bot
+    /// may not teleport now: dead or a ghost, in combat or a duel, in a group (whose AI drives it), on a battleground, its home map not
+    /// allowed (<see cref="PlayerbotMapPolicy.Allows"/>, the same rule as <c>.playerbot send</c>), no teleport service, or the service
+    /// refused it; a refusal is not retried for <see cref="BlockedMs"/>, and on the home map the return is set aside (state blocked: an
+    /// unsafe walk is not taken instead).
+    /// </summary>
+    internal bool TryTeleport(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options,
+        PlayerbotHomeTeleportReason reason, uint nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(options);
+        TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+        if (_teleportRetryPending && unchecked((int)(nowMs - _teleportRetryAt)) < 0) return false;
+        _teleportRetryPending = false;
+        // A bot in the air would land in the air at the other end, as the follower waits for a leader in the air: wait for the landing.
+        if ((player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return false;
+        if (RefusalOf(session, teleports, player, area, options) is { } refusal)
+        {
+            Refuse(player, area, reason, refusal, nowMs);
+            return false;
+        }
+
+        // A teleport under way (this one, not yet acknowledged, or any other): wait for it, start nothing.
+        if (teleports!.IsBeingTeleported(player)) return true;
+
+        PlayerbotMovementControl.Stop(session, player);
+        var from = new Vector3(player.X, player.Y, player.Z);
+        uint fromMap = player.MapId;
+        float distance = Distance;
+        if (!teleports.TeleportTo(player, area.MapId, area.Centre.X, area.Centre.Y, area.Centre.Z, player.Orientation))
+        {
+            Refuse(player, area, reason, "the teleport service refused it", nowMs);
+            return false;
+        }
+
+        Teleports++;
+        LastTeleport = reason;
+        _route = null;
+        _stuckMs = 0;
+        _failures = 0;
+        _walkBlocked = false;
+        _highestAreaLevel = null;
+        if (State == PlayerbotHomeState.Blocked) State = PlayerbotHomeState.Returning;
+        LoggerOf(session).LogInformation(
+            "Playerbot {Bot} teleports home to {Place} ({Reason}; {Distance} yd) from ({X:F1}, {Y:F1}, {Z:F1}) map {Map} to ({HomeX:F1}, {HomeY:F1}, {HomeZ:F1}) map {HomeMap}",
+            player.Name, area.Place ?? "its home", PlayerbotHomeRules.Describe(reason),
+            float.IsNaN(distance) ? "other map" : distance.ToString("F0", CultureInfo.InvariantCulture),
+            from.X, from.Y, from.Z, fromMap, area.Centre.X, area.Centre.Y, area.Centre.Z, area.MapId);
+        return true;
+    }
+
+    /// <summary>Why the bot may not teleport home now, or null.</summary>
+    private static string? RefusalOf(WorldSession session, TeleportService? teleports, Player player, PlayerbotHomeArea area, PlayerbotOptions options)
+    {
+        if (teleports is null || !session.IsManaged) return "no teleport service";
+        if (!player.IsAlive) return "dead";
+        if (player.Combat.IsInCombat) return "in combat";
+        // vmangos PartyBotAI.cpp:808: no catch-up teleport while the bot duels (!IsInDuel()); the same here.
+        if (player.Duel is not null) return "in a duel";
+        if (session.Services.GetService<Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not null) return "in a group";
+        if (player.Map?.Template is { IsBattleground: true }) return "on a battleground";
+        WorldMaps maps = WorldMaps.Of(session.World);
+        MapTemplate? template = maps.Registry.Find(area.MapId);
+        if (template is null || template.IsBattleground) return "home map unknown";
+        if (!PlayerbotMapPolicy.Allows(options.AllowedMaps, area.MapId, template, current: false)) return "home map not allowed";
+        return null;
+    }
+
+    private void Refuse(Player player, PlayerbotHomeArea area, PlayerbotHomeTeleportReason reason, string refusal, uint nowMs)
+    {
+        _teleportRetryPending = true;
+        _teleportRetryAt = unchecked(nowMs + BlockedMs);
+        if (player.Session is WorldSession session)
+            LoggerOf(session).LogDebug("Playerbot {Bot} does not teleport home to {Place} ({Reason}): {Refusal}",
+                player.Name, area.Place ?? "its home", PlayerbotHomeRules.Describe(reason), refusal);
+        // On the home map the walk was judged unsafe (or is blocked): set the return aside rather than walk it.
+        if (State != PlayerbotHomeState.OffMap) MarkBlocked(nowMs, walk: false);
+    }
+
+    private ILogger LoggerOf(WorldSession session)
+        => _logger ??= session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotHomeReturn>() ?? NullLogger<PlayerbotHomeReturn>.Instance;
 
     /// <summary>
     /// One think of the walk home. True when a step was attempted (the bot is busy), false when no route could be planned (the goals
@@ -361,10 +509,13 @@ internal sealed class PlayerbotHomeReturn
     }
 
     /// <summary>A stall on the walk (<see cref="PlayerbotStallWatch"/>): set it aside at once.</summary>
-    internal void MarkBlocked(uint nowMs)
+    internal void MarkBlocked(uint nowMs) => MarkBlocked(nowMs, walk: true);
+
+    private void MarkBlocked(uint nowMs, bool walk)
     {
         _route = null;
         _stuckMs = 0;
+        _walkBlocked = walk;
         State = PlayerbotHomeState.Blocked;
         _blockedUntil = unchecked(nowMs + BlockedMs);
     }
@@ -377,26 +528,28 @@ internal sealed class PlayerbotHomeReturn
     }
 
     /// <summary>
-    /// The short form of the status line: <c>inside:120</c>, <c>returning:810</c>, <c>off-map</c> or <c>blocked:810</c>; the distance is
-    /// rounded to 10 yards so a walking bot does not change its status line at every step. The text is rebuilt only when it changes
-    /// (the feature reads it every tick for every bot).
+    /// The short form of the status line: <c>inside:120</c>, <c>returning:810</c>, <c>off-map</c> or <c>blocked:810</c>, with
+    /// <c>,teleports=N</c> once the bot has teleported home; the distance is rounded to 10 yards so a walking bot does not change its
+    /// status line at every step. The text is rebuilt only when it changes (the feature reads it every tick for every bot).
     /// </summary>
     internal string Report
     {
         get
         {
             int rounded = float.IsNaN(Distance) ? -1 : (int)(MathF.Round(Distance / 10f) * 10f);
-            if (_report is null || _reportState != State || _reportRounded != rounded)
+            if (_report is null || _reportState != State || _reportRounded != rounded || _reportTeleports != Teleports)
             {
                 _reportState = State;
                 _reportRounded = rounded;
-                _report = State switch
+                _reportTeleports = Teleports;
+                string state = State switch
                 {
                     PlayerbotHomeState.OffMap => "off-map",
                     PlayerbotHomeState.Returning => string.Create(CultureInfo.InvariantCulture, $"returning:{rounded}"),
                     PlayerbotHomeState.Blocked => string.Create(CultureInfo.InvariantCulture, $"blocked:{rounded}"),
                     _ => rounded < 0 ? "inside" : string.Create(CultureInfo.InvariantCulture, $"inside:{rounded}"),
                 };
+                _report = Teleports == 0 ? state : string.Create(CultureInfo.InvariantCulture, $"{state},teleports={Teleports}");
             }
 
             return _report;
@@ -406,11 +559,15 @@ internal sealed class PlayerbotHomeReturn
     private string? _report;
     private PlayerbotHomeState _reportState;
     private int _reportRounded;
+    private int _reportTeleports;
 
-    /// <summary>The long form for inspection: place, map, centre, radius, zone (<c>off</c>, <c>unknown</c> or the id), distance and state.</summary>
-    internal string Describe(PlayerbotHomeArea area)
+    /// <summary>
+    /// The long form for inspection: place, map, centre, radius, zone (<c>off</c>, <c>unknown</c> or the id), distance, state, the return
+    /// mode, the return teleports so far and why the last one was made.
+    /// </summary>
+    internal string Describe(PlayerbotHomeArea area, PlayerbotHomeReturnMode mode)
         => string.Create(CultureInfo.InvariantCulture,
-            $"place={area.Place ?? "none"} map={area.MapId} centre={area.Centre.X:F1},{area.Centre.Y:F1},{area.Centre.Z:F1} radius={area.Radius:F0} zone={area.ZoneText} distance={(float.IsNaN(Distance) ? "n/a" : Distance.ToString("F1", CultureInfo.InvariantCulture))} state={State.ToString().ToLowerInvariant()}");
+            $"place={area.Place ?? "none"} map={area.MapId} centre={area.Centre.X:F1},{area.Centre.Y:F1},{area.Centre.Z:F1} radius={area.Radius:F0} zone={area.ZoneText} distance={(float.IsNaN(Distance) ? "n/a" : Distance.ToString("F1", CultureInfo.InvariantCulture))} state={State.ToString().ToLowerInvariant()} mode={mode.ToString().ToLowerInvariant()} teleports={Teleports}{(LastTeleport == PlayerbotHomeTeleportReason.None ? string.Empty : " last-teleport=" + LastTeleport.ToString().ToLowerInvariant())}");
 }
 
 /// <summary>

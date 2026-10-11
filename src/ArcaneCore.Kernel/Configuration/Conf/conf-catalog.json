@@ -12489,6 +12489,58 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Home:DangerLevelMargin",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "5",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Auto mode: the straight line from the bot to the centre crossing an area whose AreaTable level (`AreaLevel`, the 1.12.1 AreaTable.dbc exploration level) is more than this many levels above the bot's counts as unsafe, and the bot teleports (0..60).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Home:ReturnMode",
+      "section": "World:Playerbots",
+      "type": "PlayerbotHomeReturnMode",
+      "kind": "scalar",
+      "elementType": "PlayerbotHomeReturnMode",
+      "enumValues": [
+        "Walk",
+        "Teleport",
+        "Auto"
+      ],
+      "default": "Auto",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Walk, teleport, or teleport only when the walk is long or unsafe (`PlayerbotHomeReturnMode.Auto` by default). Values: `Walk`, `Teleport`, `Auto`.",
+      "allowed": "Walk | Teleport | Auto",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Home:TeleportDistanceYards",
+      "section": "World:Playerbots",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "1500",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Auto mode: a bot on the home map farther than this many yards from the centre teleports instead of walking (100..20000). The default 1500 is twice a 750-yard home (the Sentinel Hill homes of the QA Westfall fleet): the Darkshire road stray stood about 2000 yards from Sentinel Hill.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:LocalLlmContextSize",
       "section": "World:Playerbots",
       "type": "int",

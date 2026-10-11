@@ -1202,6 +1202,9 @@ How to read the tables:
 | `World:Playerbots:Groups:MinHealer` | `int` | `1` | live | Healers a group of three or more needs (0..5); priests, druids, paladins and shamans can heal. |
 | `World:Playerbots:Groups:MinTank` | `int` | `1` | live | Tanks a group of three or more needs (0..5); warriors, druids and paladins can tank. |
 | `World:Playerbots:Groups:RaidsEnabled` | `bool` | `true` | live | Convert a group to a raid when the goal needs more than five (raid instances and raid quests); on by default. |
+| `World:Playerbots:Home:DangerLevelMargin` | `int` | `5` | live | Auto mode: the straight line from the bot to the centre crossing an area whose AreaTable level (`AreaLevel`, the 1.12.1 AreaTable.dbc exploration level) is more than this many levels above the bot's counts as unsafe, and the bot teleports (0..60). |
+| `World:Playerbots:Home:ReturnMode` | `PlayerbotHomeReturnMode` | `Auto` | live | Walk, teleport, or teleport only when the walk is long or unsafe (`PlayerbotHomeReturnMode.Auto` by default). Values: `Walk`, `Teleport`, `Auto`. |
+| `World:Playerbots:Home:TeleportDistanceYards` | `float` | `1500` | live | Auto mode: a bot on the home map farther than this many yards from the centre teleports instead of walking (100..20000). The default 1500 is twice a 750-yard home (the Sentinel Hill homes of the QA Westfall fleet): the Darkshire road stray stood about 2000 yards from Sentinel Hill. |
 | `World:Playerbots:LocalLlmContextSize` | `int` | `1024` | - | The local model's context size in tokens (512..2048). |
 | `World:Playerbots:LocalLlmModel` | `string` | `"R4C3R/qwen3-0.6b-heretic:q4_k_m"` | - | The local model name sent to the loopback inference endpoint (at most 128 characters). |
 | `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |

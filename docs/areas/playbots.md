@@ -144,7 +144,8 @@ to autonomous mode resumes the brain with whatever state it had before.
 A managed bot can be anchored to an area. Without one it follows its own goals anywhere on the map (its starting-zone quest log, trainers,
 corpse runs, risk-weighted pulls); 200 bots teleported into Westfall spread over five zones within ten minutes. This is an ArcaneCore feature:
 no reference server anchors a bot, so every number here is an ArcaneCore choice. Code: `Playerbots/PlayerbotHome.cs`, the brain's
-`TryReturnHome`, `PlayerbotQuestGoals` and `PlayerbotWorldDestinations`. Tests: `PlayerbotHomeTests`, `PlayerbotHomeZoneTests`,
+`TryReturnHome`, `PlayerbotQuestGoals` and `PlayerbotWorldDestinations`; the return mode in `Playerbots/PlayerbotHomeOptions.cs`. Tests:
+`PlayerbotHomeTests`, `PlayerbotHomeZoneTests`, `PlayerbotHomeTeleportTests`,
 `ManagedPlayerbotHomeTests`, `ManagedPlayerbotHomeStoreTests`.
 
 * **Setting it.** `.playerbot home $name|$prefix* <$tele|here> [#radius] [zone|nozone]` and `.playerbot home $name|$prefix* clear` (Administrator). A selector is one
@@ -184,16 +185,35 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   keep closed is combat by choice out of the zone: while the bot is on the home map the grind filter rejects every creature outside the area wherever
   the bot is, so a bot on its way to Stormwind picks no fight on the road (it still defends itself). Combat, looting, rest, retreat and the ghost
   recovery run before the home check and are not touched; a dead bot recovers its corpse and walks home after the resurrection.
-* **Off-map policy.** Bots have no teleport, taxi or hearthstone logic, so a bot on another map than its home does not move itself: it is reported
-  `off-map` and left alone. An operator brings it back with `.tele name <Name> <place>`. This is deliberate: nothing in the brain may cross a map.
+* **Return mode (`World:Playerbots:Home:ReturnMode`, live).** `Walk`, `Teleport` or `Auto` (default). Westfall-homed level-14 bots that had drifted
+  to the Darkshire road in Duskwood (about -10703,-918) and to Loch Modan (about -5886,-2951) walked home across higher-level zones and died in death
+  loops on the way (world.log 2026-10-11: `Wfbotfk ... death loop ... attackers=202/531/569`), until the operator sent them home by hand with
+  `.playerbot send Wfbot* SentinelHill force`. **Walk** is the walk above, always (and a bot on another map is left `off-map`). **Teleport** makes every
+  return a teleport to the centre. **Auto** teleports when the bot is on another map, farther than `TeleportDistanceYards` (default **1500**, 100..20000;
+  the Darkshire road stray stood about 2000 yards from Sentinel Hill), when the straight line home crosses an area whose AreaTable level (`AreaLevel`, the 5875
+  AreaTable.dbc exploration level of the area the terrain's area flag names, sampled every 20 yards, `PlayerbotAreaLevelLookup`) is more than
+  `DangerLevelMargin` (default **5**, 0..60) above the bot's level (Raven Hill is a level-24 area 630 yards from Sentinel Hill: a level-14 bot
+  teleports, a level-20 one walks; an area with no known level is never dangerous), or when its walk was set aside as blocked (failed plans, no
+  progress, a stall); otherwise it walks. The rules are `PlayerbotHomeRules.Decide`; the level check is made once per return. The teleport is the one
+  the follower's catch-up (`PlayerbotFollower`, `World:Playerbots:Follow:CatchUpMode`) and `.playerbot send` use: the ordinary
+  `TeleportService.TeleportTo` (vmangos `Player::TeleportTo`), its near or far acknowledgement answered by `PlayerbotMovementControl` as a client's,
+  to the home's centre. **Never** in combat, in a duel, dead or as a ghost, in a group, on a battleground, or to a home map `PlayerbotMapPolicy` does not
+  allow (`AllowedMaps`, the rule of `.playerbot send`); a party AI, a bot-led group, the battlegrounds coordinator or a scripted controller drives
+  the bot instead of the brain, so its home and the teleport are suspended then. A refused teleport is not retried for 30 s; on the home map the return
+  is set aside (`blocked`) rather than walked, off the map the bot stays `off-map`. Each return teleport is logged at Information
+  (`Playerbot <Name> teleports home to <place> (<reason>; <distance> yd) from (...) map M to (...) map H`).
+* **Off-map policy.** In `Walk` mode a bot on another map than its home does not move itself: it is reported `off-map` and left alone, and an
+  operator brings it back (`.playerbot send <Name> <place>`). In `Auto` and `Teleport` it is teleported home when the home map is allowed.
   While off-map the in-area filters are **off** (`PlayerbotBrain.SyncHomeFilters`): the circle has no meaning on another map, and applying it would skip
   every creature and take no quest, starving the bot. It behaves as a bot with no home (normal autonomous grinding, questing and exploring on the map
   it is on) and the filters apply again the moment it is on the home map.
 * **Scripted and party bots.** A scripted controller, a party AI or a bot-led group drives the bot and ignores its home (shown as `suspended`).
 * **Seeing it.** `.playerbot status` appends `home=inside:120`, `returning:810`, `off-map`, `blocked:810` (distance rounded to 10 yards) or
-  `zone-unknown` (a zone-clipped home whose centre has no known zone, so it contains nothing; re-home the bot or set it with `nozone`);
-  `.playerbot inspect` prints the place, map, centre, radius, zone (`zone=40`, `zone=off`, `zone=unknown`), exact distance and state. The set reply names
-  the zone of a tele place (`... radius 750, zone 40`) or `no zone clip`.
+  `zone-unknown` (a zone-clipped home whose centre has no known zone, so it contains nothing; re-home the bot or set it with `nozone`), followed by
+  `,teleports=N` once the bot has teleported home (`home=inside:0,teleports=1`); `.playerbot inspect` prints the place, map, centre, radius, zone
+  (`zone=40`, `zone=off`, `zone=unknown`), exact distance, state, the return mode, the return teleports so far and why the last one was made
+  (`... state=inside mode=auto teleports=1 last-teleport=distance`). The set reply names the zone of a tele place (`... radius 750, zone 40`) or
+  `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
 
 ### Faults and quarantine

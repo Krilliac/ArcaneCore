@@ -85,7 +85,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal string? HomeReport => _home is null ? null : _home.ZoneFoundUnknown ? "zone-unknown" : _homeReturn.Report;
 
     /// <summary>The home line BOTINSPECT shows (place, map, centre, radius, distance, state), null without a home.</summary>
-    internal string? HomeDescription => _home is null ? null : _homeReturn.Describe(_home);
+    internal string? HomeDescription => _home is null ? null : _homeReturn.Describe(_home, _options.Home.ReturnMode);
 
     /// <summary>The walk back to the home (inspection and tests).</summary>
     internal PlayerbotHomeReturn HomeReturn => _homeReturn;
@@ -629,14 +629,43 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// trainer that has something useful to do (<see cref="PlayerbotTownGoals.HasCandidate"/>, <see cref="PlayerbotTrainerDestinations.HasCandidate"/>)
     /// and a quest exchange already under way. A completed quest's turn-in, combat, looting, rest and retreat run earlier in
     /// <see cref="Update"/> and are not touched; a dead bot follows the ghost recovery and walks home after the resurrection. A bot on
-    /// another map is reported off-map and left alone: bots have no teleport, taxi or hearth logic.
+    /// another map is teleported home unless the return mode is <see cref="PlayerbotHomeReturnMode.Walk"/> (then it is reported off-map
+    /// and left alone).
+    /// <para>
+    /// Walk or teleport (<see cref="PlayerbotHomeOptions.ReturnMode"/>, <see cref="PlayerbotHomeReturn.Judge"/>): Auto teleports a bot on
+    /// another map, farther than <see cref="PlayerbotHomeOptions.TeleportDistanceYards"/>, whose straight line home crosses an area far
+    /// above its level, or whose walk was set aside as blocked, and walks otherwise. The teleport is never made in combat (this block runs
+    /// out of combat only, and <see cref="PlayerbotHomeReturn.TryTeleport"/> checks again), dead or as a ghost (the dead branch of
+    /// <see cref="Update"/> returns before this), in a group, or to a map <see cref="PlayerbotMapPolicy"/> does not allow. A party AI, a
+    /// bot-led group, the battlegrounds coordinator or a scripted controller drives the bot instead of this brain, so the home (and its
+    /// teleport) is suspended then (ManagedPlayerbotFeature.Think).
+    /// </para>
     /// </summary>
     private bool TryReturnHome(Player player, PlayerbotHomeArea home, uint interval)
     {
         uint now = _session.World.NowMs;
-        if (_homeReturn.Evaluate(player, home, now) != PlayerbotHomeState.Returning) return false;
+        PlayerbotHomeOptions homeOptions = _options.Home;
+        PlayerbotHomeState state = _homeReturn.Evaluate(player, home, now);
+        switch (state)
+        {
+            case PlayerbotHomeState.Inside:
+            case PlayerbotHomeState.OffMap when homeOptions.ReturnMode == PlayerbotHomeReturnMode.Walk:
+            case PlayerbotHomeState.Blocked when !(homeOptions.ReturnMode == PlayerbotHomeReturnMode.Auto && _homeReturn.WalkBlocked):
+                return false;
+        }
+
         if (_quests.Busy || _town.HasCandidate(player)
             || _quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player)) return false;
+        PlayerbotHomeTeleportReason teleport = _homeReturn.Judge(player, home, homeOptions);
+        if (teleport != PlayerbotHomeTeleportReason.None)
+        {
+            if (!_homeReturn.TryTeleport(_session, player, home, _options, teleport, now)) return false;
+            DropIntent();
+            _goal = PlayerbotGoalKind.Home;
+            return true;
+        }
+
+        if (state != PlayerbotHomeState.Returning) return false;
         DropIntent();
         if (!_homeReturn.Update(_session, player, home, _options, interval, now)) return false;
         _goal = PlayerbotGoalKind.Home;
