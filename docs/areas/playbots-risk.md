@@ -124,14 +124,20 @@ same way into the same creatures after its revive.
 ## Hazards on every walk
 
 `PlayerbotHazards` holds, for `DangerMemorySeconds`: each creature with a spell that kills the bot outright (its aggro reach plus 8
-yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), each creature beyond the bot's
-strength alone (`strong`: `PlayerbotRiskModel.BeyondStrength` on the creature by itself, at full health and mana; its reach plus 3,
+ yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), each creature beyond the bot's
+ strength alone or as part of an overlapping pack (`strong`: judged at full health and mana; its reach plus 3,
 dropped at the next look once the bot can take it), the place of each death (25 yards) and of each retreat (20). The brain looks the
 visible creatures over every 2 seconds, alive or a ghost. The `strong` kind is for a bot on its own: a bot-led group's leader and a
 party bot do not keep it, and the ghost's revive spot does not count it (the recovery judges strength itself). Strong hazards are
 kept apart (their own cap of 64, so they never push a death or retreat place out), updated in place at each look, dropped when a look
 no longer sees the creature alive and strong, and lapse 6 seconds after the last look (a ghost, or a bot whose brain a bot-led
 group drives, keeps none).
+
+A creature also becomes a `strong` hazard when the creatures whose aggro reaches overlap at its position have a combined
+minimum melee exposure beyond the same full-health strength limit. This uses the ordinary hostile-threat and aggro-radius
+rules (vmangos `BasicAI::MoveInLineOfSight`), and a lower bound on damage, so two manageable creatures standing together
+cannot be treated as a safe walk. At a corpse or spirit-healer landing, recovery judges all threats whose reaches cover the
+landing as one fight, including their known spells; it still checks each nearby creature separately for a camped body.
 
 A bot ringed by them (a low-level bot revived among higher creatures, their reaches overlapping round it) walks out by a bounded
 escape (`PlayerbotRisk.Refused`, ring-escape spec of 2026-10-11):

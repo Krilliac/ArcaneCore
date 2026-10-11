@@ -547,6 +547,23 @@ internal sealed class PlayerbotRisk
         uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
         float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
         uint health = Math.Max(1u, (uint)(player.MaxHealth * CombatConstants.CorpseReclaimRestorePercent));
+        // A landing or corpse spot can aggro several unrelated creatures at once. The pull estimate counts all creatures at
+        // its fight spot; judging each one alone here let ordinary packs camp graveyards and repeatedly kill revived bots.
+        List<RiskEnemy> reaching = [];
+        foreach (PlayerbotThreat threat in threats)
+            if (threat.Source is { } creature && threat.Reaches(body, PlayerbotRecovery.CampMarginYards))
+                reaching.Add(Enemy(creature, RiskJoin.FightSpot, player));
+        if (reaching.Count > 1)
+        {
+            var pack = new PlayerbotEngagementFacts
+            {
+                BotLevel = player.Level, BotHealth = health, BotMaxHealth = player.MaxHealth, BotManaPct = mana,
+                ManaDependence = ManaDependence(player.Class),
+                BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level), Enemies = reaching,
+            };
+            PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(pack, _options.Risk);
+            if (verdict.Decision == PlayerbotEngageDecision.Avoid && PlayerbotRiskModel.BeyondStrength(pack, _options.Risk)) return verdict;
+        }
         foreach (PlayerbotThreat threat in threats)
         {
             if (threat.Source is not { } creature
@@ -619,7 +636,8 @@ internal sealed class PlayerbotRisk
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
             else if (Memory.IsRemembered(creature.Guid, now))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
-            else if (strong && BeyondStrength(player, creature, spells, botDps))
+            else if (strong && (BeyondStrength(player, creature, spells, botDps)
+                || BeyondStrengthWithNearby(player, threat, botDps)))
                 Hazards.SetStrong(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, StrongHazardLifeMs, creature.Guid);
         }
 
@@ -643,6 +661,31 @@ internal sealed class PlayerbotRisk
     {
         RiskEnemy enemy = Enemy(creature, RiskJoin.Target, player.MaxHealth, spells);
         return PlayerbotRiskModel.BeyondStrengthAlone(player.Level, player.MaxHealth, botDps, enemy, _options.Risk);
+    }
+
+    /// <summary>
+    /// Lower bound on the risk of the pack at this creature's position. Every neighboring threat that reaches the position
+    /// would aggro there even without an assistance call (vmangos BasicAI::MoveInLineOfSight). The sum of each creature's
+    /// solo damage while being killed is no greater than the real sequential fight, so crossing the maximum pull threshold
+    /// is enough to mark the overlapping reaches without sorting or allocating in the frequent hazard scan.
+    /// </summary>
+    private bool BeyondStrengthWithNearby(Player player, PlayerbotThreat at, float botDps)
+    {
+        if (player.MaxHealth == 0 || at.Source is not { } source) return true;
+        float exposure = 0;
+        int count = 0;
+        float damage = MathF.Max(0.1f, botDps);
+        foreach (PlayerbotThreat threat in _threats)
+        {
+            if (threat.Source is not { } creature || (creature.Guid != source.Guid && !threat.Reaches(at.Position, 0f))) continue;
+            CreatureTemplate template = creature.Template;
+            float melee = PlayerbotRiskModel.CreatureDps(template.MinMeleeDamage, template.MaxMeleeDamage,
+                template.MeleeBaseAttackTime, creature.Level, template.Rank is 1 or 2 or 3);
+            exposure += melee * creature.Health / damage / player.MaxHealth;
+            count++;
+        }
+
+        return count > 1 && exposure > PlayerbotRiskModel.Acceptable(float.PositiveInfinity, _options.Risk.Tolerance);
     }
 
     /// <summary>

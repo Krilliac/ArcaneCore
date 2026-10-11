@@ -491,7 +491,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             ctx.RunningNow.Add(botId);
             _startedAt[botId] = ctx.Input.ClockMs;
 
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location), ct).ConfigureAwait(false);
+            string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location,
+                plan.Placement.Zone.LocationsFor(plan.Team)), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
                 // The bot stays owned and stopped; the next pass restarts it where it stands (its race's starting area).
@@ -578,7 +579,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             PopulationPlacement? placement = atlas.Pick(bot.Level, bot.Level, bot.Team, pop.ZoneLevelSlack, ctx.Assigned, _random);
             if (placement is null) continue;
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
+            string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location,
+                placement.Zone.LocationsFor(bot.Team)), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };

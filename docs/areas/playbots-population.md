@@ -125,6 +125,14 @@ map (`game_graveyard_zone`), split by team: link team 0 serves both factions, 46
 `ObjectMgr::LoadGraveyardZones`). A zone with no graveyard for a team is not offered to it. The zone with the **fewest bots
 assigned** wins, ties broken at random, then one of its graveyards for the bot's team.
 
+Before teleporting the actual boosted bot, population checks the chosen graveyard and the other linked graveyards of that
+zone. A known local sub-area level more than three above the bot, or a hostile creature spawn more than three levels above it
+within 90 yards plus its wander radius, disqualifies that location. It tries another linked location for the bot's team; with
+none, the placement is refused as `placement-unsafe`. This uses the loaded terrain area levels, creature spawns and
+FactionTemplate.dbc hostility, rather than treating the broad zone level range or a neutral graveyard link as proof that a
+particular graveyard is safe. The 90-yard placement buffer is an ArcaneCore choice; live roaming and player reputation can
+still change the fight after placement, so the bot's route hazards remain necessary.
+
 **The slack (an ArcaneCore choice, not a game rule).** A zone accepts a bot of level L when `MinLevel - ZoneLevelSlack <= L <=
 MaxLevel`. The lowest sub-area of a starter zone is level 4 or 5, so with no slack a level 1 bot would fit nowhere and a server
 without the boost content could never populate. The default of 4 lets a level 1 bot start in any starter zone while a level 1
