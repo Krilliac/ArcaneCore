@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
@@ -10,6 +11,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Items;
@@ -63,7 +65,7 @@ public sealed class PlayerbotRepairFanOutTests
                 Assert.Empty(think(1));
             }
 
-            Assert.Equal(plans, path.Queries); // the world clock stands still in this test: well inside RepairTripBackoffMs
+            Assert.Equal(plans, path.Queries); // Run freezes the world clock (manual clock): no time passes, so the backoff cannot have run out
         });
     }
 
@@ -119,8 +121,57 @@ public sealed class PlayerbotRepairFanOutTests
         });
     }
 
+    private delegate List<Vector3> Think(int updates, bool beginThink = true);
+
+    /// <summary>
+    /// The stuck clock runs once per think, not once per Update. The walk to the nearest spawn makes no headway (the bot is rooted, so no
+    /// step is taken), the brain calls Update twice a think, and the spawn is set aside only when RepairTripStuckMs of thinks (500 ms
+    /// each) have passed: a clock ticking on every Update would set it aside after half as many.
+    /// </summary>
+    [Fact]
+    public async Task StuckClock_RunsOncePerThink_NotOncePerUpdate()
+    {
+        var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => true };
+        await Run(path, (player, goals, think) =>
+        {
+            think(1); // plans to the nearest spawn and takes the first step
+            Assert.Equal(950u, goals.TargetEntry);
+            // Rooted from here on (the motion reset, so no step is made): no headway for the rest of the walk.
+            PlayerbotMotion.Reset(player);
+            var movement = player.Movement;
+            movement.Flags |= MovementFlags.Root;
+            player.ApplyMovement(movement, 0);
+            int ticks = (int)(PlayerbotTownGoals.RepairTripStuckMs / 500);
+            for (int i = 1; i < ticks; i++)
+            {
+                think(2);
+                Assert.Equal(950u, goals.TargetEntry); // i x 500 ms stuck: still the same spawn
+            }
+
+            think(2); // the RepairTripStuckMs-th: the spawn is set aside, the next ones are planned to (and refused: rooted)
+            Assert.NotEqual(950u, goals.TargetEntry);
+        });
+    }
+
+    /// <summary>
+    /// A caller that never calls BeginThink is not capped at the bound for its lifetime: the world clock moving on opens a new think.
+    /// (Real clock here: the wait only has to outlast one millisecond; the assertions are lower bounds, so a tick inside a think is harmless.)
+    /// </summary>
+    [Fact]
+    public async Task WithoutBeginThink_TheBudgetComesBackWhenTheWorldClockMovesOn()
+    {
+        var path = new ScriptedPathfinder { StartOnMesh = true, Reaches = _ => false };
+        await Run(path, (player, goals, think) =>
+        {
+            int first = think(2, beginThink: false).Distinct().Count();
+            Assert.True(first >= Bound);
+            Thread.Sleep(25);
+            Assert.True(think(2, beginThink: false).Distinct().Count() > 0, "the second think planned to nothing: the first think's budget never came back");
+        }, manualClock: false);
+    }
+
     /// <summary>Runs <paramref name="body"/> on the world thread; <c>think(updates)</c> opens a think, calls Update that many times, and returns the destinations planned to.</summary>
-    private static async Task Run(ScriptedPathfinder path, Action<Player, PlayerbotTownGoals, Func<int, List<Vector3>>> body)
+    private static async Task Run(ScriptedPathfinder path, Action<Player, PlayerbotTownGoals, Think> body, bool manualClock = true)
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(Boots(9212, durability: 20));
@@ -128,7 +179,11 @@ public sealed class PlayerbotRepairFanOutTests
         ManyRepairServices.Current.Value = new ManyRepairFixture();
         try
         {
-            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()));
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            {
+                services.AddSingleton(RepairPrices());
+                if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
+            });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
             try
@@ -140,10 +195,10 @@ public sealed class PlayerbotRepairFanOutTests
                     PlayerbotEquipmentTests.EquipFromBags(player, 9212);
                     player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
                     player.Money = 100;
-                    body(player, goals, updates =>
+                    body(player, goals, (updates, beginThink) =>
                     {
                         path.Ends.Clear();
-                        goals.BeginThink();
+                        if (beginThink) goals.BeginThink();
                         for (int i = 0; i < updates; i++)
                         {
                             PlayerbotMotion.ElapseForTests(player, 500);
@@ -162,6 +217,12 @@ public sealed class PlayerbotRepairFanOutTests
         finally { ManyRepairServices.Current.Value = null; }
     }
 
+    /// <summary>Freezes game time for the host (<see cref="WorldRuntime.UseManualClock"/>): only <c>AdvanceClockAsync</c> moves it.</summary>
+    private sealed class ManualClock : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
+
     private static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
@@ -174,7 +235,7 @@ public sealed class PlayerbotRepairFanOutTests
 
 /// <summary>
 /// Plans to a destination are answered by <see cref="Reaches"/> (a straight line, or no path); a query from a point to itself is the
-/// "is the bot on the mesh" probe, answered by <see cref="StartOnMesh"/>. <see cref="Queries"/> counts the plan queries only.
+/// "is the bot on the mesh" probe, answered by <see cref="StartOnMesh"/>. <see cref="Queries"/> counts every query to a destination (the plan queries and the steep-ground escape ones), not the start probe.
 /// </summary>
 internal sealed class ScriptedPathfinder : IPathfinder
 {
