@@ -59,10 +59,52 @@ public sealed class PlayerbotNavigationHomeEdgeTests
     }
 
     /// <summary>
-    /// Open ground, except that a path whose end lies within 10 degrees of the straight line from its start to <paramref name="centre"/>
+    /// A small home (radius 60, explore radius 48) with the bot 55 yards out and every way within 70 degrees of the centre refused:
+    /// only the widest turns of the fan are walkable. Each leg must still end closer to the centre than the bot stood, inside the
+    /// home. Before the leg was shortened, a 48-yard leg 75 degrees off the centre from 55 yards ended 62.9 yards out, past the
+    /// radius, and the walk home took over.
+    /// </summary>
+    [Fact]
+    public async Task Brain_InASmallHome_AWideTurnBackIn_NeverEndsFartherOutOrLeavesTheHome()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var centre = new Vector3(player.X + 55f, player.Y, player.Z);
+                var area = new PlayerbotHomeArea(player.Map!.MapId, centre, 60f, "Small");
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new StraightInRefused(centre, 70f));
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true }) { Home = area };
+                float start = area.DistanceTo(player.X, player.Y);
+                float farthest = start;
+
+                for (int think = 0; think < 60 && area.DistanceTo(player.X, player.Y) > area.ExploreRadius; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(1_000);
+                    Assert.NotEqual(PlayerbotGoalKind.Home, brain.Goal);
+                    PlayerbotMotion.ElapseForTests(player, 1_000);
+                    farthest = MathF.Max(farthest, area.DistanceTo(player.X, player.Y));
+                }
+
+                Assert.True(farthest <= start + 0.5f, $"a leg back in took the bot {farthest:F1} yards out (started {start:F1}, radius {area.Radius})");
+                Assert.True(area.DistanceTo(player.X, player.Y) <= area.ExploreRadius,
+                    $"the bot is still {area.DistanceTo(player.X, player.Y):F1} yards out (explore radius {area.ExploreRadius})");
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Open ground, except that a path whose end lies within <paramref name="degrees"/> (default 10) degrees of the straight line from its start to <paramref name="centre"/>
     /// is refused (no path): as a looped destination on the motion's blacklist, a hazard or a fence in the way is.
     /// </summary>
-    private sealed class StraightInRefused(Vector3 centre) : IPathfinder
+    private sealed class StraightInRefused(Vector3 centre, float degrees = 10f) : IPathfinder
     {
         public bool Enabled => true;
 
@@ -71,7 +113,7 @@ public sealed class PlayerbotNavigationHomeEdgeTests
             Vector2 way = new(end.X - start.X, end.Y - start.Y), inward = new(centre.X - start.X, centre.Y - start.Y);
             if (way.Length() < 1f || inward.Length() < 1f) return PathResult.StraightLine(start, end, PathType.Normal);
             float cos = Vector2.Dot(Vector2.Normalize(way), Vector2.Normalize(inward));
-            return cos >= MathF.Cos(10f * MathF.PI / 180f) ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
+            return cos >= MathF.Cos(degrees * MathF.PI / 180f) ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
         }
     }
 }
