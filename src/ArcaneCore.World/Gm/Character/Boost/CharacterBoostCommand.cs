@@ -87,7 +87,7 @@ public sealed class CharacterBoostExtension : ICommandExtension
     {
         string name = target.Name;
         context.Reply(string.Create(CultureInfo.InvariantCulture,
-            $"Boost {name}: level {report.OldLevel}->{report.NewLevel}, {report.SpellsLearned} spells learned, {report.Equipped + report.Kept} items equipped ({report.Kept} kept, {report.MovedToBags} moved to bags), {report.ButtonsSet} action buttons set, money {report.Money}."));
+            $"Boost {name}: level {report.OldLevel}->{report.NewLevel}, {report.SpellsLearned} spells learned, {report.Equipped + report.Kept} items equipped ({report.Kept} kept, {report.MovedToBags} moved to bags), {report.ButtonsSet} action buttons set, {report.QuestsDropped} gray quests dropped, money {report.Money}."));
         if (report.EmptySlots.Count > 0)
         {
             context.Reply($"Boost {name}: no item for {string.Join(", ", report.EmptySlots.Select(BoostGearPlanner.SlotName))}.");

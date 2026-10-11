@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 5 | `account`, `realmlist` |
-| `characters` | 55 | `characters` |
+| `characters` | 56 | `characters` |
 | `world` | 51 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -80,6 +80,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 53 | `Characters.WorldState.SilithystDataModule` | creates `world_silithyst` | yes |
 | 54 | `Characters.ServerMail.ServerMailDataModule` | creates `mail_server_template`, `mail_server_template_items`, `mail_server_template_conditions`, `mail_server_character` | yes |
 | 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | yes |
+| 56 | `Characters.Playerbots.ManagedPlayerbotHomeDataModule` | creates `managed_playerbot_home` | yes |
 
 ## `world`
 

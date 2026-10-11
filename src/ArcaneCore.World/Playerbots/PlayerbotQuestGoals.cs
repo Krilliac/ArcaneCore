@@ -50,6 +50,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal uint PreferredCreatureEntry { get; private set; }
     internal string StageName => _stage.ToString();
 
+    /// <summary>The bot's home area (<see cref="PlayerbotHomeArea"/>), or null. New quests are taken only inside it; turn-ins are never restricted.</summary>
+    internal PlayerbotHomeArea? Home { get; set; }
+
+    /// <summary>Whether a quest exchange is under way (the brain does not pull the bot away from it to walk home).</summary>
+    internal bool Busy => _stage != Stage.None;
+
     internal bool HasCandidate(Player player) => FindCandidate(player) is not null;
 
     internal uint CompletedReturnQuest(Player player)
@@ -229,6 +235,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (services.Quests.Get(id) is not { } quest
                     || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
                     continue;
+                if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
                 if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
                     continue;
                 return new QuestTarget(npc, quest,
@@ -239,9 +246,20 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return null;
     }
 
+    /// <summary>
+    /// Whether a quest the bot has not taken may be taken from <paramref name="npc"/> inside the home area: the giver stands inside it and
+    /// the quest is worth doing there (<see cref="PlayerbotHomeArea.QuestInside"/>). Without creature content nothing is allowed.
+    /// </summary>
+    private bool HomeAllows(PlayerbotHomeArea home, Player player, QuestNpcServices services, NpcInfo npc, Quest quest)
+        => home.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y)
+            && _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content is { } content
+            && home.QuestInside(services.Quests, content, quest);
+
     private void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
         PreferredCreatureEntry = 0;
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content = Home is null ? null
+            : _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
         {
             // vmangos Quest::IsActive: a quest of a game event that is not running (game_event_quest, the server's event state) is
@@ -258,7 +276,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (entry > 0 && status.CreatureOrGOCount[index] < required
                     && HeldForGroup?.Invoke(questId, (uint)entry) != true
                     && Suspensions?.IsEntrySuspended((uint)entry, _session.World.NowMs) != true
-                    && IsKillObjective(player, services, (uint)entry))
+                    && IsKillObjective(player, services, (uint)entry)
+                    && (Home is not { } home || content is not null && home.HasSpawnInside(content, (uint)entry)))
                 {
                     PreferredCreatureEntry = (uint)entry;
                     return;

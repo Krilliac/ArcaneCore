@@ -38,6 +38,12 @@ function Test-OpsCommandLine {
     if ($Line -match '[\x00-\x1f\x7f]') { return "a command line has a control character: '$($Line -replace '[\x00-\x1f\x7f]', '?')'" }
     if ($Line.Length -gt $script:OpsMaxCommandLength) { return "a command line is longer than $($script:OpsMaxCommandLength) characters" }
     if ($Line.StartsWith('#')) {
+        if ($Line -match '^#waitfor\b') {
+            # '#waitfor <seconds 1..99999> <regex>': wait until a log line written after this point matches; the run fails at the timeout.
+            if ($Line -notmatch '^#waitfor\s+([1-9]\d{0,4})\s+(\S.*)$') { return "bad waitfor directive '$Line' (use '#waitfor <seconds 1..99999> <regex>')" }
+            try { [void][regex]::new($Matches[2]) } catch { return "bad waitfor pattern in '$Line': $($_.Exception.Message)" }
+            return $null
+        }
         if ($Line -match '^#wait\s+\d{1,5}$') { return $null }
         if ($Line -match '^#wait\b') { return "bad wait directive '$Line' (use '#wait <seconds 0..99999>')" }
         return $null   # a comment
@@ -158,8 +164,13 @@ function New-OpsProvisionScript {
         [Parameter(Mandatory)][string]$TeleSpec,
         [string]$ClassSpec = '1:1,1:2,1:4,1:5,1:8,1:9',
         [int]$StartWaitSeconds = 20,
-        [int]$FinalWaitSeconds = 20)
+        [int]$FinalWaitSeconds = 20,
+        [switch]$AnchorHome,
+        [int]$HomeRadius = 600,
+        [int]$StatusWaitSeconds = 10)
     if ($Level -lt 1 -or $Level -gt 255) { throw "Level $Level is outside 1..255 (the server refuses a level above its maximum)." }
+    if ($HomeRadius -lt 50 -or $HomeRadius -gt 5000) { throw "Home radius $HomeRadius is outside 50..5000 (the server's bounds, docs/areas/playbots.md)." }
+    if ($StatusWaitSeconds -lt 0 -or $StatusWaitSeconds -gt 600) { throw "Status wait $StatusWaitSeconds is outside 0..600 seconds." }
     $names = Get-OpsBotNames -Prefix $NamePrefix -Count $Count
     $teles = Get-OpsWeightedAssignment -Entries (ConvertFrom-OpsTeleSpec -Spec $TeleSpec) -Count $Count
     $classes = ConvertFrom-OpsClassSpec -Spec $ClassSpec
@@ -176,13 +187,142 @@ function New-OpsProvisionScript {
     $lines.Add("#wait $StartWaitSeconds")
     foreach ($name in $names) { $lines.Add(".character boost $name $Level") }
     for ($i = 0; $i -lt $Count; $i++) { $lines.Add(".tele name $($names[$i]) $($teles[$i])") }
+    if ($AnchorHome) {
+        # The home is the place the bot was teleported to (a game_tele name, so no bot position is needed) and one radius for all.
+        $lines.Add("# anchor every bot to its place: the brain walks back when it strays past the radius")
+        for ($i = 0; $i -lt $Count; $i++) { $lines.Add(".playerbot home $($names[$i]) $($teles[$i]) $HomeRadius") }
+    }
     $lines.Add("#wait $FinalWaitSeconds")
     $lines.Add('.playerbot status')
+    # The status of 200 bots is many chat lines; the runner closes the session 1.5 s after the last command, so wait for the reply:
+    # poll the log for the reply's terminator line ('Playerbot status end: N', so a bot that was never created cannot hide it), up to
+    # $StatusWaitSeconds; the run fails (exit 1) only if the terminator never comes; missing bots then reach the per-bot verification (exit 5).
+    if ($StatusWaitSeconds -gt 0) { $lines.Add((Get-OpsStatusWaitLine -Seconds $StatusWaitSeconds)) }
     foreach ($line in $lines) {
         $reason = Test-OpsCommandLine -Line $line
         if ($reason) { throw "Generated an invalid line: $reason" }
     }
     return [pscustomobject]@{ Lines = $lines.ToArray(); Names = $names; Teleports = $teles }
+}
+
+function Get-OpsStatusWaitLine {
+    <#
+    .SYNOPSIS
+      The '#waitfor' directive that waits up to $Seconds for the end of the '.playerbot status' reply: the 'Playerbot status end: N'
+      line the server prints after the last bot (PlayerbotCommands.StatusTerminator), not a bot's own line, which a missing bot never has.
+    #>
+    param([Parameter(Mandatory)][int]$Seconds)
+    return "#waitfor $Seconds \bPlayerbot status end: \d+"
+}
+
+function Wait-OpsLogMatch {
+    <#
+    .SYNOPSIS
+      Polls the log file for text written after byte $StartOffset that matches $Pattern; $true when found, $false at the timeout or
+      when $IsAlive (a script block) turns false. The file is opened shared, so the writer keeps going. Fails closed: no match is $false.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Pattern,
+        [Parameter(Mandatory)][int]$TimeoutSeconds,
+        [long]$StartOffset = 0,
+        [scriptblock]$IsAlive = { $true },
+        [int]$PollMilliseconds = 250)
+    $regex = [regex]::new($Pattern)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $text = ''
+        try {
+            $stream = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                if ($stream.Length -gt $StartOffset) {
+                    [void]$stream.Seek($StartOffset, [System.IO.SeekOrigin]::Begin)
+                    $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true, 4096, $true)
+                    try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                }
+            }
+            finally { $stream.Dispose() }
+        }
+        catch [System.IO.IOException] { $text = '' }
+        if ($regex.IsMatch($text)) { return $true }
+        if (-not (& $IsAlive) -or [DateTime]::UtcNow -ge $deadline) { return $false }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    }
+}
+
+function Get-OpsBoostDeadNames {
+    <#
+    .SYNOPSIS
+      The bots not boosted to $Level whose last boost refusal is 'the character is dead': they need '.revive <Name>' before the retry.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$LogLines, [Parameter(Mandatory)][string[]]$Names, [Parameter(Mandatory)][int]$Level)
+    foreach ($bot in @(Test-OpsProvisionLog -LogLines $LogLines -Names $Names -Level $Level)) {
+        if (-not $bot.Boosted -and $bot.Refusal -match 'is dead') { $bot.Name }
+    }
+}
+
+function Get-OpsBoostRetryNames {
+    <#
+    .SYNOPSIS
+      The bots whose boost did not land and may land later: not boosted to $Level, and either no 'Boost refused' reply was seen or the
+      refusal is a transient one (in combat, dead, settling a quest reward, not yet in the world). A permanent refusal (a level above
+      the character's, missing content) is never retried. A bot that already reached $Level is never boosted again.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$LogLines, [Parameter(Mandatory)][string[]]$Names, [Parameter(Mandatory)][int]$Level)
+    $transient = 'is in combat|is dead|is settling a quest reward|is not in the world'
+    foreach ($bot in @(Test-OpsProvisionLog -LogLines $LogLines -Names $Names -Level $Level)) {
+        if ($bot.Boosted) { continue }
+        if ($bot.Refusal -eq '' -or $bot.Refusal -match $transient) { $bot.Name }
+    }
+}
+
+function New-OpsBoostRetryScript {
+    <#
+    .SYNOPSIS
+      One retry pass: '.revive <Name>' for each of $ReviveNames (bots the boost refused as dead stay dead until revived), wait
+      $WaitSeconds (a bot in combat needs time to leave that state, a revived one to stand up), boost each named bot again, then
+      '.playerbot status' and a wait for the last bot's reply. Returns the lines.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Names,
+        [Parameter(Mandatory)][int]$Level,
+        [int]$WaitSeconds = 30,
+        [int]$StatusWaitSeconds = 10,
+        [AllowEmptyCollection()][string[]]$ReviveNames = @())
+    if ($Names.Count -eq 0) { throw 'A retry pass needs at least one bot.' }
+    if ($Level -lt 1 -or $Level -gt 255) { throw "Level $Level is outside 1..255." }
+    if ($WaitSeconds -lt 0 -or $WaitSeconds -gt 3600) { throw "Retry wait $WaitSeconds is outside 0..3600 seconds." }
+    if ($StatusWaitSeconds -lt 0 -or $StatusWaitSeconds -gt 600) { throw "Status wait $StatusWaitSeconds is outside 0..600 seconds." }
+    foreach ($dead in $ReviveNames) { if ($Names -notcontains $dead) { throw "Cannot revive '$dead': it is not one of the bots in this pass." } }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("# boost retry for $($Names.Count) bots")
+    if ($ReviveNames.Count -gt 0) {
+        $lines.Add("# $($ReviveNames.Count) bots were refused as dead: revive them first")
+        foreach ($dead in $ReviveNames) { $lines.Add(".revive $dead") }
+    }
+    $lines.Add("#wait $WaitSeconds")
+    foreach ($name in $Names) { $lines.Add(".character boost $name $Level") }
+    $lines.Add('.playerbot status')
+    if ($StatusWaitSeconds -gt 0) { $lines.Add((Get-OpsStatusWaitLine -Seconds $StatusWaitSeconds)) }
+    foreach ($line in $lines) {
+        $reason = Test-OpsCommandLine -Line $line
+        if ($reason) { throw "Generated an invalid line: $reason" }
+    }
+    return $lines.ToArray()
+}
+
+function Get-OpsHomeSetCount {
+    <#
+    .SYNOPSIS
+      The number of homes the server reported set: the sum of N over every 'Playerbot home: N set' reply. Zero for a log with none,
+      so a home that was never confirmed is never counted.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$LogLines)
+    $total = 0
+    foreach ($line in $LogLines) {
+        if ($line -match 'Playerbot home: (\d+) set\b') { $total += [int]$Matches[1] }
+    }
+    return $total
 }
 
 function Test-OpsProvisionLog {

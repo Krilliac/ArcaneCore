@@ -1,9 +1,15 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Skills;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Gm.Character.Boost;
 using ArcaneCore.World.Playerbots.Progression;
 using Xunit;
@@ -318,5 +324,151 @@ public sealed class CharacterBoostPlannerTests
         Assert.False(BoostGearPlanner.IsPoolItem(edge, 13, new HashSet<uint> { 7 }));
         Assert.Throws<ArgumentNullException>(() => BoostGearPlanner.IsPoolItem(null!, 14, new HashSet<uint>()));
         Assert.Throws<ArgumentNullException>(() => BoostGearPlanner.IsPoolItem(edge, 14, null!));
+    }
+
+    private const uint FireFestivalCrown = 23323;     // Crown of the Fire Festival, a head item rewarded by Midsummer quests
+    private const uint FireFestivalMantle = 23324;    // Mantle of the Fire Festival, the shoulder item
+    private const uint EventQuestId = 11580;          // a fixture id listed in game_event_quest
+    private const uint PermanentQuestId = 11581;
+    private const uint EventVendorEntry = 16000;      // spawns only through game_event_creature
+    private const uint MixedVendorEntry = 16001;      // one permanent spawn and one event spawn
+    private const uint PlainHead = 7100;
+    private const uint EventVendorHead = 7101;
+    private const uint MixedVendorHead = 7102;
+
+    private static ItemTemplate Obtainable(uint entry, InventoryType type, int strength)
+        => Piece(entry, type, itemLevel: 1, strength: strength) with { RequiredLevel = 1 };
+
+    private static (NpcStore Npcs, QuestStore Quests, GameEventRows Rows, CreatureContent Creatures) EventFixture()
+    {
+        var npcs = new NpcStore(NpcContent.Empty with
+        {
+            VendorItems =
+            [
+                new VendorItem { Entry = EventVendorEntry, Item = EventVendorHead },
+                new VendorItem { Entry = MixedVendorEntry, Item = MixedVendorHead },
+                new VendorItem { Entry = 16002, Item = PlainHead },
+            ],
+        });
+        var quests = new QuestStore(new QuestContent(
+        [
+            new QuestTemplate { Entry = EventQuestId, RewItemId1 = FireFestivalCrown, RewChoiceItemId1 = FireFestivalMantle },
+            new QuestTemplate { Entry = PermanentQuestId, RewItemId1 = PlainHead },
+        ], [], []));
+        var rows = new GameEventRows
+        {
+            Quests = new Dictionary<ushort, IReadOnlyList<uint>> { [1] = new uint[] { EventQuestId } },
+            // Event 1 spawns guids 501 and 503; event -2 REMOVES guid 502 during it (a permanent creature), which binds nothing.
+            Creatures = new Dictionary<int, IReadOnlyList<uint>> { [1] = new uint[] { 501, 503 }, [-2] = new uint[] { 502 } },
+        };
+        var creatures = new CreatureContent([], [
+            new CreatureSpawn { Guid = 501, Entry = EventVendorEntry, MapId = 0, X = 0, Y = 0, Z = 0 },
+            new CreatureSpawn { Guid = 502, Entry = 16002, MapId = 0, X = 0, Y = 0, Z = 0 },
+            new CreatureSpawn { Guid = 503, Entry = MixedVendorEntry, MapId = 0, X = 0, Y = 0, Z = 0 },
+            new CreatureSpawn { Guid = 504, Entry = MixedVendorEntry, MapId = 0, X = 0, Y = 0, Z = 0 },
+        ], [], [], []);
+        return (npcs, quests, rows, creatures);
+    }
+
+    [Fact]
+    public void EventBinding_NamesTheEventQuests_AndOnlyTheEntriesThatSpawnThroughAnEventAlone()
+    {
+        var (_, _, rows, creatures) = EventFixture();
+
+        BoostEventBinding binding = BoostEventBinding.From(rows, creatures);
+
+        Assert.Equal([EventQuestId], binding.Quests.ToArray());
+        Assert.Equal([EventVendorEntry], binding.CreatureEntries.ToArray());   // the mixed vendor has a permanent spawn; guid 502 is a negative-event removal
+    }
+
+    [Fact]
+    public void Sources_ExcludeEventQuestRewards_AndEventOnlyVendorWares_ButKeepEverythingElse()
+    {
+        var (npcs, quests, rows, creatures) = EventFixture();
+
+        HashSet<uint> withEvents = BoostItemSources.Build(npcs, quests, LootContent.Empty, BoostEventBinding.From(rows, creatures));
+        HashSet<uint> without = BoostItemSources.Build(npcs, quests, LootContent.Empty);
+
+        // RED control: without the binding the event rewards are "obtainable", which is how the crown and mantle got equipped.
+        Assert.Contains(FireFestivalCrown, without);
+        Assert.Contains(FireFestivalMantle, without);
+        Assert.Contains(EventVendorHead, without);
+
+        Assert.DoesNotContain(FireFestivalCrown, withEvents);
+        Assert.DoesNotContain(FireFestivalMantle, withEvents);
+        Assert.DoesNotContain(EventVendorHead, withEvents);
+        Assert.Contains(MixedVendorHead, withEvents);   // also sold by a creature that is there all year
+        Assert.Contains(PlainHead, withEvents);         // sold by a permanent vendor and rewarded by a permanent quest
+    }
+
+    [Fact]
+    public void Picker_NeverEquipsTheFireFestivalCrownOrMantle_WhenTheEventsBindThem()
+    {
+        var (npcs, quests, rows, creatures) = EventFixture();
+        // The holiday pieces carry far better stats than the permanent ones, so a pool that admits them always picks them.
+        ItemTemplate[] items =
+        [
+            Obtainable(FireFestivalCrown, InventoryType.Head, strength: 9),
+            Obtainable(FireFestivalMantle, InventoryType.Shoulders, strength: 9),
+            Obtainable(PlainHead, InventoryType.Head, strength: 1),
+            Obtainable(7103, InventoryType.Shoulders, strength: 1),
+        ];
+        var shoulders = new VendorItem { Entry = 16002, Item = 7103 };
+        npcs = new NpcStore(NpcContent.Empty with { VendorItems = [.. npcs.Content.VendorItems, shoulders] });
+        PlayerbotStatWeights weights = Weights(strength: 1f);
+
+        BoostGearPlan Plan(HashSet<uint> sources) => BoostGearPlanner.Plan(
+            items.Where(t => BoostGearPlanner.IsPoolItem(t, 14, sources)), weights, Class.Warrior, false, _ => true);
+
+        BoostGearPlan unbound = Plan(BoostItemSources.Build(npcs, quests, LootContent.Empty));
+        Assert.Equal(FireFestivalCrown, PickFor(unbound, InventorySlots.Head)!.Entry);        // RED: the defect
+        Assert.Equal(FireFestivalMantle, PickFor(unbound, InventorySlots.Shoulders)!.Entry);
+
+        BoostGearPlan bound = Plan(BoostItemSources.Build(npcs, quests, LootContent.Empty, BoostEventBinding.From(rows, creatures)));
+        Assert.Equal(PlainHead, PickFor(bound, InventorySlots.Head)!.Entry);
+        Assert.Equal(7103u, PickFor(bound, InventorySlots.Shoulders)!.Entry);
+    }
+    [Fact]
+    public void QuestOnlyCosmetics_AreNeverPicked_NotEvenAsTheLastResort_ButStatBearingQuestRewardsStay()
+    {
+        const uint trophyHead = 7200, trophyChest = 7201, rewardHead = 7202, vendorHead = 7203, vendorChest = 7204;
+        // The trophies have armor but no stat, resistance, spell or damage, and out-score the plain pieces, so without the rule they win.
+        ItemTemplate[] items =
+        [
+            Piece(trophyHead, InventoryType.Head, itemLevel: 14, armor: 5),
+            Piece(vendorHead, InventoryType.Head, itemLevel: 2, strength: 1),
+            Piece(rewardHead, InventoryType.Head, itemLevel: 1, strength: 1),
+            Piece(trophyChest, InventoryType.Chest, itemLevel: 14, armor: 5),
+            Piece(vendorChest, InventoryType.Chest, itemLevel: 2),
+        ];
+        var npcs = new NpcStore(NpcContent.Empty with { VendorItems = [new VendorItem { Entry = 1, Item = vendorHead }, new VendorItem { Entry = 1, Item = vendorChest }] });
+        var quests = new QuestStore(new QuestContent(
+        [
+            new QuestTemplate { Entry = 1, RewItemId1 = trophyHead, RewChoiceItemId1 = trophyChest, RewChoiceItemId2 = rewardHead },
+            new QuestTemplate { Entry = 2, RewItemId1 = vendorChest },   // also sold: not quest-only
+        ], [], []));
+        HashSet<uint> sources = BoostItemSources.Build(npcs, quests, LootContent.Empty);
+        HashSet<uint> questOnly = BoostItemSources.QuestOnly(npcs, quests, LootContent.Empty);
+        PlayerbotStatWeights weights = Weights(strength: 1f, armor: 1f);   // armor counts, so the statless trophies score well
+
+        Assert.Equal([trophyHead, trophyChest, rewardHead], questOnly.Order().ToArray());
+
+        BoostGearPlan Plan(IReadOnlySet<uint>? rule) => BoostGearPlanner.Plan(
+            items.Where(t => BoostGearPlanner.IsPoolItem(t, 14, sources)), weights, Class.Warrior, false, _ => true, rule);
+
+        // RED control: without the rule the trophies are the kit (they out-score the vendor head and the statless vendor chest).
+        BoostGearPlan without = Plan(null);
+        Assert.Equal(trophyChest, PickFor(without, InventorySlots.Chest)!.Entry);
+        Assert.Equal(trophyHead, PickFor(without, InventorySlots.Head)!.Entry);
+
+        BoostGearPlan with = Plan(questOnly);
+        Assert.Equal(vendorChest, PickFor(with, InventorySlots.Chest)!.Entry);     // the plain vendor piece, not the trophy
+        Assert.Equal(vendorHead, PickFor(with, InventorySlots.Head)!.Entry);       // a stat-bearing candidate exists: the trophy is dropped
+        Assert.True(BoostGearPlanner.IsPoolItem(items[2], 14, sources) && !BoostGearPlanner.IsCosmeticQuestReward(items[2], questOnly)); // a quest-only piece with a stat stays eligible
+
+        // No fallback: with only the trophy left for the slot, the slot is empty.
+        BoostGearPlan alone = BoostGearPlanner.Plan([items[3]], weights, Class.Warrior, false, _ => true, questOnly);
+        Assert.Null(PickFor(alone, InventorySlots.Chest));
+        Assert.Contains(InventorySlots.Chest, alone.EmptySlots);
     }
 }
