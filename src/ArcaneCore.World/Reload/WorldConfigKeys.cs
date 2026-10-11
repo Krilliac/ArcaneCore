@@ -234,6 +234,31 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Follow:MaxFallHealthPercent", o => o.Follow.MaxFallHealthPercent, (o, v) => o.Follow.MaxFallHealthPercent = v,
             PlayerbotFollowOptions.CheckFallPercent),
 
+        // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
+        // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
+        LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),
+        LivePlayerbotsValue("Population:TargetOnline", o => o.Population.TargetOnline, (o, v) => o.Population.TargetOnline = v, Playerbots.Population.PlayerbotPopulationOptions.CheckTarget),
+        LivePlayerbotsValue("Population:IntervalSeconds", o => o.Population.IntervalSeconds, (o, v) => o.Population.IntervalSeconds = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 2, 600)),
+        LivePlayerbotsValue("Population:TickP95BudgetMs", o => o.Population.TickP95BudgetMs, (o, v) => o.Population.TickP95BudgetMs = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 5, 1000)),
+        LivePlayerbotsValue("Population:ResumeBelowPct", o => o.Population.ResumeBelowPct, (o, v) => o.Population.ResumeBelowPct = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 10, 99)),
+        LivePlayerbotsValue("Population:WindowTicks", o => o.Population.WindowTicks, (o, v) => o.Population.WindowTicks = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 20, 4096)),
+        LivePlayerbots("Population:ParkWhenOverBudget", o => o.Population.ParkWhenOverBudget, (o, v) => o.Population.ParkWhenOverBudget = v),
+        LivePlayerbotsValue("Population:MaxCreatePerMinute", o => o.Population.MaxCreatePerMinute, (o, v) => o.Population.MaxCreatePerMinute = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 60)),
+        LivePlayerbotsValue("Population:MaxStartsPerInterval", o => o.Population.MaxStartsPerInterval, (o, v) => o.Population.MaxStartsPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 100)),
+        LivePlayerbotsValue("Population:MaxParksPerInterval", o => o.Population.MaxParksPerInterval, (o, v) => o.Population.MaxParksPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 100)),
+        LivePlayerbotsValue("Population:Factions", o => o.Population.Factions, (o, v) => o.Population.Factions = v, Playerbots.Population.PlayerbotPopulationOptions.CheckDefined),
+        LivePlayerbotsValue("Population:AllianceSharePct", o => o.Population.AllianceSharePct, (o, v) => o.Population.AllianceSharePct = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 100)),
+        LivePlayerbotsValue("Population:Classes", o => new Playerbots.Population.PopulationIdList([.. o.Population.Classes]),
+            (o, v) => o.Population.Classes = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckClasses(v.Items)),
+        LivePlayerbotsValue("Population:Bands", o => new Playerbots.Population.PopulationBandList([.. o.Population.Bands.Select(b => b.Clone())]),
+            (o, v) => o.Population.Bands = [.. v.Items.Select(b => b.Clone())], v => Playerbots.Population.PlayerbotPopulationOptions.CheckBands(v.Items)),
+        LivePlayerbotsValue("Population:ZoneLevelSlack", o => o.Population.ZoneLevelSlack, (o, v) => o.Population.ZoneLevelSlack = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
+        LivePlayerbotsValue("Population:OutlevelMargin", o => o.Population.OutlevelMargin, (o, v) => o.Population.OutlevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
+        LivePlayerbotsValue("Population:Relocation", o => o.Population.Relocation, (o, v) => o.Population.Relocation = v, Playerbots.Population.PlayerbotPopulationOptions.CheckDefined),
+        LivePlayerbotsValue("Population:MaxRelocationsPerInterval", o => o.Population.MaxRelocationsPerInterval, (o, v) => o.Population.MaxRelocationsPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 50)),
+        LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
+            (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,

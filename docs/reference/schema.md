@@ -81,6 +81,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 54 | `Characters.ServerMail.ServerMailDataModule` | creates `mail_server_template`, `mail_server_template_items`, `mail_server_template_conditions`, `mail_server_character` | yes |
 | 55 | `Economy.AuctionBotCustodyDataModule` | creates `ahbot_custody` | yes |
 | 56 | `Characters.Playerbots.ManagedPlayerbotHomeDataModule` | creates `managed_playerbot_home` | yes |
+| 56 | `Characters.Playerbots.PlayerbotPopulationDataModule` | creates `playerbot_population_member` | yes |
 
 ## `world`
 

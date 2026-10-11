@@ -118,6 +118,9 @@ public sealed class PlayerbotOptions
     /// <summary>How a following bot keeps up with its leader and catches up when it cannot walk (<c>World:Playerbots:Follow</c>; live).</summary>
     public PlayerbotFollowOptions Follow { get; set; } = new();
 
+    /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
+    public Population.PlayerbotPopulationOptions Population { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -134,6 +137,7 @@ public sealed class PlayerbotOptions
         // ConfigurationBinder appends array elements to a non-empty initialized array.
         // Explicit maps replace the defaults; missing maps retain the default continents.
         if (section.GetChildren().Any(child => string.Equals(child.Key, nameof(AllowedMaps), StringComparison.OrdinalIgnoreCase))) options.AllowedMaps = [];
+        ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions.PrepareBinding(options.Population, section);
         section.Bind(options);
     }
 
@@ -170,6 +174,8 @@ public sealed class PlayerbotOptions
         Groups.Validate();
         if (Follow is null) throw new InvalidOperationException($"{SectionName}:Follow is missing.");
         Follow.Validate();
+        if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
+        Population.Validate();
     }
 }
 

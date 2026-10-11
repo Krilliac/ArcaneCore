@@ -37,6 +37,9 @@ Content one bot cannot do (elite, dungeon and raid quests, objectives inside ins
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
 live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
 
+A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
+manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
