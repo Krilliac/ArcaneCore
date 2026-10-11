@@ -537,7 +537,7 @@ public sealed class PlayerbotFleetWorldTests
         Assert.Equal(["Playerbot start: 3 bots match; give a count <= 2 or add 'force'."], refused);
         Assert.DoesNotContain(world.Bots.Snapshot(), s => s.State == ManagedPlayerbotState.Running);
 
-        Assert.Equal(["Playerbot start accepted (3)."], await world.Console.RunAsync(".playerbot start all force"));
+        Assert.Equal("Playerbot start accepted (3).", FleetConsoleRig.FirstLine(await world.Console.RunAsync(".playerbot start all force")));
         string[] started = await world.Console.WaitForLineAsync(l => l.StartsWith("Playerbot start: matched=3", StringComparison.Ordinal), "the start summary");
         Assert.Contains("Playerbot start: matched=3 started=2 failed=1 (playerbot-capacity=1)", started);
         Assert.Contains("Fleetoac: playerbot-capacity", started);
@@ -547,7 +547,7 @@ public sealed class PlayerbotFleetWorldTests
         Assert.Equal(2, world.Bots.Snapshot().Count(s => s.State == ManagedPlayerbotState.Running));
 
         Assert.Equal(["Playerbot stop: 3 bots match; give a count <= 2 or add 'force'."], await world.Console.RunAsync(".playerbot stop Fleetoa*"));
-        Assert.Equal(["Playerbot stop accepted (3)."], await world.Console.RunAsync(".playerbot stop all force"));
+        Assert.Equal("Playerbot stop accepted (3).", FleetConsoleRig.FirstLine(await world.Console.RunAsync(".playerbot stop all force")));
         await world.Console.WaitForLineAsync(l => l.StartsWith("Playerbot stop: matched=3 stopped=3 failed=0", StringComparison.Ordinal), "the stop summary");
         await world.Host.WaitForWorldAsync(() => !world.Bots.Snapshot().Any(s => s.State == ManagedPlayerbotState.Running),
             "no bot reports Running");

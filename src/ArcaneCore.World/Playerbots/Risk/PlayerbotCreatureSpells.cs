@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Spells;
@@ -15,7 +16,7 @@ internal readonly record struct CreatureSpellThreat(float Dps, int MaxHit, bool 
 }
 
 /// <summary>
-/// A creature's spells as the risk estimate sees them (pure over the data, cached per spell store and entry): the CAST actions of
+/// A creature's spells as the risk estimate sees them (pure over the data, cached per spell store, EventAI content and entry): the CAST actions of
 /// its EventAI rows (cmangos <c>creature_ai_scripts</c> action 11, <c>ACTION_T_CAST</c>; the creature's events in
 /// <see cref="EventAiEngine.Holders"/>) and each spell's damage from <c>spell_template</c>: school damage, weapon damage, health
 /// leech and the ticks of a periodic damage aura, the dice at their top; <c>SPELL_EFFECT_INSTAKILL</c> kills outright (the Scourge
@@ -28,15 +29,29 @@ internal static class PlayerbotCreatureSpells
     internal const byte ActionCast = 11;
     internal const uint DefaultRepeatMs = 10_000;
 
-    private static readonly ConditionalWeakTable<SpellStore, Dictionary<uint, CreatureSpellThreat>> Cache = [];
+    /// <summary>The most entries cached per spell store and EventAI content.</summary>
+    internal const int MaxCachedEntries = 4096;
+
+    // Keyed by everything the value is computed from: the spell store, the EventAI content (a reload of either is a new object,
+    // so it starts a new cache), the entry, the spawn guid when that spawn has rows of its own, and whether debug-only rows run.
+    // Static and shared by every world in the process: test hosts run their world threads in parallel and all start on the same
+    // SpellStore.Empty, so the per-content map must be safe for concurrent writers (a plain Dictionary written from two world
+    // threads at once can corrupt itself and throw or spin).
+    private static readonly ConditionalWeakTable<SpellStore, ConditionalWeakTable<CreatureAiContent, ConcurrentDictionary<CacheKey, CreatureSpellThreat>>> Cache = [];
+
+    private readonly record struct CacheKey(uint Entry, uint SpawnGuid, bool DebugOnlyRows);
 
     internal static CreatureSpellThreat Of(Creature creature, SpellStore? store)
     {
         if (store is null || creature.AI is not CreatureEventAI ai) return CreatureSpellThreat.None;
-        Dictionary<uint, CreatureSpellThreat> cache = Cache.GetOrCreateValue(store);
-        if (cache.TryGetValue(creature.Entry, out CreatureSpellThreat known)) return known;
+        EventAiContext context = ai.Engine.Context;
+        CreatureAiContent content = context.Content;
+        uint spawnGuid = creature.Spawn is { } spawn && content.GetGuidEvents(spawn.Guid).Count > 0 ? spawn.Guid : 0;
+        var key = new CacheKey(creature.Entry, spawnGuid, context.Options.DebugOnlyEvents);
+        ConcurrentDictionary<CacheKey, CreatureSpellThreat> cache = Cache.GetOrCreateValue(store).GetOrCreateValue(content);
+        if (cache.TryGetValue(key, out CreatureSpellThreat known)) return known;
         CreatureSpellThreat threat = Of(ai.Engine.Holders.Select(h => h.Event), store.Get);
-        if (cache.Count < 4096) cache[creature.Entry] = threat;
+        if (cache.Count < MaxCachedEntries) cache.TryAdd(key, threat);
         return threat;
     }
 

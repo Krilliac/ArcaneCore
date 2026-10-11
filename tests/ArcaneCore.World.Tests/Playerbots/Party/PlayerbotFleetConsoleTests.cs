@@ -33,18 +33,28 @@ internal sealed class FleetConsoleRig : IAsyncDisposable
     /// <summary>Every line printed since the last <see cref="RunAsync"/>, without the console prefix.</summary>
     public string[] Lines => [.. _output.Snapshot().Select(l => l.StartsWith(WorldConsoleExecutor.Prefix, StringComparison.Ordinal) ? l[WorldConsoleExecutor.Prefix.Length..] : l)];
 
-    /// <summary>Run <paramref name="line"/> on the world thread (after <paramref name="before"/>, same turn) and return what it printed at once.</summary>
+    /// <summary>
+    /// Run <paramref name="line"/> on the world thread (after <paramref name="before"/>, same turn) and return what it has printed so
+    /// far. For most commands that is everything they print. A bulk start/stop is the exception: it prints 'accepted' and hands the
+    /// work to a worker that prints its summary later without the world thread (<see cref="WaitForLineAsync"/>), so that summary can
+    /// already be in the result. Assert only the first line of a bulk reply (<see cref="FirstLine"/>).
+    /// </summary>
     public async Task<string[]> RunAsync(string line, Action? before = null)
     {
         _output.Clear();
-        await _host.World.InvokeAsync(() =>
+        return await _host.World.InvokeAsync(() =>
         {
             before?.Invoke();
             Executor.Execute(line);
-            return 0;
+            return Lines;
         });
-        return Lines;
     }
+
+    /// <summary>
+    /// The first line of <paramref name="lines"/>: a bulk start/stop always prints 'accepted' before its worker starts, so the first
+    /// line is fixed while the rest may already hold the worker's summary.
+    /// </summary>
+    public static string FirstLine(string[] lines) => Assert.Single(lines.Take(1));
 
     /// <summary>Wait (up to 20 s) for a line a worker replies with later (bulk start/stop); returns all lines then.</summary>
     public async Task<string[]> WaitForLineAsync(Func<string, bool> match, string what)
@@ -152,13 +162,13 @@ public sealed class PlayerbotFleetConsoleTests
         Assert.Contains("Playerbot revive: matched=2 revived=0 skipped=2 (alive=1 not-running=1)", revive);
 
         string[] start = await world.Console.RunAsync(".playerbot start Fleetcd*");
-        Assert.Equal(["Playerbot start accepted (2)."], start);
+        Assert.Equal("Playerbot start accepted (2).", FleetConsoleRig.FirstLine(start));
         string[] done = await world.Console.WaitForLineAsync(l => l.StartsWith("Playerbot start: matched=2", StringComparison.Ordinal), "the start summary");
         Assert.Contains("Playerbot start: matched=2 started=1 failed=1 (playerbot-capacity=1)", done);
         Assert.Contains("Fleetcdb: playerbot-capacity", done);
 
         string[] stop = await world.Console.RunAsync(".playerbot stop all");
-        Assert.Equal(["Playerbot stop accepted (2)."], stop);
+        Assert.Equal("Playerbot stop accepted (2).", FleetConsoleRig.FirstLine(stop));
         await world.Console.WaitForLineAsync(l => l.StartsWith("Playerbot stop: matched=2 stopped=2 failed=0", StringComparison.Ordinal), "the stop summary");
     }
 
