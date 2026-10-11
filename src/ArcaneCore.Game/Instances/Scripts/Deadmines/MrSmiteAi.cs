@@ -14,6 +14,7 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
     private SmitePhase _phase;
     private uint _equipTimer;
     private uint _slamTimer;
+    private uint _thrashTimer;
 
     public SmitePhase Phase => _phase;
 
@@ -28,6 +29,7 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
         _phase = SmitePhase.First;
         _equipTimer = 0;
         _slamTimer = 9_000;
+        _thrashTimer = 4_000;
         Me.StandState = StandState.Stand;
         SetVirtualItem(0, 7420, 7, 1, 13, 3); // item 2179, default sword
         ClearVirtualItem(1);
@@ -69,13 +71,33 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
         }
 
         float healthPercent = Me.MaxHealth == 0 ? 100f : 100f * Me.Health / Me.MaxHealth;
+        if (_phase == SmitePhase.Second)
+        {
+            // vmangos boss_mr_smiteAI::UpdateAI casts spell 3391 directly rather
+            // than applying the 12787 proc aura, which procs too often there.
+            if (_thrashTimer < diffMs)
+            {
+                if (DoCast(victim, 3391) == CreatureCastResult.Ok)
+                {
+                    _thrashTimer = (uint)(System?.RandomInt(1_500, 4_000) ?? 1_500);
+                }
+            }
+            else
+            {
+                _thrashTimer -= diffMs;
+            }
+        }
+
         if ((_phase == SmitePhase.First && healthPercent < 66f) || (_phase == SmitePhase.Second && healthPercent < 33f))
         {
             if (DoCast(Me, 6432) == CreatureCastResult.Ok) // Smite Stomp
             {
                 System?.SayText(Me, healthPercent < 33f ? -1036003 : -1036002);
                 System?.Map.Combat.AttackStop(Me, targetSwitch: true);
-                System?.RemoveAuras(Me, _phase == SmitePhase.First ? 6433u : 12787u);
+                if (_phase == SmitePhase.First)
+                {
+                    System?.RemoveAuras(Me, 6433);
+                }
                 _phase = SmitePhase.Equipping;
                 _equipTimer = 2_500;
             }
@@ -85,7 +107,7 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
 
         if (_phase == SmitePhase.Third)
         {
-            if (_slamTimer <= diffMs)
+            if (_slamTimer < diffMs)
             {
                 if (DoCast(victim, 6435) == CreatureCastResult.Ok)
                 {
@@ -141,11 +163,6 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
             case SmitePhase.Resuming:
                 Me.SetByte(UpdateFields.UnitFieldBytes2, 0, 1); // melee sheath
                 _phase = Me.MaxHealth > 0 && 100f * Me.Health / Me.MaxHealth < 33f ? SmitePhase.Third : SmitePhase.Second;
-                if (_phase == SmitePhase.Second)
-                {
-                    DoCast(Me, 12787, triggered: true); // Thrash
-                }
-
                 // PhaseEquipEnd: SelectAttackingTarget(ATTACKING_TARGET_TOPAGGRO, 0); he evades only when nobody is left on his threat list.
                 if (Me.Combat.Threat.Entries.FirstOrDefault(e => e.Target.IsAlive)?.Target is { } target)
                 {

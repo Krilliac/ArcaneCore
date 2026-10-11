@@ -5,6 +5,9 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Reload;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.Game.Reload;
+using System.Numerics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -31,6 +34,10 @@ public sealed class CreatureReloadTests
     private static CreatureSpawn Spawn() => new() { Guid = SpawnGuid, Entry = WolfEntry, MapId = 0, X = -8940f, Y = -132f, Z = 83.5f };
 
     private static CreatureContent ContentOf(params CreatureTemplate[] templates) => new(templates, [Spawn()], [], [], []);
+
+    private static uint? GrindSpawn(CreatureWorldFeature feature, uint level, uint faction)
+        => feature.ExploreAtlas.Find(0, level, new Vector3(-8950, -132, 83.5f),
+            _ => true, (_, _) => false, out _, candidateFaction => candidateFaction == faction)?.Spawn.Guid;
 
     private static WorldTestHost Start(CreatureContent? content, out CreatureTestContext context)
     {
@@ -110,6 +117,35 @@ public sealed class CreatureReloadTests
         });
 
         Assert.Equal(33u, await host.OnWorldAsync(() => wolf.FactionTemplate));
+    }
+
+    [Fact]
+    public async Task AtlasUsesReloadedLevelAndFaction_AndRollbackRestoresBoth()
+    {
+        CreatureContent original = ContentOf(Wolf() with { MinLevel = 8, MaxLevel = 8, Faction = 14 });
+        CreatureContent changed = ContentOf(Wolf() with { MinLevel = 20, MaxLevel = 20, Faction = 15 });
+        await using WorldTestHost host = Start(original, out CreatureTestContext context);
+        CreatureWorldFeature feature = context.Feature!;
+        await host.WaitForWorldAsync(() => feature.ContentInstalled, "creature content installation");
+        Assert.Equal(SpawnGuid, GrindSpawn(feature, 8, 14));
+        PlayerbotExploreAtlas originalAtlas = feature.ExploreAtlas;
+
+        IServiceProvider services = new ServiceCollection()
+            .AddSingleton(feature).AddSingleton<ICreatureDataStore>(new FixedStore(changed)).BuildServiceProvider();
+        var reloadable = new CreatureContentReloadable(services);
+        ContentCandidate candidate = await reloadable.BuildAsync(CancellationToken.None);
+        await host.OnWorldAsync(() =>
+        {
+            var transaction = new ReloadTransaction();
+            candidate.Commit(host.World, transaction);
+            Assert.Null(GrindSpawn(feature, 8, 14));
+            Assert.Equal(SpawnGuid, GrindSpawn(feature, 20, 15));
+            Assert.Empty(transaction.Rollback());
+            Assert.Same(originalAtlas, feature.ExploreAtlas);
+            Assert.Equal(SpawnGuid, GrindSpawn(feature, 8, 14));
+            Assert.Null(GrindSpawn(feature, 20, 15));
+            return true;
+        });
     }
 
     [Fact]

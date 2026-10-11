@@ -153,7 +153,7 @@ public sealed partial class SpellSystem
                 SpellEffectInfo effect = cast.Spell.Effects[i];
                 if (!EffectHandlers.TryGetValue(effect.Effect, out SpellEffectHandler? handler))
                 {
-                    ReportUnsupported("effect", (uint)effect.Effect, cast.Spell.Id);
+                    ReportUnsupported(cast, i, "effect", (uint)effect.Effect);
                     continue;
                 }
 

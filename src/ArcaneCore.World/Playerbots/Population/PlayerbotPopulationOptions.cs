@@ -72,8 +72,10 @@ public sealed class PlayerbotPopulationOptions
 
     /// <summary>
     /// The number of managed bots to keep running (0..1000). The effective target is the lower of this and <c>World:Playerbots:MaxBots</c>.
-    /// Bots an operator created count towards it but are never stopped by the population; above the target only the bots the population
-    /// owns are parked. 0 parks every bot the population owns.
+    /// Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and
+    /// what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a
+    /// band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are
+    /// parked. 0 parks every bot the population owns.
     /// </summary>
     public int TargetOnline { get; set; }
 
@@ -100,6 +102,25 @@ public sealed class PlayerbotPopulationOptions
 
     /// <summary>Park (stop) the least useful bots the population owns while the tick p95 is over the budget (on by default). Off: only stop adding.</summary>
     public bool ParkWhenOverBudget { get; set; } = true;
+
+    /// <summary>
+    /// The consecutive fresh windows of WindowTicks ticks the p95 must stay over TickP95BudgetMs before a park for the budget, or under
+    /// ResumeBelowPct of it before an add (1..20). 1 acts on a single window. A window between the two, a change, or a window on the
+    /// other side starts the count again; a lowered target is honoured without waiting.
+    /// </summary>
+    public int ConfirmWindows { get; set; } = 2;
+
+    /// <summary>
+    /// Anti-churn: a bot the population started is not parked for the tick budget until it has run this many seconds of world time
+    /// (0..3600; 0 = no minimum). Over the target such a bot is still parked, last.
+    /// </summary>
+    public int MinRunSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// The population logs one information line for the passes that parked, started, created or moved bots, at most once per this many
+    /// seconds of world time; the changes of the passes in between are added up into the next line (0..3600; 0 = a line for every such pass).
+    /// </summary>
+    public int ActionLogSeconds { get; set; } = 60;
 
     /// <summary>The most new bot characters created per minute of world time (0..60; 0 creates none and only restarts parked bots).</summary>
     public int MaxCreatePerMinute { get; set; } = 4;
@@ -239,6 +260,9 @@ public sealed class PlayerbotPopulationOptions
             : CheckRange(TickP95BudgetMs, 5, 1000) is { } b ? $"TickP95BudgetMs {b}"
             : CheckRange(ResumeBelowPct, 10, 99) is { } r ? $"ResumeBelowPct {r}"
             : CheckRange(WindowTicks, 20, 4096) is { } w ? $"WindowTicks {w}"
+            : CheckRange(ConfirmWindows, 1, 20) is { } cw ? $"ConfirmWindows {cw}"
+            : CheckRange(MinRunSeconds, 0, 3600) is { } mr ? $"MinRunSeconds {mr}"
+            : CheckRange(ActionLogSeconds, 0, 3600) is { } al ? $"ActionLogSeconds {al}"
             : CheckRange(MaxCreatePerMinute, 0, 60) is { } c ? $"MaxCreatePerMinute {c}"
             : CheckRange(MaxStartsPerInterval, 1, 100) is { } s ? $"MaxStartsPerInterval {s}"
             : CheckRange(MaxParksPerInterval, 1, 100) is { } p ? $"MaxParksPerInterval {p}"

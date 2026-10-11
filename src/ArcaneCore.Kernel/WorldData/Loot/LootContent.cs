@@ -57,6 +57,7 @@ public sealed class LootContent
     private readonly Dictionary<uint, uint> _pickpocket;
 
     private readonly Dictionary<(LootTableKind, uint), IReadOnlyList<LootStoreRow>> _rows;
+    private readonly HashSet<uint> _lootItems;
     private readonly Dictionary<uint, CreatureLootInfo> _creatures;
 
     public LootContent(IEnumerable<(LootTableKind Kind, LootStoreRow Row)> rows, IEnumerable<CreatureLootInfo> creatures)
@@ -74,6 +75,7 @@ public sealed class LootContent
     {
         (LootTableKind Kind, LootStoreRow Row)[] all = [.. rows];
         RowCount = all.Length;
+        _lootItems = [.. all.Where(pair => pair.Row.Item != 0 && pair.Row.MinCountOrRef > 0).Select(pair => pair.Row.Item)];
         _rows = all.GroupBy(r => (r.Kind, r.Row.Entry))
             .ToDictionary(g => g.Key, g => (IReadOnlyList<LootStoreRow>)[.. g.Select(r => r.Row).OrderBy(r => r.GroupId).ThenBy(r => r.Item)]);
         _creatures = creatures.ToDictionary(c => c.Entry);
@@ -107,6 +109,9 @@ public sealed class LootContent
     public IReadOnlyList<LootStoreRow> GetRows(LootTableKind kind, uint entry) => _rows.GetValueOrDefault((kind, entry)) ?? [];
 
     public bool HasEntry(LootTableKind kind, uint entry) => _rows.ContainsKey((kind, entry));
+
+    /// <summary>Whether any loaded loot table names this item, including quest-chance and referenced rows.</summary>
+    public bool HasLootItem(uint itemId) => _lootItems.Contains(itemId);
 
     public CreatureLootInfo? FindCreature(uint entry) => _creatures.GetValueOrDefault(entry);
 

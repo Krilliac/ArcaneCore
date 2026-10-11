@@ -1823,4 +1823,14 @@ public sealed partial class SpellSystem
             _logger.LogInformation("Spell {Spell}: {Kind} {Value} is not implemented yet", spellId, kind, value);
         }
     }
+
+    /// <summary>The gap of a running cast: logged once per process as above, and handed to every observer each time (bot QA counts it).</summary>
+    private void ReportUnsupported(SpellCast cast, int effectIndex, string kind, uint value)
+    {
+        ReportUnsupported(kind, value, cast.Spell.Id);
+        foreach (ISpellCastObserver observer in _observers)
+        {
+            observer.OnUnsupported(cast, effectIndex, kind, value);
+        }
+    }
 }

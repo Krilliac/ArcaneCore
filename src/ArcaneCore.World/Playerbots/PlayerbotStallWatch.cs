@@ -196,6 +196,8 @@ internal sealed class PlayerbotSuspensions
     private const int Max = 64;
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
+    private int _version;
+    internal int Version => Volatile.Read(ref _version);
 
     internal bool IsEntrySuspended(uint entry, uint nowMs)
         => entry != 0 && (Active(_entries, entry, nowMs) || Shared?.IsEntrySetAside(entry, nowMs) == true);
@@ -221,11 +223,57 @@ internal sealed class PlayerbotSuspensions
     {
         _training = true;
         _trainingUntilMs = unchecked(nowMs + SuspendMs);
+        Interlocked.Increment(ref _version);
     }
 
-    internal void SuspendEntry(uint entry, uint nowMs) => Add(_entries, entry, nowMs);
+    internal void SuspendEntry(uint entry, uint nowMs)
+    {
+        if (entry != 0) { Add(_entries, entry, nowMs); Interlocked.Increment(ref _version); }
+    }
 
-    internal void SuspendQuest(uint quest, uint nowMs) => Add(_quests, quest, nowMs);
+    internal void SuspendQuest(uint quest, uint nowMs)
+    {
+        if (quest != 0) { Add(_quests, quest, nowMs); Interlocked.Increment(ref _version); }
+    }
+
+    internal PlayerbotSetAside[] Export(Guid botId, int characterId, uint nowMs, long unixNowMs)
+    {
+        var rows = new List<PlayerbotSetAside>();
+        foreach ((uint id, uint until) in _entries)
+            if (Remaining(until, nowMs) is > 0 and var remaining)
+                rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Entry, id, unixNowMs + remaining));
+        foreach ((uint id, uint until) in _quests)
+            if (Remaining(until, nowMs) is > 0 and var remaining)
+                rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Quest, id, unixNowMs + remaining));
+        if (_training && Remaining(_trainingUntilMs, nowMs) is > 0 and var trainingRemaining)
+            rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Training, 0, unixNowMs + trainingRemaining));
+        return [.. rows];
+    }
+
+    internal void Restore(IEnumerable<PlayerbotSetAside> rows, uint nowMs, long unixNowMs)
+    {
+        foreach (PlayerbotSetAside row in rows)
+        {
+            long remaining = row.ExpiresUnixMs - unixNowMs;
+            if (remaining <= 0 || remaining > SuspendMs) continue;
+            uint until = unchecked(nowMs + (uint)remaining);
+            switch (row.Kind)
+            {
+                case PlayerbotSetAsideKind.Entry when row.TargetId != 0: Restore(_entries, row.TargetId, until, nowMs); break;
+                case PlayerbotSetAsideKind.Quest when row.TargetId != 0: Restore(_quests, row.TargetId, until, nowMs); break;
+                case PlayerbotSetAsideKind.Training when row.TargetId == 0: _training = true; _trainingUntilMs = until; break;
+            }
+        }
+    }
+
+    private static long Remaining(uint until, uint nowMs) => Math.Max(0, unchecked((int)(until - nowMs)));
+
+    private static void Restore(Dictionary<uint, uint> set, uint key, uint until, uint nowMs)
+    {
+        if (set.Count >= Max && !set.ContainsKey(key))
+            set.Remove(set.OrderBy(entry => Remaining(entry.Value, nowMs)).First().Key);
+        set[key] = until;
+    }
 
     private static bool Active(Dictionary<uint, uint> set, uint key, uint nowMs)
     {
@@ -280,6 +328,8 @@ internal sealed class PlayerbotSharedSetAsides
     internal const int MaxKeys = 256;
 
     private readonly Dictionary<(bool Quest, uint Id), Record> _records = [];
+    private int _version;
+    internal int Version => Volatile.Read(ref _version);
 
     /// <summary>Goals remembered (bounded by <see cref="MaxKeys"/>).</summary>
     internal int Count => _records.Count;
@@ -311,8 +361,9 @@ internal sealed class PlayerbotSharedSetAsides
         record.Bots.Add(new Stall(bot, nowMs, map, position));
         if (record.Bots.Count < BotsToShare || Active(record, nowMs)) return null;
         uint length = (uint)Math.Min((ulong)SetAsideMs << Math.Min(record.Times, 8), MaxSetAsideMs);
-        record.Times++;
+        record.Times = Math.Min(record.Times + 1, PlayerbotSetAside.MaxRepeatCount);
         record.UntilMs = unchecked(nowMs + length);
+        Interlocked.Increment(ref _version);
         string stalls = string.Join("; ", record.Bots.Select(seen => string.Create(CultureInfo.InvariantCulture,
             $"{seen.Position.X:F1},{seen.Position.Y:F1},{seen.Position.Z:F1} map {seen.Map}")));
         record.Bots.Clear();
@@ -323,6 +374,29 @@ internal sealed class PlayerbotSharedSetAsides
     internal bool IsQuestSetAside(uint quest, uint nowMs) => _records.TryGetValue((true, quest), out Record? record) && Active(record, nowMs);
 
     internal bool IsEntrySetAside(uint entry, uint nowMs) => _records.TryGetValue((false, entry), out Record? record) && Active(record, nowMs);
+
+    internal PlayerbotSetAside[] Export(uint nowMs, long unixNowMs)
+        => [.. _records.Where(pair => pair.Key.Id != 0 && Remaining(pair.Value.UntilMs, nowMs) is > 0)
+            .Select(pair => new PlayerbotSetAside(Guid.Empty, 0,
+                pair.Key.Quest ? PlayerbotSetAsideKind.SharedQuest : PlayerbotSetAsideKind.SharedEntry,
+                pair.Key.Id, unixNowMs + Remaining(pair.Value.UntilMs, nowMs), pair.Value.Times))];
+
+    internal void Restore(IEnumerable<PlayerbotSetAside> rows, uint nowMs, long unixNowMs)
+    {
+        foreach (PlayerbotSetAside row in rows)
+        {
+            long remaining = row.ExpiresUnixMs - unixNowMs;
+            if (remaining <= 0 || remaining > MaxSetAsideMs || row.TargetId == 0 || _records.Count >= MaxKeys) continue;
+            bool quest = row.Kind == PlayerbotSetAsideKind.SharedQuest;
+            if (!quest && row.Kind != PlayerbotSetAsideKind.SharedEntry) continue;
+            _records[(quest, row.TargetId)] = new Record
+            {
+                UntilMs = unchecked(nowMs + (uint)remaining), Times = Math.Clamp(row.RepeatCount, 1, PlayerbotSetAside.MaxRepeatCount), LastMs = nowMs,
+            };
+        }
+    }
+
+    private static long Remaining(uint until, uint nowMs) => Math.Max(0, unchecked((int)(until - nowMs)));
 
     private static bool Active(Record record, uint nowMs) => record.UntilMs != 0 && unchecked((int)(record.UntilMs - nowMs)) > 0;
 

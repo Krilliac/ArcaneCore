@@ -766,7 +766,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Travelling:
                 if (CheckWipe(group, leader)) break;
-                if (leader.MapId == group.Goal.MeetingMap && Arrived(leader, group.Approach, 5f) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
+                if (leader.MapId == group.Goal.MeetingMap && (Arrived(leader, group.Approach, 5f) || WithinApproachRing(leader, group)) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
                 {
                     group.Run?.Apply(PlayerbotRunSignal.Arrived);
                     Enter(group, group.Goal.InInstance ? PlayerbotGroupState.Entering : PlayerbotGroupState.Engaging);
@@ -931,6 +931,29 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private bool Gathered(BotGroup group, Player leader)
         => group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p
             || !p.IsAlive || ReferenceEquals(p.Map, leader.Map) && Distance(p, leader) <= GatherYards);
+
+    /// <summary>
+    /// The leader is already as near the content as the approach point is (within the approach distance of the meeting point and
+    /// <see cref="ApproachSlackYards"/>, flat), whichever side it came from. The approach point is fixed at formation on the side the
+    /// leader stood on then (<see cref="ApproachPoint"/>), but a leader can be somewhere else by the time it travels: a waiting bot keeps
+    /// exploring, and a teleport (an area trigger, a summon) moves it. From the far side it walks through the content, past the approach
+    /// point it never reaches, and the group fights in the Travelling state for good (the state change to Engaging never comes).
+    /// </summary>
+    private static bool WithinApproachRing(Player leader, BotGroup group)
+    {
+        float yards = (group.Goal.InInstance ? ApproachYards : QuestApproachYards) + ApproachSlackYards;
+        float dx = leader.X - group.Goal.Meeting.X, dy = leader.Y - group.Goal.Meeting.Y;
+        return (dx * dx) + (dy * dy) <= yards * yards && MathF.Abs(leader.Z - group.Goal.Meeting.Z) <= ApproachHeightYards;
+    }
+
+    /// <summary>
+    /// How far above or below the meeting point (the objective spawn's or the entrance trigger's own height) the leader may stand and
+    /// still be in <see cref="WithinApproachRing"/>: slopes inside the ring rise a few yards, a cliff top or another floor does not count.
+    /// </summary>
+    internal const float ApproachHeightYards = 10f;
+
+    /// <summary>How far inside the approach point's distance from the meeting point the leader counts as arrived (<see cref="WithinApproachRing"/>).</summary>
+    internal const float ApproachSlackYards = 5f;
 
     private static bool Arrived(Player player, Vector3 point, float within)
         => Vector3.Distance(new Vector3(player.X, player.Y, player.Z), point) <= within;

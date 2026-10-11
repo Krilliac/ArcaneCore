@@ -483,7 +483,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     /// recipient when player damage dominated (Unit.cpp:987-1001); creatures keep no such recipient here, so the controlling player stands.
     /// </summary>
     private static Player? CreditedPlayer(Unit? killer)
-        => killer is null ? null : killer.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(killer);
+        => ArcaneCore.Game.Progression.KillRewards.CreditedPlayer(killer);
 
     private void OnUnitKilled(Unit? killer, Unit victim)
     {

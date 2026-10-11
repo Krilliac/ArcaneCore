@@ -596,6 +596,100 @@ public sealed class PlayerbotTownGoalsTests
         finally { TownVendorServices.Current.Value = null; }
     }
 
+    /// <summary>
+    /// Broken gear and no repair NPC in sight (live 2026-10-11, analysis bot-xp-analysis.md 4.1: 45% of the population bots' worn items
+    /// at 0 durability; a repair happened only when a repair NPC was in sight). With too little money for even the cheapest repair the
+    /// bot does not set out; with enough it walks to the repair NPC 130 yards away (out of sight), and once it sees it, repairs through
+    /// the real handler (CMSG_REPAIR_ITEM) and pays.
+    /// </summary>
+    [Fact]
+    public async Task BrokenGear_WithNoRepairNpcInSight_TravelsToOne_AndRepairs_WhenItCanPay()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9211, durability: 20));
+        using IDisposable itemScope = items.Use();
+        FarRepairServices.Current.Value = new FarRepairFixture();
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                float start = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9211);
+                    player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
+                    Assert.True(PlayerbotTownGoals.NeedsRepairTrip(player));
+                    Assert.DoesNotContain(FarRepairFixture.Guid, player.VisibleObjects);
+
+                    // The repair costs 20 copper (20 points x multiplier 1 x quality factor 1): 10 is not enough to set out.
+                    player.Money = 10;
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.False(goals.HasCandidate(player));
+                    Assert.False(goals.Update(player, 1500));
+                    Assert.Equal(1, session.ManagedBudget.Remaining);
+
+                    player.Money = 100;
+                    Assert.True(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.Equal(FarRepairFixture.Entry, goals.TargetEntry);
+                    Assert.Equal(PlayerbotGoalKind.Vendor, goals.Goal);
+                    return player.X;
+                });
+
+                // The walk: every think carries the bot further east, toward the repair NPC (the test world's terrain stepper lets it
+                // walk only a few yards from the start position, as in the trainer trip test; the arrival is set up below).
+                float walked = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    float last = player.X;
+                    for (int think = 0; think < 2; think++)
+                    {
+                        PlayerbotMotion.ElapseForTests(player, 500);
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        Assert.True(goals.Update(player, 500), $"think {think}: the trip stopped at x {player.X:F1}");
+                        Assert.True(player.X > last, $"think {think}: no step east from x {last:F1}");
+                        Assert.Equal(FarRepairFixture.Entry, goals.TargetEntry);
+                        last = player.X;
+                    }
+
+                    return player.X;
+                });
+                Assert.True(walked > start + 5f, $"the bot walked from x {start:F1} only to {walked:F1}");
+
+                // Arrived (the rest of the 130 yards as it would walk them): the NPC comes into sight and the visit repairs and pays.
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    PlayerbotMovementControl.Stop(session, player);
+                    player.Relocate(FarRepairFixture.X - 3f, player.Y, player.Z, 0, host.World.NowMs);
+                });
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(FarRepairFixture.Guid), "repair NPC visible");
+                bool repaired = false;
+                for (int think = 0; think < 10 && !repaired; think++)
+                {
+                    repaired = await host.OnWorldAsync(() =>
+                    {
+                        Player player = session.Player!;
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        goals.Update(player, 1500);
+                        return player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability == 20;
+                    });
+                }
+
+                Assert.True(repaired, "the boots were not repaired at the repair NPC");
+                Assert.Equal(80u, await host.OnWorldAsync(() => session.Player!.Money));
+                Assert.False(await host.OnWorldAsync(() => PlayerbotTownGoals.NeedsRepairTrip(session.Player!)));
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { FarRepairServices.Current.Value = null; }
+    }
+
     private static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
@@ -686,4 +780,32 @@ internal sealed class TownVendorFixture : ICreatureDataStore, INpcContentStore, 
                 ? [new CreatureSpawn { Guid = 92201, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f },
                    new CreatureSpawn { Guid = 92301, Entry = 923, MapId = 0, X = -8949.45f, Y = -132.49f, Z = 83.53f }]
                 : [new CreatureSpawn { Guid = 92201, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
+}
+
+/// <summary>A repair NPC 130 yards east of the start position (beyond the 100-yard visibility), friendly to the bot.</summary>
+internal sealed class FarRepairFixture : ICreatureDataStore, INpcContentStore
+{
+    public const uint Entry = 945;
+    public const float X = -8819.95f;
+    public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 94501);
+
+    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty);
+
+    Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
+        [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)NpcFlags.Repair, DisplayIds = [49] }],
+        [new CreatureSpawn { Guid = 94501, Entry = Entry, MapId = 0, X = X, Y = -132.49f, Z = 83.53f }], [], [], []));
+}
+
+internal sealed class FarRepairServices : IWorldTestServices
+{
+    public static readonly AsyncLocal<FarRepairFixture?> Current = new();
+
+    public void Register(IServiceCollection services)
+    {
+        if (Current.Value is not { } fixture) return;
+        services.AddSingleton<ICreatureDataStore>(fixture);
+        services.AddSingleton<INpcContentStore>(fixture);
+        services.AddSingleton<IWorldDataStore>(new FarTrainerWorldData());
+        services.AddSingleton(new FactionTemplateCatalog([new FactionTemplateRecord(1, 1, 0, 1, 0, 0), new FactionTemplateRecord(900011, 0, 0, 8, 0, 0)]));
+    }
 }

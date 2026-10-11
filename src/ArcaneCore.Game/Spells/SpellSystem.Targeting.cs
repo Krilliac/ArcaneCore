@@ -81,7 +81,7 @@ public sealed partial class SpellSystem
             List<(Unit Unit, float Multiplier)>? units = SelectEffectTargets(cast, effect, i, selector, unitTarget);
             if (units is null)
             {
-                ReportUnsupported("implicit target", (uint)selector, cast.Spell.Id);
+                ReportUnsupported(cast, i, "implicit target", (uint)selector);
                 continue;
             }
 
@@ -223,6 +223,19 @@ public sealed partial class SpellSystem
                     _ => u => IsAliveGroupMember(cast, caster, u, raid: false),
                 };
                 return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), filter, cone: false);
+            }
+
+            case SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc:
+            {
+                // vmangos Spell::SetTargetMap (Spell.cpp:2774-2778): a persistent area aura targets the ground;
+                // its dynamic object visits enemy units on updates. Other effects using 28 select enemies at the destination.
+                if (effect.Effect == SpellEffectName.PersistentAreaAura)
+                {
+                    return [];
+                }
+
+                (float x, float y, float z) = DestinationCentre(cast, unitTarget);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsPartyAoeAtSrcLoc:

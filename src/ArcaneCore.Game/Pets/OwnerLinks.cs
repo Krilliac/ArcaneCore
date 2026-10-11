@@ -57,6 +57,9 @@ public static class OwnerLinks
         /// <summary>vmangos Unit::GetCharmerOrOwnerOrSelf.</summary>
         public Unit GetCharmerOrOwnerOrSelf() => unit.GetCharmerOrOwner() ?? unit;
 
+        /// <summary>vmangos Unit::GetCharmerOrOwnerOrOwnGuid: the charmer or owner, else the unit's own GUID.</summary>
+        public ObjectGuid CharmerOrOwnerOrOwnGuid => unit.CharmerOrOwnerGuid is { IsEmpty: false } guid ? guid : unit.Guid;
+
         /// <summary>vmangos Unit::IsCharmerOrOwnerPlayerOrPlayerItself: a player, or something a player owns or charms (by GUID, so the owner need not be loaded).</summary>
         public bool IsCharmerOrOwnerPlayerOrPlayerItself => unit is Player || unit.CharmerOrOwnerGuid.IsPlayer;
 

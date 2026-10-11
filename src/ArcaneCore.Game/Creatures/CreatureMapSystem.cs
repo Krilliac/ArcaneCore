@@ -376,6 +376,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
             // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
             if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
+                // vmangos Unit::Update -> UpdateSplineMovement(p_time), Unit.cpp:322,10632:
+                // splines advance only by an active update's delta, never by time spent in an inactive cell.
+                // Keep all map-clock readers (including stop and observer catch-up) on the same frozen position.
+                creature.Spline?.Pause(_clockMs, diffMs);
                 SkippedInactiveCreatures++;
                 continue;
             }

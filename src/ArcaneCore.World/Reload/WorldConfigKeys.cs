@@ -146,6 +146,12 @@ public static class WorldConfigKeys
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
+        // Not vmangos keys: the slow-think log threshold and the fallback search budget of one bot think (ManagedPlayerbotFeature reads
+        // both from the shared PlayerbotOptions at every think).
+        LivePlayerbotsValue("SlowThinkLogMs", o => o.SlowThinkLogMs, (o, v) => o.SlowThinkLogMs = v,
+            v => double.IsFinite(v) && v is >= 0 and <= 60_000 ? null : "must be 0..60000"),
+        LivePlayerbotsValue("MaxThinkSearchNodes", o => o.MaxThinkSearchNodes, (o, v) => o.MaxThinkSearchNodes = v,
+            v => v == 0 || v is >= Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes and <= 10_000_000 ? null : $"must be 0 or {Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000"),
 
         // Not vmangos keys: risk against reward and retreat (docs/areas/playbots-risk.md). PlayerbotRisk, PlayerbotRiskModel and the
         // party AI read the shared PlayerbotOptions.Risk at every decision.
@@ -252,6 +258,9 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:ResumeBelowPct", o => o.Population.ResumeBelowPct, (o, v) => o.Population.ResumeBelowPct = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 10, 99)),
         LivePlayerbotsValue("Population:WindowTicks", o => o.Population.WindowTicks, (o, v) => o.Population.WindowTicks = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 20, 4096)),
         LivePlayerbots("Population:ParkWhenOverBudget", o => o.Population.ParkWhenOverBudget, (o, v) => o.Population.ParkWhenOverBudget = v),
+        LivePlayerbotsValue("Population:ConfirmWindows", o => o.Population.ConfirmWindows, (o, v) => o.Population.ConfirmWindows = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 20)),
+        LivePlayerbotsValue("Population:MinRunSeconds", o => o.Population.MinRunSeconds, (o, v) => o.Population.MinRunSeconds = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 3600)),
+        LivePlayerbotsValue("Population:ActionLogSeconds", o => o.Population.ActionLogSeconds, (o, v) => o.Population.ActionLogSeconds = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 3600)),
         LivePlayerbotsValue("Population:MaxCreatePerMinute", o => o.Population.MaxCreatePerMinute, (o, v) => o.Population.MaxCreatePerMinute = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 60)),
         LivePlayerbotsValue("Population:MaxStartsPerInterval", o => o.Population.MaxStartsPerInterval, (o, v) => o.Population.MaxStartsPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 100)),
         LivePlayerbotsValue("Population:MaxParksPerInterval", o => o.Population.MaxParksPerInterval, (o, v) => o.Population.MaxParksPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 100)),

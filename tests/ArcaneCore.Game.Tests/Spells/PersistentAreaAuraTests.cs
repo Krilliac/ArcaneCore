@@ -18,6 +18,16 @@ public sealed class PersistentAreaAuraTests : IDisposable
     private const uint Snapshot = 990_501;   // the same ground aura without the Consecration recalculation
     private const uint Channel = 990_502;    // a channelled ground aura (Blizzard-like)
     private const uint Heal = 990_503;       // a positive ground aura
+    private const uint BlizzardTarget = 990_504; // build-5875 Blizzard uses target 28 on its ground aura
+    private const uint GroundBurst = 990_505; // target 28 on a non-ground effect selects enemies at the destination
+
+    private sealed class UnsupportedProbe : ISpellCastObserver
+    {
+        public List<(int Effect, string Kind, uint Value)> Hits { get; } = [];
+
+        public void OnUnsupported(SpellCast cast, int effectIndex, string kind, uint value)
+            => Hits.Add((effectIndex, kind, value));
+    }
 
     /// <summary>The caster side adds <see cref="SpellPower"/> to a damage-over-time snapshot; the target side changes nothing.</summary>
     private sealed class PowerModifier : ISpellAmountModifier
@@ -51,6 +61,10 @@ public sealed class PersistentAreaAuraTests : IDisposable
         _kit = new SpellTestKit(
             ground,
             ground with { Id = Snapshot, SpellFamilyFlags = 0 },
+            ground with { Id = BlizzardTarget, SpellFamilyFlags = 0,
+                Effects = [ground.Effects[0] with { TargetA = SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc, TargetB = SpellImplicitTarget.None }] },
+            Spell(GroundBurst, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc) with { Radius = 8 }) with
+            { SpellVisual = 1, StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             ground with
             {
                 Id = Channel,
@@ -84,6 +98,32 @@ public sealed class PersistentAreaAuraTests : IDisposable
     private SpellAuraHolder? Holder(Unit unit, uint spell) => _kit.System.GetAuras(unit).FirstOrDefault(h => !h.IsRemoved && h.Spell.Id == spell);
 
     private void Cast(uint spell) => Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_paladin, spell, SpellCastTargets.ForSelf(), triggered: true));
+
+    [Fact]
+    public void BlizzardGroundTarget28_CreatesTheObjectAndAppliesTheAuraWithoutAnUnsupportedTarget()
+    {
+        var probe = new UnsupportedProbe();
+        _kit.System.RegisterObserver(probe);
+
+        Cast(BlizzardTarget);
+        Assert.Empty(probe.Hits);
+        Assert.Single(_kit.System.DynamicObjects);
+        _kit.Advance(100);
+        Assert.NotNull(Holder(_enemy, BlizzardTarget));
+        Assert.Null(Holder(_friend, BlizzardTarget));
+    }
+
+    [Fact]
+    public void NonPersistentTarget28_SelectsEnemiesAtTheDestination()
+    {
+        uint enemyBefore = _enemy.Health;
+        uint friendBefore = _friend.Health;
+
+        Cast(GroundBurst);
+
+        Assert.True(_enemy.Health < enemyBefore);
+        Assert.Equal(friendBefore, _friend.Health);
+    }
 
     [Fact]
     public void TheCast_PutsAGroundObjectDown_WithTheVisualFields()

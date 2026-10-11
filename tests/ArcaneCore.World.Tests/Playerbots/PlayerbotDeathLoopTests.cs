@@ -27,6 +27,44 @@ public sealed class PlayerbotDeathLoopTests
 {
     private static readonly Vector3 Here = new(-9130f, 305f, 95f);
 
+    /// <summary>A lethal creature hit between bot updates still has a known killer after combat clears attackers.</summary>
+    [Fact]
+    public async Task CreatureKillsBetweenBrainUpdates_AreAttributedToThatCreature()
+    {
+        const uint Entry = 993902;
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            for (uint death = 0; death < 2; death++)
+            {
+                Creature killer = await SpawnAsync(host, session, Entry, 301 + death);
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(500); // alive, before this attacker enters combat
+                    player.Health = 1;
+                    player.Map!.Combat.DealDamage(killer, player, 2); // lethal before the next bot update
+                    Assert.False(player.IsAlive);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(500);
+                    player.Map!.RemoveObject(killer);
+                    if (death == 0) player.Map!.Combat.ResurrectPlayer(player, 1f, applySickness: false);
+                    return true;
+                });
+            }
+            Assert.True(brain.IsEntrySetAside(Entry), "the same creature entry killed the bot twice but was not attributed");
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     [Fact]
     public void ThreeDeathsInOnePlace_AreADeathLoop_ReportedUntilTheBotHasLivedAStallBound()
     {

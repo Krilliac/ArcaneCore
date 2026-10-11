@@ -29,6 +29,9 @@ public sealed partial class WorldSession
     private int _managedPacketBytes;
     private readonly TaskCompletionSource _managedClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal bool IsManaged => _managed;
+
+    /// <summary>A managed session of a playerbot: managed and not the server console's (account 0, WorldSession.Console.cs). Bot QA reports only these.</summary>
+    internal bool IsPlayerbot => _managed && AccountId != 0;
     internal ManagedActionBudget? ManagedBudget { get; set; }
 
     /// <summary>

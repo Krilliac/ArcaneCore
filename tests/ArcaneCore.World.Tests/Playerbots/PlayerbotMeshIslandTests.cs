@@ -80,6 +80,32 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         Assert.Equal(PlayerbotGoalKind.Home, brain.Goal);
     }
 
+    /// <summary>
+    /// A failed tram trip gives up only this bot's goal, but that reporting choice must not suppress escape when the bot itself stands
+    /// on the Molsen mesh island. Both recorded trapped positions must leave the enclosure after that failure.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task OnTheMolsenFarmIsland_AnUnsharedStallStillMovesBothBotsHome()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        foreach (Vector3 trapped in new[] { MolsenIslandSouth, MolsenIslandNorth })
+        {
+            await terrain.PlaceAsync(trapped);
+            var brain = new PlayerbotBrain(terrain.Session, new PlayerbotOptions { Enabled = true })
+            {
+                Home = new PlayerbotHomeArea(0, SentinelHillCentre, 750f, "SentinelHill"),
+            };
+            await terrain.Host.OnWorldAsync(() =>
+            {
+                brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+                brain.GiveUpStalledGoal(terrain.Player, shareable: false);
+            });
+            await terrain.WaitAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y),
+                new(SentinelHillCentre.X, SentinelHillCentre.Y)) < 5f, $"escape from {trapped}");
+            Assert.Equal(PlayerbotGoalKind.Home, brain.Goal);
+        }
+    }
+
     /// <summary>The same stall beside the farm, on ground the mesh joins to the world, moves nobody: the goal alone is given up.</summary>
     [RealTerrainBotFact]
     public async Task BesideTheMolsenFarm_AStalledHomedBotStaysWhereItIs()

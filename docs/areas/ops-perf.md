@@ -5,6 +5,11 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
 
 ## Load benchmark (2026-10-08)
 
+`ActiveCellReactivationTests` adds a manual-clock reactivation workload (2026-10-11): players leave loaded patrol cells for ten
+minutes and return together. It separates creature-update and path-search time from grid loading. Dormant splines now exclude
+inactive time, preventing simultaneous false waypoint arrivals and next-leg path searches. This reproduces a reactivation burst,
+but does not establish the cause of the reported live 6.1 s TickHang. See the [reactivation report](../integration/active-cell-reactivation-20261011.md).
+
 `WorldTickLoadTests` measures 66k synthetic units, six moving simulated players, two ships and optional real
 terrain/vmap/mmap queries with manual world time. It records per-phase elapsed time, per-tick allocations and
 GC deltas to CSV. Player visibility candidate buffers and heartbeat membership snapshots now reuse storage;

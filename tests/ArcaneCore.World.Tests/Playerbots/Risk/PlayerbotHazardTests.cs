@@ -106,6 +106,70 @@ public sealed class PlayerbotHazardTests
         });
     }
 
+    /// <summary>
+    /// Live w23 (2026-10-11 11:35-12:13, world.log): level 1-3 human bots without a home (Stressbotkm, -hs, -hi, -hu, -ie), revived
+    /// at the Goldshire spirit healer, gave 58 bodies up in 38 minutes on their walks round it, to Defias Cutpurses (entry 94, level 5-6,
+    /// 102-120 health, 7-10 damage) and Mangy Wolves (525), until the death loop gave the goal up. The pull estimate would not choose
+    /// them (the body verdicts said <c>decision=avoid reason=too-strong</c>, target 94 or 525, risk 2.9 to 28): they attacked the bot on
+    /// sight as it walked past (aggro radius about 22 yards), because only creatures that kill outright or that the bot fled from were
+    /// hazards. A hostile creature beyond the bot's strength (<see cref="PlayerbotRiskModel.BeyondStrength"/>) is one too: its reach
+    /// is walked round, as a lethal creature's is; an ordinary creature the bot can take is not.
+    /// </summary>
+    [Fact]
+    public async Task EveryWalk_KeepsOutOfTheReachOfACreatureBeyondTheBotsStrength()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        // The live templates: Defias Cutpurse (94) at level 5, Young Wolf (299) at level 1.
+        CreatureTemplate cutpurseTemplate = RiskTestWorld.Template(991194, level: 5, health: 102, minDamage: 7, maxDamage: 10);
+        CreatureTemplate wolfTemplate = RiskTestWorld.Template(991199, level: 1, health: 42, minDamage: 2, maxDamage: 2, type: 1);
+        (Creature cutpurse, Creature wolf) = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            player.Level = 2;
+            player.MaxHealth = 70;
+            player.Health = 70;
+            return (world.Spawn(cutpurseTemplate, 0, 40), world.Spawn(wolfTemplate, 0, -40));
+        });
+        await world.SeeAsync(cutpurse, wolf);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var cutpurseAt = new Vector3(cutpurse.X, cutpurse.Y, cutpurse.Z);
+            Assert.Equal(PlayerbotEngageDecision.Avoid, world.Brain.Risk.Assess(player, cutpurse, false, out _).Decision);
+
+            world.Brain.Risk.ScanHazards(player);
+            PlayerbotHazard hazard = Assert.Single(world.Brain.Risk.Hazards.Active(player.MapId, world.Host.World.NowMs));
+            Assert.Equal("strong", hazard.Kind);
+            Assert.Equal(cutpurse.Guid, hazard.Creature);
+
+            // A walk 80 yards north past the cutpurse goes round its reach.
+            PlayerbotNavigation.Guard(player, world.Brain.Risk);
+            var far = new Vector3(player.X, player.Y + 80, player.Z);
+            Assert.True(PlayerbotNavigation.TryPlan(player, far, world.Options, out PlayerbotRoute? round), "no way round the cutpurse");
+            Assert.All(Sample(round!.Points), p => Assert.False(hazard.Covers(p), $"the route passes {p}, inside the cutpurse's reach"));
+            Assert.All(Sample(round.Points), p => Assert.True(Vector3.Distance(p, cutpurseAt) > 20f, $"the route passes {p}"));
+
+            // The wolf the bot can take is no hazard: a walk south past it goes straight.
+            Assert.True(PlayerbotNavigation.TryPlan(player, new Vector3(player.X, player.Y - 80, player.Z), world.Options, out PlayerbotRoute? south));
+            Assert.Contains(Sample(south!.Points), p => Vector3.Distance(p, new Vector3(wolf.X, wolf.Y, wolf.Z)) < 10f);
+
+            PlayerbotNavigation.Guard(player, null);
+
+            // Grown strong enough for it, the bot forgets the hazard at its next look.
+            player.Level = 10;
+            player.MaxHealth = 400;
+            player.Health = 400;
+            return true;
+        });
+        await world.Host.World.AdvanceClockAsync(2 * PlayerbotRisk.HazardScanMs); // past the first look's phase
+        await world.OnWorldAsync(() =>
+        {
+            world.Brain.Risk.ScanHazards(world.Player);
+            Assert.Empty(world.Brain.Risk.Hazards.Active(world.Player.MapId, world.Host.World.NowMs));
+            return true;
+        });
+    }
+
     /// <summary>A bot that died somewhere keeps out of that place on its later walks (and walks out of one it stands in).</summary>
     [Fact]
     public async Task APlaceWhereTheBotDied_IsWalkedRound()

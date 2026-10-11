@@ -6,10 +6,11 @@ namespace ArcaneCore.World.Tests.Playerbots.Population;
 /// <summary>The tick-budget control loop (a pure function) against chosen p95 sequences: budget 60 ms, adding resumes below 48 ms.</summary>
 public sealed class PopulationBudgetControllerTests
 {
-    private static PlayerbotPopulationOptions Options() => new() { Enabled = true, TargetOnline = 10, TickP95BudgetMs = 60, ResumeBelowPct = 80, WindowTicks = 200 };
+    private static PlayerbotPopulationOptions Options() => new() { Enabled = true, TargetOnline = 10, TickP95BudgetMs = 60, ResumeBelowPct = 80, WindowTicks = 200, ConfirmWindows = 1 };
 
-    private static PopulationDecision Decide(double p95, int running, int owned, int target, PlayerbotPopulationOptions? options = null, int samples = 200)
-        => PopulationBudgetController.Decide(samples, p95, running, owned, target, options ?? Options());
+    private static PopulationDecision Decide(double p95, int running, int owned, int target, PlayerbotPopulationOptions? options = null, int samples = 200,
+        int windows = 1)
+        => PopulationBudgetController.Decide(samples, p95, running, owned, target, options ?? Options(), windows);
 
     [Fact]
     public void UnderBudgetAndBelowTarget_AddsUpToTheStartCap()
@@ -120,5 +121,78 @@ public sealed class PopulationBudgetControllerTests
         PopulationDecision d = Decide(90, 8, 0, 10);
         Assert.Equal((PopulationAction.Hold, "over-budget-no-owned"), (d.Action, d.State));
         Assert.Contains("owns no running bot", d.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfirmWindows_AParkForTheBudgetNeedsThatManyOverWindows_AndAnAddAsManyUnderTheResumeLine()
+    {
+        PlayerbotPopulationOptions options = Options();
+        options.ConfirmWindows = 2;
+        PopulationDecision first = Decide(75, 6, 4, 10, options, windows: 1);
+        Assert.Equal((PopulationAction.Hold, "over-budget-confirming"), (first.Action, first.State));
+        Assert.Contains("in 1 of the 2 windows a park needs", first.Reason, StringComparison.Ordinal);
+        Assert.Equal((PopulationAction.Park, "over-budget"), (Decide(75, 6, 4, 10, options, windows: 2).Action, Decide(75, 6, 4, 10, options, windows: 2).State));
+
+        PopulationDecision quiet = Decide(20, 2, 2, 10, options, windows: 1);
+        Assert.Equal((PopulationAction.Hold, "under-budget-confirming"), (quiet.Action, quiet.State));
+        Assert.Equal(PopulationAction.Add, Decide(20, 2, 2, 10, options, windows: 2).Action);
+
+        // A lowered target is the operator's limit: honoured at once, without confirmation.
+        Assert.Equal((PopulationAction.Park, "over-target"), (Decide(5, 8, 5, 6, options, windows: 1).Action, Decide(5, 8, 5, 6, options, windows: 1).State));
+    }
+
+    [Fact]
+    public void TheWindowCount_GrowsOnTheSameSide_RestartsOnTheOtherOrBetween_IgnoresSettling_AndResets()
+    {
+        PlayerbotPopulationOptions options = Options(); // budget 60, resume line 48, 200 ticks
+        var windows = new PopulationBudgetWindows();
+        Assert.Equal(1, windows.Observe(200, 200, 75, options));
+        Assert.Equal(1, windows.Observe(150, 350, 10, options)); // settling: no evidence either way
+        Assert.Equal(2, windows.Observe(200, 400, 61, options));
+        Assert.Equal(1, windows.Observe(200, 600, 55, options)); // between the resume line and the budget
+        Assert.Equal(1, windows.Observe(200, 800, 75, options));
+        Assert.Equal(1, windows.Observe(200, 1000, 20, options)); // the other side
+        Assert.Equal(2, windows.Observe(200, 1200, 47.9, options));
+        windows.Reset();
+        Assert.Equal(0, windows.Count);
+        Assert.Equal(1, windows.Observe(200, 1400, 47.9, options));
+    }
+
+    [Fact]
+    public void AWindowSharingTicksWithTheLastCountedOne_IsNotCounted_AndNeverConfirmsTheOtherSide()
+    {
+        PlayerbotPopulationOptions options = Options(); // budget 60, resume line 48, 200 ticks
+        var windows = new PopulationBudgetWindows();
+        Assert.Equal(1, windows.Observe(200, 200, 75, options));
+        Assert.Equal(1, windows.Observe(300, 300, 75, options)); // 100 new ticks: the same burst, not a second window
+        Assert.Equal(1, windows.Observe(399, 399, 75, options)); // 199 new
+        Assert.Equal(0, windows.Observe(399, 399, 20, options)); // overlapped and on the other side: no count carried over
+        Assert.Equal(1, windows.Observe(400, 400, 75, options)); // 200 new ticks since the counted window; the other-side reading restarted the count
+        Assert.Equal(2, windows.Observe(4096, 4600, 75, options)); // a saturated ring still counts by the running total
+    }
+
+    [Fact]
+    public void ANonFreshReadingOnTheOtherSide_StartsTheCountAgain_SoOverUnderOverDoesNotConfirm()
+    {
+        PlayerbotPopulationOptions options = Options(); // budget 60, resume line 48, 200 ticks
+        var windows = new PopulationBudgetWindows();
+        Assert.Equal(1, windows.Observe(200, 200, 75, options));
+        Assert.Equal(0, windows.Observe(200, 250, 20, options)); // non-fresh, under the resume line
+        Assert.Equal(1, windows.Observe(200, 400, 75, options)); // the next counted window is the first again, not the second
+    }
+
+    [Fact]
+    public void TheLive20261011Flapping_AddTenParkTwo_IsDampedByTwoWindows()
+    {
+        // Live w25-r2 (budget 95 ms, resume 76 ms, 10 starts and 2 parks a pass): batches of ten starts every one to four minutes
+        // while the running count stayed near 84, i.e. ten added and then taken back two at a time. A single window over the budget
+        // after a quiet one (a save burst, a GC pause) no longer parks, and a single quiet window no longer adds ten.
+        PlayerbotPopulationOptions options = new() { Enabled = true, TargetOnline = 1000, TickP95BudgetMs = 95, ResumeBelowPct = 80, WindowTicks = 200,
+            MaxStartsPerInterval = 10, ConfirmWindows = 2 };
+        var windows = new PopulationBudgetWindows();
+        double[] p95 = [70, 99, 70, 99, 70, 99];
+        string[] states = [.. p95.Select((p, i) => PopulationBudgetController.Decide(200, p, 360, 84, 1000, options, windows.Observe(200, 200L * (i + 1), p, options)).State)];
+        Assert.Equal(["under-budget-confirming", "over-budget-confirming", "under-budget-confirming", "over-budget-confirming",
+            "under-budget-confirming", "over-budget-confirming"], states);
     }
 }

@@ -45,6 +45,7 @@ internal static class PlayerbotQaIssueComposer
             Row(sb, f.QuestIsGoal ? "Quest" : "Last quest (not the goal)", string.Create(CultureInfo.InvariantCulture, $"{f.Quest} {redactor.Redact(f.QuestTitle)}"));
         }
         sb.Append("\n## Likely cause\n\n").Append(Cell(redactor.Redact(f.CauseDetail))).Append("\n\n");
+        if (QaKinds.Of(f.Kind).SpellKind) AppendSpell(sb, f, redactor);
 
         sb.Append("## Evidence\n\n");
         foreach (QaSample s in f.Samples.TakeLast(MaxEvidence))
@@ -55,6 +56,13 @@ internal static class PlayerbotQaIssueComposer
         }
 
         sb.Append("\n## Reproduction\n\n");
+        if (QaKinds.Of(f.Kind).SpellKind && f.Spell != 0)
+        {
+            string who = f.ClassMask != 0 ? "a character of a class that met it (" + f.ClassNames + ")" : "a character of the spell's class";
+            sb.Append(CultureInfo.InvariantCulture, $"- On {who}: `.learn {f.Spell}`, select a hostile creature (or a friend for a helpful spell), then `.cast {f.Spell}` (a triggered cast: it skips the cast checks) or cast it from the spellbook.\n");
+            sb.Append(CultureInfo.InvariantCulture, $"- On a bot: select it, `.learn {f.Spell}` and `.cast {f.Spell}` (both act on the selected player); a bot of that class also casts it in its rotation.\n");
+        }
+
         if (PlayerbotQaReport.GoHint(f) is { } go) sb.Append("- Teleport to the place: `").Append(go).Append("`\n");
         if (f.Quest != 0 && f.QuestIsGoal)
         {
@@ -67,6 +75,38 @@ internal static class PlayerbotQaIssueComposer
 
         string title = redactor.Title(f.KindLabel, f.Subject);
         return new QaIssueDraft(f.Id, marker, title, redactor.Body(sb.ToString(), marker), labels);
+    }
+
+    /// <summary>The spell table of a spell finding: the spell, the effect, the aura, the bots and classes, and an id reference.</summary>
+    private static void AppendSpell(StringBuilder sb, QaFindingView f, PlayerbotQaRedactor redactor)
+    {
+        sb.Append("## Spell\n\n| Field | Value |\n|---|---|\n");
+        string rank = f.SpellRank.Length != 0 ? " (" + f.SpellRank + ")" : string.Empty;
+        Row(sb, "Spell", (string.Create(CultureInfo.InvariantCulture, $"{f.Spell} ") + redactor.Redact(f.SpellName) + rank).TrimEnd());
+        if (f.EffectIndex >= 0)
+        {
+            Row(sb, "Effect", string.Create(CultureInfo.InvariantCulture, $"#{f.EffectIndex} {f.EffectName}, value {f.EffectValue}"));
+        }
+
+        if (f.Aura != 0)
+        {
+            var aura = (ArcaneCore.Game.Spells.AuraType)f.Aura;
+            Row(sb, "Aura type", string.Create(CultureInfo.InvariantCulture, $"{f.Aura} {(Enum.IsDefined(aura) ? aura.ToString() : "unknown")}"));
+        }
+
+        if (f.Reason.Length != 0)
+        {
+            bool refusal = f.Kind == QaSignalKind.SpellRefused;
+            Row(sb, refusal ? "Cast result" : "Gap", f.Reason + (!refusal && f.ReasonDetail.Length != 0 ? " " + redactor.Redact(f.ReasonDetail) : string.Empty));
+        }
+
+        Row(sb, "Bots that met it", f.DistinctBots.ToString(CultureInfo.InvariantCulture)
+            + (f.Count == 0 ? " (found by the start-up spell coverage; no bot cast it yet)" : string.Empty));
+        Row(sb, "Classes", f.ClassMask != 0 ? f.ClassNames : "unknown");
+        if (f.Coverage) Row(sb, "Spell coverage", "listed: a spell bots can cast (a rotation ability, an escape or a class trainer spell)");
+        // An id reference in the Wowhead classic style, as text only: nothing is fetched.
+        Row(sb, "Reference", string.Create(CultureInfo.InvariantCulture, $"Wowhead classic spell={f.Spell} (https://classic.wowhead.com/spell={f.Spell})"));
+        sb.Append('\n');
     }
 
     /// <summary>The comment for new occurrences of a finding whose issue is open.</summary>

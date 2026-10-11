@@ -392,16 +392,36 @@ public sealed class AuctionRecoveryTests
 
         fixture.Control.RecoveryAvailable = true;
         fixture.Control.RetryRelease.TrySetResult();
-        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 1, pollOnWorld: false));
-        // The clock is frozen: a mismatch must not be re-read on every one-second timer tick.
-        await Task.Delay(TimeSpan.FromSeconds(3.5));
+        // Wait for the completed mismatch to set its feature-clock deadline, then force timer polls on the world thread.
+        long firstDeadline = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.AuctionRecoveryNotBeforeMs(1) > firstDeadline));
+        await fixture.OnWorld(() => { fixture.Feature.RecoverAuctions(); fixture.Feature.RecoverAuctions(); return true; });
         Assert.Equal(1, fixture.Control.AvailableReads);
         Assert.True(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(1)));
 
         clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 2, pollOnWorld: false));
-        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        await fixture.OnWorld(() => { fixture.Feature.RecoverAuctions(); return true; });
+        long secondDeadline = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.AuctionRecoveryNotBeforeMs(1) > secondDeadline));
         Assert.Equal(2, fixture.Control.AvailableReads);
+    }
+
+    [Fact]
+    public async Task Lost_acknowledgement_after_the_caller_budget_still_reports_unknown()
+    {
+        await using var fixture = await Fixture.CreateAsync(true, false, holdPrimaryUntilBudget: true);
+        AuctionRecord committed = fixture.Primary with { BidderId = 99, Bid = 80 };
+        var result = NewCompletion<EconomyOutcome>();
+        await fixture.OnWorld(() =>
+        {
+            fixture.Feature.RunAuctionOperation([], [new UpdateAuction(fixture.Primary, committed)], 1,
+                outcome => result.TrySetResult(outcome));
+            return true;
+        });
+
+        Assert.Equal(EconomyOutcome.Unknown, await result.Task.WaitAsync(Fixture.Budget));
+        await using CharacterDbContext db = fixture.NewContext();
+        Assert.Equal(80u, (await db.Set<AuctionRow>().AsNoTracking().SingleAsync(a => a.Id == 1)).Bid);
     }
 
     [Fact]
@@ -574,7 +594,7 @@ public sealed class AuctionRecoveryTests
 
         public static async Task<Fixture> CreateAsync(bool existing, bool failEscrow, bool loseAcknowledgement = true,
             TimeProvider? clock = null, bool omitPrimaryEscrow = false, Func<CharacterDbContext, Task>? seed = null,
-            bool holdRetryAfterFirstFailure = false)
+            bool holdRetryAfterFirstFailure = false, bool holdPrimaryUntilBudget = false)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-auction-recovery-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -614,6 +634,7 @@ public sealed class AuctionRecoveryTests
             var control = new Control
             {
                 FailEscrow = failEscrow, LoseAcknowledgement = loseAcknowledgement, HoldRetryAfterFirstFailure = holdRetryAfterFirstFailure,
+                HoldPrimaryUntilBudget = holdPrimaryUntilBudget,
             };
             var services = new ServiceCollection();
             services.AddScoped(_ => new CharacterDbContext(options));
@@ -647,6 +668,7 @@ public sealed class AuctionRecoveryTests
         /// sets <see cref="RecoveryAvailable"/> first) instead of failing again on every wall-clock timer tick.
         /// </summary>
         public bool HoldRetryAfterFirstFailure { get; init; }
+        public bool HoldPrimaryUntilBudget { get; init; }
 
         public int UnavailableReads;
         public volatile bool RecoveryAvailable;
@@ -691,7 +713,22 @@ public sealed class AuctionRecoveryTests
                 cancellationToken = CancellationToken.None;
             }
             int attempt = primary ? Interlocked.Increment(ref control.PrimaryCommitAttempts) : 0;
-            EconomyCommitResult result = await inner.CommitAsync(request, cancellationToken);
+            if (primary && attempt == 1 && control.HoldPrimaryUntilBudget)
+            {
+                // Force the caller's cancellation before storage starts, as a loaded worker can do. The simulated
+                // acknowledgement loss still commits, so this test probes which side of the transaction the fixture observes.
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+            // The test's lost acknowledgement must happen after a real commit, even if a loaded host exhausts the
+            // settlement budget while this controlled operation is in storage.
+            EconomyCommitResult result = await inner.CommitAsync(request,
+                primary && attempt == 1 && control.LoseAcknowledgement ? CancellationToken.None : cancellationToken);
             if (primary && attempt == 1 && control.LoseAcknowledgement)
             {
                 control.UnknownOperation = request.OperationId;
@@ -738,7 +775,10 @@ public sealed class AuctionRecoveryTests
             }
 
             control.CountAvailableRead();
-            AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+            // A readable controlled snapshot must complete so its mismatch backoff, rather than an unrelated read timeout,
+            // is what the feature-clock assertion observes.
+            AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter,
+                control.LostAcknowledgement && control.RecoveryAvailable ? CancellationToken.None : cancellationToken);
             if (control.HoldRecoverySnapshot && Interlocked.CompareExchange(ref control.SnapshotClaimed, 1, 0) == 0)
             {
                 // Like the held commit, the held read ignores the 5 s wall-time read budget; the snapshot is already taken.

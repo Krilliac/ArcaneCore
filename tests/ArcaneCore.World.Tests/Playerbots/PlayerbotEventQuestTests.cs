@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -83,6 +84,21 @@ public sealed class PlayerbotEventQuestTests
         Assert.True(await RunUntilAsync(world, bot, 240_000, () => Status(EventQuest) is not null && Status(EventKillQuest) is not null),
             await world.Host.OnWorldAsync(() => "not taken in season: " + Describe(world, bot, Status(EventQuest), Status(SeasonalEnderQuest))));
         await world.Host.OnWorldAsync(() => events.Service!.StopEvent(WinterVeil, overwrite: true));
+        await world.Host.OnWorldAsync(() =>
+        {
+            var player = world.Bots.FindSession(bot)!.Player!;
+            PlayerbotBrain brain = world.Bots.FindBrain(bot)!;
+            Assert.Equal(QuestStatus.Complete, Status(EventQuest)?.Status);
+            float originalX = player.X;
+            player.SetPosition(originalX + 3_000f, player.Y, player.Z, 0);
+            brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X, player.Y, player.Z), 750, "distant home");
+            bool abandoned = brain.QuestGoals.AbandonDistantCompletedQuest(player);
+            player.SetPosition(originalX, player.Y, player.Z, 0);
+            brain.Home = null;
+            Assert.False(abandoned);
+            Assert.Equal(QuestStatus.Complete, Status(EventQuest)?.Status);
+            return true;
+        });
         Assert.False(await world.Host.OnWorldAsync(() => Status(EventQuest)?.Rewarded == true));
         Assert.False(await ChasesAsync(world, bot, 60_000, EventQuest, Status(SeasonalEnderQuest)?.Rewarded == true ? 0 : SeasonalEnderQuest),
             "the bot walked to turn in an out-of-season quest");

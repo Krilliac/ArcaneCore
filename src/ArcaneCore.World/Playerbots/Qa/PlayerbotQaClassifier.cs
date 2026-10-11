@@ -52,9 +52,41 @@ internal static class PlayerbotQaClassifier
             case QaSignalKind.DeathLoop:
                 return DeathLoop(s, facts, title);
 
-            default:
+            case QaSignalKind.Stall or QaSignalKind.SharedSetAside:
                 return Stall(s, facts, title);
+
+            case QaSignalKind.SpellUnsupported:
+                return new QaClassification(QaCause.NotImplemented, SpellPrefix(s) + QaSpellGaps.Explain(s.Reason, s.Detail), title);
+
+            case QaSignalKind.SpellRefused:
+                return Refusal(s, title);
+
+            case QaSignalKind.SpellNoEffect:
+                return new QaClassification(QaCause.NotImplemented, SpellPrefix(s) + "completed casts hit their targets (no miss, resist or immunity) "
+                    + "but dealt no damage, restored no health and left no aura, cast after cast"
+                    + (s.Detail.Length != 0 ? " (" + s.Detail + ")" : string.Empty)
+                    + ": an effect that silently does nothing, or a rule that drops it", title);
+
+            default:
+                // Every kind has a case above (PlayerbotQaKindExhaustivenessTests): a new kind must say how it is classified.
+                throw new ArgumentOutOfRangeException(nameof(s), s.Kind, "no classification for this bot QA kind");
         }
+    }
+
+    private static string SpellPrefix(QaSignal s)
+        => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";
+
+    private static QaClassification Refusal(QaSignal s, string? title)
+    {
+        if (PlayerbotQaSpellRefusals.Of(s.Reason) is not { } rule)
+        {
+            return new QaClassification(QaCause.Unknown, SpellPrefix(s) + "refused with " + s.Reason, title);
+        }
+
+        string why = rule.Class == QaRefusalClass.Expected
+            ? $"refused with {s.Reason} again and again by one bot: {rule.Why}"
+            : $"refused with {s.Reason}: {rule.Why}";
+        return new QaClassification(rule.Cause, SpellPrefix(s) + why + (s.Detail.Length != 0 ? " (" + s.Detail + ")" : string.Empty), title);
     }
 
     private static string FaultDetail(QaSignal s)
@@ -174,15 +206,7 @@ internal static class PlayerbotQaClassifier
     /// </summary>
     internal static double Severity(QaSignalKind kind, long count, int distinctBots, DateTime lastSeenUtc, DateTime now)
     {
-        double weight = kind switch
-        {
-            QaSignalKind.Quarantine or QaSignalKind.Disabled => 45,
-            QaSignalKind.ActionFault => 40,
-            QaSignalKind.SharedSetAside => 35,
-            QaSignalKind.DeathLoop => 30,
-            QaSignalKind.RelayDataMissing or QaSignalKind.RelayScriptMissing => 25,
-            _ => 15,
-        };
+        double weight = QaKinds.Of(kind).Weight;
         double recent = now - lastSeenUtc <= TimeSpan.FromHours(1) ? 10 : 0;
         return Math.Round(weight + 10 * Math.Log2(1 + Math.Max(0, count)) + 5 * Math.Min(Math.Max(0, distinctBots), 20) + recent, 2);
     }

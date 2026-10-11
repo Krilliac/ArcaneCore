@@ -818,6 +818,222 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
 
     // --- harness -------------------------------------------------------------------------------------------------------
 
+    // --- resurrection sickness (analysis bot-xp-analysis.md, 4.1) -----------------------------------------------------------------
+
+    /// <summary>
+    /// The live spiral of 2026-10-11 (5,789 spirit-healer revivals of population bots in six hours; 47% of the "too strong" verdicts
+    /// against creatures at or below the bot's level): a level-14 bot carrying resurrection sickness from an earlier healer revival dies,
+    /// and its body lies among ordinary level-13 creatures, one on it and eight round it, so every spot of the reclaim radius is in a
+    /// creature's reach. Judged with its sickened health they are too strong and the body is given up for the healer at once, which
+    /// sickens it again. Judged as the corpse run revives it (no new sickness; the old one runs out) they are not: no verdict, no healer;
+    /// the ghost waits for the camp at its body.
+    /// </summary>
+    [Fact]
+    public async Task ASickBotsBodyAmongLevelAppropriateCreatures_IsJudgedWithoutItsSickness_AndKeepsTheCorpseRun()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        (uint well, uint sick) = await host.OnWorldAsync(() =>
+        {
+            GiveLevel14Stamina(host.Player);
+            uint before = host.Player.MaxHealth;
+            PlayerbotSicknessTestKit.Apply(host.Host.WorldServices, host.Player);
+            return (before, host.Player.MaxHealth);
+        });
+        Assert.True(sick * 3 < well * 2, $"the sickness took too little health: {well} -> {sick}");
+        await KillAsync(host, brain);
+        Creature[] camp = await CampOverBodyAsync(host, OrdinaryLevel13);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        await host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotSickness.IsSick(host.Session, host.Player), "the ghost lost its sickness");
+            var mods = host.Player.StatState.Mods;
+            Assert.True(well == PlayerbotSickness.UnsickenedMaxHealth(host.Session, host.Player),
+                $"unsickened {PlayerbotSickness.UnsickenedMaxHealth(host.Session, host.Player)} max {host.Player.MaxHealth} well {well} sick {sick} stam {host.Player.GetInt32(UpdateFields.UnitFieldStat0 + 2)} applied {mods.Applied(ArcaneCore.Game.Stats.UnitMods.StatStamina)} base% {mods.BasePct(ArcaneCore.Game.Stats.UnitMods.StatStamina)} total% {mods.TotalPct(ArcaneCore.Game.Stats.UnitMods.StatStamina)}");
+            PlayerbotEngagement? verdict = brain.Risk.TooStrongNear(host.Player, Body);
+            Assert.True(verdict is null, $"judged too strong ({verdict}); health well {well}, sick {sick}");
+        });
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive || brain.Recovery.SpiritHealerChosen, thinks: 30);
+
+        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.None, run.Reason);
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Equal(Step.WaitForHostiles, brain.Recovery.LastStep);
+            brain.Stop();
+        });
+    }
+
+    /// <summary>
+    /// The same camp, but for a bot that is well: the strength judged is the same either way (the reference for the test above), and
+    /// the body is kept as well.
+    /// </summary>
+    [Fact]
+    public async Task AWellBotsBodyAmongTheSameCreatures_IsNotTooStrongEither()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await host.OnWorldAsync(() => GiveLevel14Stamina(host.Player));
+        await KillAsync(host, brain);
+        Creature[] camp = await CampOverBodyAsync(host, OrdinaryLevel13);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Equal(400u, host.Player.MaxHealth);
+            Assert.Null(brain.Risk.TooStrongNear(host.Player, Body));
+            brain.Stop();
+        });
+    }
+
+    /// <summary>
+    /// Sickness level 11 (vmangos' default): the level-14 bot of the live repeat death (it already died at its body a minute ago, and
+    /// creatures that would attack the revived bot still stand in reach of the body) keeps its corpse run instead of the spirit healer,
+    /// which would cost resurrection sickness and a quarter of its durability; it revives on a clear spot near the body. Below the
+    /// sickness level the same death takes the healer (<see cref="ASecondDeathAtTheSameSpot_WithHostilesStillInReach_TakesTheSpiritHealer"/>).
+    /// </summary>
+    [Fact]
+    public async Task ALevel14RepeatDeath_KeepsTheCorpseRun_ForTheHealerWouldSickenIt()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        Creature[] camp = await CampAsync(host, strong: false, round: Body + new Vector3(12f, 0f, 0f));
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        PlayerbotUnsafeBody kept = PlayerbotUnsafeBody.None;
+
+        Run run = await RunAsync(host, brain, clock, p =>
+        {
+            if (brain.Recovery.BodyKeptOverSickness != PlayerbotUnsafeBody.None) kept = brain.Recovery.BodyKeptOverSickness;
+            return p.IsAlive;
+        }, thinks: 200);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.DiedHere, kept);
+        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
+        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    [Fact]
+    public async Task ALevel14RepeatDeath_WithNoClearReclaimSpot_TakesTheSpiritHealer()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        Creature[] camp = await CampOverBodyAsync(host, OrdinaryLevel13);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.True(run.Healer, "no clear reclaim spot, but the healer was not taken: " + run.Trail);
+        // WaitForHostiles makes the fallback before JudgeBody records an unsafe-body reason.
+        Assert.False(run.Reclaimed, run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// Sickness level 11: a body among creatures really too strong for the level-14 bot (level 24 Skeletal Horrors, judged without any
+    /// sickness) whose reclaim radius has a spot out of their reach is kept, and the bot revives there; the healer would sicken it.
+    /// Below the sickness level the same body takes the healer (<see cref="ABodyAmongHostilesTooStrongForTheBot_IsGivenUpForTheSpiritHealer"/>).
+    /// </summary>
+    [Fact]
+    public async Task ALevel14BodyAmongStrongCreatures_WithAClearSpot_KeepsTheCorpseRun()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await KillAsync(host, brain);
+        Creature[] camp = await CampAsync(host, strong: true);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        PlayerbotUnsafeBody kept = PlayerbotUnsafeBody.None;
+
+        Run run = await RunAsync(host, brain, clock, p =>
+        {
+            if (brain.Recovery.BodyKeptOverSickness != PlayerbotUnsafeBody.None) kept = brain.Recovery.BodyKeptOverSickness;
+            return p.IsAlive;
+        }, thinks: 200);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.TooStrong, kept);
+        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
+        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>A real death loop still takes the spirit healer at level 14 with sickness from level 11: the healer is the way out of it.</summary>
+    [Fact]
+    public async Task ALevel14DeathLoop_StillTakesTheSpiritHealer()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await KillAsync(host, brain);
+        await host.OnWorldAsync(() => brain.Recovery.TakeSpiritHealer()); // the death loop's request (PlayerbotBrain.RecordDeath)
+        Creature[] camp = await CampAsync(host, strong: true);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
+        Assert.False(run.Reclaimed, run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    /// <summary>
+    /// Level 13 against the level-14 bot, 400 health, 28-37 damage a 2-second swing (16.25 a second): an ordinary same-zone creature.
+    /// Against the well bot (400 health, the level-14 damage estimate of 27.2 a second) a fight at full health risks about 0.6 of its
+    /// health, under the 0.9 that any pull is ever taken at; against the sick one (190 health) about 1.26, beyond its strength.
+    /// </summary>
+    private static readonly CreatureTemplate OrdinaryLevel13 = new()
+    {
+        Entry = 994420, Name = "ordinary level 13", CreatureType = 7, Faction = 14, MinLevel = 13, MaxLevel = 13,
+        MinLevelHealth = 400, MaxLevelHealth = 400, MinMeleeDamage = 28f, MaxMeleeDamage = 37f, MeleeBaseAttackTime = 2000,
+    };
+
+    /// <summary>
+    /// World thread: a level-14 bot's stamina (40, all of it the level base: no item adds any) and the 400 health it gives with a base of
+    /// 180 (<c>Player::GetHealthBonusFromStamina</c>: 20 + 20 x 10). The test player is made level 14 by hand, without the stats.
+    /// </summary>
+    private static void GiveLevel14Stamina(Player player)
+    {
+        player.SetUInt32(UpdateFields.UnitFieldStat0 + 2, 40);
+        player.SetUInt32(UpdateFields.PlayerFieldPosstat0 + 2, 0);
+        player.SetUInt32(UpdateFields.PlayerFieldNegstat0 + 2, 0);
+        ArcaneCore.Game.Stats.StatBonuses.Update(player); // the stats lane's ledger of the health stamina gives (what an aura moves)
+        player.MaxHealth = 400;
+        player.Health = 400;
+    }
+
+    /// <summary>
+    /// <paramref name="template"/> on the body and eight round it 22 yards out: every spot of the reclaim radius lies in one's reach, so
+    /// no revive spot is clear; 17 yards apart or more, beyond each other's assistance (10 yards).
+    /// </summary>
+    private static Task<Creature[]> CampOverBodyAsync(DungeonBotHost host, CreatureTemplate template) => host.OnWorldAsync(() =>
+    {
+        Map map = host.Player.Map!;
+        uint now = host.Host.World.NowMs;
+        Vector3 body = new(host.Player.X, host.Player.Y, host.Player.Z);
+        (float X, float Y)[] offsets = [(0f, 0f), .. Enumerable.Range(0, 8).Select(i => (22f * MathF.Cos(i * MathF.PI / 4f), 22f * MathF.Sin(i * MathF.PI / 4f)))];
+        return offsets.Select((offset, index) =>
+        {
+            uint low = 994420u + (uint)index;
+            var creature = new Creature(low, template with { Entry = low }, null, CreatureContent.Empty, new Random((int)low));
+            creature.Relocate(body.X + offset.X, body.Y + offset.Y, body.Z, 0, now);
+            map.AddObject(creature);
+            return creature;
+        }).ToArray();
+    });
+
     /// <summary>A home round the body and the healer (radius 300): neither is outside it.</summary>
     private static PlayerbotHomeArea HomeAroundBodyAndHealer() => new(0, (Body + Healer) / 2f, 300f, "Westfallhome");
 
@@ -874,13 +1090,22 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         }
     }
 
+    /// <summary>
+    /// <c>Death.SicknessLevel</c> above the level cap: the spirit healer sickens nobody, so a level-14 bot's unsafe body is judged by the
+    /// rules of a bot below the sickness level (the tests written before <see cref="PlayerbotRecovery.BodyKeptOverSickness"/>).
+    /// </summary>
+    private const int NoSickness = 61;
+
+    /// <summary>The default <c>Death.SicknessLevel</c> (vmangos 11): the spirit healer sickens the level-14 bot.</summary>
+    private const int SicknessFrom11 = 11;
+
     private static async Task<DungeonBotHost> StartAsync(TestDeathClock clock, uint map = 0, Vector3? at = null,
-        Action<IServiceCollection>? configure = null)
+        Action<IServiceCollection>? configure = null, int sicknessLevel = NoSickness)
     {
         DungeonBotHost host = await DungeonBotHost.StartAsync(configure);
         await host.OnWorldAsync(() =>
         {
-            DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock));
+            DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions { SicknessLevel = sicknessLevel }, clock));
             host.Player.Level = 14;
         });
         Vector3 start = at ?? Body;

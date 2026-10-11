@@ -152,7 +152,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     private static (Vector3 Left, Vector3 Right) Orient(Vector3 inside, Vector3 a, Vector3 b)
         => Cross(inside, a, b) < 0 ? (a, b) : (b, a);
 
-    private static bool TryOverlap(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool alongZ, float climb, out Vector3 pa, out Vector3 pb)
+    internal static bool TryOverlap(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool alongZ, float climb, out Vector3 pa, out Vector3 pb)
     {
         pa = pb = default;
         float fixedA = alongZ ? a.X : a.Z;
@@ -279,6 +279,8 @@ public static class NavMeshQuery
         int best = 0;
         float bestHeuristic = nodes[0].Total;
         int goal = start == end ? 0 : -1;
+        int expansions = 0;
+        bool capped = false;
 
         while (goal < 0 && open.TryDequeue(out int current, out float priority))
         {
@@ -289,6 +291,7 @@ public static class NavMeshQuery
             }
 
             closed[current] = true;
+            expansions++;
             Node node = nodes[current];
             if (node.Poly == end)
             {
@@ -308,6 +311,7 @@ public static class NavMeshQuery
                 bool known = index.TryGetValue((next, crossSide), out int existing);
                 if (!known && nodes.Count >= options.MaxSearchNodes)
                 {
+                    capped = true;
                     continue;
                 }
 
@@ -355,6 +359,7 @@ public static class NavMeshQuery
         }
 
         bool complete = goal >= 0;
+        PathSearchCounters.RecordSearch(nodes.Count, expansions, capped);
         var corridor = new List<(NavPolyRef, Vector3, Vector3)>();
         // A reopened node can leave a stale parent chain; never walk more links than there are nodes.
         for (int i = complete ? goal : best; i >= 0 && corridor.Count < nodes.Count; i = nodes[i].Parent)

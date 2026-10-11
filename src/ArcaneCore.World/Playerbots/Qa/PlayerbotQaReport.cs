@@ -14,7 +14,8 @@ internal sealed record QaReportEntry(int Rank, string Id, string ShortId, string
 internal sealed record QaReportSample(DateTime AtUtc, uint Map, float? X, float? Y, float? Z, IReadOnlyList<uint> Attackers, string Message);
 
 /// <summary><c>qa/report.json</c>.</summary>
-internal sealed record QaReportFile(DateTime GeneratedUtc, string Build, int FindingCount, IReadOnlyList<QaReportEntry> Findings);
+internal sealed record QaReportFile(DateTime GeneratedUtc, string Build, int FindingCount, IReadOnlyList<QaReportEntry> Findings,
+    QaSpellCoverageReport? SpellCoverage = null);
 
 [JsonSourceGenerationOptions(WriteIndented = true, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(QaReportFile))]
@@ -41,7 +42,8 @@ internal static class PlayerbotQaReport
     internal static IReadOnlyList<string> ChatTop(IEnumerable<QaFindingView> findings, int n, PlayerbotQaRedactor redactor)
     {
         n = Math.Clamp(n, 1, MaxChatFindings);
-        IReadOnlyList<QaFindingView> ranked = Rank(findings);
+        // A spell gap no bot met yet (Count 0, listed by the start-up coverage) is not a seen problem: `.playerbot qa spells` lists those.
+        IReadOnlyList<QaFindingView> ranked = Rank(findings.Where(f => f.Count > 0));
         if (ranked.Count == 0) return ["Bot QA: no findings."];
         var lines = new List<string> { string.Create(CultureInfo.InvariantCulture, $"Bot QA: top {Math.Min(n, ranked.Count)} of {ranked.Count} findings (.playerbot qa show <id> for the evidence)") };
         for (int i = 0; i < Math.Min(n, ranked.Count); i++)
@@ -49,6 +51,43 @@ internal static class PlayerbotQaReport
             QaFindingView f = ranked[i];
             lines.Add(Cut(string.Create(CultureInfo.InvariantCulture,
                 $"#{i + 1} {f.ShortId} sev {f.Severity:F0} x{f.Count} bots {f.DistinctBots} {f.Cause} {f.KindLabel}: {redactor.Redact(f.Subject)}")));
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// <c>.playerbot qa spells</c>: the coverage summary and its five most shared gaps, then the top <paramref name="n"/> spell findings bots met (a gap
+    /// no bot met yet is counted in the summary, not listed).
+    /// </summary>
+    internal static IReadOnlyList<string> ChatSpells(IEnumerable<QaFindingView> findings, QaSpellCoverageReport? coverage, int n, PlayerbotQaRedactor redactor)
+    {
+        n = Math.Clamp(n, 1, MaxChatFindings);
+        var lines = new List<string>
+        {
+            Cut(coverage?.Describe() ?? "Spell coverage: not computed yet (the first QA pass after start-up computes it, once the spell table is loaded)."),
+        };
+        if (coverage is not null)
+        {
+            foreach (QaCoverageOffender o in coverage.TopOffenders(5))
+            {
+                lines.Add(Cut(string.Create(CultureInfo.InvariantCulture, $"  {QaSpellGaps.Describe(o.Code, o.Detail)}: {o.Spells} spells ({o.RotationSpells} rotation)")));
+            }
+        }
+
+        IReadOnlyList<QaFindingView> met = Rank(findings.Where(f => QaKinds.Of(f.Kind).SpellKind && f.Count > 0));
+        if (met.Count == 0)
+        {
+            lines.Add("No spell finding met by a bot yet.");
+            return lines;
+        }
+
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"Spell findings bots met: top {Math.Min(n, met.Count)} of {met.Count}"));
+        for (int i = 0; i < Math.Min(n, met.Count); i++)
+        {
+            QaFindingView f = met[i];
+            lines.Add(Cut(string.Create(CultureInfo.InvariantCulture,
+                $"#{i + 1} {f.ShortId} x{f.Count} bots {f.DistinctBots} {f.KindLabel}: {redactor.Redact(f.Subject)}{(f.ClassMask != 0 ? " [" + f.ClassNames + "]" : string.Empty)}")));
         }
 
         return lines;
@@ -113,15 +152,21 @@ internal static class PlayerbotQaReport
         return string.Create(CultureInfo.InvariantCulture, $".go xyz {s.X:F1} {s.Y:F1} {s.Z:F1} {s.Map}");
     }
 
-    internal static string RenderMarkdown(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor)
+    internal static string RenderMarkdown(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor,
+        QaSpellCoverageReport? coverage = null)
     {
-        IReadOnlyList<QaFindingView> ranked = Rank(findings);
+        QaFindingView[] all = [.. findings];
+        IReadOnlyList<QaFindingView> ranked = Rank(all.Where(f => f.Count > 0));
+        int listedOnly = all.Length - ranked.Count;
         var sb = new StringBuilder();
         sb.Append("# Playerbot QA report\n\n");
-        sb.Append(CultureInfo.InvariantCulture, $"Generated {generatedUtc:u} by ArcaneCore {Escape(build)}. {ranked.Count} findings, ranked by severity, count and last seen.\n\n");
+        sb.Append(CultureInfo.InvariantCulture, $"Generated {generatedUtc:u} by ArcaneCore {Escape(build)}. {ranked.Count} findings, ranked by severity, count and last seen.");
+        if (listedOnly > 0) sb.Append(CultureInfo.InvariantCulture, $" {listedOnly} spell gaps no bot met yet are listed under Spell coverage.");
+        sb.Append("\n\n");
         if (ranked.Count == 0)
         {
             sb.Append("No findings.\n");
+            if (coverage is not null) sb.Append('\n').Append(coverage.RenderMarkdown());
             return sb.ToString();
         }
 
@@ -151,10 +196,12 @@ internal static class PlayerbotQaReport
             sb.Append('\n');
         }
 
+        if (coverage is not null) sb.Append(coverage.RenderMarkdown());
         return sb.ToString();
     }
 
-    internal static string RenderJson(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor)
+    internal static string RenderJson(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor,
+        QaSpellCoverageReport? coverage = null)
     {
         IReadOnlyList<QaFindingView> ranked = Rank(findings);
         var entries = new List<QaReportEntry>(ranked.Count);
@@ -167,7 +214,7 @@ internal static class PlayerbotQaReport
                     s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal));
         }
 
-        return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries), QaReportJsonContext.Default.QaReportFile);
+        return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries, coverage), QaReportJsonContext.Default.QaReportFile);
     }
 
     /// <summary><c>quest Q</c> when the quest is the finding's subject, <c>last quest Q (not the goal)</c> for a stall of another goal.</summary>

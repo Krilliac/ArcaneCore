@@ -20,7 +20,7 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("qa", AccountSecurity.GameMaster,
-            "Syntax: .playerbot qa [top [#n]|show $id|reset [$id]]\nThe playerbot QA findings: stalls, death loops, faults and missing data the bots ran into, ranked, and the GitHub reporter's state.",
+            "Syntax: .playerbot qa [top [#n]|show $id|spells [#n]|reset [$id]]\nThe playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state.",
             Root,
             Children:
             [
@@ -28,6 +28,8 @@ public sealed class PlayerbotQaCommands : ICommandExtension
                     "Syntax: .playerbot qa top [#n]\nList the n (default 10, at most 25) highest-ranked findings with their short ids.", Top),
                 new ChatCommand("show", AccountSecurity.GameMaster,
                     "Syntax: .playerbot qa show $id\nShow one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id).", Show),
+                new ChatCommand("spells", AccountSecurity.GameMaster,
+                    "Syntax: .playerbot qa spells [#n]\nThe spell coverage of the bots (how many of the spells they can cast are fully handled, the gaps shared by the most spells) and the n (default 10, at most 25) highest-ranked spell findings bots met.", Spells),
                 new ChatCommand("reset", AccountSecurity.GameMaster,
                     "Syntax: .playerbot qa reset [$id]\nForget one finding, or all of them. Local only: GitHub issues are not touched.", Reset),
             ]),
@@ -79,6 +81,16 @@ public sealed class PlayerbotQaCommands : ICommandExtension
         }
 
         foreach (string line in PlayerbotQaReport.ChatShow(finding!, feature.Redactor)) context.Reply(line);
+        return true;
+    }
+
+    private static bool Spells(CommandContext context, string args)
+    {
+        string text = args.Trim().TrimStart('#');
+        int n = DefaultTop;
+        if (text.Length != 0 && !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out n)) return false;
+        if (FeatureOf(context) is not { } feature) return true;
+        foreach (string line in PlayerbotQaReport.ChatSpells(feature.Aggregator!.Snapshot(), feature.SpellCoverage, n, feature.Redactor)) context.Reply(line);
         return true;
     }
 

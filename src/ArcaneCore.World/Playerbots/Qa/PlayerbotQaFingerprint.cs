@@ -82,6 +82,12 @@ internal static partial class PlayerbotQaFingerprint
                 ? string.Create(CultureInfo.InvariantCulture, $"relaydata|relay={s.Relay}|{s.Detail}|path={s.PathId}|entry={s.Entry}")
                 : string.Create(CultureInfo.InvariantCulture, $"relaydata|relay={s.Relay}|{Normalise(s.Detail)}"),
             QaSignalKind.RelayScriptMissing => string.Create(CultureInfo.InvariantCulture, $"relayscript|relay={s.Relay}"),
+            // A spell gap is the spell, the effect and the gap code: never a place, never a bot (the same gap met anywhere by any bot, or found
+            // by the start-up coverage, is one finding).
+            // Keyed by the spell's name, not its id, so every rank of a spell shares one finding (and one issue); an unnamed spell keys by id.
+            QaSignalKind.SpellUnsupported => string.Create(CultureInfo.InvariantCulture, $"spellgap|{SpellKey(s)}|effect={s.EffectIndex}|{Token(s.Reason)}"),
+            QaSignalKind.SpellRefused => $"spellrefused|{SpellKey(s)}|result={Token(s.Reason)}",
+            QaSignalKind.SpellNoEffect => $"spellnoeffect|{SpellKey(s)}",
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }
@@ -93,6 +99,21 @@ internal static partial class PlayerbotQaFingerprint
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..FullChars].ToLowerInvariant();
 
     internal static string ShortId(string id) => id.Length <= ShortChars ? id : id[..ShortChars];
+
+    /// <summary><c>name=fireball</c> (the lower-case name, every rank alike), or <c>spell=133</c> for a signal without a name.</summary>
+    private static string SpellKey(QaSignal s)
+    {
+        string name = WhitespacePattern().Replace(s.SpellName.Replace('|', '/'), " ").Trim().ToLowerInvariant();
+        if (name.Length == 0) return string.Create(CultureInfo.InvariantCulture, $"spell={s.Spell}");
+        return "name=" + (name.Length <= 80 ? name : name[..80]);
+    }
+
+    /// <summary>A reason code as a key part: at most 40 characters, no separator (a code is an identifier; anything else is normalised).</summary>
+    private static string Token(string code)
+    {
+        string flat = code.Replace('|', '/').Trim();
+        return flat.Length <= 40 ? flat : flat[..40];
+    }
 
     /// <summary>A message without guids, hex numbers, numbers and runs of white space, lower-cased and at most 160 characters.</summary>
     internal static string Normalise(string text)

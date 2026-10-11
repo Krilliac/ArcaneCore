@@ -15,14 +15,16 @@ the zone placement are ArcaneCore's own. Nothing here changes what a bot does on
 | File (`src/ArcaneCore.World/Playerbots/Population/`) | What it does |
 |---|---|
 | `PlayerbotPopulationOptions.cs` | `World:Playerbots:Population` (every key live through `.reload config`), the validation and the list bindings. |
-| `PopulationBudgetController.cs` | The control loop as a pure function: samples, p95, counts -> hold, add or park, with a stable state code. |
+| `PopulationBudgetController.cs` | The control loop as a pure function: samples, p95, counts, confirmed windows -> hold, add or park, with a stable state code; `PopulationBudgetWindows` counts the windows. |
 | `PopulationTickWindow.cs` | `IPopulationTickSource` and `WorldTickWindow`, the ring of the last 4096 tick body durations the p95 is read from. |
 | `PopulationBandPlanner.cs` | Pure planning: bots per band (largest remainder), the next band, faction, race and class, level; the (race, class) cache. |
 | `PopulationZoneAtlas.cs` | The zones a bot may live in, built from the area table and the graveyard catalog; `Fits`, `Pick`. |
 | `PopulationProvisioner.cs` | Gives a running bot its level and kit (`CharacterBoost.Run`) and its place (the teleport service). |
 | `PopulationNames.cs` | A letters-only syllable generator for the names of new characters. |
 | `IPopulationPlacementVeto.cs` | The seam the home-area lane implements (below). |
-| `PlayerbotPopulationFeature.cs` | The world feature: capture, one pass at a time, add, park, relocate, the published status; `PopulationParking`. |
+| `PopulationAccounting.cs` | `PopulationCounts` (the population's own share of the target and its bots per band), the per-pass actions and the rate-limited action log. |
+| `PopulationParking.cs` | `PopulationBotFacts`; `PopulationParking.Order` (which running bot to park first and why) and `RestartOrder` (the rotation). |
+| `PlayerbotPopulationFeature.cs` | The world feature: capture, one pass at a time, add, park, relocate, the published status. |
 | `PlayerbotPopulationCommands.cs` | `.playerbot population [status\|enable\|disable\|target N]`. |
 
 Outside the folder, all additive: `PlayerbotOptions.Population` (and its binding and validation), the live keys in
@@ -35,42 +37,75 @@ Every `IntervalSeconds` of **world time** (the `Updated` event's elapsed time, s
 thread starts a pass, if the previous one has finished:
 
 1. **Capture, on the world thread.** The facts of every running managed bot (level, team, zone, whether it is autonomous, whether
-   it is busy, whether a real player stands in its zone, whether a placement veto owns it) and the tick p95 and sample count.
-   Nothing is awaited here.
+   it is busy, whether a real player stands in its zone, whether a placement veto owns it, and whether it is dead or a ghost,
+   resurrection-sick (spell 15007) or stalled (a stall or death loop is reported)) and the tick p95 and sample count. Nothing is
+   awaited here.
 2. **Decide and act, on one pool task.** The task reads the membership table and the bot registry, calls
    `PopulationBudgetController.Decide`, then adds, parks and relocates through `IPlayerbotService` (start, create, stop) and
    `world.InvokeAsync` (boost and teleport). It never blocks the world thread, and the world thread never waits on it. One pass
    runs at a time; a pass that is still running when the next interval comes is not doubled.
-3. **Reset.** After any start, creation, park or relocation the task asks the world thread to `Reset()` the tick source, so the
-   next decision sees only ticks measured after the change.
+3. **Reset.** After any start, creation or park the task asks the world thread to `Reset()` the tick source, so the
+   next decision sees only ticks measured after the change, and forgets the confirmed windows. A relocation alone does neither: it
+   changes no count of running bots, and a levelling population that moves a misfit every pass would otherwise never see
+   `ConfirmWindows` quiet windows in a row and never add a bot. A confirmation window needs `WindowTicks` ticks that no counted window
+   used (the tick source's running total), so passes that come faster than a window fills (slow ticks, short interval) do not count
+   one burst twice.
 4. **Publish.** `PlayerbotPopulationFeature.Status` is replaced by an immutable `PopulationStatus` (readable from any thread; the
    command prints it).
+5. **Log.** A pass that parked, started, created or moved bots adds that to the action log, which writes one information line at
+   most every `ActionLogSeconds` of world time (default 60; 0 = every such pass), adding up the passes in between:
+
+   ```
+   Playerbot population: parked 3 (dead 1, sick 2), started 0, created 1, moved 0 in 2 passes; state over-budget: tick p95 101.2 ms
+   is over the 95 ms budget; operator bots running 280, population share 720; bands 1-10 want 120 have 49, 11-20 want 120 have 0, ...
+   ```
+
+   The park reasons are those of `PopulationParking.Order` (below). A pass that changes nothing writes nothing, but hands out what
+   earlier passes added once the interval is up.
 
 ### The decision, in order
 
-`PopulationBudgetController.Decide(samples, p95Ms, runningAll, ownedRunning, effectiveTarget, options)`:
+`PopulationBudgetController.Decide(samples, p95Ms, runningAll, ownedRunning, effectiveTarget, options, windows)`:
 
 | State | When | Action |
 |---|---|---|
 | `settling` | fewer than `WindowTicks` ticks measured since the last change | hold |
 | `over-target` | more managed bots run than the effective target and the population owns a running one | park `min(surplus, MaxParksPerInterval, ownedRunning)`; this is checked before the budget, so a lowered target is honoured even on a quiet world |
-| `over-budget` | tick p95 above `TickP95BudgetMs` and `ParkWhenOverBudget` | park `min(MaxParksPerInterval, ownedRunning)` |
+| `over-budget-confirming` | over budget, `ParkWhenOverBudget`, an owned bot runs, but fewer than `ConfirmWindows` consecutive windows over it | hold |
+| `over-budget` | tick p95 above `TickP95BudgetMs` in `ConfirmWindows` consecutive windows and `ParkWhenOverBudget` | park `min(MaxParksPerInterval, ownedRunning)` |
 | `over-budget-hold` | over budget and `ParkWhenOverBudget` is off | hold (stop adding) |
 | `over-budget-no-owned` | over budget and the population owns no running bot | hold; it never stops an operator's bot |
 | `hysteresis` | p95 between `ResumeBelowPct` of the budget and the budget | hold |
-| `under-budget` | p95 below `ResumeBelowPct` of the budget and running < effective target | add `min(target - running, MaxStartsPerInterval)` |
+| `under-budget-confirming` | p95 below the resume line and running < effective target, but in fewer than `ConfirmWindows` consecutive windows | hold |
+| `under-budget` | p95 below `ResumeBelowPct` of the budget in `ConfirmWindows` consecutive windows and running < effective target | add `min(target - running, MaxStartsPerInterval)` |
 | `at-target` | p95 below the resume line and running >= effective target | hold |
 
-The effective target is `min(TargetOnline, MaxBots)` (`World:Playerbots:MaxBots` is the running cap of the whole feature).
+The effective target is `min(TargetOnline, MaxBots)` (`World:Playerbots:MaxBots` is the running cap of the whole feature). The
+totals count every managed bot running, the operator's included; the bands count only the population's own (see "Bands" below).
 
 ### Hysteresis
 
-Two things stop it adding and parking in turns. **The band:** adding resumes only below `ResumeBelowPct` (default 80) of the
+Four things stop it adding and parking in turns. **The band:** adding resumes only below `ResumeBelowPct` (default 80) of the
 budget and parking starts only above the budget, so with the default 60 ms budget a p95 between 48 and 60 ms changes nothing.
 **The reset:** the tick source is emptied after every change and the next decision needs `WindowTicks` (default 200, about ten
-seconds at 50 ms) fresh ticks, so a bot's own login or teleport cost cannot be read as the world's load, and the p95 never
-reflects ticks from before the last change. Both are pure and unit tested (`PopulationBudgetControllerTests`); the end-to-end
-sequence with a fake tick source is `PlayerbotPopulationFeatureTests`.
+seconds at 50 ms) fresh ticks, so a bot's own login cost cannot be read as the world's load, and the p95 never reflects ticks
+from before the last start, creation or park (a relocation resets nothing: it changes no bot count, so its teleport cost stays in
+the window). **The confirmation:** a park for the budget needs the p95 over it in `ConfirmWindows`
+(default 2) consecutive fresh windows, and an add needs as many under the resume line (`PopulationBudgetWindows`: a settling pass
+is no evidence and changes nothing; a window between the two lines, one on the other side, or a change starts the count again).
+With the defaults (`IntervalSeconds` 10, `WindowTicks` 200) a pass is often not fresh, since 200 ticks of 50 ms take as long as the
+interval or longer, so confirming takes about two intervals per window.
+A lowered target is honoured at once. **The minimum run time:** a bot the population started is not parked for the budget for
+`MinRunSeconds` (default 300) of world time.
+
+Why the last two (2026-10-11, live w25-r2, budget 95 ms, 10 starts and 2 parks a pass): the log showed a batch of ten starts every
+one to four minutes while the running count stayed near 84, i.e. ten bots added on one quiet window and taken back two at a time on
+the slow windows after it; 1,687 starts for 269 bots in six hours (`_wf/analysis/bot-xp-analysis.md`). Each start is a fresh brain
+that has lost its set-asides and danger memory. The p95 of a single 200-tick window is the tenth-slowest tick, so one burst of
+slow ticks (a save, a GC pause) was enough to park.
+
+All of it is pure and unit tested (`PopulationBudgetControllerTests`); the end-to-end sequence with a fake tick source is
+`PlayerbotPopulationFeatureTests`.
 
 The p95 is the nearest rank of the last `WindowTicks` tick body durations from `WorldRuntime.TickCompleted`. `WorldRuntime.Stats`
 keeps a 4096-tick ring too, but its snapshot copies and sorts all of it (about 3.4 minutes at 50 ms, too slow and too
@@ -79,12 +114,18 @@ on the world thread and allocates nothing.
 
 ## Adding a bot
 
-Per pass, up to the decision's count, in this order:
+Per pass, up to the decision's count:
 
-1. **Restart the population's own stopped bots first**, those in a band with a deficit before the others. A faulted bot
-   (quarantined or disabled) is not started here: an operator start would clear its fault history, and the managed feature
-   retries a quarantined bot itself. Three refused starts end the pass's starting.
-2. **Create new bots**, within the creation caps below. Each is planned (`PopulationBandPlanner.Plan`), created through
+1. **Restart the population's own stopped bots in rotation**: the one parked longest ago first, whatever its band
+   (`PopulationParking.RestartOrder`; a bot not parked by this process, stopped before a restart or by an operator, counts as
+   parked longest; then the older membership row, then the lower `BotId`). Before 2026-10-11 the band with the largest deficit
+   came first, which, with operator bots counted in the bands, restarted the band 1-10 bots last: they did not run for hours. A
+   faulted bot (quarantined or disabled) is not started here: an operator start would clear its fault history, and the managed
+   feature retries a quarantined bot itself. Three refused starts end the pass's starting.
+2. **Create new bots** for a band that its own bots, running **or parked**, cannot fill: creation is planned against the
+   population's own bots running plus those waiting to be restarted, so a parked bot is never replaced by a new one. While parked
+   bots wait as well, such a band gets at most half the pass's slots first and the rotation the rest; creation takes any slots
+   the rotation leaves. Each new bot is planned (`PopulationBandPlanner.Plan`), created through
    `IPlayerbotService.CreateAsync` (the ordinary `CMSG_CHAR_CREATE` rules; a refused name is retried with the next candidate, at
    most five times), recorded in `playerbot_population_member`, started, boosted to its level and teleported to its place. If
    boosting or teleporting is refused, the bot stays owned and stopped and the next pass restarts it where it stands (its race's
@@ -103,7 +144,19 @@ Per pass, up to the decision's count, in this order:
 
 The target is split over `Bands` (default six bands of ten levels, equal weights; at most 20, no overlap, at least one weight
 above 0) by weight with the **largest remainder** method, so the counts always add up to the target. The next bot goes to the
-band with the largest deficit (desired minus running; the lower band on a tie) that a zone can take.
+band with the largest deficit (desired minus the population's own bots there; the lower band on a tie) that a zone can take.
+
+**What is split, and what a band counts (the design choice, 2026-10-11).** Operator bots reduce the total target, never a band's
+share. `PopulationCounts`: the operator bots running (every managed bot running without a `playerbot_population_member` row) are
+taken off the top, `population share = max(0, effective target - operator bots running)`, and only that share is split over the
+bands; a band's `have` counts only the population's own running bots. The control loop's totals are unchanged (`TargetOnline` and
+`MaxBots` still bound the whole server: running against the effective target), so the operator fleet still costs the population
+its places, but evenly over the bands by weight. The alternative, `TargetOnline` counting owned bots only, would have let the
+population add a full `TargetOnline` on top of any operator fleet, and `MaxBots` would then be the only bound.
+
+Before, every running managed bot counted in its band. Live 2026-10-11 (`_wf/analysis/bot-xp-analysis.md`, section 3): 201
+operator bots (`Wfbot*`, `Stressbot*`) at levels 11-20 held that band above its share of 167, so no 11-20 bot was ever created;
+78 more at levels 1-10 made that band look closest to full, so its 49 population bots were parked first and restarted last.
 
 A created bot starts at level 1; a higher level is `CharacterBoost.Run`, the engine of `.character boost`, run as the bot itself
 (so no GM message is sent). **Without the boost content** (`BoostEnvironment.Resolve` fails; the status line says `Boost missing:
@@ -248,8 +301,9 @@ service over a DbContext) and awaited inside it; only the resulting value is kep
 ## Ownership and parking
 
 **Ownership is a row.** Only a bot the population created has a row in `playerbot_population_member`; a bot an operator made with
-`.playerbot create` has none. The population **counts** every running managed bot towards the target, but it only ever parks or
-relocates bots it owns, so an operator's bot is never stopped here, and above the target only owned bots are parked.
+`.playerbot create` has none. The population **counts** every running managed bot towards the total target, but only its own
+bots in a band (above), and it only ever parks or relocates bots it owns, so an operator's bot is never stopped here, and above
+the target only owned bots are parked.
 
 **Parking is `IPlayerbotService.StopAsync`**: the bot logs out and saves like any managed bot, stays in the registry and in the
 table, and is restarted first when the loop wants bots again. `PopulationParking.Order` chooses the least useful bot among the
@@ -257,12 +311,22 @@ owned running bots that are:
 
 * **autonomous** - not driven by a real player's party (`IsPartyDriven`), not scripted (`IsScripted`), not driven by a bot-led
   group (`PlayerbotGroupCoordinator.Drives`); and
-* **idle** - in the world, alive, out of combat, not being teleported.
+* **not busy** - in the world, out of combat, not being teleported. A dead bot or a ghost qualifies: it logs out like any bot
+  (a server shutdown does the same) and comes back as it was, and it earns nothing meanwhile.
 
-Order: the band with the largest surplus (a bot in no band counts as the largest), then a bot with no real player in its zone,
-then the most recently started, then the lower `BotId`. The surplus is recounted after each pick so a band is not drained below
-its share while another still has a surplus. The facts are seconds old by the time of the stop, so the world thread re-checks
-`autonomous` and `idle` right before each stop.
+Order, **least productive first**: a dead bot or ghost, then a resurrection-sick one, then a stalled one, then the rest; within
+each the band with the largest surplus (a bot in no band counts as the largest), then a bot with no real player in its zone, then
+the bot that has run longest since the population started it (one started before this process or by an operator counts as
+longest: a rotation), then the lower `BotId`. Band fullness only breaks ties between equally productive bots. The surplus is
+recounted after each pick so a band is not drained below its share while another still has a surplus. Each pick carries its
+reason for the status and the log: `dead`, `sick`, `stalled`, `surplus` (its band holds more than its share) or `rotation`.
+
+**Anti-churn.** A bot the population started less than `MinRunSeconds` ago is not parked for the budget at all, and is parked
+last over the target (a lowered target is the operator's limit). Before 2026-10-11 the most recently started bot was parked
+first, so a restart was the next park.
+
+The facts are seconds old by the time of the stop, so the world thread re-checks `autonomous` and `not busy` right before each
+stop. A dead bot is never relocated.
 
 **Housekeeping.** A row whose bot or character is gone (the character delete cleanup removes the row; a registry loss leaves it
 behind) is deleted at the next pass.
@@ -300,7 +364,7 @@ added under the `.playerbot` root.
 
 | Subcommand | Does |
 |---|---|
-| `status` (the default) | The state and why, tick p95 against the budget, the target (and the effective target), running, owned and parked bots, creations in the last minute, the boost, the zone counts per faction, and want against have per band. |
+| `status` (the default) | The state and why (a park lists its reasons), tick p95 against the budget, the target (and the effective target), running, owned and parked bots, creations in the last minute, the operator bots running and the population's own share they leave, the boost, the zone counts per faction, and want against have per band (the population's own bots). |
 | `enable` / `disable` | Sets `World:Playerbots:Population:Enabled` on the live options. `disable` stops the loop; bots it started keep running. |
 | `target #count` | Sets `World:Playerbots:Population:TargetOnline` (0..1000, `PlayerbotOptions.MaxBotsCeiling`); a value out of range is refused and nothing changes. A malformed argument answers with the syntax. |
 
@@ -317,12 +381,15 @@ and swapped as one value on reload.
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Run the manager. |
-| `TargetOnline` | `0` | Managed bots to keep running (0..1000; capped by `MaxBots`). |
+| `TargetOnline` | `0` | Managed bots to keep running (0..1000; capped by `MaxBots`); operator bots running take their places off the top, the rest is split over the bands. |
 | `IntervalSeconds` | `10` | World seconds between passes (2..600). |
 | `TickP95BudgetMs` | `60` | The p95 tick budget (5..1000). |
 | `ResumeBelowPct` | `80` | Add only below this percent of the budget (10..99). |
 | `WindowTicks` | `200` | Fresh ticks needed after a change (20..4096). |
 | `ParkWhenOverBudget` | `true` | Park owned bots when over budget; off: only stop adding. |
+| `ConfirmWindows` | `2` | Consecutive fresh windows over the budget before a park, or under the resume line before an add (1..20). |
+| `MinRunSeconds` | `300` | A bot the population started is not parked for the budget before this many world seconds (0..3600). |
+| `ActionLogSeconds` | `60` | At most one information line per this many world seconds for the passes that changed something (0..3600; 0 = every one). |
 | `MaxCreatePerMinute` | `4` | New characters per minute of world time (0..60). |
 | `MaxStartsPerInterval` / `MaxParksPerInterval` | `4` / `2` | Starts plus creations, and parks, per pass (1..100). |
 | `Factions` / `AllianceSharePct` | `Both` / `50` | Which factions; the Alliance share with `Both`. |
@@ -366,7 +433,9 @@ seconds for it.
 `tests/ArcaneCore.World.Tests/Playerbots/Population/`: the pure helpers (`PopulationBudgetControllerTests`,
 `PopulationBandPlannerTests`, `PopulationZoneAtlasTests`, `PopulationLevelRuleTests` (the slack taper, the creature survey, band
 coverage and no relocation ping-pong, on the live w24 floors of the Hinterlands, Feralas and Deadwind Pass), `PopulationTickWindowTests`, `PopulationNamesTests`,
-`PlayerbotPopulationOptionsTests`), `PopulationParkingTests` (who may be parked and in which order),
-`PlayerbotPopulationFeatureTests` (a real world and managed bots with a fake tick source: add, hold, park, restart and the window
-reset; the creation caps; owned-only parking; the pass-scoped store; enable and disable on the timer) and
+`PlayerbotPopulationOptionsTests`), `PopulationParkingTests` (who may be parked and in which order: dead, sick, stalled first;
+the anti-churn minimum; the restart rotation), `PlayerbotPopulationFeatureTests` (a real world and managed bots with a fake tick
+source: add, hold, park, restart and the window reset; the creation caps; owned-only parking; operator bots in a band not
+suppressing its creation; a dead bot parked first; the rotation; the confirmation windows; the anti-churn minimum; the action log
+line; the pass-scoped store; enable and disable on the timer) and
 `PlayerbotPopulationCommandTests`. The membership table: `tests/ArcaneCore.Data.Tests/PlayerbotPopulationStoreTests.cs`.

@@ -19,6 +19,7 @@ using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.WorldState;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
 using Item = ArcaneCore.Game.Items.Item;
@@ -35,7 +36,9 @@ internal sealed record BoostEnvironment(
     CreatureContent Creatures,
     ItemTemplateStore Items,
     HashSet<uint> Sources,
-    HashSet<uint> QuestOnly)
+    HashSet<uint> QuestOnly,
+    CharacterBoostOptions Options,
+    BoostSuffixes? Suffixes)
 {
     /// <summary>
     /// Resolves the environment, or returns null with the first thing that is missing in <paramref name="missing"/>. Item
@@ -71,7 +74,14 @@ internal sealed record BoostEnvironment(
             return null;
         }
 
-        return new BoostEnvironment(progression, spells, quests.Services, skills.Catalog, creatures.Content, store, sources, questOnly);
+        // Random-property items ("of the Bear") need both ItemRandomProperties.dbc with item_enchantment_template and SpellItemEnchantment.dbc
+        // to know their stats; without them such items are left out of the kit rather than equipped statless.
+        BoostSuffixes? suffixes = BoostSuffixes.TryCreate(
+            services.GetService<ArcaneCore.World.Items.ItemRandomPropertyFeature>()?.Properties?.Catalog,
+            services.GetService<ArcaneCore.World.Crafting.EnchantingFeature>()?.Catalog,
+            spells.System.Store.Get);
+        return new BoostEnvironment(progression, spells, quests.Services, skills.Catalog, creatures.Content, store, sources, questOnly,
+            CharacterBoostOptions.Bind(services.GetService<IConfiguration>()), suffixes);
     }
 
     /// <summary>The last sources set with the content objects it was built from; a content reload replaces those objects, so a hit is always current.</summary>
@@ -136,7 +146,7 @@ internal static class CharacterBoost
     private const uint WeaponBow = 2;
     private const uint WeaponGun = 3;
     private const uint WeaponCrossbow = 18;
-    private const uint QualityUncommon = 2;
+    private const uint QualityUncommon = 2;   // ammo stays green or lower
 
     /// <summary>The gear weights: a managed playerbot's own build (so the kit matches its talents and rotation), else a fixed table by class.</summary>
     public static PlayerbotStatWeights WeightsFor(Player target)
@@ -197,13 +207,14 @@ internal static class CharacterBoost
         PlayerbotStatWeights weights = WeightsFor(target);
         IReadOnlyList<ItemTemplate> pool = Candidates(env, level).Gear;
         BoostGearPlan plan = BoostGearPlanner.Plan(pool, weights, target.Class, inventory.Requirements.CanDualWield(inventory),
-            template => inventory.CanUseItem(template) == InventoryResult.Ok, env.QuestOnly);
+            template => inventory.CanUseItem(template) == InventoryResult.Ok, env.QuestOnly, env.Suffixes is { } suffixes ? suffixes.For : null);
         report.EmptySlots.AddRange(plan.EmptySlots);
 
         foreach ((byte slot, ItemTemplate template) in plan.Picks)
         {
+            int? property = plan.Suffixes.TryGetValue(slot, out BoostSuffix? suffix) ? suffix.PropertyId : null;
             Item? worn = inventory.GetItem(InventorySlots.Bag0, slot);
-            if (worn?.Template.Entry == template.Entry)
+            if (worn?.Template.Entry == template.Entry && (property is null || worn.RandomPropertyId == property))
             {
                 report.Kept++;
                 continue;
@@ -221,7 +232,7 @@ internal static class CharacterBoost
                 continue;
             }
 
-            InventoryResult result = inventory.AddItemAt(InventorySlots.Bag0, slot, template.Entry, 1, out _);
+            InventoryResult result = inventory.AddItemAt(InventorySlots.Bag0, slot, template.Entry, 1, out _, randomPropertyId: property);
             if (result == InventoryResult.Ok)
             {
                 report.Equipped++;
@@ -302,29 +313,31 @@ internal static class CharacterBoost
     }
 
     /// <summary>The character-independent candidates for one level: gear pool items and ammo by item level, best first.</summary>
-    private sealed record CandidateCache(ItemTemplateStore Items, HashSet<uint> Sources, byte Level, IReadOnlyList<ItemTemplate> Gear, IReadOnlyList<ItemTemplate> Ammo);
+    private sealed record CandidateCache(ItemTemplateStore Items, HashSet<uint> Sources, byte Level, uint MaxQuality, IReadOnlyList<ItemTemplate> Gear, IReadOnlyList<ItemTemplate> Ammo);
 
     private static CandidateCache? _candidates;
 
     /// <summary>
-    /// The gear pool and ammo list for <paramref name="level"/>, filtered once per (item store, sources set, level) instead of once per
+    /// The gear pool and ammo list for <paramref name="level"/>, filtered once per (item store, sources set, level, quality cap) instead of once per
     /// command: a 200-bot provision would otherwise scan every item template twice per bot. A content reload replaces the store or the
     /// sources set, so the reference check below is a valid freshness test. World thread only.
     /// </summary>
     private static CandidateCache Candidates(BoostEnvironment env, byte level)
     {
         CandidateCache? cached = _candidates;
-        if (cached is not null && cached.Level == level && ReferenceEquals(cached.Items, env.Items) && ReferenceEquals(cached.Sources, env.Sources))
+        uint maxQuality = env.Options.EffectiveMaxQuality;
+        if (cached is not null && cached.Level == level && cached.MaxQuality == maxQuality
+            && ReferenceEquals(cached.Items, env.Items) && ReferenceEquals(cached.Sources, env.Sources))
         {
             return cached;
         }
 
-        ItemTemplate[] gear = [.. env.Items.All.Where(t => BoostGearPlanner.IsPoolItem(t, level, env.Sources))];
+        ItemTemplate[] gear = [.. env.Items.All.Where(t => BoostGearPlanner.IsPoolItem(t, level, env.Sources, maxQuality))];
         ItemTemplate[] ammo = [.. env.Items.All
             .Where(t => (ItemClass)t.Class == ItemClass.Projectile && t.GetInventoryType() == InventoryType.Ammo
                 && t.Quality <= QualityUncommon && t.RequiredLevel <= level && t.RandomProperty == 0
                 && !t.HasFlag(ItemTemplateFlags.Deprecated) && (t.ExtraFlags & 0x04) == 0 && env.Sources.Contains(t.Entry))];
-        var built = new CandidateCache(env.Items, env.Sources, level, gear, ammo);
+        var built = new CandidateCache(env.Items, env.Sources, level, maxQuality, gear, ammo);
         _candidates = built;
         return built;
     }

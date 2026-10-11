@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
     private readonly Dictionary<Map, CreatureMapSystem> _instanceSystems = new(ReferenceEqualityComparer.Instance);
     private CreatureContent _content = CreatureContent.Empty;
+    private PlayerbotExploreAtlas _exploreAtlas = new(CreatureContent.Empty);
     private bool _contentInstalled;
     private WorldRuntime? _world;
     private ICreatureHeightProvider? _height;
@@ -40,6 +42,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
 
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
+
+    /// <summary>Startup spawn index for level-appropriate playerbot exploration; rebuilt when creature definitions change.</summary>
+    internal PlayerbotExploreAtlas ExploreAtlas => Volatile.Read(ref _exploreAtlas);
+
+    internal void PublishExploreAtlas(PlayerbotExploreAtlas atlas) => Volatile.Write(ref _exploreAtlas, atlas);
 
     /// <summary>Built SMSG_CREATURE_QUERY_RESPONSE replies (cleared when the content is installed or its definitions swapped).</summary>
     public Packets.QueryResponseCache<CreatureTemplate> QueryCache { get; } = new();
@@ -107,7 +114,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         ReportSmartScripts(content.Ai.SmartScripts);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
-        world.Post(() => Install(content));
+        // Startup is still outside the world tick: build the immutable bot index before posting the content install.
+        var exploreAtlas = new PlayerbotExploreAtlas(content);
+        logger.LogInformation("Playerbot Explore atlas: {Cells} level/map cells, {Entries} sampled spawn entries, {ThreatCells} threat cells",
+            exploreAtlas.CellCount, exploreAtlas.EntryCount, exploreAtlas.ThreatCellCount);
+        world.Post(() => Install(content, exploreAtlas));
     }
 
     /// <summary>
@@ -154,8 +165,14 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     /// yet (world thread). Maps already running keep their system.
     /// </summary>
     public void Install(CreatureContent content)
+        => Install(content, new PlayerbotExploreAtlas(content));
+
+    /// <summary>Install prebuilt content and index together on the world thread.</summary>
+    internal void Install(CreatureContent content, PlayerbotExploreAtlas exploreAtlas)
     {
         ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(exploreAtlas);
+        PublishExploreAtlas(exploreAtlas);
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
         QueryCache.Clear();

@@ -20,8 +20,11 @@ a missing attribute or an empty id list throws) + `SpellScriptDispatcher` mirror
 | `OnSuccessfulDispel` | chained DISPEL wrapper: only when the target lost at least one aura stack | scripts/spells |
 
 SCRIPT_EFFECT has no behaviour of its own in vmangos (SpellEffects.cpp:3685-3700, :4560-4570 fall through to the database script
-table, which is empty here), so the dispatcher installs a no-op for it: the mage Teleport spells and the Create Healthstone ranks
-no longer log "effect 77 is not implemented". Chaining keeps any handler another feature installed before the dispatcher; a feature
+table, which is empty here), so the dispatcher installs a no-op for it: the mage Teleport spells no longer log "effect 77 is not
+implemented". A spell whose script effect does real work needs a script: the five Create Healthstone ranks (5699, 6201, 6202, 11729,
+11730) create their item from `Spells/Warlock/CreateHealthstoneScript.cs` (vmangos `spell_warlock.cpp:260-368`: rank and Improved
+Healthstone 18692/18693 pick the item, `CanStoreNewItem` failure answers DONT_REPORT, the Soul Shard goes through the normal reagent
+path; tests `tests/ArcaneCore.Game.Tests/Spells/CreateHealthstoneScriptTests.cs`). Chaining keeps any handler another feature installed before the dispatcher; a feature
 that replaces DUMMY, SCRIPT_EFFECT or DISPEL after it without chaining would drop the scripts (the world feature attaches after
 `SpellFeature`, alphabetically).
 
@@ -146,13 +149,13 @@ Transform aura and the mage polymorph classification (mage family, first effect 
 
 Tests: `tests/ArcaneCore.Game.Tests/CombatMechanics/RegenAuraTests.cs` (11 tests; RED first: 9 failed, the two baseline tests proving the harness passed).
 
-## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
-
-This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
-docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
-`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
-implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
-docs/integration/wave4-integration.md.
+## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
+
+This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
+docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
+`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
+implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
+docs/integration/wave4-integration.md.
 ## wlm-08 (reduced) Warlock demons and Demonic Sacrifice (`Pets/SummonService.Demons.cs`, `Spells/Warlock/DemonicSacrificeScript.cs`)
 
 `SPELL_EFFECT_SUMMON_PET` (56) was unregistered (docs/integration/pets.md), so Summon Imp, Voidwalker, Succubus and Felhunter did nothing.

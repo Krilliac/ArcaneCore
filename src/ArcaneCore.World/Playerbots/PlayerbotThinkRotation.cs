@@ -2,7 +2,7 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// The fair rotation of the bots' thinks over ticks. A tick thinks for as many running bots as its budget lets it (the shared
-/// action budget, World:Playerbots:MaxActionsPerTick, and the 8 ms cap of <see cref="ManagedPlayerbotFeature"/>), starting at the
+/// action budget, World:Playerbots:MaxActionsPerTick, and <see cref="TickBudgetMs"/>, <see cref="TickWithin"/>), starting at the
 /// cursor; the next tick starts right after the last bot this one visited.
 /// <para>
 /// Before (scale campaign 2026-10-08), the cursor moved one bot per tick whatever the tick visited. A tick that visits K of N bots
@@ -39,5 +39,31 @@ internal sealed class PlayerbotThinkRotation
         // A tick that could visit nobody still moves on by one, so no bot can hold the head of the rotation for good.
         _cursor = (_cursor + Math.Max(1, visited)) % count;
         return visited;
+    }
+
+    /// <summary>The wall time one tick spends on the bots' thinks before it leaves the rest to the next tick.</summary>
+    internal const double TickBudgetMs = 8;
+
+    /// <summary>
+    /// <see cref="Tick"/>, visiting no further bot once <paramref name="budgetMs"/> went by since the tick began: a tick spends at
+    /// most that much plus one think, and the bots it did not reach come first in the next tick. The first bot is always visited
+    /// (when <paramref name="visit"/> admits it), so the rotation moves on even when one think alone takes longer than the budget.
+    /// </summary>
+    internal int TickWithin(int count, double budgetMs, Func<int, bool> visit)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        return TickWithin(count, budgetMs, visit, () => System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+    }
+
+    /// <summary><see cref="TickWithin(int, double, Func{int, bool})"/> on a given clock: <paramref name="elapsedMs"/> is the time since the tick began (tests).</summary>
+    internal int TickWithin(int count, double budgetMs, Func<int, bool> visit, Func<double> elapsedMs)
+    {
+        bool first = true;
+        return Tick(count, index =>
+        {
+            if (!first && elapsedMs() >= budgetMs) return false;
+            first = false;
+            return visit(index);
+        });
     }
 }

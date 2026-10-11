@@ -64,6 +64,18 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
+    // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
+    private readonly PlayerbotThinkProbe _probe = new();
+    private PlayerbotSlowThinkLog? _slowThinks;
+
+    /// <summary>
+    /// Called after every think with the bot and the think's probe (world thread; benchmarks and tests). The probe is valid only
+    /// during the call.
+    /// </summary>
+    internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
+
+    /// <summary>The slow-think log (null before the first think).</summary>
+    internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
     private uint _checkpointMs;
     private Task _checkpoint = Task.CompletedTask;
 
@@ -80,6 +92,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
+    private readonly ConcurrentDictionary<Guid, PlayerbotSetAside[]> _loadedSetAsides = new();
+    private readonly TimeProvider _setAsideTime = services.GetService<TimeProvider>() ?? TimeProvider.System;
+    private int _savedSharedSetAsideVersion;
     private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
 
@@ -109,6 +124,19 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides)
+        {
+            IReadOnlyList<PlayerbotSetAside> rows = await setAsides.LoadAllAsync(cancellationToken).ConfigureAwait(false);
+            foreach (IGrouping<Guid, PlayerbotSetAside> group in rows.Where(row => row.BotId != Guid.Empty).GroupBy(row => row.BotId))
+                _loadedSetAsides[group.Key] = [.. group];
+            await _world!.InvokeAsync(() =>
+            {
+                _sharedSetAsides.Restore(rows.Where(row => row.BotId == Guid.Empty), _world.NowMs,
+                    _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _savedSharedSetAsideVersion, _sharedSetAsides.Version);
+        }
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
@@ -646,6 +674,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
             active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
+            _loadedSetAsides.TryRemove(bot.BotId, out _);
             Interlocked.Increment(ref _activeVersion);
             retained = true;
             logger.LogInformation("Started managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
@@ -710,6 +739,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             foreach (ActiveBot active in _active.Values.ToArray())
                 await StopCoreAsync(active.Record, true, CancellationToken.None).ConfigureAwait(false);
+            try { await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { logger.LogWarning(ex, "Managed playerbot shared set-aside shutdown save failed ({Type})", ex.GetType().Name); }
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
@@ -721,7 +753,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
-        => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+    {
+        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
+            brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+        return brain;
+    }
 
     /// <summary>
     /// The bot's home as a brain's area, or null when it has none. A zone-clipped home takes the zone of its centre from the terrain on
@@ -760,6 +797,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_active.TryGetValue(bot.BotId, out ActiveBot? active))
         {
             active.Paused = true;
+            try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name); }
             if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
@@ -862,11 +902,11 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         }
 
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
-        long started = Stopwatch.GetTimestamp();
-        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for.
-        _rotation.Tick(bots.Length, index =>
+        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
+        // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
+        _rotation.TickWithin(bots.Length, PlayerbotThinkRotation.TickBudgetMs, index =>
         {
-            if (budget.Remaining <= 0 || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 8) return false;
+            if (budget.Remaining <= 0) return false;
             Think(bots[index], budget);
             return true;
         });
@@ -876,9 +916,42 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         { _checkpointMs = 0; _checkpoint = Task.Run(CheckpointAsync); }
     }
 
-    /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain.</summary>
+    /// <summary>
+    /// One bot's think (world thread), measured (<see cref="PlayerbotThinkProbe"/>) and with its fallback path searches held to
+    /// <see cref="PlayerbotOptions.MaxThinkSearchNodes"/>: a think over <see cref="PlayerbotOptions.SlowThinkLogMs"/> is logged with its
+    /// bot, driver, goal and phases (<see cref="PlayerbotSlowThinkLog"/>). Both are read from the shared options at each think, so
+    /// <c>.reload config</c> changes them at once (WorldConfigKeys).
+    /// </summary>
     private void Think(ActiveBot active, ManagedActionBudget budget)
     {
+        _probe.NodeBudget = _options.MaxThinkSearchNodes;
+        _probe.Begin();
+        string driver;
+        try { driver = ThinkCore(active, budget); }
+        finally { _probe.End(); }
+        double slowMs = _options.SlowThinkLogMs;
+        bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
+        if (!slow && ThinkObserver is null) return; // the common case: nothing to describe, nothing allocated
+        string goal = GoalOf(active, driver);
+        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal);
+        if (ThinkObserver is { } observer)
+        {
+            _probe.Subject = (driver, goal);
+            observer(active.Record.BotId, _probe);
+        }
+    }
+
+    /// <summary>
+    /// The goal a think was about, for the slow-think line: the brain's goal, target entry and quest when the brain drove it; "n/a" for
+    /// another driver (party AI, bot-led group, battleground, controller), which holds the brain suspended with the goal it had before.
+    /// </summary>
+    private static string GoalOf(ActiveBot active, string driver)
+        => driver == "brain" ? $"{active.Brain.Goal} entry {active.Brain.TargetEntry} quest {active.Brain.QuestId}" : "n/a";
+
+    /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain. Returns which drove it.</summary>
+    private string ThinkCore(ActiveBot active, ManagedActionBudget budget)
+    {
+        string driver = "idle";
         if (!active.Paused && active.Session.State == SessionState.InWorld)
         {
             uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
@@ -889,6 +962,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 {
                     // Scripted mode: the brain is suppressed and the shared action budget does not apply.
                     active.Session.ManagedBudget = null;
+                    driver = "controller";
+                    PlayerbotThinkProbe.Phase("controller");
                     controller.Tick(active.ControllerContext, sinceLast);
                 }
                 else if (active.Session.Player is { } driven)
@@ -905,6 +980,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         }
 
                         active.BattlegroundDriven = true;
+                        driver = "battleground";
+                        PlayerbotThinkProbe.Phase("battleground");
                         battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -918,6 +995,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         }
 
                         active.GroupDriven = true;
+                        driver = "group";
+                        PlayerbotThinkProbe.Phase("group");
                         coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
                     }
                     else
@@ -934,17 +1013,18 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                             active.Brain.ResumeAfterGroup();
                         }
 
-                        UpdateAutonomous(active, driven, sinceLast);
+                        driver = UpdateAutonomous(active, driven, sinceLast);
                     }
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
+        return driver;
     }
 
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
-    private void UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
+    private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
         // A bot in a real player's group follows its party AI; out of it (or after its master's timeout) the
         // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
@@ -952,15 +1032,33 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (active.PartyDriven && !party) ReplaceBrain(active);
         // The party AI follows its master: a tram trip of the brain ends (its entrance consent with it); off the tram map again under the
         // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
-        if (party && !active.PartyDriven) PlayerbotTram.Cancel(driven);
+        if (party && !active.PartyDriven)
+        {
+            PlayerbotTram.Cancel(driven);
+            // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
+            // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
+            PlayerbotElevator.Cancel(driven);
+            if (PlayerbotElevator.HoldsForLanding(driven))
+            {
+                if (!PlayerbotMovementControl.Update(active.Session, driven))
+                    PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
+                return "elevator";
+            }
+        }
         active.PartyDriven = party;
-        if (party) active.Party.Update(driven, sinceLast);
+        if (party)
+        {
+            PlayerbotThinkProbe.Phase("party");
+            active.Party.Update(driven, sinceLast);
+            return "party AI";
+        }
         else
         {
             active.Brain.Update(sinceLast);
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
                 active.StallsLogged, active.Brain.StallReport, active.Brain.StallOutsideHome, active.Brain.SharedSetAside);
             if (sharedLogged) active.Brain.SharedSetAside = null;
+            return "brain";
         }
     }
 
@@ -1081,7 +1179,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 }
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 { Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId }, CancellationToken.None).ConfigureAwait(false);
+                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             }
+            await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         { logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name); }
@@ -1133,8 +1233,56 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     private void ReplaceBrain(ActiveBot active)
     {
-        active.Brain.Stop();
-        active.Brain = NewBrain(active.Session, active.Record.BotId);
+        lock (active.SetAsideGate)
+        {
+            PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
+                active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+            active.Brain.Stop();
+            active.Brain = NewBrain(active.Session, active.Record.BotId);
+            active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
+            Volatile.Write(ref active.SavedSetAsideVersion, -1);
+        }
+    }
+
+    private async Task SaveBotSetAsidesAsync(ActiveBot active, bool force = false)
+    {
+        if (!force && Volatile.Read(ref active.SavedSetAsideVersion) == active.Brain.Suspensions.Version) return;
+        (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) Capture()
+        {
+            PlayerbotBrain brain = active.Brain;
+            PlayerbotSuspensions state = brain.Suspensions;
+            return (state.Export(active.Record.BotId, active.Record.CharacterId, active.Session.World.NowMs,
+                _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()), state.Version, brain);
+        }
+        // WorldTestHost and the production host may stop the world before stopping features. No tick can mutate the brain then.
+        (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) snapshot;
+        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) = snapshot;
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
+            await store.ReplaceAsync(active.Record.BotId, rows).ConfigureAwait(false);
+        if (force) _loadedSetAsides[active.Record.BotId] = rows;
+        lock (active.SetAsideGate)
+            if (ReferenceEquals(active.Brain, brain)) Volatile.Write(ref active.SavedSetAsideVersion, version);
+    }
+
+    private async Task SaveSharedSetAsidesAsync()
+    {
+        if (Volatile.Read(ref _savedSharedSetAsideVersion) == _sharedSetAsides.Version) return;
+        (PlayerbotSetAside[] rows, int version) Capture()
+        {
+            return (_sharedSetAsides.Export(_world.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()),
+                _sharedSetAsides.Version);
+        }
+        (PlayerbotSetAside[] rows, int version) snapshot;
+        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        (PlayerbotSetAside[] rows, int version) = snapshot;
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
+            await store.ReplaceAsync(Guid.Empty, rows).ConfigureAwait(false);
+        Volatile.Write(ref _savedSharedSetAsideVersion, version);
     }
 
     /// <summary>
@@ -1313,6 +1461,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public AsyncServiceScope Scope { get; } = scope;
         public WorldSession Session { get; } = session;
         public PlayerbotBrain Brain = brain;
+        public int SavedSetAsideVersion;
+        public readonly object SetAsideGate = new();
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;
         public bool GroupDriven;

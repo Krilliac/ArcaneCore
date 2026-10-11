@@ -257,6 +257,13 @@ loses that one write (same window as vmangos' asynchronous character-database qu
 
 ## References used
 
+Active-cell reactivation (2026-10-11): a skipped creature's spline excludes inactive map time. Position interpolation, completion,
+observer catch-up packets and stopping all use that same adjusted time. Returning players no longer make paused patrols complete
+their current leg and launch the next waypoint path in a single burst. This follows vmangos `Unit::Update` / `UpdateSplineMovement`
+(`Objects/Unit.cpp:322-323,10632-10637`): the spline receives the active tick delta, not the elapsed time since the creature's last visit.
+Corpse decay and absolute respawn deadlines retain their separate clocks. Active objects, formations and camera viewers still take
+the existing always-update path. Tests and performance limits are in the [reactivation report](../integration/active-cell-reactivation-20261011.md).
+
 vmangos: `Movement/spline/packet_builder.cpp`, `Movement/MoveSplineInit.cpp`, `Movement/MotionMaster.h`, `Movement/RandomMovementGenerator.cpp`,
 `Movement/WaypointMovementGenerator.cpp`, `Movement/WaypointManager.{h,cpp}`, `Movement/HomeMovementGenerator.cpp`, `AI/CreatureAI.cpp`, `Objects/Creature.cpp`
 (`:817-884`, `:1087-1161`, `:1318-1343`, `:1925-2004`, `:2242-2264`, `:2785-2794`, `:3305-3401`), `Maps/Map.cpp:1310-1365`, `Maps/MapPersistentStateMgr.cpp:80-101`,

@@ -110,6 +110,9 @@ public sealed partial class SpellSystem
 
     private readonly Dictionary<uint, (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick)> _periodicDummyAuras = [];
 
+    /// <summary>Whether <paramref name="spellId"/> has a periodic DUMMY aura tick (<see cref="RegisterPeriodicDummyAura"/>).</summary>
+    public bool HasPeriodicDummyAura(uint spellId) => _periodicDummyAuras.ContainsKey(spellId);
+
     private void TickDummyAura(SpellAuraHolder holder, SpellAura aura)
     {
         if (_periodicDummyAuras.TryGetValue(holder.Spell.Id, out (uint PeriodMs, Action<SpellSystem, SpellAuraHolder, SpellAura> Tick) dummy))
@@ -197,7 +200,7 @@ public sealed partial class SpellSystem
         SpellEffectInfo effect = context.Effect;
         if (!AuraHandlers.ContainsKey(effect.AuraType))
         {
-            ReportUnsupported("aura", (uint)effect.AuraType, context.Spell.Id);
+            ReportUnsupported(context.Cast, context.EffectIndex, "aura", (uint)effect.AuraType);
         }
 
         context.PendingHolder ??= new SpellAuraHolder(

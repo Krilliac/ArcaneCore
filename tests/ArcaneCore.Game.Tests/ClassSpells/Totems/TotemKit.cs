@@ -18,6 +18,7 @@ internal sealed class TotemKit : IDisposable
     public const uint FireTotemSummon = 930002;    // Searing/Magma shape: SUMMON_TOTEM_SLOT1, target 44
     public const uint WaterTotemSummon = 930003;   // Healing Stream shape: SUMMON_TOTEM_SLOT3, target 42
     public const uint AirTotemSummon = 930004;     // Windfury/Grace shape: SUMMON_TOTEM_SLOT4, target 43
+    public const uint SentryTotem = 6495;          // air totem followed by a DUMMY aura on the caster
     public const uint NoSlotSummon = 930005;       // SUMMON_TOTEM (74)
     public const uint DestroyAll = 930006;         // Totemic Call shape: DESTROY_ALL_TOTEMS
     public const uint PartyPassive = 930010;       // Healing Stream passive shape: APPLY_AREA_AURA_PARTY, permanent
@@ -61,6 +62,13 @@ internal sealed class TotemKit : IDisposable
                 Summon(FireTotemSummon, SpellEffectName.SummonTotemSlot1, 44, FireEntry, summonDurationMs),
                 Summon(WaterTotemSummon, SpellEffectName.SummonTotemSlot3, 42, WaterEntry, summonDurationMs),
                 Summon(AirTotemSummon, SpellEffectName.SummonTotemSlot4, 43, AirEntry, summonDurationMs),
+                Spell(SentryTotem,
+                    Effect(SpellEffectName.SummonTotemSlot4, 100, (SpellImplicitTarget)43, misc: (int)AirEntry) with { Radius = 2 },
+                    Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.Dummy)) with
+                {
+                    StartRecoveryCategory = 0, StartRecoveryTime = 0,
+                    Duration = new SpellDuration(summonDurationMs, 0, summonDurationMs),
+                },
                 Summon(NoSlotSummon, SpellEffectName.SummonTotem, 41, NoSlotEntry, summonDurationMs),
                 Summon(930007, SpellEffectName.SummonTotemSlot2, 41, TremorEntry, summonDurationMs),
                 Summon(930008, SpellEffectName.SummonTotemSlot2, 41, SlowEntry, summonDurationMs),

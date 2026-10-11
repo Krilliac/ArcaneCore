@@ -10429,6 +10429,22 @@
       "isCollection": false
     },
     {
+      "path": "World:GmCommands:Boost:MaxQuality",
+      "section": "World:GmCommands:Boost",
+      "type": "uint",
+      "kind": "scalar",
+      "elementType": "uint",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The highest item quality a boost kit piece may have: 1 white, 2 green, 3 blue (default), 4 epic. Blue is what a character gets from the dungeons of its level; values outside 1-4 are clamped. White is always the lowest: grey items are never offered.",
+      "allowed": "a whole number, 0 to 4294967295",
+      "docs": "docs/reference/configuration.md#worldgmcommandsboost",
+      "isCollection": false
+    },
+    {
       "path": "World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath",
       "section": "World:GmCommands:DebugDraw",
       "type": "string",
@@ -12733,6 +12749,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:MaxThinkSearchNodes",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "98304",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the starts beside the bot, the hazard detours; `PlayerbotThinkProbe.NodeBudget`): past it a fallback runs with what is left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held to it nor counted. 0 = no bound, else 2048..10000000; three of the largest single searches (`PlayerbotNavigation.MaxSearchNodes`) by default. Live: `.reload config`.",
+      "allowed": "0 (no bound), or a whole number from 2048 to 10000000",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:MoveSpeed",
       "section": "World:Playerbots",
       "type": "float",
@@ -12864,6 +12896,22 @@
       "reload": "start",
       "meaning": "Teleport to the master when the follower cannot keep up by walking (vmangos PartyBotAI .goname; on by default). Off: the bot never teleports to its master, whatever `PlayerbotFollowOptions.CatchUpMode` says.",
       "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Population:ActionLogSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "60",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The population logs one information line for the passes that parked, started, created or moved bots, at most once per this many seconds of world time; the changes of the passes in between are added up into the next line (0..3600; 0 = a line for every such pass).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -13053,6 +13101,22 @@
       "isCollection": true
     },
     {
+      "path": "World:Playerbots:Population:ConfirmWindows",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The consecutive fresh windows of WindowTicks ticks the p95 must stay over TickP95BudgetMs before a park for the budget, or under ResumeBelowPct of it before an add (1..20). 1 acts on a single window. A window between the two, a change, or a window on the other side starts the count again; a lowered target is honoured without waiting.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:CreatureLevelMargin",
       "section": "World:Playerbots",
       "type": "int",
@@ -13217,6 +13281,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Population:MinRunSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "300",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Anti-churn: a bot the population started is not parked for the tick budget until it has run this many seconds of world time (0..3600; 0 = no minimum). Over the target such a bot is still parked, last.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:OutlevelMargin",
       "section": "World:Playerbots",
       "type": "int",
@@ -13294,7 +13374,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population; above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
+      "meaning": "The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -13536,6 +13616,22 @@
       "reload": "start",
       "meaning": "Default bound of one WaitUntil step in seconds (1..300).",
       "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:SlowThinkLogMs",
+      "section": "World:Playerbots",
+      "type": "double",
+      "kind": "scalar",
+      "elementType": "double",
+      "enumValues": null,
+      "default": "50",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches (`PlayerbotSlowThinkLog`; 0 = off, 0..60000). Live: `.reload config` applies a change at once.",
+      "allowed": "a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -13820,6 +13916,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Qa:GitHub:KindLabels",
+      "section": "World:Playerbots:Qa",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Add a per-kind label (`bot-qa:spell-unsupported`, `bot-qa:death-loop`, ...) to created issues besides `Labels` (off by default: the `gh` transport refuses a label that does not exist yet, so create the labels in the repository first).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Qa:GitHub:Labels",
       "section": "World:Playerbots:Qa",
       "type": "string[]",
@@ -13885,6 +13997,38 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "The most 100-issue pages read when looking for an existing issue (1..100).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Qa:GitHub:MaxSpellIssuesPerDay",
+      "section": "World:Playerbots:Qa",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The most spell issues created per rolling 24 hours (0..1000; 0 creates none), saved with the hourly caps.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Qa:GitHub:MaxSpellIssuesPerPass",
+      "section": "World:Playerbots:Qa",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The most spell issues (spell unsupported, refused, no effect) created in one publish pass (0..100; 0 creates none). Spell findings can be numerous on a first run; the hourly `MaxIssuesPerHour` still applies on top.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
       "isCollection": false

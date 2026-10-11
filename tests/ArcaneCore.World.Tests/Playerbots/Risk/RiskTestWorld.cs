@@ -46,7 +46,14 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     public Player Player => Session.Player!;
 
     /// <param name="ai">EventAI rows for the creatures (their templates name <c>EventAI</c>), loaded as the world's creature content.</param>
-    public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null)
+    /// <param name="aggroOnSight">
+    /// Give the creature system the world's creature AI services (<see cref="ArcaneCore.World.Creatures.CreatureAiServicesBinder"/>):
+    /// its hostility then reads the faction templates above and creatures attack the bot on sight (vmangos BasicAI::MoveInLineOfSight).
+    /// Off by default: without it the AI's hostility is empty and no creature aggroes on sight (the hooks' hostility, which the risk
+    /// reads, is the faction catalog's either way).
+    /// </param>
+    public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null,
+        bool aggroOnSight = false)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -68,8 +75,11 @@ internal sealed class RiskTestWorld : IAsyncDisposable
         {
             Player player = session.Player!;
             WorldCollision.Of(host.World).Install(lineOfSight: new FlatGround(player.Z));
-            if (player.Map!.FindUpdater<CreatureMapSystem>() is { } existing) return existing;
-            var system = new CreatureMapSystem(player.Map, new CreatureContent([], [], [], [], [], ai), random: new Random(7));
+            if (player.Map!.FindUpdater<CreatureMapSystem>() is { } existing)
+                return aggroOnSight ? throw new InvalidOperationException("the map already has a creature system: aggroOnSight cannot apply") : existing;
+            var creatureOptions = new CreatureOptions();
+            var system = new CreatureMapSystem(player.Map, new CreatureContent([], [], [], [], [], ai), creatureOptions, random: new Random(7),
+                aiServices: aggroOnSight ? ArcaneCore.World.Creatures.CreatureAiServicesBinder.Build(host.WorldServices, creatureOptions) : null);
             player.Map.AddUpdater(system);
             return system;
         });

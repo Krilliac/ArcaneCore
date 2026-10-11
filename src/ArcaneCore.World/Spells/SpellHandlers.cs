@@ -30,7 +30,14 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         uint spellId = reader.ReadUInt32();
         SpellCastTargets targets = SpellCastTargets.Read(ref reader);
-        if (Spells(session).HandleCastRequest(player, spellId, targets) == SpellCastResult.NotKnown)
+        SpellCastResult result = Spells(session).HandleCastRequest(player, spellId, targets);
+        if (result != SpellCastResult.CastOk && session.IsPlayerbot)
+        {
+            // Bot QA: a managed bot's refused cast (a real player's never reaches this; nothing when QA is off).
+            session.Services.GetService<Playerbots.Qa.PlayerbotQaFeature>()?.SpellMonitor?.OnCastRefused(player, spellId, result);
+        }
+
+        if (result == SpellCastResult.NotKnown)
         {
             // A spell the character does not know: refused, and a client never sends it (docs/areas/anticheat.md).
             session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Spell, 10f, "cast of a spell the character does not know");

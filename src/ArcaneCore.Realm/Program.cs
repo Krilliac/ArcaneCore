@@ -45,6 +45,9 @@ if (startupReport.IsInvalid)
     return ExitCodes.InvalidConfiguration;
 }
 
+// Name the console window (realmserver), so an operator running both daemons can tell them apart (no window: skipped).
+ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TrySet("realmserver", builder.Configuration["Auth:Port"]);
+
 ArcaneCore.Kernel.Diagnostics.DiagnosticsHostingExtensions.UseArcaneDiagnostics(builder); // crash hooks and invariants (docs/ops/invariants.md), installed before anything else can fail
 
 builder.Services.AddArcaneCoreLogging(builder.Configuration);

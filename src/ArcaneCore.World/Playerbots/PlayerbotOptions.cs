@@ -46,6 +46,23 @@ public sealed class PlayerbotOptions
     /// <summary>The most managed client actions all bots may send in one world tick (1..64).</summary>
     public int MaxActionsPerTick { get; set; } = 4;
 
+    /// <summary>
+    /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
+    /// (<see cref="PlayerbotSlowThinkLog"/>; 0 = off, 0..60000). Live: <c>.reload config</c> applies a change at once.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off")]
+    public double SlowThinkLogMs { get; set; } = 50;
+
+    /// <summary>
+    /// The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the
+    /// starts beside the bot, the hazard detours; <see cref="PlayerbotThinkProbe.NodeBudget"/>): past it a fallback runs with what is
+    /// left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held
+    /// to it nor counted. 0 = no bound, else 2048..10000000; three of
+    /// the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by default. Live: <c>.reload config</c>.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("0 (no bound), or a whole number from 2048 to 10000000")]
+    public int MaxThinkSearchNodes { get; set; } = 3 * PlayerbotNavigation.MaxSearchNodes;
+
     /// <summary>The most points of one bot route (1..4096).</summary>
     public int MaxPathPoints { get; set; } = 128;
 
@@ -160,6 +177,9 @@ public sealed class PlayerbotOptions
         if (MaxBulkCommand is < 1 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBulkCommand must be 1..{MaxBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
+        if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
+        if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
+            throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");
         if (!float.IsFinite(MaxRouteYards) || MaxRouteYards <= 0 || MaxRouteYards > 100_000)
             throw new InvalidOperationException($"{SectionName}: MaxRouteYards must be finite and > 0..100000.");

@@ -27,6 +27,11 @@
     <EmbeddedResource Include="..\ArcaneCore.Data.Tests\Upgrade\CodexLine\*.sql" LogicalName="CodexLine/%(Filename)%(Extension)" Link="Playerbots\CodexLine\%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- Repository-authored navigation meshes (.mmap/.mmtile writer) for the playerbot region-leg tests, shared with ArcaneCore.Game.Tests. -->
+  <ItemGroup>
+    <Compile Include="..\ArcaneCore.Game.Tests\Collision\NavMeshFixture.cs" Link="Playerbots\NavMeshFixture.cs" />
+  </ItemGroup>
+
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
   <ItemGroup>
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />
