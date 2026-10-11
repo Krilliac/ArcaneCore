@@ -37,19 +37,25 @@ public sealed class PlayerbotThinkBudgetTests
             Vector3 far = origin + new Vector3(500, 0, 0);
 
             var probe = new PlayerbotThinkProbe { NodeBudget = 40_000 };
+            PathResult own, first, second, third, ownAgain;
             probe.Begin();
-            PathResult own = PlayerbotThinkProbe.Find(collision, origin, far, asked); // a plan's own: in full, not counted
-            PathResult first, second, third;
-            using (PlayerbotThinkProbe.Fallback())
+            try // the probe of the running think is thread-static: never leave it active on the world thread
             {
-                first = PlayerbotThinkProbe.Find(collision, origin, far, asked);  // 40 000 left: in full
-                second = PlayerbotThinkProbe.Find(collision, origin, far, asked); // 7 232 left: cut short
-            }
+                own = PlayerbotThinkProbe.Find(collision, origin, far, asked); // a plan's own: in full, not counted
+                using (PlayerbotThinkProbe.Fallback())
+                {
+                    first = PlayerbotThinkProbe.Find(collision, origin, far, asked);  // 40 000 left: in full
+                    second = PlayerbotThinkProbe.Find(collision, origin, far, asked); // 7 232 left: cut short
+                }
 
-            PathResult ownAgain = PlayerbotThinkProbe.Find(collision, origin, far, asked); // a plan's own query again: in full
-            using (PlayerbotThinkProbe.Fallback())
-                third = PlayerbotThinkProbe.Find(collision, origin, far, asked); // none left: refused
-            probe.End();
+                ownAgain = PlayerbotThinkProbe.Find(collision, origin, far, asked); // a plan's own query again: in full
+                using (PlayerbotThinkProbe.Fallback())
+                    third = PlayerbotThinkProbe.Find(collision, origin, far, asked); // none left: refused
+            }
+            finally
+            {
+                probe.End();
+            }
 
             Assert.Equal([32_768, 32_768, 40_000 - 32_768, 32_768], search.Budgets);
             Assert.True(own.HasPath && first.HasPath && second.HasPath && ownAgain.HasPath); // a short search still answers

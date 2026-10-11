@@ -25,11 +25,17 @@ public sealed class PlayerbotThinkProbeTests
     {
         var probe = new PlayerbotThinkProbe();
         probe.Begin();
-        PlayerbotThinkProbe.Phase("threats");
-        Spin(1);
-        PlayerbotThinkProbe.Phase("quests");
-        Spin(questsMs);
-        probe.End();
+        try
+        {
+            PlayerbotThinkProbe.Phase("threats");
+            Spin(1);
+            PlayerbotThinkProbe.Phase("quests");
+            Spin(questsMs);
+        }
+        finally
+        {
+            probe.End();
+        }
         return probe;
     }
 
@@ -91,13 +97,19 @@ public sealed class PlayerbotThinkProbeTests
         PlayerbotThinkProbe.Phase("nowhere"); // no probe running: ignored
         var probe = new PlayerbotThinkProbe();
         probe.Begin();
-        PlayerbotThinkProbe.Phase("a");
-        Spin(4);
-        PlayerbotThinkProbe.Phase("b");
-        Spin(1);
-        PlayerbotThinkProbe.Phase("a");
-        Spin(4);
-        probe.End();
+        try
+        {
+            PlayerbotThinkProbe.Phase("a");
+            Spin(4);
+            PlayerbotThinkProbe.Phase("b");
+            Spin(1);
+            PlayerbotThinkProbe.Phase("a");
+            Spin(4);
+        }
+        finally
+        {
+            probe.End();
+        }
 
         var phases = probe.Phases().ToDictionary(p => p.Phase, p => p.Ms);
         Assert.Equal("a", probe.SlowestPhase);

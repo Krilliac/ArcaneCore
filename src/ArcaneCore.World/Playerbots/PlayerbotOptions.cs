@@ -50,6 +50,7 @@ public sealed class PlayerbotOptions
     /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
     /// (<see cref="PlayerbotSlowThinkLog"/>; 0 = off, 0..60000). Live: <c>.reload config</c> applies a change at once.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off")]
     public double SlowThinkLogMs { get; set; } = 50;
 
     /// <summary>
@@ -59,6 +60,7 @@ public sealed class PlayerbotOptions
     /// to it nor counted. 0 = no bound, else 2048..10000000; three of
     /// the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by default. Live: <c>.reload config</c>.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("0 (no bound), or a whole number from 2048 to 10000000")]
     public int MaxThinkSearchNodes { get; set; } = 3 * PlayerbotNavigation.MaxSearchNodes;
 
     /// <summary>The most points of one bot route (1..4096).</summary>

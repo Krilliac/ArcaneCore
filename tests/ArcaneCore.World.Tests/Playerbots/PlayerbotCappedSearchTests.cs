@@ -83,6 +83,76 @@ public sealed class PlayerbotCappedSearchTests
     }
 
     /// <summary>
+    /// The steep escape's corner loop (TryLeaveSteepGround): the way off the slope passes several walkable corners, and the ordinary
+    /// search onward from each of them runs out of nodes short of the far goal. The first such refusal ends the loop: the next corner,
+    /// a few yards on, searches the same ground. Exactly one onward search; before, every corner searched (four here).
+    /// </summary>
+    [Fact]
+    public async Task SteepEscape_OnwardSearchesThatRunOutOfNodes_StopAtTheFirstCorner()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var slope = new MultiCornerSlope(origin);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: slope);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+
+            Assert.False(PlayerbotNavigation.TryPlanToward(player, origin + new Vector3(1800, 0, 0), options, out _));
+            Assert.Equal(1, slope.SteepQueries); // the escape ran (the bot's own search was no capped one)
+            Assert.Equal(1, slope.OnwardQueries);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// The bot's own search (steep slopes excluded, from where it stands) ends three yards beside it, not capped: a patch, so the
+    /// fallbacks run. With steep slopes allowed the way runs down past four walkable corners. Every other steep-excluding search is
+    /// capped and ends three yards beside its start, no closer to its end.
+    /// </summary>
+    private sealed class MultiCornerSlope(Vector3 origin) : IPathfinder
+    {
+        private readonly Vector3[] _corners =
+        [
+            origin + new Vector3(1.2f, 0.3f, -0.5f), origin + new Vector3(3.1f, 0.7f, -1f),
+            origin + new Vector3(3.8f, -1.1f, -1.5f), origin + new Vector3(6.3f, 0.4f, -2f),
+        ];
+
+        private int _ownDone;
+
+        public int SteepQueries { get; private set; }
+
+        public int OnwardQueries { get; private set; }
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            options ??= PathOptions.Default;
+            if (start == end)
+            {
+                PathSearchCounters.RecordSearch(1, 1, capped: false);
+                return new PathResult(PathType.Normal, [start, end]); // every corner is walkable ground
+            }
+
+            if ((options.ExcludeFlags & NavTerrain.SteepSlopes) == 0)
+            {
+                SteepQueries++;
+                PathSearchCounters.RecordSearch(64, 64, capped: false);
+                return new PathResult(PathType.Incomplete, [start, .. _corners]); // down the slope, short of the far goal
+            }
+
+            bool own = _ownDone++ == 0; // the first steep-excluding search is the bot's own
+            if (_corners.Contains(start)) OnwardQueries++;
+            PathSearchCounters.RecordSearch(own ? 100 : options.MaxSearchNodes, own ? 100 : options.MaxSearchNodes, capped: !own);
+            Vector3 flat = new(end.X - start.X, end.Y - start.Y, 0);
+            Vector3 toward = flat.Length() < 0.01f ? Vector3.UnitX : Vector3.Normalize(flat);
+            return new PathResult(PathType.Incomplete, [start, start + (new Vector3(-toward.Y, toward.X, 0) * 3f)]);
+        }
+    }
+
+    /// <summary>
     /// A mesh on which every query ends three yards beside its start, short of its end and no closer to it (a partial answer: the
     /// visited polygon nearest the goal, beside the bot), each a search that used <see cref="NodesPerQuery"/> of its node bound and, when
     /// <see cref="Capped"/>, hit it (PathSearchCounters, as NavMeshQuery records it).

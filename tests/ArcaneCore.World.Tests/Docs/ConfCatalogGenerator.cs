@@ -60,6 +60,7 @@ internal static class ConfCatalogGenerator
 
     private static string AllowedOf(ConfigEntry entry)
     {
+        if (entry.AllowedOverride is { } allowed) return allowed;
         switch (entry.Kind)
         {
             case ConfKey.Scalar:

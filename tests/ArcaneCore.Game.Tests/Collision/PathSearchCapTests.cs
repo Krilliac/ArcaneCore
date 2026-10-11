@@ -73,4 +73,32 @@ public sealed class PathSearchCapTests
         Assert.Equal(0, spent.Capped);
         Assert.True(spent.Expansions > 0 && spent.Nodes > 16);
     }
+
+    /// <summary>
+    /// A real dead end below the cap: the goal lies on an island the mesh does not join (a wall of missing cells splits the tile in two),
+    /// so the search runs out of corridor after the 200 polygons of its own side, long before its 4 096-node cap. It is not counted
+    /// capped: the discriminator the bots use (PlayerbotNavigation: a fragment versus a far goal) comes from the real A*, not a flag.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ADisconnectedIsland_BelowTheCap_IsADeadEnd_NotCapped(bool partial)
+    {
+        using var fixture = new NavMeshFixture();
+        fixture.WriteParams(MapId);
+        fixture.WriteTile(MapId, 31, 31, new CellTile(0, 0, 0, 0, 20, 20) { Walkable = (i, _) => i != 10 }); // column 10 missing
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(MapId, 31, 31));
+        PathSearchTotals before = PathSearchCounters.Current;
+
+        PathResult path = nav.FindPath(MapId, new Vector3(1, 20, 0), new Vector3(39, 20, 0),
+            new PathOptions { MaxSearchNodes = 4096, AllowPartial = partial });
+
+        PathSearchTotals spent = PathSearchCounters.Current - before;
+        Assert.Equal(partial ? PathType.Incomplete : PathType.NoPath, path.Type & (PathType.Incomplete | PathType.NoPath));
+        if (partial) Assert.True(path.End.X <= 20.01f, $"the partial path crossed the gap (column 10, X 20 to 22) to {path.End}");
+        Assert.Equal(1, spent.Searches);
+        Assert.Equal(0, spent.Capped);
+        Assert.InRange(spent.Nodes, 100, 4095); // the whole west side was searched, the cap never reached
+    }
 }

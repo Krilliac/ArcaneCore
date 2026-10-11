@@ -12744,7 +12744,7 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the starts beside the bot, the hazard detours; `PlayerbotThinkProbe.NodeBudget`): past it a fallback runs with what is left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held to it nor counted. 0 = no bound, else 2048..10000000; three of the largest single searches (`PlayerbotNavigation.MaxSearchNodes`) by default. Live: `.reload config`.",
-      "allowed": "a whole number, -2147483648 to 2147483647",
+      "allowed": "0 (no bound), or a whole number from 2048 to 10000000",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -13519,7 +13519,7 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches (`PlayerbotSlowThinkLog`; 0 = off, 0..60000). Live: `.reload config` applies a change at once.",
-      "allowed": "a number, '.' is the decimal point",
+      "allowed": "a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

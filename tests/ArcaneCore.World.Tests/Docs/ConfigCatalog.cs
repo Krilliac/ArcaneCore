@@ -26,7 +26,8 @@ internal sealed record ConfigEntry(
     string ElementType = "string",
     IReadOnlyList<string>? EnumValues = null,
     string? RawDefault = null,
-    IReadOnlyList<ConfDefaultEntry>? DefaultEntries = null);
+    IReadOnlyList<ConfDefaultEntry>? DefaultEntries = null,
+    string? AllowedOverride = null);
 
 /// <summary>The catalog and every reason it could not be built cleanly (an empty list means complete).</summary>
 internal sealed record ConfigCatalogResult(IReadOnlyList<ConfigEntry> Entries, IReadOnlyList<string> Problems);
@@ -137,7 +138,11 @@ internal static class ConfigCatalog
                     meaning += (meaning.Length > 0 ? " " : string.Empty) + "Values: " + string.Join(", ", Enum.GetNames(propertyType).Select(n => "`" + n + "`")) + ".";
                 }
 
-                entries.Add(Leaf(section, path, property.PropertyType, propertyType, value, meaning, reload(path) ?? "-", propertyDaemons, problems));
+                ConfigEntry leaf = Leaf(section, path, property.PropertyType, propertyType, value, meaning, reload(path) ?? "-", propertyDaemons, problems);
+                // An option's real range (ConfigAllowedAttribute) replaces the type's own in the "Allowed" line.
+                if (property.GetCustomAttribute<ArcaneCore.Kernel.Configuration.ConfigAllowedAttribute>(inherit: false) is { } allowed)
+                    leaf = leaf with { AllowedOverride = allowed.Allowed };
+                entries.Add(leaf);
                 continue;
             }
 

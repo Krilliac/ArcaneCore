@@ -10310,7 +10310,7 @@ World.Playerbots.MaxRouteYards = 2000
 #                     config.
 #        Type: int
 #        Default: 98304
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: 0 (no bound), or a whole number from 2048 to 10000000
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
@@ -10827,7 +10827,7 @@ World.Playerbots.Scenarios.StepTimeoutSeconds = 20
 #                     Live: .reload config applies a change at once.
 #        Type: double
 #        Default: 50
-#        Allowed: a number, '.' is the decimal point
+#        Allowed: a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
