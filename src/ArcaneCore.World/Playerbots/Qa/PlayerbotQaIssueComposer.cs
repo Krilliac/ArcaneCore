@@ -38,7 +38,12 @@ internal static class PlayerbotQaIssueComposer
         Row(sb, "First seen (UTC)", f.FirstSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Last seen (UTC)", f.LastSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Build", PlayerbotQaRedactor.RedactSecrets(build));
-        if (f.QuestTitle is not null) Row(sb, "Quest", string.Create(CultureInfo.InvariantCulture, $"{f.Quest} {redactor.Redact(f.QuestTitle)}"));
+        if (f.Kind == QaSignalKind.Stall && f.Goal.Length != 0) Row(sb, "Goal", f.Goal);
+        // A stall's quest is the subject only for a Quest goal; for any other goal it is the last quest the bot remembers (GitHub #154).
+        if (f.QuestTitle is not null)
+        {
+            Row(sb, f.QuestIsGoal ? "Quest" : "Last quest (not the goal)", string.Create(CultureInfo.InvariantCulture, $"{f.Quest} {redactor.Redact(f.QuestTitle)}"));
+        }
         sb.Append("\n## Likely cause\n\n").Append(Cell(redactor.Redact(f.CauseDetail))).Append("\n\n");
 
         sb.Append("## Evidence\n\n");
@@ -51,7 +56,7 @@ internal static class PlayerbotQaIssueComposer
 
         sb.Append("\n## Reproduction\n\n");
         if (PlayerbotQaReport.GoHint(f) is { } go) sb.Append("- Teleport to the place: `").Append(go).Append("`\n");
-        if (f.Quest != 0)
+        if (f.Quest != 0 && f.QuestIsGoal)
         {
             sb.Append(CultureInfo.InvariantCulture, $"- Find the quest: `.lookup quest {Code(redactor.Redact(f.QuestTitle ?? f.Quest.ToString(CultureInfo.InvariantCulture)))}` (id {f.Quest})\n");
         }

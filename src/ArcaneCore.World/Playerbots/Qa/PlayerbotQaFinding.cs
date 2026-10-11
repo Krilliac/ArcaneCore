@@ -80,6 +80,12 @@ internal sealed record QaFindingView
     /// <summary>What it is about, in words (the issue title after the kind).</summary>
     public string Subject { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The goal the bot held (<c>goal=</c> of a stall; <c>Quest</c> or <c>Entry</c> of a set-aside). Empty in files written before 2026-10-11:
+    /// <see cref="PlayerbotQaAggregator.Restore"/> takes it from the key then.
+    /// </summary>
+    public string Goal { get; init; } = string.Empty;
+
     public long Count { get; init; }
 
     public int DistinctBots { get; init; }
@@ -121,6 +127,17 @@ internal sealed record QaFindingView
     [JsonIgnore]
     public string KindLabel => LabelOf(Kind);
 
+    /// <summary>
+    /// Whether <see cref="Quest"/> is what the finding is about. A stall's <c>quest=</c> is the last quest the bot's brain remembers; it is the
+    /// subject only when the goal is Quest (a goal-less stall of an old file keeps the old reading). For every other goal it is shown as the last
+    /// quest, not the goal.
+    /// </summary>
+    [JsonIgnore]
+    public bool QuestIsGoal => Goal.Length == 0 || QuestIsGoalOf(Kind, Goal);
+
+    internal static bool QuestIsGoalOf(QaSignalKind kind, string goal)
+        => kind != QaSignalKind.Stall || string.Equals(goal, "Quest", StringComparison.Ordinal);
+
     internal static string LabelOf(QaSignalKind kind) => kind switch
     {
         QaSignalKind.Stall => "stall",
@@ -150,6 +167,8 @@ internal sealed class QaFinding
     public required QaSignalKind Kind { get; init; }
 
     public string Subject { get; set; } = string.Empty;
+
+    public string Goal { get; set; } = string.Empty;
 
     public long Count { get; set; }
 
@@ -189,7 +208,7 @@ internal sealed class QaFinding
 
     public QaFindingView ToView() => new()
     {
-        Id = Id, Key = Key, Kind = Kind, Subject = Subject, Count = Count, DistinctBots = DistinctBots, FirstSeenUtc = FirstSeenUtc,
+        Id = Id, Key = Key, Kind = Kind, Subject = Subject, Goal = Goal, Count = Count, DistinctBots = DistinctBots, FirstSeenUtc = FirstSeenUtc,
         LastSeenUtc = LastSeenUtc, Samples = [.. Samples], Quest = Quest, Target = Target, Map = Map, QuestTitle = QuestTitle, Cause = Cause,
         CauseDetail = CauseDetail, Severity = Severity, Publication = Publication, LastCommentUtc = LastCommentUtc,
         OccurrencesReported = OccurrencesReported,
