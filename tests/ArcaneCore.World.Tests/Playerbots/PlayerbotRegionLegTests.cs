@@ -1,12 +1,7 @@
 using System.Numerics;
-using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Tests.Collision;
-using ArcaneCore.World.Features;
-using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
-using ArcaneCore.World.Teleport;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -35,7 +30,7 @@ public sealed class PlayerbotRegionLegTests : IDisposable
     [Fact]
     public async Task AFarGoalBehindADeadEnd_IsReachedLegByLeg_RoundIt()
     {
-        await using Synthetic world = await Synthetic.StartAsync(_fixture);
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
         await world.PlaceAsync(Start);
         var ends = new List<Vector3>();
         for (int leg = 0; leg < 12 && (ends.Count == 0 || Vector3.Distance(ends[^1], Goal) > 0.5f); leg++)
@@ -64,7 +59,7 @@ public sealed class PlayerbotRegionLegTests : IDisposable
     [InlineData(220f, 75f, 5f)] // 110: the goal itself
     public async Task ALeg_EndsAtTheFarthestPointOfTheWay_WithinHalfARoute(float maxRouteYards, float x, float y)
     {
-        await using Synthetic world = await Synthetic.StartAsync(_fixture);
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
         await world.PlaceAsync(new Vector3(20, 41, 0));
         var options = new PlayerbotOptions { MaxRouteYards = maxRouteYards, MaxPathPoints = 22 };
         PlayerbotRoute? route = await world.Host.OnWorldAsync(() =>
@@ -75,69 +70,12 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.True(Vector2.Distance(new(end.X, end.Y), new(x, y)) < 0.5f, $"the leg ends at {end}");
     }
 
-    /// <summary>A world with one managed bot on map 0, the fixture's mesh as its pathfinder and the region graph built.</summary>
-    private sealed class Synthetic : IAsyncDisposable
-    {
-        private Synthetic(WorldTestHost host, WorldSession session)
-        {
-            Host = host;
-            Session = session;
-        }
-
-        public WorldTestHost Host { get; }
-
-        public WorldSession Session { get; }
-
-        public Game.Entities.Player Player => Session.Player!;
-
-        public static async Task<Synthetic> StartAsync(NavMeshFixture fixture)
-        {
-            // The layout of NavRegionGraphTests: Detour tile (x, y) covers world Y from 40x and world X from 40y.
-            fixture.WriteParams(0);
-            fixture.WriteTile(0, 10, 10, new CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2] });
-            fixture.WriteTile(0, 10, 11, new CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6], Walkable = (i, _) => i >= 6 });
-            fixture.WriteTile(0, 11, 10, new CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [2, 4] });
-            fixture.WriteTile(0, 11, 11, new CellTile(1, 1, 40, 40, 8, 8, Size: 5) { LinkedSides = [4, 6] });
-            var nav = new NavMeshPathfinder(fixture.Directory);
-            foreach ((int x, int y) in (ValueTuple<int, int>[])[(10, 10), (10, 11), (11, 10), (11, 11)])
-                Assert.True(nav.LoadTile(0, x, y));
-            Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
-
-            WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
-            await host.OnWorldAsync(() => WorldCollision.Of(host.World).Install(pathfinder: nav));
-            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
-            return new Synthetic(host, session);
-        }
-
-        public async Task PlaceAsync(Vector3 at)
-        {
-            var teleports = Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-            Assert.True(await Host.OnWorldAsync(() => teleports.TeleportTo(Player, 0, at.X, at.Y, at.Z, 0)), "teleport refused");
-            for (int tick = 0; tick < 200; tick++)
-            {
-                bool there = await Host.OnWorldAsync(() =>
-                {
-                    PlayerbotMovementControl.Update(Session, Player);
-                    return Player.IsInWorld && teleports.StageOf(Player) is null && Player.MapId == 0
-                        && Vector2.Distance(new(Player.X, Player.Y), new(at.X, at.Y)) < 0.1f;
-                });
-                if (there) return;
-                await Host.World.AdvanceClockAsync(50);
-            }
-
-            throw new TimeoutException($"the bot did not arrive at {at}");
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            Session.Kick();
-            await Session.ManagedClosed;
-            await Host.DisposeAsync();
-        }
-
-        private sealed class ManualClock : IWorldFeature
-        {
-            public void Attach(Game.Maps.WorldRuntime world) => world.UseManualClock();
-        }
-    }
+    // The layout of NavRegionGraphTests: Detour tile (x, y) covers world Y from 40x and world X from 40y.
+    private static readonly (int X, int Y, CellTile Tile)[] Layout =
+    [
+        (10, 10, new CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2] }),
+        (10, 11, new CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6], Walkable = (i, _) => i >= 6 }),
+        (11, 10, new CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [2, 4] }),
+        (11, 11, new CellTile(1, 1, 40, 40, 8, 8, Size: 5) { LinkedSides = [4, 6] }),
+    ];
 }

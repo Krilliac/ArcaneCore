@@ -5,6 +5,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -199,9 +200,13 @@ internal static class PlayerbotNavigation
             pick = i;
         }
 
-        // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially.
+        // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
+        // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
+        // straight-line steps still get their turn.
         if (Plan(player, portals[pick], portals[pick], options, partial: true, out route, out _)) return true;
-        return pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, out route, out _);
+        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, out route, out _)) return true;
+        route = null;
+        return null;
     }
 
     /// <summary>
@@ -528,11 +533,16 @@ internal static class PlayerbotNavigation
     /// leads up its lower stairs and ends 13 yards below her, where the upper flight is flagged steep. Every bot that reached Kargath
     /// stood there (issue #194).
     /// </para>
+    /// <para>
+    /// Not in a dungeon, raid or battleground (<see cref="MapTemplate.IsDungeon"/>, <see cref="MapTemplate.IsBattleground"/>): there
+    /// nearly every place is indoors, so the indoor test would not tell stairs from slopes, and no stall there is known to need it.
+    /// </para>
     /// </summary>
     private static bool TryClimbIndoors(Map map, Vector3 start, Vector3 destination, PlayerbotOptions options, PathResult? walk,
         out PlayerbotRoute? route)
     {
         route = null;
+        if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
         if (map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)) return false;
         PathResult reach = walk ?? Query(map, start, destination, options, partial: true, steep: false);
         if (!reach.HasPath || (reach.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || Reaches(reach) || EndsAt(reach, destination)

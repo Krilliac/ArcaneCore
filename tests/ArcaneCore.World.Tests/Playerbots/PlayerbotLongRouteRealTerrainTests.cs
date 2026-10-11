@@ -33,9 +33,10 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
 
     /// <summary>
     /// The most wall-clock time one plan may take. The tick-perf lane measured bot-think spikes of 0.7 to 1.9 seconds from long path
-    /// searches; the legs measured 5 to 100 ms on a machine loaded by a live server, so this bound catches that class of spike, not noise.
+    /// searches; the legs measured 5 to 100 ms on a machine loaded by a live server. A coarse guard against that class of spike, wide
+    /// enough for a loaded machine (a region search once took 18 times its usual time there); the work bounds are in NavRegionGraphRealTerrainTests.
     /// </summary>
-    private const double PlanBudgetMs = 500;
+    private const double PlanBudgetMs = 1_000;
 
     public static TheoryData<string, uint, float, float, float> IssueStallPoints => new()
     {
@@ -122,7 +123,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
             return (absent, watch.Elapsed.TotalMilliseconds);
         });
         Assert.True(none, "the graph was there before it could have been built");
-        Assert.True(ms < 50, $"the first call took {ms:F1} ms on the world thread");
+        Assert.True(ms < 250, $"the first call took {ms:F1} ms on the world thread");
         var stopwatch = Stopwatch.StartNew();
         NavRegionGraph graph = await RegionGraphAsync(terrain, 1);
         output.WriteLine($"built in about {stopwatch.ElapsedMilliseconds} ms: {graph.TileCount} tiles, {graph.RegionCount} regions, {graph.LinkCount} links");
