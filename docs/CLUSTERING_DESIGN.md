@@ -357,9 +357,9 @@ validates and applies them on its own tick. Common rules (planned):
 
 1. **Boundary.** Warden is per connection and reads no world state. The session's
    two RC4 streams are derived from the 40-byte session key K
-   (`Warden/WardenSession.cs:44-66`, `Warden/WardenCrypto.cs`). The handshake
+   (`Warden/WardenSession.cs:52-77`, `Warden/WardenCrypto.cs`). The handshake
    state machine, deadlines, scan batches and checksum checks
-   (`WardenSession.cs:4-13`, `:173-245`) run where the client connection and K
+   (`WardenSession.cs:4-13`, `:187-277`) run where the client connection and K
    already live: the World session today (`Net/WorldSession.cs:833-841`), and the
    gateway in cluster mode (the gateway owns the cipher, above). A separate Warden
    process would need K or both RC4 states, and every CMSG/SMSG_WARDEN_DATA body,
@@ -378,7 +378,7 @@ validates and applies them on its own tick. Common rules (planned):
    reason, action, check id)` to operators. Idempotency: a verdict belongs to
    one session generation, so a stale generation is ignored.
 3. **Failure.** A Warden failure is the session's protocol failure, and
-   `ProtocolAction` applies (never above Kick, `WardenSession.cs:247-252`).
+   `ProtocolAction` applies (never above Kick, `WardenSession.cs:283-284`).
    Today, Warden enabled with a missing or corrupt module logs an error and runs
    unscanned (`WardenFeature.cs:47-51`). In cluster mode (planned), a gateway with
    `Warden:Enabled` true reports not ready unless its module is usable. All

@@ -20,9 +20,13 @@ public sealed record WardenVerdict(string Reason, WardenAction Action, bool IsPr
 /// in MODULE_CACHE chunks (once); a loaded module answers HASH_REQUEST with the expected 20 bytes, after which both RC4 directions switch
 /// to the module's keys and MODULE_INITIALIZE installs the client callbacks. From then on a CHEAT_CHECKS_REQUEST goes out at a random gap
 /// and every scan of the reply is checked (vmangos Warden::HandlePacket). Every awaited reply has a deadline; a protocol break or a late
-/// reply is <see cref="WardenOptions.ProtocolAction"/>; Log retries the handshake or schedules another scan. A failed scan uses
-/// its own action or <see cref="WardenOptions.Action"/>.
-/// Thread-safe: the packet arrives on the session task, the update on the world thread.
+/// reply is <see cref="WardenOptions.ProtocolAction"/>, capped at Kick (vmangos uses WARDEN_ACTION_KICK for every protocol penalty).
+/// Under Log a failure sends nothing back: the handshake keeps waiting for its single outstanding request, and a failed scan batch is
+/// sent once more, then skipped. Failures to a request the server made are strikes; the <see cref="WardenOptions.MaxProtocolFailures"/>th
+/// strike kicks even under Log, and a valid reply forgives one. Unsolicited packets are never strikes. Repeated Log verdicts are reported
+/// at most once per <see cref="WardenOptions.ProtocolReportIntervalSeconds"/>, then as one count. A failed scan uses its own action or
+/// <see cref="WardenOptions.Action"/>.
+/// Thread-safe: the packet arrives on the session task, the update on the world thread; every member runs under one lock.
 /// </summary>
 public sealed class WardenSession
 {
@@ -39,6 +43,11 @@ public sealed class WardenSession
     private long _nextScanMs;
     private int _nextCheck;
     private bool _transferred;
+    private bool _batchRetried;
+    private int _strikes;
+    private long _quietUntilMs;
+    private int _suppressed;
+    private string _lastSuppressed = string.Empty;
 
     /// <summary>Create the session's Warden. <paramref name="sessionKey"/> is the 40-byte login key K; it is not retained.</summary>
     /// <param name="checks">The scans to run; null runs <c>options.Checks</c>.</param>
@@ -132,6 +141,7 @@ public sealed class WardenSession
                 case WardenState.AwaitingTransferResult:
                     if (command == WardenClientCommand.ModuleOk)
                     {
+                        Forgive();
                         SendPlain(WardenCodec.HashRequest());
                         Await(WardenState.AwaitingHash);
                     }
@@ -148,7 +158,10 @@ public sealed class WardenSession
                     }
                     else
                     {
-                        Fail(command == WardenClientCommand.ModuleFailed ? "the client failed to load the module" : $"unexpected command {command}");
+                        // A miss after the transfer is a failed load too (vmangos Warden.cpp:546-552 kicks); the module is not offered again.
+                        Fail(command == WardenClientCommand.ModuleFailed ? "the client failed to load the module"
+                            : command == WardenClientCommand.ModuleMissing ? "the client still lacks the module after the transfer"
+                            : $"unexpected command {command}");
                     }
 
                     return;
@@ -161,6 +174,7 @@ public sealed class WardenSession
                         return;
                     }
 
+                    Forgive();
                     _crypto.InstallModuleKeys(WardenModuleProfile.ClientKeySeed, WardenModuleProfile.ServerKeySeed);
                     SendPlain(WardenCodec.ModuleInitialize()); // the first body under the module's keys; the module does not acknowledge it
                     State = WardenState.Ready;
@@ -176,10 +190,19 @@ public sealed class WardenSession
         lock (_lock)
         {
             ClockMs += diffMs;
+            if (State is WardenState.NotStarted or WardenState.Failed)
+            {
+                return;
+            }
+
+            if (_suppressed > 0 && ClockMs >= _quietUntilMs)
+            {
+                ReportSuppressed();
+                _quietUntilMs = ClockMs + (1000L * _options.ProtocolReportIntervalSeconds);
+            }
+
             switch (State)
             {
-                case WardenState.NotStarted or WardenState.Failed:
-                    return;
                 case WardenState.Ready:
                     if (ClockMs >= _nextScanMs)
                     {
@@ -190,7 +213,13 @@ public sealed class WardenSession
                 default:
                     if (ClockMs >= _deadlineMs)
                     {
-                        Fail($"no reply in {_options.ResponseTimeoutSeconds} s ({State})"); // vmangos Warden::Update client response timeout
+                        WardenState timedOut = State;
+                        Fail($"no reply in {_options.ResponseTimeoutSeconds} s ({timedOut})"); // vmangos Warden::Update client response timeout
+                        if (State == timedOut)
+                        {
+                            // A handshake stage under Log keeps waiting for its one outstanding request; nothing is re-sent.
+                            Await(timedOut);
+                        }
                     }
 
                     return;
@@ -224,6 +253,8 @@ public sealed class WardenSession
         }
 
         _pending = null;
+        _batchRetried = false;
+        Forgive();
         State = WardenState.Ready;
         ScheduleScan();
         foreach (WardenCheck check in failed)
@@ -248,42 +279,85 @@ public sealed class WardenSession
     private void Fail(string reason)
     {
         WardenState failedState = State;
-        int pendingCount = _pending?.Count ?? 0;
-        _pending = null;
-        WardenAction action = _options.ProtocolAction;
-        if (action != WardenAction.Log)
+
+        // Never above Kick: a late reply from a lagging client must not ban its account (vmangos Warden.cpp:166-173, 583, 589, 664).
+        WardenAction action = _options.ProtocolAction == WardenAction.Log ? WardenAction.Log : WardenAction.Kick;
+
+        // A failure to answer what the server asked is a strike; an unsolicited packet in Ready is not (it cannot stop scans).
+        if (failedState != WardenState.Ready && ++_strikes >= _options.MaxProtocolFailures && action == WardenAction.Log)
         {
-            State = WardenState.Failed;
+            action = WardenAction.Kick;
+            reason = $"{reason}; {_strikes} protocol failures without a valid reply";
         }
 
-        _report(new WardenVerdict(reason, action, true, null));
         if (action != WardenAction.Log)
+        {
+            _pending = null;
+            State = WardenState.Failed;
+            ReportSuppressed();
+            _report(new WardenVerdict(reason, action, true, null));
+            return;
+        }
+
+        ReportThrottled(reason);
+
+        // A Log verdict keeps the client online, so it must also leave a live Warden cycle, without answering the client with a packet.
+        // The received body was already decrypted; both RC4 directions remain aligned.
+        // Ready: an unsolicited packet must not push the scheduled scan into the future.
+        // Handshake stages: keep waiting for the one outstanding request and its deadline. Re-sending HASH_REQUEST under the old keys
+        // would desynchronize RC4 with a client whose late reply already switched to the module keys.
+        if (failedState == WardenState.AwaitingCheckResult)
+        {
+            // Re-run a failed batch once so one bad reply does not skip its checks; a second failure advances past it.
+            if (_batchRetried)
+            {
+                _batchRetried = false;
+            }
+            else
+            {
+                _nextCheck = (_nextCheck - _pending!.Count + _checks.Count) % _checks.Count;
+                _batchRetried = true;
+            }
+
+            _pending = null;
+            State = WardenState.Ready;
+            ScheduleScan();
+        }
+    }
+
+    /// <summary>A valid reply forgives one strike, so a client alternating good and bad replies still reaches the limit.</summary>
+    private void Forgive()
+    {
+        if (_strikes > 0)
+        {
+            _strikes--;
+        }
+    }
+
+    /// <summary>Report a Log verdict, or count it while the previous one is less than an interval old.</summary>
+    private void ReportThrottled(string reason)
+    {
+        if (ClockMs < _quietUntilMs)
+        {
+            _suppressed++;
+            _lastSuppressed = reason;
+            return;
+        }
+
+        ReportSuppressed();
+        _report(new WardenVerdict(reason, WardenAction.Log, true, null));
+        _quietUntilMs = ClockMs + (1000L * _options.ProtocolReportIntervalSeconds);
+    }
+
+    private void ReportSuppressed()
+    {
+        if (_suppressed == 0)
         {
             return;
         }
 
-        // A Log verdict keeps the client online, so it must also leave a live Warden cycle.
-        // The received body was already decrypted; both RC4 directions remain aligned.
-        switch (failedState)
-        {
-            case WardenState.Ready:
-                // Unsolicited packets must not push an already scheduled scan into the future.
-                break;
-            case WardenState.AwaitingCheckResult:
-                // Re-run an unanswered batch instead of letting a malformed reply skip its checks.
-                _nextCheck = (_nextCheck - pendingCount + _checks.Count) % _checks.Count;
-                State = WardenState.Ready;
-                ScheduleScan();
-                break;
-            case WardenState.AwaitingHash:
-                SendPlain(WardenCodec.HashRequest());
-                Await(WardenState.AwaitingHash);
-                break;
-            case WardenState.AwaitingModuleStatus or WardenState.AwaitingTransferResult:
-                SendPlain(WardenCodec.ModuleUse(_module.Length));
-                Await(WardenState.AwaitingModuleStatus);
-                break;
-        }
+        _report(new WardenVerdict($"{_suppressed} more protocol failure(s) since the last report (last: {_lastSuppressed})", WardenAction.Log, true, null));
+        _suppressed = 0;
     }
 
     private void SendPlain(byte[] plain)

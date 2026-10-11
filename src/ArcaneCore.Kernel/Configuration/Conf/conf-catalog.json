@@ -8803,6 +8803,22 @@
       "isCollection": false
     },
     {
+      "path": "Warden:MaxProtocolFailures",
+      "section": "Warden",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Warden:MaxProtocolFailures: protocol failures to the server's own requests (a bad or late reply, a failed module load) that disconnect the session even under ProtocolAction Log. Each valid reply forgives one. Unsolicited packets never count. 1-100, default 3.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#warden",
+      "isCollection": false
+    },
+    {
       "path": "Warden:ProtocolAction",
       "section": "Warden",
       "type": "WardenAction",
@@ -8817,8 +8833,24 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Log retries without ending scans; Kick disconnects, and Ban bans and disconnects. Default Log. Values: `Log`, `Kick`, `Ban`.",
+      "meaning": "Warden:ProtocolAction, applied when the handshake or a reply breaks the protocol (a wrong hash, a malformed or late reply, a failed module load). Log keeps the session and keeps scanning, up to `MaxProtocolFailures`; Kick disconnects. Ban is treated as Kick, so a late reply from a lagging client never bans an account (vmangos kicks for every protocol failure). Default Log. Values: `Log`, `Kick`, `Ban`.",
       "allowed": "Log | Kick | Ban",
+      "docs": "docs/reference/configuration.md#warden",
+      "isCollection": false
+    },
+    {
+      "path": "Warden:ProtocolReportIntervalSeconds",
+      "section": "Warden",
+      "type": "uint",
+      "kind": "scalar",
+      "elementType": "uint",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Warden:ProtocolReportIntervalSeconds: under ProtocolAction Log, a session reports at most one protocol failure per interval and then one line with the count of the rest. 1-3600, default 10.",
+      "allowed": "a whole number, 0 to 4294967295",
       "docs": "docs/reference/configuration.md#warden",
       "isCollection": false
     },

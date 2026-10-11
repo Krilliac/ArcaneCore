@@ -73,15 +73,18 @@ public sealed class WardenTests
         }
 
         /// <summary>Encrypt a CHECK_RESULT with its length and folded checksum.</summary>
-        public byte[] Result(params byte[] results)
-        {
-            byte[] body = new byte[7 + results.Length];
-            body[0] = (byte)WardenClientCommand.CheckResult;
-            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), (ushort)results.Length);
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), WardenCodec.Checksum(results));
-            results.CopyTo(body, 7);
-            return Client.Write(body);
-        }
+        public byte[] Result(params byte[] results) => Client.Write(CheckResultBody(results));
+    }
+
+    /// <summary>A plain CHECK_RESULT with its length and folded checksum.</summary>
+    private static byte[] CheckResultBody(params byte[] results)
+    {
+        byte[] body = new byte[7 + results.Length];
+        body[0] = (byte)WardenClientCommand.CheckResult;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), (ushort)results.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), WardenCodec.Checksum(results));
+        results.CopyTo(body, 7);
+        return body;
     }
 
     [Fact]
@@ -160,7 +163,7 @@ public sealed class WardenTests
     }
 
     [Fact]
-    public void AWrongHash_UsesTheConfiguredBanAction()
+    public void AWrongHash_CapsTheConfiguredBanActionAtKick()
     {
         var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Ban });
         rig.Warden.Start();
@@ -169,7 +172,7 @@ public sealed class WardenTests
 
         WardenVerdict verdict = Assert.Single(rig.Verdicts);
         Assert.True(verdict.IsProtocolFailure);
-        Assert.Equal(WardenAction.Ban, verdict.Action);
+        Assert.Equal(WardenAction.Kick, verdict.Action);
         Assert.Equal(WardenState.Failed, rig.Warden.State);
     }
 
@@ -186,7 +189,7 @@ public sealed class WardenTests
 
         Assert.Equal(WardenAction.Log, Assert.Single(rig.Verdicts).Action);
         Assert.Equal(WardenState.AwaitingHash, rig.Warden.State);
-        Assert.Equal((byte)WardenServerCommand.HashRequest, rig.Next()[0]);
+        Assert.Equal(2, rig.Sent.Count); // keep the in-flight challenge; no RC4-desynchronizing resend
         rig.Warden.Handle(rig.Client.Write([(byte)WardenClientCommand.HashResult, .. WardenModuleProfile.ClientKeySeedHash]));
         rig.Client.SwitchToModuleKeys();
         Assert.Equal((byte)WardenServerCommand.ModuleInitialize, rig.Next()[0]);
@@ -195,7 +198,7 @@ public sealed class WardenTests
     }
 
     [Fact]
-    public void ASecondMissingModule_UnderLog_RetriesTheModuleOffer()
+    public void RepeatedMissingModule_UnderLog_StopsAfterTheBoundedAttempts()
     {
         var rig = new Rig();
         rig.Warden.Start();
@@ -206,10 +209,14 @@ public sealed class WardenTests
             rig.Client.Read(chunk);
         }
 
-        rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.ModuleMissing));
-        Assert.Equal(WardenAction.Log, Assert.Single(rig.Verdicts).Action);
-        Assert.Equal(WardenState.AwaitingModuleStatus, rig.Warden.State);
-        Assert.Equal((byte)WardenServerCommand.ModuleUse, rig.Next()[0]);
+        for (int i = 0; i < 4 && rig.Warden.State != WardenState.Failed; i++)
+        {
+            rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.ModuleMissing));
+        }
+
+        Assert.Equal(WardenState.Failed, rig.Warden.State);
+        Assert.Equal(WardenAction.Kick, rig.Verdicts[^1].Action);
+        Assert.True(rig.Sent.Count <= 40, "repeated misses must not cause one MODULE_USE per reply");
     }
 
     [Fact]
@@ -346,6 +353,25 @@ public sealed class WardenTests
     }
 
     [Fact]
+    public void RepeatedUnsolicitedReplies_UnderLog_AggregateVerdictsWithoutSendingPackets()
+    {
+        var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log,
+            ScanIntervalMinSeconds = 120, ScanIntervalMaxSeconds = 120 });
+        rig.Handshake();
+        int sent = rig.Sent.Count;
+        for (int i = 0; i < 100; i++)
+        {
+            rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
+        }
+
+        Assert.Equal(sent, rig.Sent.Count);
+        Assert.Single(rig.Verdicts);
+        rig.Warden.Update(60_000);
+        Assert.Equal(2, rig.Verdicts.Count);
+        Assert.Contains("99", rig.Verdicts[^1].Reason);
+    }
+
+    [Fact]
     public void AMalformedScanReply_UnderLog_DoesNotStopFutureScans()
     {
         var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log,
@@ -386,6 +412,61 @@ public sealed class WardenTests
     }
 
     [Fact]
+    public void RepeatedMalformedScanReplies_UnderLog_EndInKick()
+    {
+        var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log,
+            ScanIntervalMinSeconds = 10, ScanIntervalMaxSeconds = 10 });
+        rig.Handshake();
+        for (int i = 0; i < 3; i++)
+        {
+            rig.Warden.Update(10_000);
+            Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, rig.Next()[0]);
+            rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
+        }
+
+        Assert.Equal(WardenState.Failed, rig.Warden.State);
+        Assert.Equal(WardenAction.Kick, rig.Verdicts[^1].Action);
+    }
+
+    [Fact]
+    public void RepeatedScanTimeouts_UnderLog_EndInKick()
+    {
+        var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log,
+            ResponseTimeoutSeconds = 2, ScanIntervalMinSeconds = 10, ScanIntervalMaxSeconds = 10 });
+        rig.Handshake();
+        for (int i = 0; i < 3; i++)
+        {
+            rig.Warden.Update(10_000);
+            Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, rig.Next()[0]);
+            rig.Warden.Update(2_000);
+        }
+
+        Assert.Equal(WardenState.Failed, rig.Warden.State);
+        Assert.Equal(WardenAction.Kick, rig.Verdicts[^1].Action);
+    }
+
+    [Fact]
+    public void AFailedCheckBatch_IsRetriedOnlyOnce_ThenOtherChecksRun()
+    {
+        WardenOptions options = Scans(
+            new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Timing },
+            new WardenCheckOptions { Id = 2, Kind = WardenCheckKind.Memory, Address = 0x00401000, Expected = "90" });
+        options.ProtocolAction = WardenAction.Log;
+        options.ScansPerRequest = 1;
+        var rig = new Rig(options);
+        rig.Handshake();
+        rig.Warden.Update(10_000);
+        byte[] first = rig.Next();
+        rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
+        rig.Warden.Update(10_000);
+        Assert.Equal(first, rig.Next());
+        rig.Warden.Handle(rig.Client.Write((byte)WardenClientCommand.CheckResult));
+
+        rig.Warden.Update(10_000);
+        Assert.NotEqual(first, rig.Next());
+    }
+
+    [Fact]
     public void AnUnsolicitedReply_UnderKick_RequiresDisconnect()
     {
         var rig = new Rig(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Kick });
@@ -412,6 +493,72 @@ public sealed class WardenTests
 
         await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
         await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "Warden kick closed the session");
+    }
+
+    [Fact]
+    public async Task AProtocolFailure_UnderBan_ClosesTheSessionWithoutBanning()
+    {
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IOptions<WardenOptions>>(
+            Options.Create(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Ban, LoadFromDatabase = false })));
+        byte[] key = await host.AddAccountAsync("wardenlag");
+        WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync("wardenlag", key);
+        WorldSession session = Assert.Single(host.Registry.Sessions);
+        WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+        var verdicts = new System.Collections.Concurrent.ConcurrentQueue<WardenVerdict>();
+        feature.Verdict += (_, verdict) => verdicts.Enqueue(verdict);
+
+        await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the protocol failure closed the session");
+
+        Assert.Equal(WardenAction.Kick, Assert.Single(verdicts).Action);
+        Assert.Null(await host.Bans.GetActiveAccountBanAsync(session.AccountId));
+    }
+
+    [Fact]
+    public async Task AFailedScan_UnderBan_BansTheAccountAndClosesTheSession()
+    {
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IOptions<WardenOptions>>(
+            Options.Create(new WardenOptions
+            {
+                Enabled = true,
+                LoadFromDatabase = false,
+                ScanIntervalMinSeconds = 1,
+                ScanIntervalMaxSeconds = 1,
+                BanSeconds = 0,
+                Checks = [new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Memory, Address = 0x00401000, Expected = "90", Action = WardenAction.Ban }],
+            })));
+        byte[] key = await host.AddAccountAsync("wardenban");
+        WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync("wardenban", key);
+        WorldSession session = Assert.Single(host.Registry.Sessions);
+        var warden = new Client(key);
+
+        Assert.Equal((byte)WardenServerCommand.ModuleUse, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write((byte)WardenClientCommand.ModuleOk));
+        Assert.Equal((byte)WardenServerCommand.HashRequest, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write([(byte)WardenClientCommand.HashResult, .. WardenModuleProfile.ClientKeySeedHash]));
+        warden.SwitchToModuleKeys();
+        Assert.Equal((byte)WardenServerCommand.ModuleInitialize, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write(CheckResultBody(0, 0x91))); // the byte at 0x401000 is not 90
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the failed scan closed the session");
+
+        ArcaneCore.Kernel.Accounts.AccountBanRecord? ban = null;
+        for (int attempt = 0; attempt < 100 && ban is null; attempt++)
+        {
+            ban = await host.Bans.GetActiveAccountBanAsync(session.AccountId);
+            if (ban is null)
+            {
+                await Task.Delay(20);
+            }
+        }
+
+        Assert.NotNull(ban);
+        Assert.Equal(WardenFeature.BanAuthor, ban.BannedBy);
+        Assert.True(ban.IsPermanent);
+        Assert.Contains("failed scan 1", ban.Reason);
     }
 
     [Fact]
