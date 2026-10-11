@@ -9,7 +9,8 @@ internal sealed record QaClassification(QaCause Cause, string Detail, string? Qu
 /// Guesses why a signal happened, from the loaded content (<see cref="IQaContentFacts"/>); pure and deterministic. Rules, in order:
 /// missing data (a relay path or script that is not there; a stalled quest/target creature with no spawns on the map, no template, or a
 /// ScriptName the server has no script for), behaviour bug (a fault, quarantine, disable, or a death loop with no attacker), content difficulty
-/// (a death loop against elites, against several kinds of attacker, or against attackers well above the quest's level), otherwise unknown.
+/// (a death loop against elites, against several kinds of attacker, or against attackers well above the quest's level), outside the home (a
+/// stall of a homed bot that stood outside its home area: expected, and nothing was set aside for other bots), otherwise unknown.
 /// A missing-data claim is only made while the content is loaded (<see cref="IQaContentFacts.Available"/>).
 /// </summary>
 internal static class PlayerbotQaClassifier
@@ -71,6 +72,13 @@ internal static class PlayerbotQaClassifier
 
     private static QaClassification Stall(QaSignal s, IQaContentFacts facts, string? title)
     {
+        if (s.Kind == QaSignalKind.Stall && s.OutsideHome)
+        {
+            return new QaClassification(QaCause.OutsideHome,
+                "the bot stood outside its home area (on its way back, or on a turn-in or capital errand that took it out): expected for a homed "
+                + "bot; it set the goal aside for itself only, not for every bot", title);
+        }
+
         uint target = s.Target;
         if (facts.Available)
         {

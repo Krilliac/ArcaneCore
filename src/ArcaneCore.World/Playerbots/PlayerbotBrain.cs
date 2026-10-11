@@ -110,7 +110,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
 
     /// <summary>A goal this bot's stall set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>), until the feature logs it.</summary>
-    internal string? SharedSetAside { get; set; }
+    internal PlayerbotSharedSetAside? SharedSetAside { get; set; }
+
+    /// <summary>
+    /// Whether the bot was outside its home area when it last gave a goal up for a stall (<see cref="GiveUpStalledGoal"/>): that stall
+    /// was not reported to the shared set-asides, and the feature logs it as made outside the home.
+    /// </summary>
+    internal bool StallOutsideHome { get; private set; }
     // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
@@ -677,11 +683,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// and drop the intent, so the next decision picks something else. A quest goal sets its quest and its giver aside (a completed
     /// quest whose ender cannot be reached no longer holds the bot at its giver for good), a vendor or trainer goal that NPC, a
     /// fight its target; an exploring bot turns anywhere.
+    /// <para>
+    /// The stall counts towards the goals set aside for every bot (<see cref="PlayerbotSharedSetAsides"/>) only while the bot is inside
+    /// its home area, or has none. A homed bot outside it (on another map, on its way back, or on a turn-in or capital errand) stalls
+    /// where its home does not keep it: that says nothing about the goal for the bots whose home it is (live 2026-10-11: quest 109,
+    /// ended at Sentinel Hill inside every bot's home, was set aside for all of them by bots stalled in Redridge and at Raven Hill).
+    /// Its own set-aside is unchanged. <see cref="StallOutsideHome"/> tells the feature's log line (and so bot QA) which it was.
+    /// </para>
     /// </summary>
-    private void GiveUpStalledGoal(Player player)
+    internal void GiveUpStalledGoal(Player player)
     {
         uint now = _session.World.NowMs;
-        if (shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now) is { } everyone) SharedSetAside = everyone;
+        StallOutsideHome = _home is { } home && !home.Contains(player);
+        if (!StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
+                new System.Numerics.Vector3(player.X, player.Y, player.Z)) is { } everyone)
+            SharedSetAside = everyone;
         switch (_goal)
         {
             case PlayerbotGoalKind.Quest:
@@ -745,6 +761,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>The quest exchanges (inspection and tests).</summary>
     internal PlayerbotQuestGoals QuestGoals => _quests;
+
+    /// <summary>Set the goal the brain holds, as its decisions would (tests of <see cref="GiveUpStalledGoal"/>).</summary>
+    internal void HoldGoalForTests(PlayerbotGoalKind goal, uint entry, uint quest)
+    {
+        _goal = goal;
+        TargetEntry = entry;
+        QuestId = quest;
+    }
 
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)

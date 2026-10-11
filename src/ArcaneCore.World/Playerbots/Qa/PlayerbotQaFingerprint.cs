@@ -41,7 +41,9 @@ internal static partial class PlayerbotQaFingerprint
             : string.Empty;
         return Version + "|" + (s.Kind switch
         {
-            QaSignalKind.Stall => string.Create(CultureInfo.InvariantCulture, $"stall|goal={s.Goal}|quest={s.Quest}|target={s.Target}") + where,
+            // A stall outside the bot's home is its own finding (QaCause.OutsideHome); the keys of the other stalls are unchanged.
+            QaSignalKind.Stall => string.Create(CultureInfo.InvariantCulture, $"stall|goal={s.Goal}|quest={s.Quest}|target={s.Target}") + where
+                + (s.OutsideHome ? "|outside" : string.Empty),
             QaSignalKind.SharedSetAside => s.Quest != 0
                 ? string.Create(CultureInfo.InvariantCulture, $"setaside|quest={s.Quest}")
                 : string.Create(CultureInfo.InvariantCulture, $"setaside|entry={s.Target}"),

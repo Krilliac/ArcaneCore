@@ -229,6 +229,14 @@ internal sealed class PlayerbotSuspensions
 /// stalled, most on a handful of quests (1656 99 times, 2159 30 times); each bot set its quest aside for ten minutes, picked it again,
 /// stalled again, and the next bot did the same. Bounded (<see cref="MaxKeys"/>, the one reported longest ago goes first); a
 /// set-aside that ends is tried again, and a repeat lasts twice as long (at most <see cref="MaxSetAsideMs"/>).
+/// <para>
+/// Only the stalls of bots inside their home area count (the brain does not report the others, PlayerbotBrain.GiveUpStalledGoal): a
+/// bot outside its home stalls where its home does not want it, which says nothing about the goal for the bots whose home it is.
+/// Live 2026-10-11 (200 bots homed at Sentinel Hill, build f5bc89a5): 46 of the 49 stalls behind the 50 shared set-asides were made
+/// outside the home, by dwarves and gnomes walking from Westfall towards Dun Morogh and Ironforge enders and by bots stuck at Raven Hill
+/// and on the hill west of Lakeshire; quest 109's ender (Gryan Stoutmantle) stands at Sentinel Hill, yet the quest was set aside for
+/// every bot for up to two hours.
+/// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
 internal sealed class PlayerbotSharedSetAsides
@@ -255,9 +263,11 @@ internal sealed class PlayerbotSharedSetAsides
 
     /// <summary>
     /// Bot <paramref name="bot"/> stalled on <paramref name="goal"/> with target <paramref name="entry"/> for quest
-    /// <paramref name="quest"/>. Returns what is newly set aside for every bot ("quest 1656 for 30 min"), or null.
+    /// <paramref name="quest"/> at <paramref name="position"/> on <paramref name="map"/>. Returns what is newly set aside for every bot
+    /// (<see cref="PlayerbotSharedSetAside.Goal"/> "quest 1656 for 30 min", and where the bots that set it aside stalled), or null.
     /// </summary>
-    internal string? Report(PlayerbotGoalKind goal, uint entry, uint quest, ulong bot, uint nowMs)
+    internal PlayerbotSharedSetAside? Report(PlayerbotGoalKind goal, uint entry, uint quest, ulong bot, uint nowMs, uint map = 0,
+        Vector3 position = default)
     {
         (bool Quest, uint Id) key = goal switch
         {
@@ -275,14 +285,16 @@ internal sealed class PlayerbotSharedSetAsides
 
         record.LastMs = nowMs;
         record.Bots.RemoveAll(seen => unchecked(nowMs - seen.AtMs) > WindowMs || seen.Bot == bot);
-        record.Bots.Add((bot, nowMs));
+        record.Bots.Add(new Stall(bot, nowMs, map, position));
         if (record.Bots.Count < BotsToShare || Active(record, nowMs)) return null;
         uint length = (uint)Math.Min((ulong)SetAsideMs << Math.Min(record.Times, 8), MaxSetAsideMs);
         record.Times++;
         record.UntilMs = unchecked(nowMs + length);
+        string stalls = string.Join("; ", record.Bots.Select(seen => string.Create(CultureInfo.InvariantCulture,
+            $"{seen.Position.X:F1},{seen.Position.Y:F1},{seen.Position.Z:F1} map {seen.Map}")));
         record.Bots.Clear();
-        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"{(key.Quest ? "quest" : "entry")} {key.Id} for {length / 60_000} min");
+        return new PlayerbotSharedSetAside(string.Create(CultureInfo.InvariantCulture,
+            $"{(key.Quest ? "quest" : "entry")} {key.Id} for {length / 60_000} min"), stalls);
     }
 
     internal bool IsQuestSetAside(uint quest, uint nowMs) => _records.TryGetValue((true, quest), out Record? record) && Active(record, nowMs);
@@ -291,11 +303,19 @@ internal sealed class PlayerbotSharedSetAsides
 
     private static bool Active(Record record, uint nowMs) => record.UntilMs != 0 && unchecked((int)(record.UntilMs - nowMs)) > 0;
 
+    private readonly record struct Stall(ulong Bot, uint AtMs, uint Map, Vector3 Position);
+
     private sealed class Record
     {
-        public List<(ulong Bot, uint AtMs)> Bots { get; } = [];
+        public List<Stall> Bots { get; } = [];
         public uint UntilMs { get; set; }
         public int Times { get; set; }
         public uint LastMs { get; set; }
     }
 }
+
+/// <summary>
+/// A goal newly set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>): <see cref="Goal"/> as the log names it
+/// ("quest 1656 for 30 min") and <see cref="Stalls"/>, where the bots whose stalls set it aside stood ("x,y,z map m; ..."), oldest first.
+/// </summary>
+internal readonly record struct PlayerbotSharedSetAside(string Goal, string Stalls);

@@ -221,7 +221,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         return s.Kind switch
         {
             QaSignalKind.Stall => (s.Quest != 0 ? quest : $"goal {s.Goal}") + (s.Target != 0 ? string.Create(CultureInfo.InvariantCulture, $" target {s.Target}") : string.Empty) + near,
-            QaSignalKind.SharedSetAside => s.Quest != 0 ? quest + " set aside by every bot" : string.Create(CultureInfo.InvariantCulture, $"entry {s.Target} set aside by every bot"),
+            // "for every bot after N stalled": the line names the bots that stalled (BotsToShare), not every bot of the world.
+            QaSignalKind.SharedSetAside => (s.Quest != 0 ? quest : string.Create(CultureInfo.InvariantCulture, $"entry {s.Target}"))
+                + string.Create(CultureInfo.InvariantCulture, $" set aside for every bot after {s.BotCount} stalled"),
             QaSignalKind.DeathLoop => near.TrimStart() + (s.Attackers.Count == 0 ? " attackers none" : " attackers " + string.Join('/', s.Attackers)),
             QaSignalKind.ActionFault => (s.ExceptionType.Length != 0 ? s.ExceptionType : "fault") + " " + (s.FaultCode.Length != 0 ? s.FaultCode : Short(s.Detail)),
             QaSignalKind.Quarantine => s.FaultCode.Length != 0 ? s.FaultCode : Short(s.Detail),

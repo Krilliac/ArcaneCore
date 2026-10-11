@@ -223,6 +223,32 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   (`... state=inside mode=auto teleports=1 last-teleport=distance`). The set reply names the zone of a tele place (`... radius 750, zone 40`) or
   `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
+* **Stalls outside the home.** A goal on which `PlayerbotSharedSetAsides.BotsToShare` (3) different bots stalled within 30 minutes is set aside for
+  every bot (30 min, doubling to at most 2 h). Only the stalls of bots **inside their home area** (or with none) count
+  (`PlayerbotBrain.GiveUpStalledGoal`, `StallOutsideHome`): a homed bot outside it (on another map, on its way back, on a turn-in or capital
+  errand) stalls where its home does not keep it, which says nothing about the goal for the bots whose home it is. It still sets the goal aside
+  for itself (10 min), and its stall line ends `it gives up that goal outside its home` (bot QA: cause `OutsideHome`, never published). The
+  shared line is logged as soon as the set-aside is made (`ManagedPlayerbotFeature.LogStall`; before, only beside the bot's next new stall line,
+  so one completed by a further give-up of an old stall waited, and was logged beside a stall on another goal) and names where the bots behind it
+  stalled: `Playerbots: 3 bots stalled on quest 109 for 30 min; every bot sets it aside (stalls at x,y,z map M; ...)`. Live 2026-10-11 (build
+  f5bc89a5, 200 bots homed at Sentinel Hill with the 550-yard circle, no zone clip, no return teleport): 46 of the 49 stalls behind the 50 shared
+  set-aside lines were made outside the home, and quest 109, ended by Gryan Stoutmantle at Sentinel Hill, was set aside for every bot for up to two
+  hours by bots stalled in Redridge and at Raven Hill (`PlayerbotSharedSetAsideTests`).
+* **Known travel gaps (backlog).** Measured on the same run (`character_queststatus` of the 200 `Wfbot` bots, world.log stall lines):
+  * *Turn-ins across the Deeprun Tram.* Dwarf and gnome bots homed in Westfall hold completed Dun Morogh, Ironforge and Loch Modan quests
+    (65 bots complete-unrewarded on 400 "Tools for Steelgrill", 79 on 2160, 28 on 353, 19 on 2218, 16 on 1679, 9 on 1879 and 2997, 7 on 2039;
+    the other way, quest 1338 "Stormpike's Order" ends in Stormwind for bots in Loch Modan). A completed quest's turn-in is never restricted by
+    the home, so these bots walk from Westfall towards Ironforge-side enders: on foot that side is out of reach, they stop at the Westfall/Elwynn
+    ridge (-9540,1015; -9488,820) or at the Stormwind tram entrance (-8285,554), stall, set the quest aside for 10 min, and try again. The tram
+    is map 369, which an autonomous bot's area triggers walk through (`PlayerbotAreaTriggers`, not in `AllowedMaps`), and the brain has no
+    transport step (riding the tram's GAMEOBJECT_TYPE_TRANSPORT, `GameObjectMapSystem.Elevators`). Two ways out, both open: (1) teach bots
+    the tram (allow map 369 for that trigger pair, ride the car, leave by the far trigger), or (2) decide that a homed bot does not walk out of
+    its home for a turn-in whose ender is not reachable (needs a reachability rule: the navigation mesh alone answers per tile; a zone
+    connectivity graph would have to be sourced). Until then these stalls are logged `outside its home` and set nothing aside for other bots.
+  * *Terrain stuck points on the way home.* Several bots stalled at the very same coordinates: Raven Hill in Duskwood (-10607.0,294.0,32;
+    quests 783, 2158, 6181), the hill west of Lakeshire in Redridge (-9471.9,-1792.0,132; quests 106, 109), north Westfall (-9540.1,1015.0,52;
+    quests 400, 2160, 2997). These are navigation obstacles, not quest faults; the zone clip and the return teleport bring homed bots back from
+    the first two, the third is on the Westfall-to-Ironforge line above.
 
 ### Faults and quarantine
 

@@ -16,8 +16,8 @@ lock beyond the queue's and never throws, so it cannot slow the world thread. On
 
 | Kind | The warning it comes from |
 |---|---|
-| stall | `Playerbot ... stalled 120s: goal=Quest target=N quest=Q at x,y,z map M; it gives up that goal` |
-| shared set-aside | `Playerbots: N bots stalled on quest Q for 30 min; every bot sets it aside` |
+| stall | `Playerbot ... stalled 120s: goal=Quest target=N quest=Q at x,y,z map M; it gives up that goal` (a homed bot outside its home: `... it gives up that goal outside its home`) |
+| shared set-aside | `Playerbots: N bots stalled on quest Q for 30 min; every bot sets it aside (stalls at x,y,z map M; ...)` (the positions since 2026-10-11; the first is the signal's position) |
 | death loop | `Playerbot ... death loop: died N times in Ns within 60 yd of x,y,z map M attackers=a/b/c` |
 | action fault | `Playerbot ... action failed (InvalidOperationException: playerbot-recovery-...)` |
 | quarantine, disabled | `Playerbot ... quarantined for N s (fault N of N)`, `... disabled after N faults ...` |
@@ -48,6 +48,10 @@ content is not loaded.
 * **BehaviourBug**: an action fault, a quarantine or a disabled bot; a death loop with no attacker.
 * **ContentDifficulty**: a death loop against an elite, rare or boss, against attackers three or more levels above the quest, or
   against three or more different attackers.
+* **OutsideHome**: a stall logged as made outside the bot's home area (checked first). Expected for a homed bot on its way back or on an
+  errand out of its home; it set the goal aside for that bot only. Such a stall is its own finding (its key ends `|outside`; the keys of
+  the other stalls are unchanged) and is **never published** to GitHub; the report lists it. A shared set-aside counts only stalls made
+  inside the home (docs/areas/playbots.md, Home area), so it is never an outside-home finding.
 * **Unknown**: anything else; the detail says what was checked.
 
 Severity ranks findings: a weight per kind (quarantine/disabled 45, fault 40, set-aside 35, death loop 30, relay data 25, stall 15),
@@ -109,6 +113,12 @@ process.
 Calls per pass are bounded: one list; a finding with no known issue is skipped before any lookup while the hourly create cap is used up (a
 zero cap makes no call at all); a finding whose issue is known and has nothing due makes no call; and the lookups outside the list (an
 issue by number, the search) are capped at 5 per pass, 2 seconds apart, the finding that would need a sixth waits for the next pass.
+
+A finding is eligible once seen `MinOccurrences` (3) times by `MinDistinctBots` (2) different bots, and is not an `OutsideHome` one. A shared
+set-aside line carries no bot ids: its bot count is the `BotsToShare` (3) the line names, so it always meets the bot threshold, and its
+occurrences are the set-aside's repeats (30, 60, 120 min): three of them mean three separate windows in which three bots stalled. Its subject
+reads `quest Q (title) set aside for every bot after 3 stalled` (before 2026-10-11: `set aside by every bot`, which read as if every bot had
+stalled; the fingerprint, and so the issue marker, is unchanged).
 
 * **No issue**: create one (title `[bot-qa] kind: subject`, the configured `Labels`).
 * **Open issue**: add a comment with the new occurrences, at most once per `CommentIntervalHours` (default 24) per finding.

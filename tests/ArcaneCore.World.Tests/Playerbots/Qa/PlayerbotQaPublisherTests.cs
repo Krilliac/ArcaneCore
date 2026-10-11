@@ -257,6 +257,23 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
         Assert.Equal(QaPublicationState.Published, rig.State.Get(C)!.Publication.State);
     }
 
+    /// <summary>
+    /// A stall of a homed bot outside its home is expected (<see cref="QaCause.OutsideHome"/>) and never becomes an issue, whatever its
+    /// count; the report still lists it. The bot-QA issues of 2026-10-11 (#143 quest 1097, #144 quest 400 and 18 more shared set-asides)
+    /// came almost entirely from such stalls.
+    /// </summary>
+    [Fact]
+    public async Task OutsideHomeFindings_AreNeverReported()
+    {
+        Rig rig = NewRig(findings: [QaData.View(A, count: 50, bots: 20, cause: QaCause.OutsideHome), QaData.View(B, count: 50, bots: 20)]);
+
+        await rig.Run();
+
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Pending, rig.State.Get(A)!.Publication.State);
+        Assert.Equal(QaPublicationState.Published, rig.State.Get(B)!.Publication.State);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
