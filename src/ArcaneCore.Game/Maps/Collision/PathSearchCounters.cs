@@ -17,6 +17,12 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_tileLoadTicks;
     [ThreadStatic] private static long t_capped;
 
+    /// <summary>Searches on this thread so far that hit their node cap (<see cref="PathOptions.MaxSearchNodes"/>).</summary>
+    public static long CappedSearches => t_capped;
+
+    /// <summary>A* nodes created on this thread so far.</summary>
+    public static long NodesCreated => t_nodes;
+
     /// <summary>This thread's totals so far.</summary>
     public static PathSearchTotals Current => new(t_searches, t_nodes, t_expansions, t_tileLoads, t_tileLoadTicks, t_capped);
 
