@@ -196,6 +196,8 @@ public sealed class PlayerbotPopulationFeatureTests
         PlayerbotOperationResult made = await world.Bots.CreateAsync("Restoredone", 1, 1);
         Guid id = Assert.IsType<Guid>(made.BotId);
         Assert.True((await world.Bots.StartAsync(id.ToString())).Success);
+        // The pass counts only bots whose player is in the world; without this the count is 0 whatever the code does.
+        await world.Host.WaitForWorldAsync(() => world.Host.World.FindOnlinePlayer("Restoredone") is { IsInWorld: true }, "the restored bot in the world");
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         world.Members.Seed(new PlayerbotPopulationMember(id, (await world.Owners.LoadAllAsync()).Single().CharacterId, 0,
             PlayerbotPopulationFeature.PendingDeleteBand, now, now));
@@ -208,11 +210,44 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == id);
     }
 
+    [Fact]
+    public async Task ARefusedPendingDelete_IsRetriedWithGrowingGaps_CappedAtEight()
+    {
+        var hook = new SwitchableDeleteHook { Refuse = true };
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<ICharacterDeleteHook>(hook));
+        bool firstPass = true;
+        // The first pass places and is refused; afterwards nothing is safe, so only the one pending bot is ever retried.
+        world.Feature.Provisioner.AreaLevelSource = _ => firstPass && world.Members.Snapshot.Count == 0 ? 0 : 60;
+
+        var attemptPasses = new List<int>();
+        int calls = 0;
+        for (int pass = 1; pass <= 46; pass++)
+        {
+            await PassWithTicksAsync(world);
+            firstPass = false;
+            if (hook.Calls != calls) { attemptPasses.Add(pass); calls = hook.Calls; }
+        }
+
+        Assert.Single(await world.Owners.LoadAllAsync());
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, Assert.Single(world.Members.Snapshot).Band);
+        int[] gaps = [.. attemptPasses.Zip(attemptPasses.Skip(1), (a, b) => b - a)];
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 8], gaps);
+    }
+
     private sealed class SwitchableDeleteHook : ICharacterDeleteHook
     {
         public volatile bool Refuse;
 
-        public Task<bool> CanDeleteCharacterAsync(WorldSession session, CharacterRecord character) => Task.FromResult(!Refuse);
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task<bool> CanDeleteCharacterAsync(WorldSession session, CharacterRecord character)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(!Refuse);
+        }
     }
 
     private static Task<PopulationStatus> PassWithTicksAsync(PopulationTestHost world)

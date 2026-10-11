@@ -59,6 +59,7 @@ public sealed class ManagedPlayerbotHomeTests
         Assert.Null(feature.HomeOf(bot.BotId));              // and so is its in-memory home
         Assert.DoesNotContain(feature.Snapshot(), b => b.BotId == bot.BotId);
         Assert.Null(await owners.FindAsync(bot.BotId));      // no restore attempt re-created or faulted it
+        Assert.Equal("bot-not-found", (await feature.StartAsync(bot.BotId.ToString())).Code);
     }
 
     [Fact]

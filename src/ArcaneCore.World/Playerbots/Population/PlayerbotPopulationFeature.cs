@@ -354,6 +354,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
             }
 
+            // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
+            foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
+            foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
+
             // A pending bot that a restart restored is running for a moment: it is not part of any band.
             foreach (PopulationBotFacts bot in input.Running)
                 if (!pendingIds.Contains(bot.BotId) && PopulationBandPlanner.BandOf(input.Bands, bot.Level) is var band and >= 0) have[band]++;
