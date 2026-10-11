@@ -220,12 +220,8 @@ public sealed class RealBattlegroundRaidEntryTests : IDisposable
     {
         Directory.CreateDirectory(_directory);
         string world = Path.Combine(_directory, "world.db");
-        File.Copy(Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!, world);
-        IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Database:World:Provider"] = "Sqlite",
-            ["Database:World:ConnectionString"] = $"Data Source={world};Pooling=False",
-        }).Build();
+        IConfiguration config = await RealWorldDatabaseCopy.CreateAsync(world);
+        await RealWorldDatabaseCopy.RestoreRaidPortalRequirementsAsync(world);
         ScenarioTestWorld result = await ScenarioTestWorld.StartAsync(services =>
         {
             // The classic-db importer has world content but not ChrRaces/ChrClasses DBC appearance rows;
