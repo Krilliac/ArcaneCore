@@ -18,8 +18,8 @@ namespace ArcaneCore.Game.Reputation;
 /// <c>RewardReputation(Unit*)</c> gives nothing for a pet victim (patch 1.10, Player.cpp:6361-6365) or for a victim a player
 /// controls (the PvP flag of the group helper; a totem or a charmed unit). The killer need not be alive.
 /// <para>
-/// Experience and quest kill credit resolve the same tap (<see cref="KillRewards.ResolveTap"/>): a tap a pet still holds credits only
-/// the group of the tap, and a tap that failed the damage-origin rule (players dealt 35% or less) was cleared at the kill, so then only
+/// Experience and quest kill credit resolve the same tap (<see cref="KillRewards.ResolveTap"/>): a tap a pet still holds credits nobody
+/// (Unit.cpp:1020 gates group rewards too), and a tap that failed the damage-origin rule (players dealt 35% or less) was cleared at the kill, so then only
 /// a player behind the killing blow is credited. The Alterac Valley reputation for killing enemy
 /// players (Group.cpp:2305-2320) belongs to the battleground area.
 /// </para>

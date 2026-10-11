@@ -200,11 +200,8 @@ public sealed partial class CreatureMapSystem
 
     private static void ClearLootTap(Creature creature)
     {
-        creature.LootTapPlayerGuid = default;
-        creature.LootTapGroup = null;
+        creature.ClearLootRecipient();
         creature.ResetDamageTakenOrigin();
-        creature.SetUInt32(UpdateFields.UnitDynamicFlags,
-            creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
     }
 
     private void ResetAiState(Creature creature)

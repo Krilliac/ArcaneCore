@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
@@ -426,6 +427,13 @@ public sealed partial class LootService : IViewerFieldFilter
             return null;
         }
 
+        // Unit::Kill (Unit.cpp:995-997, 1020): a provisional pet tap clears pPlayerTap,
+        // so even a recorded group cannot generate corpse loot yet.
+        if (!creature.LootTapPlayerGuid.IsEmpty && !creature.LootTapPlayerGuid.IsPlayer)
+        {
+            return null;
+        }
+
         Group? tappedGroup = creature.LootTapGroup;
         // vmangos Creature::GetGroupLootRecipient resolves the stored id through the live group
         // manager (Creature.cpp:1541-1552). A disbanded group cannot retain its old rights.
@@ -494,7 +502,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (obj is Creature tapped && !tapped.LootTapPlayerGuid.IsEmpty)
         {
-            bool canTap = tapped.LootTapPlayerGuid == viewer.Guid || tapped.LootTapGroup is { } group
+            bool canTap = tapped.LootTapPlayerGuid == viewer.Guid || tapped.LootTapPlayerGuid == viewer.PetGuid || tapped.LootTapGroup is { } group
                 && ReferenceEquals(Groups?.GroupOf(viewer), group);
             value = canTap ? value | UnitDynFlagTapped | UnitDynFlagTappedByPlayer
                 : (value | UnitDynFlagTapped) & ~UnitDynFlagTappedByPlayer;

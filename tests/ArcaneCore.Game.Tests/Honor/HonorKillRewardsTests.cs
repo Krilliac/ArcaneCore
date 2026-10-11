@@ -4,6 +4,9 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -64,6 +67,54 @@ public sealed class HonorKillRewardsTests : IDisposable
     }
 
     private void Hit(Unit attacker, Player victim, uint damage) => _map.Combat.DealDamage(attacker, victim, damage);
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Charmed_player_victim_honor_uses_original_team_even_on_environmental_death(bool sameTeam, bool environmental)
+    {
+        // Player::RewardHonorOnDeath (Player.cpp:21868-21917) compares GetTeam(), not charm faction.
+        Player victim = sameTeam ? AddHuman(6, 2) : _victim;
+        Player controller = sameTeam ? _victim : _a;
+        CharmService.SetCharmerGuid(victim, controller.Guid);
+        victim.FactionTemplate = controller.FactionTemplate;
+        Hit(_a, victim, 100);
+        if (environmental)
+        {
+            EnvironmentalDamage.Apply(_world, victim, EnvironmentalDamageType.Fire, victim.Health);
+        }
+        else
+        {
+            Hit(_a, victim, victim.Health);
+        }
+        Assert.False(victim.IsAlive);
+        if (sameTeam)
+        {
+            Assert.Empty(RowsOf(_a));
+        }
+        else
+        {
+            Assert.Equal(188f, Assert.Single(RowsOf(_a)).Cp);
+        }
+    }
+
+    [Fact]
+    public void Provisional_pet_tap_does_not_reward_group_honor()
+    {
+        // Unit::Kill's outer pPlayerTap gate (Unit.cpp:1020) also gates RewardGroupAtKill.
+        Player member = AddHuman(3, -2);
+        Group(_a, member);
+        (Creature pet, _, _) = CreatureAt(Template(1004, level: 60), 1);
+        pet.Summon = new SummonLinks(SummonKind.Pet, _a.Guid, 0, -1, 0);
+        pet.SetOwnerGuid(_a.Guid);
+        _a.SetPetGuid(pet.Guid);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        _map.Combat.DealDamage(pet, leader, leader.Health);
+        Assert.Empty(RowsOf(_a));
+        Assert.Empty(RowsOf(member));
+    }
 
     [Fact]
     public void A_lone_attacker_killing_with_one_blow_gets_the_whole_kill_honor()
@@ -361,11 +412,39 @@ public sealed class HonorKillRewardsTests : IDisposable
 
         _map.Combat.DealDamage(_a, leader, 1);
         _map.Combat.DealDamage(_a, leader, 1);
-        leader.Health = leader.MaxHealth; // evaded: EnterEvadeMode restores full health
+        leader.System!.EnterEvadeMode(leader);
+        leader.IsEvading = false;
+        leader.Health = leader.MaxHealth;
         Hit(b, leader);
 
         Assert.Empty(RowsOf(_a));
         Assert.Single(RowsOf(b));
+    }
+
+    [Fact]
+    public void Healing_to_full_without_evading_keeps_the_honor_tap()
+    {
+        Player next = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        _map.Combat.DealDamage(_a, leader, 1);
+        leader.Health = leader.MaxHealth;
+        Hit(next, leader);
+        Assert.Single(RowsOf(_a));
+        Assert.Empty(RowsOf(next));
+    }
+
+    [Fact]
+    public void Evade_without_a_full_heal_releases_the_honor_tap()
+    {
+        Player next = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        _map.Combat.DealDamage(_a, leader, 1);
+        leader.System!.EnterEvadeMode(leader);
+        leader.IsEvading = false;
+        leader.Health = leader.MaxHealth - 1; // vmangos evade need not heal to full (CreatureAI::EnterEvadeMode).
+        Hit(next, leader);
+        Assert.Empty(RowsOf(_a));
+        Assert.Single(RowsOf(next));
     }
 
     [Fact]

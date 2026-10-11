@@ -37,7 +37,7 @@ public static class KillRewards
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(player);
-        return unit is not Player && !unit.Guid.IsEmpty && player.PetGuid == unit.Guid ? unit.Guid : player.Guid;
+        return unit is Creature { IsPet: true } && !unit.Guid.IsEmpty && player.PetGuid == unit.Guid ? unit.Guid : player.Guid;
     }
 
     /// <summary>
@@ -65,6 +65,13 @@ public static class KillRewards
         Player? tapper = tap.IsEmpty ? killingPlayer
             : !tap.IsPlayer ? null
             : victim.Map?.FindPlayer(tap) ?? killingPlayer;
+        // Unit::Kill (Unit.cpp:1020-1098) gates loot AND RewardGroupAtKill on pPlayerTap.
+        // A provisional pet tap cannot reward its group until a player takes it over.
+        if (tapper is null)
+        {
+            return (null, null);
+        }
+
         RewardGroup? group = victim.LootTapGroup is { MemberCount: > 0 } tapGroup
             ? new RewardGroup([.. tapGroup.Members.Select(m => m.Guid)], tapGroup.IsRaid)
             : tapper is not null && groupOf(tapper) is { } current && current.Members.Contains(tapper.Guid) ? current : null;

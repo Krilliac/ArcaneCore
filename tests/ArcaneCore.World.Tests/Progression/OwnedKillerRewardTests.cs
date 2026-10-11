@@ -151,7 +151,13 @@ public sealed class OwnedKillerRewardTests
     /// <summary>A hunter's pet or a warlock's demon: the owner links SummonService gives it, and the owner's UNIT_FIELD_SUMMON.</summary>
     private static Creature SpawnActivePet(WorldTestHost host, Player owner)
     {
-        Creature pet = SpawnGuardian(host, owner);
+        Creature pet = host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(owner.Map!)
+            .SpawnSummoned(Helper, HighGuid.Pet, creature =>
+            {
+                creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
+                SummonService.ApplyOwner(creature, owner, 0);
+                return new CreatureHome(owner.X + 2, owner.Y, owner.Z, 0);
+            });
         owner.SetPetGuid(pet.Guid);
         return pet;
     }
@@ -195,6 +201,10 @@ public sealed class OwnedKillerRewardTests
 
             Hit(pet, victim, 1);
             Assert.Equal(pet.Guid, victim.LootTapPlayerGuid); // Creature.cpp:1602-1603: the active pet holds the tap
+            var loot = host.WorldServices.GetRequiredService<GameObjectLootFeature>().FindSystem(hunter.Map!)!.Loot!;
+            uint visibleFlags = ((ArcaneCore.Game.Updates.IViewerFieldFilter)loot).Filter(victim, UpdateFields.UnitDynamicFlags,
+                victim.GetUInt32(UpdateFields.UnitDynamicFlags), hunter);
+            Assert.NotEqual(0u, visibleFlags & LootService.UnitDynFlagTappedByPlayer); // Creature::IsTappedBy includes the viewer's pet.
             Hit(hunter, victim, 1);
             Assert.Equal(hunter.Guid, victim.LootTapPlayerGuid); // Unit.cpp:814-815: the owner's hit takes it over
             Finish(pet, victim);
@@ -223,10 +233,12 @@ public sealed class OwnedKillerRewardTests
         });
     }
 
-    [Fact]
-    public async Task AGroupMembersActivePet_KillingAlone_RewardsTheGroupOfTheTap()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AGroupMembersActivePet_RequiresAPlayerToTakeOverTheTap(bool memberHits)
     {
-        // Unit.cpp:991 and 1094-1095: pGroupTap is the group recorded with the pet's tap; RewardGroupAtKill runs without a pPlayerTap.
+        // Unit.cpp:1020 gates both loot and group rewards on pPlayerTap, which a provisional pet tap clears.
         await using WorldTestHost host = Start();
         (WorldTestClient leader, WorldTestClient member) = await PartyAsync(host, "Petgrpleader", "Petgrpmember");
         await using (leader)
@@ -242,9 +254,14 @@ public sealed class OwnedKillerRewardTests
                 Creature victim = Spawn(host, hunter, Victim, 4);
 
                 Hit(pet, victim, 10);
+                if (memberHits)
+                {
+                    Hit(lead, victim, 1);
+                    Assert.Equal(lead.Guid, victim.LootTapPlayerGuid);
+                }
                 Finish(pet, victim);
 
-                watch.AssertRewarded(victim, lead, hunter);
+                watch.AssertRewarded(victim, memberHits ? [lead, hunter] : []);
             });
         }
     }
@@ -351,8 +368,10 @@ public sealed class OwnedKillerRewardTests
         });
     }
 
-    [Fact]
-    public async Task AGuardFinishingACreaturePlayersDamagedBelowTheShare_RewardsNobody()
+    [Theory]
+    [InlineData(30u)]
+    [InlineData(35u)]
+    public async Task AGuardFinishingACreaturePlayersDamagedBelowTheShare_RewardsNobody(uint playerDamage)
     {
         // Creature.h:553 (65 * player > 35 * non-player fails) and Unit.cpp:1007-1008: the tap is dropped, the killer is no player.
         await using WorldTestHost host = Start();
@@ -364,7 +383,7 @@ public sealed class OwnedKillerRewardTests
             Creature guard = Spawn(host, player, Helper, 2);
             Creature victim = Spawn(host, player, Victim, 4);
 
-            Hit(player, victim, victim.MaxHealth * 30 / 100); // 30%: 65 * 30 = 1950 <= 35 * 70 = 2450
+            Hit(player, victim, playerDamage);
             Assert.Equal(player.Guid, victim.LootTapPlayerGuid);
             Finish(guard, victim);
 
@@ -390,6 +409,80 @@ public sealed class OwnedKillerRewardTests
             Finish(guard, victim);
 
             watch.AssertRewarded(victim, player);
+            Assert.Equal(20u, watch.XpGained(player)); // level 1 base XP 50 * 40% (Creature.h:565, Formulas.h:152)
+        });
+    }
+
+    [Theory]
+    [InlineData("melee")]
+    [InlineData("spell")]
+    [InlineData("periodic")]
+    public async Task ActivePetFinisher_UsesTheSameCreditAcrossDamagePaths(string path)
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("PATHXP", "Pathxp");
+        await host.OnWorldAsync(() =>
+        {
+            Player owner = host.World.FindOnlinePlayer("Pathxp")!;
+            using var watch = new Watch(host, owner.Map!, owner);
+            Creature pet = SpawnActivePet(host, owner);
+            Creature victim = Spawn(host, owner, Victim, 4);
+            Hit(owner, victim, 1);
+            if (path == "melee")
+            {
+                owner.Map!.Combat.DealDamage(pet, victim, victim.Health, direct: true, meleeDamage: true);
+            }
+            else
+            {
+                new MapCombatDamageSink().DealSpellDamage(pet, victim, new SpellInfo { Id = 133 }, victim.Health, periodic: path == "periodic");
+            }
+            watch.AssertRewarded(victim, owner);
+            Assert.Equal(50u, watch.XpGained(owner));
+        });
+    }
+
+    [Fact]
+    public async Task ActivePetOnlyDamage_WithOwnerGone_RewardsNobody()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("GONEXP", "Gonexp");
+        await host.OnWorldAsync(() =>
+        {
+            Player owner = host.World.FindOnlinePlayer("Gonexp")!;
+            Map map = owner.Map!;
+            using var watch = new Watch(host, map, owner);
+            Creature pet = SpawnActivePet(host, owner);
+            Creature victim = Spawn(host, owner, Victim, 4);
+            Hit(pet, victim, 10);
+            map.RemovePlayer(owner);
+            Assert.Null(map.FindPlayer(owner.Guid));
+            Finish(pet, victim);
+            watch.AssertRewarded(victim);
+        });
+    }
+
+    [Fact]
+    public async Task Evade_DropsThePreviousFightsDamageShareAndTap()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("EVADEXP", "Evadexp");
+        await host.OnWorldAsync(() =>
+        {
+            Player owner = host.World.FindOnlinePlayer("Evadexp")!;
+            using var watch = new Watch(host, owner.Map!, owner);
+            Creature guard = Spawn(host, owner, Helper, 2);
+            Creature victim = Spawn(host, owner, Victim, 4);
+            Hit(owner, victim, 90);
+            victim.System!.EnterEvadeMode(victim);
+            Assert.True(victim.LootTapPlayerGuid.IsEmpty);
+            Assert.Equal(0ul, victim.PlayerDamageTaken);
+            Assert.Equal(0ul, victim.NonPlayerDamageTaken);
+            // Complete the return home without relying on the host's clock or motion timing.
+            victim.IsEvading = false;
+            victim.Health = victim.MaxHealth;
+            Hit(owner, victim, 1);
+            Finish(guard, victim);
+            watch.AssertRewarded(victim);
         });
     }
 

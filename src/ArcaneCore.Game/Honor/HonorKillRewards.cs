@@ -20,12 +20,13 @@ namespace ArcaneCore.Game.Honor;
 /// the other team; a group's damage is pooled and split evenly over its qualifying members with the group rate. Every
 /// recipient needs the victim above its gray level. Creature kills reward the TAPPER, as vmangos does (Unit::Kill takes the creature's loot recipient and its group, Unit.cpp:988-1001, 1076-1079):
 /// the first player (or the owner of the first pet) to damage a creature that is not a pet taps it (Unit::DealDamage, Unit.cpp:804-807), the
-/// tap is dropped when the creature is back at full health (what an evade or a respawn does, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
+/// tap is dropped on an explicit reset (evade or respawn, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
 /// every living member of its group in range is rewarded, whoever landed the killing blow. A creature nobody tapped, or one players damaged 35% or less
 /// (Creature::IsLootAllowedDueToDamageOrigin, settled at the kill), rewards the killing blow's player, which is the original's pPlayerTap fallback;
-/// an owner's active pet holds its tap until the owner or the tap's group hits. Documented limits: the tap is a snapshot of the tapper's group taken
-/// at the first hit (the tapper's current group is preferred while it still contains the tapper), and a creature healed
-/// to full health mid-fight loses its tap; the "xp_multiplier 0" and "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
+/// an owner's active pet holds its tap until the owner or the tap's group hits. Without that player tapper, group rewards are also gated
+/// (Unit.cpp:1020). Documented limits: the tap is a snapshot of the tapper's group taken at the first hit (the current group is preferred
+/// while it still contains the tapper); the "xp_multiplier 0" and
+/// "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
 /// </para>
 /// </summary>
 public sealed class HonorKillRewards
@@ -37,7 +38,7 @@ public sealed class HonorKillRewards
     private readonly HashSet<MapCombat> _attached = [];
     private readonly ConditionalWeakTable<Creature, Tap> _taps = new();
 
-    private sealed record Tap(ObjectGuid Player, RewardGroup? Group);
+    private sealed record Tap(ObjectGuid Player, RewardGroup? Group, ulong Revision);
 
     /// <param name="honor">The honor owner.</param>
     /// <param name="groups">A player's reward group (null for solo).</param>
@@ -104,19 +105,20 @@ public sealed class HonorKillRewards
             return;
         }
 
-        // Damage dealt at full health starts a new fight: an evade (CreatureAI.cpp:344) or a respawn (Creature.cpp:2306) cleared the old tap.
-        if (creature.Health >= creature.MaxHealth)
+        // CreatureAI::EnterEvadeMode clears the recipient without requiring full health.
+        // A heal to full during the same fight is not a tap reset.
+        if (_taps.TryGetValue(creature, out Tap? previous) && previous.Revision != creature.LootTapRevision)
         {
             _taps.Remove(creature);
         }
 
         if (!_taps.TryGetValue(creature, out Tap? held))
         {
-            _taps.Add(creature, new Tap(KillRewards.TapGuid(attacker, owner), _groups(owner)));
+            _taps.Add(creature, new Tap(KillRewards.TapGuid(attacker, owner), _groups(owner), creature.LootTapRevision));
         }
         else if (KillRewards.TakesOverPetTap(held.Player, attacker, held.Group?.Members.Contains(owner.Guid) == true))
         {
-            _taps.AddOrUpdate(creature, new Tap(owner.Guid, _groups(owner) ?? held.Group));
+            _taps.AddOrUpdate(creature, new Tap(owner.Guid, _groups(owner) ?? held.Group, creature.LootTapRevision));
         }
     }
 
@@ -137,7 +139,7 @@ public sealed class HonorKillRewards
         Tap? tap = null;
         if (_taps.TryGetValue(creature, out Tap? held))
         {
-            tap = held;
+            tap = held.Revision == creature.LootTapRevision ? held : null;
             _taps.Remove(creature);
         }
 
@@ -147,10 +149,15 @@ public sealed class HonorKillRewards
             tap = null;
         }
 
-        // A tap a pet still holds credits no player, only its group (Unit.cpp:995-997).
+        // A provisional pet tap blocks both solo and group rewards (Unit.cpp:995-997, 1020).
         Player? tapper = tap is null
             ? KillRewards.CreditedPlayer(killer)
-            : tap.Player.IsPlayer ? map.FindPlayer(tap.Player) : null;
+            : tap.Player.IsPlayer ? map.FindPlayer(tap.Player) ?? KillRewards.CreditedPlayer(killer) : null;
+        if (tapper is null)
+        {
+            return;
+        }
+
         RewardCreatureKill(tapper, tap?.Group, creature);
     }
 
