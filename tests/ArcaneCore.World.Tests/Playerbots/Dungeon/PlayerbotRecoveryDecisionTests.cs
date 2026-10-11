@@ -82,9 +82,35 @@ public sealed class PlayerbotRecoveryDecisionTests
     [InlineData(false, false, true, false, true, "WalkToGraveyard")]
     [InlineData(true, false, false, false, true, "WalkToHealer")]
     [InlineData(true, true, false, false, true, "Activate")]
-    [InlineData(false, false, false, true, true, "Fault")]
+    [InlineData(false, false, false, true, true, "ResumeCorpseRun")]
+    [InlineData(true, false, false, true, true, "ResumeCorpseRun")]
+    [InlineData(true, true, false, true, true, "ResumeCorpseRun")]
     public void DecideSpiritHealer_WithTheBodyOnThisMap(bool healer, bool inReach, bool graveyard, bool stalled, bool bodyRunLeft, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled, bodyRunLeft));
+
+    /// <summary>
+    /// A stalled fallback with a healer in sight but out of reach tries the long way round to it once (DetourToHealer), then the body,
+    /// then faults; a healer in reach (the server refused it) or none in sight is no reason for the long way.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false, true, true, "DetourToHealer")]
+    [InlineData(true, false, true, false, "DetourToHealer")]
+    [InlineData(true, false, false, true, "ResumeCorpseRun")]
+    [InlineData(true, false, false, false, "Fault")]
+    [InlineData(true, true, true, true, "ResumeCorpseRun")]
+    [InlineData(false, false, true, false, "Fault")]
+    public void DecideSpiritHealer_WhenStalled(bool healer, bool inReach, bool detourLeft, bool bodyRunLeft, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected),
+            PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyardKnown: false, stalled: true, bodyRunLeft, detourLeft));
+
+    /// <summary>A stalled walk from where the server itself would accept the activation (a ledge the mesh does not quite reach) activates.</summary>
+    [Theory]
+    [InlineData(true, true, "Activate")]
+    [InlineData(true, false, "DetourToHealer")]
+    [InlineData(false, true, "ResumeCorpseRun")]
+    public void DecideSpiritHealer_WhenStalled_WhereTheServerAccepts(bool healer, bool serverAccepts, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, healerInReach: false, graveyardKnown: false,
+            stalled: true, bodyRunLeft: true, detourLeft: true, serverAccepts: serverAccepts));
 
     /// <summary>
     /// An unsafe body (<see cref="PlayerbotRecovery.JudgeBody"/>): a repeat death there, a creature too strong for the bot round it,

@@ -93,6 +93,14 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route)
         => Plan(player, destination, destination, options, partial: false, out route, out _);
 
+    /// <summary>
+    /// <see cref="TryPlan"/> with an explicit search budget (up to <see cref="MaxSearchNodes"/>) whatever the straight distance: for a
+    /// goal near in a straight line but far by the mesh (a ledge above the bot, reached by a long way round). One query; the route
+    /// bounds (<see cref="PlayerbotOptions.MaxRouteYards"/>, <see cref="PlayerbotOptions.MaxPathPoints"/>) still hold.
+    /// </summary>
+    internal static bool TryPlanFar(Player player, Vector3 destination, PlayerbotOptions options, int searchNodes, out PlayerbotRoute? route)
+        => Plan(player, destination, destination, options, partial: false, out route, out _, Math.Clamp(searchNodes, 1, MaxSearchNodes));
+
     /// <summary>Closer than this to its goal, a partial route ends near enough to count (<see cref="TryPlanToward"/>).</summary>
     internal const float PartialProgressYards = 2f;
 
@@ -151,9 +159,9 @@ internal static class PlayerbotNavigation
     /// <param name="straightRefused">The mesh had no corridor to offer, only a straight line (an unloaded tile, or no mesh), and the terrain
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null)
     {
-        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused) || route is null) return false;
+        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Blocking(player, route.Points) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
@@ -205,7 +213,7 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null)
     {
         straightRefused = false;
         route = null;
@@ -226,7 +234,7 @@ internal static class PlayerbotNavigation
         // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350) for a near destination, more for a far
         // one (SearchNodes). The old 512 polygons ran out on the real Dun Morogh mesh well inside the route bound: 200 yards from
         // Coldridge Valley to the Rockjaw Raiders (quest 179) answered no path with 512 and an 18-corner path with 2048.
-        PathResult path = Query(map, start, destination, options, partial, steep: false);
+        PathResult path = Query(map, start, destination, options, partial, steep: false, searchNodes);
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
@@ -277,10 +285,11 @@ internal static class PlayerbotNavigation
     /// One query of the navigation mesh, with steep slopes excluded as for every bot route, or allowed (<paramref name="steep"/>);
     /// navigation tiles are read as needed (<see cref="PathOptions.LoadTiles"/>).
     /// </summary>
-    private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep)
+    private static PathResult Query(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep,
+        int? searchNodes = null)
         => map.Collision.FindPath(from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
             ExcludeFlags = steep ? NavTerrain.Empty : NavTerrain.SteepSlopes, AllowPartial = partial,
-            MaxSearchNodes = SearchNodes(from, to), LoadTiles = true });
+            MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true });
 
     /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
     private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
