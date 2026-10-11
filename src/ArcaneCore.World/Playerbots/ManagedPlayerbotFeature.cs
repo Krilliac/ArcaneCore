@@ -804,6 +804,17 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             : active.PartyDriven ? (active.Party.Goal, active.Party.TargetEntry, active.Brain.QuestId)
             : (active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
 
+    /// <summary>
+    /// <see cref="GoalOf(ActiveBot)"/> read where the coordinators' collections are owned. A stopped world has no tick left to mutate them,
+    /// so it is read in place then (as the set-aside captures do).
+    /// </summary>
+    private async Task<(PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)> GoalOnWorldThreadAsync(ActiveBot active)
+    {
+        if (_world is not { } world || world.IsStopped || world.IsWorldThread) return GoalOf(active);
+        try { return await world.InvokeAsync(() => GoalOf(active)).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { return GoalOf(active); }
+    }
+
     private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
         => WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, _world!, registry, sessionOptions.Value, logger, cancellationToken);
 
@@ -825,12 +836,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 active.Session.Kick();
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
                 await saves.FlushCharacterAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                // Read on the world thread, queued behind this bot's own Forget: other bots' Forgets mutate the coordinators' collections.
+                (PlayerbotGoalKind goal, uint targetEntry, uint questId) = await GoalOnWorldThreadAsync(active).ConfigureAwait(false);
                 bot = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 {
                     DesiredEnabled = preserveDesired && active.Record.DesiredEnabled,
                     State = faultCode is null ? ManagedPlayerbotState.Stopped : ManagedPlayerbotState.Faulted,
                     ErrorCode = faultCode ?? active.Record.ErrorCode,
-                    Goal = GoalOf(active).Goal, TargetEntry = GoalOf(active).TargetEntry, QuestId = GoalOf(active).QuestId,
+                    Goal = goal, TargetEntry = targetEntry, QuestId = questId,
                 }, cancellationToken).ConfigureAwait(false);
                 active.Record = bot;
                 if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(bot.BotId, active))) Interlocked.Increment(ref _activeVersion);

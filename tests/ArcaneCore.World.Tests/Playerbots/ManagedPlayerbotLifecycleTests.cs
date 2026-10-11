@@ -72,6 +72,36 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     [Fact]
+    public async Task Shutdown_OneStopFailingMidBatch_StillStopsTheOthersAndReportsTheFailure()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 40, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        // More than one batch of 32, so the failing stop is in the first batch or in the second whichever order the bots are taken.
+        const int count = 34;
+        Guid[] ids = new Guid[count];
+        for (int i = 0; i < count; i++)
+        {
+            ids[i] = Assert.IsType<Guid>((await feature.CreateAsync($"Batchbot{(char)('a' + i / 26)}{(char)('a' + i % 26)}", 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(ids[i].ToString(), new IdleController())).Success);
+        }
+
+        owners.FailUpdatesOf(ids[3]);
+        AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
+        owners.FailUpdatesOf(null);
+
+        Assert.Contains(failure.InnerExceptions, e => e is InvalidOperationException { Message: "fixture-update-failure" });
+        foreach (Guid id in ids.Where(id => id != ids[3]))
+        {
+            Assert.Equal(ManagedPlayerbotState.Stopped, owners.Peek(id)!.State);
+            Assert.Null(host.Registry.Find(owners.Peek(id)!.AccountId));
+        }
+        Assert.NotEqual(ManagedPlayerbotState.Stopped, owners.Peek(ids[3])!.State);
+    }
+
+    [Fact]
     public async Task StoppedBots_DoNotTakeASlot_OnlyRunningBotsCountAgainstMaxBots()
     {
         // The live world of 2026-10-08 (MaxBots 10) refused '.playerbot create' with 5 bots running and 5 stopped.
@@ -817,6 +847,11 @@ public sealed class ManagedPlayerbotLifecycleTests
             return Task.CompletedTask;
         }
 
+        private Guid? _failBot;
+
+        /// <summary>Every update of <paramref name="botId"/> throws until this is called with null.</summary>
+        public void FailUpdatesOf(Guid? botId) => _failBot = botId;
+
         private Guid? _holdBot;
         private TaskCompletionSource? _held;
         private TaskCompletionSource<Guid>? _nextUpdateHeld;
@@ -859,6 +894,7 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         private bool Update(ManagedPlayerbot bot, long expectedRevision)
         {
+            if (_failBot == bot.BotId) throw new InvalidOperationException("fixture-update-failure");
             if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("fixture-update-failure"); }
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
             {
