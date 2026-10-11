@@ -155,6 +155,33 @@ public sealed class EscortAiTests
         Assert.Single(quests.GroupFailed); // the quest fails once: the dead escort no longer checks
     }
 
+    /// <summary>
+    /// The behaviour on a continent without the active-object mark (vmangos Map::UpdateActiveCellsSynch; npc_escortAI is not an active
+    /// object): a player who teleports far from the escort leaves its cells inactive, so the escort stands still, its range check does
+    /// not run and the quest is neither failed nor completed until a player comes back near it.
+    /// </summary>
+    [Fact]
+    public void EscortQuest_AnEscortLeftByATeleportStandsStillAndTheQuestStaysOpen()
+    {
+        var quests = new EscortQuests();
+        using Rig rig = Setup(quests: quests);
+        rig.Map.SetActive(rig.Escort, false); // the production state: an escort is not an active object
+        Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393));
+        Run(rig.World, 200);
+        (float x, float y) = (rig.Escort.X, rig.Escort.Y);
+
+        rig.Player.Relocate(300, 0, Z, 0, 0); // far outside the escort's cells
+        Run(rig.World, 5_000);
+        Assert.Empty(quests.GroupFailed);
+        Assert.True(rig.Escort.IsAlive);
+        Assert.Equal((x, y), (rig.Escort.X, rig.Escort.Y));
+
+        rig.Player.Relocate(x + 101.6f, y, Z, 0, 0); // back: the escort's cell is active again, the player just past its 100-yard range
+        Run(rig.World, 1_200);
+        Assert.True(rig.Map.Grids.IsInActiveCell(rig.Escort) || !rig.Escort.IsAlive);
+        Assert.Equal([(rig.Player, 1393u)], quests.GroupFailed);
+    }
+
     [Fact]
     public void EscortQuest_FailsForTheGroupWhenTheEscortDies_Once()
     {

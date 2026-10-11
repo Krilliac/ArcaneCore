@@ -339,6 +339,7 @@ public sealed partial class CreatureMapSystem
         if (creature.DeathState != CreatureDeathState.Dead)
         {
             Map.AddObject(creature, isNewObject: creature.IsNewObject);
+            QueueActivationIfFlagged(creature);
         }
 
         creature.Motion.Initialize(CreateMovementGenerator(creature), this, start: creature.DeathState == CreatureDeathState.Alive);
@@ -497,6 +498,7 @@ public sealed partial class CreatureMapSystem
         // Invisible until now, so nobody needs a values update for the re-initialization.
         creature.ClearChangedFields();
         Map.AddObject(creature);
+        QueueActivationIfFlagged(creature);
         ResetAiState(creature);
         creature.Motion.Initialize(creature.Motion.Default, this, start: true);
         if (entryChanged)

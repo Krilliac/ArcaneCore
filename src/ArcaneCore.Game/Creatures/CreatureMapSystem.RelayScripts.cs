@@ -630,7 +630,19 @@ public sealed partial class CreatureMapSystem
                 return false;
             }
 
-            case 21: // SCRIPT_COMMAND_SET_ACTIVEOBJECT: this server keeps no active-object grid state; nothing to do
+            case 21: // SCRIPT_COMMAND_SET_ACTIVEOBJECT (vmangos Map::ScriptCommand_SetActiveObject, Maps/ScriptCommands.cpp:831-845)
+                // The creature source, else the creature target, becomes an active object (datalong 1) or stops being one (0):
+                // it is updated and keeps its cells active wherever it walks (Map::AddToActive; Map.UpdatesActiveCellsOnly).
+                if ((source as Creature ?? target as Creature) is { } activated && ReferenceEquals(activated.Map, Map)
+                    && Map.Grids.Contains(activated))
+                {
+                    Map.SetActive(activated, step.DataLong != 0);
+                }
+                else
+                {
+                    ReportRelay(step, "SET_ACTIVEOBJECT without a creature source or target in this map");
+                }
+
                 return false;
 
             case 25: // SCRIPT_COMMAND_SET_RUN (:2460-2477)
