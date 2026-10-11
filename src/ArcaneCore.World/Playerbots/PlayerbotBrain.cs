@@ -1091,19 +1091,25 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         float angle = _exploreRefusals >= 3
             ? (attempt + player.Guid.Low) * 2.39996323f
             : player.Orientation + (spread * MathF.PI * 2f / 3f);
-        // Beyond 0.8 of the home radius the next leg heads for the centre instead of wandering further out; so does a leg that
-        // would end out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle).
+        // Beyond 0.8 of the home radius the next leg heads back in instead of wandering further out; so does a leg that would end
+        // out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle). Back in is the centre first,
+        // then, while legs are refused, a fan around it (InwardFanDegrees).
         bool onHomeMap = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId;
         if (onHomeMap && _home!.DistanceTo(player.X, player.Y) > _home.ExploreRadius)
-            angle = MathF.Atan2(_home.Centre.Y - player.Y, _home.Centre.X - player.X);
+            angle = InwardAngle(_home, player, _exploreRefusals);
         var destination = new System.Numerics.Vector3(
             player.X + (MathF.Cos(angle) * 48f),
             player.Y + (MathF.Sin(angle) * 48f),
             player.Z);
         if (onHomeMap && _home!.ZoneClipped && !_home.InZone(destination.X, destination.Y, destination.Z))
         {
-            angle = MathF.Atan2(_home.Centre.Y - player.Y, _home.Centre.X - player.X);
+            angle = InwardAngle(_home, player, _exploreRefusals);
             destination = new System.Numerics.Vector3(player.X + (MathF.Cos(angle) * 48f), player.Y + (MathF.Sin(angle) * 48f), player.Z);
+            if (!_home.InZone(destination.X, destination.Y, destination.Z))
+            {
+                angle = InwardAngle(_home, player, 0);
+                destination = new System.Numerics.Vector3(player.X + (MathF.Cos(angle) * 48f), player.Y + (MathF.Sin(angle) * 48f), player.Z);
+            }
         }
         if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
         {
@@ -1118,6 +1124,22 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             PlayerbotMovementControl.Stop(_session, player);
         }
     }
+
+    /// <summary>
+    /// The turns from the straight way to the home's centre that an exploring bot beyond the explore radius tries, one per refused
+    /// leg (<see cref="InwardAngle"/>): each still closes on the centre (a 48-yard leg 75 degrees off it gains about 12 yards
+    /// inward). Before, every leg there aimed straight at the centre, the refusals' turn and the stall watch's give-up included, so
+    /// one refused leg was refused on every think. Live 2026-10-11 (bot QA issue #154, 200 bots homed at Sentinel Hill, radius 550):
+    /// 74 of the run's 204 stalls lay 460 to 480 yards from the centre, just past the 440-yard explore radius; replayed from the live
+    /// characters database on the real terrain, the bots stood there with that one leg on the motion's loop blacklist
+    /// (<see cref="PlayerbotMotion.LoopBlacklistMs"/>), refused hundreds of times a minute.
+    /// </summary>
+    internal static readonly float[] InwardFanDegrees = [0f, 25f, -25f, 50f, -50f, 75f, -75f];
+
+    /// <summary>The heading of an exploring bot's leg back in after <paramref name="refusals"/> refused legs (<see cref="InwardFanDegrees"/>).</summary>
+    internal static float InwardAngle(PlayerbotHomeArea home, Player player, int refusals)
+        => MathF.Atan2(home.Centre.Y - player.Y, home.Centre.X - player.X)
+            + (InwardFanDegrees[(int)((uint)refusals % (uint)InwardFanDegrees.Length)] * MathF.PI / 180f);
 
     private static float Distance(WorldObject a, WorldObject b)
         => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
