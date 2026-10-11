@@ -342,6 +342,9 @@ public sealed class CreatureEventAiTests
         Assert.Same(add, system.FindCreature(add.Guid));
         Assert.Same(player, add.Combat.Victim);
 
+        // With no player left on the map no cell is active and the add would stand still (vmangos Map::UpdateActiveCellsSynch):
+        // keep it updated to watch its out-of-combat despawn timer.
+        map.SetActive(add, true);
         world.RemovePlayer(player); // the fight ends
         Run(world, 700);
         Assert.Same(add, system.FindCreature(add.Guid));

@@ -113,6 +113,7 @@ public static class WorldConfigKeys
         // GridContainer reads the shared MapOptions at each use; running grids keep the timer they have
         // until it is reset, as vmangos MapManager::SetGridCleanUpDelay does (World.cpp:588-590).
         Live("Maps:GridUnload", o => o.Maps.GridUnload, (o, v) => o.Maps.GridUnload = v),
+        Live("Maps:UpdateActiveCellsOnly", o => o.Maps.UpdateActiveCellsOnly, (o, v) => o.Maps.UpdateActiveCellsOnly = v),
         LiveNonNegative("Maps:GridCleanUpDelayMs", o => o.Maps.GridCleanUpDelayMs, (o, v) => o.Maps.GridCleanUpDelayMs = v),
         LiveNonNegative("Maps:GridActivationDistance", o => o.Maps.GridActivationDistance, (o, v) => o.Maps.GridActivationDistance = v),
         LiveNonNegative("Maps:VisibilityRelocationLowerLimit", o => o.Maps.VisibilityRelocationLowerLimit, (o, v) => o.Maps.VisibilityRelocationLowerLimit = v),

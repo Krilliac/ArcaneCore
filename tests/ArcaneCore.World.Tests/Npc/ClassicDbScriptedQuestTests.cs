@@ -148,6 +148,9 @@ public sealed class ClassicDbScriptedQuestTests
         using var rig = new Rig(creatures, quests, mapId: 1, giverEntry: RuulSnowhoofAI.Entry, journal: []);
 
         Assert.True(rig.Accept(6482));
+        // A teleport 300 yards away also leaves Ruul's cells inactive (vmangos Map::UpdateActiveCellsSynch freezes him until a player
+        // comes back): update every creature so his own player check runs, as it does while a player walks out of range.
+        rig.World.Options.Maps.UpdateActiveCellsOnly = false;
         rig.Teleport(rig.Player.X + 300, rig.Player.Y); // beyond DEFAULT_MAX_PLAYER_DISTANCE (100 yd)
         rig.Run(1_100);
         Assert.Equal(QuestStatus.Failed, rig.Status(6482));

@@ -104,6 +104,93 @@ public sealed class GridContainer
 
     public bool IsActive(WorldObject obj) => _active.Contains(obj);
 
+    // One bit per cell of the map (1024 x 1024), allocated on the first mark; the words set last time are cleared next time.
+    private ulong[]? _activeCells;
+    private readonly List<int> _activeCellWords = [];
+
+    /// <summary>Cells marked by the last <see cref="MarkActiveCells"/> (diagnostics, tests).</summary>
+    public int ActiveCellCount { get; private set; }
+
+    /// <summary>
+    /// vmangos Map::UpdateActiveCellsSynch / MarkCellsAroundObject (Maps/Map.cpp:743-760, 815-838): mark every cell a circle of
+    /// <see cref="MapOptions.GridActivationDistance"/> touches (Cell::CalculateCellArea) around each player and active object
+    /// (Map::AddToActive: <see cref="SetActive"/>). Objects in other cells are not updated this tick
+    /// (<see cref="IsInActiveCell"/>).
+    /// </summary>
+    public void MarkActiveCells()
+    {
+        ulong[] bits = _activeCells ??= new ulong[(GridDefines.TotalNumberOfCellsPerMap * GridDefines.TotalNumberOfCellsPerMap) / 64];
+        foreach (int word in _activeCellWords)
+        {
+            bits[word] = 0;
+        }
+
+        _activeCellWords.Clear();
+        int marked = 0;
+        float radius = Options.GridActivationDistance;
+        foreach (WorldObject obj in _active)
+        {
+            if (!float.IsFinite(obj.X) || !float.IsFinite(obj.Y))
+            {
+                continue;
+            }
+
+            CellArea area = GridDefines.CalculateCellArea(obj.X, obj.Y, radius);
+            for (int x = area.Low.X; x <= area.High.X; x++)
+            {
+                for (int y = area.Low.Y; y <= area.High.Y; y++)
+                {
+                    int id = (y * GridDefines.TotalNumberOfCellsPerMap) + x;
+                    ulong mask = 1UL << (id & 63);
+                    ref ulong word = ref bits[id >> 6];
+                    if ((word & mask) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (word == 0)
+                    {
+                        _activeCellWords.Add(id >> 6);
+                    }
+
+                    word |= mask;
+                    marked++;
+                }
+            }
+        }
+
+        ActiveCellCount = marked;
+    }
+
+    /// <summary>
+    /// Whether the cell the object is indexed in (or, for an object out of the index such as a dead creature waiting for its respawn
+    /// at home, the cell of its position: vmangos keeps it in its cell's container) was marked by the last <see cref="MarkActiveCells"/>.
+    /// </summary>
+    public bool IsInActiveCell(WorldObject obj)
+    {
+        if (_activeCells is not { } bits)
+        {
+            return false;
+        }
+
+        if (!_cells.TryGetValue(obj, out CellCoord cell))
+        {
+            if (!float.IsFinite(obj.X) || !float.IsFinite(obj.Y))
+            {
+                return false;
+            }
+
+            cell = GridDefines.ComputeCellCoord(obj.X, obj.Y);
+            if ((uint)cell.X >= GridDefines.TotalNumberOfCellsPerMap || (uint)cell.Y >= GridDefines.TotalNumberOfCellsPerMap)
+            {
+                return false;
+            }
+        }
+
+        int id = (cell.Y * GridDefines.TotalNumberOfCellsPerMap) + cell.X;
+        return (bits[id >> 6] & (1UL << (id & 63))) != 0;
+    }
+
     /// <summary>The cell an object is indexed in, or null when it is not in this container.</summary>
     public CellCoord? CellOf(WorldObject obj) => _cells.TryGetValue(obj, out CellCoord cell) ? cell : null;
 

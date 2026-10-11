@@ -678,6 +678,12 @@ public sealed class Map
                 unit.UpdateHeartbeat(diffMs);
         diagnostics?.EndHeartbeat();
 
+        // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).
+        if (UpdatesActiveCellsOnly)
+        {
+            _grid.MarkActiveCells();
+        }
+
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
         {
@@ -890,6 +896,16 @@ public sealed class Map
             viewer.NeedsVisibilityUpdate = true;
         }
     }
+
+    /// <summary>
+    /// Whether this map updates creatures only in the active cells (<see cref="MapOptions.UpdateActiveCellsOnly"/>): continents
+    /// (vmangos Map::IsContinent; a map without a loaded template counts as one when it is 0 or 1). Instances and battlegrounds
+    /// update every creature of their loaded grids: vmangos activates 170 yards there (Visibility.Distance.Instances) and 180 in
+    /// battlegrounds where ArcaneCore has the one 100-yard <see cref="MapOptions.GridActivationDistance"/>, and their scripted
+    /// encounters run far from the players.
+    /// </summary>
+    internal bool UpdatesActiveCellsOnly
+        => _grid.Options.UpdateActiveCellsOnly && (Template is { } template ? !template.Instanceable : MapId is 0 or 1);
 
     /// <summary>Moves that stayed within the relocation lower limit and so scheduled no visibility pass (diagnostics, tests).</summary>
     public long RelocationsWithoutVisibility { get; private set; }

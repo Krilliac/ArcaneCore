@@ -183,6 +183,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>Map clock (ms) at which a dead creature respawns.</summary>
     internal long RespawnAtMs { get; set; }
 
+    /// <summary>The creature system's clock at this creature's last update (-1: never); a paused creature catches up from it.</summary>
+    internal long LastUpdateClockMs { get; set; } = -1;
+
     private bool _respawnDelayDrawn;
     private uint _respawnDelaySeconds;
 

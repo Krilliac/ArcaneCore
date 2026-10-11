@@ -169,6 +169,7 @@ on the world thread, so every reader sees the new value on its next read.
   `ListenRange*`, `AllowTwoSideChat`, `AllowTwoSideWhoList`, `LogoutDelayMs`, `InstantLogoutSecurity`,
   `GmLevelInWhoList`, `PlayerCommands`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
   `World:Maps:VisibilityRelocationLowerLimit` (read by `Map.OnObjectMoved` at each move),
+  `World:Maps:UpdateActiveCellsOnly` (read by each continent map update),
   `World:Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids
   already running keep their timer until it resets, like `MapManager::SetGridCleanUpDelay`).
 - Live, social rules (`World:Social:*`, a configuration surface that did not exist before: `SocialOptions`

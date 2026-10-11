@@ -67,6 +67,10 @@ public sealed class EscortAiTests
         (Player player, _) = AddPlayer(world, 1, hostile ? 150 : 0, 0);
         system.RegisterEntryAi(EscortEntry, c => new TestEscortAI(c));
         Creature escort = Assert.Single(system.Creatures, c => c.Entry == EscortEntry);
+        // These tests put the player 150 yards off (hostile rig) or move it 200 yards in one step; on a continent only the cells
+        // within the activation distance of a player are updated (vmangos Map::UpdateActiveCellsSynch), so the escort is made an
+        // active object (Map::AddToActive) to keep running its own player-range check.
+        map.SetActive(escort, true);
         return new Rig(world, map, system, player, escort);
     }
 

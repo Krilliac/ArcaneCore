@@ -108,6 +108,11 @@ public sealed class ScourgeInvasionChoreographyTests
             World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
                 new CharacterSaveQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
                 NullLogger<WorldRuntime>.Instance);
+            // The choreography spans six zones and two capitals with no player near most of its creatures (Mouths, Pallid Horrors,
+            // Flameshockers, cultists); vmangos would only update those near players (Map::UpdateActiveCellsSynch; its Necropolis,
+            // relay, proxy and shard scripts are active objects, ScourgeNetwork.MarkActive). The continent rule has its own tests
+            // (ActiveCellUpdateTests), so this rig updates every creature.
+            World.Options.Maps.UpdateActiveCellsOnly = false;
             if (withMaps)
             {
                 CreatureTemplate[] templates =

@@ -9169,6 +9169,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Maps:UpdateActiveCellsOnly",
+      "section": "World",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "On continents, update creatures only in the cells within `GridActivationDistance` of a player or active object (vmangos Map::UpdateCells → UpdateActiveCellsSynch, Maps/Map.cpp:815-857): a creature elsewhere in a loaded grid stands still, its AI and movement paused, until a player comes near; its respawn time is wall-clock and its corpse decay catches up on the first update (WorldObject::UpdateHelper::UpdateRealTime, Objects/Object.h:477-481). False updates every creature of the loaded grids each tick (the behaviour before 2026-10-11).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#world",
+      "isCollection": false
+    },
+    {
       "path": "World:Maps:VisibilityRelocationLowerLimit",
       "section": "World",
       "type": "float",
