@@ -164,6 +164,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         }
 
         _clockMs += diffMs;
+        _pathSearchesThisTick = 0;
+        _pathNodesThisTick = 0;
         SendCatchUpMoves();
         UpdateLinkedFollowers();
         UpdateCreatures(diffMs);
@@ -246,7 +248,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     {
         ArgumentNullException.ThrowIfNull(creature);
         var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathResult path = Map.Collision.FindPath(start, destination);
+        if (!HasPathBudget)
+        {
+            // Over the tick's budget and the caller cannot wait (waypoint, flee, home, formation): the straight line, as on NOPATH.
+            DirectFallbackPaths++;
+            return [destination];
+        }
+
+        PathResult path = SearchPath(start, destination);
         if (!path.HasPath)
         {
             return [destination];
@@ -261,6 +270,45 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         }
 
         return corners;
+    }
+
+    // --- per-tick creature path-search budget ------------------------------------------------------
+
+    private int _pathSearchesThisTick;
+    private long _pathNodesThisTick;
+
+    /// <summary>
+    /// The most path searches and A* nodes creature movement may spend in one map update (reset at the start of <see cref="Update"/>).
+    /// Searches past it are deferred (chase, follow) or answered with the straight line (see <see cref="DirectFallbackPaths"/>).
+    /// </summary>
+    public CreaturePathBudget PathBudget { get; set; } = CreaturePathBudget.Default;
+
+    /// <summary>Searches creature movement has run since the current update began.</summary>
+    public int PathSearchesThisTick => _pathSearchesThisTick;
+
+    /// <summary>A* nodes those searches created.</summary>
+    public long PathNodesThisTick => _pathNodesThisTick;
+
+    /// <summary>Chase/follow re-paths put off to a later update because the budget was spent (diagnostics, tests).</summary>
+    public long DeferredPathSearches { get; private set; }
+
+    /// <summary>Non-deferrable path requests answered with the straight line because the budget was spent (diagnostics, tests).</summary>
+    public long DirectFallbackPaths { get; private set; }
+
+    /// <summary>Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap.</summary>
+    public bool HasPathBudget => _pathSearchesThisTick < PathBudget.MaxSearches && _pathNodesThisTick < PathBudget.MaxNodes;
+
+    /// <summary>Count a chase/follow request put off because <see cref="HasPathBudget"/> was false.</summary>
+    internal void NoteDeferredPath() => DeferredPathSearches++;
+
+    /// <summary>One counted search through the map's pathfinder. World thread.</summary>
+    private PathResult SearchPath(Vector3 start, Vector3 destination)
+    {
+        long nodes = PathSearchCounters.NodesCreated;
+        PathResult path = Map.Collision.FindPath(start, destination);
+        _pathSearchesThisTick++;
+        _pathNodesThisTick += PathSearchCounters.NodesCreated - nodes;
+        return path;
     }
 
     /// <summary>Stop a moving creature where it is (vmangos Unit::StopMoving → MoveSplineInit::Stop).</summary>

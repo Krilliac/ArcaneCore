@@ -310,7 +310,14 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     IReadOnlyList<Vector3> ICreaturePathQuery.FindPath(Creature creature, Vector3 destination, out bool reachable)
     {
         var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathResult path = Map.Collision.FindPath(start, destination);
+        if (!HasPathBudget)
+        {
+            DirectFallbackPaths++;
+            reachable = true;
+            return [destination];
+        }
+
+        PathResult path = SearchPath(start, destination);
         if (!path.HasPath)
         {
             reachable = false;
@@ -326,6 +333,10 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
         return corners;
     }
+
+    bool ICreaturePathQuery.HasPathBudget => HasPathBudget;
+
+    void ICreaturePathQuery.NoteDeferred() => NoteDeferredPath();
 
     /// <summary>vmangos MAP_ALTERAC_VALLEY: the map whose unreachable victims lose their threat after one second (Creature.cpp:1026-1027).</summary>
     private const uint AlteracValleyMapId = 30;

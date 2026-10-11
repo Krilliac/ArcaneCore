@@ -122,3 +122,7 @@ The GM-commands lane had a second shutdown implementation (`ShutdownScheduler`, 
 This lane's `ServerLifecycleFeature`/`ShutdownCountdown`/`ExitCodes` is the single implementation (it owns the process exit code).
 The GM lane keeps `.server set motd` and `ServerStats`. `Program.cs` runs the ops verbs and config validation first, then the
 code hot-reload launch gate. The retail `.server`/`.announce` texts live in `BuiltinCommands` (GM lane) as before.
+
+## Creature path-search budget
+
+`CreatureMapSystem.PathBudget` (`CreaturePathBudget`, default 64 searches / 16 384 A* nodes per map update) bounds creature path searches on the world thread. Chase/follow re-paths over budget are deferred to the next update (the creature keeps its spline); other requests (waypoint, flee, home, formation, confused) take the straight line. Before: one search (up to 2 048 nodes) per chaser per update, unbounded; after: at most 64 searches and 16 383 + 2 048 nodes. Tests: `CreaturePathBudgetTests`.
