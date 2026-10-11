@@ -36,17 +36,19 @@ internal sealed class PlayerbotThinkProbe
     internal static PlayerbotThinkProbe? Active => t_active;
 
     /// <summary>
-    /// The most A* nodes a think may have created when one of its fallback queries runs (<see cref="PlayerbotOptions.MaxThinkSearchNodes"/>;
-    /// 0 = no bound). Only the queries made inside a <see cref="Fallback"/> scope are held to it: the steep escape, the starts beside
-    /// the bot and the hazard detours of <see cref="PlayerbotNavigation"/>, which only try other ways after a plan's own query was
-    /// refused. A fallback query past the budget is given only what is left (<see cref="Clamped"/>), and with less than
-    /// <see cref="MinQueryNodes"/> left it is answered no path without a search (<see cref="Refused"/>): the fallback then finds
-    /// nothing, an answer it could always give. A plan's own query is never cut short, so no caller takes a starved search for an
-    /// unreachable goal and stores that (a blocked spawn, an unreachable target, a back-off, a risk verdict). Set before <see cref="Begin"/>.
+    /// The most A* nodes the fallback queries of one think may create together (<see cref="PlayerbotOptions.MaxThinkSearchNodes"/>;
+    /// 0 = no bound). Only the queries made inside a <see cref="Fallback"/> scope count and are held to it: the steep escape, the starts
+    /// beside the bot and the hazard detours of <see cref="PlayerbotNavigation"/>, which only try other ways after a plan's own query was
+    /// refused or blocked. A fallback query past the budget is given only what is left (<see cref="Clamped"/>), and with less than
+    /// <see cref="MinQueryNodes"/> left it is answered no path without a search (<see cref="Refused"/>): that fallback finds nothing.
+    /// A plan's own query is never cut short or counted. A starved fallback can still make its plan fail, and the caller may store
+    /// that as it stores any failed plan (a blocked spawn, an unreachable target, a back-off): the same outcome as when no such way
+    /// exists, which it could always give. Set before <see cref="Begin"/>.
     /// </summary>
     internal long NodeBudget { get; set; }
 
     private int _fallbackDepth;
+    private long _fallbackNodes;
 
     /// <summary>
     /// The queries made until the returned scope is disposed are fallbacks, held to <see cref="NodeBudget"/>. Nothing off a think.
@@ -109,6 +111,7 @@ internal sealed class PlayerbotThinkProbe
         Clamped = 0;
         Refused = 0;
         _fallbackDepth = 0;
+        _fallbackNodes = 0;
         Largest = default;
         Search = default;
         _elapsed = 0;
@@ -181,9 +184,10 @@ internal sealed class PlayerbotThinkProbe
     {
         if (t_active is not { } probe) return collision.FindPath(from, to, options);
         long nodesBefore = PathSearchCounters.NodesCreated;
-        if (probe.NodeBudget > 0 && probe._fallbackDepth > 0)
+        bool fallback = probe._fallbackDepth > 0;
+        if (probe.NodeBudget > 0 && fallback)
         {
-            long left = probe.NodeBudget - (nodesBefore - probe._searchBefore.Nodes);
+            long left = probe.NodeBudget - probe._fallbackNodes;
             if (left < MinQueryNodes)
             {
                 probe.Refused++;
@@ -203,6 +207,7 @@ internal sealed class PlayerbotThinkProbe
         probe.Queries++;
         probe.QueryTicks += ticks;
         long nodes = PathSearchCounters.NodesCreated - nodesBefore;
+        if (fallback) probe._fallbackNodes += nodes;
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
         return path;

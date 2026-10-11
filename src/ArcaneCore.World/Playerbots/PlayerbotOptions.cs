@@ -53,9 +53,10 @@ public sealed class PlayerbotOptions
     public double SlowThinkLogMs { get; set; } = 50;
 
     /// <summary>
-    /// The most navigation-mesh search nodes one bot think may have created when a fallback path query of it runs (the steep escape,
-    /// the starts beside the bot, the hazard detours; <see cref="PlayerbotThinkProbe.NodeBudget"/>): past it a fallback runs with what
-    /// is left, or not at all, and finds nothing. A plan's own query is never held to it. 0 = no bound, else 2048..10000000; three of
+    /// The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the
+    /// starts beside the bot, the hazard detours; <see cref="PlayerbotThinkProbe.NodeBudget"/>): past it a fallback runs with what is
+    /// left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held
+    /// to it nor counted. 0 = no bound, else 2048..10000000; three of
     /// the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by default. Live: <c>.reload config</c>.
     /// </summary>
     public int MaxThinkSearchNodes { get; set; } = 3 * PlayerbotNavigation.MaxSearchNodes;
