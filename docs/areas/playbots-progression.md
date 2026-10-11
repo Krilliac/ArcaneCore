@@ -102,6 +102,13 @@ under `AllowlistOnly`. Quest travel (`PlayerbotWorldDestinations`) considers, un
 character is old enough for and that is not gray for it (vmangos GetGrayLevel), and keeps the 128 nearest giver and ender spawns;
 under `AllowlistOnly` the allowlist, as before.
 
+An item-only repeatable delivery is a travel candidate only while the bot carries its required turn-in items (or receives them as
+quest source items on acceptance). The server's `CanTakeQuest` alone can allow such a quest before its items are present: ClassicDB
+quest 579, "Stormwind Library", is offered by Donyal Tovald in Stormwind to level-1 characters but requires Library Scrip 3898.
+Without the scrip, a Coldridge bot has no delivery objective it can pursue and does not travel there. Once it carries the item, the
+normal eligibility and Deeprun Tram route apply. Failed far destination plans also wait for the two-second travel backoff before
+another distant spawn is searched; nearby alternate spawns still rotate at the next think.
+
 ## Scenarios (`Scenarios/ScenarioProgression.cs`)
 
 The bots are set up scripted, then handed back to their brain (`GoAutonomousAsync`); the steps wait for what the brain does.

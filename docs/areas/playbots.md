@@ -125,8 +125,10 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
 (`PlayerbotTram`):
 
 * **When.** `PlayerbotWorldDestinations` asks `TramNetwork.Choose` before it plans a walk: the bot takes the tram when its destination
-  lies on the other platform's side (nearer that platform's way out than this platform's entrance) and walking to this entrance plus
-  walking from the other exit to the destination is shorter, in straight lines, than the straight line itself. A failed trip is not tried
+  lies on the other platform's side (nearer that platform's way out than this platform's entrance). The apparent straight-line shortcut
+  from Coldridge Valley to Stormwind crosses impassable mountains, so it does not veto a tram trip. A bot in Dun Morogh (AreaTable zone
+  1) starts from the Ironforge entrance (ClassicDB trigger 2175) even where Stormwind is closer in straight-line distance; when its zone
+  is unknown, the nearest entrance remains the fallback. A failed trip is not tried
   again for 10 minutes (`RetryAfterFailureMs`); the destination then falls back to the walk and the ordinary stall watch.
 * **The tram, from the data.** `TramNetwork.Build` reads the area triggers: the two entrances on the continent whose
   `areatrigger_teleport` leads to map 369 (classic-db 2173 Stormwind, 2175 Ironforge), each paired with the exit on map 369 nearest its
@@ -200,8 +202,8 @@ tram map as a ghost, is revived there and leaves by the Stormwind exit).
 
 Not done: only quest destinations (`PlayerbotWorldDestinations`) begin a trip; trainer, vendor and home-area walks
 (`PlayerbotTrainerDestinations`, `PlayerbotTownGoals`, `PlayerbotHome`) do not use the tram yet, and party followers follow their leader
-only through triggers the leader took (`PlayerbotFollower`). `Choose` compares straight lines, so a bot well east of both cities (Redridge
-to Thelsamar) still walks. Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
+only through triggers the leader took (`PlayerbotFollower`). `Choose` uses proximity to the two exits; destinations outside their cities
+can still be routed through the tram based on that approximation. Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
 from the transport when the release finds a graveyard, `GraveyardRepopService.RepopAtGraveyard`) is not.
 
 **Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit

@@ -58,6 +58,17 @@ public sealed class PlayerbotTramNetworkTests
     }
 
     [Fact]
+    public void ColdridgeUsesTheIronforgeEntranceForAStormwindDestination()
+    {
+        // Live Coldridge bot position and ClassicDB quest-579 giver position. Zone 1 is Dun Morogh.
+        (TramPlatform From, TramPlatform To)? leg = Network().Choose(0,
+            new Vector3(-6489.42f, 494.74f, 388.03f), new Vector3(-8344.69f, 418.89f, 122.36f), sourceZoneId: 1);
+        Assert.NotNull(leg);
+        Assert.Equal(2175u, leg.Value.From.Entrance.Id);
+        Assert.Equal(2173u, leg.Value.To.Entrance.Id);
+    }
+
+    [Fact]
     public void TheTram_IsLeftAloneOnAnotherMap()
         => Assert.Null(Network().Choose(1, new Vector3(-8354f, 524f, 0), new Vector3(-4918.9f, -982.5f, 0)));
 

@@ -1,8 +1,12 @@
 using System.Numerics;
+using System.Diagnostics;
+using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Transports;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -46,6 +50,70 @@ internal sealed class RealTramFactAttribute : FactAttribute
 /// </summary>
 public sealed class PlayerbotTramRealTerrainTests(ITestOutputHelper output)
 {
+    [RealAreaTerrainFact]
+    public async Task ColdridgeBot_UsesTheIronforgeEntranceOnTheRealAreaAndTerrainData()
+    {
+        string terrain = Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable)!;
+        string dbc = Environment.GetEnvironmentVariable("ARCANECORE_TEST_DBC_DIR")!;
+        WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = terrain,
+            configureServices: services =>
+            {
+                services.AddSingleton<IMapDataStore>(new TramTestData.MapStore());
+                services.AddSingleton<IWorldFeature, ManualClockFeature>();
+            });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            AreaTemplate[] areas = [.. AreaTableDbcReader.Read(Path.Combine(dbc, "AreaTable.dbc"))
+                .Select(r => new AreaTemplate(r.Entry, r.MapId, r.ZoneId, r.ExploreFlag, r.Flags, r.AreaLevel,
+                    r.Name, r.Team, r.LiquidTypeId))];
+            await host.OnWorldAsync(() =>
+            {
+                WorldMaps maps = WorldMaps.Of(host.World);
+                maps.Terrain.Areas = new AreaTable(areas, maps.Registry);
+                return true;
+            });
+            Player player = session.Player!;
+            TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+            Vector3 coldridge = new(-6489.42f, 494.74f, 388.03f);
+            Assert.True(await host.OnWorldAsync(() => teleports.TeleportTo(player, 0, coldridge.X, coldridge.Y, coldridge.Z, 0)));
+            for (int i = 0; i < 200 && !await host.OnWorldAsync(() => player.IsInWorld && teleports.StageOf(player) is null
+                && Vector2.Distance(new(player.X, player.Y), new(coldridge.X, coldridge.Y)) < 1f); i++)
+            {
+                await host.OnWorldAsync(() => PlayerbotMovementControl.Update(session, player));
+                await host.World.AdvanceClockAsync(50);
+            }
+
+            (uint zone, bool began, uint from, double ms) = await host.OnWorldAsync(() =>
+            {
+                uint zone = player.Map!.GetZoneAndAreaId(player.X, player.Y, player.Z).ZoneId;
+                var watch = Stopwatch.StartNew();
+                bool began = PlayerbotTram.TryBegin(session, player, new Vector3(-8344.69f, 418.89f, 122.36f));
+                return (zone, began, PlayerbotTram.TripOf(player)?.From.Entrance.Id ?? 0, watch.Elapsed.TotalMilliseconds);
+            });
+            output.WriteLine($"Coldridge zone={zone}; tram choice {ms:F2} ms; entrance={from}");
+            Assert.Equal(1u, zone);
+            Assert.True(began);
+            Assert.Equal(2175u, from);
+            (bool planned, double planMs) = await host.OnWorldAsync(() =>
+            {
+                Vector3 entrance = PlayerbotTram.TripOf(player)!.From.EntranceCentre;
+                var watch = Stopwatch.StartNew();
+                bool planned = PlayerbotNavigation.TryPlanToward(player, entrance,
+                    new PlayerbotOptions { Enabled = true }, out PlayerbotRoute? route) && route is not null;
+                return (planned, watch.Elapsed.TotalMilliseconds);
+            });
+            output.WriteLine($"first walking leg to Ironforge planned={planned}; {planMs:F2} ms");
+            Assert.True(planned, "Coldridge bot could not plan its first leg to the Ironforge tram entrance");
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+            await host.DisposeAsync();
+        }
+    }
+
     [RealTramFact]
     public async Task ABot_RidesTheRealTram_FromStormwindToIronforge()
     {

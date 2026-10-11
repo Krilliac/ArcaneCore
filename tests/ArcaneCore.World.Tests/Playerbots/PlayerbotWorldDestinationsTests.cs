@@ -2,13 +2,16 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Items;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Tests.Items;
 using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
 using Xunit;
@@ -17,6 +20,32 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWorldDestinationsTests
 {
+    [Fact]
+    public async Task ItemOnlyRepeatableStarterNeedsItsTurnInItemBeforeBotTravels()
+    {
+        // ClassicDB quest 579 at Donyal Tovald in Stormwind asks for Library Scrip 3898.
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 3898, Name = "Library Scrip", Class = (uint)ItemClass.Quest, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        var quests = new QuestStore(new QuestContent(
+            [new QuestTemplate { Entry = 579, Method = 2, MinLevel = 1, QuestLevel = 1,
+                SpecialFlags = 1, ReqItemId1 = 3898, ReqItemCount1 = 1 }], [], []));
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var player = session.Player!;
+                Assert.False(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3898, 1, out _));
+                Assert.True(PlayerbotWorldDestinations.CanPursueStarter(player, quests.Get(579)!));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task BlockedNearestHintRotatesToReachableSameEntryOnNextThink()
     {
@@ -50,6 +79,38 @@ public sealed class PlayerbotWorldDestinationsTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.True(player.X < before);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task FailedLongRouteDoesNotSearchAnotherFarSpawnBeforeBackoff()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "far objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 21001, Entry = 6, MapId = 0, X = startX + 1600, Y = -132.49f, Z = 83.53f },
+             new CreatureSpawn { Guid = 21002, Entry = 6, MapId = 0, X = startX + 1800, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                int afterFirst = pathfinder.Calls;
+                Assert.True(afterFirst > 0);
+                Assert.False(destinations.Update(session.Player!, 6, 100));
+                Assert.Equal(afterFirst, pathfinder.Calls);
                 return true;
             });
         }

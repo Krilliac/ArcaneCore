@@ -193,7 +193,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);
-                return false; // Rotate to another indexed spawn on the next think; one path attempt per think.
+                // A far failed search is expensive. Defer the next far spawn until the backoff expires instead of
+                // running another capped search on the very next think; nearby alternatives still rotate promptly.
+                float longRoute = _options.MaxRouteYards * 0.5f;
+                if (DistanceSquared(player, entry.Spawn) > longRoute * longRoute) Backoff(now);
+                return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
             _route = route;
             _routeTarget = entry.Entry;
@@ -309,6 +313,26 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .Where(services.IsRewardable);
     }
 
+    /// <summary>
+    /// An item-only repeatable delivery has no objective the bot can pursue to obtain its items. vmangos
+    /// Player::CanCompleteRepeatableQuest checks the bag counts before completing it (Player.cpp:12663-12680);
+    /// being allowed to take it is not a reason to travel to its giver. A quest source item counts because
+    /// accepting the quest gives it to the player.
+    /// </summary>
+    internal static bool CanPursueStarter(Player player, Quest quest)
+    {
+        if (!quest.IsRepeatable || !quest.HasSpecialFlag(QuestSpecialFlags.Deliver)
+            || quest.ReqCreatureOrGOCountTotal != 0 || quest.ReqSpell.Any(id => id != 0)) return true;
+        for (int i = 0; i < quest.ReqItemId.Count; i++)
+        {
+            uint id = quest.ReqItemId[i];
+            if (id == 0) continue;
+            uint supplied = quest.Template.SrcItemId == id ? Math.Max(1u, quest.Template.SrcItemCount) : 0;
+            if ((ulong)player.Inventory.GetItemCount(id) + supplied < quest.ReqItemCount[i]) return false;
+        }
+        return true;
+    }
+
     private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
         PlayerNpcState? state, uint returnQuestId, Func<uint, bool>? skipQuest, out uint questId)
     {
@@ -333,6 +357,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (uint id in services.Quests.StartersOf(entry))
         {
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
+                && services.Quests.Get(id) is { } quest && CanPursueStarter(player, quest)
                 && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
         }
         return false;
