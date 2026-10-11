@@ -220,6 +220,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 RecordDeath(player);
                 RetireDeathIntent();
+                // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
+                // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
+                PlayerbotTram.Cancel(player);
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -296,7 +299,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (tram == TramStep.Failed)
             {
                 _stall.ReportExternal(tramFailure ?? "tram: the trip failed");
-                GiveUpStalledGoal(player);
+                GiveUpStalledGoal(player, shareable: false);
                 return;
             }
         }
@@ -716,12 +719,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// ended at Sentinel Hill inside every bot's home, was set aside for all of them by bots stalled in Redridge and at Raven Hill).
     /// Its own set-aside is unchanged. <see cref="StallOutsideHome"/> tells the feature's log line (and so bot QA) which it was.
     /// </para>
+    /// <para>
+    /// A failed tram trip (<see cref="PlayerbotTram"/>, <paramref name="shareable"/> false) is the bot's own too: it says the tram did not
+    /// carry the bot (no car, no stop, no way to the car's side), not that the goal beyond it is unreachable, and the place it is reported
+    /// (the exit the bot left by) is not where the goal failed. Shared, three bots behind one stopped car would set every bot's goal on the
+    /// other side aside, and bot QA would read it as that quest's fault. Its log line is never marked outside the home either
+    /// (ManagedPlayerbotFeature.LogStall marks only "stalled" lines).
+    /// </para>
     /// </summary>
-    internal void GiveUpStalledGoal(Player player)
+    internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
         StallOutsideHome = _home is { } home && !home.Contains(player);
-        if (!StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
+        if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
                 new System.Numerics.Vector3(player.X, player.Y, player.Z)) is { } everyone)
             SharedSetAside = everyone;
         switch (_goal)

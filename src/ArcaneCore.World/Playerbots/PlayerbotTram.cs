@@ -248,8 +248,16 @@ internal static class PlayerbotTram
     internal static bool IsTraveling(Player player)
         => Trips.TryGetValue(player, out TramTrip? trip) && trip.Stage is not (TramStage.Done or TramStage.Failed);
 
-    /// <summary>Whether the bot may plan and walk on <paramref name="map"/> because of a trip: the tram map, while one is under way.</summary>
-    internal static bool AllowsWalkingOn(Player player, Map map) => map.MapId == TramNetwork.TramMapId && IsTraveling(player);
+    /// <summary>
+    /// Whether the bot may plan and walk on <paramref name="map"/> because of the tram: the tram map, while a trip is under way, or as a
+    /// ghost whose body lies there (a bot that died on the tram map dropped its trip, PlayerbotBrain; its corpse run walks back to the body
+    /// like anywhere else, PlayerbotRecovery, and once revived it takes the nearest exit, <see cref="Drive"/>).
+    /// </summary>
+    internal static bool AllowsWalkingOn(Player player, Map map)
+        => map.MapId == TramNetwork.TramMapId && (IsTraveling(player) || IsGhostWithBodyOnTramMap(player));
+
+    private static bool IsGhostWithBodyOnTramMap(Player player)
+        => !player.IsAlive && (player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is { MapId: TramNetwork.TramMapId };
 
     /// <summary>The reason the bot's last trip failed (inspection), null after a trip that arrived.</summary>
     internal static string? LastFailure(Player player)

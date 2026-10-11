@@ -130,11 +130,22 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
   plan and walk on the tram map only while its trip is under way (`PlayerbotMapPolicy.MayMoveOn`); a bot there without one (logged in
   after a save on the way: the login gate admits the tram map when the tram joins a continent of AllowedMaps,
   `PlayerbotMapPolicy.MayLogInOnTram`) walks nowhere but into the nearest platform's exit.
-* **Fails closed** with a stall reason (logged as `Playerbot <id> (<name>) tram: ...; it gives up that goal`, the goal set aside as for any
-  stall): no car runs on the tram map, no car stops at the platform within two cycles (about five minutes), no way to the side of a car,
+* **Fails closed** with a stall reason (logged as `Playerbot <id> (<name>) tram: ...; it gives up that goal`, the goal set aside for the
+  bot itself as for any stall, but never for every bot, see below): no car runs on the tram map, no car stops at the platform within two cycles (about five minutes), no way to the side of a car,
   no way to the entrance (no progress for 60 s), or a car that did not stop at the other platform within a cycle. On the tram map the bot
   then leaves by the exit of the platform it is at; when it cannot walk into that exit within 60 s without progress, the server sends it
   where the exit would (that trigger's own teleport).
+* **Beside the home, the shared set-asides and death.**
+  * *Home return.* A homed bot on a trip is on "another map" (369) or far from its home, which an Auto return teleports from at once. The trip
+    runs before the home return (`PlayerbotBrain.Update`), so no home teleport cuts a ride short; once the bot is out on the continent with no
+    errand left, the home return applies as usual. A completed turn-in that began the trip runs before the home return too.
+  * *Stalls.* The stall watch never judges a bot on a trip. A failed trip is the bot's own set-aside only (`GiveUpStalledGoal(shareable:
+    false)`): it says the tram did not carry the bot, not that the goal beyond it is unreachable, and it is reported at the exit the bot left
+    by. Shared, three bots behind one stopped car would set every bot's quest on the other side aside, and bot QA would read it as that
+    quest's fault. Its line is never marked `outside its home` (only `stalled` lines are).
+  * *Death.* A death ends the trip and its entrance consent (`PlayerbotTram.Cancel` when the brain records the death). The ghost's corpse
+    run may walk the tram map while its body lies there (`PlayerbotTram.AllowsWalkingOn`), reclaims it as anywhere else (no spirit healer
+    stands on map 369, so the body is the way back), and the revived bot, on the tram map without a trip, leaves by the nearest platform's exit.
 
 Tests: `PlayerbotTramRouteTests` (the brain drives a bot from the Stormwind tram exit to Ironforge with the classic-db trigger and car
 rows, a synthetic animation and flat floors, with the anticheat judging the bot as a client: no fake transport, no speed; a destination of
@@ -142,12 +153,16 @@ rows, a synthetic animation and flat floors, with the anticheat judging the bot 
 the nearest exit; no car fails the trip closed and the bot goes back out; the entrance is not taken without a trip),
 `PlayerbotTramNetworkTests` (the network from the rows, `Choose`, `NextDock`), and `PlayerbotTramRealTerrainTests` (needs
 `ARCANECORE_TEST_TERRAIN_DIR` and `ARCANECORE_TEST_DBC_DIR`: the same ride on the real map 369 mesh and models and the client's
-TransportAnimation.dbc; the bot boards an Ironforge-bound car 49 s after arriving and is out at Ironforge 140 s after it started).
+TransportAnimation.dbc; the bot boards an Ironforge-bound car 49 s after arriving and is out at Ironforge 140 s after it started), and
+`PlayerbotTramInteractionTests` (a bot homed in Westfall rides to Ironforge without a home teleport and is taken home only after the trip; a
+failed trip sets the quest aside for the bot but not for every bot; a bot killed on the platform drops its trip, walks back to its body on the
+tram map as a ghost, is revived there and leaves by the Stormwind exit).
 
 Not done: only quest destinations (`PlayerbotWorldDestinations`) begin a trip; trainer, vendor and home-area walks
 (`PlayerbotTrainerDestinations`, `PlayerbotTownGoals`, `PlayerbotHome`) do not use the tram yet, and party followers follow their leader
 only through triggers the leader took (`PlayerbotFollower`). `Choose` compares straight lines, so a bot well east of both cities (Redridge
-to Thelsamar) still walks. A bot that dies on the tram map drops its trip (nothing kills there; its ghost has no tram-map route).
+to Thelsamar) still walks. Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
+from the transport when the release finds a graveyard, `GraveyardRepopService.RepopAtGraveyard`) is not.
 
 **Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit
 healer when the walk stopped closing for `StuckMs` (10 s), faults a fallback that stalls the same way
@@ -321,7 +336,8 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
     transport step (riding the tram's GAMEOBJECT_TYPE_TRANSPORT, `GameObjectMapSystem.Elevators`). Two ways out, both open: (1) teach bots
     the tram (allow map 369 for that trigger pair, ride the car, leave by the far trigger), or (2) decide that a homed bot does not walk out of
     its home for a turn-in whose ender is not reachable (needs a reachability rule: the navigation mesh alone answers per tile; a zone
-    connectivity graph would have to be sourced). Until then these stalls are logged `outside its home` and set nothing aside for other bots.
+    connectivity graph would have to be sourced). Way (1) is done ([Travel by the Deeprun Tram](#travel-by-the-deeprun-tram)); bots still on
+    foot there are logged `outside its home` and set nothing aside for other bots.
   * *Terrain stuck points on the way home.* Several bots stalled at the very same coordinates: Raven Hill in Duskwood (-10607.0,294.0,32;
     quests 783, 2158, 6181), the hill west of Lakeshire in Redridge (-9471.9,-1792.0,132; quests 106, 109), north Westfall (-9540.1,1015.0,52;
     quests 400, 2160, 2997). These are navigation obstacles, not quest faults; the zone clip and the return teleport bring homed bots back from
