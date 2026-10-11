@@ -677,7 +677,8 @@ public sealed class WardenTests
         rig.Handshake();
         rig.Warden.Update(10_000);
         rig.Next();
-        rig.Warden.Handle(rig.Result(0));
+        rig.Warden.Handle(rig.Result(1, 0, 0, 0, 0)); // a valid Timing reply, so the gap comes from the scheduled scan, not the retry path
+        Assert.All(rig.Verdicts, v => Assert.False(v.IsProtocolFailure));
         int sent = rig.Sent.Count;
         rig.Warden.Update(9_999);
         Assert.Equal(sent, rig.Sent.Count);
@@ -724,7 +725,7 @@ public sealed class WardenTests
     [Fact]
     public void ARetriedBatch_RunsTheSameCheckAgain_FromARandomStart()
     {
-        // Real seeded starts, not the pinned one: the retry rewinds the rotation from wherever it began, including a wrap past the end.
+        // Real seeded starts, not the pinned one: the retry rewinds the rotation from wherever it began.
         var firstChecks = new HashSet<uint>();
         for (int seed = 1; seed <= 16; seed++)
         {
