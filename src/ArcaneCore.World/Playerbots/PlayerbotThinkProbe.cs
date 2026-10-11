@@ -35,6 +35,22 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>The probe of the think running on this thread, if any.</summary>
     internal static PlayerbotThinkProbe? Active => t_active;
 
+    /// <summary>
+    /// The most A* nodes the think's queries may create (<see cref="PlayerbotOptions.MaxThinkSearchNodes"/>; 0 = no bound). A query
+    /// past it is given only what is left of it (<see cref="Clamped"/>), and once less than <see cref="MinQueryNodes"/> is left it is
+    /// answered no path without a search (<see cref="Refused"/>). Set before <see cref="Begin"/>.
+    /// </summary>
+    internal long NodeBudget { get; set; }
+
+    /// <summary>The smallest search a query is still run with under <see cref="NodeBudget"/>.</summary>
+    internal const int MinQueryNodes = 64;
+
+    /// <summary>Queries of this think run with fewer nodes than they asked for (<see cref="NodeBudget"/>).</summary>
+    internal int Clamped { get; private set; }
+
+    /// <summary>Queries of this think answered no path without a search (<see cref="NodeBudget"/> spent).</summary>
+    internal int Refused { get; private set; }
+
     /// <summary>Navigation queries made through <see cref="Find"/> in this think.</summary>
     internal int Queries { get; private set; }
 
@@ -65,6 +81,8 @@ internal sealed class PlayerbotThinkProbe
         _phase = "start";
         Queries = 0;
         QueryTicks = 0;
+        Clamped = 0;
+        Refused = 0;
         Largest = default;
         Search = default;
         _elapsed = 0;
@@ -126,18 +144,41 @@ internal sealed class PlayerbotThinkProbe
 
     /// <summary>
     /// One navigation query of a bot (every bot query goes through here: <see cref="PlayerbotNavigation"/>, the follow drop),
-    /// counted on the running think.
+    /// counted on the running think and held to its <see cref="NodeBudget"/>.
+    /// <para>
+    /// The budget bounds one think whatever its goals ask: before it, a bot whose plan fell through to its fallbacks (the steep
+    /// escape, the starts beside it, the hazard detours) could run 40 searches of up to 32 768 nodes in one think, 557 ms on the
+    /// 200-bot terrain benchmark and 2 139 ms in one live tick (live-w24-r1). A query held short answers what a search out of
+    /// nodes answers (a partial path, or none): the caller refuses that route this think, as it refuses any it cannot use, and
+    /// plans again later.
+    /// </para>
     /// </summary>
     internal static PathResult Find(MapCollision collision, Vector3 from, Vector3 to, PathOptions options)
     {
         if (t_active is not { } probe) return collision.FindPath(from, to, options);
-        long nodesBefore = PathSearchCounters.Current.Nodes;
+        long nodesBefore = PathSearchCounters.NodesCreated;
+        if (probe.NodeBudget > 0)
+        {
+            long left = probe.NodeBudget - (nodesBefore - probe._searchBefore.Nodes);
+            if (left < MinQueryNodes)
+            {
+                probe.Refused++;
+                return PathResult.None(from);
+            }
+
+            if (options.MaxSearchNodes > left)
+            {
+                probe.Clamped++;
+                options = options with { MaxSearchNodes = (int)left };
+            }
+        }
+
         long started = Stopwatch.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
         long ticks = Stopwatch.GetTimestamp() - started;
         probe.Queries++;
         probe.QueryTicks += ticks;
-        long nodes = PathSearchCounters.Current.Nodes - nodesBefore;
+        long nodes = PathSearchCounters.NodesCreated - nodesBefore;
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
         return path;
@@ -190,6 +231,8 @@ internal sealed class PlayerbotThinkProbe
                 $"; largest {nodes}/{max} nodes {Ms(ticks):F1} ms in {phase} from ({from.X:F1}, {from.Y:F1}, {from.Z:F1}) to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}), {Vector3.Distance(from, to):F0} yd");
         }
 
+        if (Clamped > 0 || Refused > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} queries cut short, {Refused} refused");
         if (Search.TileLoads > 0)
             text.Append(CultureInfo.InvariantCulture, $"; tiles read {Search.TileLoads} ({Search.TileLoadMs:F1} ms)");
         return text.ToString();

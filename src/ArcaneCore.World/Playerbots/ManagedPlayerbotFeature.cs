@@ -68,6 +68,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
     private double _slowThinkMs = double.NaN;
+    private int _thinkSearchNodes;
     private long _slowThinkReadMs = long.MinValue;
 
     /// <summary>
@@ -877,11 +878,11 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
         RefreshSlowThinkThreshold();
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
-        long started = Stopwatch.GetTimestamp();
-        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for.
-        _rotation.Tick(bots.Length, index =>
+        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
+        // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
+        _rotation.TickWithin(bots.Length, PlayerbotThinkRotation.TickBudgetMs, index =>
         {
-            if (budget.Remaining <= 0 || Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 8) return false;
+            if (budget.Remaining <= 0) return false;
             Think(bots[index], budget);
             return true;
         });
@@ -892,20 +893,28 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     }
 
     /// <summary>
-    /// <c>World:Playerbots:SlowThinkLogMs</c>, read from the configuration again once a second of world time (an edited settings file
-    /// takes effect without a restart); <see cref="PlayerbotOptions.SlowThinkLogMs"/> when the configuration has none or no valid one.
+    /// <c>World:Playerbots:SlowThinkLogMs</c> and <c>World:Playerbots:MaxThinkSearchNodes</c>, read from the configuration again once a
+    /// second of world time (an edited settings file takes effect without a restart); the bound options' values when the configuration
+    /// has none or no valid one.
     /// </summary>
     private void RefreshSlowThinkThreshold()
     {
         long now = ClockMs;
         if (_slowThinkReadMs != long.MinValue && now - _slowThinkReadMs < 1000) return;
         _slowThinkReadMs = now;
+        Microsoft.Extensions.Configuration.IConfiguration? configuration = services.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
         double threshold = _options.SlowThinkLogMs;
-        if (services.GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.SlowThinkLogMs)] is { } text
+        if (configuration?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.SlowThinkLogMs)] is { } text
             && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double configured)
             && double.IsFinite(configured) && configured is >= 0 and <= 60_000)
             threshold = configured;
         _slowThinkMs = threshold;
+        int nodes = _options.MaxThinkSearchNodes;
+        if (configuration?[PlayerbotOptions.SectionName + ":" + nameof(PlayerbotOptions.MaxThinkSearchNodes)] is { } nodesText
+            && int.TryParse(nodesText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int configuredNodes)
+            && (configuredNodes == 0 || configuredNodes is >= ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes and <= 10_000_000))
+            nodes = configuredNodes;
+        _thinkSearchNodes = nodes;
     }
 
     /// <summary>
@@ -914,11 +923,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// </summary>
     private void Think(ActiveBot active, ManagedActionBudget budget)
     {
+        if (double.IsNaN(_slowThinkMs)) RefreshSlowThinkThreshold();
+        _probe.NodeBudget = _thinkSearchNodes;
         _probe.Begin();
         string driver;
         try { driver = ThinkCore(active, budget); }
         finally { _probe.End(); }
-        if (double.IsNaN(_slowThinkMs)) RefreshSlowThinkThreshold();
         (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, _slowThinkMs, ClockMs, active.Record.BotId, active.Name, driver,
             active.Brain.Goal, active.Brain.TargetEntry, active.Brain.QuestId);
         if (ThinkObserver is { } observer)

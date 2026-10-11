@@ -53,6 +53,13 @@ public sealed class PlayerbotOptions
     /// </summary>
     public double SlowThinkLogMs { get; set; } = 50;
 
+    /// <summary>
+    /// The most navigation-mesh search nodes one bot think may create over all its path queries (<see cref="PlayerbotThinkProbe.NodeBudget"/>;
+    /// 0 = no bound, else 2048..10000000). Three of the largest single searches (<see cref="PlayerbotNavigation.MaxSearchNodes"/>) by
+    /// default. Read again from the configuration about once a second, as <see cref="SlowThinkLogMs"/>.
+    /// </summary>
+    public int MaxThinkSearchNodes { get; set; } = 3 * PlayerbotNavigation.MaxSearchNodes;
+
     /// <summary>The most points of one bot route (1..4096).</summary>
     public int MaxPathPoints { get; set; } = 128;
 
@@ -168,6 +175,8 @@ public sealed class PlayerbotOptions
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
+        if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
+            throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");
         if (!float.IsFinite(MaxRouteYards) || MaxRouteYards <= 0 || MaxRouteYards > 100_000)
             throw new InvalidOperationException($"{SectionName}: MaxRouteYards must be finite and > 0..100000.");
