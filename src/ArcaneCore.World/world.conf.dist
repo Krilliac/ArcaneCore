@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       339 keys
+#   WORLD                       340 keys
 #
 ###############################################################################
 
@@ -8500,6 +8500,24 @@ World.GmCommands.SecurityMap.Player = 0
 #        Docs: docs/reference/configuration.md#worldgmcommands
 #
 World.GmCommands.TicketMutationsPerMinute = 10
+
+#----------------------------------------------------------------------------
+# World:GmCommands:Boost
+#----------------------------------------------------------------------------
+
+#
+#    World.GmCommands.Boost.MaxQuality
+#        Description: The highest item quality a boost kit piece may have: 1 white, 2 green, 3 blue
+#                     (default), 4 epic. Blue is what a character gets from the dungeons of its
+#                     level; values outside 1-4 are clamped. White is always the lowest: grey items
+#                     are never offered.
+#        Type: uint
+#        Default: 3
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsboost
+#
+World.GmCommands.Boost.MaxQuality = 3
 
 #----------------------------------------------------------------------------
 # World:GmCommands:DebugDraw
