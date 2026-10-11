@@ -10556,8 +10556,8 @@ World.Playerbots.Population.ParkWhenOverBudget = true
 
 #
 #    World.Playerbots.Population.Relocation
-#        Description: What happens to a bot that out-levelled its zone (Teleport by default).
-#                     Values: Off, Teleport.
+#        Description: What happens to a bot that out-levelled its zone or is below it (Teleport by
+#                     default). Values: Off, Teleport.
 #        Type: PopulationRelocation
 #        Default: Teleport
 #        Allowed: Off | Teleport
@@ -10621,10 +10621,11 @@ World.Playerbots.Population.WindowTicks = 200
 
 #
 #    World.Playerbots.Population.ZoneLevelSlack
-#        Description: How many levels below its lowest sub-area level a zone still accepts a bot
-#                     (0..10). The area table puts the zone's level on its sub-areas, and a starter
-#                     zone's lowest sub-area is level 4 or 5, so the default 4 lets a level 1 bot
-#                     start there.
+#        Description: How many levels below a placement's floor a bot may be (0..10). The floor is
+#                     the level of the sub-area the graveyard stands in, or the zone's lowest
+#                     sub-area level when the terrain does not know; a starter zone's is level 4 or
+#                     5, so the default 4 lets a level 1 bot start there. A bot further below every
+#                     floor of its zone is relocated like an out-levelled one.
 #        Type: int
 #        Default: 4
 #        Allowed: a whole number, -2147483648 to 2147483647

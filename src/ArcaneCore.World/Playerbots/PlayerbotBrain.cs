@@ -145,8 +145,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly Dictionary<ObjectGuid, uint> _unreachable = [];
     private const uint UnreachableTargetMs = 30_000;
     private const float MeleeRange = PlayerbotClassRotation.MeleeRange;
-    // A ranged bot standing at its range without anything to cast at a target that is not fighting it closes in after this long.
-    private const uint RangedIdleLimitMs = 8_000;
+    // A ranged bot standing at its range without anything to cast at a target that is not fighting it closes in after this long
+    // (the group AI uses it too: PlayerbotGroupAI.Fight).
+    internal const uint RangedIdleLimitMs = 8_000;
     private uint _rangedIdleMs;
 
     internal void Stop()

@@ -385,6 +385,179 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task AnUnderLevelledBot_IsRelocatedToAZoneThatFitsItsLevel()
+    {
+        // Issue #177: a level 9 bot homed in Duskwood (whose graveyards stand in level 24-26 areas) died in a loop at Raven Hill, and the
+        // relocation only ever moved bots that were above their zone. Westfall's lowest place is 12; minus the slack (4) a level 5 bot is
+        // below anywhere it could have been put there.
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        await SetBotAsync(world, bot, 5, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Contains("moved 1", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Theory]
+    [InlineData("vetoed")]
+    [InlineData("dead")]
+    [InlineData("party")]
+    public async Task AnUnderLevelledBot_ThatIsVetoedDeadOrPartyDriven_IsLeftWhereItIs(string why)
+    {
+        var veto = new TestPlacementVeto();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true,
+            configureServices: services => services.AddSingleton<IPopulationPlacementVeto>(veto));
+        Guid bot = await StartOneBotInElwynnAsync(world);
+        await using WorldTestClient? master = why == "party" ? await world.Host.EnterWorldAsync("POPMASTER", "Popmaster") : null;
+
+        await SetBotAsync(world, bot, 5, PopulationTestHost.Westfall);
+        switch (why)
+        {
+            case "vetoed":
+                veto.Owned.Add(bot);
+                break;
+            case "dead":
+                await world.Host.World.InvokeAsync(() => world.Bots.FindSession(bot)!.Player!.Health = 0);
+                break;
+            case "party":
+                Assert.True(await world.Host.World.InvokeAsync(() =>
+                    world.Bots.Leash(bot, world.Host.World.OnlinePlayers.Single(p => p.Name == "Popmaster"), stay: true).Success));
+                Assert.True(world.Bots.IsPartyDriven(bot));
+                break;
+        }
+
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
+    public async Task TheGraveyardTerrainLookup_RunsOffTheWorldThread_AndNoPassWaitsForIt()
+    {
+        // The production hookup (PlayerbotPopulationFeature.AtlasFor) with a fake terrain that is slow: it holds until the test lets it
+        // go. Graveyard 2 is linked to Westfall but the terrain puts it in Elwynn, so once the lookup is in Westfall has no location.
+        using var release = new ManualResetEventSlim(false);
+        var onWorldThread = new System.Collections.Concurrent.ConcurrentBag<bool>();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            onWorldThread.Add(world.Host.World.IsWorldThread);
+            release.Wait(TimeSpan.FromSeconds(30));
+            return location.Id == 2 ? (PopulationTestHost.Elwynn, 25u) : (PopulationTestHost.Elwynn, 24u);
+        };
+        world.Population.ExcludedZones = [];
+
+        world.Ticks.Set(200, 10);
+        Task<PopulationStatus> pass = world.PassAsync();
+        Assert.True(await Task.WhenAny(pass, Task.Delay(TimeSpan.FromSeconds(10))) == pass, "a pass waited for the graveyard terrain lookup");
+        Assert.Equal(2, (await pass).AllianceZones); // not in yet: every link is kept
+
+        release.Set();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        PopulationStatus status;
+        do
+        {
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+            if (status.AllianceZones == 1) break;
+            await Task.Delay(20);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        Assert.Equal(1, status.AllianceZones); // Westfall's only graveyard stands in Elwynn
+        Assert.Equal([new PopulationDroppedLocation(PopulationTestHost.Westfall, 2, PopulationTestHost.Elwynn)],
+            await world.Host.World.InvokeAsync(() => world.Feature.Atlas.Dropped.ToArray()));
+        Assert.NotEmpty(onWorldThread);
+        Assert.DoesNotContain(true, onWorldThread);
+    }
+
+    [Fact]
+    public async Task WhileTheTerrainLookupRuns_NoBotIsCreated_AndOnceItIsIn_CreationGoesAhead()
+    {
+        // The first pass after a start or a reload would otherwise place bots from the unlocated fallback atlas (the Duskwood bug again).
+        using var release = new ManualResetEventSlim(false);
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            release.Wait(TimeSpan.FromSeconds(30));
+            return (0, 0);
+        };
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("held back: waiting for the graveyard terrain lookup", status.Reason);
+        Assert.DoesNotContain("created 1", status.Reason);
+        Assert.Empty(world.Members.Snapshot);
+
+        release.Set();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (world.Members.Snapshot.Count == 0 && DateTime.UtcNow < deadline)
+        {
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+            await Task.Delay(20);
+        }
+
+        Assert.Single(world.Members.Snapshot);
+        Assert.DoesNotContain("waiting for the graveyard terrain lookup", status.Reason);
+    }
+
+    [Fact]
+    public async Task AHungTerrainLookup_HoldsCreationForAtMostTheCap_ThenTheFallbackIsUsed()
+    {
+        using var release = new ManualResetEventSlim(false);
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            release.Wait(TimeSpan.FromSeconds(60));
+            return (0, 0);
+        };
+
+        try
+        {
+            for (int pass = 1; pass <= PlayerbotPopulationFeature.MaxTerrainHoldPasses; pass++)
+            {
+                world.Ticks.Set(200, 10);
+                PopulationStatus held = await world.PassAsync();
+                Assert.Contains("waiting for the graveyard terrain lookup", held.Reason);
+                Assert.Empty(world.Members.Snapshot);
+            }
+
+            world.Ticks.Set(200, 10);
+            PopulationStatus status = await world.PassAsync();
+            Assert.Contains("created 1", status.Reason);
+            Assert.Single(world.Members.Snapshot);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task ABotAtTheSlackBelowItsZone_StaysWhereItIs()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        // Level 8 is Westfall's lowest (12) minus the slack (4): it could have been placed there, so it is not moved.
+        await SetBotAsync(world, bot, 8, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Westfall, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
     public async Task ABotInACapital_IsNeverRelocated_WhateverItsLevel()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
