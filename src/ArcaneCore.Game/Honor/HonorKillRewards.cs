@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Totems;
@@ -21,11 +22,12 @@ namespace ArcaneCore.Game.Honor;
 /// recipient needs the victim above its gray level. Creature kills reward the TAPPER, as vmangos does (Unit::Kill takes the creature's loot recipient and its group, Unit.cpp:988-1001, 1076-1079):
 /// the first player (or the owner of the first pet) to damage a creature that is not a pet taps it (Unit::DealDamage, Unit.cpp:804-807), the
 /// tap is dropped on an explicit reset (evade or respawn, CreatureAI.cpp:344, Creature.cpp:2306), and the tapper or
-/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature nobody tapped, or one players damaged 35% or less
-/// (Creature::IsLootAllowedDueToDamageOrigin, settled at the kill), rewards the killing blow's player, which is the original's pPlayerTap fallback;
+/// every living member of its group in range is rewarded, whoever landed the killing blow. A creature players damaged 35% or less
+/// (Creature::IsLootAllowedDueToDamageOrigin, settled at the kill) rewards the killing blow's player ALONE (pGroupTap stays null,
+/// Unit.cpp:1007-1008); a creature nobody tapped rewards the killer and his current group (:998-999).
+/// A respawn is a reset too (Creature.cpp:2306, via Creature.ClearLootRecipient);
 /// an owner's active pet holds its tap until the owner or the tap's group hits. Without that player tapper, group rewards are also gated
-/// (Unit.cpp:1020). Documented limits: the tap is a snapshot of the tapper's group taken at the first hit (the current group is preferred
-/// while it still contains the tapper); the "xp_multiplier 0" and
+/// (Unit.cpp:1020). Documented limits: honor keeps its own snapshot of the tapper's group at the first hit; the "xp_multiplier 0" and
 /// "UNIT_STATE_NO_KILL_REWARD" terms of IsHonorOrXPTarget have no data either.
 /// </para>
 /// </summary>
@@ -122,7 +124,7 @@ public sealed class HonorKillRewards
         }
     }
 
-    /// <summary>React to a death: honor for a player victim from its damage history, for a creature victim from the killer.</summary>
+    /// <summary>React to a death: honor for a player victim from its damage history, for a creature victim from the tap (Unit::Kill).</summary>
     public void OnUnitKilled(Unit? killer, Unit victim)
     {
         if (victim is Player deadPlayer)
@@ -139,27 +141,45 @@ public sealed class HonorKillRewards
         Tap? tap = null;
         if (_taps.TryGetValue(creature, out Tap? held))
         {
-            tap = held.Revision == creature.LootTapRevision ? held : null;
+            tap = held.Revision == creature.LootTapRevision ? held : null; // a reset (evade, respawn) since the tap: stale
             _taps.Remove(creature);
         }
 
-        // Unit::Kill (Unit.cpp:989, 1007-1008): a creature players damaged 35% or less loses its tap, leaving the killing blow's player.
+        Player? tapper;
+        RewardGroup? group = null;
         if (!creature.KillCreditAllowed)
         {
-            tap = null;
+            // Unit.cpp:1007-1008: the tap was dropped and pGroupTap is never set; RewardSinglePlayerAtKill for the killing blow's player.
+            tapper = KillRewards.CreditedPlayer(killer);
+        }
+        else if (tap is null)
+        {
+            // Unit.cpp:984, 998-999: nobody tapped; pPlayerTap is the killer's player and pGroupTap his current group.
+            tapper = KillRewards.CreditedPlayer(killer);
+            group = CurrentGroupOf(tapper);
+        }
+        else if (!tap.Player.IsPlayer)
+        {
+            return; // a provisional pet tap: pPlayerTap = nullptr gates loot and both reward paths (Unit.cpp:995-997, 1020)
+        }
+        else
+        {
+            // Unit.cpp:989-999: the original recipient (the killer's player when he left the map), the tap's group while it has
+            // members, else his current group.
+            tapper = map.FindPlayer(tap.Player) ?? KillRewards.CreditedPlayer(killer);
+            group = tap.Group is { Members.Count: > 0 } ? tap.Group : CurrentGroupOf(tapper);
         }
 
-        // A provisional pet tap blocks both solo and group rewards (Unit.cpp:995-997, 1020).
-        Player? tapper = tap is null
-            ? KillRewards.CreditedPlayer(killer)
-            : tap.Player.IsPlayer ? map.FindPlayer(tap.Player) ?? KillRewards.CreditedPlayer(killer) : null;
-        if (tapper is null)
+        if (tapper is null || !ReferenceEquals(tapper.Map, map))
         {
             return;
         }
 
-        RewardCreatureKill(tapper, tap?.Group, creature);
+        RewardCreatureKill(tapper, group, creature);
     }
+
+    private RewardGroup? CurrentGroupOf(Player? player)
+        => player is not null && _groups(player) is { } current && current.Members.Contains(player.Guid) ? current : null;
 
     /// <summary>Player::IsHonorOrXPTarget: the victim is above the gray level and is no totem or pet.</summary>
     public static bool IsHonorOrXpTarget(Player rewarded, Unit victim)
@@ -256,36 +276,18 @@ public sealed class HonorKillRewards
     }
 
     /// <summary>
-    /// The honor of a creature kill for <paramref name="tapper"/> (the player the creature's honor belongs to): the player alone, or every
-    /// living member of its group within reach (Group::RewardGroupAtKill_helper calls RewardHonor for living members).
+    /// Group::RewardGroupAtKill_helper (Group.cpp:2295-2300) for a creature victim: RewardHonor for every living member of
+    /// <paramref name="group"/> at reward distance; without a group, Player::RewardSinglePlayerAtKill (Player.cpp:19965) for the tapper alone.
     /// </summary>
-    public void RewardCreatureKill(Player tapper, Creature victim)
+    private void RewardCreatureKill(Player tapper, RewardGroup? group, Creature victim)
     {
-        ArgumentNullException.ThrowIfNull(tapper);
-        ArgumentNullException.ThrowIfNull(victim);
-        RewardCreatureKill(tapper, null, victim);
-    }
-
-    // tapper null: the tapping player is gone, only the tap-time group is left to reward.
-    private void RewardCreatureKill(Player? tapper, RewardGroup? tapGroup, Creature victim)
-    {
-        if (victim.Map is not { } map || (tapper is not null && !ReferenceEquals(tapper.Map, map)))
-        {
-            return;
-        }
-
-        RewardGroup? current = tapper is null ? null : _groups(tapper);
-        RewardGroup? group = tapper is not null && current is not null && current.Members.Contains(tapper.Guid) ? current : tapGroup;
         if (group is null)
         {
-            if (tapper is not null)
-            {
-                RewardHonor(tapper, victim);
-            }
-
+            RewardHonor(tapper, victim);
             return;
         }
 
+        Map map = victim.Map!;
         foreach (ObjectGuid guid in group.Members)
         {
             if (map.FindPlayer(guid) is { IsAlive: true } member && GroupRewardRange.IsAtGroupRewardDistance(member, victim, _range))

@@ -417,12 +417,22 @@ public sealed partial class LootService : IViewerFieldFilter
     /// A creature died (subscribe to <see cref="MapCombat.UnitKilled"/>): generate its corpse loot
     /// for the killing player and their group, set UNIT_DYNFLAG_LOOTABLE (shown only to allowed
     /// looters), or mark it looted out at once when nothing dropped. The first damage tap owns
-    /// the rights; a first-hit killing blow uses its killer as the tapper.
+    /// the rights; a first-hit killing blow uses its killer as the tapper. A kill that failed the damage-origin rule generates nothing.
     /// </summary>
     public LootBag? OnCreatureKilled(Unit? killer, Unit victim)
     {
         Prune();
         if (victim is not Creature creature || !creature.IsInWorld || creature.Map is not { } map)
+        {
+            return null;
+        }
+
+        // Unit::Kill (Unit.cpp:1007-1008) cleared the recipient: vmangos still fills the loot (:1090) but Player::IsAllowedToLoot
+        // (Player.cpp:15253-15278) is false for everyone, UNIT_DYNFLAG_LOOTABLE is masked for every viewer (Object.cpp:797-798) and
+        // UNIT_FLAG_SKINNABLE is never set (Creature.cpp:2274-2277: HasLootRecipient() is false). Observably: no loot, no skinning, and the
+        // corpse decays on its plain timer (AllLootRemovedFromCorpse never fires). Generating no bag is the same observable outcome and
+        // avoids the empty-bag "looted out" decay shortcut below.
+        if (!creature.KillCreditAllowed)
         {
             return null;
         }

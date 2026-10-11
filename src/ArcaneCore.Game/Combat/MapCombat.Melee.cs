@@ -954,6 +954,9 @@ public sealed partial class MapCombat
     /// A direct call (a script, a GM command or a test killing outright) stands for a lethal blow of the victim's remaining
     /// health by <paramref name="killer"/>: a creature victim counts it toward its damage origin, as Unit::DealDamage would have
     /// before reaching Unit::Kill (Unit.cpp:789, 825).
+    /// This differs from vmangos Unit::Kill itself, which counts no damage. For Twin Emperors (boss_twinemperors.cpp:316), the brother
+    /// keeps his own fight counters, but this extra player-attributed health can allow rewards when players dealt 35% or less of his
+    /// damage; vmangos would deny them. The direct-Kill lethal-blow contract is retained for existing scripts and test callers.
     /// </remarks>
     public void Kill(Unit? killer, Unit victim, bool durabilityLoss = true, SpellInfo? spell = null)
     {

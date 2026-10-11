@@ -53,7 +53,8 @@ public static class KillRewards
     /// loot recipient; a tap still held by a pet leaves no pPlayerTap at all (Unit.cpp:995-997). pGroupTap is the group of the tap
     /// while it has members, else pPlayerTap's current group (<paramref name="groupOf"/>; a group that does not hold him is ignored).
     /// Both null when nobody is credited. A tap that failed the damage-origin rule was already cleared at the kill
-    /// (<see cref="Creature.SettleKillCredit"/>, Unit.cpp:1007-1008), which leaves the killing player alone.
+    /// (<see cref="Creature.SettleKillCredit"/>, Unit.cpp:1007-1008), which leaves the killing player alone with NO group
+    /// (pGroupTap stays null): rep, quest credit and honor for him only, 0 XP (Formulas.h:152).
     /// Limit: the recipient is looked up on the victim's map only (vmangos GetOriginalLootRecipient finds him anywhere in the world);
     /// a tapper who has left the map is replaced by the killing player.
     /// </summary>
@@ -61,6 +62,14 @@ public static class KillRewards
     {
         ArgumentNullException.ThrowIfNull(victim);
         ArgumentNullException.ThrowIfNull(groupOf);
+        // Unit::Kill (Unit.cpp:1007-1008): the damage-origin rule failed, the tap was cleared at the kill (Creature.SettleKillCredit) and
+        // pGroupTap is never set (the group assignments at :991 and :998-999 sit inside the allowed branch): the killing blow's player
+        // alone, whatever his group, whoever tapped (a provisional pet tap included). Null when no player is behind the blow.
+        if (!victim.KillCreditAllowed)
+        {
+            return (killingPlayer, null);
+        }
+
         ObjectGuid tap = victim.LootTapPlayerGuid;
         Player? tapper = tap.IsEmpty ? killingPlayer
             : !tap.IsPlayer ? null

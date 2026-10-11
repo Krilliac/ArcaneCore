@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Game.Tests.Honor;
 
@@ -32,9 +33,11 @@ public sealed class HonorKillRewardsTests : IDisposable
     private readonly HashSet<Unit> _honorless = [];
     private readonly Player _a;
     private readonly Player _victim;
+    private readonly ITestOutputHelper _output;
 
-    public HonorKillRewardsTests()
+    public HonorKillRewardsTests(ITestOutputHelper output)
     {
+        _output = output;
         (_world, _map, _, _) = CombatTestKit.CreateWorld();
         _honor = new HonorService(new HonorOptions(), _clock, () => 19_997);
         _rewards = new HonorKillRewards(_honor, p => _groups.GetValueOrDefault(p.Guid.Value), noPvpCredit: u => _honorless.Contains(u));
@@ -67,6 +70,76 @@ public sealed class HonorKillRewardsTests : IDisposable
     }
 
     private void Hit(Unit attacker, Player victim, uint damage) => _map.Combat.DealDamage(attacker, victim, damage);
+
+    [Fact]
+    public void A_player_finishing_a_leader_players_damaged_35_percent_or_less_gets_the_honor_alone_and_his_group_nothing()
+    {
+        Player b = AddHuman(3, -2);
+        Group(_a, b);
+        // The general fixture has 55 HP: fix this fixture at 100 so integer rounding cannot turn 35% into a passing share.
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true) with { MinLevelHealth = 100, MaxLevelHealth = 100 }, 5);
+        (Creature guard, _, _) = CreatureAt(Template(1003, level: 60), 6);
+        _map.Combat.DealDamage(guard, leader, 65);
+        _map.Combat.DealDamage(_a, leader, leader.Health);
+        _output.WriteLine($"player damage={leader.PlayerDamageTaken}, guard damage={leader.NonPlayerDamageTaken}; killer honor={RowsOf(_a).Sum(r => r.Cp)}, member honor={RowsOf(b).Sum(r => r.Cp)}");
+        Assert.False(leader.IsAlive);
+        Assert.False(leader.KillCreditAllowed);
+        Assert.Single(RowsOf(_a));
+        Assert.Empty(RowsOf(b));
+    }
+
+    [Fact]
+    public void A_pet_finishing_a_leader_players_damaged_35_percent_or_less_pays_its_owner_alone()
+    {
+        Player b = AddHuman(3, -2);
+        Group(_a, b);
+        var pet = new OwnedUnit(_a);
+        pet.Spawn(_map, 1, 0);
+        pet.SetOwnerGuid(_a.Guid); // count its damage through the real owner field, not just the credit test seam.
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true) with { MinLevelHealth = 100, MaxLevelHealth = 100 }, 5);
+        (Creature guard, _, _) = CreatureAt(Template(1003, level: 60), 6);
+        _map.Combat.DealDamage(guard, leader, 65);
+        _map.Combat.DealDamage(pet, leader, leader.Health);
+        _output.WriteLine($"player damage={leader.PlayerDamageTaken}, guard damage={leader.NonPlayerDamageTaken}; owner honor={RowsOf(_a).Sum(r => r.Cp)}, member honor={RowsOf(b).Sum(r => r.Cp)}");
+        Assert.False(leader.IsAlive);
+        Assert.False(leader.KillCreditAllowed);
+        Assert.Single(RowsOf(_a));
+        Assert.Empty(RowsOf(b));
+    }
+
+    [Fact]
+    public void A_tap_from_a_despawned_life_does_not_survive_the_respawn()
+    {
+        Player next = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        _map.Combat.DealDamage(_a, leader, 1);
+        ulong revision = leader.LootTapRevision;
+        leader.System!.ForcedDespawn(leader, 0);
+        Assert.Equal(CreatureDeathState.Dead, leader.DeathState);
+        leader.System.ForceRespawn(leader);
+        Assert.True(leader.IsAlive);
+        Hit(next, leader);
+        _output.WriteLine($"tap revision before={revision}, after={leader.LootTapRevision}; old tapper honor={RowsOf(_a).Sum(r => r.Cp)}, new killer honor={RowsOf(next).Sum(r => r.Cp)}");
+        Assert.Empty(RowsOf(_a));
+        Assert.Single(RowsOf(next));
+    }
+
+    [Fact]
+    public void A_tapper_who_regrouped_mid_fight_still_pays_the_tap_group()
+    {
+        Player b = AddHuman(3, -2);
+        Player c = AddHuman(4, 1);
+        Player stranger = AddHuman(5, 2);
+        Group(_a, b);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        _map.Combat.DealDamage(_a, leader, 1);
+        Group(_a, c);
+        Hit(stranger, leader);
+        _output.WriteLine($"tapper honor={RowsOf(_a).Sum(r => r.Cp)}, original member honor={RowsOf(b).Sum(r => r.Cp)}, new member honor={RowsOf(c).Sum(r => r.Cp)}");
+        Assert.Single(RowsOf(_a));
+        Assert.Single(RowsOf(b));
+        Assert.Empty(RowsOf(c));
+    }
 
     [Theory]
     [InlineData(false, false)]

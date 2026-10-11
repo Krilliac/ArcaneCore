@@ -9,6 +9,7 @@ using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Totems;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -26,9 +27,11 @@ using ArcaneCore.World.Spells.Totems;
 using ArcaneCore.World.Tests.ClassSpells.Totems;
 using ArcaneCore.World.Tests.Creatures;
 using ArcaneCore.World.Tests.GameObjects;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Reputation;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Progression;
 
@@ -40,11 +43,14 @@ namespace ArcaneCore.World.Tests.Progression;
 /// takes the creature's loot recipient and group instead, credits no player while a pet still holds the tap, and drops the tap of a
 /// creature players damaged 35% or less (Creature::IsLootAllowedDueToDamageOrigin, Creature.h:548-554).
 /// </summary>
-public sealed class OwnedKillerRewardTests
+public sealed class OwnedKillerRewardTests(ITestOutputHelper output)
 {
     private const uint VictimEntry = 960201;
     private const uint HelperEntry = 960202;
     private const uint SummonSpell = 960203;
+    private const uint SkinLoot = 960204;
+    private const uint Hide = 783; // SkinningFidelityWorldTests' registered skinning item.
+    private const uint RespawnGuid = 960210;
     private const uint BootyBay = 21;
 
     private static readonly CreatureTemplate Victim = new()
@@ -67,16 +73,27 @@ public sealed class OwnedKillerRewardTests
 
     private static WorldTestHost Start()
     {
-        CreatureTestStore.Current.Value = new CreatureTestContext(new CreatureContent([Victim, Helper, Totem], [], [], [], []));
+        var spawn = new CreatureSpawn
+        {
+            Guid = RespawnGuid, Entry = VictimEntry, MapId = 0, X = -8940, Y = -132, Z = 83.5f,
+            SpawnTimeMinSeconds = 30, SpawnTimeMaxSeconds = 30,
+        };
+        CreatureTestStore.Current.Value = new CreatureTestContext(new CreatureContent([Victim, Helper, Totem], [spawn], [], [], []));
         GameObjectTestStore.Current.Value = new GameObjectTestContext(GameObjectContent.Empty,
-            new LootContent([], [new CreatureLootInfo(VictimEntry, 0, 0, 10, 20)]));
+            new LootContent([(LootTableKind.Skinning, new LootStoreRow(SkinLoot, Hide, 100f, 0, 1, 1))],
+                [new CreatureLootInfo(VictimEntry, 0, SkinLoot, 10, 20)]));
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = Hide, Class = 7, Name = "Test Hide", DisplayId = 4, Quality = 1, Stackable = 20 });
         var reputation = new MutableReputationContent();
         reputation.OnKill.Add(new ReputationOnKillEntry(VictimEntry, BootyBay, 0, 7, false, 10, 0, false, 0, TeamDependent: false));
         ReputationTestServices.Current.Value = new MemoryReputationStore();
         ReputationTestServices.Mutable.Value = reputation;
         try
         {
-            return WorldTestHost.Start();
+            using (items.Use())
+            {
+                return WorldTestHost.Start();
+            }
         }
         finally
         {
@@ -106,6 +123,7 @@ public sealed class OwnedKillerRewardTests
         }
 
         public List<(ObjectGuid Player, uint Entry)> Credits { get; } = [];
+        public ITestOutputHelper? Output { get; init; }
 
         public uint XpGained(Player player) => PlayerProgression.CurrentXp(player) - _before[player].Xp;
 
@@ -139,6 +157,35 @@ public sealed class OwnedKillerRewardTests
                 Assert.NotNull(bag);
                 Assert.All(rewarded, p => Assert.Contains(p.Guid, bag.Recipients));
             }
+        }
+
+        /// <summary>Player::RewardSinglePlayerAtKill after a failed share check: solo rep and quest credit, no XP, loot or skinning.</summary>
+        public void AssertCreditedWithoutLoot(Creature victim, Player only)
+        {
+            // Record every observable before the first assertion, so a RED run shows more than its first failure.
+            foreach ((Player p, _) in _before)
+            {
+                Output?.WriteLine($"{p.Name}: XP={XpGained(p)}, reputation={RepGained(p)}, quest={Credits.Contains((p.Guid, VictimEntry))}");
+            }
+            LootBag? bag = Loot(victim);
+            Output?.WriteLine($"bag recipients={(bag is null ? "none" : string.Join(",", _before.Keys.Where(p => bag.Recipients.Contains(p.Guid)).Select(p => p.Name)))}; "
+                + $"Skinnable={(victim.UnitFlags & UnitFlags.Skinnable) != 0}; dynamic flags=0x{victim.GetUInt32(UpdateFields.UnitDynamicFlags):X}; "
+                + $"shareAllowed={victim.KillCreditAllowed}; XP modifier={victim.KillXpModifier}");
+            Assert.Equal(CreatureDeathState.Corpse, victim.DeathState);
+            foreach ((Player p, _) in _before)
+            {
+                bool expected = ReferenceEquals(p, only);
+                Assert.Equal(0u, XpGained(p));
+                Assert.True(expected == RepGained(p) > 0, $"{p.Name}: reputation {RepGained(p)}, expected {(expected ? "some" : "none")}");
+                Assert.True(expected == Credits.Contains((p.Guid, VictimEntry)), $"{p.Name}: quest kill credit, expected {expected}");
+            }
+            Assert.Single(Credits);
+            Assert.Null(bag);
+            Assert.True(victim.LootTapPlayerGuid.IsEmpty);
+            Assert.False(victim.KillCreditAllowed);
+            Assert.Equal(0f, victim.KillXpModifier);
+            Assert.Equal(0u, (uint)(victim.UnitFlags & UnitFlags.Skinnable));
+            Assert.Equal(0u, victim.GetUInt32(UpdateFields.UnitDynamicFlags) & (LootService.UnitDynFlagLootable | LootService.UnitDynFlagTapped));
         }
 
         public void Dispose() => _adapter.Dispose();
@@ -410,6 +457,132 @@ public sealed class OwnedKillerRewardTests
 
             watch.AssertRewarded(victim, player);
             Assert.Equal(20u, watch.XpGained(player)); // level 1 base XP 50 * 40% (Creature.h:565, Formulas.h:152)
+            Assert.True((victim.UnitFlags & UnitFlags.Skinnable) != 0);
+            output.WriteLine("40% positive control: Skinnable=True, skinning template loaded with item 783.");
+        });
+    }
+
+    [Theory]
+    [InlineData(30u, "player")]
+    [InlineData(35u, "player")]
+    [InlineData(30u, "pet")]
+    [InlineData(35u, "pet")]
+    public async Task ASoloKillingBlowAfterPlayersDamaged35PercentOrLess_CreditsTheKillerAlone_NoXpNoLoot(uint playerDamage, string killer)
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("SHARESOLO", "Sharesolo");
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Sharesolo")!;
+            using var watch = new Watch(host, player.Map!, player) { Output = output };
+            Creature guard = Spawn(host, player, Helper, 2);
+            Creature victim = Spawn(host, player, Victim, 4);
+            Unit killerUnit = killer == "pet" ? SpawnActivePet(host, player) : player;
+            Hit(guard, victim, 100 - playerDamage);
+            Assert.True(victim.LootTapPlayerGuid.IsEmpty);
+            Hit(killerUnit, victim, playerDamage);
+            watch.AssertCreditedWithoutLoot(victim, player);
+        });
+    }
+
+    [Theory]
+    [InlineData(30u)]
+    [InlineData(35u)]
+    public async Task AGroupedKillingBlowAfterPlayersDamaged35PercentOrLess_CreditsTheKillerAlone_TheGroupNothing(uint playerDamage)
+    {
+        await using WorldTestHost host = Start();
+        (WorldTestClient leader, WorldTestClient member) = await PartyAsync(host, "Sharelead", "Sharemem");
+        await using (leader)
+        await using (member)
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player lead = host.World.FindOnlinePlayer("Sharelead")!;
+                Player mem = host.World.FindOnlinePlayer("Sharemem")!;
+                using var watch = new Watch(host, lead.Map!, lead, mem) { Output = output };
+                Creature guard = Spawn(host, lead, Helper, 2);
+                Creature victim = Spawn(host, lead, Victim, 4);
+                Hit(guard, victim, 100 - playerDamage);
+                Hit(lead, victim, playerDamage);
+                watch.AssertCreditedWithoutLoot(victim, lead);
+            });
+        }
+    }
+
+    [Fact]
+    public async Task AGroupedKillingBlowAbove35Percent_SharesWithTheGroup()
+    {
+        await using WorldTestHost host = Start();
+        (WorldTestClient leader, WorldTestClient member) = await PartyAsync(host, "Sharelead", "Sharemem");
+        await using (leader)
+        await using (member)
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player lead = host.World.FindOnlinePlayer("Sharelead")!;
+                Player mem = host.World.FindOnlinePlayer("Sharemem")!;
+                using var watch = new Watch(host, lead.Map!, lead, mem);
+                Creature guard = Spawn(host, lead, Helper, 2);
+                Creature victim = Spawn(host, lead, Victim, 4);
+                Hit(guard, victim, 60);
+                Hit(lead, victim, 40);
+                watch.AssertRewarded(victim, lead, mem);
+                Assert.True(victim.KillCreditAllowed);
+            });
+        }
+    }
+
+    [Fact]
+    public async Task Exactly35PercentFails_36PercentPasses_Solo()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("SHAREEDGE", "Shareedge");
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Shareedge")!;
+            Creature guard = Spawn(host, player, Helper, 2);
+            using (var watch = new Watch(host, player.Map!, player) { Output = output })
+            {
+                Creature victim = Spawn(host, player, Victim, 4);
+                Hit(guard, victim, 65);
+                Hit(player, victim, 35);
+                watch.AssertCreditedWithoutLoot(victim, player);
+            }
+            using (var watch = new Watch(host, player.Map!, player))
+            {
+                Creature victim = Spawn(host, player, Victim, 4);
+                Hit(guard, victim, 64);
+                Hit(player, victim, 36);
+                watch.AssertRewarded(victim, player);
+                Assert.Equal(18u, watch.XpGained(player));
+            }
+        });
+    }
+
+    [Fact]
+    public async Task ADespawnedAndRespawnedCreature_KilledByAnotherPlayer_CreditsOnlyHim()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient a = await host.EnterWorldAsync("OLDLIFE", "Oldlife");
+        await using WorldTestClient b = await host.EnterWorldAsync("NEWLIFE", "Newlife");
+        await host.OnWorldAsync(() =>
+        {
+            Player old = host.World.FindOnlinePlayer("Oldlife")!;
+            Player next = host.World.FindOnlinePlayer("Newlife")!;
+            using var watch = new Watch(host, old.Map!, old, next);
+            CreatureMapSystem system = host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(old.Map!);
+            Creature victim = system.Creatures.Single(c => c.Spawn?.Guid == RespawnGuid);
+            Hit(old, victim, 50);
+            system.ForcedDespawn(victim, 0);
+            Assert.Equal(CreatureDeathState.Dead, victim.DeathState);
+            victim.UnitFlags |= UnitFlags.Skinnable; // a stale flag from the previous life must not survive JUST_ALIVED.
+            system.ForceRespawn(victim);
+            Assert.Equal(CreatureDeathState.Alive, victim.DeathState);
+            Assert.True(victim.LootTapPlayerGuid.IsEmpty);
+            Assert.Equal(0ul, victim.PlayerDamageTaken);
+            Assert.Equal(0u, (uint)(victim.UnitFlags & UnitFlags.Skinnable));
+            Finish(next, victim);
+            watch.AssertRewarded(victim, next);
         });
     }
 
