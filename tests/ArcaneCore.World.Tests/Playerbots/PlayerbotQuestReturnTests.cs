@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
@@ -142,7 +143,7 @@ public sealed partial class PlayerbotQuestReturnTests
         internal WorldSession Session => session;
         internal QuestNpcFeature Feature => host.WorldServices.GetRequiredService<QuestNpcFeature>();
 
-        internal static async Task<ReturnFixture> CreateAsync(bool farGiver)
+        internal static async Task<ReturnFixture> CreateAsync(bool farGiver, bool secondEnder = false, bool manualClock = false)
         {
             var original = new QuestInteractionFixture();
             string db = Path.Combine(Path.GetTempPath(), "arcane-return-" + Guid.NewGuid().ToString("N") + ".db");
@@ -157,7 +158,8 @@ public sealed partial class PlayerbotQuestReturnTests
                 host = WorldTestHost.Start(configureServices: services =>
                 {
                     services.AddCharacterDatabase(configuration);
-                    if (farGiver) services.AddSingleton<ICreatureDataStore>(new FarGiverStore(original));
+                    if (manualClock) services.AddSingleton<IWorldFeature, ManualReturnClock>();
+                    if (farGiver) services.AddSingleton<ICreatureDataStore>(new FarGiverStore(original, secondEnder));
                 });
             }
             finally { QuestInteractionTestServices.Current.Value = null; }
@@ -206,13 +208,20 @@ public sealed partial class PlayerbotQuestReturnTests
         { session.Kick(); await session.ManagedClosed; await host.DisposeAsync(); }
     }
 
-    private sealed class FarGiverStore(QuestInteractionFixture original) : ICreatureDataStore
+    private sealed class FarGiverStore(QuestInteractionFixture original, bool secondEnder = false) : ICreatureDataStore
     {
         public async Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default)
         {
             CreatureContent content = await ((ICreatureDataStore)original).LoadAsync(cancellationToken);
-            return new CreatureContent(content.Templates, content.GetSpawns(0).Select(spawn => spawn with { X = -8799.95f }), [], [], []);
+            CreatureSpawn[] spawns = content.GetSpawns(0).Select(spawn => spawn with { X = -8799.95f }).ToArray();
+            if (secondEnder) spawns = [.. spawns, .. spawns.Select(spawn => spawn with { Guid = spawn.Guid + 1000, X = -8700f })];
+            return new CreatureContent(content.Templates, spawns, [], [], []);
         }
+    }
+
+    private sealed class ManualReturnClock : IWorldFeature
+    {
+        public void Attach(ArcaneCore.Game.Maps.WorldRuntime world) => world.UseManualClock();
     }
 
     private sealed class FlatFloor(float height) : ILineOfSight

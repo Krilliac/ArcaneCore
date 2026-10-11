@@ -471,34 +471,48 @@ internal static class PlayerbotNavigation
     /// <summary>How far above where the bot stands a way off steep ground may lead (<see cref="TryLeaveSteepGround"/>).</summary>
     internal const float SteepEscapeClimbYards = 1.5f;
 
+    /// <summary>The search budget of <see cref="RequiresSteepAscent"/>'s two queries (a diagnosis, not a route: the climb shows within the first corners).</summary>
+    internal const int DiagnosisSearchNodes = 8192;
+
+    /// <summary>A leg of a path climbs steep ground when it rises at least this much per flat yard (45 degrees).</summary>
+    internal const float SteepLegSlope = 0.9f;
+
+    /// <summary>The height gained on steep legs within the first corners of the steep-allowed path that makes a way unwalkable.</summary>
+    internal const float SteepAscentYards = 15f;
+
     /// <summary>
-    /// Explain a refused route when the ordinary mesh cannot leave the bot's spot, but the mesh with steep polygons allowed
-    /// approaches the goal only by climbing above the safe steep-ground escape bound. This is a local topology diagnosis, not
-    /// proof that the quest is impossible from every approach.
+    /// Whether the ordinary mesh cannot leave the bot's spot toward <paramref name="goal"/> because the way there climbs steep ground:
+    /// the ordinary query ends at the bot's feet, and the path with steep polygons allowed first gains at least
+    /// <see cref="SteepAscentYards"/> of height along legs steeper than <see cref="SteepLegSlope"/> (the slope of each leg, not the
+    /// height of the highest corner: an ordinary climb to an uphill turn-in gains more than <see cref="SteepEscapeClimbYards"/> too).
+    /// A local topology diagnosis, not proof the goal is unreachable from elsewhere. Two queries of
+    /// <see cref="DiagnosisSearchNodes"/> nodes at most; the caller runs it once per quest and spot (<see cref="PlayerbotWorldDestinations"/>).
     /// </summary>
     internal static bool RequiresSteepAscent(Player player, Vector3 goal, PlayerbotOptions options, out float ascent)
     {
         ascent = 0;
         if (player.Map is not { } map || !Finite(goal)) return false;
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
-        PathResult ordinary = Query(map, start, goal, options, partial: true, steep: false);
+        PathResult ordinary = Query(map, start, goal, options, partial: true, steep: false, DiagnosisSearchNodes);
         if ((ordinary.Type & PathType.NotUsingPath) != 0
             || (ordinary.Type & PathType.NoPath) == 0 &&
                 ((ordinary.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(ordinary.End), Flat(start)) > SteepPatchYards))
             return false;
 
-        PathResult steep = Query(map, start, goal, options, partial: true, steep: true);
-        if (!steep.HasPath || (steep.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.DestForced)) != 0
-            || Vector3.Distance(steep.End, goal) > 8f) return false;
-        foreach (Vector3 corner in steep.Points.Skip(1).Take(SteepEscapeCorners))
+        PathResult steep = Query(map, start, goal, options, partial: true, steep: true, DiagnosisSearchNodes);
+        if (!steep.HasPath || (steep.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.DestForced)) != 0) return false;
+        float climb = 0;
+        for (int index = 1; index < steep.Points.Count && index <= SteepEscapeCorners; index++)
         {
-            if (!Finite(corner)) return false;
-            ascent = MathF.Max(ascent, corner.Z - start.Z);
-            if (ascent > SteepEscapeClimbYards) return true;
+            Vector3 from = steep.Points[index - 1], to = steep.Points[index];
+            if (!Finite(from) || !Finite(to)) return false;
+            float rise = to.Z - from.Z;
+            if (rise > 0 && rise >= Vector2.Distance(Flat(from), Flat(to)) * SteepLegSlope) climb += rise;
         }
 
-        ascent = 0;
-        return false;
+        if (climb < SteepAscentYards) return false;
+        ascent = climb;
+        return true;
     }
 
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>

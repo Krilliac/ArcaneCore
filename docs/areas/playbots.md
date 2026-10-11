@@ -100,13 +100,23 @@ and logged once.
 
 **Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
 (3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at
-(2770.4, 1275.2, 319.1), the real mesh with steep polygons excluded ends at the bot's feet. With them allowed,
-its route approaches the ender after first climbing more than 23 yards (and ultimately above Z 438); that violates
-the bot's 1.5-yard steep escape climb bound. When the only indexed ender of a completed quest has this topology,
-`PlayerbotWorldDestinations` sets that quest and entry aside for this bot for ten minutes at the first failed plan
-and logs the measured climb. Other spawns still rotate normally. The real-terrain regression is
-`Quest6562_FromAshenvaleRidge_SetsAsideTheUnsafeSteepAscent`. This does not establish a walkable approach from
-the ridge or complete the dungeon quest for the bot; it lets the bot pursue another goal immediately.
+(2770.4, 1275.2, 319.1), the real mesh with steep polygons excluded ends at the bot's feet; with them allowed, the first
+16 corners of its route gain 97.5 yards of height along legs steeper than 45 degrees. The ridge is not a mesh island
+(`IsOnMeshIsland` is false: the probes to the south-west lead 60 yards and more) and the ordinary mesh plans routes to
+goals down the slope, so the bot is free to leave once this quest stops being its goal. One failed plan proves nothing (a
+bot momentarily on a steep patch gets the same refusal), so `PlayerbotWorldDestinations` confirms before it acts: the
+third failed plan (`ConfirmFailures`) of a completed quest with a single indexed ender, from the same spot (within 3 yards),
+runs the diagnosis `PlayerbotNavigation.RequiresSteepAscent` once for that quest and spot (two queries capped at
+`DiagnosisSearchNodes`, 8192, not the 32,768 of a full route). It sets the quest and entry aside for this bot for ten
+minutes only if the steep-allowed path gains at least `SteepAscentYards` (15) on legs steeper than `SteepLegSlope` (0.9),
+and logs the bot's name and the measured climb. A gentle uphill to a turn-in, a transient failure, and a quest with a second
+ender are never set aside. The third set-aside of the same quest abandons it with the client's abandon packet instead of
+cycling every ten minutes. The brain's `AbandonDistantCompletedQuest` (codex/w6-setaside-persist; it runs before
+`CompletedReturnQuest` and drops a completed quest with no ender in the home or within 600 yards) acts first on far enders;
+this set-aside covers the enders that are near on the map but behind steep ground. Real-terrain tests:
+`Quest6562_FromAshenvaleRidge_TheClimbToTheEnderIsMeasuredOnSteepLegs` and
+`AtTheAshenvaleStall_TheRidgeIsNoMeshIsland_AndTheBrainWalksTheBotOff`; the decision itself is tested through the brain in
+`PlayerbotQuestSteepReturnTests`. None of this establishes a walkable approach from the ridge or completes the quest.
 
 Some walkable ground is a navigation-mesh **island**: polygons the mesh joins to nothing round them, so every route from there ends at the
 island's edge nearest the goal and the next plan is refused, whatever the goal. Inside the round wall of the Molsen Farm in Westfall
