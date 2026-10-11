@@ -153,6 +153,14 @@ danger memory alike, and the errand it keeps is the one both set aside, the risk
 errand), the loop breaker at the third. Target choice skips both the set-aside entries and the remembered creatures. With the
 estimate and the hazards, the live replay of the 2026-10-08 rehearsal no longer reaches the loop breaker (0 death loops in 5 runs, against 27 reports in 5 runs without them).
 
+## Resurrection sickness and corpse recovery
+
+A spirit healer is a fallback when a bot cannot safely reclaim its body. For a bot at or above `Death.SicknessLevel`, recovery keeps a reachable corpse run after a repeat death or an out-of-home death. It also keeps a body judged too strong when there is a clear revival spot within reclaim range. A death loop still requests the healer to escape the loop. This follows vmangos `WorldSession::SendSpiritResurrect` (`src/game/Handlers/NPCHandler.cpp`) and `Player::ResurrectPlayer` (`src/game/Objects/Player.cpp`): the healer applies sickness and a 25% durability loss; corpse reclaim does not.
+
+While spell 15007 is active, the autonomous brain drops a pending pull and starts no new fight, even when risk scoring is disabled. Quest exchanges, town errands, repair trips and home travel can continue. A creature that attacks the bot is still defended against. Body strength is judged using the bot's health without the temporary sickness; sick fight damage does not lower its learned healthy damage estimate. Broken worn gear or aggregate durability below 20% makes an affordable repair vendor elsewhere on the map a town destination. The vendor interaction still uses `CMSG_REPAIR_ITEM` and the normal server pricing.
+
+`PlayerbotSicknessStandDownTests`, `PlayerbotUnsafeBodyRecoveryTests` and `PlayerbotTownGoalsTests` cover these decisions with a manual world clock. The live 2026-10-11 death-loop measurements motivated this policy; they are not a post-change live acceptance result.
+
 ## Party bots
 
 A bot in a real player's group (`PlayerbotPartyAI`) follows its master's lead: it never weighs a pull (it takes its master's

@@ -240,6 +240,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
+            // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
+            // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
+            if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
+                && PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 })
+            {
+                if (_attacking) _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
+                DropIntent();
+                _combatSpells.PullTarget = null;
+                _goal = PlayerbotGoalKind.Rest;
+                _stall.Reset();
+                PlayerbotMovementControl.Stop(_session, player);
+            }
         }
         // Death cleanup must happen before this seam, but pending movement orders still
         // require their ordinary acknowledgements while alive or ghosted.
@@ -896,7 +908,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     }
 
     /// <summary>
-    /// While the bot carries resurrection sickness (<see cref="PlayerbotSickness"/>, with the risk estimate on), it pulls nothing and
+    /// While the bot carries resurrection sickness (<see cref="PlayerbotSickness"/>), it pulls nothing and
     /// travels nowhere for a fight: it stands with goal Rest until the sickness runs out (at most ten minutes), and that wait is no
     /// stall. Called after the quest exchanges and the town errands (a repair, food) and before the trainer and quest travel, the
     /// economy, exploring and the pull; a creature that attacks it is fought as ever (earlier in <see cref="Update"/>). Under the
@@ -907,7 +919,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// </summary>
     private bool StandDownWhileSick(Player player)
     {
-        if (!_options.Risk.Enabled || PlayerbotSickness.Holder(_session, player) is not { IsPermanent: false, Duration: > 0 }) return false;
+        if (PlayerbotSickness.Holder(_session, player) is not { IsPermanent: false, Duration: > 0 }) return false;
         DropIntent();
         _goal = PlayerbotGoalKind.Rest;
         _stall.Reset(); // waiting the sickness out is bounded by its duration, not a stall

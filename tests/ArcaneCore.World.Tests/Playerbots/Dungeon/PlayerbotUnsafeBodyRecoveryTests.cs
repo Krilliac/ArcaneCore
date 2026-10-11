@@ -920,6 +920,26 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         await host.OnWorldAsync(brain.Stop);
     }
 
+    [Fact]
+    public async Task ALevel14RepeatDeath_WithNoClearReclaimSpot_TakesTheSpiritHealer()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        Creature[] camp = await CampOverBodyAsync(host, OrdinaryLevel13);
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+
+        Assert.True(run.Done, "still dead: " + run.Trail);
+        Assert.True(run.Healer, "no clear reclaim spot, but the healer was not taken: " + run.Trail);
+        // WaitForHostiles makes the fallback before JudgeBody records an unsafe-body reason.
+        Assert.False(run.Reclaimed, run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
     /// <summary>
     /// Sickness level 11: a body among creatures really too strong for the level-14 bot (level 24 Skeletal Horrors, judged without any
     /// sickness) whose reclaim radius has a spot out of their reach is kept, and the bot revives there; the healer would sicken it.
