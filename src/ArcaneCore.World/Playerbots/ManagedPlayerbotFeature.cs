@@ -842,6 +842,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             try { groups.Update(running, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             { logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+            // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
+            // think while a group drives them, so this is the only stall line such a group gets (bot QA parses it).
+            foreach ((Guid botId, string name, string report) in groups.TakeStalls())
+                LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null);
         }
         // Battlegrounds (PlayerbotBattlegroundCoordinator): the queue machines, the demand and the free bots' choices, after the groups
         // so a bot a group took this tick is not free here.
