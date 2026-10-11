@@ -129,7 +129,9 @@ stalled; the fingerprint, and so the issue marker, is unchanged).
 A stall's subject always names its goal: `goal Explore map 0 near -10350,1400`, and only for a Quest goal also the quest:
 `goal Quest, quest 109 (Report to Gryan Stoutmantle) target 6747 map 0 near ...`. The issue body has a `Goal` row; the quest row is `Quest`
 for a Quest goal and `Last quest (not the goal)` otherwise (with no `.lookup quest` step), and `report.md`, `report.json` (`Goal`,
-`QuestIsGoal`) and `.playerbot qa show` say the same. The fingerprint is unchanged (its key already held the goal, and still holds the
+`QuestIsGoal`) and `.playerbot qa show` say the same. `Goal` is set in `report.json` for every kind (a set-aside's is `Quest` or `Entry`,
+a fault's the action that threw); `QuestIsGoal` is false only for a stall of a non-quest goal. A quest set-aside is checked against its
+quest's content; an entry set-aside is checked as a creature (spawn, template, script), as before. The fingerprint is unchanged (its key already held the goal, and still holds the
 remembered quest, so the markers of existing issues still match): a findings file written before this gets each stall's goal and subject
 back from its key on load (only a key that rebuilds to itself), and keeps its id and issue. A published issue's title is never edited, so
 #154 keeps its old title; its cause text in the local report is recomputed with the finding's next stall.

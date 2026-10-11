@@ -80,9 +80,10 @@ internal static class PlayerbotQaClassifier
         }
 
         uint target = s.Target;
-        // A stall's quest= is the last quest the brain remembers; it is checked only when the goal is that quest (a set-aside is always about its
-        // quest). A non-quest goal is classified by its own target (GitHub #154: an Explore stall was blamed on quest 109's content).
-        bool questGoal = s.Kind == QaSignalKind.SharedSetAside || string.Equals(s.Goal, "Quest", StringComparison.Ordinal);
+        // A stall's quest= is the last quest the brain remembers; it is checked only when the goal is that quest. A non-quest goal is classified
+        // by its own target (GitHub #154: an Explore stall was blamed on quest 109's content). A set-aside's goal is "Quest" for a quest one and
+        // "Entry" for an entry one, so an entry set-aside is still checked as a creature (review of #168).
+        bool questGoal = string.Equals(s.Goal, "Quest", StringComparison.Ordinal);
         if (facts.Available)
         {
             IReadOnlyList<uint> objectives = questGoal && s.Quest != 0 ? facts.QuestObjectiveCreatures(s.Quest) : [];

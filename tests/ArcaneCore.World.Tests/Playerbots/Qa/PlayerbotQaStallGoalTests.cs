@@ -109,6 +109,21 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.Contains("creature entry 1196 has no spawn on map 0", forGrind.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An entry set-aside (Goal "Entry", no quest) is still checked as a creature: an entry with no template and no spawn is missing data, as
+    /// before the goal change (review of #168: treating every set-aside as a quest goal skipped the creature check and said Unknown).
+    /// </summary>
+    [Fact]
+    public void EntrySetAside_WithNoTemplateAndNoSpawn_IsStillMissingData()
+    {
+        QaSignal entry = QaData.Parse("Playerbots: 3 bots stalled on entry 4321 for 30 min; every bot sets it aside");
+        Assert.Equal("Entry", entry.Goal);
+
+        QaClassification c = PlayerbotQaClassifier.Classify(entry, new FakeFacts());
+        Assert.Equal(QaCause.MissingData, c.Cause);
+        Assert.Equal("creature entry 4321 has no spawn on any map and no creature_template row", c.Detail);
+    }
+
     [Fact]
     public void Fingerprints_OfExistingIssues_AreUnchanged()
     {
