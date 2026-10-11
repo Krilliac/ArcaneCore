@@ -297,7 +297,7 @@ public sealed class AllocationProfilerTests(ITestOutputHelper output)
         bool seen;
         try
         {
-            seen = await AllocateUntil(() => aggregator.Snapshot().Rows.Any(r => r.Heap == AllocationHeap.Loh) && aggregator.Snapshot().Rows.Any(r => r.Heap == AllocationHeap.Soh), TimeSpan.FromSeconds(30));
+            seen = await AllocateUntil(() => aggregator.Snapshot().Rows.Any(r => r.Heap == AllocationHeap.Loh && r.Type == "System.Byte[]") && aggregator.Snapshot().Rows.Any(r => r.Heap == AllocationHeap.Soh), TimeSpan.FromSeconds(30));
         }
         finally
         {
