@@ -300,7 +300,10 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the
   radius and stops at **0.75** (`ReturnFraction`) and back in the zone, so it does not oscillate at the edge; the way back itself may cross other zones (it
   is never restricted). A clipped home whose zone is not known is walked by the circle alone. An exploring bot beyond **0.8** of the radius (`ExploreFraction`)
-  aims its next leg at the centre instead of further out. A stall reported by `PlayerbotStallWatch` sets the walk aside for 30 s at once (state
+  aims its next leg at the centre instead of further out; when that leg is refused (on the motion's loop blacklist, through a hazard, no path) the
+  next ones turn 25, 50 and 75 degrees either side of it (`PlayerbotBrain.InwardFanDegrees`, `InwardLeg`), instead of asking for the refused one again on
+  every think. A turned leg is at most the bot's distance × cos of the turn long, so it always ends closer to the centre than the bot (inside the home,
+  also in a small one); a turn whose leg would end out of a clipped home's zone is skipped for the next one (live 2026-10-11, bot QA #154: 74 of 204 stalls 460-480 yards from the Sentinel Hill centre). A stall reported by `PlayerbotStallWatch` sets the walk aside for 30 s at once (state
   `blocked`); the brain's own no-movement stalls (the bot stands still for the stuck time on a route) and failed route plans count instead, and the
   third in a row sets it aside. The goals carry on while it is set aside.
 * **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
