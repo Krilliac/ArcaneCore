@@ -123,6 +123,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
+    private readonly object _killWatchGate = new();
+    private PlayerbotKillObserver? _killObserver;
+    private Player? _observedPlayer;
     // The last errand the bot was travelling for (quest, trainer, vendor): what led it where it keeps dying.
     private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
     // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
@@ -153,6 +156,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void Stop()
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
+        lock (_killWatchGate)
+        {
+            if (_killObserver is { } observer && _observedPlayer is { } player) observer.Remove(player);
+            _killObserver = null;
+            _observedPlayer = null;
+        }
         _planningStop.Cancel();
         _planningStop.Dispose();
     }
@@ -210,6 +219,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
+        WatchKills(player);
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
         _recovery.LandingUnsafe ??= (bot, at) => Risk.TooStrongAt(bot, at) is not null;
@@ -1112,6 +1122,31 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
             if (unit is Creature creature && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
                 _attackers.Add((creature.Guid, creature.Entry));
+    }
+
+    // A creature can land its first lethal hit between two bot updates; the living snapshot above
+    // never sees that attacker. The map's kill observer carries it to us before RecordDeath runs.
+    private void WatchKills(Player player)
+    {
+        MapCombat? combat = player.Map?.Combat;
+        PlayerbotKillObserver? observer = combat is null ? null : PlayerbotKillObserver.For(combat);
+        lock (_killWatchGate)
+        {
+            if (Volatile.Read(ref _stopped) != 0
+                || ReferenceEquals(_killObserver, observer) && ReferenceEquals(_observedPlayer, player)) return;
+            if (_killObserver is { } previous && _observedPlayer is { } oldPlayer) previous.Remove(oldPlayer);
+            _killObserver = observer;
+            _observedPlayer = player;
+            observer?.Add(player, RememberKiller);
+        }
+    }
+
+    private void RememberKiller(Unit? killer)
+    {
+        if (Volatile.Read(ref _stopped) != 0 || killer is not Creature creature) return;
+        _attackerEntries.Add(creature.Entry);
+        if (!_attackers.Contains((creature.Guid, creature.Entry)))
+            _attackers.Add((creature.Guid, creature.Entry));
     }
 
     /// <summary>
