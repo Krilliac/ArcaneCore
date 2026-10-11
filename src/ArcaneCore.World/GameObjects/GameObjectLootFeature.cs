@@ -108,8 +108,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     public GameObjectOptions ObjectOptions { get; } = new();
 
     /// <summary>
-    /// The elevator and tram animations from <c>GameObjects:TransportAnimationDbcPath</c> (empty without it). A path that does not load stops
-    /// the start, as the other configured DBCs do.
+    /// The elevator and tram animations from <c>GameObjects:TransportAnimationDbcPath</c> (empty without it), or a registered
+    /// <see cref="TransportAnimationCatalog"/> service (tests). A path that does not load stops the start, as the other configured DBCs do.
     /// </summary>
     public TransportAnimationCatalog ElevatorAnimations { get; private set; } = TransportAnimationCatalog.Empty;
 
@@ -127,7 +127,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
 
         services.GetService<IConfiguration>()?.GetSection(GameObjectOptions.SectionName).Bind(ObjectOptions);
-        if (!string.IsNullOrWhiteSpace(ObjectOptions.TransportAnimationDbcPath))
+        if (services.GetService<TransportAnimationCatalog>() is { } registered)
+        {
+            ElevatorAnimations = registered; // a registered catalog (tests) instead of the configured DBC
+        }
+        else if (!string.IsNullOrWhiteSpace(ObjectOptions.TransportAnimationDbcPath))
         {
             ElevatorAnimations = TransportAnimationDbcReader.Load(ObjectOptions.TransportAnimationDbcPath);
             logger.LogInformation("elevators and trams: {Count} animation(s) from {Path}", ElevatorAnimations.Count, ObjectOptions.TransportAnimationDbcPath);

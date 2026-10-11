@@ -344,6 +344,37 @@ internal static class PlayerbotMotion
     }
 
     /// <summary>
+    /// Stand on an elevator or tram car (<see cref="PlayerbotTram"/>): MSG_MOVE_HEARTBEAT with MOVEFLAG_ONTRANSPORT, the car's GUID and the
+    /// bot's offset on it, at the world position the car and the offset give, as a 1.12 client reports itself standing on a transport
+    /// (vmangos MovementInfo transport block; the first such packet is the step aboard). Unbudgeted like every movement report; the bot
+    /// must not be following a route (the caller stops it first). True when the server stored it.
+    /// </summary>
+    internal static bool SendAboard(WorldSession session, Player player, ulong transportGuid, Vector3 world, float heading,
+        Vector3 offset, float offsetOrientation)
+    {
+        MotionState state = Of(player);
+        state.World = session.World;
+        if (state.Active || !CanMove(player)) return false;
+        return Send(session, player, WorldOpcode.MsgMoveHeartbeat, world, heading, walk: false, moving: false, session.World.NowMs,
+            budgeted: false, seat: new Seat(true, transportGuid, offset, offsetOrientation));
+    }
+
+    /// <summary>
+    /// Step off a transport onto <paramref name="world"/>: MSG_MOVE_HEARTBEAT without MOVEFLAG_ONTRANSPORT and without the transport block,
+    /// as a client sends once its feet leave the car. True when the server stored it.
+    /// </summary>
+    internal static bool SendStepOff(WorldSession session, Player player, Vector3 world, float heading)
+    {
+        MotionState state = Of(player);
+        state.World = session.World;
+        if (state.Active || !CanMove(player)) return false;
+        return Send(session, player, WorldOpcode.MsgMoveHeartbeat, world, heading, walk: false, moving: false, session.World.NowMs,
+            budgeted: false, seat: new Seat(false, 0, default, 0));
+    }
+
+    private readonly record struct Seat(bool Aboard, ulong Guid, Vector3 Offset, float Orientation);
+
+    /// <summary>
     /// Stop refusing destinations near <paramref name="place"/> that a loop put on the blacklist: a follower's destination is its
     /// leader, and refusing the leader for a minute only strands it (the follower has its own loop detection,
     /// <see cref="Party.PlayerbotFollowProgress"/>).
@@ -500,7 +531,7 @@ internal static class PlayerbotMotion
     /// server stored it.
     /// </summary>
     private static bool Send(WorldSession session, Player player, WorldOpcode opcode, Vector3 position, float heading,
-        bool walk, bool moving, uint now, bool budgeted, MovementFlags extra = MovementFlags.None, uint fallTime = 0)
+        bool walk, bool moving, uint now, bool budgeted, MovementFlags extra = MovementFlags.None, uint fallTime = 0, Seat? seat = null)
     {
         MovementInfo movement = player.Movement;
         movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled | MovementFlags.WalkMode
@@ -508,6 +539,16 @@ internal static class PlayerbotMotion
         if (moving) movement.Flags |= MovementFlags.Forward;
         if (walk) movement.Flags |= MovementFlags.WalkMode;
         movement.Flags |= extra;
+        if (seat is { } place)
+        {
+            if (place.Aboard) movement.Flags |= MovementFlags.OnTransport;
+            else movement.Flags &= ~MovementFlags.OnTransport;
+            movement.TransportGuid = place.Guid;
+            movement.TransportX = place.Offset.X;
+            movement.TransportY = place.Offset.Y;
+            movement.TransportZ = place.Offset.Z;
+            movement.TransportOrientation = place.Orientation;
+        }
         movement.X = position.X;
         movement.Y = position.Y;
         movement.Z = position.Z;

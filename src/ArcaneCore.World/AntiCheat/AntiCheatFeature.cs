@@ -547,8 +547,8 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
 
     /// <summary>
     /// What the block's transport claim is worth: a ship (MO_TRANSPORT GUID) must be one the transport system sails on this
-    /// map near the player; an elevator or tram (a TRANSPORT game object) must exist on the map near the player; any other
-    /// GUID is fake. Without a transport system or game object system the claim cannot be judged and is never scored.
+    /// map near the player; an elevator or tram (a TRANSPORT game object) must exist on the map near the player, measured from
+    /// where its animation puts it now (its spawn without one); any other GUID is fake. Without a transport system or game object system the claim cannot be judged and is never scored.
     /// </summary>
     private TransportClaim ClaimOf(Player player, in MovementInfo movement)
     {
@@ -583,8 +583,17 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
                     return TransportClaim.Unknown;
                 }
 
-                return objects.Find(guid) is { Type: GameObjectType.Transport } elevator && Near(elevator, movement, NearbyElevatorYards)
-                    ? TransportClaim.Known : TransportClaim.Fake;
+                // Judged against where the animation puts the car now (vmangos relocates its elevators every update, Transport.cpp:396-430):
+                // a Deeprun Tram car is 2,480 yards from its spawn at the other platform, and measured from the spawn every rider
+                // past the first 600 yards of the tunnel was a fake transport and its ride a speed hack.
+                if (objects.Find(guid) is not { Type: GameObjectType.Transport } elevator)
+                {
+                    return TransportClaim.Fake;
+                }
+
+                (float X, float Y, float Z) at = objects.ElevatorPosition(elevator) ?? (elevator.X, elevator.Y, elevator.Z);
+                float ex = at.X - movement.X, ey = at.Y - movement.Y;
+                return (ex * ex) + (ey * ey) <= NearbyElevatorYards * NearbyElevatorYards ? TransportClaim.Known : TransportClaim.Fake;
             default:
                 return TransportClaim.Fake;
         }
