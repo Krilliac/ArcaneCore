@@ -225,6 +225,19 @@ public sealed partial class SpellSystem
                 return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), filter, cone: false);
             }
 
+            case SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc:
+            {
+                // vmangos Spell::SetTargetMap (Spell.cpp:2774-2778): a persistent area aura targets the ground;
+                // its dynamic object visits enemy units on updates. Other effects using 28 select enemies at the destination.
+                if (effect.Effect == SpellEffectName.PersistentAreaAura)
+                {
+                    return [];
+                }
+
+                (float x, float y, float z) = DestinationCentre(cast, unitTarget);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: false);
+            }
+
             case SpellImplicitTarget.EnumUnitsPartyAoeAtSrcLoc:
             case SpellImplicitTarget.EnumUnitsPartyWithinCasterRange:
                 return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector),

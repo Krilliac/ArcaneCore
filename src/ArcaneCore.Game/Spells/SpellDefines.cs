@@ -218,6 +218,8 @@ public enum SpellImplicitTarget : uint
 
     /// <summary>TARGET_GAMEOBJECT_ITEM: the game object or item named in the cast's explicit target block (Pick Lock, vmangos / cmangos value 26).</summary>
     GameObjectItem = 26,
+    /// <summary>Ground aura destination; its dynamic object selects enemies on later updates (vmangos Spell::SetTargetMap).</summary>
+    EnumUnitsEnemyAoeAtDynobjLoc = 28,
     EnumUnitsFriendAoeAtSrcLoc = 30,
     EnumUnitsFriendAoeAtDestLoc = 31,
     /// <summary>vmangos TARGET_LOCATION_UNIT_MINION_POSITION: caster-relative summon destination.</summary>

@@ -1,7 +1,11 @@
 using ArcaneCore.Data;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Crafting;
 using ArcaneCore.World.Playerbots.Qa;
+using ArcaneCore.World.Skills;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Talents;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,6 +49,21 @@ public sealed class PlayerbotQaSpellCoverageRealContentTests(ITestOutputHelper o
             output.WriteLine($"content sections from {profile}");
         }
 
+        // The live profile may omit optional DBC settings. The supplied test DBC directory makes the full retail
+        // Skills, Talents and Enchanting registries available before the gap analysis (no world DB or port is reused).
+        string? dbc = Environment.GetEnvironmentVariable("ARCANECORE_TEST_DBC_DIR");
+        if (!string.IsNullOrWhiteSpace(dbc))
+        {
+            values["Skills:Mode"] = "Retail";
+            values["Skills:SkillLineDbcPath"] = Path.Combine(dbc, "SkillLine.dbc");
+            values["Skills:SkillRaceClassInfoDbcPath"] = Path.Combine(dbc, "SkillRaceClassInfo.dbc");
+            values["Skills:SkillTiersDbcPath"] = Path.Combine(dbc, "SkillTiers.dbc");
+            values["Skills:SkillLineAbilityDbcPath"] = Path.Combine(dbc, "SkillLineAbility.dbc");
+            values["Talents:TalentDbcPath"] = Path.Combine(dbc, "Talent.dbc");
+            values["Talents:TalentTabDbcPath"] = Path.Combine(dbc, "TalentTab.dbc");
+            values["Enchanting:SpellItemEnchantmentDbcPath"] = Path.Combine(dbc, "SpellItemEnchantment.dbc");
+        }
+
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -74,7 +93,17 @@ public sealed class PlayerbotQaSpellCoverageRealContentTests(ITestOutputHelper o
             output.WriteLine($"  rotation gap: {g.Spell} {g.Name} {g.Rank} [{QaFindingView.ClassNamesOf(g.ClassMask)}] #{g.EffectIndex} {g.EffectName}: {QaSpellGaps.Describe(g.Code, g.Detail)}");
         }
 
-        await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "arcanecore-qa-spell-coverage.md"), coverage.RenderMarkdown(1000));
+        string reportPath = Environment.GetEnvironmentVariable("ARCANECORE_QA_COVERAGE_OUTPUT")
+            ?? Path.Combine(Path.GetTempPath(), "arcanecore-qa-spell-coverage.md");
+        await File.WriteAllTextAsync(reportPath, coverage.RenderMarkdown(int.MaxValue));
+        output.WriteLine($"full gap list: {reportPath}");
+        if (!string.IsNullOrWhiteSpace(dbc))
+        {
+            Assert.True(host.WorldServices.GetRequiredService<SkillsFeature>().IsActive);
+            Assert.NotNull(host.WorldServices.GetRequiredService<TalentFeature>().Catalog);
+            Assert.True(host.WorldServices.GetRequiredService<EnchantingFeature>().IsActive);
+            Assert.True(host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(SpellEffectName.OpenLock));
+        }
         Assert.True(coverage.RotationCastable > 50, $"only {coverage.RotationCastable} rotation spells resolved");
         Assert.True(coverage.TrainerRows > 0);
     }
