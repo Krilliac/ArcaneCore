@@ -1,6 +1,9 @@
 using System.Numerics;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -96,5 +99,105 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         float moved = await terrain.Host.OnWorldAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(MolsenNorth.X, MolsenNorth.Y)));
         Assert.True(moved < 1f, $"moved {moved:F1} yards");
         Assert.NotEqual(PlayerbotGoalKind.Home, brain.Goal);
+    }
+
+    // A bind point for the unhomed cases: the Sentinel Hill inn's square, 400 yards from the farm.
+    private static readonly Vector3 SentinelHillBind = new(-10628.3f, 1036.7f, 34.1f);
+
+    /// <summary>
+    /// An unhomed bot with a bind point whose stall gives its goal up on the island is teleported to its bind point and explores from
+    /// there (the way out of an unsafe landing too).
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task OnTheMolsenFarmIsland_AStalledUnhomedBotGoesToItsBindPoint_AndExplores()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(MolsenIslandSouth);
+        var brain = new PlayerbotBrain(terrain.Session, new PlayerbotOptions { Enabled = true });
+        await terrain.Host.OnWorldAsync(() =>
+        {
+            terrain.Player.Home = new HomeBind(0, 40, SentinelHillBind.X, SentinelHillBind.Y, SentinelHillBind.Z);
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(terrain.Player);
+        });
+        await terrain.WaitAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(SentinelHillBind.X, SentinelHillBind.Y)) < 5f,
+            "the teleport off the island to the bind point");
+        Assert.Equal(PlayerbotGoalKind.Explore, brain.Goal);
+    }
+
+    /// <summary>
+    /// A grouped bot can run this brain (PlayerbotPartyAI.Drives is false while it never engaged and no real member is online): its stall
+    /// on the island must not pull it away from its group. The bind-point teleport is refused as the return teleport home is.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task OnTheMolsenFarmIsland_AGroupedUnhomedBotIsNotTeleported()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(MolsenIslandSouth);
+        var brain = new PlayerbotBrain(terrain.Session, new PlayerbotOptions { Enabled = true });
+        await terrain.Host.OnWorldAsync(() =>
+        {
+            terrain.Player.Home = new HomeBind(0, 40, SentinelHillBind.X, SentinelHillBind.Y, SentinelHillBind.Z);
+            PlayerbotTestGroups.JoinOfflinePartner(terrain.Session, terrain.Player);
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(terrain.Player);
+        });
+        for (int tick = 0; tick < 40; tick++)
+        {
+            await terrain.Host.OnWorldAsync(() => PlayerbotMovementControl.Update(terrain.Session, terrain.Player));
+            await terrain.Host.World.AdvanceClockAsync(50);
+        }
+        float moved = await terrain.Host.OnWorldAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(MolsenIslandSouth.X, MolsenIslandSouth.Y)));
+        Assert.True(moved < 1f, $"the grouped bot was moved {moved:F1} yards");
+    }
+
+    /// <summary>
+    /// A homed bot whose home teleport is held back by its cooldown (it teleported home moments ago) still leaves the island, by its bind
+    /// point, as from an unsafe landing; the refused home teleport does not set its walk home aside.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task OnTheMolsenFarmIsland_AHomedBotWithinItsHomeTeleportCooldown_GoesToItsBindPoint()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(MolsenIslandSouth);
+        var brain = new PlayerbotBrain(terrain.Session, new PlayerbotOptions { Enabled = true })
+        {
+            Home = new PlayerbotHomeArea(0, SentinelHillCentre, 750f, "SentinelHill"),
+        };
+        await terrain.Host.OnWorldAsync(() =>
+        {
+            terrain.Player.Home = new HomeBind(0, 40, SentinelHillBind.X, SentinelHillBind.Y, SentinelHillBind.Z);
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(terrain.Player);
+        });
+        await terrain.WaitAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(SentinelHillCentre.X, SentinelHillCentre.Y)) < 5f,
+            "the first teleport home");
+
+        await terrain.PlaceAsync(MolsenIslandSouth);
+        await terrain.Host.OnWorldAsync(() =>
+        {
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(terrain.Player);
+        });
+        await terrain.WaitAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(SentinelHillBind.X, SentinelHillBind.Y)) < 5f,
+            "the teleport to the bind point within the home teleport's cooldown");
+        Assert.DoesNotContain("blocked", brain.HomeReport ?? "");
+    }
+}
+
+/// <summary>Groups for bot tests.</summary>
+internal static class PlayerbotTestGroups
+{
+    /// <summary>Put <paramref name="player"/> in a party with an offline partner (a stored group, as at a restart; GroupManager.Restore). World thread.</summary>
+    internal static void JoinOfflinePartner(WorldSession session, Player player)
+    {
+        const int partner = 900_001;
+        session.Services.GetRequiredService<ArcaneCore.World.Characters.CharacterDirectory>().Add(
+            new CharacterIdentity(partner, 1, "Partnerone", 1, 0, 1, 14));
+        var groups = session.Services.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+        var restored = groups.Restore([new ArcaneCore.Kernel.Social.GroupRecord(900, partner, 0, partner, 2, false, [],
+            [new ArcaneCore.Kernel.Social.GroupMemberRecord(partner, 0, false), new ArcaneCore.Kernel.Social.GroupMemberRecord((int)player.Guid.Low, 0, false)])]);
+        Assert.Single(restored.Restored);
+        Assert.NotNull(groups.GetGroup(player.Guid));
     }
 }

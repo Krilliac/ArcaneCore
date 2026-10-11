@@ -376,6 +376,12 @@ internal static class PlayerbotNavigation
     /// </summary>
     internal const float IslandYards = 45f;
 
+    /// <summary>
+    /// The point budget of each of <see cref="IsOnMeshIsland"/>'s queries, fixed (not the operator's MaxPathPoints): 60 yards of winding
+    /// ground fit in it, and a path cut at it (<see cref="PathType.Short"/>) is never taken for an island's edge.
+    /// </summary>
+    internal const int IslandPathPoints = 256;
+
     /// <summary>The search budget of each of <see cref="IsOnMeshIsland"/>'s queries: an island's few polygons run out long before it.</summary>
     internal const int IslandSearchNodes = 8192;
 
@@ -383,7 +389,9 @@ internal static class PlayerbotNavigation
     /// Whether the bot stands on a navigation-mesh island: walkable polygons the mesh joins to nothing round them, so that no route from
     /// there leads anywhere else. Partial queries from the bot towards <see cref="IslandDirections"/> points
     /// <see cref="IslandProbeYards"/> away all end within <see cref="IslandYards"/> of it; the first that ends farther (the mesh goes
-    /// on), and any answer without the mesh (no navigation data, or no polygon under the bot: other recoveries' cases), says no. At most
+    /// on, or the path was cut at its point bound), and any answer without the mesh (no navigation data, or no polygon under the bot: other
+    /// recoveries' cases), says no. So an island beside water or a void, where a probe point has no polygon near it (a NoPath answer), is
+    /// never detected: its bots still stall, and are given up goal by goal as before. At most
     /// <see cref="IslandDirections"/> queries; the brain asks only once a stall gives a goal up (PlayerbotBrain.EscapeIsland).
     /// <para>
     /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): the ground inside the round wall of the Molsen Farm in Westfall
@@ -402,10 +410,11 @@ internal static class PlayerbotNavigation
         {
             float angle = direction * 2f * MathF.PI / IslandDirections;
             Vector3 probe = start + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0) * IslandProbeYards);
-            PathResult path = map.Collision.FindPath(start, probe, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+            PathResult path = map.Collision.FindPath(start, probe, new PathOptions { MaxPoints = IslandPathPoints,
                 Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = IslandSearchNodes,
                 LoadTiles = true });
-            if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || !Finite(path.End)
+            // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
+            if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !Finite(path.End)
                 || Vector2.Distance(Flat(path.End), Flat(start)) > IslandYards)
                 return false;
         }
