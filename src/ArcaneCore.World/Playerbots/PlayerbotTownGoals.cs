@@ -269,6 +269,24 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// <summary>At most this many repair NPC spawns of the map are kept as trip goals (the nearest first).</summary>
     private const int MaxRepairSpawns = 64;
 
+    /// <summary>
+    /// The most repair NPC spawns a route is planned to in one think (<see cref="BeginThink"/> opens it; the brain may call
+    /// <see cref="Update"/> twice in one). Live (live-w27-r1): a bot whose start was off the mesh planned to every spawn of the map in
+    /// one think, up to 1,740 queries (59 ms for 528 of them), 94 slow thinks in 4 minutes. The rest of the list waits for the next
+    /// thinks; with the whole list refused the trip rests (<see cref="RepairTripBackoffMs"/>).
+    /// </summary>
+    internal const int MaxRepairPlansPerThink = 3;
+
+    private int _repairPlansThisThink;
+    private bool _repairClockedThisThink;
+
+    /// <summary>A new think begins: its repair plan budget (<see cref="MaxRepairPlansPerThink"/>) and its one stuck-clock tick are whole again.</summary>
+    internal void BeginThink()
+    {
+        _repairPlansThisThink = 0;
+        _repairClockedThisThink = false;
+    }
+
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
     private (uint MapId, CreatureContent? Content, int Version) _repairIndex;
@@ -344,7 +362,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
             float left = Vector3.Distance(here, at);
             if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
-            else _repairStuckMs += elapsedMs;
+            else if (!_repairClockedThisThink) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
+            _repairClockedThisThink = true;
             if (_repairStuckMs < RepairTripStuckMs && Suspensions?.IsEntrySuspended(current.Entry, now) != true)
             {
                 Goal = PlayerbotGoalKind.Vendor;
@@ -362,10 +381,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             ClearRepairTrip();
         }
 
+        // At most MaxRepairPlansPerThink new candidates are planned to in one think (however many Updates it makes), nearest first;
+        // the rest wait for the next think, the blocked set keeping the refused ones out. A refused plan blocks its spawn as ever: a
+        // start off the mesh still reaches some spawns (the steep-ground escape depends on the destination), so none is skipped.
         foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid))
                      .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
+            if (_repairPlansThisThink >= MaxRepairPlansPerThink) return false;
+            _repairPlansThisThink++;
             if (!PlayerbotNavigation.TryPlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, out PlayerbotRoute? route) || route is null)
             {
                 _blockedRepairSpawns.Add(spawn.Guid);
