@@ -259,6 +259,23 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
             (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),
 
+        // Not vmangos keys: bot guilds, guild chat and greetings (docs/areas/playbots-social.md). PlayerbotSocialFeature reads the shared
+        // PlayerbotOptions.Social at every pass.
+        LivePlayerbots("Social:Guilds:Enabled", o => o.Social.Guilds.Enabled, (o, v) => o.Social.Guilds.Enabled = v),
+        LivePlayerbotsValue("Social:Guilds:MaxBotGuilds", o => o.Social.Guilds.MaxBotGuilds, (o, v) => o.Social.Guilds.MaxBotGuilds = v,
+            v => v is >= 0 and <= Playerbots.BotSocial.PlayerbotSocialGuildOptions.MaxBotGuildsCeiling ? null : "must be 0..64"),
+        LivePlayerbotsValue("Social:Guilds:TargetSize", o => o.Social.Guilds.TargetSize, (o, v) => o.Social.Guilds.TargetSize = v,
+            v => v is >= Playerbots.BotSocial.PlayerbotSocialGuildOptions.MinTargetSize and <= Playerbots.BotSocial.PlayerbotSocialGuildOptions.MaxTargetSize
+                ? null : "must be 2..500"),
+        LivePlayerbotsValue("Social:Guilds:InvitePolicy", o => o.Social.Guilds.InvitePolicy, (o, v) => o.Social.Guilds.InvitePolicy = v,
+            v => Enum.IsDefined(v) ? null : "must be None, GuildOrFriends or Anyone"),
+        LivePlayerbotsValue("Social:Guilds:Creation", o => o.Social.Guilds.Creation, (o, v) => o.Social.Guilds.Creation = v,
+            v => Enum.IsDefined(v) ? null : "must be Auto, Charter or ClientCreate"),
+        LivePlayerbots("Social:GuildChat:Enabled", o => o.Social.GuildChat.Enabled, (o, v) => o.Social.GuildChat.Enabled = v),
+        LivePlayerbotsValue("Social:GuildChat:MessagesPerHour", o => o.Social.GuildChat.MessagesPerHour, (o, v) => o.Social.GuildChat.MessagesPerHour = v,
+            v => v is >= 0 and <= Playerbots.BotSocial.PlayerbotSocialGuildChatOptions.MaxMessagesPerHour ? null : "must be 0..60"),
+        LivePlayerbots("Social:Emotes:Enabled", o => o.Social.Emotes.Enabled, (o, v) => o.Social.Emotes.Enabled = v),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,

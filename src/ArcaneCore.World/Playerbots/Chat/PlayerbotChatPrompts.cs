@@ -55,6 +55,24 @@ internal static class PlayerbotChatPrompts
         return text.ToString();
     }
 
+    /// <summary>
+    /// The prompt of an announcement (<see cref="PlayerbotChat.TryAnnounce"/>): the same static rules, the bot's own facts and its guild's
+    /// name, and the topic's instruction as the one line to answer. Never a GUID, an account or another player's details beyond the
+    /// character names in the instruction.
+    /// </summary>
+    internal static BotChatPrompt Announcement(BotChatAsk ask, BotChatTopic topic)
+    {
+        BotChatPersona p = ask.Persona;
+        CultureInfo c = CultureInfo.InvariantCulture;
+        var text = new StringBuilder();
+        text.Append(c, $"You are {p.Name}, a level {p.Level} {Words(p.Gender)} {Words(p.Race)} {Words(p.Class)}.");
+        if (p.Zone is { } zone)
+            text.Append(c, $" You are in {zone}{(p.Subzone is { } sub ? $" ({sub})" : string.Empty)}.");
+        if (DescribeGoal(p) is { } goal) text.Append(c, $" Right now you are {goal}.");
+        text.Append(c, $" You are a member of the guild {topic.GuildName} and you are writing one short line in your guild's chat. Nobody spoke to you.");
+        return new BotChatPrompt(StaticSystem, text.ToString(), [new BotChatTurn(true, Clean(topic.Instruction, MaxLineLength))]);
+    }
+
     /// <summary>The model prompt: the static rules, the bot's facts, the remembered exchanges and the player's line.</summary>
     internal static BotChatPrompt Build(BotChatAsk ask, IReadOnlyList<BotChatTurn> memory)
     {
@@ -219,6 +237,7 @@ internal static class PlayerbotChatPrompts
     {
         ChatType.Whisper => "by whisper",
         ChatType.Say => "out loud nearby",
+        ChatType.Guild => "in your guild's chat",
         _ => "in party chat",
     };
 }

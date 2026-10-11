@@ -40,6 +40,9 @@ live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
 A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
 manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
 
+Bots found guilds, fill and rank them, say a short line in guild chat and (off by default) wave at nearby real players
+(`World:Playerbots:Social`, live): `docs/areas/playbots-social.md`.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,

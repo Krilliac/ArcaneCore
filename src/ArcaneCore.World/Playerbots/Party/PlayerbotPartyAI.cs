@@ -332,6 +332,9 @@ internal sealed class PlayerbotPartyAI
         return true;
     }
 
+    /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
+    internal Chat.BotChatPersona PersonaFor(Player p) => Persona(p, ResolveMaster(p));
+
     /// <summary>The bot's facts for the chat (world thread): who and where it is, what it does, its group and recent events.</summary>
     private Chat.BotChatPersona Persona(Player player, ObjectGuid master)
     {
@@ -396,6 +399,12 @@ internal sealed class PlayerbotPartyAI
                     break;
                 case ChatType.Say:
                     Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Say, language, text), budgeted: false);
+                    break;
+                case ChatType.Guild:
+                    // A guild announcement (docs/areas/playbots-social.md): said only in the guild it was written for, and only while guilded.
+                    if (Services.Social?.Guilds.GetGuildOf(player) is { } guild
+                        && (reply.Guild is null || string.Equals(guild.Name, reply.Guild, StringComparison.OrdinalIgnoreCase)))
+                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Guild, language, text), budgeted: false);
                     break;
             }
         }

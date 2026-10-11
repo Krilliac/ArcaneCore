@@ -121,6 +121,9 @@ public sealed class PlayerbotOptions
     /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
     public Population.PlayerbotPopulationOptions Population { get; set; } = new();
 
+    /// <summary>Bot guilds, guild chat and greetings (<c>World:Playerbots:Social</c>; live; docs/areas/playbots-social.md).</summary>
+    public BotSocial.PlayerbotSocialOptions Social { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -176,6 +179,8 @@ public sealed class PlayerbotOptions
         Follow.Validate();
         if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
         Population.Validate();
+        if (Social is null) throw new InvalidOperationException($"{SectionName}:Social is missing.");
+        Social.Validate();
     }
 }
 

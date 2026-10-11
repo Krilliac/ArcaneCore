@@ -149,6 +149,30 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     }
 
     /// <summary>
+    /// World thread: take an announcement a bot makes on its own (<see cref="BotChatAsk.Topic"/> set; a guild line, docs/areas/playbots-social.md).
+    /// Nobody spoke, so there is no channel list, safety choice or per-player cooldown to apply: the line needs chat on, a provider
+    /// with budget (the hourly caps, the spend cap) and room in the queue. Queued means a worker will write it (or, when every provider
+    /// fails, nothing will); anything else means it was not taken.
+    /// </summary>
+    internal BotChatAdmission TryAnnounce(BotChatAsk ask)
+    {
+        ArgumentNullException.ThrowIfNull(ask);
+        if (ask.Topic is null) throw new ArgumentException("an announcement needs a topic", nameof(ask));
+        if (!IsActive) return BotChatAdmission.Disabled;
+        DateTimeOffset now = _time.GetUtcNow();
+        PlayerbotChatOptions options = Options;
+        lock (_gate)
+        {
+            if (!options.EffectiveProviders().Any(provider => CanAnswer(provider, now, out _))) return BotChatAdmission.Budget;
+            Channel<BotChatAsk> queue = EnsureWorkers();
+            if (Volatile.Read(ref _queued) >= options.MaxQueuedRequests || !queue.Writer.TryWrite(ask)) return BotChatAdmission.QueueFull;
+            Interlocked.Increment(ref _queued);
+        }
+
+        return BotChatAdmission.Queued;
+    }
+
+    /// <summary>
     /// World thread, after <see cref="TryAsk"/> took a line: the AI disclosure to show its speaker first (once per login,
     /// <paramref name="login"/> from <see cref="PlayerbotChatSafety.LoginOf"/>), or null.
     /// </summary>
@@ -277,6 +301,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         PlayerbotChatOptions options = Options;
         if (!options.Enabled) return null;
+        if (ask.Topic is { } topic) return await AnnounceAsync(ask, topic, options).ConfigureAwait(false);
         PlayerbotChatSafetyOptions safety = options.Safety;
         bool screening = safety.Enabled;
         bool modelAllowed = true;
@@ -367,6 +392,123 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Worker: the line for an announcement (<see cref="TryAnnounce"/>). The same chain as an answer, with these differences: the
+    /// sentence is screened but a flag never strikes anyone (the sentence is the server's own, there is no player to cut off) and
+    /// says nothing; a model provider is used only while <see cref="PlayerbotChatSafetyOptions.RequireOptIn"/> is off (no one has opted
+    /// in to an announcement, so it takes built-in lines only); the model prompt is <see cref="PlayerbotChatPrompts.Announcement"/>; the
+    /// built-in line is the topic's template; and nothing is remembered. A model's line is screened before it is said, and a flagged one
+    /// is replaced by the built-in line (or dropped, <see cref="PlayerbotChatSafetyOptions.OnOutputFlagged"/>).
+    /// </summary>
+    private async Task<BotChatReply?> AnnounceAsync(BotChatAsk ask, BotChatTopic topic, PlayerbotChatOptions options)
+    {
+        PlayerbotChatSafetyOptions safety = options.Safety;
+        bool screening = safety.Enabled;
+        bool modelAllowed = options.HasModelProvider && !safety.RequireOptIn;
+        if (screening)
+        {
+            SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
+            if (verdict.Category is { } category)
+            {
+                _safety.Flag(ask, category.ToString(), BotChatFlagSource.Local, strike: false, ask.Text);
+                return null;
+            }
+
+            if (verdict.TimedOut) modelAllowed = false;
+        }
+
+        int index = -1;
+        foreach (PlayerbotChatProviderOptions provider in options.EffectiveProviders())
+        {
+            index++;
+            if (provider.Kind != PlayerbotChatProviderKind.Builtin && !modelAllowed) continue;
+            string? key;
+            lock (_gate)
+            {
+                if (!CanAnswer(provider, _time.GetUtcNow(), out key)) continue;
+            }
+
+            if (provider.Kind == PlayerbotChatProviderKind.Builtin) return BuiltinTopic(ask, topic, provider);
+            if (screening && provider.Moderation != PlayerbotChatModerationKind.None)
+            {
+                BotChatModeration moderation = await ModerateAsync(provider, key, ask, options).ConfigureAwait(false);
+                if (moderation.Verdict == BotChatModerationVerdict.Flagged)
+                {
+                    _safety.Flag(ask, moderation.Category ?? "flagged", BotChatFlagSource.Moderation, strike: false, ask.Text);
+                    return null;
+                }
+
+                if (moderation.Verdict != BotChatModerationVerdict.Clean)
+                {
+                    Fail(provider, index, "moderation-failed", TimeSpan.Zero);
+                    continue;
+                }
+            }
+
+            BotChatResult result;
+            BotChatPrompt prompt = PlayerbotChatPrompts.Announcement(Outgoing(ask, options), topic);
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
+            {
+                deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
+                try
+                {
+                    result = await _client.CompleteAsync(provider, key, prompt, deadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+                {
+                    result = BotChatResult.Fail(BotChatOutcome.Timeout);
+                }
+                catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
+                {
+                    result = BotChatResult.Fail(BotChatOutcome.NetworkError);
+                }
+            }
+
+            Record(provider, index, result);
+            if (result.Outcome != BotChatOutcome.Ok) continue;
+            string? text = PlayerbotChatPrompts.ReadAnswer(result.Text).Reply;
+            if (text is null)
+            {
+                Fail(provider, index, "empty-reply", null);
+                continue;
+            }
+
+            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+            {
+                _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
+                modelAllowed = false; // the built-in provider writes the (clean) line instead
+                continue;
+            }
+
+            return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, null, AcknowledgeCommand: false, provider.Label, topic.GuildName);
+        }
+
+        return null;
+    }
+
+    /// <summary>The built-in line of an announcement: one phrasing of the topic's template with its placeholders filled; nothing remembered.</summary>
+    private BotChatReply? BuiltinTopic(BotChatAsk ask, BotChatTopic topic, PlayerbotChatProviderOptions provider)
+    {
+        string? text;
+        lock (_gate)
+        {
+            text = PlayerbotBuiltinChat.Pick(topic.TemplateKey, ask, null, _random);
+            if (text is null) return null;
+            StateOf(provider).Succeed(_time.GetUtcNow());
+        }
+
+        // The template is ours, but its values are names (a member's, a boss's): the line is screened like a model's before it is said.
+        PlayerbotChatSafetyOptions safety = Options.Safety;
+        if (safety.Enabled && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+        {
+            _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+            return null;
+        }
+
+        return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, null, AcknowledgeCommand: false, provider.Label, topic.GuildName);
     }
 
     private BotChatReply? Builtin(BotChatAsk ask, PlayerbotChatProviderOptions provider, PlayerbotChatOptions options)
