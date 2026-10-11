@@ -54,6 +54,12 @@ content is not loaded.
   inside the home (docs/areas/playbots.md, Home area), so it is never an outside-home finding.
 * **Unknown**: anything else; the detail says what was checked.
 
+A stall's `quest=` is the last quest the bot's brain remembers, not necessarily what it was doing: it stays set after the quest goal
+ends. Only a stall whose goal is `Quest` (and a shared set-aside) is checked against the quest's content; any other goal is classified by
+its own target, and its Unknown detail reads `no missing content found for goal Explore`. Before 2026-10-11 a non-quest stall with a
+remembered quest was checked, titled and explained as that quest (GitHub #154: every line said `goal=Explore target=0 quest=109`, 178 of
+179 such bots had already turned 109 in, yet the issue read as a quest-109 problem).
+
 Severity ranks findings: a weight per kind (quarantine/disabled 45, fault 40, set-aside 35, death loop 30, relay data 25, stall 15),
 plus `10 * log2(1 + count)`, plus 5 per distinct bot (at most 20), plus 10 for a finding seen in the last hour.
 
@@ -119,6 +125,14 @@ set-aside line carries no bot ids: its bot count is the `BotsToShare` (3) the li
 occurrences are the set-aside's repeats (30, 60, 120 min): three of them mean three separate windows in which three bots stalled. Its subject
 reads `quest Q (title) set aside for every bot after 3 stalled` (before 2026-10-11: `set aside by every bot`, which read as if every bot had
 stalled; the fingerprint, and so the issue marker, is unchanged).
+
+A stall's subject always names its goal: `goal Explore map 0 near -10350,1400`, and only for a Quest goal also the quest:
+`goal Quest, quest 109 (Report to Gryan Stoutmantle) target 6747 map 0 near ...`. The issue body has a `Goal` row; the quest row is `Quest`
+for a Quest goal and `Last quest (not the goal)` otherwise (with no `.lookup quest` step), and `report.md`, `report.json` (`Goal`,
+`QuestIsGoal`) and `.playerbot qa show` say the same. The fingerprint is unchanged (its key already held the goal, and still holds the
+remembered quest, so the markers of existing issues still match): a findings file written before this gets each stall's goal and subject
+back from its key on load (only a key that rebuilds to itself), and keeps its id and issue. A published issue's title is never edited, so
+#154 keeps its old title; its cause text in the local report is recomputed with the finding's next stall.
 
 * **No issue**: create one (title `[bot-qa] kind: subject`, the configured `Labels`).
 * **Open issue**: add a comment with the new occurrences, at most once per `CommentIntervalHours` (default 24) per finding.

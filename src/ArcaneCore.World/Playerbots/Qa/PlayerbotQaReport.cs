@@ -7,7 +7,8 @@ namespace ArcaneCore.World.Playerbots.Qa;
 
 /// <summary>One finding as the JSON export shows it (no bot hashes, redacted text).</summary>
 internal sealed record QaReportEntry(int Rank, string Id, string ShortId, string Kind, string Cause, string CauseDetail, double Severity, long Count,
-    int DistinctBots, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Subject, string? QuestTitle, string Publication, IReadOnlyList<QaReportSample> Samples);
+    int DistinctBots, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Subject, string? QuestTitle, string Publication, IReadOnlyList<QaReportSample> Samples,
+    string Goal = "", bool QuestIsGoal = true);
 
 /// <summary>One evidence sample of the JSON export.</summary>
 internal sealed record QaReportSample(DateTime AtUtc, uint Map, float? X, float? Y, float? Z, IReadOnlyList<uint> Attackers, string Message);
@@ -91,7 +92,7 @@ internal static class PlayerbotQaReport
             Cut(string.Create(CultureInfo.InvariantCulture, $"cause {f.Cause}: {redactor.Redact(f.CauseDetail)}")),
             string.Create(CultureInfo.InvariantCulture, $"seen {f.Count} times by {f.DistinctBots} bots, sev {f.Severity:F1}, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}, github {f.Publication}"),
         };
-        if (f.QuestTitle is not null) lines.Add(Cut($"quest {f.Quest}: {redactor.Redact(f.QuestTitle)}"));
+        if (f.QuestTitle is not null) lines.Add(Cut($"{QuestLabel(f, "quest")}: {redactor.Redact(f.QuestTitle)}"));
         foreach (QaSample s in f.Samples.TakeLast(3))
         {
             string where = s.HasPosition ? string.Create(CultureInfo.InvariantCulture, $"map {s.Map} at {s.X:F1},{s.Y:F1},{s.Z:F1}") : "no position";
@@ -138,7 +139,7 @@ internal static class PlayerbotQaReport
             sb.Append(CultureInfo.InvariantCulture, $"## {i + 1}. {f.KindLabel}: {Escape(redactor.Redact(f.Subject))}\n\n");
             sb.Append(CultureInfo.InvariantCulture, $"- Id `{f.Id}`, severity {f.Severity:F1}, seen {f.Count} times by {f.DistinctBots} bots, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}\n");
             sb.Append(CultureInfo.InvariantCulture, $"- Likely cause: {f.Cause}. {Escape(redactor.Redact(f.CauseDetail))}\n");
-            if (f.QuestTitle is not null) sb.Append(CultureInfo.InvariantCulture, $"- Quest {f.Quest}: {Escape(redactor.Redact(f.QuestTitle))}\n");
+            if (f.QuestTitle is not null) sb.Append(CultureInfo.InvariantCulture, $"- {QuestLabel(f, "Quest")}: {Escape(redactor.Redact(f.QuestTitle))}\n");
             if (GoHint(f) is { } go) sb.Append(CultureInfo.InvariantCulture, $"- Go there: `{go}`\n");
             foreach (QaSample s in f.Samples)
             {
@@ -163,11 +164,17 @@ internal static class PlayerbotQaReport
             entries.Add(new QaReportEntry(i + 1, f.Id, f.ShortId, f.KindLabel, f.Cause.ToString(), redactor.Redact(f.CauseDetail), f.Severity, f.Count, f.DistinctBots,
                 f.FirstSeenUtc, f.LastSeenUtc, redactor.Redact(f.Subject), f.QuestTitle is null ? null : redactor.Redact(f.QuestTitle), f.Publication.ToString(),
                 [.. f.Samples.Select(s => new QaReportSample(s.AtUtc, s.Map, s.HasPosition ? s.X : null, s.HasPosition ? s.Y : null, s.HasPosition ? s.Z : null,
-                    s.Attackers, redactor.Redact(s.Message)))]));
+                    s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal));
         }
 
         return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries), QaReportJsonContext.Default.QaReportFile);
     }
+
+    /// <summary><c>quest Q</c> when the quest is the finding's subject, <c>last quest Q (not the goal)</c> for a stall of another goal.</summary>
+    private static string QuestLabel(QaFindingView f, string quest)
+        => f.QuestIsGoal
+            ? string.Create(CultureInfo.InvariantCulture, $"{quest} {f.Quest}")
+            : string.Create(CultureInfo.InvariantCulture, $"{(quest[0] == 'Q' ? "Last" : "last")} quest {f.Quest} (not the goal)");
 
     private static string Cut(string line) => line.Length <= MaxChatLine ? line : line[..(MaxChatLine - 3)] + "...";
 
