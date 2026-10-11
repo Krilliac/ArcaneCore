@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       259 keys
+#   WORLD                       317 keys
 #
 ###############################################################################
 
@@ -9508,6 +9508,68 @@ World.Playerbots.Chat.Safety.TermsFile = ""
 World.Playerbots.Chat.TimeoutSeconds = 10
 
 #
+#    World.Playerbots.Economy.BuyUpgradeBudgetFraction
+#        Description: The share of the money a bot holds at the start of a visit that the visit may
+#                     spend in all (0..1): listing deposits and the buyout of an upgrade count
+#                     against it. 0 spends nothing.
+#        Type: float
+#        Default: 0.25
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
+
+#
+#    World.Playerbots.Economy.Enabled
+#        Description: Let bots list, buy and collect at the auction house (on by default). Off: no
+#                     visit starts; a running one is dropped.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.Enabled = true
+
+#
+#    World.Playerbots.Economy.ListChancePerVisit
+#        Description: The chance in percent (0..100) that a visit lists anything: one roll per
+#                     visit, then the bot lists up to its free listing slots. 0 lists nothing (a bot
+#                     may still buy and collect); 100 always lists.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListChancePerVisit = 50
+
+#
+#    World.Playerbots.Economy.MaxListingsPerBot
+#        Description: The most auctions one bot has listed at once (0..50), counted from the auction
+#                     house's own owner list; 0 lists nothing.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxListingsPerBot = 5
+
+#
+#    World.Playerbots.Economy.VisitIntervalMinutes
+#        Description: Minutes between two visits of one bot (1..1440). Bots start at a random point
+#                     of the first interval.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.VisitIntervalMinutes = 30
+
+#
 #    World.Playerbots.Enabled
 #        Description: Run server-managed playerbots (off by default).
 #        Type: bool
@@ -9542,6 +9604,326 @@ World.Playerbots.FaultBackoffSeconds = 30
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.FaultWindowSeconds = 3600
+
+#
+#    World.Playerbots.Follow.CatchUpMode
+#        Description: Teleport to catch up, fight through, or teleport only when unreachable
+#                     (PlayerbotCatchUpMode.Teleport by default, the reference behaviour). Values:
+#                     Teleport, FightThrough, Auto.
+#        Type: PlayerbotCatchUpMode
+#        Default: Teleport
+#        Allowed: Teleport | FightThrough | Auto
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.CatchUpMode = Teleport
+
+#
+#    World.Playerbots.Follow.DangerLevelMargin
+#        Description: Teleport mode: a way that passes inside the aggro radius of a hostile creature
+#                     this many levels or more above the bot, or of an elite at or above the bot's
+#                     level, counts as no way (0..60).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.DangerLevelMargin = 3
+
+#
+#    World.Playerbots.Follow.LeaderCombatRangeYards
+#        Description: A bot in combat makes a catch-up teleport only when its leader is out of
+#                     combat and farther than this many yards (the leader left the fight; vmangos
+#                     counts a member's attacker within 50 yards as the group's fight,
+#                     SelectPartyAttackTarget; 0..1000).
+#        Type: float
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.LeaderCombatRangeYards = 50
+
+#
+#    World.Playerbots.Follow.MaxFallHealthPercent
+#        Description: A drop to a leader below is taken when the fall (vmangos Player::HandleFall
+#                     damage) would cost less than this percentage of the bot's current health (0:
+#                     only falls that do no damage, under 14.57 yards; 0..99).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.MaxFallHealthPercent = 50
+
+#
+#    World.Playerbots.Follow.MaxPathRatio
+#        Description: Teleport mode: a way to the leader longer than this many times the straight
+#                     distance counts as no way (1.5..20), when it is also at least MinDetourYards
+#                     longer than the straight line.
+#        Type: float
+#        Default: 3
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.MaxPathRatio = 3
+
+#
+#    World.Playerbots.Follow.MinDetourYards
+#        Description: Teleport mode: a way to the leader at most this many yards longer than the
+#                     straight line is always walked (0..500).
+#        Type: float
+#        Default: 40
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.MinDetourYards = 40
+
+#
+#    World.Playerbots.Follow.NoProgressSeconds
+#        Description: Seconds without getting closer to a leader who stands still before the
+#                     follower plans again; the same again after that re-plan and it teleports
+#                     (Teleport and Auto modes) or plans once more (FightThrough). 2..120.
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.NoProgressSeconds = 8
+
+#
+#    World.Playerbots.Follow.TeleportDistanceYards
+#        Description: Teleport mode: a leader on the bot's map farther than this many yards is
+#                     teleported to (vmangos PartyBotAI IsWithinDistInMap(pLeader, 100.0f);
+#                     10..1000).
+#        Type: float
+#        Default: 100
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Follow.TeleportDistanceYards = 100
+
+#
+#    World.Playerbots.Groups.DungeonRuns.BandAboveBoss
+#        Description: Levels above the strongest boss the level band ends (0..20).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.BandAboveBoss = 3
+
+#
+#    World.Playerbots.Groups.DungeonRuns.BandBelowBoss
+#        Description: Levels below the weakest boss the level band starts (0..20): the band's lower
+#                     end is the higher of the entrance level and the weakest boss's level minus
+#                     this.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.BandBelowBoss = 3
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Enabled
+#        Description: Let free bots start dungeon runs (on by default). Off: no new run starts;
+#                     running ones finish. Raid runs also need PlayerbotRaidRunOptions.Enabled.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Enabled = true
+
+#
+#    World.Playerbots.Groups.DungeonRuns.LevelBandOverrides
+#        Description: Level bands that replace the derived ones. Keys are a map id (36) or a map id
+#                     and segment (189:2, the third wing of Scarlet Monastery, counting from 0);
+#                     values min-max (1..63). Example: "36": "15-22".
+#        Type: Dictionary<string, string>
+#        Default: (empty)
+#        Allowed: a map: one key per entry name; each value is text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# Empty by default.
+# World.Playerbots.Groups.DungeonRuns.LevelBandOverrides.<Name> =
+
+#
+#    World.Playerbots.Groups.DungeonRuns.MaxConcurrentRuns
+#        Description: The most dungeon runs at once (0..16; 0 starts none).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.MaxConcurrentRuns = 2
+
+#
+#    World.Playerbots.Groups.DungeonRuns.MaxRunMinutes
+#        Description: The longest a dungeon run lasts, in minutes, from the moment the group forms
+#                     (10..720).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.MaxRunMinutes = 90
+
+#
+#    World.Playerbots.Groups.DungeonRuns.MaxTravelYards
+#        Description: A bot farther than this from the entrance (yards, 3-D) is not matched for the
+#                     run (500..20000).
+#        Type: float
+#        Default: 6000
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.MaxTravelYards = 6000
+
+#
+#    World.Playerbots.Groups.DungeonRuns.MaxWipes
+#        Description: Wipes a dungeon run survives; the run is given up at this many (1..20).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.MaxWipes = 3
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.Enabled
+#        Description: Let free bots start raid runs (on by default; needs
+#                     PlayerbotRunOptions.Enabled too).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.Enabled = true
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.HealerPercent
+#        Description: Healers as a percentage of the raid (10..50): a raid of 40 takes 10 at 25.
+#        Type: int
+#        Default: 25
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.HealerPercent = 25
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.MaxConcurrentRaids
+#        Description: The most raid runs at once (0..4; 0 starts none).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.MaxConcurrentRaids = 1
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.MaxRunMinutes
+#        Description: The longest a raid run lasts, in minutes, from the moment the raid forms
+#                     (10..1440).
+#        Type: int
+#        Default: 240
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.MaxRunMinutes = 240
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.MaxWipes
+#        Description: Wipes a raid run survives; the run is given up at this many (1..20).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.MaxWipes = 5
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.SkipPrerequisites
+#        Description: Skip the raids' key item, attunement quest and condition requirements (off by
+#                     default). On, bots are matched without them and the server lets the members of
+#                     a bot raid run through the entrance without them. Only managed bots in a bot
+#                     raid run, only through that raid's own entrance and never the entrance level:
+#                     a real player, a bot outside a run and a dungeon run are checked as always.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.SkipPrerequisites = false
+
+#
+#    World.Playerbots.Groups.DungeonRuns.Raids.TanksPerTen
+#        Description: Tanks per ten raid members (1..5): a raid of 40 takes 4 at 1, 8 at 2.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.Raids.TanksPerTen = 1
+
+#
+#    World.Playerbots.Groups.DungeonRuns.StartChancePerMinute
+#        Description: The chance per minute (0..1) that a scan which finds enough fitting bots
+#                     starts a run. 0 starts none; 1 starts one at once.
+#        Type: double
+#        Default: 0.5
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.StartChancePerMinute = 0.5
+
+#
+#    World.Playerbots.Groups.DungeonRuns.TeleportToEntrance
+#        Description: Teleport the group to the approach point of the entrance instead of walking
+#                     there (off by default: the group travels together, fighting what is in the
+#                     way). The run never teleports otherwise.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.TeleportToEntrance = false
+
+#
+#    World.Playerbots.Groups.DungeonRuns.TravelTimeoutMinutes
+#        Description: The longest the group takes to gather and walk to the entrance, in minutes
+#                     (5..240).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonRuns.TravelTimeoutMinutes = 30
 
 #
 #    World.Playerbots.Groups.Enabled
@@ -9854,8 +10236,9 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 
 #
 #    World.Playerbots.Party.TeleportToLeader
-#        Description: Teleport to the master when it is more than 100 yards away or on another map
-#                     (vmangos PartyBotAI .goname; on by default).
+#        Description: Teleport to the master when the follower cannot keep up by walking (vmangos
+#                     PartyBotAI .goname; on by default). Off: the bot never teleports to its
+#                     master, whatever PlayerbotFollowOptions.CatchUpMode says.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -9863,6 +10246,273 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Party.TeleportToLeader = true
+
+#
+#    World.Playerbots.Population.AllianceSharePct
+#        Description: With Factions Both, the share of new bots that are Alliance (0..100).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.AllianceSharePct = 50
+
+#
+#    World.Playerbots.Population.Bands
+#        Description: The level bands the target is split over: each has MinLevel, MaxLevel and
+#                     Weight (at most 20; bands must not overlap and at least one weight must be
+#                     above 0). A configured list replaces the default six bands of ten levels with
+#                     equal weights. Without the boost content (see docs/areas/character-boost.md)
+#                     only a band that contains level 1 is used.
+#        Type: PopulationBand[]
+#        Default: 0:MaxLevel = 10; 0:MinLevel = 1; 0:Weight = 1; 1:MaxLevel = 20; 1:MinLevel = 11;
+#                 1:Weight = 1; 2:MaxLevel = 30; 2:MinLevel = 21; 2:Weight = 1; 3:MaxLevel = 40;
+#                 3:MinLevel = 31; 3:Weight = 1; 4:MaxLevel = 50; 4:MinLevel = 41; 4:Weight = 1;
+#                 5:MaxLevel = 60; 5:MinLevel = 51; 5:Weight = 1
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# These entries are the default list. They are commented out because a list you write is appended to the default list, not
+# substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
+# World.Playerbots.Population.Bands.0.MaxLevel = 10
+# World.Playerbots.Population.Bands.0.MinLevel = 1
+# World.Playerbots.Population.Bands.0.Weight = 1
+# World.Playerbots.Population.Bands.1.MaxLevel = 20
+# World.Playerbots.Population.Bands.1.MinLevel = 11
+# World.Playerbots.Population.Bands.1.Weight = 1
+# World.Playerbots.Population.Bands.2.MaxLevel = 30
+# World.Playerbots.Population.Bands.2.MinLevel = 21
+# World.Playerbots.Population.Bands.2.Weight = 1
+# World.Playerbots.Population.Bands.3.MaxLevel = 40
+# World.Playerbots.Population.Bands.3.MinLevel = 31
+# World.Playerbots.Population.Bands.3.Weight = 1
+# World.Playerbots.Population.Bands.4.MaxLevel = 50
+# World.Playerbots.Population.Bands.4.MinLevel = 41
+# World.Playerbots.Population.Bands.4.Weight = 1
+# World.Playerbots.Population.Bands.5.MaxLevel = 60
+# World.Playerbots.Population.Bands.5.MinLevel = 51
+# World.Playerbots.Population.Bands.5.Weight = 1
+
+#
+#    World.Playerbots.Population.Classes
+#        Description: The class ids new bots are created with (1.12 classes: 1 warrior, 2 paladin, 3
+#                     hunter, 4 rogue, 5 priest, 7 shaman, 8 mage, 9 warlock, 11 druid; non-empty,
+#                     no duplicates).
+#        Type: uint[]
+#        Default: 0 = 1; 1 = 2; 2 = 3; 3 = 4; 4 = 5; 5 = 7; 6 = 8; 7 = 9; 8 = 11
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# These entries are the default list. They are commented out because a list you write is appended to the default list, not
+# substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
+# World.Playerbots.Population.Classes.0 = 1
+# World.Playerbots.Population.Classes.1 = 2
+# World.Playerbots.Population.Classes.2 = 3
+# World.Playerbots.Population.Classes.3 = 4
+# World.Playerbots.Population.Classes.4 = 5
+# World.Playerbots.Population.Classes.5 = 7
+# World.Playerbots.Population.Classes.6 = 8
+# World.Playerbots.Population.Classes.7 = 9
+# World.Playerbots.Population.Classes.8 = 11
+
+#
+#    World.Playerbots.Population.Enabled
+#        Description: Run the population manager (off by default). Off: no bot is created, started,
+#                     parked or moved by it.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.Enabled = false
+
+#
+#    World.Playerbots.Population.ExcludedZones
+#        Description: Area table zone ids bots are never placed in (at most 256, no duplicates).
+#                     Capitals and cities are never used.
+#        Type: uint[]
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# Empty by default.
+# World.Playerbots.Population.ExcludedZones.0 =
+
+#
+#    World.Playerbots.Population.Factions
+#        Description: The factions bots are created for (Both by default). Values: Both, Alliance,
+#                     Horde.
+#        Type: PopulationFactions
+#        Default: Both
+#        Allowed: Both | Alliance | Horde
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.Factions = Both
+
+#
+#    World.Playerbots.Population.IntervalSeconds
+#        Description: Seconds of world time between two passes of the control loop (2..600).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.IntervalSeconds = 10
+
+#
+#    World.Playerbots.Population.MaxCreatePerMinute
+#        Description: The most new bot characters created per minute of world time (0..60; 0 creates
+#                     none and only restarts parked bots).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MaxCreatePerMinute = 4
+
+#
+#    World.Playerbots.Population.MaxParksPerInterval
+#        Description: The most bots parked in one pass (1..100).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MaxParksPerInterval = 2
+
+#
+#    World.Playerbots.Population.MaxRelocationsPerInterval
+#        Description: The most bots relocated in one pass (0..50).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MaxRelocationsPerInterval = 2
+
+#
+#    World.Playerbots.Population.MaxStartsPerInterval
+#        Description: The most bots started or created in one pass (1..100).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MaxStartsPerInterval = 4
+
+#
+#    World.Playerbots.Population.OutlevelMargin
+#        Description: How many levels a bot may be above the highest level of its zone before it is
+#                     relocated (0..10).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.OutlevelMargin = 2
+
+#
+#    World.Playerbots.Population.ParkWhenOverBudget
+#        Description: Park (stop) the least useful bots the population owns while the tick p95 is
+#                     over the budget (on by default). Off: only stop adding.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ParkWhenOverBudget = true
+
+#
+#    World.Playerbots.Population.Relocation
+#        Description: What happens to a bot that out-levelled its zone (Teleport by default).
+#                     Values: Off, Teleport.
+#        Type: PopulationRelocation
+#        Default: Teleport
+#        Allowed: Off | Teleport
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.Relocation = Teleport
+
+#
+#    World.Playerbots.Population.ResumeBelowPct
+#        Description: Adding bots resumes only while the tick p95 is below this percentage of
+#                     TickP95BudgetMs (10..99). Between it and the budget the population holds,
+#                     which keeps it from adding and parking in turns.
+#        Type: int
+#        Default: 80
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ResumeBelowPct = 80
+
+#
+#    World.Playerbots.Population.TargetOnline
+#        Description: The number of managed bots to keep running (0..1000). The effective target is
+#                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count
+#                     towards it but are never stopped by the population; above the target only the
+#                     bots the population owns are parked. 0 parks every bot the population owns.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TargetOnline = 0
+
+#
+#    World.Playerbots.Population.TickP95BudgetMs
+#        Description: The world tick time budget in milliseconds (5..1000): the 95th percentile of
+#                     the tick body duration over the last WindowTicks ticks. Above it the
+#                     population stops adding bots and, with ParkWhenOverBudget, parks some.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TickP95BudgetMs = 60
+
+#
+#    World.Playerbots.Population.WindowTicks
+#        Description: The ticks measured after every start, creation, park or relocation before the
+#                     next decision (20..4096). A pass that finds fewer fresh ticks holds, so a
+#                     decision never reacts to ticks from before the last change.
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.WindowTicks = 200
+
+#
+#    World.Playerbots.Population.ZoneLevelSlack
+#        Description: How many levels below its lowest sub-area level a zone still accepts a bot
+#                     (0..10). The area table puts the zone's level on its sub-areas, and a starter
+#                     zone's lowest sub-area is level 4 or 5, so the default 4 lets a level 1 bot
+#                     start there.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ZoneLevelSlack = 4
 
 #
 #    World.Playerbots.RestoreOnStartup
@@ -9996,6 +10646,113 @@ World.Playerbots.Scenarios.MaxDurationSeconds = 120
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Scenarios.StepTimeoutSeconds = 20
+
+#
+#    World.Playerbots.Social.Emotes.Enabled
+#        Description: Let an idle bot wave at (CMSG_TEXT_EMOTE) or greet with /say a real player of
+#                     its faction standing within 8 yards, at most once per bot and player in 30
+#                     minutes, once per player in 10 minutes, once per bot in 5 minutes and twelve
+#                     times a minute in all (off by default). A player who ignores the bot is never
+#                     greeted.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Emotes.Enabled = false
+
+#
+#    World.Playerbots.Social.GuildChat.Enabled
+#        Description: Let bots say a short line in guild chat (on by default): a welcome,
+#                     congratulations on a level, a note on a boss or a battleground won, and some
+#                     small talk. The lines go through the bot chat service (World:Playerbots:Chat:
+#                     its providers, spend caps and safety screening), so nothing is said while
+#                     Chat:Enabled is off; and only while a real player who can read guild chat is
+#                     online.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.GuildChat.Enabled = true
+
+#
+#    World.Playerbots.Social.GuildChat.MessagesPerHour
+#        Description: The most lines the bots of one guild say per hour (0..60; 0 keeps them
+#                     silent).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.GuildChat.MessagesPerHour = 4
+
+#
+#    World.Playerbots.Social.Guilds.Creation
+#        Description: How a guild is founded (PlayerbotGuildCreation.Auto by default). Values: Auto,
+#                     Charter, ClientCreate.
+#        Type: PlayerbotGuildCreation
+#        Default: Auto
+#        Allowed: Auto | Charter | ClientCreate
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.Creation = Auto
+
+#
+#    World.Playerbots.Social.Guilds.Enabled
+#        Description: Let bots found guilds and invite other bots (on by default). Off: no new guild
+#                     forms and no bot is invited; a bot still answers the invitations it receives
+#                     (by InvitePolicy) and the guilds that exist go on.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.Enabled = true
+
+#
+#    World.Playerbots.Social.Guilds.InvitePolicy
+#        Description: Who may invite a bot into a guild, and whose charter a bot signs
+#                     (PlayerbotInvitePolicy.GuildOrFriends by default): the same rules as
+#                     World:Playerbots:Party:InvitePolicy, and the names in
+#                     World:Playerbots:Party:Allowlist are always accepted. Another bot's invitation
+#                     into a guild the founding bots are building is always accepted. Values: None,
+#                     GuildOrFriends, Anyone.
+#        Type: PlayerbotInvitePolicy
+#        Default: GuildOrFriends
+#        Allowed: None | GuildOrFriends | Anyone
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.InvitePolicy = GuildOrFriends
+
+#
+#    World.Playerbots.Social.Guilds.MaxBotGuilds
+#        Description: The most guilds led by a registered bot at once (0..64; 0 founds none).
+#                     Lowering it disbands nothing: it only stops new foundings.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.MaxBotGuilds = 4
+
+#
+#    World.Playerbots.Social.Guilds.TargetSize
+#        Description: The most members of a bot guild, pending invitations counted (2..500).
+#        Type: int
+#        Default: 25
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Guilds.TargetSize = 25
 
 #
 #    World.Playerbots.StallSeconds

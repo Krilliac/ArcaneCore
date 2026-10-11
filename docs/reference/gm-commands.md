@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
 | `GameMaster` | 3 | 189 |
-| `Administrator` | 6 | 277 |
+| `Administrator` | 6 | 283 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -304,7 +304,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
 | `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
 | `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |
-| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|chat\|groups\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive&gt; Manage server-owned autonomous players. |
+| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|home\|chat\|groups\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name\|$prefix*\|all [force] Start a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
 | `.playerbot stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot stop $id\|$name\|$prefix*\|all [force] Stop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
@@ -312,6 +312,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot list List managed bots. |
 | `.playerbot inspect` | 3 | GameMaster | stored level through the map | Syntax: .playerbot inspect $id\|$name Read actual target, victim, cast and nearby trainer facts. |
 | `.playerbot invite` | 3 | GameMaster | stored level through the map | Syntax: .playerbot invite $id\|$name Put a running bot into your group; it follows you and takes your commands. |
+| `.playerbot home` | 6 | Administrator | stored level through the map | Syntax: .playerbot home $name\|$prefix* &lt;$tele\|here&gt; [#radius] .playerbot home $name\|$prefix* clear Anchor bots to an area: a game_tele place (or each bot's own position with here) and a radius in yards (50 to 5000, default 600). A prefix such as Wfbot* names every bot whose name starts with it. clear removes the home. |
 | `.playerbot chat` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat &lt;status\|flags\|pardon&gt; The bots' chat replies and their safety screening. |
 | `.playerbot chat status` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat status Show bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error. |
 | `.playerbot chat flags` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat flags [$player] Show the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice). |
@@ -327,6 +328,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot dismiss` | 6 | Administrator | stored level through the map | Syntax: .playerbot dismiss $name\|$prefix*\|all End a follow or stay: the bots go back to their own autonomous play. |
 | `.playerbot near` | 3 | GameMaster | stored level through the map | Syntax: .playerbot near [#radius] List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal and distance. |
 | `.playerbot revive` | 6 | Administrator | stored level through the map | Syntax: .playerbot revive $name\|$prefix*\|all Revive the dead bots among the selection, as .revive does. |
+| `.playerbot population` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot population [status\|enable\|disable\|target #count] Keep a number of bots online, spread over the level bands, as long as the world's tick time allows. |
+| `.playerbot population status` | 6 | Administrator | stored level through the map | Syntax: .playerbot population status Show the population manager: its state and why, the tick p95 against the budget, the target and the running, owned and parked bots, and want against have for each level band. |
+| `.playerbot population enable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population enable Turn the population manager on until the next .reload config or restart (World:Playerbots:Population:Enabled). |
+| `.playerbot population disable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population disable Turn the population manager off until the next .reload config or restart. Bots it started keep running. |
+| `.playerbot population target` | 6 | Administrator | stored level through the map | Syntax: .playerbot population target #count Set the number of bots to keep online (0..1000) until the next .reload config or restart (World:Playerbots:Population:TargetOnline). The effective target is also capped by MaxBots. |
 | `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n]\|show $id\|reset [$id]] The playerbot QA findings: stalls, death loops, faults and missing data the bots ran into, ranked, and the GitHub reporter's state. |
 | `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] List the n (default 10, at most 25) highest-ranked findings with their short ids. |
 | `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
