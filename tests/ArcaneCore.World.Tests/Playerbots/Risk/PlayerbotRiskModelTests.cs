@@ -39,6 +39,29 @@ public sealed class PlayerbotRiskModelTests
         Assert.Contains("decision=avoid reason=pack-of-3", pack.ToString());
     }
 
+    /// <summary>
+    /// Strength, not worth (<see cref="PlayerbotRiskModel.BeyondStrength"/>, the rule of an unsafe body): a lower-level creature that
+    /// gives too little to be pulled (risk 0.7 at full health against a bar of about 0.5 for its reward) is not beyond the bot, which
+    /// survives it with health to spare; live 2026-10-11, such creatures (level 9-13 Defias and gnolls against level-14 bots) had bodies
+    /// given up as "too strong". A fight above the highest bar any pull is taken at (Tolerance x 0.9), a creature that kills outright and
+    /// an elite three levels above are beyond it.
+    /// </summary>
+    [Fact]
+    public void AFightNotWorthAPull_IsNotBeyondTheBotsStrength_ButAFightItWouldNotSurviveIs()
+    {
+        RiskEnemy lowWorth = Mob(level: 7, health: 400, dps: 10.5f);
+        PlayerbotEngagementFacts facts = Bot(lowWorth) with { LootValue = 0 };
+        PlayerbotEngagement pull = PlayerbotRiskModel.Assess(facts, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Avoid, pull.Decision); // not worth a pull: the old unsafe-body rule gave the body up
+        Assert.InRange(pull.Risk, 0.65f, 0.75f);
+        Assert.False(PlayerbotRiskModel.BeyondStrength(facts, Defaults));
+
+        Assert.True(PlayerbotRiskModel.BeyondStrength(Bot(Mob(level: 7, health: 400, dps: 20f)), Defaults)); // risk 1.33
+        Assert.True(PlayerbotRiskModel.BeyondStrength(Bot(Mob(level: 13, rank: 1, health: 300, dps: 3f)), Defaults)); // elite above
+        Assert.True(PlayerbotRiskModel.BeyondStrength(Bot(Mob(dps: 1f) with { Lethal = true }), Defaults));
+        Assert.False(PlayerbotRiskModel.BeyondStrength(Bot(), Defaults));
+    }
+
     [Fact]
     public void CreaturesOnlyAlongTheWay_AreWalkedRound()
     {

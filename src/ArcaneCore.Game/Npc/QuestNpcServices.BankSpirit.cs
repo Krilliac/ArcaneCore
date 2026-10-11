@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Npc;
 
@@ -88,13 +89,31 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        if (InteractableNpc(player, guid, NpcFlags.SpiritHealer) is null)
+        if (InteractableNpc(player, guid, NpcFlags.SpiritHealer, out string? refusal) is null)
         {
-            LogMissing("SpiritHealerActivate", guid);
+            _logger.LogDebug("SpiritHealerActivate: {Npc} refused: {Refusal}", guid, refusal);
             return;
         }
 
         Deps.Resurrection?.ResurrectAtSpiritHealer(player);
+    }
+
+    /// <summary>
+    /// Why CMSG_SPIRIT_HEALER_ACTIVATE for <paramref name="guid"/> would leave <paramref name="player"/> dead now, or null when it would
+    /// resurrect it: the checks of <see cref="SpiritHealerActivate"/> (the player's NPC state loaded, dead; the healer interactable,
+    /// <see cref="InteractableNpc(Player, ObjectGuid, NpcFlags, out string?)"/>) and of the resurrection itself
+    /// (<see cref="Combat.MapCombat.ResurrectAtSpiritHealer"/>: a ghost, no quest settlement pending). For a caller that reports a
+    /// refusal (a managed bot's recovery); a client's refused request stays silent, as in vmangos.
+    /// </summary>
+    public string? SpiritHealerRefusal(Player player, ObjectGuid guid)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.IsAlive) return "the player is alive";
+        if (Ready(player) is null) return "the player's NPC state is not ready (not loaded, or a quest settlement pending)";
+        if (InteractableNpc(player, guid, NpcFlags.SpiritHealer, out string? refusal) is null) return refusal ?? "not interactable";
+        if ((player.Flags & PlayerFlags.Ghost) == 0) return "the player is not a ghost (its body was not released)";
+        if (player.IsQuestSettlementPending) return "a quest settlement is pending";
+        return Deps.Resurrection is null ? "no resurrection service" : null;
     }
 
     /// <summary>vmangos WorldSession::SendShowBank.</summary>
