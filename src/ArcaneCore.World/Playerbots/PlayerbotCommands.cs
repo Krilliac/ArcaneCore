@@ -13,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|scenario|summon|send|follow|stay|dismiss|near|revive>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|scenario|summon|send|follow|stay|dismiss|near|revive>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -48,6 +48,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     ]),
                 new ChatCommand("groups", AccountSecurity.GameMaster,
                     "Syntax: .playerbot groups\nList the bot-led groups (goal, members and roles, state) and the bots waiting for partners.", GroupsCommand),
+                new ChatCommand("battlegrounds", AccountSecurity.GameMaster,
+                    "Syntax: .playerbot battlegrounds\nList the bots with battleground business (type, phase, role, activity), the totals and the refused types.", BattlegroundsCommand),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
@@ -369,6 +371,20 @@ public sealed class PlayerbotCommands : ICommandGroup
             catch (Exception error) when (error is not OutOfMemoryException)
             { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
         });
+        return true;
+    }
+
+    /// <summary><c>.playerbot battlegrounds</c>: the battlegrounds coordinator's report (world thread, where commands run).</summary>
+    private static bool BattlegroundsCommand(CommandContext context, string text)
+    {
+        if (text.Trim().Length != 0) return false;
+        if (context.Session.Services.GetService<Battlegrounds.PlayerbotBattlegroundCoordinator>() is not { } coordinator)
+        {
+            context.Reply("Playerbot battlegrounds are unavailable.");
+            return true;
+        }
+
+        foreach (string line in coordinator.Report()) context.Reply(line);
         return true;
     }
 

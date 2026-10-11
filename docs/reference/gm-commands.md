@@ -318,6 +318,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chat flags` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat flags [$player] Show the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice). |
 | `.playerbot chat pardon` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat pardon $player Clear a player's bot chat strikes and cut-off (an automatic mute is lifted with .unmute). |
 | `.playerbot groups` | 3 | GameMaster | stored level through the map | Syntax: .playerbot groups List the bot-led groups (goal, members and roles, state) and the bots waiting for partners. |
+| `.playerbot battlegrounds` | 3 | GameMaster | stored level through the map | Syntax: .playerbot battlegrounds List the bots with battleground business (type, phase, role, activity), the totals and the refused types. |
 | `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
 | `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
 | `.playerbot scenario run` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario run $name Run one scenario with scripted bots and print its report. |

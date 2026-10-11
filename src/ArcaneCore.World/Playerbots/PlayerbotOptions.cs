@@ -126,6 +126,8 @@ public sealed class PlayerbotOptions
 
     /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotEconomyOptions Economy { get; set; } = new();
+    /// <summary>Bots queue for, play and leave battlegrounds (<c>World:Playerbots:Battlegrounds</c>; live).</summary>
+    public Battlegrounds.PlayerbotBattlegroundOptions Battlegrounds { get; set; } = new();
 
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
@@ -186,6 +188,8 @@ public sealed class PlayerbotOptions
         Social.Validate();
         if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
         Economy.Validate();
+        if (Battlegrounds is null) throw new InvalidOperationException($"{SectionName}:Battlegrounds is missing.");
+        Battlegrounds.Validate();
     }
 }
 
