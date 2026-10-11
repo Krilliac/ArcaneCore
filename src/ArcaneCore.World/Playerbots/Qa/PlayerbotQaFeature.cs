@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -42,6 +43,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     internal Func<string, IQaIssueTransport>? TransportFactory { get; init; }
 
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
+
+    /// <summary>The spell watcher of the bots' casts (registered on the world's spell system while QA runs; null otherwise).</summary>
+    internal PlayerbotQaSpellMonitor? SpellMonitor { get; private set; }
 
     internal PlayerbotQaRedactor Redactor { get; } = new();
 
@@ -89,6 +93,15 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
+        if (services.GetService<SpellFeature>() is { } spells)
+        {
+            // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).
+            IPlayerbotQaSink sink = services.GetService<IPlayerbotQaSink>() ?? new PlayerbotQaSink(_bus);
+            SpellMonitor = new PlayerbotQaSpellMonitor(sink, spells.System,
+                knows: (player, spell) => spells.Spellbook.GetSpells(player).Contains(spell));
+            spells.System.RegisterObserver(SpellMonitor);
+        }
+
         _loop = Task.Run(() => RunAsync(_cts.Token));
     }
 
