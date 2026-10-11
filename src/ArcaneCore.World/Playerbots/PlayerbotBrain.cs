@@ -767,7 +767,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attacking = false;
         _lootOpened = false;
         PlayerbotMovementControl.Stop(_session, player);
-        if (shareable) EscapeIsland(player);
+        // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
+        // on an island too; suppressing the shared set-aside must not suppress local escape.
+        EscapeIsland(player);
     }
 
     /// <summary>
