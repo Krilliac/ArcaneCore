@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
@@ -1120,7 +1121,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attackerEntries.Clear();
         _attackers.Clear();
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
-            if (unit is Creature creature && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
+            if (unit is Creature creature && !creature.CharmerOrOwnerGuid.IsPlayer && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
                 _attackers.Add((creature.Guid, creature.Entry));
     }
 
@@ -1143,7 +1144,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void RememberKiller(Unit? killer)
     {
-        if (Volatile.Read(ref _stopped) != 0 || killer is not Creature creature) return;
+        // A player's pet or totem is not the content's danger: never set its entry aside.
+        if (Volatile.Read(ref _stopped) != 0 || killer is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) return;
         _attackerEntries.Add(creature.Entry);
         if (!_attackers.Contains((creature.Guid, creature.Entry)))
             _attackers.Add((creature.Guid, creature.Entry));
