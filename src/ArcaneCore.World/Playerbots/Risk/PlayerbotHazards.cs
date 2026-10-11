@@ -26,6 +26,9 @@ internal sealed class PlayerbotHazards
     internal const float RetreatYards = 20f;
     internal const float LethalMarginYards = 8f;
     internal const float FledMarginYards = 3f;
+
+    /// <summary>The margin round the reach of a creature beyond the bot's strength (<see cref="PlayerbotRisk.ScanHazards"/>), as round one it fled from.</summary>
+    internal const float StrongMarginYards = FledMarginYards;
     private const int Max = 64;
 
     private readonly List<PlayerbotHazard> _hazards = [];
@@ -73,6 +76,12 @@ internal sealed class PlayerbotHazards
         }
 
         return null;
+    }
+
+    /// <summary>Drop the hazard of <paramref name="creature"/> of <paramref name="kind"/>, if any.</summary>
+    internal void Forget(ObjectGuid creature, string kind)
+    {
+        if (!creature.IsEmpty) _hazards.RemoveAll(h => h.Creature == creature && h.Kind == kind);
     }
 
     internal void Clear() => _hazards.Clear();

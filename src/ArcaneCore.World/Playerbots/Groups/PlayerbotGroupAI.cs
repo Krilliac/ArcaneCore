@@ -92,7 +92,7 @@ internal sealed class PlayerbotGroupAI
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
-        _risk = new PlayerbotRisk(session, options, _spells);
+        _risk = new PlayerbotRisk(session, options, _spells) { AvoidsStrongCreatures = false };
         _recovery.Hazards = _risk.HazardThreats;
         _random = new Random(session.AccountId);
         _followAngle = (float)(_random.NextDouble() * MathF.Tau);

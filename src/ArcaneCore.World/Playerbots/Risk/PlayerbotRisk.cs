@@ -81,6 +81,13 @@ internal sealed class PlayerbotRisk
     /// <summary>The places the bot keeps out of on its walks (<see cref="PlayerbotHazards"/>).</summary>
     internal PlayerbotHazards Hazards { get; } = new();
 
+    /// <summary>
+    /// Whether creatures beyond the bot's strength alone are hazards on its walks (<see cref="ScanHazards"/>): a bot on its own, yes;
+    /// a bot-led group's leader no (the group goes for creatures too strong for one of its members alone, and its leader chose the
+    /// way), nor a party bot (it follows its master, without hazards).
+    /// </summary>
+    internal bool AvoidsStrongCreatures { get; init; } = true;
+
     /// <summary>How often the visible creatures are looked over for hazards.</summary>
     internal const uint HazardScanMs = 2_000;
     private uint _nextScanMs;
@@ -529,7 +536,16 @@ internal sealed class PlayerbotRisk
 
     /// <summary>
     /// Every <see cref="HazardScanMs"/> (alive or a ghost): each visible creature that would attack the bot and has a spell that kills it outright, or that
-    /// the bot fled from or died to, is a hazard round its aggro reach (moving with it while seen).
+    /// the bot fled from or died to, or that is beyond the bot's strength (<see cref="BeyondStrength(Player, Creature, CreatureSpellThreat)"/>),
+    /// is a hazard round its aggro reach (moving with it while seen). A creature no longer beyond the bot's strength (the bot levelled,
+    /// the creature is wounded) stops being one at the next look.
+    /// <para>
+    /// The strong ones: the pull estimate never chooses such a creature, but a creature attacks whoever walks into its reach (vmangos
+    /// BasicAI::MoveInLineOfSight), and a walk (quest travel, exploring, an errand) did not look. Live w23 2026-10-11 11:35-12:13
+    /// (world.log): five level 1-3 bots without a home, revived at the Goldshire spirit healer, gave a body up to it 58 times on their
+    /// walks round it, among Defias Cutpurses (94) and Mangy Wolves (525) of level 5-6 that each of those verdicts judged
+    /// <c>decision=avoid reason=too-strong</c> (risk 2.9 to 28).
+    /// </para>
     /// </summary>
     internal void ScanHazards(Player player)
     {
@@ -541,11 +557,42 @@ internal sealed class PlayerbotRisk
         foreach (PlayerbotThreat threat in PlayerbotRecovery.Threats(player))
         {
             if (threat.Source is not { } creature) continue;
-            if (SpellThreat(creature).IsLethalTo(player.MaxHealth))
+            CreatureSpellThreat spells = SpellThreat(creature);
+            if (spells.IsLethalTo(player.MaxHealth))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
             else if (Memory.IsRemembered(creature.Guid, now))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
+            else if (AvoidsStrongCreatures && BeyondStrength(player, creature, spells))
+                Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, seconds, "strong", creature.Guid);
+            else
+                Hazards.Forget(creature.Guid, "strong");
         }
+    }
+
+    /// <summary>
+    /// Whether the bot could not take <paramref name="creature"/> alone even at full health and mana
+    /// (<see cref="PlayerbotRiskModel.BeyondStrength"/>: an elite well above it, or a risk above the highest share any pull is taken
+    /// at), judged on the creature alone (its assistance would only add to it), from the same template damage and bot damage as a pull.
+    /// </summary>
+    internal bool BeyondStrength(Player player, Creature creature, CreatureSpellThreat spells)
+    {
+        CreatureTemplate t = creature.Template;
+        bool elite = t.Rank is 1 or 2 or 3;
+        var enemy = new RiskEnemy(creature.Entry, creature.Level, t.Rank, creature.Health,
+            PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, elite) + spells.Dps,
+            RiskJoin.Target);
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        var facts = new PlayerbotEngagementFacts
+        {
+            BotLevel = player.Level,
+            BotHealth = player.MaxHealth,
+            BotMaxHealth = player.MaxHealth,
+            BotManaPct = player.PowerType == PowerType.Mana && maxMana > 0 ? 100f : null,
+            ManaDependence = ManaDependence(player.Class),
+            BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level),
+            Enemies = [enemy],
+        };
+        return PlayerbotRiskModel.BeyondStrength(facts, _options.Risk);
     }
 
     /// <summary>
@@ -558,10 +605,12 @@ internal sealed class PlayerbotRisk
     /// <summary>
     /// The hazards as threats for the ghost's revive spot (<see cref="PlayerbotRecovery"/>): a revive in reach of a creature that kills
     /// outright, or of one the bot fled from or died to, is camped. Remembered places are not: the body lies at the place of death
-    /// itself, and a camp that has gone is no reason to give the body up.
+    /// itself, and a camp that has gone is no reason to give the body up. Nor are the creatures beyond the bot's strength (kind
+    /// <c>strong</c>, for its walks): the recovery weighs those itself (<see cref="TooStrongNear"/>, <see cref="TooStrongAt"/>) and a
+    /// revive spot keeps out of their aggro reach by <see cref="PlayerbotRecovery.Threats(Player)"/> already.
     /// </summary>
     internal IEnumerable<PlayerbotThreat> HazardThreats(Player player)
-        => !Enabled ? [] : Hazards.Active(player.MapId, _session.World.NowMs).Where(h => !h.Creature.IsEmpty)
+        => !Enabled ? [] : Hazards.Active(player.MapId, _session.World.NowMs).Where(h => !h.Creature.IsEmpty && h.Kind != "strong")
             .Select(h => new PlayerbotThreat(h.At, h.Radius, IgnoresHeight: true, Radii: 0));
 
     // --- in a fight ------------------------------------------------------------------------------------------------

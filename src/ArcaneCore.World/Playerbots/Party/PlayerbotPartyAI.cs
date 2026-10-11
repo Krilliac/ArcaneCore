@@ -115,7 +115,7 @@ internal sealed class PlayerbotPartyAI
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _combatSpells = new PlayerbotCombatSpells(session);
         _recovery = new PlayerbotRecovery(session, options);
-        _risk = new PlayerbotRisk(session, options, _combatSpells);
+        _risk = new PlayerbotRisk(session, options, _combatSpells) { AvoidsStrongCreatures = false };
         _follower = new PlayerbotFollower(session, options);
         _random = new Random(session.AccountId);
         _chat = chat;
