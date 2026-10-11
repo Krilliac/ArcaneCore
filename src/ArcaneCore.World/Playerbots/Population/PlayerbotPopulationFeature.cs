@@ -5,6 +5,8 @@ using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
@@ -15,6 +17,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +26,11 @@ using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Playerbots.Population;
 
-/// <summary>One level band in <see cref="PopulationStatus"/>: the bots wanted and the managed bots running in it.</summary>
+/// <summary>
+/// One level band in <see cref="PopulationStatus"/>: <see cref="Want"/> is its weighted share of the population's own target (the
+/// effective target less the operator bots running), <see cref="Have"/> the population's own bots running in it. An operator's bot
+/// never counts in a band.
+/// </summary>
 public sealed record PopulationBandStatus(int MinLevel, int MaxLevel, int Weight, int Want, int Have);
 
 /// <summary>What the population manager last saw and did (immutable; replaced after every pass).</summary>
@@ -45,52 +52,12 @@ public sealed record PopulationStatus(
     int HordeZones,
     IReadOnlyList<PopulationBandStatus> Bands,
     string? LastError,
-    long Passes)
+    long Passes,
+    int OperatorRunning = 0,
+    int OwnedTarget = 0)
 {
     public static PopulationStatus Idle(bool enabled, string state, string reason) => new(enabled, state, reason, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         "unknown", 0, 0, [], null, 0);
-}
-
-/// <summary>The world-thread facts about one running managed bot that a pass decides on.</summary>
-internal sealed record PopulationBotFacts(Guid BotId, byte Level, Team Team, uint ZoneId, bool Autonomous, bool Busy, bool PlayerInZone, bool Vetoed);
-
-/// <summary>Which running bots may be parked, and in which order.</summary>
-internal static class PopulationParking
-{
-    /// <summary>
-    /// The bots to park, best first. Only bots the population owns that are autonomous (not scripted, in a real player's party or in a
-    /// bot-led group) and idle (alive, out of combat, not teleporting) qualify. Order: the band with the largest surplus first (a bot in
-    /// no band counts as the largest), then a bot with no real player in its zone, then the most recently started one. The surplus is
-    /// recounted after each pick, so a band is not drained below its share while another still has a surplus.
-    /// </summary>
-    public static IReadOnlyList<PopulationBotFacts> Order(IReadOnlyCollection<PopulationBotFacts> running, IReadOnlySet<Guid> owned,
-        IReadOnlyList<PopulationBand> bands, int[] desired, int[] have, IReadOnlyDictionary<Guid, long> startedAt)
-    {
-        var remaining = running.Where(f => owned.Contains(f.BotId) && f.Autonomous && !f.Busy).ToList();
-        var counts = (int[])have.Clone();
-        var ordered = new List<PopulationBotFacts>(remaining.Count);
-        while (remaining.Count > 0)
-        {
-            PopulationBotFacts best = remaining
-                .OrderByDescending(f => Surplus(f, bands, desired, counts))
-                .ThenBy(f => f.PlayerInZone)
-                .ThenByDescending(f => startedAt.GetValueOrDefault(f.BotId))
-                .ThenBy(f => f.BotId)
-                .First();
-            remaining.Remove(best);
-            ordered.Add(best);
-            int band = PopulationBandPlanner.BandOf(bands, best.Level);
-            if (band >= 0) counts[band]--;
-        }
-
-        return ordered;
-    }
-
-    private static int Surplus(PopulationBotFacts bot, IReadOnlyList<PopulationBand> bands, int[] desired, int[] counts)
-    {
-        int band = PopulationBandPlanner.BandOf(bands, bot.Level);
-        return band < 0 ? int.MaxValue : counts[band] - desired[band];
-    }
 }
 
 /// <summary>
@@ -101,7 +68,8 @@ internal static class PopulationParking
 /// task decides and acts: it never waits on the world thread, and the world thread never waits on it. Starts, creations, parks and
 /// moves go through <see cref="IPlayerbotService"/> and the world thread; the tick window is reset after any of them, so the next decision
 /// sees only ticks measured after the change. Bots it created are recorded in <c>playerbot_population_member</c>; only those are ever
-/// parked or relocated. A bot an operator created counts towards the target and is never stopped here.
+/// parked or relocated, and only those count in a band. A bot an operator created counts towards the total target (it is taken off
+/// the top of the population's own share, <see cref="PopulationCounts"/>) and is never stopped here.
 /// </para>
 /// <para>Thread affinity: <c>Attach</c>, the event handlers and the capture run on the world thread; the pass runs on the thread pool, one at a time.</para>
 /// </summary>
@@ -115,6 +83,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly CancellationTokenSource _stop = new();
     private readonly Queue<long> _createTimes = new();
     private readonly Dictionary<Guid, long> _startedAt = [];
+    private readonly Dictionary<Guid, long> _parkedAt = [];
+    private readonly PopulationBudgetWindows _windows = new();
+    private readonly PopulationActionLog _actionLog = new();
     private WorldRuntime? _world;
     private long _clockMs;
     private long _sinceMs;
@@ -256,6 +227,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions Pop,
         PopulationBand[] Bands,
         int Samples,
+        long TotalSamples,
         double P95Ms,
         int RunningAll,
         IReadOnlyList<PopulationBotFacts> Running,
@@ -287,6 +259,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotGroupCoordinator? coordinator = services.GetService<PlayerbotGroupCoordinator>();
         TeleportService? teleports = services.GetService<TeleportFeature>()?.Teleports;
         IPopulationPlacementVeto[] vetoes = [.. services.GetServices<IPopulationPlacementVeto>()];
+        SpellSystem? spells = services.GetService<SpellFeature>()?.System;
         var states = new Dictionary<Guid, ManagedPlayerbotState>();
         var running = new List<PopulationBotFacts>();
         int runningAll = 0;
@@ -297,15 +270,18 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             runningAll++;
             if (managed.FindSession(status.BotId)?.Player is not { } player) continue;
             bool autonomous = !managed.IsPartyDriven(status.BotId) && !managed.IsScripted(status.BotId) && coordinator?.Drives(status.BotId) != true;
-            bool busy = !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat || teleports?.IsBeingTeleported(player) == true;
+            // Busy: cannot be stopped now. A dead bot or a ghost is not busy: it can log out, and it earns nothing until it is back.
+            bool busy = !player.IsInWorld || player.Combat.IsInCombat || teleports?.IsBeingTeleported(player) == true;
+            bool sick = spells?.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == SpiritHealerResurrection.ResurrectionSicknessSpell) == true;
+            bool stalled = managed.FindBrain(status.BotId)?.StallReport is not null;
             running.Add(new PopulationBotFacts(status.BotId, player.Level, player.Team, player.ZoneId, autonomous, busy,
-                realZones.Contains(player.ZoneId), vetoes.Any(v => v.OwnsPlacement(status.BotId))));
+                realZones.Contains(player.ZoneId), vetoes.Any(v => v.OwnsPlacement(status.BotId)), !player.IsAlive, sick, stalled));
         }
 
         IPopulationTickSource source = Source;
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
-        return new PassInput(pop, pop.Bands, samples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
+        return new PassInput(pop, pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
             ClockMs, managed, terrainHold);
     }
 
@@ -521,14 +497,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         CancellationToken ct = _stop.Token;
         PlayerbotPopulationOptions pop = input.Pop;
         int effectiveTarget = PopulationBudgetController.EffectiveTarget(pop, _options.MaxBots);
-        int[] desired = PopulationBandPlanner.DesiredPerBand(effectiveTarget, input.Bands);
+        // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts).
+        int[] desired = new int[input.Bands.Length];
         int[] have = new int[input.Bands.Length];
-        foreach (PopulationBotFacts bot in input.Running)
-            if (PopulationBandPlanner.BandOf(input.Bands, bot.Level) is var band and >= 0) have[band]++;
+        int operatorRunning = 0, ownedTarget = 0;
+        int windows = _windows.Observe(input.Samples, input.TotalSamples, input.P95Ms, pop);
 
         PopulationDecision decision = new(PopulationAction.Hold, 0, "error", "the pass did not complete");
         int ownedRunning = 0, ownedParked = 0;
         string actions = string.Empty;
+        var pass = new PopulationPassActions();
         try
         {
             await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
@@ -544,9 +522,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 else await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
             }
 
+            // A member that is gone no longer needs its start and park times.
+            foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
+            foreach (Guid gone in _parkedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _parkedAt.Remove(gone);
+
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
-            decision = PopulationBudgetController.Decide(input.Samples, input.P95Ms, input.RunningAll, ownedRunning, effectiveTarget, pop);
+            PopulationCounts counts = PopulationCounts.Of(input.Bands, effectiveTarget, input.RunningAll,
+                members.Keys.Count(id => input.States.TryGetValue(id, out ManagedPlayerbotState s) && s == ManagedPlayerbotState.Running),
+                input.Running.Where(f => members.ContainsKey(f.BotId)).Select(f => f.Level));
+            (desired, have, operatorRunning, ownedTarget) = (counts.Desired, counts.Have, counts.OperatorRunning, counts.OwnedTarget);
+            decision = PopulationBudgetController.Decide(input.Samples, input.P95Ms, input.RunningAll, ownedRunning, effectiveTarget, pop, windows);
 
             var ctx = new PassContext(input, scope.ServiceProvider, store, known, members, desired, have, effectiveTarget);
             int changed = 0;
@@ -555,27 +541,36 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 case PopulationAction.Add:
                     (int started, int created) = await AddAsync(ctx, decision.Count, ct).ConfigureAwait(false);
                     changed += started + created;
+                    pass.Started = started;
+                    pass.Created = created;
                     actions = $"started {started}, created {created}";
                     break;
                 case PopulationAction.Park:
-                    int parked = await ParkAsync(ctx, decision.Count, ct).ConfigureAwait(false);
-                    changed += parked;
-                    actions = $"parked {parked}";
+                    // Over the target the operator's limit is honoured, recent starts included (last); for the budget they are kept.
+                    IReadOnlyList<string> reasons = await ParkAsync(ctx, decision.Count, keepRecent: decision.State != "over-target", ct).ConfigureAwait(false);
+                    changed += reasons.Count;
+                    pass.Parked.AddRange(reasons);
+                    actions = $"parked {reasons.Count}" + (reasons.Count == 0 ? string.Empty : " (" + PopulationPassActions.Tally(reasons) + ")");
                     break;
             }
 
-            bool relocate = decision.State is "under-budget" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
+            bool relocate = decision.State is "under-budget" or "under-budget-confirming" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
                 && pop.MaxRelocationsPerInterval > 0;
             if (relocate && input.TerrainHold is { } relocationHold) ctx.Note ??= relocationHold; // no relocation on the fallback atlas either
             else if (relocate)
             {
                 int moved = await RelocateAsync(ctx, ct).ConfigureAwait(false);
-                changed += moved;
+                pass.Moved = moved; // not counted in changed: a move leaves the count of running bots, and so the tick load the windows measure, alone
                 if (moved > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"moved {moved}";
             }
 
             if (ctx.Note is not null) actions += (actions.Length == 0 ? string.Empty : ", ") + "held back: " + ctx.Note;
-            if (changed > 0) await _world!.InvokeAsync(() => { Source.Reset(); return true; }, ct).ConfigureAwait(false);
+            if (changed > 0)
+            {
+                await _world!.InvokeAsync(() => { Source.Reset(); return true; }, ct).ConfigureAwait(false);
+                _windows.Reset();
+            }
+
             ownedParked = members.Keys.Count(id => !ctx.RunningNow.Contains(id));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
@@ -588,12 +583,18 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         long now = input.ClockMs;
         while (_createTimes.Count > 0 && now - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
+        PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i]))];
+        _actionLog.Add(pass);
+        if (_actionLog.Due(now, pop.ActionLogSeconds) is { } line)
+            logger.LogInformation(
+                "Playerbot population: {Actions}; state {State}: {Reason}; operator bots running {Operator}, population share {OwnedTarget}; bands {Bands}",
+                line, decision.State, decision.Reason, operatorRunning, ownedTarget,
+                string.Join(", ", bands.Select(b => string.Create(CultureInfo.InvariantCulture, $"{b.MinLevel}-{b.MaxLevel} want {b.Want} have {b.Have}"))));
         Publish(new PopulationStatus(true, decision.State, actions.Length == 0 ? decision.Reason : decision.Reason + "; " + actions,
             input.P95Ms, input.Samples, pop.TickP95BudgetMs, pop.TargetOnline, effectiveTarget, input.RunningAll, ownedRunning, ownedParked,
             _createTimes.Count, input.BoostAvailable ? "available" : "missing: " + input.BoostMissing,
-            input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde),
-            [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i]))],
-            _lastError, Interlocked.Increment(ref _passes)));
+            input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde), bands,
+            _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget));
     }
 
     /// <summary>What one pass works on: the captured facts, the stores, the membership read at its start, and the band counts it keeps current.</summary>
@@ -613,6 +614,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         public int Alliance { get; set; } = input.Running.Count(f => f.Team == Team.Alliance);
         public int Horde { get; set; } = input.Running.Count(f => f.Team == Team.Horde);
         public string? Note { get; set; }
+
+        /// <summary>Bots this pass has started again, and created (the running cap and the registry cap count them).</summary>
+        public int Started { get; set; }
+
+        public int Created { get; set; }
     }
 
     private static long NowUnix() => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -626,41 +632,58 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private async Task<(int Started, int Created)> AddAsync(PassContext ctx, int count, CancellationToken ct)
     {
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
-        PlayerbotPopulationOptions pop = ctx.Input.Pop;
         int remaining = count, started = 0, created = 0;
         string? stoppedBecause = null;
 
-        // 1. Bots the population owns that are stopped come back first, those in a band with a deficit before the others. A faulted bot
-        //    (quarantined or disabled) is not started here: an operator start would clear its fault history, and the manager retries a
-        //    quarantined bot itself.
+        // The population's own stopped bots, in rotation: the one parked longest ago first, whatever its band (PopulationParking.RestartOrder).
+        // A faulted bot (quarantined or disabled) is not started here: an operator start would clear its fault history, and the manager
+        // retries a quarantined bot itself. The startable, not-running members are ordered first and only then capped, so a registry of
+        // more than 128 owned bots never hides a parked bot behind running or faulted ones.
         ICharacterStore characters = ctx.Scoped.GetRequiredService<ICharacterStore>();
-        var restart = new List<(PlayerbotPopulationMember Member, int Band, byte Level)>();
-        //    The startable, not-running members are chosen first and only then capped (oldest first), so a registry of more than 128
-        //    owned bots never hides a parked bot behind running or faulted ones.
-        foreach (PlayerbotPopulationMember member in ctx.Members.Values
-            .Where(m => !ctx.RunningNow.Contains(m.BotId) && IsStartable(ctx, m))
-            .OrderBy(m => m.UpdatedUnix).ThenBy(m => m.BotId).Take(128))
+        var restart = new List<(PlayerbotPopulationMember Member, int Band)>();
+        foreach (PlayerbotPopulationMember member in PopulationParking.RestartOrder(
+            ctx.Members.Values.Where(m => !ctx.RunningNow.Contains(m.BotId) && IsStartable(ctx, m)), _parkedAt).Take(128))
         {
             CharacterRecord? character = await characters.GetByIdAsync(member.CharacterId, ct).ConfigureAwait(false);
             if (character is null) continue;
-            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level), character.Level));
+            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level)));
         }
 
-        int[] deficit = PopulationBandPlanner.Deficits(ctx.Desired, ctx.Have);
+        // New bots are planned against the population's own bots running or waiting to be restarted (a parked bot fills its band once it
+        // is back), so only a band its parked bots cannot fill gets new ones. While parked bots wait as well, such a band gets at most
+        // half the pass's slots first, the rotation the rest, and creation any slots the rotation leaves: neither starves the other.
+        int[] planned = (int[])ctx.Have.Clone();
+        foreach ((_, int band) in restart)
+            if (band >= 0) planned[band]++;
+
+        bool creationFailed = false;
+        if (restart.Count > 0 && PopulationBandPlanner.NextBand(ctx.Desired, planned) >= 0)
+        {
+            int first = (remaining + 1) / 2;
+            (int made, string? because, bool failed) = await CreateAsync(ctx, planned, first, quietWhenNothingFits: true, ct).ConfigureAwait(false);
+            created += made;
+            remaining -= made;
+            stoppedBecause = because;
+            creationFailed = failed;
+        }
+
         int failures = 0;
-        foreach ((PlayerbotPopulationMember member, int band, _) in restart.OrderByDescending(r => r.Band >= 0 ? deficit[r.Band] : -1))
+        bool capacity = false;
+        foreach ((PlayerbotPopulationMember member, int band) in restart)
         {
             if (remaining == 0 || failures >= 3) break;
             PlayerbotOperationResult result = await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false);
             if (result.Success)
             {
                 started++;
+                ctx.Started++;
                 remaining--;
                 ctx.RunningNow.Add(member.BotId);
                 _startedAt[member.BotId] = ctx.Input.ClockMs;
+                _parkedAt.Remove(member.BotId);
                 if (band >= 0) ctx.Have[band]++;
             }
-            else if (result.Code == "playerbot-capacity") { stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
+            else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
             else
             {
                 failures++;
@@ -668,20 +691,48 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
         }
 
-        // 2. New bots, within the rate limit, the registry and the running cap.
-        if (ctx.Input.TerrainHold is { } hold && remaining > 0) stoppedBecause = hold;
-        while (remaining > 0 && stoppedBecause is null)
+        if (remaining > 0 && stoppedBecause is null && !capacity && !creationFailed)
         {
-            if (pop.MaxCreatePerMinute == 0) break;
+            if (ctx.Input.TerrainHold is { } hold) stoppedBecause = hold;
+            else
+            {
+                (int made, string? because, _) = await CreateAsync(ctx, planned, remaining, quietWhenNothingFits: false, ct).ConfigureAwait(false);
+                created += made;
+                stoppedBecause = because;
+            }
+        }
+
+        ctx.Note = stoppedBecause;
+        return (started, created);
+    }
+
+    /// <summary>
+    /// Create up to <paramref name="count"/> new bots, within the rate limit, the registry and the running cap, each planned against
+    /// <paramref name="planned"/> (the population's own bots running or waiting to be restarted, per band; kept current). Returns the
+    /// bots created, why creation stopped short when a cap or a hold stopped it (the status line's <c>held back</c>), and whether a
+    /// creation, start or placement was refused (recorded as the last problem; no more creation this pass). With
+    /// <paramref name="quietWhenNothingFits"/> a plan that finds no band ends it without a reason (the rotation goes on).
+    /// </summary>
+    private async Task<(int Created, string? StoppedBecause, bool Failed)> CreateAsync(PassContext ctx, int[] planned, int count, bool quietWhenNothingFits,
+        CancellationToken ct)
+    {
+        ManagedPlayerbotFeature managed = ctx.Input.Managed;
+        PlayerbotPopulationOptions pop = ctx.Input.Pop;
+        int created = 0;
+        if (ctx.Input.TerrainHold is { } hold) return (0, quietWhenNothingFits ? null : hold, false);
+        while (created < count)
+        {
+            if (pop.MaxCreatePerMinute == 0) return (created, null, false);
             while (_createTimes.Count > 0 && ctx.Input.ClockMs - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
-            if (_createTimes.Count >= pop.MaxCreatePerMinute) { stoppedBecause = $"creation is limited to {pop.MaxCreatePerMinute} per minute"; break; }
-            if (ctx.Known.Count + created >= _options.MaxRegisteredBots) { stoppedBecause = "the bot registry is full (MaxRegisteredBots)"; break; }
-            if (ctx.Input.RunningAll + started + created >= _options.MaxBots) { stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
+            if (_createTimes.Count >= pop.MaxCreatePerMinute) return (created, $"creation is limited to {pop.MaxCreatePerMinute} per minute", false);
+            if (ctx.Known.Count + ctx.Created >= _options.MaxRegisteredBots) return (created, "the bot registry is full (MaxRegisteredBots)", false);
+            if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
-            PopulationPlan? plan = PopulationBandPlanner.Plan(pop, ctx.Desired, ctx.Have, ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned,
+            PopulationPlan? plan = PopulationBandPlanner.Plan(pop, ctx.Desired, planned, ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned,
                 ctx.Input.BoostAvailable, _random);
-            if (plan is null) { stoppedBecause = "no band has a zone and a race and class to place a new bot (see the zone counts and boost line)"; break; }
+            if (plan is null)
+                return (created, quietWhenNothingFits ? null : "no band has a zone and a race and class to place a new bot (see the zone counts and boost line)", false);
 
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
@@ -693,21 +744,22 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (made is not { Success: true, BotId: { } botId })
             {
                 Fail($"creation refused: {made?.Code}");
-                break;
+                return (created, null, true);
             }
 
             created++;
-            remaining--;
+            ctx.Created++;
             _createTimes.Enqueue(ctx.Input.ClockMs);
             ManagedPlayerbot? record = await ctx.Scoped.GetRequiredService<IManagedPlayerbotStore>().FindAsync(botId, ct).ConfigureAwait(false);
-            if (record is null) { Fail($"created bot {botId} is not in the registry"); break; }
+            if (record is null) { Fail($"created bot {botId} is not in the registry"); return (created, null, true); }
             long now = NowUnix();
             var member = new PlayerbotPopulationMember(botId, record.CharacterId, 0, (byte)plan.Band, now, now);
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
             ctx.Members[botId] = member;
+            planned[plan.Band]++;
 
             PlayerbotOperationResult start = await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false);
-            if (!start.Success) { Fail($"start of new bot {made.Name} refused: {start.Code}"); break; }
+            if (!start.Success) { Fail($"start of new bot {made.Name} refused: {start.Code}"); return (created, null, true); }
             ctx.RunningNow.Add(botId);
             _startedAt[botId] = ctx.Input.ClockMs;
 
@@ -718,7 +770,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 Fail($"placement of {made.Name} refused: {refusal}");
                 await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
                 ctx.RunningNow.Remove(botId);
-                break;
+                return (created, null, true);
             }
 
             member = member with { ZoneId = plan.Placement.Zone.ZoneId, UpdatedUnix = NowUnix() };
@@ -729,8 +781,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (plan.Team == Team.Alliance) ctx.Alliance++; else ctx.Horde++;
         }
 
-        ctx.Note = stoppedBecause;
-        return (started, created);
+        return (created, null, false);
     }
 
     private static bool IsStartable(PassContext ctx, PlayerbotPopulationMember member)
@@ -739,22 +790,25 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         return ctx.Known[member.BotId].State != ManagedPlayerbotState.Faulted;
     }
 
-    private async Task<int> ParkAsync(PassContext ctx, int count, CancellationToken ct)
+    /// <summary>Park up to <paramref name="count"/> bots in <see cref="PopulationParking.Order"/>; returns the reason of each bot parked.</summary>
+    private async Task<IReadOnlyList<string>> ParkAsync(PassContext ctx, int count, bool keepRecent, CancellationToken ct)
     {
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
-        IReadOnlyList<PopulationBotFacts> order = PopulationParking.Order(ctx.Input.Running, ctx.Members.Keys.ToHashSet(), ctx.Input.Bands, ctx.Desired,
-            ctx.Have, _startedAt);
-        int parked = 0;
-        foreach (PopulationBotFacts bot in order)
+        IReadOnlyList<PopulationParkPick> order = PopulationParking.Order(ctx.Input.Running, ctx.Members.Keys.ToHashSet(), ctx.Input.Bands, ctx.Desired,
+            ctx.Have, _startedAt, ctx.Input.ClockMs, ctx.Input.Pop.MinRunSeconds * 1000L, keepRecent);
+        var parked = new List<string>();
+        foreach (PopulationParkPick pick in order)
         {
-            if (parked == count) break;
+            if (parked.Count == count) break;
+            PopulationBotFacts bot = pick.Bot;
             // The facts are seconds old: look again, on the world thread, right before stopping.
             bool stillParkable = await _world!.InvokeAsync(() => IsParkableNow(managed, bot.BotId), ct).ConfigureAwait(false);
             if (!stillParkable) continue;
             PlayerbotOperationResult result = await managed.StopAsync(bot.BotId.ToString(), ct).ConfigureAwait(false);
             if (!result.Success) { Fail($"park of {bot.BotId} refused: {result.Code}"); continue; }
-            parked++;
+            parked.Add(pick.Reason);
             ctx.RunningNow.Remove(bot.BotId);
+            _parkedAt[bot.BotId] = ctx.Input.ClockMs;
             int band = PopulationBandPlanner.BandOf(ctx.Input.Bands, bot.Level);
             if (band >= 0) ctx.Have[band]--;
         }
@@ -766,7 +820,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         if (managed.FindSession(botId)?.Player is not { IsInWorld: true } player) return false;
         if (managed.IsPartyDriven(botId) || managed.IsScripted(botId) || services.GetService<PlayerbotGroupCoordinator>()?.Drives(botId) == true) return false;
-        return player.IsAlive && !player.Combat.IsInCombat && services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) != true;
+        // Dead or a ghost may be parked (it logs out like any bot and comes back as it was); in combat or teleporting may not.
+        return !player.Combat.IsInCombat && services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) != true;
     }
 
     private async Task<int> RelocateAsync(PassContext ctx, CancellationToken ct)
@@ -779,7 +834,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
         // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
         // walked over a border into a harder zone) is moved the same way. The worst misfit first.
-        foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Vetoed
+        foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed
                 && atlas.Find(f.ZoneId) is not null)
             .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f, rule)).ThenBy(f => f.BotId))
         {
@@ -823,7 +878,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         CultureInfo c = CultureInfo.InvariantCulture;
         yield return string.Create(c, $"Population: {(s.Enabled ? "on" : "off")}, state {s.State}: {s.Reason}.");
         if (!s.Enabled && s.Passes == 0) yield break;
-        yield return string.Create(c, $"Target {s.Target} (effective {s.EffectiveTarget}), running {s.RunningAll} ({s.OwnedRunning} owned), parked {s.OwnedParked}, created in the last minute {s.CreatesLastMinute}.");
+        yield return string.Create(c, $"Target {s.Target} (effective {s.EffectiveTarget}), running {s.RunningAll} ({s.OwnedRunning} owned), parked {s.OwnedParked}, created in the last minute {s.CreatesLastMinute}; {s.OperatorRunning} operator bots running leave the population {s.OwnedTarget}.");
         yield return string.Create(c, $"Tick p95 {s.P95Ms:0.0} ms over {s.Samples} ticks, budget {s.BudgetMs} ms. Boost {s.Boost}. Zones: {s.AllianceZones} Alliance, {s.HordeZones} Horde.");
         foreach (PopulationBandStatus band in s.Bands)
             yield return string.Create(c, $"  Levels {band.MinLevel}-{band.MaxLevel} (weight {band.Weight}): want {band.Want}, have {band.Have}.");

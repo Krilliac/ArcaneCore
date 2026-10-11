@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       336 keys
+#   WORLD                       334 keys
 #
 ###############################################################################
 
@@ -10299,24 +10299,6 @@ World.Playerbots.MaxRegisteredBots = 1000
 World.Playerbots.MaxRouteYards = 2000
 
 #
-#    World.Playerbots.MaxThinkSearchNodes
-#        Description: The most navigation-mesh search nodes the fallback path queries of one bot
-#                     think may create together (the steep escape, the starts beside the bot, the
-#                     hazard detours; PlayerbotThinkProbe.NodeBudget): past it a fallback runs with
-#                     what is left, or not at all, and finds nothing (its plan may then fail, as
-#                     when no such way exists). A plan's own query is neither held to it nor
-#                     counted. 0 = no bound, else 2048..10000000; three of the largest single
-#                     searches (PlayerbotNavigation.MaxSearchNodes) by default. Live: .reload
-#                     config.
-#        Type: int
-#        Default: 98304
-#        Allowed: 0 (no bound), or a whole number from 2048 to 10000000
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.MaxThinkSearchNodes = 98304
-
-#
 #    World.Playerbots.MoveSpeed
 #        Description: The bots' movement speed in yards per second, never above the player's run
 #                     speed (above 0, at most 100).
@@ -10420,6 +10402,20 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 World.Playerbots.Party.TeleportToLeader = true
 
 #
+#    World.Playerbots.Population.ActionLogSeconds
+#        Description: The population logs one information line for the passes that parked, started,
+#                     created or moved bots, at most once per this many seconds of world time; the
+#                     changes of the passes in between are added up into the next line (0..3600; 0 =
+#                     a line for every such pass).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ActionLogSeconds = 60
+
+#
 #    World.Playerbots.Population.AllianceSharePct
 #        Description: With Factions Both, the share of new bots that are Alliance (0..100).
 #        Type: int
@@ -10489,6 +10485,21 @@ World.Playerbots.Population.AllianceSharePct = 50
 # World.Playerbots.Population.Classes.6 = 8
 # World.Playerbots.Population.Classes.7 = 9
 # World.Playerbots.Population.Classes.8 = 11
+
+#
+#    World.Playerbots.Population.ConfirmWindows
+#        Description: The consecutive fresh windows of WindowTicks ticks the p95 must stay over
+#                     TickP95BudgetMs before a park for the budget, or under ResumeBelowPct of it
+#                     before an add (1..20). 1 acts on a single window. A window between the two, a
+#                     change, or a window on the other side starts the count again; a lowered target
+#                     is honoured without waiting.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ConfirmWindows = 2
 
 #
 #    World.Playerbots.Population.CreatureLevelMargin
@@ -10612,6 +10623,19 @@ World.Playerbots.Population.MaxRelocationsPerInterval = 2
 World.Playerbots.Population.MaxStartsPerInterval = 4
 
 #
+#    World.Playerbots.Population.MinRunSeconds
+#        Description: Anti-churn: a bot the population started is not parked for the tick budget
+#                     until it has run this many seconds of world time (0..3600; 0 = no minimum).
+#                     Over the target such a bot is still parked, last.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.MinRunSeconds = 300
+
+#
 #    World.Playerbots.Population.OutlevelMargin
 #        Description: How many levels a bot may be above the highest level of its zone before it is
 #                     relocated (0..10).
@@ -10664,8 +10688,12 @@ World.Playerbots.Population.ResumeBelowPct = 80
 #    World.Playerbots.Population.TargetOnline
 #        Description: The number of managed bots to keep running (0..1000). The effective target is
 #                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count
-#                     towards it but are never stopped by the population; above the target only the
-#                     bots the population owns are parked. 0 parks every bot the population owns.
+#                     towards it but are never stopped by the population: the running ones are taken
+#                     off the top, and what is left (the population's own share) is what the bands
+#                     split by weight. An operator's bot never counts in a band, so a band full of
+#                     operator bots still gets its share of population bots. Above the target only
+#                     the bots the population owns are parked. 0 parks every bot the population
+#                     owns.
 #        Type: int
 #        Default: 0
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -10864,19 +10892,6 @@ World.Playerbots.Scenarios.MaxDurationSeconds = 120
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Scenarios.StepTimeoutSeconds = 20
-
-#
-#    World.Playerbots.SlowThinkLogMs
-#        Description: A single bot think longer than this many milliseconds is logged with its bot,
-#                     goal, phases and path searches (PlayerbotSlowThinkLog; 0 = off, 0..60000).
-#                     Live: .reload config applies a change at once.
-#        Type: double
-#        Default: 50
-#        Allowed: a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.SlowThinkLogMs = 50
 
 #
 #    World.Playerbots.Social.Emotes.Enabled
@@ -11099,19 +11114,6 @@ World.Playerbots.Qa.GitHub.GhPassToken = false
 World.Playerbots.Qa.GitHub.GhPath = "gh"
 
 #
-#    World.Playerbots.Qa.GitHub.KindLabels
-#        Description: Add a per-kind label (bot-qa:spell-unsupported, bot-qa:death-loop, ...) to
-#                     created issues besides Labels (off by default: the gh transport refuses a
-#                     label that does not exist yet, so create the labels in the repository first).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbotsqa
-#
-World.Playerbots.Qa.GitHub.KindLabels = false
-
-#
 #    World.Playerbots.Qa.GitHub.Labels
 #        Description: The labels put on created issues; the first one is also how existing issues
 #                     are listed (1..10 labels; a configured list replaces the default).
@@ -11158,31 +11160,6 @@ World.Playerbots.Qa.GitHub.MaxIssuesPerHour = 5
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.GitHub.MaxListPages = 10
-
-#
-#    World.Playerbots.Qa.GitHub.MaxSpellIssuesPerDay
-#        Description: The most spell issues created per rolling 24 hours (0..1000; 0 creates none),
-#                     saved with the hourly caps.
-#        Type: int
-#        Default: 10
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbotsqa
-#
-World.Playerbots.Qa.GitHub.MaxSpellIssuesPerDay = 10
-
-#
-#    World.Playerbots.Qa.GitHub.MaxSpellIssuesPerPass
-#        Description: The most spell issues (spell unsupported, refused, no effect) created in one
-#                     publish pass (0..100; 0 creates none). Spell findings can be numerous on a
-#                     first run; the hourly MaxIssuesPerHour still applies on top.
-#        Type: int
-#        Default: 2
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbotsqa
-#
-World.Playerbots.Qa.GitHub.MaxSpellIssuesPerPass = 2
 
 #
 #    World.Playerbots.Qa.GitHub.MinDistinctBots

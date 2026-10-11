@@ -11,6 +11,9 @@ internal interface IPopulationTickSource
     /// <summary>The tick durations recorded since the last <see cref="Reset"/>, at most <see cref="WorldTickWindow.Capacity"/>.</summary>
     int Samples { get; }
 
+    /// <summary>Every tick recorded since the source was created; <see cref="Reset"/> does not lower it. Two readings differ by the ticks that arrived between them.</summary>
+    long TotalSamples { get; }
+
     /// <summary>The 95th percentile (nearest rank) of the last <paramref name="windowTicks"/> recorded ticks, in milliseconds (0 without samples).</summary>
     double P95Ms(int windowTicks);
 
@@ -34,8 +37,11 @@ internal sealed class WorldTickWindow : IPopulationTickSource
     private readonly long[] _scratch = new long[Capacity];
     private int _next;
     private int _count;
+    private long _total;
 
     public int Samples => _count;
+
+    public long TotalSamples => _total;
 
     /// <summary>Record one tick body duration in microseconds (negative values are recorded as 0).</summary>
     public void Add(long micros)
@@ -43,6 +49,7 @@ internal sealed class WorldTickWindow : IPopulationTickSource
         _ring[_next] = micros < 0 ? 0 : micros;
         _next = (_next + 1) % Capacity;
         if (_count < Capacity) _count++;
+        _total++;
     }
 
     public double P95Ms(int windowTicks)

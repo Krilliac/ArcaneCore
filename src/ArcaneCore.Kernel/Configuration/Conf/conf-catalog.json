@@ -12884,6 +12884,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Population:ActionLogSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "60",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The population logs one information line for the passes that parked, started, created or moved bots, at most once per this many seconds of world time; the changes of the passes in between are added up into the next line (0..3600; 0 = a line for every such pass).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:AllianceSharePct",
       "section": "World:Playerbots",
       "type": "int",
@@ -13069,6 +13085,22 @@
       "isCollection": true
     },
     {
+      "path": "World:Playerbots:Population:ConfirmWindows",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The consecutive fresh windows of WindowTicks ticks the p95 must stay over TickP95BudgetMs before a park for the budget, or under ResumeBelowPct of it before an add (1..20). 1 acts on a single window. A window between the two, a change, or a window on the other side starts the count again; a lowered target is honoured without waiting.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:CreatureLevelMargin",
       "section": "World:Playerbots",
       "type": "int",
@@ -13233,6 +13265,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Population:MinRunSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "300",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Anti-churn: a bot the population started is not parked for the tick budget until it has run this many seconds of world time (0..3600; 0 = no minimum). Over the target such a bot is still parked, last.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:OutlevelMargin",
       "section": "World:Playerbots",
       "type": "int",
@@ -13310,7 +13358,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population; above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
+      "meaning": "The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
