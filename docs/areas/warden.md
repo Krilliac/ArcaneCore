@@ -12,12 +12,12 @@ Ported from MaNGOS Zero `src/game/Warden/` (module delivery, handshake, RC4 keys
 3. HASH_REQUEST sends the seed. The client must answer with the expected 20 bytes. Both directions then switch to the module's keys, and MODULE_INITIALIZE installs the client callbacks.
 4. A CHEAT_CHECKS_REQUEST goes out every 30-60 s with up to `ScansPerRequest` scans, taken round-robin from `Warden:Checks`. Each reply is checked against its folded SHA-1 checksum.
 
-Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol failure.
+Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol failure. Received bodies are decrypted even when unsolicited so the RC4 stream stays aligned. Under `ProtocolAction=Log`, a protocol failure is logged, nothing is sent back, and the session keeps checking: a failed scan reply or timeout sends the same scan batch once more, and a failure of that retry kicks (so a client cannot skip a chosen check by corrupting its replies), an unsolicited reply keeps the existing scan deadline, and a handshake stage keeps waiting for its one outstanding request (HASH_REQUEST is never re-sent under the old keys). The module is transferred at most once. A failure to answer a request the server made (a bad, malformed or late reply, a failed module load, a module still missing after the transfer) is a strike; the `MaxProtocolFailures`th strike (default 3) kicks the session even under Log, and each valid reply forgives one strike. Unsolicited packets are never strikes. Under Log a session reports at most one protocol failure per `ProtocolReportIntervalSeconds` (default 10), then one line with the count of the rest; a count still held when the session closes or the server stops is reported then. vmangos `src/game/Anticheat/WardenAnticheat/Warden.cpp`, `Warden::HandlePacket`, decrypts before dispatch and kicks on an unexpected opcode, a second module miss or a bad scan checksum (lines 517-532, 546-552, 575-595, 654-665).
 
 ## Actions
 
 - `Action` (Log, Kick, Ban): applied when a scan fails. A check can override it with its own `Action`.
-- `ProtocolAction`: applied when the handshake fails, a reply is malformed or late, or the module fails to load. It is never above Kick.
+- `ProtocolAction`: applied when the handshake fails, a reply is malformed or late, or the module fails to load. Log records the failure and keeps the session, up to `MaxProtocolFailures`; Kick disconnects. Ban acts as Kick: a protocol failure (such as one late reply from a lagging client) never bans, as in vmangos.
 - `BanSeconds`: the ban length, 0 for permanent. The ban author is `Warden`.
 
 ## Checks
@@ -63,5 +63,5 @@ For page, driver and module checks, `Wanted` says whether the pattern, driver or
 - **Not verified against a live 1.12.1 client.** The page, driver and module opcodes (0xB2 / 0xBF / 0x71 / 0xD9) come from TrinityCore's table for this module.
 - **No Lua rows ship.** vmangos's 5875 set has none.
 - **Re-seeding.** An empty table is seeded again at every start. Delete the rows you don't want instead of emptying the table, or set `LoadFromDatabase` to false.
-- **Windows only.** The 5875 auth session does not carry the platform, so a Mac client cannot load the module and gets `ProtocolAction`.
+- **Windows only.** The 5875 auth session does not carry the platform, so a Mac client cannot load the module. It gets `ProtocolAction`, and is kicked after `MaxProtocolFailures` strikes even under Log.
 - **Not ported:** API-hook scans, the vmangos sysinfo and EndScene scripted scans, the `InitialLogin` scan flag, and MaNGOS Zero's evidence classes and confirmation rescans.

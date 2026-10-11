@@ -61,7 +61,16 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             _usable ? "enabled" : "disabled", _options.Action, _options.ProtocolAction, _options.Checks.Count);
     }
 
-    public Task StopAsync() => Task.CompletedTask;
+    /// <summary>Report every session's held protocol verdicts, so no count is lost at shutdown.</summary>
+    public Task StopAsync()
+    {
+        foreach (WardenSession warden in _sessions.Values)
+        {
+            warden.Flush();
+        }
+
+        return Task.CompletedTask;
+    }
 
     /// <summary>The scans new sessions run: the table's for build 5875 merged with <c>Warden:Checks</c>.</summary>
     public IReadOnlyList<WardenCheckOptions> Checks => _checks;
@@ -124,7 +133,11 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         {
             if (session.State == SessionState.Closed)
             {
-                _sessions.TryRemove(session, out _);
+                if (_sessions.TryRemove(session, out WardenSession? removed))
+                {
+                    removed.Flush(); // the held protocol verdict count is reported, not dropped with the session
+                }
+
                 continue;
             }
 
