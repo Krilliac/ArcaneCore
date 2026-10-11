@@ -135,11 +135,32 @@ public sealed class PlayerbotPopulationOptions
     ];
 
     /// <summary>
-    /// How many levels below a placement's floor a bot may be (0..10). The floor is the level of the sub-area the graveyard stands in,
-    /// or the zone's lowest sub-area level when the terrain does not know; a starter zone's is level 4 or 5, so the default 4 lets a
-    /// level 1 bot start there. A bot further below every floor of its zone is relocated like an out-levelled one.
+    /// How many levels below a placement's floor a bot may be while the floor is at most ZoneLevelSlackMaxFloor (0..10). The floor is the
+    /// level of the sub-area the graveyard stands in, or the zone's lowest sub-area level when the terrain does not know; a starter zone's
+    /// is level 4 to 7, so the default 4 lets a level 1 bot start there. Above ZoneLevelSlackMaxFloor the slack shrinks by one level for
+    /// every two floor levels, to 0. A bot below every place of its zone it could have been put is relocated like an out-levelled one.
     /// </summary>
     public int ZoneLevelSlack { get; set; } = 4;
+
+    /// <summary>
+    /// The highest placement floor that gets the whole ZoneLevelSlack (1..60). Above it the slack shrinks by one level for every two
+    /// floor levels (default: 3 at floors 13-14, 2 at 15-16, 1 at 17-18, 0 from 19), so a level 38 bot is not placed at a level 41
+    /// graveyard. 60 gives every floor the whole slack (the rule before the taper).
+    /// </summary>
+    public int ZoneLevelSlackMaxFloor { get; set; } = 12;
+
+    /// <summary>
+    /// A bot is not placed at a graveyard where most creatures hostile to its faction within CreatureSurveyRadius are more than this
+    /// many levels above it (0..10), and is relocated from a zone where every graveyard of its faction is like that. Uses the creature
+    /// survey; without creature data or faction templates nothing is surveyed and only the area floor counts.
+    /// </summary>
+    public int CreatureLevelMargin { get; set; } = 3;
+
+    /// <summary>
+    /// The radius in yards around each graveyard the creature survey counts hostile creature spawns in (0..300; 0 turns the survey off).
+    /// The survey runs with the graveyard terrain lookup, off the world thread, when the atlas is built.
+    /// </summary>
+    public int CreatureSurveyRadius { get; set; } = 100;
 
     /// <summary>How many levels a bot may be above the highest level of its zone before it is relocated (0..10).</summary>
     public int OutlevelMargin { get; set; } = 2;
@@ -226,6 +247,9 @@ public sealed class PlayerbotPopulationOptions
             : CheckClasses(Classes) is { } k ? $"Classes {k}"
             : CheckBands(Bands) is { } n ? $"Bands {n}"
             : CheckRange(ZoneLevelSlack, 0, 10) is { } z ? $"ZoneLevelSlack {z}"
+            : CheckRange(ZoneLevelSlackMaxFloor, 1, MaxLevel) is { } zf ? $"ZoneLevelSlackMaxFloor {zf}"
+            : CheckRange(CreatureLevelMargin, 0, 10) is { } cm ? $"CreatureLevelMargin {cm}"
+            : CheckRange(CreatureSurveyRadius, 0, 300) is { } cr ? $"CreatureSurveyRadius {cr}"
             : CheckRange(OutlevelMargin, 0, 10) is { } o ? $"OutlevelMargin {o}"
             : CheckDefined(Relocation) is { } l ? $"Relocation {l}"
             : CheckRange(MaxRelocationsPerInterval, 0, 50) is { } m ? $"MaxRelocationsPerInterval {m}"

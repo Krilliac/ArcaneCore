@@ -222,7 +222,10 @@ public sealed class TickWatchdogFeatureTests
     [Fact]
     public async Task AQuietWorld_ReportsThatNoTickBodyWasRecorded()
     {
-        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        // A slow tick is a tick body over the interval: the test host's 5 ms interval lets one startup tick on a loaded machine count
+        // (seen on the CI node), so this world ticks once a minute, which no tick body here comes near.
+        await using WorldTestHost host = WorldTestHost.Start(
+            configure: o => o.TickIntervalMs = 60_000, configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
         TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
         Assert.Empty(host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)));
         Assert.Contains("the stall was outside the tick body", monitor.HangDetail!(false));
