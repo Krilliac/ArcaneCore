@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.World.Playerbots;
@@ -17,7 +18,14 @@ internal sealed class PlayerbotExploreAtlas
     private const float ThreatCellYards = 80f;
 
     private readonly Dictionary<(uint Map, byte Level, int X, int Y), Cell> _cells = [];
-    private readonly Dictionary<(uint Map, int X, int Y), List<Threat>> _threats = [];
+    private readonly Dictionary<(uint Map, int X, int Y), ThreatCell> _threats = [];
+    private readonly HashSet<uint> _mapsIndexed = [];
+    private int _entryCount;
+
+    internal int CellCount => _cells.Count;
+    internal int EntryCount => _entryCount;
+    internal int ThreatCellCount => _threats.Count;
+    internal bool HasIndexedMap(uint mapId) => _mapsIndexed.Contains(mapId);
 
     internal readonly record struct Candidate(CreatureSpawn Spawn, int CellX, int CellY);
     private readonly record struct Threat(CreatureSpawn Spawn, byte MinLevel, uint Rank, uint Faction);
@@ -26,47 +34,64 @@ internal sealed class PlayerbotExploreAtlas
     {
         internal readonly Dictionary<uint, List<CreatureSpawn>> ByFaction = [];
 
-        internal void Add(uint faction, CreatureSpawn spawn)
+        internal bool Add(uint faction, CreatureSpawn spawn)
         {
             if (!ByFaction.TryGetValue(faction, out List<CreatureSpawn>? samples))
             {
-                if (ByFaction.Count >= MaxFactionsPerCell) return;
+                if (ByFaction.Count >= MaxFactionsPerCell) return false;
                 ByFaction.Add(faction, samples = []);
             }
             if (samples.Count < SamplesPerFactionCell)
+            {
                 samples.Add(spawn);
+                return true;
+            }
+            return false;
         }
     }
 
-    internal PlayerbotExploreAtlas(CreatureContent content)
+    private sealed class ThreatCell
     {
-        foreach (uint map in content.MapsWithSpawns)
+        internal readonly Dictionary<uint, List<Threat>> ByFaction = [];
+
+        internal void Add(Threat incoming)
+        {
+            if (!ByFaction.TryGetValue(incoming.Faction, out List<Threat>? samples))
+            {
+                if (ByFaction.Count >= MaxFactionsPerCell) return;
+                ByFaction.Add(incoming.Faction, samples = []);
+            }
+            if (samples.Count < ThreatSamplesPerCell)
+            {
+                samples.Add(incoming);
+                return;
+            }
+            int weakest = 0;
+            for (int i = 1; i < samples.Count; i++)
+                if (Strength(samples[i]) < Strength(samples[weakest])) weakest = i;
+            if (Strength(incoming) > Strength(samples[weakest])) samples[weakest] = incoming;
+        }
+    }
+
+    internal PlayerbotExploreAtlas(CreatureContent spawns, CreatureContent? definitions = null)
+    {
+        definitions ??= spawns;
+        foreach (uint map in spawns.MapsWithSpawns)
         {
             if (map is not (0 or 1)) continue; // continent travel only
-            foreach (CreatureSpawn spawn in content.GetSpawns(map))
+            foreach (CreatureSpawn spawn in spawns.GetSpawns(map))
             {
-                CreatureTemplate? template = content.FindTemplate(spawn.Entry);
+                CreatureTemplate? template = definitions.FindTemplate(spawn.Entry);
                 if (template is null || !float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z)
-                    || template.CreatureType == 8
+                    || template.CreatureType == CreatureAiFactory.CritterType
                     || (template.Behaviour & (CreatureBehaviourFlags.Civilian | CreatureBehaviourFlags.Invisible
                         | CreatureBehaviourFlags.NoAggro)) != 0 || (template.UnitFlags & (uint)ArcaneCore.Game.UnitFlags.NotSelectable) != 0)
                     continue;
                 int x = CellOf(spawn.X), y = CellOf(spawn.Y);
                 var threatKey = (map, ThreatCellOf(spawn.X), ThreatCellOf(spawn.Y));
-                if (!_threats.TryGetValue(threatKey, out List<Threat>? threats))
-                    _threats.Add(threatKey, threats = []);
-                if (threats.Count < ThreatSamplesPerCell)
-                    threats.Add(new Threat(spawn, template.MinLevel, template.Rank, template.Faction));
-                else
-                {
-                    // Keep the strongest threats when a site has many spawns. Startup work is bounded per spawn,
-                    // while the bot's later hazard check remains bounded by the sample size.
-                    int weakest = 0;
-                    for (int i = 1; i < threats.Count; i++)
-                        if (Strength(threats[i]) < Strength(threats[weakest])) weakest = i;
-                    var incoming = new Threat(spawn, template.MinLevel, template.Rank, template.Faction);
-                    if (Strength(incoming) > Strength(threats[weakest])) threats[weakest] = incoming;
-                }
+                if (!_threats.TryGetValue(threatKey, out ThreatCell? threats))
+                    _threats.Add(threatKey, threats = new ThreatCell());
+                threats.Add(new Threat(spawn, template.MinLevel, template.Rank, template.Faction));
                 if (template.NpcFlags != 0 || template.Rank != 0) continue;
 
                 // Template levels are a range: only index bots for which the entire possible range stays near their level.
@@ -77,7 +102,11 @@ internal sealed class PlayerbotExploreAtlas
                 {
                     var key = (map, (byte)level, x, y);
                     if (!_cells.TryGetValue(key, out Cell? cell)) _cells.Add(key, cell = new Cell());
-                    cell.Add(template.Faction, spawn);
+                    if (cell.Add(template.Faction, spawn))
+                    {
+                        _entryCount++;
+                        _mapsIndexed.Add(map);
+                    }
                 }
             }
         }
@@ -88,20 +117,24 @@ internal sealed class PlayerbotExploreAtlas
     private static int Strength(Threat threat) => (threat.Rank == 0 ? 0 : 100) + threat.MinLevel;
 
     /// <summary>A candidate near an elite or creature at least five levels higher is a poor unattended grinding site.</summary>
-    internal bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> attackableFaction)
+    internal bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> hostileFaction)
     {
         const float radius2 = 70f * 70f;
         int cx = ThreatCellOf(candidate.Spawn.X), cy = ThreatCellOf(candidate.Spawn.Y);
         for (int x = cx - 1; x <= cx + 1; x++)
             for (int y = cy - 1; y <= cy + 1; y++)
             {
-                if (!_threats.TryGetValue((candidate.Spawn.MapId, x, y), out List<Threat>? threats)) continue;
-                foreach (Threat threat in threats)
+                if (!_threats.TryGetValue((candidate.Spawn.MapId, x, y), out ThreatCell? threats)) continue;
+                foreach ((uint faction, List<Threat> samples) in threats.ByFaction)
                 {
-                    if (threat.Rank == 0 && threat.MinLevel < level + 5 || !attackableFaction(threat.Faction)) continue;
-                    float dx = threat.Spawn.X - candidate.Spawn.X, dy = threat.Spawn.Y - candidate.Spawn.Y;
-                    if (dx * dx + dy * dy <= radius2 && MathF.Abs(threat.Spawn.Z - candidate.Spawn.Z) <= 20f)
-                        return true;
+                    if (!hostileFaction(faction)) continue;
+                    foreach (Threat threat in samples)
+                    {
+                        if (threat.Rank == 0 && threat.MinLevel < level + 5) continue;
+                        float dx = threat.Spawn.X - candidate.Spawn.X, dy = threat.Spawn.Y - candidate.Spawn.Y;
+                        if (dx * dx + dy * dy <= radius2 && MathF.Abs(threat.Spawn.Z - candidate.Spawn.Z) <= 20f)
+                            return true;
+                    }
                 }
             }
         return false;
@@ -112,11 +145,11 @@ internal sealed class PlayerbotExploreAtlas
     /// adding thousands of spawns to one cell does not add think-time work. The eligibility callback checks current faction,
     /// spawn gate, home and hazard state. The caller tests one route, then sets a refused or exhausted cell aside.
     /// </summary>
-    internal Candidate? Find(uint map, uint level, Vector3 from, Func<CreatureSpawn, bool> eligible,
+    internal Candidate? Find(uint map, uint level, Vector3 from, Func<Candidate, bool> eligible,
         Func<int, int, bool> blocked, out int examined, Func<uint, bool>? factionEligible = null)
     {
         examined = 0;
-        if (map is not (0 or 1) || level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return null;
+        if (!HasIndexedMap(map) || level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return null;
         int cx = CellOf(from.X), cy = CellOf(from.Y);
         for (int ring = 0; ring <= MaxRing; ring++)
         {
@@ -134,12 +167,13 @@ internal sealed class PlayerbotExploreAtlas
                         foreach (CreatureSpawn spawn in samples)
                         {
                             examined++;
-                            if (!eligible(spawn)) continue;
+                            var candidate = new Candidate(spawn, x, y);
+                            if (!eligible(candidate)) continue;
                             float dx = spawn.X - from.X, dy = spawn.Y - from.Y;
                             float distance = dx * dx + dy * dy;
                             if (distance >= bestDistance) continue;
                             bestDistance = distance;
-                            best = new Candidate(spawn, x, y);
+                            best = candidate;
                         }
                     }
                 }

@@ -44,9 +44,9 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     public CreatureContent Content => Volatile.Read(ref _content);
 
     /// <summary>Startup spawn index for level-appropriate playerbot exploration; rebuilt when creature definitions change.</summary>
-    internal PlayerbotExploreAtlas ExploreAtlas => _exploreAtlas;
+    internal PlayerbotExploreAtlas ExploreAtlas => Volatile.Read(ref _exploreAtlas);
 
-    internal void RefreshExploreAtlas() => _exploreAtlas = new PlayerbotExploreAtlas(Content);
+    internal void PublishExploreAtlas(PlayerbotExploreAtlas atlas) => Volatile.Write(ref _exploreAtlas, atlas);
 
     /// <summary>Built SMSG_CREATURE_QUERY_RESPONSE replies (cleared when the content is installed or its definitions swapped).</summary>
     public Packets.QueryResponseCache<CreatureTemplate> QueryCache { get; } = new();
@@ -114,7 +114,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         ReportSmartScripts(content.Ai.SmartScripts);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
-        world.Post(() => Install(content));
+        // Startup is still outside the world tick: build the immutable bot index before posting the content install.
+        var exploreAtlas = new PlayerbotExploreAtlas(content);
+        logger.LogInformation("Playerbot Explore atlas: {Cells} level/map cells, {Entries} sampled spawn entries, {ThreatCells} threat cells",
+            exploreAtlas.CellCount, exploreAtlas.EntryCount, exploreAtlas.ThreatCellCount);
+        world.Post(() => Install(content, exploreAtlas));
     }
 
     /// <summary>
@@ -161,9 +165,14 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     /// yet (world thread). Maps already running keep their system.
     /// </summary>
     public void Install(CreatureContent content)
+        => Install(content, new PlayerbotExploreAtlas(content));
+
+    /// <summary>Install prebuilt content and index together on the world thread.</summary>
+    internal void Install(CreatureContent content, PlayerbotExploreAtlas exploreAtlas)
     {
         ArgumentNullException.ThrowIfNull(content);
-        _exploreAtlas = new PlayerbotExploreAtlas(content);
+        ArgumentNullException.ThrowIfNull(exploreAtlas);
+        PublishExploreAtlas(exploreAtlas);
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
         QueryCache.Clear();

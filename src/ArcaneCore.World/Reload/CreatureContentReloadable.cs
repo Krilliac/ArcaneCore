@@ -3,6 +3,7 @@ using ArcaneCore.Game.Reload;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Reload;
@@ -43,11 +44,20 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
         ICreatureDataStore store = scope.ServiceProvider.GetService<ICreatureDataStore>()
             ?? throw new InvalidOperationException("no creature data store is registered");
         CreatureContent fresh = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
-        return new CreatureCandidate(feature, fresh);
+        CreatureContent current = feature.Content;
+        // Spawns do not reload with creature_template. Build the new index on this worker from the current spawns and fresh definitions.
+        var atlas = new PlayerbotExploreAtlas(ReferenceEquals(current, CreatureContent.Empty) ? fresh : current, fresh);
+        var candidate = new CreatureCandidate(feature, fresh, atlas);
+        if (!ReferenceEquals(current, CreatureContent.Empty)) candidate.PrepareOrphanedSpawns(current);
+        return candidate;
     }
 
-    private sealed class CreatureCandidate(CreatureWorldFeature feature, CreatureContent fresh) : ContentCandidate
+    private sealed class CreatureCandidate(CreatureWorldFeature feature, CreatureContent fresh, PlayerbotExploreAtlas atlas) : ContentCandidate
     {
+        private (int Count, string Entries) _orphaned;
+
+        internal void PrepareOrphanedSpawns(CreatureContent current) => _orphaned = OrphanedSpawns(current);
+
         public override string Summary => $"{fresh.TemplateCount} creature templates";
 
         public override bool TryKeepCurrent(WorldRuntime world, out string reason)
@@ -68,18 +78,20 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
             CreatureContent current = feature.Content;
             if (ReferenceEquals(current, CreatureContent.Empty))
             {
-                transaction.Step("creature content", () => feature.Install(fresh), () => feature.Install(CreatureContent.Empty));
+                PlayerbotExploreAtlas previousAtlas = feature.ExploreAtlas;
+                transaction.Step("creature content", () => feature.Install(fresh, atlas),
+                    () => feature.Install(CreatureContent.Empty, previousAtlas));
                 return;
             }
 
-            (int orphaned, string entries) = OrphanedSpawns(current);
             CreatureDefinitions? previous = null;
+            PlayerbotExploreAtlas oldAtlas = feature.ExploreAtlas;
             transaction.Step("creature definitions",
-                () => { previous = current.SwapDefinitions(fresh); feature.RefreshExploreAtlas(); feature.QueryCache.Clear(); },
-                () => { current.RestoreDefinitions(previous!); feature.RefreshExploreAtlas(); feature.QueryCache.Clear(); });
-            if (orphaned > 0)
+                () => { feature.QueryCache.Clear(); previous = current.SwapDefinitions(fresh); feature.PublishExploreAtlas(atlas); },
+                () => { feature.QueryCache.Clear(); current.RestoreDefinitions(previous!); feature.PublishExploreAtlas(oldAtlas); });
+            if (_orphaned.Count > 0)
             {
-                transaction.Note($"{orphaned} spawn(s) use creature_template entries that are no longer defined ({entries}); they keep their last known template.");
+                transaction.Note($"{_orphaned.Count} spawn(s) use creature_template entries that are no longer defined ({_orphaned.Entries}); they keep their last known template.");
             }
         }
 
