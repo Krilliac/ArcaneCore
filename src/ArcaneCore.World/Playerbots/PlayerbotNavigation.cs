@@ -4,6 +4,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -114,7 +116,8 @@ internal static class PlayerbotNavigation
     internal const float PartialProgressYards = 2f;
 
     /// <summary>
-    /// A route towards <paramref name="goal"/>, which may lie beyond one route: the goal itself when it is within one route's
+    /// A route towards <paramref name="goal"/>, which may lie beyond one route. Beyond <see cref="PlayerbotOptions.MaxPathPoints"/> yards
+    /// the map's region graph leads (<see cref="RegionLeg"/>); without it, the goal itself when it is within one route's
     /// reach (<see cref="PlayerbotOptions.MaxRouteYards"/>, and <see cref="PlayerbotOptions.MaxPathPoints"/> yards for the terrain
     /// stepper), else the point that far along the straight line to it. When the navigation mesh does not connect that point, the
     /// route goes to the walkable point nearest to it (vmangos <c>PathFinder</c> with <c>PATHFIND_INCOMPLETE</c>), taken when it ends
@@ -138,6 +141,10 @@ internal static class PlayerbotNavigation
         // 2026-10-08, quest 1656, 99 stalls), whose way down runs south through a tile no grid held.
         // Within the first step the loop below plans to the goal itself, so the goal-first query would only repeat it.
         float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
+        // Beyond the first step the map's region graph knows the way, round mountains and out of dead ends: the leg goes to a portal
+        // of that way (RegionLeg). Only when the graph does not decide (none, still being built, both ends in one region) do the
+        // goal-first query and the straight-line steps below plan.
+        if (distance > chunk && RegionLeg(player, goal, options, out route) is { } planned) return planned;
         // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
         // the refusal: one plan attempt costs one query, as before. Only an unloaded tile or no mesh (a refused straight line) goes on.
         if (distance > chunk && distance <= options.MaxRouteYards)
@@ -160,6 +167,64 @@ internal static class PlayerbotNavigation
 
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
     internal const float MinTowardChunkYards = 24f;
+
+    /// <summary>
+    /// How far along the region graph's way one leg of <see cref="RegionLeg"/> goes at most (straight lines between portals), and at most
+    /// half of <see cref="PlayerbotOptions.MaxRouteYards"/>: the path query's search grows with the distance (<see cref="SearchNodes"/>),
+    /// and the way it finds is longer than the straight lines.
+    /// </summary>
+    internal const float RegionLegYards = 1000f;
+
+    /// <summary>The most portals one region search settles (<see cref="NavRegionGraph.FindRoute"/>).</summary>
+    internal const int RegionSearchNodes = 20_000;
+
+    /// <summary>
+    /// A leg of the way to a far <paramref name="goal"/> along the map's region graph (<see cref="NavRegionGraph"/>: which parts of the
+    /// whole navigation mesh join which, built once per map off the world thread): the region search finds the way across the map coarsely,
+    /// and the leg is the path query to its farthest portal within <see cref="RegionLegYards"/> (the goal itself when that near), or to
+    /// its first portal. Without a way (the goal's region is not joined to the bot's) the search's way leads to the portal nearest the
+    /// goal, as a partial path does. Null when the graph does not decide: none yet, no region under the bot or the goal, both in one
+    /// region, or no portal nearer the goal than the bot; the straight-line planning goes on then.
+    /// <para>
+    /// Before, a goal beyond one route was approached only by points on the straight line to it. On the real terrain no route at all was
+    /// planned from any stall point of issue #191 (quest 5881, Stonetalon to Grish Longrunner at the Great Lift, 5,200 to 7,900 yards)
+    /// or of issue #194 (quest 1418, the Swamp of Sorrows to Kargath, 3,400 yards): the line's next point lay off the mesh, in rock. A
+    /// partial path to the goal itself reaches Grish in four or five legs, but not Kargath: it ends at the point of the swamp nearest to
+    /// it (-9356.8, -3872.5), from which no partial path closes on it, while the way leads west and north round the mountains (by
+    /// Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain: twelve legs, 9,400 yards).
+    /// </para>
+    /// </summary>
+    private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route)
+    {
+        route = null;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return null;
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true };
+        int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
+        if (from < 0 || to < 0) return null;
+        NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
+        if (portals.Count == 0) return null;
+        if (status == NavRegionRouteStatus.Found) portals.Add(goal);
+
+        int pick = 0;
+        float leg = MathF.Min(RegionLegYards, options.MaxRouteYards * 0.5f), along = Vector3.Distance(start, portals[0]);
+        for (int i = 1; i < portals.Count; i++)
+        {
+            along += Vector3.Distance(portals[i - 1], portals[i]);
+            if (along > leg) break;
+            pick = i;
+        }
+
+        // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
+        // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
+        // straight-line steps still get their turn.
+        if (Plan(player, portals[pick], portals[pick], options, partial: true, out route, out _)) return true;
+        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, out route, out _)) return true;
+        route = null;
+        return null;
+    }
 
     /// <summary>
     /// One path query from where the bot is now to <paramref name="destination"/>; with <paramref name="partial"/> a route that
@@ -269,6 +334,8 @@ internal static class PlayerbotNavigation
             route = usable;
             return true;
         }
+
+        if (TryClimbIndoors(map, start, destination, options, partial ? path : null, out route)) return true;
 
         // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
         // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by and the search ran out of corridor,
@@ -561,6 +628,47 @@ internal static class PlayerbotNavigation
         }
 
         return false;
+    }
+
+    /// <summary>How far (flat) from an indoor destination the walkable mesh must end for <see cref="TryClimbIndoors"/>.</summary>
+    internal const float ClimbReachYards = 20f;
+
+    /// <summary>How much longer than the walkable mesh's partial way the way up <see cref="TryClimbIndoors"/> takes may be.</summary>
+    internal const float ClimbExtraYards = 60f;
+
+    /// <summary>
+    /// The way to a destination inside a building over its stairs, where the mesh flags the stairs as steep slopes. The generator marks
+    /// polygons steeper than a player walks up (<see cref="NavTerrain.SteepSlopes"/>) whatever they lie on, and a flight of stairs in a
+    /// model is such a ramp, while a player climbs it step by step. Taken only when the destination is indoors (inside a model's group,
+    /// <see cref="MapCollision.IsOutdoors"/>), the walkable mesh ends within <see cref="ClimbReachYards"/> of it (flat, the stairs
+    /// above or below), and the way with steep polygons reaches it at most <see cref="ClimbExtraYards"/> longer: a slope of the terrain
+    /// outdoors stays refused (<see cref="TryLeaveSteepGround"/>). One or two queries more, only for an indoor destination the walkable
+    /// mesh does not reach.
+    /// <para>
+    /// Neeka Bloodscar, the ender of quest 1418, stands at the top of the Kargath tower (-6672.3, -2240.5, 278.6); the walkable mesh
+    /// leads up its lower stairs and ends 13 yards below her, where the upper flight is flagged steep. Every bot that reached Kargath
+    /// stood there (issue #194).
+    /// </para>
+    /// <para>
+    /// Not in a dungeon, raid or battleground (<see cref="MapTemplate.IsDungeon"/>, <see cref="MapTemplate.IsBattleground"/>): there
+    /// nearly every place is indoors, so the indoor test would not tell stairs from slopes, and no stall there is known to need it.
+    /// </para>
+    /// </summary>
+    private static bool TryClimbIndoors(Map map, Vector3 start, Vector3 destination, PlayerbotOptions options, PathResult? walk,
+        out PlayerbotRoute? route)
+    {
+        route = null;
+        if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
+        if (map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)) return false;
+        PathResult reach = walk ?? Query(map, start, destination, options, partial: true, steep: false);
+        if (!reach.HasPath || (reach.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || Reaches(reach) || EndsAt(reach, destination)
+            || Vector2.Distance(Flat(reach.End), Flat(destination)) > ClimbReachYards)
+            return false;
+        PathResult climb = Query(map, start, destination, options, partial: false, steep: true);
+        if (!IsUsablePath(climb, options.MaxPathPoints, reach.Length + ClimbExtraYards) || !(Reaches(climb) || EndsAt(climb, destination)))
+            return false;
+        route = Bounded(climb.Points, options, complete: true);
+        return route is not null;
     }
 
     /// <summary>

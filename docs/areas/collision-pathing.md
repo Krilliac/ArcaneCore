@@ -69,6 +69,21 @@ of the way, else a shortcut; `DestForced | FlyPath`). A hole in the mesh answers
 pathfinder in either install order. Swim and underwater shortcuts (`PathFinder.cpp:160-170`, `BuildUnderwaterPath`)
 are still not implemented; a swimmer takes the mesh path.
 
+### Region graph (NavRegionGraph)
+
+Not a vmangos feature: a coarse level over a whole map's mesh for long walks (the playerbots' far goals, issues
+#191 and #194). Every `.mmtile` of the map is read once; each tile's polygons that pass a filter (the bots':
+ground and water, no steep slopes) are split into regions by the tile's own links, and regions of adjacent tiles
+meet at portals where their border edges meet by the rule `NavMesh.Neighbours` crosses a border (one portal per
+stretch of at most 64 yards, 1 yard inside the region it enters). `FindRoute` is A* over the portals with
+straight-line costs; without a way it returns the way to the portal nearest the goal, as Detour's partial path
+does. Chains of regions are chains of polygons a path query can walk, so the graph answers reachability on foot
+exactly for its filter. `NavMeshPathfinder.RegionGraph` builds it on the thread pool on first use (null until
+then); `RegionAt` locates a position's region as a path query locates its polygon. Real data (2026-10-11):
+Kalimdor 704 tiles, 3.0 M polygons, 223,798 regions (most are slivers), 39,330 portal links, built in 3 to 6 s,
+about 22 MB kept; Eastern Kingdoms 470 tiles, 151,309 regions, 26,418 links, 3 to 4 s. A route search across
+Kalimdor settles in under 1 ms, an unreachable goal's full search of the Eastern Kingdoms in about 14 ms.
+
 ## Limits (not done in this lane run)
 
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,

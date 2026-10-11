@@ -80,7 +80,25 @@ its game time about 30 times faster, so a replay in December would have turned W
 step's quest reward writes (on the fast clock a bot's 15-second exchange deadline ran out while the write was on its way, and the reward
 counted as refused) and prints each bot's quests taken, rewarded and still open.
 
-A far goal (a quest giver or ender, a corpse) is approached a step at a time (`PlayerbotNavigation.TryPlanToward`): the point
+A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
+`MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
+thread on the first far goal of a map, seconds for a continent): its search finds the way across the map coarsely, round mountains and out
+of dead ends, and the leg is one path query to the farthest point of that way within `RegionLegYards` (1000) and half of `MaxRouteYards`
+(the goal itself when that near). A goal the walkable mesh does not join to the bot's place gets the way to the portal nearest it, as a
+partial path. When the query to the chosen portal is no route either, the old steps below still get their turn. Before, a far goal was approached only by points on the straight line, and in the mountains the next one lay in rock: no
+route at all from any bot-QA stall point of issue #191 (quest 5881, Stonetalon to Grish Longrunner at the Great Lift, 5,200 to 7,900
+yards) or #194 (quest 1418, the Swamp of Sorrows to Kargath, 3,400 yards), and every bot set those quests aside. A partial path to the goal
+itself was tried too: it reaches Grish, but from the swamp it ends at the point nearest Kargath (-9356.8, -3872.5) and goes no further,
+while the way leads west and north by Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain. Now every stall point's legs
+reach the ender: 9 to 13 legs of 6,500 to 9,400 yards, each plan 5 to 80 ms (`FromAnIssueStallPoint_...`, real terrain).
+
+Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
+ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the
+walkable mesh ends within `ClimbReachYards` (20, flat) of it and the way over steep polygons is at most `ClimbExtraYards` (60) longer
+(`PlayerbotNavigation.TryClimbIndoors`; `FromKargathsFloor_TheBotWalksUpTheTowerStairs_ToNeekaBloodscar`; each guard pinned by `PlayerbotClimbIndoorsTests`). Not in dungeons, raids or battlegrounds, where nearly every place is indoors. Steep terrain outdoors stays
+refused.
+
+Without the region graph (a map without one, or while it is built) the old steps plan: the point
 `MaxPathPoints - 2` yards along the straight line (at most 90% of `MaxRouteYards`), or the walkable point the mesh reaches nearest to it.
 Navigation-mesh tiles load with the map's grids round the players, so that point may lie on a tile not loaded yet, where the mesh
 answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the terrain stepper refuses over any hill; the step is then

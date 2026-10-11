@@ -152,7 +152,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     private static (Vector3 Left, Vector3 Right) Orient(Vector3 inside, Vector3 a, Vector3 b)
         => Cross(inside, a, b) < 0 ? (a, b) : (b, a);
 
-    private static bool TryOverlap(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool alongZ, float climb, out Vector3 pa, out Vector3 pb)
+    internal static bool TryOverlap(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool alongZ, float climb, out Vector3 pa, out Vector3 pb)
     {
         pa = pb = default;
         float fixedA = alongZ ? a.X : a.Z;

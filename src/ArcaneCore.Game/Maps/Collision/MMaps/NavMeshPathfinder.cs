@@ -185,6 +185,81 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? NavMeshTile.ParseFile(File.ReadAllBytes(path)) : null);
     }
 
+    private readonly Dictionary<(uint Map, NavTerrain Include, NavTerrain Exclude), Task<NavRegionGraph?>> _regionGraphs = [];
+
+    /// <summary>
+    /// The map's region graph for polygons with some flag of <paramref name="include"/> and none of <paramref name="exclude"/>
+    /// (<see cref="NavRegionGraph"/>), or null: the map has no navmesh, the graph is still being built, or building it failed. The
+    /// first call starts the build on the thread pool (it reads every tile of the map once: seconds for a continent) and every call
+    /// answers at once; nothing is read on the calling thread. World thread.
+    /// </summary>
+    public NavRegionGraph? RegionGraph(uint mapId, NavTerrain include, NavTerrain exclude)
+    {
+        Task<NavRegionGraph?>? build = RegionGraphTask(mapId, include, exclude);
+        return build is { IsCompletedSuccessfully: true } ? build.Result : null;
+    }
+
+    /// <summary>The build of <see cref="RegionGraph"/>, started if it was not (null: the map has no navmesh). Tests await it.</summary>
+    public Task<NavRegionGraph?>? RegionGraphTask(uint mapId, NavTerrain include, NavTerrain exclude)
+    {
+        if (GetNavMesh(mapId) is null)
+        {
+            return null;
+        }
+
+        (uint, NavTerrain, NavTerrain) key = (mapId, include, exclude);
+        if (!_regionGraphs.TryGetValue(key, out Task<NavRegionGraph?>? build))
+        {
+            string directory = _directory;
+            ILogger logger = _logger;
+            build = Task.Run(() =>
+            {
+                try
+                {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    NavRegionGraph graph = NavRegionGraph.Build(directory, mapId, include, exclude);
+                    logger.LogInformation("MMaps: map {MapId} region graph built from {Tiles} tiles in {Ms} ms: {Regions} regions, {Links} portal links",
+                        mapId, graph.TileCount, watch.ElapsedMilliseconds, graph.RegionCount, graph.LinkCount);
+                    return graph;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "MMaps: map {MapId} region graph could not be built; long routes there plan without it", mapId);
+                    return null;
+                }
+            });
+            _regionGraphs[key] = build;
+        }
+
+        return build;
+    }
+
+    /// <summary>
+    /// The region of <paramref name="graph"/> under world position <paramref name="at"/>: the polygon a path query would start or end on
+    /// (the same search boxes and filter, <paramref name="options"/>), its tile read when <see cref="PathOptions.LoadTiles"/> allows. -1
+    /// when no polygon is found there.
+    /// </summary>
+    public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!IsFinite(at) || GetNavMesh(graph.MapId) is not { } mesh)
+        {
+            return -1;
+        }
+
+        if (options.LoadTiles)
+        {
+            _queryStamp++;
+            _queryLoads = 0;
+            EnsureTile(graph.MapId, at);
+        }
+
+        Vector3 recast = NavMeshFormat.ToRecast(at);
+        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, out NavPolyRef poly, out _, out _)
+            ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
+    }
+
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
         options ??= PathOptions.Default;
