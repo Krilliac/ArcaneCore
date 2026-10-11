@@ -222,6 +222,67 @@ public sealed class TerrainTests : IDisposable
         Assert.Equal(1, manager.FilesLoaded);
     }
 
+    /// <summary>
+    /// <see cref="TerrainManager.ReadZoneAndAreaIdDetached"/> reads the file itself and must equal the cached lookup. Every one of the
+    /// 256 cells of the tile has its own area, so a wrong cell (swapped axes, wrong index) or wrong tile gives a different answer.
+    /// </summary>
+    [Fact]
+    public void DetachedZoneAndAreaRead_EqualsTheCachedLookup_ForEveryCell_AndFailsSoftWhereThereIsNoTile()
+    {
+        string maps = Directory.CreateDirectory(Path.Combine(_dataDir, "maps")).FullName;
+        File.WriteAllBytes(Path.Combine(maps, TerrainTile.FileName(0, 32, 32)), new MapFileBuilder
+        {
+            AreaFlags = Enumerable.Range(0, 256).Select(i => (ushort)(1000 + i)).ToArray(),
+        }.Build());
+        File.WriteAllBytes(Path.Combine(maps, TerrainTile.FileName(0, 31, 32)), [1, 2, 3]); // corrupt
+        File.WriteAllBytes(Path.Combine(maps, TerrainTile.FileName(1, 32, 32)), new MapFileBuilder { GridArea = 41 }.Build());
+
+        // Area 5000 + i is the cell with flag 1000 + i; the zone of cell i is 100 + i / 16 (a parent area, itself a zone).
+        var areas = new List<AreaTemplate> { new(41, 1, 41, 41, 0, 1, "Whole", 0, 0) };
+        for (int i = 0; i < 256; i++)
+            areas.Add(new AreaTemplate((uint)(5000 + i), 0, (uint)(100 + (i / 16)), (uint)(1000 + i), 0, 1, "Cell" + i, 0, 0));
+        for (uint z = 100; z < 116; z++)
+            areas.Add(new AreaTemplate(z, 0, 0, 0, 0, 1, "Zone" + z, 0, 0));
+        var registry = new MapRegistry([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", "")]);
+        var manager = new TerrainManager(_dataDir) { Areas = new AreaTable(areas, registry) };
+        TerrainInfo cached = manager.For(0);
+
+        // The centre of every cell of tile (32, 32): x in (-533.3, 0], y in (-533.3, 0].
+        float cell = GridDefines.SizeOfGrids / 16f;
+        var seen = new HashSet<uint>();
+        for (int cx = 0; cx < 16; cx++)
+        {
+            for (int cy = 0; cy < 16; cy++)
+            {
+                float x = -((cx + 0.5f) * cell), y = -((cy + 0.5f) * cell);
+                (uint, uint) expected = cached.GetZoneAndAreaId(x, y, 0f);
+                (uint zone, uint area) = manager.ReadZoneAndAreaIdDetached(0, x, y, manager.Areas);
+                Assert.Equal(expected, (zone, area));
+                Assert.InRange(area, 5000u, 5255u);
+                Assert.Equal(100u + ((area - 5000) / 16), zone);
+                seen.Add(area);
+            }
+        }
+
+        Assert.Equal(256, seen.Count); // every cell answered with its own area
+
+        // The detached read does not touch the tile cache.
+        var fresh = new TerrainManager(_dataDir) { Areas = manager.Areas };
+        Assert.Equal(cached.GetZoneAndAreaId(-300f, -20f, 0f), fresh.ReadZoneAndAreaIdDetached(0, -300f, -20f, fresh.Areas));
+        Assert.Equal(0, fresh.FilesLoaded);
+
+        // A tile-wide area, another map's file, a corrupt file, a missing file, outside the grid and not-a-number: the cached lookup's answer.
+        Assert.Equal((41u, 41u), manager.ReadZoneAndAreaIdDetached(1, X, Y, manager.Areas));
+        Assert.Equal(manager.For(1).GetZoneAndAreaId(X, Y, 0f), manager.ReadZoneAndAreaIdDetached(1, X, Y, manager.Areas));
+        Assert.Equal((0u, 0u), manager.ReadZoneAndAreaIdDetached(0, 100f, Y, manager.Areas)); // tile 31,32 is corrupt
+        Assert.Equal(cached.GetZoneAndAreaId(100f, Y, 0f), manager.ReadZoneAndAreaIdDetached(0, 100f, Y, manager.Areas));
+        Assert.Equal((0u, 0u), manager.ReadZoneAndAreaIdDetached(0, 3000f, 3000f, manager.Areas)); // no file
+        Assert.Equal((0u, 0u), manager.ReadZoneAndAreaIdDetached(0, 40000f, 0f, manager.Areas));
+        Assert.Equal((0u, 0u), manager.ReadZoneAndAreaIdDetached(0, float.NaN, 0f, manager.Areas));
+        Assert.Equal((0u, 0u), new TerrainManager(null).ReadZoneAndAreaIdDetached(0, X, Y, manager.Areas));
+        Assert.Throws<ArgumentNullException>(() => manager.ReadZoneAndAreaIdDetached(0, X, Y, null!));
+    }
+
     [Fact]
     public void Tiles_AreRefCounted_AndFreedByTheCleanUp()
     {
