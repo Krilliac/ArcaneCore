@@ -462,6 +462,39 @@ public sealed class PlayerbotBattlegroundWorldTests
         });
     }
 
+    [Fact]
+    public async Task BotWithBattlegroundBusiness_LeashedByFollow_IsLetGo_AndStaysLeashed()
+    {
+        // .playerbot follow (ManagedPlayerbotFeature.Leash) on a bot the coordinator drives: the coordinator's drive comes first at each think,
+        // so the leash holds only because the leashed bot is no longer free and the coordinator's update (before the think) releases it.
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await using WorldTestClient real = await world.EnterWorldAsync("BGLEASH", "Bgleashgm", AccountSecurity.Player);
+        ObjectGuid realGuid = await world.Host.OnWorldAsync(() => world.Host.World.OnlinePlayers.Single(p => p.Name == "Bgleashgm").Guid);
+        await RunAsync(world, "bg-leash", async context =>
+        {
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            ScenarioBot bot = await AutonomousAsync(context, "Bgleashbot", race: 1);
+            await context.StepAsync("the coordinator drives the bot to its battlemaster", () => context.WaitUntilAsync("driven",
+                () => coordinator.Drives(bot.BotId), TimeSpan.FromSeconds(30)));
+            PlayerbotOperationResult leashed = await context.ReadAsync(() => context.Services.GetRequiredService<ManagedPlayerbotFeature>()
+                .Leash(bot.BotId, context.World.FindOnlinePlayer(realGuid)!, stay: false));
+            ScenarioContext.Expect(leashed.Success, $"the leash was refused ({leashed.Code})");
+            await context.StepAsync("for ten seconds the coordinator holds nothing of the bot and it never goes for a battleground", async () =>
+            {
+                bool held = false;
+                await context.World.AdvanceClockUntilAsync(10_000, () =>
+                {
+                    held |= coordinator.Holds(bot.BotId);
+                    return false;
+                });
+                ScenarioContext.Expect(!held, "the coordinator took the leashed bot back");
+                PlayerbotStatus? status = await context.ReadAsync(() => context.Services.GetRequiredService<ManagedPlayerbotFeature>().Snapshot().SingleOrDefault(s => s.BotId == bot.BotId));
+                ScenarioContext.Expect(status is { } s && s.Goal != PlayerbotGoalKind.Battleground && s.Risk != "decision=battleground",
+                    $"the leashed bot still reports battleground business ({status?.Goal} {status?.Risk})");
+            });
+        });
+    }
+
     // --- the objectives ------------------------------------------------------------------------------------------------
 
     [Fact]
