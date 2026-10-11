@@ -248,6 +248,8 @@ internal static class PlayerbotNavigation
             return true;
         }
 
+        if (TryClimbIndoors(map, start, destination, options, partial ? path : null, out route)) return true;
+
         // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
         // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by; any other refusal stays one.
         if ((path.Type & PathType.NoPath) != 0
@@ -445,6 +447,42 @@ internal static class PlayerbotNavigation
         }
 
         return false;
+    }
+
+    /// <summary>How far (flat) from an indoor destination the walkable mesh must end for <see cref="TryClimbIndoors"/>.</summary>
+    internal const float ClimbReachYards = 20f;
+
+    /// <summary>How much longer than the walkable mesh's partial way the way up <see cref="TryClimbIndoors"/> takes may be.</summary>
+    internal const float ClimbExtraYards = 60f;
+
+    /// <summary>
+    /// The way to a destination inside a building over its stairs, where the mesh flags the stairs as steep slopes. The generator marks
+    /// polygons steeper than a player walks up (<see cref="NavTerrain.SteepSlopes"/>) whatever they lie on, and a flight of stairs in a
+    /// model is such a ramp, while a player climbs it step by step. Taken only when the destination is indoors (inside a model's group,
+    /// <see cref="MapCollision.IsOutdoors"/>), the walkable mesh ends within <see cref="ClimbReachYards"/> of it (flat, the stairs
+    /// above or below), and the way with steep polygons reaches it at most <see cref="ClimbExtraYards"/> longer: a slope of the terrain
+    /// outdoors stays refused (<see cref="TryLeaveSteepGround"/>). One or two queries more, only for an indoor destination the walkable
+    /// mesh does not reach.
+    /// <para>
+    /// Neeka Bloodscar, the ender of quest 1418, stands at the top of the Kargath tower (-6672.3, -2240.5, 278.6); the walkable mesh
+    /// leads up its lower stairs and ends 13 yards below her, where the upper flight is flagged steep. Every bot that reached Kargath
+    /// stood there (issue #194).
+    /// </para>
+    /// </summary>
+    private static bool TryClimbIndoors(Map map, Vector3 start, Vector3 destination, PlayerbotOptions options, PathResult? walk,
+        out PlayerbotRoute? route)
+    {
+        route = null;
+        if (map.Collision.IsOutdoors(destination.X, destination.Y, destination.Z + 1f)) return false;
+        PathResult reach = walk ?? Query(map, start, destination, options, partial: true, steep: false);
+        if (!reach.HasPath || (reach.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0 || Reaches(reach) || EndsAt(reach, destination)
+            || Vector2.Distance(Flat(reach.End), Flat(destination)) > ClimbReachYards)
+            return false;
+        PathResult climb = Query(map, start, destination, options, partial: false, steep: true);
+        if (!IsUsablePath(climb, options.MaxPathPoints, reach.Length + ClimbExtraYards) || !(Reaches(climb) || EndsAt(climb, destination)))
+            return false;
+        route = Bounded(climb.Points, options, complete: true);
+        return route is not null;
     }
 
     /// <summary>
