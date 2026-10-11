@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
@@ -276,7 +277,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones);
         if (!ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey)
         {
-            _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones));
+            // Where each graveyard really stands, from the terrain (world thread; the tiles stay loaded): a linked graveyard in another zone
+            // is left out, and each kept one carries the level of the sub-area it stands in.
+            TerrainManager terrain = WorldMaps.Of(world).Terrain;
+            _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
+                terrain.Enabled ? l => terrain.For(l.MapId).GetZoneAndAreaId(l.X, l.Y, l.Z) : null);
+            logger.LogInformation(
+                "Playerbot population atlas: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Dropped} graveyard links left out as standing in another zone{List}",
+                _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde), _atlas.Dropped.Count,
+                _atlas.Dropped.Count == 0 ? string.Empty
+                    : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
             _atlasAreas = areas;
             _atlasGraveyards = graveyards;
             _atlasKey = key;
@@ -555,15 +565,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
         int moved = 0;
         // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
-        // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. Most out-levelled first.
+        // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
+        // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
+        // walked over a border into a harder zone) is moved the same way. The worst misfit first.
         foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Vetoed
                 && atlas.Find(f.ZoneId) is not null)
-            .OrderByDescending(f => f.Level - atlas.Find(f.ZoneId)!.MaxLevel).ThenBy(f => f.BotId))
+            .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f)).ThenBy(f => f.BotId))
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
             PopulationZone current = atlas.Find(bot.ZoneId)!;
-            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin)
+            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, pop.ZoneLevelSlack))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
                 if (member.ZoneId != current.ZoneId)
@@ -588,6 +600,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         return moved;
+
+        // How far the bot is outside its zone's levels, above or below (0 or less when it fits).
+        static int Misfit(PopulationZone zone, PopulationBotFacts bot) => Math.Max(bot.Level - zone.MaxLevel, zone.FloorFor(bot.Team) - bot.Level);
     }
 
     /// <summary>The status as chat lines (<c>.playerbot population status</c>).</summary>

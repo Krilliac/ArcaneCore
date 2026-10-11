@@ -385,6 +385,40 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task AnUnderLevelledBot_IsRelocatedToAZoneThatFitsItsLevel()
+    {
+        // Issue #177: a level 9 bot homed in Duskwood (whose graveyards stand in level 24-26 areas) died in a loop at Raven Hill, and the
+        // relocation only ever moved bots that were above their zone. Westfall's lowest place is 12; minus the slack (4) a level 5 bot is
+        // below anywhere it could have been put there.
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        await SetBotAsync(world, bot, 5, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Contains("moved 1", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
+    public async Task ABotAtTheSlackBelowItsZone_StaysWhereItIs()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        // Level 8 is Westfall's lowest (12) minus the slack (4): it could have been placed there, so it is not moved.
+        await SetBotAsync(world, bot, 8, PopulationTestHost.Westfall);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Westfall, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
     public async Task ABotInACapital_IsNeverRelocated_WhateverItsLevel()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);

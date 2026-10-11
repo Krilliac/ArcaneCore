@@ -150,6 +150,113 @@ public sealed class PopulationZoneAtlasTests
         Assert.Equal((1, 10), (placement.LowLevel, placement.HighLevel));
     }
 
+    // Rows of the r5 world DB (area_template, world_safe_locs, game_graveyard_zone) and, in RealTerrain, the zone and area the 5875
+    // terrain (Map.GetZoneAndAreaId) gives each graveyard's position. Duskwood's lowest sub-area is The Darkened Bank (10), but its
+    // graveyards are 911 "Duskwood, Ravenhill" (both teams; stands in Raven Hill, 24), 3 "Duskwood, Darkshire" (Alliance; Darkshire, 25)
+    // and 104 "Redridge Mountains, Lakeshire" (Horde; stands in Redridge). Western Plaguelands (46-57) is linked to 509 Chillwind Camp
+    // (Alliance; in no levelled sub-area), 569 Bulwark (Horde; stands on the Tirisfal side, in Tirisfal's The Bulwark, 9) and 829 "Alterac
+    // Valley, Alliance Exit" (both; stands in Alterac Mountains' Growless Cave, 34, beside level 61 Stormpike Battleguards). Durotar
+    // (5-10) is a Horde starter zone with one graveyard.
+    private static List<AreaTemplate> RealZones() =>
+    [
+        Area(10, 0, 0, 0, 0, "Duskwood", AreaTeams.None), Area(799, 0, 10, 0, 10, "The Darkened Bank", 0), Area(94, 0, 10, 0, 24, "Raven Hill", 0),
+        Area(492, 0, 10, 0, 26, "Raven Hill Cemetery", 0), Area(42, 0, 10, 0, 25, "Darkshire", 0), Area(1098, 0, 10, 0, 30, "Manor Mistmantle", 0),
+        Area(44, 0, 0, 0, 0, "Redridge Mountains", AreaTeams.None), Area(69, 0, 44, 0, 15, "Lakeshire", 0),
+        Area(28, 0, 0, 0, 0, "Western Plaguelands", AreaTeams.None), Area(202, 0, 28, 0, 46, "The Writhing Haunt", 0),
+        Area(813, 0, 28, 0, 52, "The Bulwark", 0), Area(2297, 0, 28, 0, 55, "Darrowmere Lake", 0),
+        Area(85, 0, 0, 0, 0, "Tirisfal Glades", AreaTeams.Horde), Area(159, 0, 85, 0, 5, "Brill", 0), Area(152, 0, 85, 0, 9, "The Bulwark", 0),
+        Area(36, 0, 0, 0, 0, "Alterac Mountains", AreaTeams.None), Area(1683, 0, 36, 0, 34, "Growless Cave", 0), Area(1682, 0, 36, 0, 39, "Dandred's Fold", 0),
+        Area(14, 1, 0, 0, 0, "Durotar", AreaTeams.Horde), Area(362, 1, 14, 0, 5, "Razor Hill", 0), Area(817, 1, 14, 0, 10, "Skull Rock", 0),
+    ];
+
+    private static GraveyardCatalog RealGraveyards()
+    {
+        WorldSafeLoc[] locs =
+        [
+            new(3, 0, -10774.3f, -1189.67f, 33.15f, 3.84f, "Duskwood, Darkshire"),
+            new(104, 0, -9403.25f, -2037.69f, 58.37f, 0.93f, "Redridge Mountains, Lakeshire"),
+            new(911, 0, -10606.8f, 294.05f, 31.8f, 0f, "Duskwood, Ravenhill"),
+            new(509, 0, 908.32f, -1520.29f, 55.04f, 4.99f, "Western Plaguelands, Chillwind Camp"),
+            new(569, 0, 1750.34f, -669.79f, 44.57f, 3.39f, "Western Plaguelands, Bulwark"),
+            new(829, 0, 101.14f, -184.93f, 127.34f, 4.78f, "Alterac Valley, Alliance Exit"),
+            new(20, 1, 340f, -4686f, 16f, 0f, "Durotar, Razor Hill"),
+        ];
+        GraveyardLink[] links =
+        [
+            new(3, 10, GraveyardCatalog.TeamAlliance), new(104, 10, GraveyardCatalog.TeamHorde), new(911, 10, 0),
+            new(509, 28, GraveyardCatalog.TeamAlliance), new(569, 28, GraveyardCatalog.TeamHorde), new(829, 28, 0),
+            new(20, 14, 0),
+        ];
+        return GraveyardCatalog.Build(new GraveyardContent(locs, links), null, out _);
+    }
+
+    private static (uint ZoneId, uint AreaId) RealTerrain(WorldSafeLoc location) => location.Id switch
+    {
+        3 => (10, 42),
+        104 => (44, 44),
+        911 => (10, 94),
+        509 => (28, 28),
+        569 => (85, 152),
+        829 => (36, 1683),
+        20 => (14, 362),
+        _ => (0, 0),
+    };
+
+    [Fact]
+    public void ALowLevelBot_IsNeverPlacedAtAGraveyardInAnAreaFarAboveIt_Issue177()
+    {
+        PopulationZoneAtlas atlas = PopulationZoneAtlas.Build(RealZones(), RealGraveyards(), [0, 1], new HashSet<uint>(), RealTerrain);
+        // Band 0 (1-10) for a troll: Duskwood (empty) used to win over Durotar (one bot) with levels 6-10, and the bot landed at Raven Hill.
+        var random = new Random(177);
+        for (int i = 0; i < 200; i++)
+        {
+            PopulationPlacement placement = atlas.Pick(1, 10, Team.Horde, 4, new Dictionary<uint, int> { [14] = 1 }, random)!;
+            Assert.Equal(14u, placement.Zone.ZoneId);
+        }
+
+        PopulationZone duskwood = atlas.Find(10)!;
+        Assert.Equal(10, duskwood.MinLevel); // the zone's range is unchanged: the floor sits on the graveyard
+        Assert.Equal(24, duskwood.FloorOf(duskwood.HordeLocations.Single()));
+        Assert.False(PopulationZoneAtlas.Fits(duskwood, 9, Team.Horde, 4));
+        Assert.False(PopulationZoneAtlas.Fits(duskwood, 19, Team.Horde, 4));
+        Assert.True(PopulationZoneAtlas.Fits(duskwood, 20, Team.Horde, 4)); // Raven Hill (24) minus the slack
+        Assert.True(PopulationZoneAtlas.UnderLevelled(duskwood, 9, Team.Horde, 4));
+        Assert.False(PopulationZoneAtlas.UnderLevelled(duskwood, 20, Team.Horde, 4));
+
+        // A band that reaches Duskwood gets a level that fits the graveyard it lands at, not the zone's lowest sub-area.
+        for (int i = 0; i < 200; i++)
+        {
+            PopulationPlacement placement = atlas.Pick(11, 30, Team.Alliance, 4, new Dictionary<uint, int>(), random)!;
+            Assert.Equal(10u, placement.Zone.ZoneId);
+            Assert.Equal(placement.Location.Id == 3 ? 21 : 20, placement.LowLevel);
+        }
+    }
+
+    [Fact]
+    public void AGraveyardStandingInAnotherZone_IsNeverAPlacement_Issue178()
+    {
+        PopulationZoneAtlas atlas = PopulationZoneAtlas.Build(RealZones(), RealGraveyards(), [0, 1], new HashSet<uint>(), RealTerrain);
+        PopulationZone plaguelands = atlas.Find(28)!;
+        Assert.Equal([509u], plaguelands.AllianceLocations.Select(l => l.Id).ToArray());
+        Assert.Empty(plaguelands.HordeLocations); // the Bulwark graveyard stands in Tirisfal, 829 in Alterac Mountains
+        Assert.Equal([911u], atlas.Find(10)!.HordeLocations.Select(l => l.Id).ToArray()); // Lakeshire is in Redridge
+        Assert.Equal(
+            [new PopulationDroppedLocation(10, 104, 44), new PopulationDroppedLocation(28, 569, 85), new PopulationDroppedLocation(28, 829, 36)],
+            atlas.Dropped.OrderBy(d => d.ZoneId).ThenBy(d => d.LocationId).ToArray());
+
+        var random = new Random(178);
+        for (int i = 0; i < 200; i++)
+        {
+            Assert.Equal(509u, atlas.Pick(55, 55, Team.Alliance, 4, new Dictionary<uint, int>(), random)!.Location.Id);
+            Assert.Null(atlas.Pick(55, 55, Team.Horde, 4, new Dictionary<uint, int>(), random));
+        }
+
+        // Without terrain nothing is known: the links stand as the world DB has them.
+        PopulationZoneAtlas blind = PopulationZoneAtlas.Build(RealZones(), RealGraveyards(), [0, 1], new HashSet<uint>());
+        Assert.Equal([569u, 829u], blind.Find(28)!.HordeLocations.Select(l => l.Id).Order().ToArray());
+        Assert.Empty(blind.Dropped);
+    }
+
     [Fact]
     public void RealAreaTable_ElwynnIsAllianceFiveToTen_TheBarrensIsHorde()
     {

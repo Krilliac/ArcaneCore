@@ -135,15 +135,16 @@ public sealed class PlayerbotPopulationOptions
     ];
 
     /// <summary>
-    /// How many levels below its lowest sub-area level a zone still accepts a bot (0..10). The area table puts the zone's level on its
-    /// sub-areas, and a starter zone's lowest sub-area is level 4 or 5, so the default 4 lets a level 1 bot start there.
+    /// How many levels below a placement's floor a bot may be (0..10). The floor is the level of the sub-area the graveyard stands in,
+    /// or the zone's lowest sub-area level when the terrain does not know; a starter zone's is level 4 or 5, so the default 4 lets a
+    /// level 1 bot start there. A bot further below every floor of its zone is relocated like an out-levelled one.
     /// </summary>
     public int ZoneLevelSlack { get; set; } = 4;
 
     /// <summary>How many levels a bot may be above the highest level of its zone before it is relocated (0..10).</summary>
     public int OutlevelMargin { get; set; } = 2;
 
-    /// <summary>What happens to a bot that out-levelled its zone (Teleport by default).</summary>
+    /// <summary>What happens to a bot that out-levelled its zone or is below it (Teleport by default).</summary>
     public PopulationRelocation Relocation { get; set; } = PopulationRelocation.Teleport;
 
     /// <summary>The most bots relocated in one pass (0..50).</summary>
