@@ -121,7 +121,8 @@ island's edge nearest the goal and the next plan is refused, whatever the goal. 
 (x -10305..-10274, y 1355..1385) the collision data closes it too: the wall stands 1.7 to 3 yards above the ground inside, and no floor
 within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136) Wfbotac and Wfbotaj stalled there with
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
-across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, not a failed tram or lift trip), the brain asks
+across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
+set-aside), the brain asks
 `PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 60 yards out; an island ends every one within 45 yards) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
