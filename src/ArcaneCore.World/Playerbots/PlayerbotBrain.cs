@@ -763,6 +763,45 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attacking = false;
         _lootOpened = false;
         PlayerbotMovementControl.Stop(_session, player);
+        if (shareable) EscapeIsland(player);
+    }
+
+    /// <summary>
+    /// A stall gave a goal up on a navigation-mesh island (<see cref="PlayerbotNavigation.IsOnMeshIsland"/>): no route leaves it, so
+    /// the next goal would stall the same, and so would every one after it. Out of combat and alive, the bot is moved off as from an
+    /// unsafe landing (<see cref="EscapeLanding"/>): a homed bot teleports to its home's centre
+    /// (<see cref="PlayerbotHomeTeleportReason.Island"/>, at most once per home-teleport cooldown), a bot without a home to its bind point.
+    /// Only in the open world: a dungeon's own map is left to its group and the instance.
+    /// <para>
+    /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): Wfbotac and Wfbotaj stood inside the round wall of the Molsen Farm
+    /// (Westfall), on an island the mesh joins to nothing, and gave up goal after goal there for hours, across restarts (Wfbotac was saved
+    /// there, and stalled within two minutes of every login). True when the bot was moved.
+    /// </para>
+    /// </summary>
+    private bool EscapeIsland(Player player)
+    {
+        if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
+        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        uint now = _session.World.NowMs;
+        var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (_home is { } home)
+        {
+            _homeReturn.Evaluate(player, home, now);
+            if (!_homeReturn.TryTeleport(_session, player, home, _options, PlayerbotHomeTeleportReason.Island, now)) return false;
+            DropIntent();
+            _goal = PlayerbotGoalKind.Home;
+            return true;
+        }
+
+        TeleportService? teleports = _session.Services.GetService<ArcaneCore.World.Teleport.TeleportFeature>()?.Teleports;
+        HomeBind bind = player.Home;
+        if (teleports is null || bind == default || !teleports.TeleportToHomebind(player)) return false;
+        DropIntent();
+        _goal = PlayerbotGoalKind.Explore;
+        _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>().LogInformation(
+            "Playerbot {Bot} stalled on ground no route leaves at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: teleports to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
+            player.Name, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
+        return true;
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
