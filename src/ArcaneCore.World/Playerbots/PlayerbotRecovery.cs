@@ -73,7 +73,13 @@ internal enum PlayerbotSpiritHealerStep
     /// <summary>No healer in sight: walk to the graveyard of this position, where one stands.</summary>
     WalkToGraveyard,
 
-    /// <summary>No healer and no graveyard, or the fallback stalled too: the recovery faults.</summary>
+    /// <summary>
+    /// No healer in sight and no graveyard found from here (the ghost's area not known yet, a healer not yet spawned or seen): stand
+    /// and look again next think. Not progress, so a ghost that never finds either faults after <see cref="PlayerbotRecovery.NoProgressMs"/>.
+    /// </summary>
+    WaitForHealer,
+
+    /// <summary>The fallback stalled too (no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>, or a walk stuck): the recovery faults.</summary>
     Fault,
 }
 
@@ -93,8 +99,8 @@ internal enum PlayerbotSpiritHealerStep
 /// <item><description>The bound is progress, not a count of thinks, judged only after more than <see cref="MinBoundThinks"/> thinks that acted (a think gap under load is no stall). When nothing moved the recovery on for <see cref="NoProgressMs"/>,
 /// or a walk stopped closing on its goal (or could not be planned) for <see cref="StuckMs"/>, or there is no way back to the body,
 /// the ghost takes the spirit healer instead (CMSG_SPIRIT_HEALER_ACTIVATE, vmangos NPCHandler.cpp:416): the nearest healer it can
-/// see, else it walks to the graveyard of its position, where one stands. Only when that fallback stalls the same way does the
-/// recovery fault (<see cref="SpiritHealerFailed"/>); a body that cannot even be released for <see cref="NoProgressMs"/> faults with
+/// see, else it walks to the graveyard of its position, where one stands, else it waits and looks again (nothing found once is no
+/// fault). Only when that fallback stalls the same way does the recovery fault (<see cref="SpiritHealerFailed"/>); a body that cannot even be released for <see cref="NoProgressMs"/> faults with
 /// <see cref="Stalled"/>. Before, a stall or a stuck walk threw at once, and the fault quarantined the bot.</description></item>
 /// <item><description>Waiting at the body while the reclaim delay runs (30, 60 or 120 s by recent deaths, vmangos
 /// GetCorpseReclaimDelay) is progress (live, 2026-10-07: the bots that faulted were only waiting); waiting for hostiles, or walking
@@ -230,7 +236,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (stalled) return PlayerbotSpiritHealerStep.Fault;
         if (healerKnown) return healerInReach ? PlayerbotSpiritHealerStep.Activate : PlayerbotSpiritHealerStep.WalkToHealer;
-        return graveyardKnown ? PlayerbotSpiritHealerStep.WalkToGraveyard : PlayerbotSpiritHealerStep.Fault;
+        // Neither is a fault by itself: one look that finds nothing can be a transient (the bound decides, Stuck).
+        return graveyardKnown ? PlayerbotSpiritHealerStep.WalkToGraveyard : PlayerbotSpiritHealerStep.WaitForHealer;
     }
 
     internal bool Update(Player player, uint elapsedMs)
@@ -372,6 +379,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 return Walk(player, new Vector3(healer!.X, healer.Y, healer.Z), healer.Guid, elapsedMs, now);
             case PlayerbotSpiritHealerStep.WalkToGraveyard:
                 return Walk(player, new Vector3(graveyard!.X, graveyard.Y, graveyard.Z), graveyard, elapsedMs, now);
+            case PlayerbotSpiritHealerStep.WaitForHealer:
+                // Not progress: the no-progress bound turns a ghost that never finds a healer or a graveyard into the fault.
+                StandStill(player);
+                return false;
             default:
                 throw new InvalidOperationException(SpiritHealerFailed);
         }

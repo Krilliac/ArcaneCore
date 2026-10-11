@@ -67,7 +67,11 @@ when the stored values are clamped to them.
   `Player.cpp:20228-20260`: nothing when the ghost time is after the window or the delay has passed).
 - A ghost without a body comes back alive at half health and mana, rage empty (`Player::LoadCorpse` ->
   `ResurrectPlayer(0.5f)`, `Player.cpp:15427-15439`, which runs only for a player that is not alive and
-  has no corpse).
+  has no corpse). Its saved ghost aura (8326, and the wisp's 20584) is not restored: vmangos loads the
+  auras first (`Player.cpp:14971`) and that `ResurrectPlayer` removes the ghost form again
+  (`RemoveGhostForm`, `Player.cpp:4571-4578`). Restoring it gave a living player `PLAYER_FLAGS_GHOST`,
+  whose next release was refused (live 2026-10-11: managed bots faulting
+  `playerbot-recovery-spirit-healer-failed`; `SpellFeature.OnPlayerLoggedIn`).
 - A character that is not a ghost loads alive whatever health it was stored with, including 0 (a death
   that was never released). vmangos sets the dead state at load only from `PLAYER_FLAGS_GHOST`
   (`Player.cpp:14973-14975`), so `LoadCorpse` does not resurrect such a player at half. It restores the
