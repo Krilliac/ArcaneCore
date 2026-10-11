@@ -16,6 +16,19 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_tileLoads;
     [ThreadStatic] private static long t_tileLoadTicks;
     [ThreadStatic] private static long t_capped;
+    [ThreadStatic] private static bool t_captureTiles;
+    [ThreadStatic] private static TileLoadDetail t_slowestTile;
+
+    /// <summary>The slowest tile load since BeginTileCapture on this thread.</summary>
+    public static TileLoadDetail SlowestTile => t_slowestTile;
+
+    public static void BeginTileCapture()
+    {
+        t_slowestTile = default;
+        t_captureTiles = true;
+    }
+
+    public static void EndTileCapture() => t_captureTiles = false;
 
     /// <summary>Searches on this thread so far that hit their node cap (<see cref="PathOptions.MaxSearchNodes"/>).</summary>
     public static long CappedSearches => t_capped;
@@ -36,12 +49,17 @@ public static class PathSearchCounters
     }
 
     /// <summary>A navigation tile was read for a query, taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks).</summary>
-    internal static void RecordTileLoad(long ticks)
+    internal static void RecordTileLoad(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit)
     {
         t_tileLoads++;
         t_tileLoadTicks += ticks;
+        if (t_captureTiles && ticks > t_slowestTile.Ticks)
+            t_slowestTile = new TileLoadDetail(mapId, tileX, tileY, ticks, prefetchHit);
     }
 }
+
+/// <summary>Largest synchronous navmesh tile installation within an active capture.</summary>
+public readonly record struct TileLoadDetail(uint MapId, int X, int Y, long Ticks, bool PrefetchHit);
 
 /// <summary>A snapshot of <see cref="PathSearchCounters"/>; the difference of two is the work between them.</summary>
 public readonly record struct PathSearchTotals(long Searches, long Nodes, long Expansions, long TileLoads, long TileLoadTicks, long Capped)

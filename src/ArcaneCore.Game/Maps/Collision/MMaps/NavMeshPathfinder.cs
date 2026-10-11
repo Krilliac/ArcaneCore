@@ -80,7 +80,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
     /// <summary>Load a terrain tile's navmesh tile (vmangos <c>MMapManager::loadMap</c>). False when nothing was loaded.</summary>
     public bool LoadTile(uint mapId, int tileX, int tileY)
+        => LoadTile(mapId, tileX, tileY, out _);
+
+    private bool LoadTile(uint mapId, int tileX, int tileY, out bool prefetchHit)
     {
+        prefetchHit = false;
         if (GetNavMesh(mapId) is not { } mesh)
         {
             return false;
@@ -94,6 +98,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
         if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile? prefetched))
         {
+            prefetchHit = true;
             if (mesh.AddTile(tileX, tileY, prefetched))
             {
                 return true;
@@ -407,8 +412,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool loaded = LoadTile(mapId, terrain.X, terrain.Y);
-        PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted);
+        bool loaded = LoadTile(mapId, terrain.X, terrain.Y, out bool prefetchHit);
+        PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
+            mapId, terrain.X, terrain.Y, prefetchHit);
         if (!loaded)
         {
             if (_noTile.Count < 16_384)

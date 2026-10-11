@@ -134,6 +134,7 @@ internal sealed class PlayerbotStallWatch
         // A death loop is over once the bot has lived through a whole stall bound.
         if (_deathLoopReport is not null && unchecked(nowMs - _aliveSinceMs) >= stallMs) _deathLoopReport = null;
         Fingerprint current = fingerprint(player);
+        PlayerbotThinkProbe.Phase("stall decision");
         if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
         {
