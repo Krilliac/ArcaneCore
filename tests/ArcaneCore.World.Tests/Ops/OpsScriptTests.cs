@@ -658,7 +658,7 @@ public sealed class OpsScriptTests
             $seen = 0
             while (-not (Test-Path -LiteralPath $stopFile) -and (Get-Date) -lt $deadline) {
                 $sent = @(Get-Content -LiteralPath $scriptFile)
-                while ($seen -lt $sent.Count) { Write-Output 'Wfbotd state=Running desired=True goal=none error=none'; $seen++ }
+                while ($seen -lt $sent.Count) { Write-Output ('{0} [127.0.0.1:50000] > {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $sent[$seen]); Write-Output 'Wfbotd state=Running desired=True goal=none error=none'; $seen++ }
                 Start-Sleep -Milliseconds 20
             }
             exit 0
@@ -672,6 +672,91 @@ public sealed class OpsScriptTests
         Assert.True(code == 0, $"exit {code}: {output}");
         Assert.Contains("sent 1 of 1 commands", output);
         Assert.DoesNotContain("no log line matched", output);
+    }
+
+    // A fake arcane-mock live that replays the script file slowly and, like the real one, logs '<time> [<endpoint>] > <command>' per
+    // replayed line. MillisecondsPerLine is its replay speed; DeliverAtMost (0 = all) is how many lines it ever sends, after which it
+    // ignores the file and exits 1.5 s after its last send.
+    private static string WriteCommands(string directory, params string[] lines)
+    {
+        string path = Path.Combine(directory, "commands.txt");
+        File.WriteAllLines(path, lines);
+        return path;
+    }
+
+    private static string WriteSlowMock(string directory, int millisecondsPerLine, int deliverAtMost)
+    {
+        string mock = Path.Combine(directory, "slow-mock.ps1");
+        File.WriteAllText(mock, $$"""
+            $args_ = $args
+            function Get-Arg([string]$Name) { $i = [array]::IndexOf($args_, $Name); $args_[$i + 1] }
+            $scriptFile = Get-Arg '--script-file'
+            $stopFile = Get-Arg '--stop-file'
+            $deadline = (Get-Date).AddSeconds([int](Get-Arg '--duration-s'))
+            Write-Output 'IN WORLD as Opsgm'
+            $seen = 0
+            $firstAt = $null
+            while (-not (Test-Path -LiteralPath $stopFile) -and (Get-Date) -lt $deadline) {
+                $lines = @(Get-Content -LiteralPath $scriptFile)
+                if ($seen -lt $lines.Count -and ({{deliverAtMost}} -eq 0 -or $seen -lt {{deliverAtMost}})) {
+                    # Falling behind: busy for a while before this line goes out; a stop file seen first ends the session unsent.
+                    $busyUntil = (Get-Date).AddMilliseconds({{millisecondsPerLine}})
+                    while ((Get-Date) -lt $busyUntil) { Start-Sleep -Milliseconds 10 }
+                    if (Test-Path -LiteralPath $stopFile) { exit 0 }
+                    Write-Output ('{0} [127.0.0.1:50000] > {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $lines[$seen])
+                    Write-Output ('{0} [127.0.0.1:50000] < reply' -f (Get-Date -Format 'HH:mm:ss.fff'))
+                    $seen++
+                    if ($null -eq $firstAt) { $firstAt = Get-Date }
+                }
+                elseif ({{deliverAtMost}} -gt 0 -and $seen -ge {{deliverAtMost}} -and ((Get-Date) - $firstAt).TotalMilliseconds -gt 1500) { exit 0 }
+                else { Start-Sleep -Milliseconds 20 }
+            }
+            exit 0
+            """);
+        return mock;
+    }
+
+    [PwshFact]
+    public void RunGmCommands_WaitsForAMockThatFellBehind_AndReportsTheCommandsActuallySent()
+    {
+        // The mock needs ~1.2 s per line while the runner appends one every 450 ms, so after the last append it is still two lines
+        // behind. The runner used to sleep a fixed 1.5 s and then create the stop file: the last command was appended, never sent,
+        // and the run still said "sent 3 of 3" and exited 0.
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteSlowMock(toolDir, millisecondsPerLine: 1200, deliverAtMost: 0);
+        string log = Path.Combine(toolDir, "session.log");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".first", ".second", ".third"),
+            "-PaceMilliseconds", "450", "-LogPath", log);
+
+        Assert.True(code == 0, $"exit {code}: {output}");
+        Assert.Contains("sent 3 of 3 commands", output);
+        Assert.Contains("> .third", File.ReadAllText(log));   // RED on the fixed-sleep script: the stop file arrived first
+    }
+
+    [PwshFact]
+    public void RunGmCommands_FailsWithExitOne_NamingTheFirstUndeliveredCommand_WhenTheMockNeverSendsIt()
+    {
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteSlowMock(toolDir, millisecondsPerLine: 20, deliverAtMost: 1);
+        string log = Path.Combine(toolDir, "session.log");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".first", ".second"),
+            "-PaceMilliseconds", "450", "-LogPath", log);
+
+        Assert.Equal(1, code);
+        Assert.Contains("first undelivered: '.second'", output);
+        Assert.Contains("sent 1 of 2 commands", output);
     }
 
     // ---- harness -------------------------------------------------------------------------------------------------------

@@ -12,6 +12,9 @@
        the command line) and promotes the account to Administrator (arcane-account set-gmlevel);
     4. writes the password into a credentials file only the current user can read, for arcane-mock live --credentials-file;
     5. sends the lines one by one with -PaceMilliseconds between them, stopping at once when the -StopFile appears;
+       a line is only 'sent' once arcane-mock has replayed it and logged '[<endpoint>] > <command>': appending it to the script file
+       is not delivery, because the mock polls the file and can fall behind. After the last line the run waits (bounded) until the
+       log shows every appended command, and only then keeps the reply window and ends the session;
     6. in a finally block, whatever happened: stops the session, deletes the credentials file, and demotes the account to the level
        it had (three tries). A demotion that fails is reported loudly and the exit code says so.
 
@@ -19,7 +22,8 @@
   the log (the log is scanned for it afterwards as a second guard). The account keeps an unknown password afterwards; the next run
   sets a new one.
 
-  Exit codes: 0 done; 1 the session or a tool failed; 2 refused before any change (bad argument, stop file already present, missing
+  Exit codes: 0 done and every command was delivered (counted from the log); 1 the session or a tool failed, or fewer commands were
+  delivered than appended (the message names the first undelivered one); 2 refused before any change (bad argument, stop file already present, missing
   tool, unknown account); 3 stopped by the stop file; 4 the account could not be demoted (check it by hand: arcane-account list).
 
   arcane-account reads the auth database from the appsettings.json in its working directory, so -ProfileDirectory is the directory
@@ -160,6 +164,18 @@ function Invoke-Account([string[]]$Arguments, [string]$StdIn) {
     return [pscustomobject]@{ Code = $code; Output = @($output | ForEach-Object { "$_" }) }
 }
 
+# Commands arcane-mock live has actually sent: its '<time> [<endpoint>] > <command>' lines written after StartOffset. Replies are '<'.
+function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset) {
+    $stream = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try {
+        if ($stream.Length -le $StartOffset) { return 0 }
+        [void]$stream.Seek($StartOffset, 'Begin')
+        $text = [System.IO.StreamReader]::new($stream).ReadToEnd()
+    }
+    finally { $stream.Dispose() }
+    return ([regex]::Matches($text, '(?m)^\S+ \[[^\]\r\n]+\] > ')).Count
+}
+
 function Get-AccountSecurity([string]$Name) {
     $result = Invoke-Account -Arguments @('list')
     if ($result.Code -ne 0) { throw "arcane-account list failed ($($result.Code)): $($result.Output -join ' | ')" }
@@ -223,7 +239,7 @@ try {
 
     # Stop file present now (it appeared while the account was being promoted): nothing is sent.
     $mockArguments = @('live', '--realm', $Realm, '--account', $accountName, '--credentials-file', $credentials, '--character', $Character,
-        '--script-file', $scriptFile, '--stop-file', $StopFile, '--interval-ms', '1000', '--duration-s', "$estimateSeconds")
+        '--script-file', $scriptFile, '--stop-file', $StopFile, '--interval-ms', '250', '--duration-s', "$estimateSeconds")
     $job = Start-Job -ScriptBlock {
         param($Tool, $ToolArguments, $Log)
         & $Tool @ToolArguments *>> $Log
@@ -242,6 +258,8 @@ try {
     }
     if (-not $inWorld -and -not $stopRequested) { throw "the session did not reach the world (see $LogPath)." }
 
+    # arcane-mock live logs each replayed line as '<time> [<endpoint>] > <command>'. Everything before this offset is not ours.
+    $deliveryOffset = (Get-Item -LiteralPath $LogPath).Length
     $sent = 0
     $lastSendOffset = $null
     foreach ($line in $lines) {
@@ -278,11 +296,28 @@ try {
         Start-Sleep -Milliseconds $PaceMilliseconds
     }
 
+    # Appending is not sending: wait until the mock's log shows every appended command. Bounded by the backlog at the pace the mock
+    # drains it (each reply costs it 400 ms) plus 10 s; ends early when the session dies or the stop file appears.
+    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+    $backlog = $sent - $delivered
+    if ($backlog -gt 0 -and -not $stopRequested) {
+        $until = [DateTime]::UtcNow.AddMilliseconds($backlog * ($PaceMilliseconds + 1000) + 10000)
+        while ($delivered -lt $sent -and [DateTime]::UtcNow -lt $until) {
+            if (Test-Path -LiteralPath $StopFile) { $stopRequested = $true; break }
+            if ($job.State -ne 'Running') { break }
+            Start-Sleep -Milliseconds 100
+            $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+        }
+    }
     if (-not $stopRequested) {
         Start-Sleep -Milliseconds 1500   # the last reply's window
     }
-    Write-Host "$(if ($stopRequested) { 'stop file seen: ' })sent $sent of $($sendable.Count) commands"
+    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+    Write-Host "$(if ($stopRequested) { 'stop file seen: ' })sent $delivered of $($sendable.Count) commands"
     if ($stopRequested) { $exit = 3 }
+    elseif ($delivered -lt $sent) {
+        throw "only $delivered of $sent appended commands reached the world (first undelivered: '$($sendable[$delivered])'); arcane-mock live never sent it (see $LogPath)."
+    }
 }
 catch {
     $message = $_.Exception.Message
