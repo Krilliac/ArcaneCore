@@ -402,6 +402,82 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Theory]
+    [InlineData("vetoed")]
+    [InlineData("dead")]
+    [InlineData("party")]
+    public async Task AnUnderLevelledBot_ThatIsVetoedDeadOrPartyDriven_IsLeftWhereItIs(string why)
+    {
+        var veto = new TestPlacementVeto();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true,
+            configureServices: services => services.AddSingleton<IPopulationPlacementVeto>(veto));
+        Guid bot = await StartOneBotInElwynnAsync(world);
+        await using WorldTestClient? master = why == "party" ? await world.Host.EnterWorldAsync("POPMASTER", "Popmaster") : null;
+
+        await SetBotAsync(world, bot, 5, PopulationTestHost.Westfall);
+        switch (why)
+        {
+            case "vetoed":
+                veto.Owned.Add(bot);
+                break;
+            case "dead":
+                await world.Host.World.InvokeAsync(() => world.Bots.FindSession(bot)!.Player!.Health = 0);
+                break;
+            case "party":
+                Assert.True(await world.Host.World.InvokeAsync(() =>
+                    world.Bots.Leash(bot, world.Host.World.OnlinePlayers.Single(p => p.Name == "Popmaster"), stay: true).Success));
+                Assert.True(world.Bots.IsPartyDriven(bot));
+                break;
+        }
+
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
+    public async Task TheGraveyardTerrainLookup_RunsOffTheWorldThread_AndNoPassWaitsForIt()
+    {
+        // The production hookup (PlayerbotPopulationFeature.AtlasFor) with a fake terrain that is slow: it holds until the test lets it
+        // go. Graveyard 2 is linked to Westfall but the terrain puts it in Elwynn, so once the lookup is in Westfall has no location.
+        using var release = new ManualResetEventSlim(false);
+        var onWorldThread = new System.Collections.Concurrent.ConcurrentBag<bool>();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            onWorldThread.Add(world.Host.World.IsWorldThread);
+            release.Wait(TimeSpan.FromSeconds(30));
+            return location.Id == 2 ? (PopulationTestHost.Elwynn, 25u) : (PopulationTestHost.Elwynn, 24u);
+        };
+        world.Population.ExcludedZones = [];
+
+        world.Ticks.Set(200, 10);
+        Task<PopulationStatus> pass = world.PassAsync();
+        Assert.True(await Task.WhenAny(pass, Task.Delay(TimeSpan.FromSeconds(10))) == pass, "a pass waited for the graveyard terrain lookup");
+        Assert.Equal(2, (await pass).AllianceZones); // not in yet: every link is kept
+
+        release.Set();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        PopulationStatus status;
+        do
+        {
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+            if (status.AllianceZones == 1) break;
+            await Task.Delay(20);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        Assert.Equal(1, status.AllianceZones); // Westfall's only graveyard stands in Elwynn
+        Assert.Equal([new PopulationDroppedLocation(PopulationTestHost.Westfall, 2, PopulationTestHost.Elwynn)],
+            await world.Host.World.InvokeAsync(() => world.Feature.Atlas.Dropped.ToArray()));
+        Assert.NotEmpty(onWorldThread);
+        Assert.DoesNotContain(true, onWorldThread);
+    }
+
     [Fact]
     public async Task ABotAtTheSlackBelowItsZone_StaysWhereItIs()
     {

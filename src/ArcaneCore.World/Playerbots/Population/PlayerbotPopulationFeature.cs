@@ -122,6 +122,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private object? _atlasAreas;
     private object? _atlasGraveyards;
     private string _atlasKey = string.Empty;
+    private bool _atlasLocated;
+    private IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? _located;
+    private object? _locating;
     private string? _lastError;
 
     private ManagedPlayerbotFeature? Managed => services.GetService<ManagedPlayerbotFeature>();
@@ -130,6 +133,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     internal IPopulationTickSource? TickSource { get; set; }
 
     private IPopulationTickSource Source => TickSource ?? _window;
+
+    /// <summary>
+    /// Where a graveyard stands (zone, area), called on a background thread for each graveyard of the atlas; a test supplies a fake.
+    /// Null reads the terrain files (<see cref="TerrainManager.ReadZoneAndAreaIdDetached"/>) when terrain data is configured.
+    /// Set it before the first pass.
+    /// </summary>
+    internal Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? TerrainLocator { get; set; }
+
+    /// <summary>The atlas the last capture used (world thread; tests).</summary>
+    internal PopulationZoneAtlas Atlas => _atlas;
 
     /// <summary>World time this feature has seen, in ms (the creation rate limit runs on it); tests move it forward.</summary>
     internal long ClockMs
@@ -269,30 +282,88 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             ClockMs, managed);
     }
 
-    /// <summary>The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload) or the maps/exclusions change.</summary>
+    /// <summary>
+    /// The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload), the maps/exclusions
+    /// change, or the terrain lookup of the graveyards (<see cref="StartLocating"/>) has come in.
+    /// <para>
+    /// Where each graveyard really stands comes from the terrain, and the world thread never reads it: a <c>TerrainInfo</c> tile not in
+    /// memory is read from disk synchronously, and the clean-up frees unreferenced tiles after a minute, so about 90 graveyard lookups
+    /// would be about 90 file reads inside a tick on every build. Until the background lookup for the current key is in, the atlas is
+    /// built without it (every link kept, the zone's lowest sub-area as the floor: the behaviour without terrain data).
+    /// </para>
+    /// </summary>
     private PopulationZoneAtlas AtlasFor(WorldRuntime world, PlayerbotPopulationOptions pop)
     {
-        var areas = WorldMaps.Of(world).Areas;
+        AreaTable areas = WorldMaps.Of(world).Areas;
         GraveyardCatalog graveyards = WorldGraveyards.Of(world).Catalog;
         string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones);
-        if (!ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey)
+        bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey;
+        if (sourcesChanged)
         {
-            // Where each graveyard really stands, from the terrain (world thread; the tiles stay loaded): a linked graveyard in another zone
-            // is left out, and each kept one carries the level of the sub-area it stands in.
-            TerrainManager terrain = WorldMaps.Of(world).Terrain;
-            _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
-                terrain.Enabled ? l => terrain.For(l.MapId).GetZoneAndAreaId(l.X, l.Y, l.Z) : null);
-            logger.LogInformation(
-                "Playerbot population atlas: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Dropped} graveyard links left out as standing in another zone{List}",
-                _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde), _atlas.Dropped.Count,
-                _atlas.Dropped.Count == 0 ? string.Empty
-                    : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
             _atlasAreas = areas;
             _atlasGraveyards = graveyards;
             _atlasKey = key;
+            _located = null;
+            _locating = null; // a lookup still running for the old sources is ignored when it posts (its token is no longer current)
         }
 
+        if (!sourcesChanged && (_located is null || _atlasLocated)) return _atlas;
+
+        IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? located = _located;
+        _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
+            located is null ? null : l => located.GetValueOrDefault(l.Id));
+        _atlasLocated = located is not null;
+        logger.LogInformation(
+            "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Dropped} graveyard links left out as standing in another zone{List}",
+            located is null ? " (graveyard terrain lookup not in yet)" : string.Empty,
+            _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde), _atlas.Dropped.Count,
+            _atlas.Dropped.Count == 0 ? string.Empty
+                : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
+        if (located is null && _locating is null) StartLocating(world, areas);
         return _atlas;
+    }
+
+    /// <summary>
+    /// World thread: start the background lookup of where the graveyards of the current (unlocated) atlas stand, through
+    /// <see cref="TerrainLocator"/> or, by default, <see cref="TerrainManager.ReadZoneAndAreaIdDetached"/> (its own file reads, never
+    /// the world thread's tile cache). The result is posted back to the world thread (<see cref="WorldRuntime.Post"/>) and taken by
+    /// the next capture; a result for sources that have changed since is dropped. Without a locator and without terrain data nothing
+    /// starts and the atlas stays unlocated.
+    /// </summary>
+    private void StartLocating(WorldRuntime world, AreaTable areas)
+    {
+        TerrainManager terrain = WorldMaps.Of(world).Terrain;
+        Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = TerrainLocator
+            ?? (terrain.Enabled ? l => terrain.ReadZoneAndAreaIdDetached(l.MapId, l.X, l.Y, areas) : null);
+        if (locate is null) return;
+        WorldSafeLoc[] locations = [.. _atlas.Zones.SelectMany(z => z.AllianceLocations.Concat(z.HordeLocations)).DistinctBy(l => l.Id)];
+        var token = new object();
+        _locating = token;
+        CancellationToken ct = _stop.Token;
+        _ = Task.Run(() =>
+        {
+            Dictionary<uint, (uint ZoneId, uint AreaId)> result = [];
+            try
+            {
+                foreach (WorldSafeLoc location in locations)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    result[location.Id] = locate(location);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup failed; the atlas keeps every graveyard link");
+                return;
+            }
+
+            world.Post(() =>
+            {
+                if (!ReferenceEquals(_locating, token)) return;
+                _located = result;
+            });
+        }, ct);
     }
 
     /// <summary>
