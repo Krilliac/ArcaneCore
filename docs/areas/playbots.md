@@ -186,6 +186,56 @@ only through triggers the leader took (`PlayerbotFollower`). `Choose` compares s
 to Thelsamar) still walks. Only a death on the platform is covered by a test; a death aboard a car (its body in the tunnel, or a revival
 from the transport when the release finds a graveyard, `GraveyardRepopService.RepopAtGraveyard`) is not.
 
+#### Travel by elevator
+
+The Barrens and Thousand Needles are joined on foot only by the Great Lift, Thunder Bluff's mesas only by their two lifts, Freewind Post's
+mesa only by its lift. Before, a bot with a destination on the other level walked the straight line and stalled against the cliff: live
+2026-10-11 (issue #186), every bot with quest 1111 complete set it aside after three bots stalled in Thousand Needles on their way to
+Wharfmaster Dizzywig in Ratchet (stalls at -5450,-3750 on the Shimmering Flats edge and -4817,-2079 under the cliff). Now they ride the lift
+as a player does (`PlayerbotElevator`), following the tram rider's design without its map change:
+
+* **The lifts, from the data.** `ElevatorNetwork.Build` takes every GAMEOBJECT_TYPE_TRANSPORT spawn whose TransportAnimation.dbc path
+  rises at least 20 yards and stays within a yard of its shaft (not a tram car, a door or a plunger), its levels the spawn position plus
+  the path's lowest and highest node offset, and groups the cars within 40 yards between the same levels into one lift. classic-db 5875
+  with the 5875 client gives, on Kalimdor, the Great Lift (spawns 16874 and 16876, -44 to 85), the Freewind Post lift (16875, 16877), and
+  the Thunder Bluff lifts (18298 and 18435, 69 to 130; 20639 and 20640, 69 to 140), two counterweighted cars each on a 30 s cycle.
+* **Which regions a lift joins: the one hand table.** `ElevatorRegions.Known` names, per lift, the AreaTable region of its lower and its
+  upper level: the Great Lift Thousand Needles (400) below and The Barrens (17) above; Freewind Post Thousand Needles (400) below and
+  Freewind Post (area 484) above; both Thunder Bluff lifts Mulgore (215) below and Thunder Bluff (1638) above. The data does not give this:
+  the terrain's area map is flat (one area per cell, the same above and below a cliff) and does not follow the cliffs (the Great Lift's top
+  landing lies in Thousand Needles' "The Great Lift" area, 485; Thunder Bluff's zone covers the Mulgore ground round the mesa's foot; the
+  Thunder Bluff lifts' lower stop stands on a platform 9 yards above that ground). Beside a lift (150 yards) the bot's height decides its
+  level instead; a mesa's region counts as the top only from 30 yards below it up. A lift without a row joins nothing.
+* **When.** `PlayerbotWorldDestinations` asks `ElevatorNetwork.Choose` before it plans a walk (after the tram): a bot on top of a mesa
+  whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
+  ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
+  taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
+  reach (a route that stops short, at the foot of the cliff, is no way). A failed ride is not tried again for 10 minutes.
+* **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
+  can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
+  half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a
+  second more, and report what a client standing on a transport reports (MSG_MOVE_HEARTBEAT with MOVEFLAG_ONTRANSPORT, the car's GUID and
+  the offset, every 500 ms, at the world position the car's animation gives). When the car stands at the other level the bot steps off
+  onto the landing there nearest its destination, and the destination plans again from there. Nothing teleports the bot.
+* **Fails closed** with a stall reason (`elevator: ...`, the bot's own set-aside as for the tram, never every bot's): no way to the lift or
+  its landing (no progress for 60 s), no car in the world, no floor beside a car, no car standing at the landing within two cycles and 30 s
+  (90 s). Aboard: a car that does not stand at the other level within a cycle and 30 s is left at the next level it stands at; a car that
+  leaves the world under the bot, or a bot knocked off it in the shaft, drops the bot: it steps off and falls to the floor below as a
+  client does (MOVEFLAG_FALLINGFAR, then MSG_MOVE_FALL_LAND with the fall's time; the server takes the fall damage), and the ride fails.
+  A death, or a party taking the bot over, ends the ride (a bot aboard steps off first).
+
+Tests: `PlayerbotElevatorNetworkTests` (the lifts from the classic-db and DBC rows; `Choose` for issue #186, quest 5361 and Thunder Bluff),
+`PlayerbotElevatorRideTests` (a fixture cliff and the Great Lift's real paths: a destination in Ratchet begins the ride, the brain walks,
+waits, rides up and steps off on the plateau with the anticheat judging it, then walks on; the ride down; the 90 s wait for cars that never
+stop; the 60 s bound on a landing the bot cannot reach; the fall when the car leaves the world under it), `PlayerbotElevatorRealTerrainTests`
+(needs `ARCANECORE_TEST_TERRAIN_DIR` and `ARCANECORE_TEST_DBC_DIR`: the four lifts and the region table against the real terrain and
+AreaTable.dbc, and the choices of issue #186 from the live stall points) and `PlayerbotElevatorRealRideTests` (the Great Lift ridden on
+Kalimdor's real mesh and models: aboard 26 s after reaching the foot, off at the top 15 s later, the mesh leading on towards Ratchet).
+
+Not done: as with the tram, only quest destinations begin a ride. The Undercity lifts and the other lifts on map 0 have no region row, so
+no bot rides them. A bot saved aboard is not taken off the car at its next login. A bot far from a mesa whose way there is not a lift's
+regions (Desolace to Thunder Bluff) walks until it is in Mulgore.
+
 **Death recovery bounds are judged on attempts, not on world time alone.** `PlayerbotRecovery` gives a corpse run up for the spirit
 healer when the walk stopped closing for `StuckMs` (10 s), faults a fallback that stalls the same way
 (`playerbot-recovery-spirit-healer-failed`), and faults a body never released for `NoProgressMs` (60 s)
