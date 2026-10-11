@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -55,7 +56,10 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
 
     public TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
 
-    public static async Task<ElevatorTestWorld> StartAsync(TransportAnimationCatalog? animation = null, CreatureContent? creatures = null)
+    /// <param name="shaftFloor">The floor inside the cars' footprints (null, the default: none, as on the real data, where a car is a
+    /// dynamic object in no collision data and nothing lies under it but the bottom of the shaft).</param>
+    public static async Task<ElevatorTestWorld> StartAsync(TransportAnimationCatalog? animation = null, CreatureContent? creatures = null,
+        float? shaftFloor = null)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -68,9 +72,26 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         await host.OnWorldAsync(() =>
         {
-            WorldCollision.Of(host.World).Install(lineOfSight: new Floors(), pathfinder: new CliffPathfinder());
+            WorldCollision.Of(host.World).Install(lineOfSight: new Floors(shaftFloor), pathfinder: new CliffPathfinder());
             PlayerbotElevator.UseSurvey(host.World, _ => new ElevatorSurvey(at => at.X < Cliff ? (ThousandNeedles, 0u) : (TheBarrens, 0u)));
         });
+        return new ElevatorTestWorld(host, session);
+    }
+
+    /// <summary>
+    /// The same world on the real data: Kalimdor's terrain, models and navigation mesh from <paramref name="terrain"/> (the live server's
+    /// extraction) and the client's paths of the Great Lift's two cars (<paramref name="animation"/>, TransportAnimation.dbc); no fixture.
+    /// </summary>
+    public static async Task<ElevatorTestWorld> StartRealAsync(string terrain, TransportAnimationCatalog animation)
+    {
+        WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = terrain, configureServices: services =>
+        {
+            services.AddSingleton<IMapDataStore>(new MapStore());
+            services.AddScoped<IGameObjectDataStore>(_ => new GameObjectStore());
+            services.AddSingleton(animation);
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         return new ElevatorTestWorld(host, session);
     }
 
@@ -112,6 +133,29 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
         throw new TimeoutException($"the bot did not arrive at {at}");
     }
 
+    /// <summary>
+    /// A real player's client (a socket, as <see cref="WorldTestHost.EnterWorldAsync"/> makes one) brought to <paramref name="at"/> on
+    /// Kalimdor, so it observes the bot there: the far teleport from its start, its worldport acknowledgement, the clock moved meanwhile.
+    /// </summary>
+    public async Task<WorldTestClient> ObserverAsync(string account, string name, Vector3 at)
+    {
+        WorldTestClient client = await Host.EnterWorldAsync(account, name);
+        Assert.True(await OnWorldAsync(() => Teleports.TeleportTo(Host.World.FindOnlinePlayer(name)!, ElevatorTestData.Kalimdor, at.X, at.Y, at.Z, 0)),
+            "the observer's teleport was refused");
+        for (int i = 0; i < 10; i++) await AdvanceAsync(50);
+        await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        for (int i = 0; i < 200; i++)
+        {
+            bool there = await OnWorldAsync(() => Host.World.FindOnlinePlayer(name) is { IsInWorld: true, MapId: ElevatorTestData.Kalimdor } p
+                && Teleports.StageOf(p) is null);
+            if (there) return client;
+            await AdvanceAsync(50);
+        }
+
+        throw new TimeoutException("the observer never arrived on Kalimdor");
+    }
+
     public GameObjectMapSystem? Objects() => Host.World.GetMap(ElevatorTestData.Kalimdor).FindUpdater<GameObjectMapSystem>();
 
     /// <summary>The lift of the world's data, as the bots see it.</summary>
@@ -141,14 +185,24 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
     }
 
-    /// <summary>The fixture cliff: the plateau east of <see cref="Cliff"/> (found only from above it), the canyon floor west of it.</summary>
-    private sealed class Floors : ILineOfSight
+    /// <summary>The two cars' shafts (their spawns, flat): no floor inside them unless the fixture gives one.</summary>
+    internal static readonly Vector2[] Shafts = [new(-4665.43f, -1827.67f), new(-4670.77f, -1849.61f)];
+
+    /// <summary>
+    /// The fixture cliff: the plateau east of <see cref="Cliff"/> (found only from above it), the canyon floor west of it; inside a car's
+    /// footprint (<see cref="PlayerbotElevator.CarHalfYards"/> of a shaft) <paramref name="shaftFloor"/> or nothing.
+    /// </summary>
+    internal sealed class Floors(float? shaftFloor) : ILineOfSight
     {
         public bool Enabled => true;
         public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
         public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
-            => x >= Cliff ? (z >= TopFloor - 0.1f ? TopFloor : null) : (z >= BottomFloor - 0.1f ? BottomFloor : null);
+        {
+            if (Shafts.Any(s => Vector2.Distance(s, new Vector2(x, y)) <= PlayerbotElevator.CarHalfYards))
+                return shaftFloor is { } floor && z >= floor - 0.1f ? floor : null;
+            return x >= Cliff ? (z >= TopFloor - 0.1f ? TopFloor : null) : (z >= BottomFloor - 0.1f ? BottomFloor : null);
+        }
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
     }
 
@@ -156,7 +210,7 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
     /// The navigation mesh of the fixture: a straight line on one side of the cliff; across it, the incomplete way to the cliff's edge on
     /// the start's side (as a mesh answers a goal it does not join: the nearest point it reaches), none when the start is at the edge.
     /// </summary>
-    private sealed class CliffPathfinder : IPathfinder
+    internal sealed class CliffPathfinder : IPathfinder
     {
         public bool Enabled => true;
 
