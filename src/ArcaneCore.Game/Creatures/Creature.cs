@@ -578,7 +578,7 @@ public readonly record struct CreatureHome(float X, float Y, float Z, float Orie
 
 /// <summary>
 /// A linear spline (vmangos linear MoveSpline): positions interpolate along the path by
-/// distance over <see cref="DurationMs"/>, measured on the map clock. A single-segment spline
+/// distance over <see cref="DurationMs"/>, measured on the map clock excluding inactive-cell time. A single-segment spline
 /// has an empty <see cref="Path"/>; a multi-point one lists every point after the start.
 /// </summary>
 public sealed record CreatureSpline(
@@ -591,16 +591,23 @@ public sealed record CreatureSpline(
     /// <summary>How the spline ends facing.</summary>
     public SplineFacing Facing { get; init; } = SplineFacing.None;
 
-    public bool IsFinished(long clockMs) => clockMs - StartClockMs >= DurationMs;
+    private long _pausedMs;
 
-    public uint ElapsedMs(long clockMs) => (uint)Math.Clamp(clockMs - StartClockMs, 0, DurationMs);
+    // vmangos Unit::UpdateSplineMovement advances MoveSpline::updateState only on active updates.
+    // A scalar offset avoids replacing the spline (and allocating) on every skipped creature tick.
+    internal void Pause(long clockMs, uint diffMs)
+        => _pausedMs += Math.Clamp(clockMs - StartClockMs - _pausedMs, 0, diffMs);
+
+    public bool IsFinished(long clockMs) => clockMs - StartClockMs - _pausedMs >= DurationMs;
+
+    public uint ElapsedMs(long clockMs) => (uint)Math.Clamp(clockMs - StartClockMs - _pausedMs, 0, DurationMs);
 
     /// <summary>All points after the start (destination last).</summary>
     public IReadOnlyList<Vector3> Points => Path.Count > 0 ? Path : [new Vector3(EndX, EndY, EndZ)];
 
     public (float X, float Y, float Z) PositionAt(long clockMs)
     {
-        float t = DurationMs == 0 ? 1f : Math.Clamp((float)(clockMs - StartClockMs) / DurationMs, 0f, 1f);
+        float t = DurationMs == 0 ? 1f : (float)ElapsedMs(clockMs) / DurationMs;
         (Vector3 position, _) = Locate(t);
         return (position.X, position.Y, position.Z);
     }
@@ -608,7 +615,7 @@ public sealed record CreatureSpline(
     /// <summary>The points still ahead at <paramref name="clockMs"/> (destination last).</summary>
     public IReadOnlyList<Vector3> RemainingPoints(long clockMs)
     {
-        float t = DurationMs == 0 ? 1f : Math.Clamp((float)(clockMs - StartClockMs) / DurationMs, 0f, 1f);
+        float t = DurationMs == 0 ? 1f : (float)ElapsedMs(clockMs) / DurationMs;
         (_, int segment) = Locate(t);
         IReadOnlyList<Vector3> points = Points;
         return [.. points.Skip(segment)];
