@@ -34,8 +34,14 @@ public sealed partial class CreatureMapSystem
         return link?.Flags ?? template?.Flags ?? 0;
     }
 
+    internal bool IsFollowSlave(Creature creature) => _followSlaves.Contains(creature);
+
+    internal bool HasSpawnIndex(uint spawnGuid) => _bySpawnGuid.ContainsKey(spawnGuid);
+
+    internal int SpawnDuplicateCount => _spawnGuidDuplicates.Count;
+
     /// <summary>Record a creature that has just entered <c>_creatures</c> in the spawn-guid index and, when it follows, the follower set.</summary>
-    private void IndexCreature(Creature creature)
+    internal void IndexCreature(Creature creature)
     {
         if (creature.Spawn is { } spawn)
         {
@@ -51,7 +57,7 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>Drop a creature that is leaving <c>_creatures</c> from the indexes; a later creature of the same spawn guid takes its place.</summary>
-    private void UnindexCreature(Creature creature)
+    internal void UnindexCreature(Creature creature)
     {
         _followSlaves.Remove(creature);
         _linkedFollowerMaster.Remove(creature.Guid);
@@ -101,7 +107,7 @@ public sealed partial class CreatureMapSystem
             Debug.Assert(slave.Spawn is not null);
             CreatureSpawn spawn = slave.Spawn!;
             // vmangos GetLinkedTriggerInformation (CreatureLinkingMgr.cpp:310-326): the spawn's own link first, then its entry's on this map.
-            LinkFlags(slave, out CreatureLink? link, out CreatureTemplateLink? template);
+            if ((LinkFlags(slave, out CreatureLink? link, out CreatureTemplateLink? template) & LinkFollow) == 0) continue; // entry rewritten behind RefreshFollowSlave's back
 
             Creature? master = null;
             if (link is not null)
@@ -143,7 +149,10 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// The master of a template-linked slave among the creatures standing for a spawn guid: one of the master entry within the search range.
     /// vmangos LoadFromDB requires it to be unique when search_range is zero (CreatureLinkingMgr.cpp:233-250); otherwise the nearest wins
-    /// (the first of equals).
+    /// (equal distances: the one met first, in <see cref="_bySpawnGuid"/> slot order, which is not insertion order once entries were removed).
+    /// Deviations from vmangos that predate the spawn-guid index and are kept: vmangos TryFollowMaster takes the first registered master in
+    /// range, not the nearest (CreatureLinkingMgr.cpp:720-729), and it checks the range-0 uniqueness once at load, over the database rows,
+    /// where this counts the creatures currently loaded on the map.
     /// </summary>
     private Creature? FindTemplateMaster(Creature slave, CreatureSpawn spawn, CreatureTemplateLink template)
     {
