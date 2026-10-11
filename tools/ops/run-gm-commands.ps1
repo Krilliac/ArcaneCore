@@ -164,8 +164,12 @@ function Invoke-Account([string[]]$Arguments, [string]$StdIn) {
     return [pscustomobject]@{ Code = $code; Output = @($output | ForEach-Object { "$_" }) }
 }
 
-# Commands arcane-mock live has actually sent: its '<time> [<endpoint>] > <command>' lines written after StartOffset. Replies are '<'.
-function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset) {
+# How many of the Commands, from the first, arcane-mock live has logged as sending, in order: its '<HH:mm:ss.fff> [<endpoint>] > <command>'
+# lines written after StartOffset. "Delivered" means the mock logged the send; a send that fails ends the mock non-zero, which the
+# finally block turns into exit 1. Replies are '< ' lines; a multi-line reply's continuation lines are written raw without a timestamp,
+# so they never match, even when they look like '[x] > y'. Endpoint is the session's local endpoint from its 'IN WORLD' line (IPv4 or
+# '[::1]:port'); without one, any IPv4 or bracketed IPv6 endpoint is accepted.
+function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset, [string[]]$Commands, [string]$Endpoint) {
     $stream = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
     try {
         if ($stream.Length -le $StartOffset) { return 0 }
@@ -173,7 +177,15 @@ function Get-OpsDeliveredCount([string]$Path, [long]$StartOffset) {
         $text = [System.IO.StreamReader]::new($stream).ReadToEnd()
     }
     finally { $stream.Dispose() }
-    return ([regex]::Matches($text, '(?m)^\S+ \[[^\]\r\n]+\] > ')).Count
+    $endpointPattern = if ($Endpoint) { [regex]::Escape($Endpoint) } else { '(?:\[[0-9A-Fa-f:.]+\]|[0-9.]+):\d+' }
+    $echo = [regex]::new("^\d{2}:\d{2}:\d{2}\.\d{3} \[$endpointPattern\] > (.*)$")
+    $count = 0
+    foreach ($row in $text -split "\r?\n") {
+        if ($count -ge $Commands.Count) { break }
+        $m = $echo.Match($row)
+        if ($m.Success -and $m.Groups[1].Value.TrimEnd() -ceq $Commands[$count]) { $count++ }
+    }
+    return $count
 }
 
 function Get-AccountSecurity([string]$Name) {
@@ -260,6 +272,8 @@ try {
 
     # arcane-mock live logs each replayed line as '<time> [<endpoint>] > <command>'. Everything before this offset is not ours.
     $deliveryOffset = (Get-Item -LiteralPath $LogPath).Length
+    $localEndpoint = $null
+    if ((Get-Content -LiteralPath $LogPath -Raw -ErrorAction SilentlyContinue) -match 'IN WORLD as [^\r\n]*? connection (\S+) ->') { $localEndpoint = $Matches[1] }
     $sent = 0
     $lastSendOffset = $null
     foreach ($line in $lines) {
@@ -298,7 +312,7 @@ try {
 
     # Appending is not sending: wait until the mock's log shows every appended command. Bounded by the backlog at the pace the mock
     # drains it (each reply costs it 400 ms) plus 10 s; ends early when the session dies or the stop file appears.
-    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset -Commands $sendable -Endpoint $localEndpoint
     $backlog = $sent - $delivered
     if ($backlog -gt 0 -and -not $stopRequested) {
         $until = [DateTime]::UtcNow.AddMilliseconds($backlog * ($PaceMilliseconds + 1000) + 10000)
@@ -306,13 +320,15 @@ try {
             if (Test-Path -LiteralPath $StopFile) { $stopRequested = $true; break }
             if ($job.State -ne 'Running') { break }
             Start-Sleep -Milliseconds 100
-            $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+            $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset -Commands $sendable -Endpoint $localEndpoint
         }
     }
+    if (-not $stopRequested -and (Test-Path -LiteralPath $StopFile)) { $stopRequested = $true }   # the user's stop file wins
     if (-not $stopRequested) {
         Start-Sleep -Milliseconds 1500   # the last reply's window
+        if (Test-Path -LiteralPath $StopFile) { $stopRequested = $true }
     }
-    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset
+    $delivered = Get-OpsDeliveredCount -Path $LogPath -StartOffset $deliveryOffset -Commands $sendable -Endpoint $localEndpoint
     Write-Host "$(if ($stopRequested) { 'stop file seen: ' })sent $delivered of $($sendable.Count) commands"
     if ($stopRequested) { $exit = 3 }
     elseif ($delivered -lt $sent) {

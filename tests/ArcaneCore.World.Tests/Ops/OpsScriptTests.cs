@@ -684,7 +684,7 @@ public sealed class OpsScriptTests
         return path;
     }
 
-    private static string WriteSlowMock(string directory, int millisecondsPerLine, int deliverAtMost)
+    private static string WriteSlowMock(string directory, int millisecondsPerLine, int deliverAtMost, string endpoint = "127.0.0.1:50000", bool continuation = false)
     {
         string mock = Path.Combine(directory, "slow-mock.ps1");
         File.WriteAllText(mock, $$"""
@@ -693,7 +693,7 @@ public sealed class OpsScriptTests
             $scriptFile = Get-Arg '--script-file'
             $stopFile = Get-Arg '--stop-file'
             $deadline = (Get-Date).AddSeconds([int](Get-Arg '--duration-s'))
-            Write-Output 'IN WORLD as Opsgm'
+            Write-Output 'IN WORLD as Opsgm; connection {{endpoint}} -> 127.0.0.1:8085'
             $seen = 0
             $firstAt = $null
             while (-not (Test-Path -LiteralPath $stopFile) -and (Get-Date) -lt $deadline) {
@@ -703,8 +703,9 @@ public sealed class OpsScriptTests
                     $busyUntil = (Get-Date).AddMilliseconds({{millisecondsPerLine}})
                     while ((Get-Date) -lt $busyUntil) { Start-Sleep -Milliseconds 10 }
                     if (Test-Path -LiteralPath $stopFile) { exit 0 }
-                    Write-Output ('{0} [127.0.0.1:50000] > {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $lines[$seen])
-                    Write-Output ('{0} [127.0.0.1:50000] < reply' -f (Get-Date -Format 'HH:mm:ss.fff'))
+                    Write-Output ('{0} [{{endpoint}}] > {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $lines[$seen])
+                    Write-Output ('{0} [{{endpoint}}] < reply' -f (Get-Date -Format 'HH:mm:ss.fff'))
+                    if ({{(continuation ? "1" : "0")}} -eq 1) { Write-Output 'Item [Linen] > cloth' }   # a multi-line reply's raw continuation line
                     $seen++
                     if ($null -eq $firstAt) { $firstAt = Get-Date }
                 }
@@ -757,6 +758,86 @@ public sealed class OpsScriptTests
         Assert.Equal(1, code);
         Assert.Contains("first undelivered: '.second'", output);
         Assert.Contains("sent 1 of 2 commands", output);
+    }
+
+    [PwshFact]
+    public void RunGmCommands_DoesNotCountAMultiLineReplysContinuationLineAsADeliveredCommand()
+    {
+        // The mock writes the 2nd and later lines of a multi-line reply raw, without a timestamp: 'Item [Linen] > cloth' looks like a
+        // sent-line to a loose pattern. The mock here sends only the first command, so the run must fail, not count the reply line.
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteSlowMock(toolDir, millisecondsPerLine: 20, deliverAtMost: 1, continuation: true);
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".first", ".second"),
+            "-PaceMilliseconds", "450", "-LogPath", Path.Combine(toolDir, "session.log"));
+
+        Assert.Equal(1, code);
+        Assert.Contains("first undelivered: '.second'", output);
+        Assert.Contains("sent 1 of 2 commands", output);
+    }
+
+    [PwshFact]
+    public void RunGmCommands_CountsCommandsEchoedOnAnIpv6LoopbackEndpoint()
+    {
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteSlowMock(toolDir, millisecondsPerLine: 20, deliverAtMost: 0, endpoint: "[::1]:50000");
+
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".first", ".second"),
+            "-PaceMilliseconds", "450", "-LogPath", Path.Combine(toolDir, "session.log"));
+
+        Assert.True(code == 0, $"exit {code}: {output}");
+        Assert.Contains("sent 2 of 2 commands", output);
+    }
+
+    [PwshFact]
+    public void RunGmCommands_StopFileDuringTheDeliveryWait_IsExitThree_NotAFailure()
+    {
+        using var sandbox = new Sandbox();
+        string profile = sandbox.Directory("profile");
+        string bin = sandbox.Directory("bin");
+        string toolDir = sandbox.Directory("scripted-tools");
+        string account = Path.Combine(toolDir, "account.ps1");
+        File.WriteAllText(account, "if ($args[0] -eq 'list') { Write-Output '1 OPSGM x Player' }\nexit 0\n");
+        string mock = WriteSlowMock(toolDir, millisecondsPerLine: 6000, deliverAtMost: 0);
+        string log = Path.Combine(toolDir, "session.log");
+        string stop = Path.Combine(toolDir, "user-stop");
+
+        // The operator's stop file appears once the session is in the world and the runner is waiting for the slow mock.
+        Task stopper = Task.Run(() =>
+        {
+            DateTime give = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < give && !(File.Exists(log) && ReadShared(log).Contains("IN WORLD")))
+            {
+                Thread.Sleep(50);
+            }
+
+            Thread.Sleep(2500);
+            File.WriteAllText(stop, "");
+        });
+        (int code, string output) = RunScriptFile(profile, bin, account, mock, "-CommandFile", WriteCommands(toolDir, ".first", ".second"),
+            "-PaceMilliseconds", "450", "-LogPath", log, "-StopFile", stop);
+        stopper.Wait();
+
+        Assert.True(code == 3, $"exit {code}: {output}");
+        Assert.Contains("stop file seen", output);
+        Assert.DoesNotContain("first undelivered", output);
+    }
+
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     // ---- harness -------------------------------------------------------------------------------------------------------
