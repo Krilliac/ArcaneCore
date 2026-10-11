@@ -44,6 +44,7 @@ How to read the tables:
 - [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
+- [`Ops:Diagnostics`](#opsdiagnostics)
 - [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
@@ -611,6 +612,14 @@ How to read the tables:
 | `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
 | `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
+
+## `Ops:Diagnostics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
+| `Ops:Diagnostics:Dumps:Enabled` | `bool` | `false` | - | `true` lets an administrator write a dump of the running world with `.debug dump`. Default false, because a dump holds everything in memory: session keys, password material in flight, character data. Keep the dump directory private and delete the files when the analysis is done. |
+| `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `int` | `600` | - | The least seconds between two dumps, so a repeated command cannot suspend the process again and again or fill the disk. 0 disables the limit. Default 600. |
 
 ## `Ops:Metrics`
 

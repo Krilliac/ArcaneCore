@@ -113,7 +113,7 @@ high-load threshold, pause percentage), `GC.CollectionCount(2)` and `Environment
   dedicated thread (`watchdog-gc`). The runtime refuses the registration under concurrent (background) GC, which is the default
   configuration; the refusal is logged once at `Information` and the monitor polls only. To use it set `<ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>`
   (or `DOTNET_gcConcurrent=0`) and accept the longer gen2 pauses that come with non-concurrent GC.
-- Counters: gauges `watchdog.memory.heap_bytes`, `gen2_bytes`, `loh_bytes`, `gen2_collections`; counters `watchdog.memory.actions`, `samples`.
+- Counters: gauges `watchdog.memory.heap_bytes`, `gen2_bytes`, `loh_bytes`, `loh_fragmented_bytes`, `gen2_collections`, `watchdog.gc.last_full_pause_ms` (the pause of the last full blocking collection); counters `watchdog.memory.actions`, `samples`. The growth line also gives the LOH fragmentation (MiB and %) and that pause. For a GC-pause investigation see [memory and GC diagnostics](diagnostics.md): slow ticks now carry `gc N ms (gen0 +a, gen1 +b, gen2 +c)`, and `.debug gc`, `.debug alloc` and `.debug dump` exist.
 
 ### 3. Thread-pool starvation (`Ops:Watchdog:ThreadPool`)
 
