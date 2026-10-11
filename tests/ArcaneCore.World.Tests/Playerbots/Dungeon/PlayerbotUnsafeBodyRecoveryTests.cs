@@ -371,6 +371,34 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     }
 
     /// <summary>
+    /// The same unhomed bot in a party (a stored group with an offline partner; the brain still drives it, PlayerbotPartyAI.Drives): the
+    /// bind-point teleport is refused as the return teleport home is (in a group), and the bot is not pulled away from its group. Before,
+    /// EscapeLanding called TeleportToHomebind, which checks nothing.
+    /// </summary>
+    [Fact]
+    public async Task AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, at: CampedBody, configure: services =>
+            services.AddSingleton<ICreatureDataStore>(new HealerAmongSkeletons(CampOverBodyAndHealer)));
+        var bind = new Vector3(CampedBody.X + 1500f, CampedBody.Y, CampedBody.Z);
+        await host.OnWorldAsync(() =>
+        {
+            host.Player.Home = new HomeBind(0, 0, bind.X, bind.Y, bind.Z);
+            PlayerbotTestGroups.JoinOfflinePartner(host.Session, host.Player);
+        });
+        PlayerbotBrain brain = await BrainAsync(host, home: null);
+        await KillAsync(host, brain);
+        await SeeTheCampAsync(host, CampOverBodyAndHealer.Length);
+
+        Run run = await RunAsync(host, brain, clock,
+            p => Vector2.Distance(new(p.X, p.Y), new(bind.X, bind.Y)) < 5f, thinks: 200);
+
+        Assert.False(run.Done, "the grouped bot was teleported to its bind point: " + run.Trail);
+        await host.OnWorldAsync(() => brain.Stop());
+    }
+
+    /// <summary>
     /// The camp of the live case covers the healer's landing and the body, but not all of the body's reclaim radius: a spot inside it
     /// lies out of every skeleton's reach. The body is then the safer of the two, though it was judged too strong: the bot keeps its
     /// corpse run, revives on that spot (no sickness, no durability loss, out of combat) and goes home as after any death.

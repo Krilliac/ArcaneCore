@@ -364,6 +364,64 @@ internal static class PlayerbotNavigation
     private static bool Reaches(PathResult path)
         => path.HasPath && (path.Type & (PathType.Incomplete | PathType.NotUsingPath | PathType.NoPath)) == 0;
 
+    /// <summary>How many directions <see cref="IsOnMeshIsland"/> asks the mesh round the bot about.</summary>
+    internal const int IslandDirections = 12;
+
+    /// <summary>How far away the points lie that <see cref="IsOnMeshIsland"/> asks the mesh to approach.</summary>
+    internal const float IslandProbeYards = 60f;
+
+    /// <summary>
+    /// An island's ground ends this close to the bot (flat yards) in every direction <see cref="IsOnMeshIsland"/> asks about; ground that
+    /// leads farther in any of them is no island.
+    /// </summary>
+    internal const float IslandYards = 45f;
+
+    /// <summary>
+    /// The point budget of each of <see cref="IsOnMeshIsland"/>'s queries, fixed (not the operator's MaxPathPoints): 60 yards of winding
+    /// ground fit in it, and a path cut at it (<see cref="PathType.Short"/>) is never taken for an island's edge.
+    /// </summary>
+    internal const int IslandPathPoints = 256;
+
+    /// <summary>The search budget of each of <see cref="IsOnMeshIsland"/>'s queries: an island's few polygons run out long before it.</summary>
+    internal const int IslandSearchNodes = 8192;
+
+    /// <summary>
+    /// Whether the bot stands on a navigation-mesh island: walkable polygons the mesh joins to nothing round them, so that no route from
+    /// there leads anywhere else. Partial queries from the bot towards <see cref="IslandDirections"/> points
+    /// <see cref="IslandProbeYards"/> away all end within <see cref="IslandYards"/> of it; the first that ends farther (the mesh goes
+    /// on, or the path was cut at its point bound), and any answer without the mesh (no navigation data, or no polygon under the bot: other
+    /// recoveries' cases), says no. So an island beside water or a void, where a probe point has no polygon near it (a NoPath answer), is
+    /// never detected: its bots still stall, and are given up goal by goal as before. At most
+    /// <see cref="IslandDirections"/> queries; the brain asks only once a stall gives a goal up (PlayerbotBrain.EscapeIsland).
+    /// <para>
+    /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): the ground inside the round wall of the Molsen Farm in Westfall
+    /// (x -10305..-10274, y 1355..1385, the wall 1.7 to 3 yards high) is such an island, closed by the collision data too (no floor
+    /// within a step and in sight leads over the wall). Wfbotac and Wfbotaj, once inside, stalled there whatever goal they took
+    /// (Wiley the Black for quest 65, Bingles Blastenheimer for quest 2039, the Harvest Watchers beside the farm), restart after restart:
+    /// every route ended at the island's edge nearest the goal, and the next one was refused.
+    /// </para>
+    /// </summary>
+    internal static bool IsOnMeshIsland(Player player, PlayerbotOptions options)
+    {
+        if (player.Map is not { } map) return false;
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        if (!Finite(start)) return false;
+        for (int direction = 0; direction < IslandDirections; direction++)
+        {
+            float angle = direction * 2f * MathF.PI / IslandDirections;
+            Vector3 probe = start + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0) * IslandProbeYards);
+            PathResult path = map.Collision.FindPath(start, probe, new PathOptions { MaxPoints = IslandPathPoints,
+                Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = IslandSearchNodes,
+                LoadTiles = true });
+            // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
+            if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !Finite(path.End)
+                || Vector2.Distance(Flat(path.End), Flat(start)) > IslandYards)
+                return false;
+        }
+
+        return true;
+    }
+
     /// <summary>How far from the bot the starts beside it lie (<see cref="FromBeside"/>), eight directions each.</summary>
     private static readonly float[] BesideYards = [2.5f, 5f];
 
