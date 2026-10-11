@@ -398,7 +398,12 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
      spaced-out letters (`k y s`) and repeated letters (`kiiill`); terms match whole words, and a trailing `*` matches longer words.
      Patterns are compiled with `RegexOptions.NonBacktracking` (matching time linear in the line, whatever the pattern: an
      operator's pattern with a back-reference or lookaround is skipped with a warning) and a 100 ms timeout; a line the filter
-     cannot judge in time goes to no model (the built-in provider answers) but costs no strike.
+     cannot judge in time goes to no model (the built-in provider answers) but costs no strike. The timeout is wall-clock time, so a
+     process pause during a match (a garbage collection, a starved CPU) can trip it on a harmless line. A pattern's first match is
+     the slow one (its matcher is built then), so every pattern is run once on the thread pool when the filter is loaded, at start
+     and after a reload, and a line waits for that warm-up rather than paying it. A timed-out screening is counted
+     (`timed-out=` in the status, metric `arcanecore_playerbot_chat_screening_timeouts_total{kind}`) and logged as a warning at
+     most once a minute, naming the pattern (`Harassment pattern #2`, `personal data (phone)`), never the line.
   2. each provider's optional **moderation step** (`Moderation` on the provider entry, `None` by default): `Endpoint` posts the
      line to an OpenAI-compatible `/moderations` endpoint (`ModerationBaseUrl`, default the provider's own `BaseUrl`;
      `ModerationModel`, default `omni-moderation-latest`; `ModerationApiKeyEnvironmentVariable`, default the provider's key), so an
@@ -412,7 +417,11 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
   remembered either, so it is never sent later as conversation memory.
 - **Screening what a model says** (`ScreenOutput`, on). A model's reply is run through the same local filter before the bot says
   it; a hit is never said: the built-in provider answers the player's line instead (`OnOutputFlagged`: `BuiltinReply`) or nothing
-  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player.
+  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player. A reply the filter cannot judge in
+  time fails closed: it is never said either and takes the same path (`OnOutputFlagged`), with no flag record (nothing was found,
+  even when a personal-data pattern ran out of time, which on a player's line counts as personal data) and no strike; it is
+  counted and warned as an `output` timeout. If the filter's warm-up meets an unexpected error, one warning names the error's
+  type and lines are screened without it.
 - **Flags, strikes and cut-off.** Every flag is kept in an in-memory ring of `FlagLogSize` (200) records and logged as a warning:
   the character's name and GUID, the account id, the bot, the category, the source (local filter, moderation or output
   screening), the time, and, while `StoreExcerpt` is on, at most 60 characters of the line with emails, phone numbers and addresses
@@ -426,7 +435,7 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **GM.** `.playerbot chat flags [player]` lists the newest 15 flag records (one player's when named, after a line with their
   strikes, remaining cut-off and AI choice); `.playerbot chat pardon <player>` clears a player's strikes and cut-off (not a mute).
   `.playerbot chat status` ends with `Bot chat safety: screening=on screened=.. flagged=.. moderation-flagged=..
-  output-flagged=.. builtin-only=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
+  output-flagged=.. builtin-only=.. timed-out=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
   filter's size.
 - **Disclosure and choice.** While a model provider is configured, a player who talks to a bot gets, once per login and before
   the first reply, a system message: `DisclosureText` ("Bot replies on this server may be written by an AI service, which
@@ -437,7 +446,9 @@ configure. Nothing here applies to the built-in provider, which sends nothing an
 - **What is sent.** A model request carries the bot's facts, the bounded memory (`MemoryExchanges`) and the current line, with
   players named only by character name: never an account name, an address or a GUID. With `StripPersonalData` (on), email
   addresses, phone numbers and street addresses in the line and the memory are replaced by `[email]`, `[phone]` and `[address]`
-  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far).
+  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far). If
+  one of those patterns runs out of time, the whole text is sent as `[removed]` (fails closed), counted and warned as a `strip`
+  timeout. The excerpt of a flag record is stripped the same way, and its timeouts count as `strip` too.
 
 **Operator responsibilities.** Read and follow the usage policies of every provider you configure, and keep the server's own
 rules in line with them. Keep `Enabled` on whenever a model provider is configured (the start log warns when it is off). Review

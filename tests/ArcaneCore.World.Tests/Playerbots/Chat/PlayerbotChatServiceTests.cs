@@ -37,6 +37,7 @@ public sealed class PlayerbotChatServiceTests
         public Rig(Action<PlayerbotChatOptions>? configure = null)
         {
             Options.Chat.PerPlayerCooldownSeconds = 0;
+            ChatSamples.NoScreeningDeadline(Options.Chat);
             configure?.Invoke(Options.Chat);
             Options.Validate();
             Chat = new PlayerbotChat(Options, Client, Environment, Time, Log);

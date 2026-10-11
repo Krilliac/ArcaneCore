@@ -34,6 +34,7 @@ public sealed class PlayerbotChatSafetyTests
         public Rig(Action<PlayerbotChatOptions>? configure = null, bool model = true)
         {
             Options.Chat.PerPlayerCooldownSeconds = 0;
+            ChatSamples.NoScreeningDeadline(Options.Chat);
             if (model) Options.Chat.Providers = [Model()];
             configure?.Invoke(Options.Chat);
             Options.Validate();
@@ -519,6 +520,295 @@ public sealed class PlayerbotChatSafetyTests
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"screening took {clock.Elapsed}");
     }
 
+    [Fact]
+    public async Task ThePatternTimeout_ReachesEveryPatternOfTheFilterInUse_ThePersonalDataOnesToo()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(100), new PlayerbotChatSafetyOptions().PatternTimeout);
+        Assert.Equal(PlayerbotChatSafetyFilter.PatternTimeout, PlayerbotChatSafetyFilter.Default.MatchTimeout);
+
+        await using var rig = new Rig(chat => chat.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250));
+        PlayerbotChatSafetyFilter custom = rig.Chat.Safety.Filter();
+        Assert.Equal(TimeSpan.FromMilliseconds(250), custom.MatchTimeout);
+        Assert.True(custom.AllPatterns.Count() > 3); // the shipped patterns and the three personal-data ones
+        Assert.All(custom.AllPatterns, pattern => Assert.Equal(TimeSpan.FromMilliseconds(250), pattern.MatchTimeout));
+        Assert.Same(custom, rig.Chat.Safety.Filter());
+
+        // Live: the filter follows the option, and the default is the shared filter again.
+        rig.Safety.PatternTimeout = System.Text.RegularExpressions.Regex.InfiniteMatchTimeout;
+        Assert.All(rig.Chat.Safety.Filter().AllPatterns, pattern => Assert.Equal(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout, pattern.MatchTimeout));
+        rig.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout;
+        Assert.Same(PlayerbotChatSafetyFilter.Default, rig.Chat.Safety.Filter());
+
+        // Personal data is still screened and stripped through the filter in use.
+        rig.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
+        Assert.Equal("mail me at [email]", rig.Chat.Safety.Filter().StripPersonalData("mail me at someone@example.com"));
+        Assert.Equal(PlayerbotChatSafetyCategories.PersonalData, rig.Chat.Safety.ScreenInput("call 555-123-4567").Category);
+    }
+
+    [Fact]
+    public async Task EveryFilterInUse_IsWarmed_EveryPatternOnce_TheDefaultOneAtStartAndAReloadedOne()
+    {
+        // At start: the chat's safety warms the filter it starts with (the shared default when the deadline is the default).
+        await using (var plain = new Rig(chat => chat.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout))
+        {
+            PlayerbotChatSafetyFilter shared = plain.Chat.Safety.Filter();
+            Assert.Same(PlayerbotChatSafetyFilter.Default, shared);
+            await shared.Warmed.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(shared.AllPatterns.Count(), shared.WarmedPatterns);
+        }
+
+        // A filter built later (another deadline, an operator's file: what a reload does) is warmed when it is swapped in.
+        string path = Path.Combine(Path.GetTempPath(), "arcane-safety-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{ "categories": { "Harassment": { "patterns": [ "\\bwarm(ed)? up\\b" ] } } }""");
+        try
+        {
+            await using var rig = new Rig();
+            PlayerbotChatSafetyFilter first = rig.Chat.Safety.Filter();
+            Assert.True(first.WarmUpStarted); // started by the swap itself, not by the await below
+            await first.Warmed.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(first.AllPatterns.Count(), first.WarmedPatterns);
+
+            rig.Safety.TermsFile = path;
+            PlayerbotChatSafetyFilter reloaded = rig.Chat.Safety.Filter();
+            Assert.NotSame(first, reloaded);
+            Assert.True(reloaded.WarmUpStarted);
+            await reloaded.Warmed.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(reloaded.AllPatterns.Count(), reloaded.WarmedPatterns);
+            Assert.Equal(first.AllPatterns.Count() + 1, reloaded.WarmedPatterns); // the operator's pattern too
+            Assert.Same(reloaded.Warmed, reloaded.Warmed); // once per filter
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task AScreeningOutOfTime_IsCounted_AndWarnedOncePerMinute_WithThePatternNeverTheLine()
+    {
+        var timeouts = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            // By name: the counter may be published from its own static initializer, before the property is set.
+            if (instrument.Meter.Name == "ArcaneCore.Playerbots.Chat" && instrument.Name == "arcanecore.playerbot.chat.screening_timeouts") l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (KeyValuePair<string, object?> tag in tags)
+                if (tag.Key == "kind") timeouts.Enqueue(tag.Value as string);
+        });
+        listener.Start();
+
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter(); // this rig's own filter (no deadline), not the shared one
+        Assert.NotSame(PlayerbotChatSafetyFilter.Default, filter);
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        filter.TimeoutForTest = (pattern, _) => ReferenceEquals(pattern, slow);
+        static bool Warning(string line) => line.Contains("input screening ran out of time on ", StringComparison.Ordinal);
+
+        BotChatReply reply = (await rig.AnswerAsync("hello there, meet me at the inn"))!;
+        Assert.Equal("Builtin", reply.Provider); // not judged in time: kept from the model, no strike
+        Assert.Empty(rig.Client.Calls);
+        Assert.Empty(rig.Chat.Safety.Flags());
+        string warning = Assert.Single(rig.Log.Lines, Warning);
+        Assert.Matches(@"on [A-Za-z]+ pattern #\d+ \(1 so far, 0 more since the last warning\)$", warning);
+        Assert.All(rig.Log.Lines, line => Assert.DoesNotContain("meet me", line));
+
+        await rig.AnswerAsync("hello again");
+        Assert.Single(rig.Log.Lines, Warning); // within the minute: counted, not logged
+        rig.Time.Advance(PlayerbotChatSafety.TimeoutWarningInterval);
+        await rig.AnswerAsync("and once more");
+        Assert.Equal(2, rig.Log.Lines.Count(Warning));
+        Assert.EndsWith("(3 so far, 1 more since the last warning)", rig.Log.Lines.Last(Warning));
+
+        Assert.Equal(3, rig.Chat.Status().Safety.TimedOut);
+        Assert.Contains(" timed-out=3 ", PlayerbotCommands.ChatStatusLines(rig.Chat.Status()).Last());
+        Assert.True(timeouts.Count(kind => kind == "input") >= 3, $"input timeouts metered: {timeouts.Count(kind => kind == "input")}");
+
+        // A personal-data pattern out of time is named as such (and the line is treated as personal data, as before).
+        System.Text.RegularExpressions.Regex email = filter.AllPatterns.Last(pattern => pattern.ToString().Contains('@', StringComparison.Ordinal));
+        filter.TimeoutForTest = (pattern, _) => ReferenceEquals(pattern, email);
+        SafetyVerdict verdict = rig.Chat.Safety.ScreenInput("nothing personal here");
+        Assert.Equal((PlayerbotChatSafetyCategories?)PlayerbotChatSafetyCategories.PersonalData, verdict.Category);
+        Assert.Equal("personal data (email)", verdict.TimedOutOn);
+        Assert.Equal(4, rig.Chat.Status().Safety.TimedOut);
+    }
+
+    /// <summary>The <c>kind</c> of every screening-timeout measurement while it lives (any test's: count with <c>&gt;=</c>).</summary>
+    private sealed class TimeoutMeter : IDisposable
+    {
+        private readonly System.Diagnostics.Metrics.MeterListener _listener = new();
+
+        public TimeoutMeter()
+        {
+            _listener.InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == "ArcaneCore.Playerbots.Chat" && instrument.Name == "arcanecore.playerbot.chat.screening_timeouts") l.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                foreach (KeyValuePair<string, object?> tag in tags)
+                    if (tag.Key == "kind") Kinds.Enqueue(tag.Value as string);
+            });
+            _listener.Start();
+        }
+
+        public System.Collections.Concurrent.ConcurrentQueue<string?> Kinds { get; } = new();
+
+        public int Of(string kind) => Kinds.Count(k => k == kind);
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    [Theory]
+    [InlineData(PlayerbotChatOutputAction.BuiltinReply)]
+    [InlineData(PlayerbotChatOutputAction.Drop)]
+    public async Task AModelReplyWhoseScreeningRunsOutOfTime_IsNeverSaid_ItTakesTheBlockedReplyPath(PlayerbotChatOutputAction action)
+    {
+        using var meter = new TimeoutMeter();
+        await using var rig = new Rig(chat => chat.Safety.OnOutputFlagged = action);
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        // Only the model's reply ("fake reply") is out of time; the player's line is judged in time and goes to the model.
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("fake", StringComparison.Ordinal);
+
+        BotChatReply? reply = await rig.AnswerAsync("hello there");
+
+        Assert.Single(rig.Client.Calls); // the model was asked
+        if (action == PlayerbotChatOutputAction.Drop) Assert.Null(reply);
+        else
+        {
+            Assert.NotNull(reply);
+            Assert.Equal("Builtin", reply.Provider);
+            Assert.NotEqual("fake reply", reply.Text);
+        }
+
+        Assert.Empty(rig.Chat.Safety.Flags()); // nothing was found in it: no flag record, no strike
+        Assert.Equal(1, rig.Chat.Status().Safety.TimedOut);
+        Assert.Contains(rig.Log.Lines, line => line.Contains("output screening ran out of time on ", StringComparison.Ordinal));
+        Assert.All(rig.Log.Lines, line => Assert.DoesNotContain("fake reply", line));
+        Assert.True(meter.Of("output") >= 1, $"output timeouts metered: {meter.Of("output")}");
+    }
+
+    [Fact]
+    public async Task APersonalDataPatternOutOfTimeOnAModelReply_BlocksTheReply_WithoutAFlagRecord()
+    {
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex email = filter.AllPatterns.Last(pattern => pattern.ToString().Contains('@', StringComparison.Ordinal));
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, email) && text.Contains("fake", StringComparison.Ordinal);
+
+        BotChatReply reply = (await rig.AnswerAsync("hello there"))!;
+
+        Assert.Single(rig.Client.Calls);
+        Assert.Equal("Builtin", reply.Provider); // not said
+        Assert.Empty(rig.Chat.Safety.Flags()); // a timeout is not a finding: no flag record, no excerpt of the model's text
+        BotChatSafetyStatus status = rig.Chat.Status().Safety;
+        Assert.Equal((0L, 0L, 1L), (status.Flagged, status.OutputFlagged, status.TimedOut));
+        Assert.All(rig.Log.Lines, line => Assert.DoesNotContain("fake reply", line));
+        Assert.Contains(rig.Log.Lines, line => line.Contains("output screening ran out of time on personal data (email)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task APersonalDataPatternOutOfTimeOnAPlayersLine_IsStillFlaggedAsPersonalData_WithoutAStrike()
+    {
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex email = filter.AllPatterns.Last(pattern => pattern.ToString().Contains('@', StringComparison.Ordinal));
+        filter.TimeoutForTest = (pattern, _) => ReferenceEquals(pattern, email);
+
+        BotChatReply reply = (await rig.AnswerAsync("hello there"))!;
+
+        Assert.Empty(rig.Client.Calls);
+        Assert.Contains(PlayerbotChatTemplates.Lines["safety.personal"], line => line.Replace("{player}", "Nathan", StringComparison.Ordinal) == reply.Text);
+        BotChatFlag flag = Assert.Single(rig.Chat.Safety.Flags());
+        Assert.Equal(("PersonalData", BotChatFlagSource.Local), (flag.Category, flag.Source));
+        Assert.Equal("[removed]", flag.Excerpt); // the excerpt's strip ran out of time on the same pattern: fails closed
+        Assert.Equal("Nathan: no strikes, no cut-off.", PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "Nathan").First());
+        Assert.Equal(2, rig.Chat.Status().Safety.TimedOut); // the input screening and the excerpt's strip
+    }
+
+    [Fact]
+    public async Task AWarmUpThatFails_StillCompletes_WarnsOnce_AndLinesAreScreenedCold()
+    {
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = PlayerbotChatSafetyFilter.Load(null, replaceDefaults: false, System.Text.RegularExpressions.Regex.InfiniteMatchTimeout);
+        System.Text.RegularExpressions.Regex broken = filter.AllPatterns.First();
+        filter.WarmUpHookForTest = pattern =>
+        {
+            if (ReferenceEquals(pattern, broken)) throw new InvalidOperationException("warm-up test failure kys");
+        };
+
+        await rig.Chat.Safety.Warm(filter).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(filter.Warmed.IsCompletedSuccessfully); // never faulted: a worker awaiting it goes on
+        Assert.Equal(filter.AllPatterns.Count(), filter.WarmedPatterns); // the other patterns were still warmed
+        Assert.Equal(nameof(InvalidOperationException), filter.WarmUpError);
+        string warning = Assert.Single(rig.Log.Lines, line => line.Contains("warm-up failed", StringComparison.Ordinal));
+        Assert.Contains("(InvalidOperationException)", warning);
+        Assert.DoesNotContain("kys", warning);
+        Assert.Equal(PlayerbotChatSafetyCategories.Harassment, filter.Screen("kys", PlayerbotChatSafetyCategories.All).Category); // screening works
+    }
+
+    [Fact]
+    public async Task AWorker_ScreensNothing_UntilTheWarmUpOfTheFilterInUseIsDone()
+    {
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        var warmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        filter.SetWarmedForTest(warmed.Task);
+
+        Task<BotChatReply?> pending = rig.AnswerAsync("hello there");
+
+        // AnswerAsync runs synchronously up to its first await: the pending warm-up. Nothing is screened or sent before it.
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(0, rig.Chat.Status().Safety.Screened);
+        Assert.Empty(rig.Client.Calls);
+
+        warmed.SetResult();
+        Assert.Equal("fake reply", (await pending.WaitAsync(TimeSpan.FromSeconds(30)))!.Text);
+        Assert.Equal(1, rig.Chat.Status().Safety.Screened);
+    }
+
+    [Fact]
+    public async Task ATimeoutBeforeARealHit_IsStillCounted()
+    {
+        await using var rig = new Rig();
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex first = filter.AllPatterns.First(); // a category pattern, screened before personal data
+        filter.TimeoutForTest = (pattern, _) => ReferenceEquals(pattern, first);
+
+        SafetyVerdict verdict = rig.Chat.Safety.ScreenInput("mail me at someone@example.com");
+
+        Assert.Equal((PlayerbotChatSafetyCategories?)PlayerbotChatSafetyCategories.PersonalData, verdict.Category); // a real hit
+        Assert.True(verdict.TimedOut);
+        Assert.Matches(@"^[A-Za-z]+ pattern #\d+$", verdict.TimedOutOn);
+        Assert.Equal(1, rig.Chat.Status().Safety.TimedOut);
+    }
+
+    [Fact]
+    public async Task APersonalDataStripOutOfTime_SendsRemoved_AndIsCountedAsStrip()
+    {
+        using var meter = new TimeoutMeter();
+        // Personal data left out of the screening, so only the strip before sending runs the personal-data patterns.
+        await using var rig = new Rig(chat => chat.Safety.Categories = PlayerbotChatSafetyCategories.All & ~PlayerbotChatSafetyCategories.PersonalData);
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex email = filter.AllPatterns.Last(pattern => pattern.ToString().Contains('@', StringComparison.Ordinal));
+        filter.TimeoutForTest = (pattern, _) => ReferenceEquals(pattern, email);
+
+        Assert.Equal("fake reply", (await rig.AnswerAsync("mail me at someone@example.com"))!.Text);
+        var call = Assert.Single(rig.Client.Calls);
+        Assert.Contains(call.Prompt.Messages, message => message.Text.Contains("[removed]", StringComparison.Ordinal));
+        Assert.DoesNotContain(call.Prompt.Messages, message => message.Text.Contains("someone@example.com", StringComparison.Ordinal));
+
+        Assert.Equal(1, rig.Chat.Status().Safety.TimedOut);
+        string warning = Assert.Single(rig.Log.Lines, line => line.Contains("strip screening ran out of time on ", StringComparison.Ordinal));
+        Assert.Contains("personal data (email)", warning);
+        Assert.All(rig.Log.Lines, line => Assert.DoesNotContain("someone@example.com", line));
+        Assert.True(meter.Of("strip") >= 1, $"strip timeouts metered: {meter.Of("strip")}");
+    }
+
     /// <summary>The same pattern without its match timeout, so the test measures the engine, not the guard.</summary>
     private static System.Text.RegularExpressions.Regex Untimed(System.Text.RegularExpressions.Regex pattern)
     {
@@ -601,7 +891,7 @@ public sealed class PlayerbotChatSafetyTests
         await rig.AnswerAsync("hello", sender: 0x43, name: "Other");
 
         string safety = PlayerbotCommands.ChatStatusLines(rig.Chat.Status()).Last();
-        Assert.StartsWith("Bot chat safety: screening=on screened=3 flagged=2 moderation-flagged=0 output-flagged=0 builtin-only=0 cut-offs=1 cut-off-now=1", safety);
+        Assert.StartsWith("Bot chat safety: screening=on screened=3 flagged=2 moderation-flagged=0 output-flagged=0 builtin-only=0 timed-out=0 cut-offs=1 cut-off-now=1", safety);
         string[] flags = [.. PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "nathan")];
         Assert.Equal("Nathan: strikes=0 cut-off=60m ai=default", flags[0]);
         Assert.Matches(@"^2026-10-08 12:00:00 Nathan \(guid 66, account 12\) -> Chatbot: Harassment \(local filter\) ""kys, mail me at \[email\]""$", flags[1]);

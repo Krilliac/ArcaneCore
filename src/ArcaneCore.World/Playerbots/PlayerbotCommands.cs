@@ -150,7 +150,7 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         Chat.BotChatSafetyStatus s = status.Safety;
         yield return string.Create(c,
-            $"Bot chat safety: screening={(s.Screening ? "on" : "off")} screened={s.Screened} flagged={s.Flagged} moderation-flagged={s.ModerationFlagged} output-flagged={s.OutputFlagged} builtin-only={s.BuiltinOnly} cut-offs={s.Cutoffs} cut-off-now={s.CutOffNow} auto-mutes={s.AutoMutes} opted-out={s.OptedOut} opted-in={s.OptedIn} disclosed={s.Disclosed} filter={s.Terms} terms/{s.Patterns} patterns");
+            $"Bot chat safety: screening={(s.Screening ? "on" : "off")} screened={s.Screened} flagged={s.Flagged} moderation-flagged={s.ModerationFlagged} output-flagged={s.OutputFlagged} builtin-only={s.BuiltinOnly} timed-out={s.TimedOut} cut-offs={s.Cutoffs} cut-off-now={s.CutOffNow} auto-mutes={s.AutoMutes} opted-out={s.OptedOut} opted-in={s.OptedIn} disclosed={s.Disclosed} filter={s.Terms} terms/{s.Patterns} patterns");
     }
 
     private static bool Create(CommandContext context, string text)

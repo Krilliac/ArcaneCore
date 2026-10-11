@@ -83,6 +83,13 @@ internal sealed class ListLogger : ILogger
 
 internal static class ChatSamples
 {
+    /// <summary>
+    /// The local filter without its per-match time limit. That limit is wall-clock time, so a process pause during a match (a
+    /// garbage collection or a starved CPU in a full suite run, most likely on a pattern's first, slower match) reports a clean line
+    /// as "not judged in time", and the built-in provider answers instead of the model: a test that is not about that guard sets this.
+    /// </summary>
+    public static void NoScreeningDeadline(PlayerbotChatOptions chat) => chat.Safety.PatternTimeout = System.Text.RegularExpressions.Regex.InfiniteMatchTimeout;
+
     public static BotChatPersona Persona(PlayerbotGoalKind? goal = PlayerbotGoalKind.Quest, string? quest = "Wolves Across the Border",
         string? zone = "Elwynn Forest", string? subzone = "Northshire Valley", byte level = 7, string? master = null, bool inGroup = false,
         Race race = Race.Human, Class @class = Class.Warrior)

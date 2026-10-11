@@ -282,7 +282,9 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         bool modelAllowed = true;
         if (screening)
         {
-            SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
+            PlayerbotChatSafetyFilter filter = _safety.Filter();
+            await filter.Warmed.ConfigureAwait(false); // a worker thread: never a cold first match on a player's line
+            SafetyVerdict verdict = _safety.ScreenInput(ask.Text, filter);
             if (verdict.Category is { } category)
             {
                 _safety.Flag(ask, category.ToString(), BotChatFlagSource.Local, Strikes(category), ask.Text);
@@ -349,9 +351,11 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 continue;
             }
 
-            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
             {
-                _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                // Flagged, or not judged in time (fails closed: an unjudged reply is never said, nothing is flagged): the blocked-reply path.
+                // A personal-data category from a timeout is no finding: no flag record, no excerpt of the model's text.
+                if (verdict.Category is { } said && !verdict.CategoryFromTimeout) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
                 if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
                 modelAllowed = false; // the built-in provider answers the (clean) line instead
                 continue;
@@ -410,11 +414,14 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     }
 
     /// <summary>The line as sent to a model provider: emails and phone numbers replaced when <see cref="PlayerbotChatSafetyOptions.StripPersonalData"/>.</summary>
-    private static BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
-        => options.Safety.StripPersonalData ? ask with { Text = PlayerbotChatSafetyFilter.StripPersonalData(ask.Text) } : ask;
+    private BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
+        => options.Safety.StripPersonalData ? ask with { Text = _safety.StripPersonalData(ask.Text) } : ask;
 
-    private static List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
-        => options.Safety.StripPersonalData ? [.. memory.Select(turn => turn with { Text = PlayerbotChatSafetyFilter.StripPersonalData(turn.Text) })] : memory;
+    private List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
+    {
+        if (!options.Safety.StripPersonalData) return memory;
+        return [.. memory.Select(turn => turn with { Text = _safety.StripPersonalData(turn.Text) })];
+    }
 
     /// <summary>A provider's moderation step for <paramref name="ask"/>'s line (as it would be sent); any error fails the step.</summary>
     private async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? key, BotChatAsk ask, PlayerbotChatOptions options)
