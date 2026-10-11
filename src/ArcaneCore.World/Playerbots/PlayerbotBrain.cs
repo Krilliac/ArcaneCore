@@ -385,10 +385,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 return;
             }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
-            { TargetEntry = _quests.TargetEntry; return; }
+            { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             _target = null;
             _route = null;
-            if (_destinations.Update(player, 0, interval, completedReturn)) TargetEntry = _destinations.TargetEntry;
+            // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
+            // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
+            // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
+            // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
+            _destinations.Update(player, 0, interval, completedReturn);
+            TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
             // Wait/retry at the real giver while combat or a normal interaction
             // refusal remains. A completed quest must not reopen opportunistic grind.
             return;
