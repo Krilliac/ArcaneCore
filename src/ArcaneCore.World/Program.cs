@@ -52,6 +52,9 @@ if (startupReport.IsInvalid)
     return ExitCodes.InvalidConfiguration;
 }
 
+// Name the console window (worldserver), so an operator running both daemons can tell them apart (no window: skipped).
+ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TrySet("worldserver", builder.Configuration["World:Port"]);
+
 ArcaneCore.World.Ops.Diagnostics.WorldDiagnosticsExtensions.UseWorldDiagnostics(builder); // crash hooks, invariants and the tick context (docs/ops/invariants.md); after the validation so a bad Diagnostics key is listed with the rest
 
 // Code hot reload gate (docs/areas/code-hot-reload.md). It runs before the host is built and
