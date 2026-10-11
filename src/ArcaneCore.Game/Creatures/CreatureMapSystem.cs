@@ -333,8 +333,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// A creature entering the map that is an active object from its template or group (Map::AddToActive): vmangos Creature.cpp:683-699
     /// (CREATURE_STATIC_FLAG_LARGE_AOI, CREATURE_FLAG_EXTRA_GIGANTIC_AOI / INFINITE_AOI, with Visibility.ForceActiveObjects, default
     /// true, World.cpp:828), mangos-classic Creature.cpp:205 (CREATURE_EXTRA_FLAG_ACTIVE, classic-db's dialect) and vmangos
-    /// Creature.cpp:289-292 (a formation member). Queued and applied before the next creature update: activating loads the grids
-    /// around it, which must not run inside the grid load that placed the creature.
+    /// Creature.cpp:289-292 (a formation member). Queued and applied before the next creature update: activating loads and pins the
+    /// creature's own grid, which must not run inside the grid load that placed the creature.
     /// </summary>
     private void QueueActivationIfFlagged(Creature creature)
     {

@@ -249,8 +249,8 @@ public sealed class GridContainer
     /// <summary>
     /// Re-index an object after it moved (vmangos <c>Map::PlayerRelocation</c> /
     /// <c>CreatureCellRelocation</c>). Moving into another grid loads it for active objects; an
-    /// active object entering a different cell re-activates its grid (expiry × 0.1) and loads
-    /// the grids within the activation distance. Returns true when the cell changed.
+    /// active object entering a different cell re-activates its grid (expiry × 0.1); only a player
+    /// also loads the grids within the activation distance. Returns true when the cell changed.
     /// </summary>
     public bool Relocate(WorldObject obj)
     {

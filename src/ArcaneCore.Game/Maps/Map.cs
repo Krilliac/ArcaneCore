@@ -419,7 +419,7 @@ public sealed class Map
     /// <summary>
     /// Put a non-player object (creature, game object, …) into the map — the seam for content
     /// that spawns into grids. Its grid is created (vmangos Map::Add&lt;T&gt; → EnsureGridCreated;
-    /// an <paramref name="active"/> object also loads the grids around it, like a player), and
+    /// an <paramref name="active"/> object pins only its own grid; only players load the grids around them), and
     /// every player in range gets its create block at the end of the tick.
     /// </summary>
     public void AddObject(WorldObject obj, bool active = false, bool isNewObject = false)
