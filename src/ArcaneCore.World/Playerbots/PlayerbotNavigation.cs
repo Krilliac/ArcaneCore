@@ -335,7 +335,11 @@ internal static class PlayerbotNavigation
             return true;
         }
 
-        if (TryClimbIndoors(map, start, destination, options, partial ? path : null, out route)) return true;
+        // The way up indoors is a fallback too, held to the think's search budget (PlayerbotThinkProbe.Fallback).
+        using (PlayerbotThinkProbe.Fallback())
+        {
+            if (TryClimbIndoors(map, start, destination, options, partial ? path : null, out route)) return true;
+        }
 
         // No path at all from walkable ground: the destination is the one off the mesh, not the bot. A partial path is a patch of
         // walkable ground among steep slopes, or a fragment of mesh, only when it ends close by and the search ran out of corridor,

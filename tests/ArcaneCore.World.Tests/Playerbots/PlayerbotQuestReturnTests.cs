@@ -84,6 +84,58 @@ public sealed class PlayerbotQuestReturnTests
         finally { brain.Stop(); }
     }
 
+    /// <summary>
+    /// GitHub #186: the return trip of a completed quest whose ender the bot cannot walk to (quest 1111, from the Shimmering Flats to
+    /// Ratchet over the Great Lift) stalled with the target of an earlier goal: 4147, a Saltstone Basilisk the bot had fought, and 11259,
+    /// the ender of quest 5361 it had walked to before. The stall line named that creature and the bot set it aside. The trip's target is
+    /// its own ender, or none while no way to it was planned.
+    /// </summary>
+    [Fact]
+    public async Task AReturnTripWithNoWay_DoesNotKeepOrSetAsideAnEarlierGoalsTarget()
+    {
+        const uint earlierTarget = 4147;
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true);
+        WorldTestHost host = fixture.Host;
+        WorldSession session = fixture.Session;
+        await fixture.AcceptAndCompleteAsync();
+        await host.World.InvokeAsync(() =>
+        {
+            var player = session.Player!;
+            var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 150, player.Y, player.Z, 0);
+            WorldCollision.Of(host.World).Install(lineOfSight: new Walled(player.Z)); // no step of any way is clear
+            return true;
+        });
+        await host.WaitForWorldAsync(() => !session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "offscreen return giver");
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var player = session.Player!;
+                float before = player.X;
+                brain.HoldGoalForTests(PlayerbotGoalKind.Grind, earlierTarget, 0);
+                for (int i = 0; i < 3; i++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    brain.Update(500);
+                }
+
+                Assert.Equal(before, player.X); // no way was planned
+                Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
+                Assert.Equal(QuestInteractionFixture.QuestId, brain.QuestId);
+                Assert.NotEqual(earlierTarget, brain.TargetEntry);
+
+                uint now = host.World.NowMs;
+                brain.GiveUpStalledGoal(player);
+                Assert.True(brain.Suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, now));
+                Assert.False(brain.Suspensions.IsEntrySuspended(earlierTarget, now));
+                return true;
+            });
+        }
+        finally { brain.Stop(); }
+    }
+
     [Fact]
     public async Task VisibleCompletedQuestRewardsNormallyBeforeFreshAttackAndPersists()
     {
@@ -213,6 +265,17 @@ public sealed class PlayerbotQuestReturnTests
             CreatureContent content = await ((ICreatureDataStore)original).LoadAsync(cancellationToken);
             return new CreatureContent(content.Templates, content.GetSpawns(0).Select(spawn => spawn with { X = -8799.95f }), [], [], []);
         }
+    }
+
+    private sealed class Walled(float height) : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => false;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        { hit = from; return true; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => height;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
     }
 
     private sealed class FlatFloor(float height) : ILineOfSight

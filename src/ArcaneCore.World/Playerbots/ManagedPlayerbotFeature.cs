@@ -1004,7 +1004,19 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (active.PartyDriven && !party) ReplaceBrain(active);
         // The party AI follows its master: a tram trip of the brain ends (its entrance consent with it); off the tram map again under the
         // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
-        if (party && !active.PartyDriven) PlayerbotTram.Cancel(driven);
+        if (party && !active.PartyDriven)
+        {
+            PlayerbotTram.Cancel(driven);
+            // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
+            // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
+            PlayerbotElevator.Cancel(driven);
+            if (PlayerbotElevator.HoldsForLanding(driven))
+            {
+                if (!PlayerbotMovementControl.Update(active.Session, driven))
+                    PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
+                return;
+            }
+        }
         active.PartyDriven = party;
         if (party)
         {

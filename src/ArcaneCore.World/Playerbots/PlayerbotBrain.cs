@@ -229,6 +229,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
                 PlayerbotTram.Cancel(player);
+                // And a lift ride: the corpse loses the transport. This must run BEFORE the acknowledgements below
+                // (PlayerbotMovementControl.Update): the death root's ack then carries the cleared block, relayed as MSG_MOVE_ROOT.
+                PlayerbotElevator.Cancel(player);
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -238,6 +241,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             // Alive again: the next death is a new one, even when pending movement orders hold this update below. The recovery is
             // reset here too, before that early return: a death in the window it held would otherwise start in the last death's
             // spirit-healer fallback (PlayerbotRecovery.Update goes straight to it), never release its new body, and fault.
+            if (_deathIntentRetired) PlayerbotElevator.SettleAfterRevive(player);
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
@@ -310,6 +314,26 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (tram == TramStep.Failed)
             {
                 _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
+                GiveUpStalledGoal(player, shareable: false);
+                return;
+            }
+
+            // A lift ride (PlayerbotElevator) owns the bot the same way, until it stands on the other level; a fight on the way to the
+            // landing ends it. A failed ride is the bot's own set-aside, like a failed tram trip: the lift did not carry it.
+            if (player.Combat.IsInCombat && PlayerbotElevator.TripOf(player) is { Stage: ElevatorStage.ToStop }) PlayerbotElevator.Cancel(player);
+            ElevatorStep lift = PlayerbotElevator.Drive(_session, player, _options, interval, out string? liftFailure);
+            if (lift == ElevatorStep.Traveling)
+            {
+                _stall.Reset();
+                _target = null;
+                _route = null;
+                _attacking = false;
+                return;
+            }
+
+            if (lift == ElevatorStep.Failed)
+            {
+                _stall.ReportExternal(liftFailure ?? "elevator: the ride failed (no reason recorded)");
                 GiveUpStalledGoal(player, shareable: false);
                 return;
             }
@@ -405,11 +429,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 return;
             }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
-            { TargetEntry = _quests.TargetEntry; return; }
+            { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             _target = null;
             _route = null;
             PlayerbotThinkProbe.Phase("quest destinations");
-            if (_destinations.Update(player, 0, interval, completedReturn)) TargetEntry = _destinations.TargetEntry;
+            // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
+            // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
+            // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
+            // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
+            _destinations.Update(player, 0, interval, completedReturn);
+            TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
             // Wait/retry at the real giver while combat or a normal interaction
             // refusal remains. A completed quest must not reopen opportunistic grind.
             return;
