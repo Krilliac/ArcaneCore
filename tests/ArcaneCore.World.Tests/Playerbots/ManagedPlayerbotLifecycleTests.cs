@@ -14,6 +14,64 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class ManagedPlayerbotLifecycleTests
 {
     [Fact]
+    public async Task Shutdown_StopsEightBotsTogether_AndFlushesEachCharacterOnce()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 8, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        string[] names = ["Stopone", "Stoptwo", "Stopthree", "Stopfour", "Stopfive", "Stopsix", "Stopseven", "Stopeight"];
+        Guid[] ids = new Guid[names.Length];
+        int[] characterIds = new int[names.Length];
+        int[] savesBefore = new int[names.Length];
+        for (int i = 0; i < names.Length; i++)
+        {
+            ids[i] = Assert.IsType<Guid>((await feature.CreateAsync(names[i], 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(ids[i].ToString(), new IdleController())).Success);
+            characterIds[i] = (await owners.FindAsync(ids[i]))!.CharacterId;
+            savesBefore[i] = characters.SavesFor(characterIds[i]);
+        }
+
+        // Hold the first stop that reaches its persistence write, independent of dictionary order.
+        // The old foreach cannot advance past it; a batched stop reaches the other seven.
+        TaskCompletionSource<Guid> held = owners.HoldNextUpdate();
+        long ticksAtStart = host.World.Stats.Snapshot().TotalTicks;
+        Task shutdown = feature.ShutdownBeforeWorldStopAsync();
+        bool advanced = false;
+        long ticksBeforeRelease = 0;
+        try
+        {
+            Guid heldId = await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                await host.WaitForWorldAsync(
+                    () => ids.Where(id => id != heldId).All(id => owners.Peek(id)?.State is ManagedPlayerbotState.Stopping or ManagedPlayerbotState.Stopped),
+                    "all other bots begin stopping while the first update is held");
+                advanced = true;
+            }
+            catch (TimeoutException) { /* prove the missing progress after releasing the gate and draining shutdown */ }
+            Assert.False(shutdown.IsCompleted);
+            ticksBeforeRelease = host.World.Stats.Snapshot().TotalTicks;
+        }
+        finally { owners.ReleaseHeldUpdates(); }
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(advanced, "shutdown did not begin stopping the other seven bots while one stop write was held");
+        long ticksToFinish = host.World.Stats.Snapshot().TotalTicks - ticksBeforeRelease;
+        long totalTicks = host.World.Stats.Snapshot().TotalTicks - ticksAtStart;
+        Console.WriteLine($"Eight-bot shutdown used {totalTicks} world ticks total, {ticksToFinish} after the held stop was released");
+        Assert.InRange(totalTicks, 0, 64);
+        Assert.InRange(ticksToFinish, 0, 24);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            Assert.Equal(ManagedPlayerbotState.Stopped, (await owners.FindAsync(ids[i]))!.State);
+            Assert.Equal(savesBefore[i] + 1, characters.SavesFor(characterIds[i]));
+            Assert.Null(host.Registry.Find((await owners.FindAsync(ids[i]))!.AccountId));
+        }
+    }
+
+    [Fact]
     public async Task StoppedBots_DoNotTakeASlot_OnlyRunningBotsCountAgainstMaxBots()
     {
         // The live world of 2026-10-08 (MaxBots 10) refused '.playerbot create' with 5 bots running and 5 stopped.
@@ -761,7 +819,14 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         private Guid? _holdBot;
         private TaskCompletionSource? _held;
+        private TaskCompletionSource<Guid>? _nextUpdateHeld;
         private TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<Guid> HoldNextUpdate()
+        {
+            _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _nextUpdateHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
 
         /// <summary>The next update of <paramref name="botId"/> waits until <see cref="ReleaseHeldUpdates"/>; the returned task completes when it is waiting.</summary>
         public TaskCompletionSource HoldUpdatesOf(Guid botId)
@@ -775,14 +840,17 @@ public sealed class ManagedPlayerbotLifecycleTests
         public void ReleaseHeldUpdates()
         {
             _holdBot = null;
+            _nextUpdateHeld = null;
             _release.TrySetResult();
         }
 
         public async Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {
-            if (_holdBot == bot.BotId && _held is { } held)
+            TaskCompletionSource<Guid>? next = Interlocked.Exchange(ref _nextUpdateHeld, null);
+            if (next is not null || _holdBot == bot.BotId && _held is not null)
             {
-                held.TrySetResult();
+                next?.TrySetResult(bot.BotId);
+                _held?.TrySetResult();
                 await _release.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             }
 

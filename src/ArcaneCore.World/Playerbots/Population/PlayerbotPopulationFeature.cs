@@ -573,7 +573,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             ownedParked = members.Keys.Count(id => !ctx.RunningNow.Contains(id));
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+        catch (OperationCanceledException ex) when (ct.IsCancellationRequested || _stopping || _world?.IsStopped == true)
+        {
+            logger.LogInformation("Playerbot population pass canceled during shutdown ({Type})", ex.GetType().Name);
+            return;
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             logger.LogWarning(ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);

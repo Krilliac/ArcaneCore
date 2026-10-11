@@ -51,11 +51,28 @@ internal sealed class FakeTickSource : IPopulationTickSource
 internal sealed class MemoryPopulationStore : IPlayerbotPopulationStore
 {
     private readonly ConcurrentDictionary<Guid, PlayerbotPopulationMember> _items = new();
+    private TaskCompletionSource? _loadHeld;
+    private TaskCompletionSource _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public IReadOnlyList<PlayerbotPopulationMember> Snapshot => [.. _items.Values.OrderBy(m => m.BotId)];
 
-    public Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(Snapshot);
+    public TaskCompletionSource HoldNextLoad()
+    {
+        _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _loadHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public void CancelHeldLoad() => _loadRelease.TrySetCanceled();
+
+    public async Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _loadHeld, null) is { } held)
+        {
+            held.TrySetResult();
+            await _loadRelease.Task;
+        }
+        return Snapshot;
+    }
 
     public Task UpsertAsync(PlayerbotPopulationMember member, CancellationToken cancellationToken = default)
     {

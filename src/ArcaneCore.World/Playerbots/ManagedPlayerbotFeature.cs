@@ -735,10 +735,24 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);
+        List<Exception> failures = [];
         try
         {
-            foreach (ActiveBot active in _active.Values.ToArray())
-                await StopCoreAsync(active.Record, true, CancellationToken.None).ConfigureAwait(false);
+            // Each stop waits for its own world-thread removal and character flush. Start a bounded
+            // group together so those waits overlap, while the operation lock keeps other lifecycle
+            // work out until all members of the group have finished.
+            foreach (ActiveBot[] batch in _active.Values.ToArray().Chunk(32))
+            {
+                Task[] stops = [.. batch.Select(active => StopCoreAsync(active.Record, true, CancellationToken.None))];
+                try { await Task.WhenAll(stops).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    foreach (Task stop in stops.Where(stop => stop.IsFaulted))
+                        failures.AddRange(stop.Exception!.InnerExceptions);
+                    foreach (Task stop in stops.Where(stop => stop.IsCanceled))
+                        failures.Add(new TaskCanceledException(stop));
+                }
+            }
             try { await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             { logger.LogWarning(ex, "Managed playerbot shared set-aside shutdown save failed ({Type})", ex.GetType().Name); }
@@ -748,6 +762,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
         _chatClient = null;
+        if (failures.Count > 0) throw new AggregateException("Managed playerbot shutdown failed", failures);
     }
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
