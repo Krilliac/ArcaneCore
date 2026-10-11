@@ -38,6 +38,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
     private int _exploreRefusals;
+    private bool _exploreIslandWatchStarted;
+    private bool _earlyExploreIslandChecked;
+    private System.Numerics.Vector3 _exploreIslandAnchor;
+    private uint _exploreIslandMap;
+    private uint _exploreIslandSince;
     private PlayerbotExploreAtlas.Candidate? _exploreCandidate;
     private readonly Dictionary<(uint Map, int X, int Y), uint> _exploreBlockedCells = [];
     private readonly List<(uint Map, int X, int Y)> _expiredExploreCells = new(64);
@@ -387,7 +392,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
-
 
         if (PlayerbotMotion.ConsumeLoop(player))
         {
@@ -1479,6 +1483,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void Explore(Player player, uint elapsedMs)
     {
         _goal = PlayerbotGoalKind.Explore;
+        if (EscapeConfinedExplore(player)) return;
         if (_exploreCandidate is not null && _exploreHasPosition
             && (_exploreLastMap != player.MapId || System.Numerics.Vector3.DistanceSquared(
                 _exploreLastPosition, new(player.X, player.Y, player.Z)) > 300f * 300f))
@@ -1534,6 +1539,29 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreRefusals++;
             PlayerbotMovementControl.Stop(_session, player);
         }
+    }
+
+    private bool EscapeConfinedExplore(Player player)
+    {
+        if (player.Map is null || !player.IsAlive || player.Combat.IsInCombat) return false;
+        uint now = _session.World.NowMs;
+        var at = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (!_exploreIslandWatchStarted || _exploreIslandMap != player.MapId
+            || System.Numerics.Vector2.DistanceSquared(new(at.X, at.Y),
+                new(_exploreIslandAnchor.X, _exploreIslandAnchor.Y)) > PlayerbotNavigation.IslandYards * PlayerbotNavigation.IslandYards)
+        {
+            _exploreIslandWatchStarted = true;
+            _exploreIslandAnchor = at;
+            _exploreIslandMap = player.MapId;
+            _exploreIslandSince = now;
+            _earlyExploreIslandChecked = false;
+        }
+
+        // Short valid routes on a small island can move a bot more than the stall watch's 10-yard
+        // progress bound while keeping it trapped. Diagnose once when exploration stays confined.
+        if (_earlyExploreIslandChecked || unchecked(now - _exploreIslandSince) < 15_000u) return false;
+        _earlyExploreIslandChecked = true;
+        return EscapeIsland(player);
     }
 
     private void BlockExploreCell(PlayerbotExploreAtlas.Candidate candidate)

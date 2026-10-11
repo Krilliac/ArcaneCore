@@ -483,16 +483,16 @@ internal static class PlayerbotNavigation
     internal const int IslandDirections = 12;
 
     /// <summary>How far away the points lie that <see cref="IsOnMeshIsland"/> asks the mesh to approach.</summary>
-    internal const float IslandProbeYards = 60f;
+    internal const float IslandProbeYards = 120f;
 
     /// <summary>
     /// An island's ground ends this close to the bot (flat yards) in every direction <see cref="IsOnMeshIsland"/> asks about; ground that
     /// leads farther in any of them is no island.
     /// </summary>
-    internal const float IslandYards = 45f;
+    internal const float IslandYards = 55f;
 
     /// <summary>
-    /// The point budget of each of <see cref="IsOnMeshIsland"/>'s queries, fixed (not the operator's MaxPathPoints): 60 yards of winding
+    /// The point budget of each of <see cref="IsOnMeshIsland"/>'s queries, fixed (not the operator's MaxPathPoints): 120 yards of winding
     /// ground fit in it, and a path cut at it (<see cref="PathType.Short"/>) is never taken for an island's edge.
     /// </summary>
     internal const int IslandPathPoints = 256;
@@ -514,6 +514,9 @@ internal static class PlayerbotNavigation
     /// within a step and in sight leads over the wall). Wfbotac and Wfbotaj, once inside, stalled there whatever goal they took
     /// (Wiley the Black for quest 65, Bingles Blastenheimer for quest 2039, the Harvest Watchers beside the farm), restart after restart:
     /// every route ended at the island's edge nearest the goal, and the next one was refused.
+    /// The lower Stormwind ledge of #207 extends almost 50 yards from the bot, but none of its 36 routes toward points 60, 120 and
+    /// 200 yards away leaves it. Probing 120 yards and requiring every end within 55 yards includes this ledge while retaining
+    /// a substantial gap between the probe and the edge; ordinary connected ground fails the first long-reaching probe.
     /// </para>
     /// </summary>
     internal static bool IsOnMeshIsland(Player player, PlayerbotOptions options)
