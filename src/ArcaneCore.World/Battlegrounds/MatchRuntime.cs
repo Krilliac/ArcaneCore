@@ -12,6 +12,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Npc;
@@ -105,6 +106,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             }
 
             objects.SpawnGate = this;
+            objects.DirectUseRefused = RefusesDirectUse;
             objects.RegisterUseHandler(GameObjectType.FlagStand, UseFlagStand);
             objects.RegisterUseHandler(GameObjectType.FlagDrop, UseFlagDrop);
             objects.Used += OnObjectUsed;
@@ -138,6 +140,10 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         if (_gameObjects is { } objects)
         {
             objects.Used -= OnObjectUsed;
+            if (objects.DirectUseRefused == RefusesDirectUse)
+            {
+                objects.DirectUseRefused = null;
+            }
             DetachAlteracValley(objects);
         }
 
@@ -208,11 +214,61 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         return new BattlegroundObjectUse(go.Entry, e1, e2, (dx * dx) + (dy * dy) + (dz * dz) <= 10f * 10f);
     }
 
-    /// <summary>vmangos <c>Player::CanUseBattleGroundObject</c> (Player.cpp:20448-20465): not a GM, not mounted, not in Spirit of Redemption.</summary>
-    private bool CanUseBattlegroundObject(Player player)
+    /// <summary>
+    /// The states vmangos <c>UNIT_STATE_CAN_NOT_REACT_OR_LOST_CONTROL</c> covers (UnitDefines.h:395-402: stunned, feign death, confused, fleeing,
+    /// possessed) as this server keeps them: the stunned, confused, fleeing and possessed unit flags (the crowd-control state, CcState) and a
+    /// feign death aura.
+    /// </summary>
+    private const UnitFlags LostControlFlags = UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing | UnitFlags.Possessed;
+
+    /// <summary>
+    /// vmangos <c>Player::CanUseBattleGroundObject</c> (Player.cpp:20448-20465): not in Spirit of Redemption, not a GM, not mounted, not totally
+    /// immune (<c>Unit::IsTotalImmune</c>, Unit.cpp:5659-5670: the school immunity auras together cover every school - Divine Shield, Ice Block),
+    /// alive, and neither unable to react nor out of control; and a participant of this match. vmangos asks only priests for Spirit of
+    /// Redemption; the aura exists only on priests, so the class test is left out.
+    /// </summary>
+    internal bool CanUseBattlegroundObject(Player player)
         => !player.IsGameMaster && !MountService.IsMounted(player)
             && Spells?.HasAura(player, BattlegroundConstants.SpellSpiritOfRedemption) != true
+            && !IsTotalImmune(player)
+            && player.IsAlive
+            && (player.UnitFlags & LostControlFlags) == 0
+            && Spells?.GetAuras(player).Any(h => h.HasAura(AuraType.FeignDeath)) != true
             && Battleground.PlayerTeam(player.Guid) is not null;
+
+    /// <summary>vmangos <c>Unit::IsTotalImmune</c> (Unit.cpp:5659-5670): the misc values (school masks) of the school immunity auras cover all schools.</summary>
+    private bool IsTotalImmune(Player player)
+    {
+        if (Spells is not { } spells)
+        {
+            return false;
+        }
+
+        int mask = 0;
+        foreach (SpellAuraHolder holder in spells.GetAuras(player))
+        {
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.SchoolImmunity })
+                {
+                    mask |= aura.MiscValue;
+                }
+            }
+        }
+
+        return mask == SpellSchoolMaskAll;
+    }
+
+    /// <summary>vmangos <c>SPELL_SCHOOL_MASK_ALL</c>: the seven schools.</summary>
+    private const int SpellSchoolMaskAll = 0x7F;
+
+    /// <summary>
+    /// A direct use (CMSG_GAMEOBJ_USE) of a banner is refused on the match's map: only the opening spell's open-lock effect reaches a banner
+    /// (<see cref="GameObjectMapSystem.OpenLock"/>), so a claim or an assault always takes the Opening cast (10 s, interruptible). A deliberate
+    /// divergence: vmangos lets a direct use through (GameObject::Use has no lock test for a goober, and <c>GameObject::PlayerCanUse</c>,
+    /// GameObject.cpp:2189-2241, checks a key item only for doors), so a crafted use packet claims a neutral node at once.
+    /// </summary>
+    private static bool RefusesDirectUse(Player player, GameObject go) => RoutesBannerUse(go.Template);
 
     /// <summary>vmangos GameObject::Use, GAMEOBJECT_TYPE_FLAGSTAND (GameObject.cpp:1843-1870).</summary>
     private GameObjectUseResult UseFlagStand(Player player, GameObject go)
@@ -243,16 +299,58 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     }
 
     /// <summary>
-    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner (a button whose
-    /// <c>noDamageImmune</c>, data4, is set) is a click on it.
+    /// Whether a use or an opening of an object of <paramref name="template"/> reaches the battleground's node click (vmangos
+    /// <c>EventPlayerClickedOnFlag</c>):
+    /// <list type="bullet">
+    /// <item>a button whose <c>noDamageImmune</c> (data4) is set - the faction and contested banners: Spell::EffectOpenLock hands the opening
+    /// to the battleground itself (SpellEffects.cpp:2122-2133), see <see cref="OnObjectUsed"/>;</item>
+    /// <item>a goober whose spell (data10) is a banner trigger spell (<see cref="BattlegroundConstants.BannerTriggerSpells"/>) - the neutral
+    /// banners: its use casts that spell at the user (GameObject.cpp:1609, 2001-2026), whose script makes the click (battleground.cpp:185-196),
+    /// see <see cref="OnBannerTriggered"/>.</item>
+    /// </list>
+    /// Anything else (a flag stand or dropped flag has its own use handler) is not a banner.
+    /// The bots decide whether they can play Arathi Basin with this rule (<see cref="Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator"/>).
+    /// </summary>
+    internal static bool RoutesBannerUse(GameObjectTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return (GameObjectType)template.Type switch
+        {
+            GameObjectType.Button => template.GetData(4) != 0,
+            GameObjectType.Goober => Array.IndexOf(BattlegroundConstants.BannerTriggerSpells, template.GetData(GameObjectMapSystem.GooberSpellData)) >= 0,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner button (one that
+    /// <see cref="RoutesBannerUse"/>) is a click on it. A goober banner's use clicks through its trigger spell instead (<see cref="OnBannerTriggered"/>).
     /// </summary>
     private void OnObjectUsed(Player player, GameObject go)
     {
-        if (go.Type == GameObjectType.Button && go.Template.GetData(4) != 0
+        if (go.Type == GameObjectType.Button && RoutesBannerUse(go.Template)
             && Type is BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley && CanUseBattlegroundObject(player))
         {
             Battleground.EventPlayerClickedOnFlag(player.Guid, UseOf(player, go));
         }
+    }
+
+    /// <summary>
+    /// A neutral banner's trigger spell went off (vmangos BattlegroundBannerTriggerScript, src/scripts/battlegrounds/battleground.cpp:185-196:
+    /// <c>bg->EventPlayerClickedOnFlag(player, m_casterGo)</c>). The banner is a goober (classic-db 180087-180091, 180418) whose use - a click, or
+    /// the opening spell's open-lock effect through Spell::SendLoot (SpellEffects.cpp:2053-2063) - casts its goober.spellId at the user
+    /// (GameObject.cpp:1609, 2001-2026). The opening spell's battleground gate (Spell::CheckCast, Spell.cpp:5990-5997:
+    /// Player::CanUseBattleGroundObject) is checked here, where the button banners check it too (<see cref="OnObjectUsed"/>); a banner that is
+    /// not on this match's map is not this match's, and only an object that <see cref="RoutesBannerUse"/> is a banner.
+    /// </summary>
+    public void OnBannerTriggered(Player player, GameObject banner)
+    {
+        if (Map is not { } map || !ReferenceEquals(banner.Map, map) || !RoutesBannerUse(banner.Template) || !CanUseBattlegroundObject(player))
+        {
+            return;
+        }
+
+        Battleground.EventPlayerClickedOnFlag(player.Guid, UseOf(player, banner));
     }
 
     // ---- the battleground buff traps (vmangos GameObject::Update, GameObject.cpp:476-551, and BattleGround::HandleTriggerBuff) ----

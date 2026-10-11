@@ -270,6 +270,16 @@ internal static class ScenarioTestContent
     /// <summary>Replace the creature content registered by <see cref="Register"/> with the same plus a Stormwind auctioneer beside the start (call it from the <c>configure</c> of <see cref="ScenarioTestWorld.StartAsync"/>).</summary>
     public static void UseAuctioneer(IServiceCollection services) => services.AddSingleton<ICreatureDataStore>(new ContentStore(auctioneer: true));
 
+    /// <summary>The spells every scenario world loads (a content that adds its own spells extends these).</summary>
+    public static SpellContent Spells()
+    {
+        SpellContent duel = DuelWorldHost.Content();
+        return ScenarioClassContent.Extend(ClassScriptScenarioContent.Extend(duel with
+        {
+            Spells = [.. duel.Spells, .. ProcScenarioContent.Spells, .. UnitControlScenarioContent.Spells],
+        }));
+    }
+
     public static void Register(IServiceCollection services)
     {
         var items = new InMemoryItemTemplateSource();
@@ -279,8 +289,7 @@ internal static class ScenarioTestContent
         });
         services.AddSingleton<IItemTemplateSource>(items);
         ScenarioClassContent.Register(services, items);
-        SpellContent duel = DuelWorldHost.Content();
-        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(ScenarioClassContent.Extend(ClassScriptScenarioContent.Extend(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells, .. UnitControlScenarioContent.Spells] }))));
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells()));
         var store = new ContentStore();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddSingleton<IQuestContentStore>(store);

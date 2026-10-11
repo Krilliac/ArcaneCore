@@ -190,6 +190,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>Whether the group AI drives <paramref name="botId"/> now (it is a member of a bot-led group).</summary>
     internal bool Drives(Guid botId) => _memberOf.ContainsKey(botId);
 
+    /// <summary>Whether <paramref name="botId"/> is in a bot-led group or waits for partners (the battlegrounds coordinator leaves it alone).</summary>
+    internal bool Involves(Guid botId) => _memberOf.ContainsKey(botId) || _waiting.ContainsKey(botId);
+
     /// <summary>One tick of a member's group AI (world thread, within the shared action budget).</summary>
     internal void UpdateMember(Guid botId, Player player, uint elapsedMs)
     {
@@ -300,7 +303,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (EvacuateIfStranded(bot, player)) continue;
             if (!_options.Groups.Enabled || !player.IsAlive || GroupManagerOrNull() is not { } groupManager) continue;
-            if (groupManager.GetGroup(player.Guid) is { } stale && stale.Members.All(m => m.Guid == player.Guid || IsOnlineBot(m.Guid)))
+            // Never a battleground raid: the match owns it (BattlegroundFeature.LeaveBattlegroundRaid takes the bot out when it leaves).
+            if (groupManager.GetGroup(player.Guid) is { IsBattlegroundGroup: false } stale && stale.Members.All(m => m.Guid == player.Guid || IsOnlineBot(m.Guid)))
             {
                 // A group of bots nobody leads any more (a world restart restores the server groups but not the coordinator's): the
                 // bot leaves it, as a client would. Only when every other member is a bot online: an offline member may be a real

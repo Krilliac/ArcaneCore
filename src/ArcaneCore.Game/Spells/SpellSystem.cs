@@ -376,7 +376,8 @@ public sealed partial class SpellSystem
             castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem, itemSpellIndex,
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
-            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura };
+            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura,
+              CasterGameObject = TakeCastingObject(caster) };
         cast.AutoRepeatShot = autoRepeatShot;
         if (!triggered)
         {

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
 
 namespace ArcaneCore.Game.Spells;
@@ -79,6 +80,13 @@ public sealed class SpellCast
 
     /// <summary>How many targets the proc engine has seen for this cast (vmangos Spell::m_targetNum): a secondary target's melee ability counts as a spell for the attacker.</summary>
     internal int ProcTargetCount { get; set; }
+
+    /// <summary>
+    /// The game object casting the spell by itself (vmangos <c>Spell::m_casterGo</c>), or null: a goober's spell (GameObject::Use,
+    /// GameObject.cpp:1609, 2001-2005) cast through <see cref="SpellSystem.CastForGameObject"/> without a unit caster. This engine casts only
+    /// from units, so <see cref="Caster"/> is then the object's stand-in; effect scripts that act on the object read it here.
+    /// </summary>
+    public GameObject? CasterGameObject { get; internal init; }
 
     /// <summary>The original spell/aura behind a trigger (vmangos m_triggeredBySpellInfo).</summary>
     public SpellInfo? TriggeringSpell { get; }

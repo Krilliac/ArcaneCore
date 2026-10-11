@@ -21,6 +21,12 @@ public sealed partial class SpellSystem
     private byte _objectStandInLevel;
 
     /// <summary>
+    /// The object casting by itself in <see cref="CastForGameObject"/>, until the cast it starts takes it as its
+    /// <see cref="SpellCast.CasterGameObject"/> (vmangos <c>Spell::m_casterGo</c>); only that one cast gets it, not a cast its effects start.
+    /// </summary>
+    private GameObject? _castingObject;
+
+    /// <summary>
     /// Cast <paramref name="spellId"/> at <paramref name="target"/> for the object <paramref name="source"/>, triggered, from the object's position:
     /// by <paramref name="unitCaster"/> when the object acts for a unit (a trap's owner, vmangos <c>owner->CastSpell(target, spell, true, ..., goGuid)</c>),
     /// otherwise by the object itself. This engine casts only from units, so an object casting by itself is stood in for by its target, which
@@ -50,9 +56,11 @@ public sealed partial class SpellSystem
         ISpellTargetRelations previous = Relations;
         Unit? previousStandIn = _objectStandIn;
         byte previousLevel = _objectStandInLevel;
+        GameObject? previousCastingObject = _castingObject;
         Relations = new GameObjectCasterRelations(previous, source, target);
         _objectStandIn = target;
         _objectStandInLevel = ObjectLevel(source);
+        _castingObject = source;
         try
         {
             return CastFromObject(target, spellId, target, source: (source.X, source.Y, source.Z));
@@ -62,7 +70,23 @@ public sealed partial class SpellSystem
             Relations = previous;
             _objectStandIn = previousStandIn;
             _objectStandInLevel = previousLevel;
+            _castingObject = previousCastingObject;
         }
+    }
+
+    /// <summary>
+    /// The object a cast by <paramref name="caster"/> is made for, taken once (see <see cref="_castingObject"/>): the first cast the stand-in
+    /// starts inside <see cref="CastForGameObject"/> is the object's own; null for every other cast.
+    /// </summary>
+    private GameObject? TakeCastingObject(Unit caster)
+    {
+        if (_castingObject is not { } go || !IsGameObjectStandIn(caster))
+        {
+            return null;
+        }
+
+        _castingObject = null;
+        return go;
     }
 
     /// <summary>

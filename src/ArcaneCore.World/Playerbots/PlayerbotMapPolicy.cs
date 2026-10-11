@@ -2,6 +2,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Battlegrounds;
+using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -10,7 +13,9 @@ namespace ArcaneCore.World.Playerbots;
 /// allows every map); in addition a bot may always move on, and stay on, the dungeon or raid instance it is in, when the map
 /// registry (<c>map_template</c>) says its current map is one. Without that, a bot that entered a dungeon through its entrance
 /// (or died in one and came back in as a ghost) could not take a step inside. A map the registry does not know gets the
-/// <see cref="PlayerbotOptions.AllowedMaps"/> answer alone, exactly as before this policy.
+/// <see cref="PlayerbotOptions.AllowedMaps"/> answer alone, exactly as before this policy. A battleground map is walkable only for a
+/// participant of the match on that map instance (<see cref="IsParticipant"/>; the battlegrounds coordinator,
+/// docs/areas/playbots-battlegrounds.md): any other bot there is one the match has let go, and the server takes it out.
 /// <para>Thread affinity: world thread (reads the player's map).</para>
 /// </summary>
 internal static class PlayerbotMapPolicy
@@ -18,17 +23,32 @@ internal static class PlayerbotMapPolicy
     /// <summary>
     /// The policy itself, free of world state: <paramref name="mapId"/> is allowed when the list is empty or names it, or when
     /// it is the bot's <paramref name="current"/> map and <paramref name="template"/> (null: unknown to the registry) is a dungeon
-    /// or raid (vmangos <c>MapEntry::IsDungeon</c>).
+    /// or raid (vmangos <c>MapEntry::IsDungeon</c>), or a battleground (<c>MapEntry::IsBattleGround</c>) whose match the bot takes
+    /// part in (<paramref name="participant"/>).
     /// </summary>
-    internal static bool Allows(uint[]? allowedMaps, uint mapId, MapTemplate? template, bool current)
+    internal static bool Allows(uint[]? allowedMaps, uint mapId, MapTemplate? template, bool current, bool participant = false)
     {
         if (allowedMaps is not { Length: > 0 } allowed || allowed.Contains(mapId)) return true;
-        return current && template is { IsDungeon: true } && template.Entry == mapId;
+        if (!current || template is null || template.Entry != mapId) return false;
+        return template.IsDungeon || (template.IsBattleground && participant);
     }
 
     /// <summary>Whether <paramref name="player"/> may plan and walk on the map it is on now (navigation and route following).</summary>
     internal static bool MayMoveOn(Player player, PlayerbotOptions options)
-        => player.Map is { } map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true);
+        => player.Map is { } map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map));
+
+    /// <summary>
+    /// Whether <paramref name="player"/> takes part in the battleground match of <paramref name="map"/>: the server binds it to a match
+    /// (<see cref="BattlegroundFeature.BattlegroundOf"/>, vmangos <c>Player::GetBattleGround</c>) whose map and instance are these, and the
+    /// match counts it on a team (<see cref="Game.Battlegrounds.Battleground.PlayerTeam"/>, vmangos <c>BattleGround::AddPlayer</c>).
+    /// False on any other map and without a battleground feature.
+    /// </summary>
+    internal static bool IsParticipant(Player player, Map map)
+    {
+        if (map.Template is not { IsBattleground: true } || player.Session is not WorldSession session) return false;
+        return session.Services.GetService<BattlegroundFeature>()?.BattlegroundOf(player.Guid) is { } match
+            && match.MapId == map.MapId && match.InstanceId == map.InstanceId && match.PlayerTeam(player.Guid) is not null;
+    }
 
     /// <summary>
     /// Whether a bot may take an area trigger whose <c>areatrigger_teleport</c> leads to <paramref name="targetMap"/> (null: the
@@ -63,12 +83,13 @@ internal static class PlayerbotMapPolicy
     /// <summary>
     /// Whether a bot may stay logged in on the map it is on (the login gate of <see cref="ManagedPlayerbotFeature"/>): its map is
     /// in <see cref="PlayerbotOptions.AllowedMaps"/>, or it is the dungeon or raid instance the bot is in. A bot saved inside a
-    /// dungeon logs back into that instance (vmangos <c>Player::LoadFromDB</c> keeps the instance bind) and may carry on there.
+    /// dungeon logs back into that instance (vmangos <c>Player::LoadFromDB</c> keeps the instance bind) and may carry on there. A login on
+    /// a battleground map is moved to its entry point by the battleground feature first (vmangos Player.cpp:14775-14788).
     /// </summary>
     internal static bool MayStayOnMap(Player player, PlayerbotOptions options)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
-        return player.Map is Map map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true);
+        return player.Map is Map map && Allows(options.AllowedMaps, map.MapId, map.Template, current: true, IsParticipant(player, map));
     }
 }

@@ -531,7 +531,7 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
-        // Of the playerbot options the caps, the movement transport and the whole risk, chat and groups sections are in the reload set
+        // Of the playerbot options the caps, the movement transport and the whole risk, chat, groups and battlegrounds sections are in the reload set
         // (the rest are read once at start; the chat provider list is one key).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxBots)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxRegisteredBots)}");
@@ -551,6 +551,10 @@ public sealed class ConfigReloadTests : IDisposable
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Battlegrounds)}:{property.Name}");
         }
 
         // The dungeon-run section and its raid subsection are live key by key (docs/areas/playbots-groups.md, Dungeon and raid runs).

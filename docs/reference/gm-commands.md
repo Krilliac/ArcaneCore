@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 189 |
-| `Administrator` | 6 | 283 |
+| `GameMaster` | 3 | 190 |
+| `Administrator` | 6 | 284 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -304,7 +304,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
 | `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
 | `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |
-| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|home\|chat\|groups\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive&gt; Manage server-owned autonomous players. |
+| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|home\|chat\|groups\|battlegrounds\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive\|population\|qa&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name\|$prefix*\|all [force] Start a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
 | `.playerbot stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot stop $id\|$name\|$prefix*\|all [force] Stop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
@@ -318,6 +318,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chat flags` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat flags [$player] Show the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice). |
 | `.playerbot chat pardon` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat pardon $player Clear a player's bot chat strikes and cut-off (an automatic mute is lifted with .unmute). |
 | `.playerbot groups` | 3 | GameMaster | stored level through the map | Syntax: .playerbot groups List the bot-led groups (goal, members and roles, state) and the bots waiting for partners. |
+| `.playerbot battlegrounds` | 3 | GameMaster | stored level through the map | Syntax: .playerbot battlegrounds List the bots with battleground business (type, phase, role, activity), the totals and the refused types. |
 | `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
 | `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
 | `.playerbot scenario run` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario run $name Run one scenario with scripted bots and print its report. |

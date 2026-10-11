@@ -150,6 +150,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>Raised after a successful use (scripts, events, the spells area's linked traps/spells).</summary>
     public event Action<Player, GameObject>? Used;
 
+    /// <summary>
+    /// Objects of this map that a direct use (CMSG_GAMEOBJ_USE, <see cref="Use"/>) may not touch, only an opening (<see cref="OpenLock"/>): a
+    /// battleground sets it for its banners. True refuses the use as <see cref="GameObjectUseResult.Locked"/> before anything else happens.
+    /// </summary>
+    public Func<Player, GameObject, bool>? DirectUseRefused { get; set; }
+
     public long ClockMs => _clockMs;
 
     /// <summary>
@@ -283,6 +289,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (result != GameObjectUseResult.Ok)
         {
             return result;
+        }
+
+        if (DirectUseRefused?.Invoke(player, go!) == true)
+        {
+            return GameObjectUseResult.Locked;
         }
 
         // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing

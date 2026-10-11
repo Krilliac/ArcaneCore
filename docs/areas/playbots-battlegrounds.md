@@ -1,0 +1,198 @@
+# Playerbots in battlegrounds: queueing, playing, leaving
+
+How autonomous managed playerbots queue for battlegrounds, play Warsong Gulch and Arathi Basin, and leave when the match is over, so
+the world has battleground traffic and the bots exercise the server's battleground code. The bot itself (goals, movement, the brain)
+is in `docs/areas/playbots.md`; bot-led groups in `docs/areas/playbots-groups.md`; the server's battlegrounds (queues, matches, flags,
+nodes, graveyards) in `docs/areas/battlegrounds.md`. A bot in a real player's party (the party AI) or under a scripted controller is
+never taken.
+
+References: vmangos `Handlers/BattleGroundHandler.cpp` (hello 40-73, join 82-264, port 361-507, leave 510-525) for what a client
+sends and how the server answers; vmangos `PlayerBots/BattleBotAI.cpp` (`SelectFollowTarget` 379-421, leaving on the ended
+scoreboard 461-485) and `PlayerBots/BattleBotWaypoints.cpp` (`WSG_AtAllianceFlag` / `WSG_AtHordeFlag` 76-140, `AtFlag` and
+`SPELL_CAPTURE_BANNER` 21651, 163-215) for what a battle bot does; `BattleGroundWS.cpp` 354-480 / 539-548 and `BattleGroundAB.cpp`
+337-458 for the server side of the objectives. vmangos battle bots are server-side puppets queued by a GM command and cast through
+`CastSpell` directly; here every step is a client packet through the ordinary world handler, and who queues is decided by this
+server's own rules (below).
+
+## Pieces
+
+| File (`src/ArcaneCore.World/Playerbots/Battlegrounds/`) | What it does |
+|---|---|
+| `PlayerbotBattlegroundOptions.cs` | `World:Playerbots:Battlegrounds` (every key live through `.reload config`). |
+| `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses Alterac Valley, a missing template, missing objective content and no battlemaster in reach. Unit tested. |
+| `PlayerbotBattlegroundDemand.cs` | The demand snapshot and the caps: per (type, bracket, team) real players waiting and bots committed; the pick. Unit tested. |
+| `PlayerbotBattlegroundQueueMachine.cs` | One bot's queue-to-leave life as a pure state machine (phases and the packet of each transition). Unit tested. |
+| `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
+| `PlayerbotBattlegroundCoordinator.cs` | The world feature: scans free bots, runs every followed bot's queue machine from the server's own state, sends the client packets, rebuilds the demand and the roles, the GM report. |
+| `PlayerbotBattlegroundAI.cs` | One per followed bot: the walk to the battlemaster, and the match (fighting enemy players, the objective, the corpse run). |
+
+Changes outside the folder: `ManagedPlayerbotFeature` calls the coordinator every tick after the group coordinator and lets it drive a
+bot before the group AI, the party AI and the brain (`BattlegroundDriven`); a bot the coordinator holds is not free for bot groups and a
+bot in or waiting for a bot group is not free for battlegrounds (`PlayerbotGroupCoordinator.Involves`); the group coordinator never
+disbands a battleground raid; `PlayerbotMapPolicy` lets a bot walk on a battleground map only while it is a participant of the match
+there; `PlayerbotCombatSpells.CastAtObject` (CMSG_CAST_SPELL at a game object); `PlayerbotGoalKind.Battleground` (persisted as its
+number, appended); `.playerbot battlegrounds`.
+
+## Who queues, and for what
+
+Every 2 seconds each **free** bot is looked over: autonomous (no controller), not driven by its party AI, not in or waiting for a bot
+group, in no group and with no group invitation, alive and out of combat, on a map of `World:Playerbots:AllowedMaps` (not a dungeon or
+battleground), in no battleground queue or match, without the Deserter debuff (26013).
+
+The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal logged once per type and reason:
+
+| Check | Refusal |
+|---|---|
+| Warsong Gulch or Arathi Basin (Alterac Valley is out of scope, below) | `Unsupported` |
+| a `battleground_template` row for the type | `NoTemplate` |
+| the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
+| the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
+| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
+
+Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
+template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
+(`QueueChancePerMinute`, as `1 - (1 - p)^(scan seconds / 60)`) and takes a random one of the open choices. A choice is open while the
+bracket holds fewer than `MaxBotsPerBattleground` committed bots, the bot's team fewer than `min(MaxPlayersPerTeam, ceil(cap / 2))`, and
+no running match of the bracket with room already holds the cap in bots.
+
+The snapshot behind these numbers is rebuilt at every scan from the battleground manager itself: the real players (sessions that are
+not managed) waiting in each queue and not yet invited, the bots this coordinator committed (walking, joining, queued, invited,
+porting), and the managed participants of every running match that still has free slots (a new queuer would be put into it).
+
+## The queue, like a client
+
+`PlayerbotBattlegroundQueueMachine` decides every tick from what the server's state says about the bot: its queue slot for the type,
+its invitation (the instance it is invited to), the match it is bound to and whether the match counts it on a team. The coordinator
+reads this state directly where a client reads SMSG_BATTLEFIELD_STATUS (which the bot also receives); every request is the ordinary
+client opcode through its world handler and never waits for the shared action budget.
+
+| Phase | Driven by | What happens |
+|---|---|---|
+| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards (a fight on the way is answered first); 10 minutes at most |
+| `join` | the coordinator | CMSG_BATTLEMASTER_HELLO (the server answers SMSG_BATTLEFIELD_LIST), then CMSG_BATTLEMASTER_JOIN (map, instance 0, not as a group); no queue slot within 15 seconds sets the type aside for this bot for 10 minutes |
+| `queued` | the brain | the bot carries on with what it was doing; after `MaxQueueWaitMinutes` it leaves the queue (CMSG_BATTLEFIELD_PORT action 0) and sets the type aside for 10 minutes |
+| `invited` | the brain | an invitation the bot cannot answer yet (dead, between maps); answered when it can |
+| `entering` | the coordinator | CMSG_BATTLEFIELD_PORT action 1, the far teleport acknowledged like any other (MSG_MOVE_WORLDPORT_ACK); 30 seconds at most |
+| `inmatch` | the coordinator | the match AI (below) |
+| `leaving` | the coordinator | CMSG_LEAVE_BATTLEFIELD once the match is over (WAIT_LEAVE); sent again every 5 seconds while the server still has the bot in the match |
+
+**Taken.** Every tick the coordinator reads the group manager itself: a bot in a group that is not a battleground raid, or holding a group
+invitation, is taken (as is one a controller, its party AI or a bot-led group drives). Walking, joining or queued, it leaves the queue
+(CMSG_BATTLEFIELD_PORT action 0); invited, it declines; in the rare tick where its port already went out, it leaves the match again
+(CMSG_LEAVE_BATTLEFIELD, sent until the server acts on it). That leave is a desertion like a real client's: in a match that is waiting to
+start or in progress the server casts the ordinary Deserter debuff (26013, 15 minutes in the 5875 Spell.dbc; `BattlegroundFeature.LeaveBattleground`,
+vmangos Player::LeaveBattleground), and the bot queues for nothing until it wears off. The party AI's own flag follows only at the bot's next
+think, too late for a port sent the same tick, so it is not what decides.
+
+An invitation into a match that already holds `MaxBotsPerBattleground` bots (participants plus bots porting in) is declined
+(CMSG_BATTLEFIELD_PORT action 0). A bot that a controller, a real player's party or a bot group takes while it walks, joins or waits
+leaves the queue. Back in the world (the server teleports it to where it queued, the battleground entry point) the brain resumes with its
+quests, suspensions and memories; only its route, target and rest belong to another place (`PlayerbotBrain.ResumeAfterGroup`).
+
+A free bot that is already queued for, or bound to, a match of a type the bots play (a world restart, a controller that let it go) is
+taken on where it stands. A bot taken by a controller is forgotten where it stands: the server keeps its queue or match.
+
+## In the match
+
+`PlayerbotBattlegroundAI.Play`, once per think (`ThinkIntervalMs`), the movement acknowledgements every tick:
+
+* **Before the gates open and after the end** the bot stands still (the start countdown, the frozen end).
+* **Fighting.** The enemy is a living participant of the other team on the bot's map; teammates never (the match's teams decide, not the
+  faction templates). In order: the enemy carrying the bot's own flag within 80 yards (Warsong Gulch), an enemy attacking the bot, the
+  enemy it already fights, the nearest enemy within 30 yards. The fight is the brain's and the group AI's: the class rotation
+  (`PlayerbotCombatSpells`), the position (`PlayerbotBrain.DecidePosition`), facing the victim, the melee swing. A flag carrier does not
+  stop to fight.
+* **Death.** The bot releases and runs back to its body (`PlayerbotRecovery`, as the brain and the group AI do); the server casts
+  Waiting to Resurrect on release and puts the ghost at the match's graveyard. There is no spirit-guide resurrection wave in this
+  server (docs/areas/battlegrounds.md, Resurrection): the corpse run is the way back, and it waits while the match is not in progress.
+* **Roles** (`PlayerbotBattlegroundRoles`, per match and team over the coordinator's bots, healers escort first): Warsong Gulch 40%
+  attackers, 30% escorts, 30% defenders; Arathi Basin 70% attackers, 30% defenders. These shares are this server's design.
+
+**Warsong Gulch.** The carrier walks into its own flag room trigger (3646 Alliance, 3647 Horde; its motion reports CMSG_AREATRIGGER like
+a client, and the match captures when the carrier's own flag is home) and waits there while its own flag is away. Anyone within 60 yards
+of its own dropped flag, and a defender from anywhere, returns it (CMSG_GAMEOBJ_USE on the dropped flag). An attacker takes the enemy
+flag from its stand when the stand is up (CMSG_GAMEOBJ_USE within 4 yards), or from the ground, escorts a teammate carrying it, and
+otherwise waits at the enemy stand. An escort follows its own carrier at 3-5 yards (vmangos `SelectFollowTarget`) and attacks when
+there is none. A defender holds within 8 yards of its own flag room.
+
+**Arathi Basin.** A node may be clicked by a team when it is neutral or its status belongs to the other team (vmangos
+`EventPlayerClickedOnFlag`: `status == 0 || teamIndex == status % 2`). An attacker walks to the nearest such node's banner, stops within
+4 yards and casts 21651 at the banner (CMSG_CAST_SPELL with TARGET_FLAG_OBJECT; Spell.dbc: OPEN_LOCK lock type 17, 10 second cast,
+0-5 yards; lock 1479 is LOCK_KEY_SKILL of that type), standing still while it casts; a node a teammate is already casting at is left to
+it (vmangos `AtFlag`). The server's open-lock effect turns the opening of a banner button with `noDamageImmune` into the click, and
+the opening of a neutral goober banner into its trigger spell cast at the bot, which clicks (docs/areas/battlegrounds.md). A defender guards one of its team's nodes (spread by guid) and casts at it when the enemy contests it;
+with nothing to take, an attacker guards its nearest own node.
+
+## Configuration (`World:Playerbots:Battlegrounds`, live)
+
+| Key | Default | What the code does with it |
+|---|---|---|
+| `World:Playerbots:Battlegrounds:Enabled` | `true` | Off: no bot starts a queue; bots already walking, queued or in a match finish their business. |
+| `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
+| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
+| `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
+| `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
+| `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `30` | 1..240. A bot leaves a queue after this long and does not queue for that type again for 10 minutes. |
+
+## Where it shows
+
+`.playerbot battlegrounds` (GameMaster): enabled or not, the chance and the cap, the totals (queued, entered, left, declined, queues
+given up), one line per bot with battleground business (type, bracket, team, phase, its time in it, its role and activity in a match),
+the refused types with the reason, the last events. `.playerbot status` and BOTINSPECT show `bg=WarsongGulch:inmatch:attacker:taking-flag`
+where the group would be, the goal `Battleground` (or `Recover` on a corpse run) and `decision=battleground` for the risk.
+
+## Tests
+
+* Unit (`tests/ArcaneCore.World.Tests/Playerbots/Battlegrounds/`): brackets and refusals (Alterac Valley `Unsupported` at every level
+  with a template and content), the demand and caps, the queue machine, the roles, the options and their validation;
+  `PlayerbotMapPolicyTests.Allows_ABattleground_OnlyToItsParticipants`.
+* World (`PlayerbotBattlegroundWorldTests`, the real handlers and the manual clock, `BattlegroundBotTestContent`): two autonomous bots
+  walk to their battlemasters, receive SMSG_BATTLEFIELD_LIST, queue, port into one Warsong Gulch match, and leave through
+  CMSG_LEAVE_BATTLEFIELD when it ends (no Deserter, back where they queued, the brain driving again); a lone bot leaves the queue after
+  `MaxQueueWaitMinutes`; a cap of two holds against the manager's own queue and participant counts; an invitation into a match at the cap
+  is declined; a real player beside the battlemaster is never queued or moved; a real player waiting gets a bot for the other team and is
+  invited but never ported by the coordinator; a scripted managed bot waiting in a queue brings no bot (it is no real player); a real player's
+  party bot at a battlemaster never queues, even when the scan runs before its party AI noticed its master; a queued bot that joins a real
+  player's party in the tick its invitation arrives declines it and is never ported; an autonomous bot takes the Horde flag and captures it at 3646
+  (`Wsg_AutonomousBot_TakesTheEnemyFlag_AndCapturesItAtItsOwnFlagRoom`); an autonomous bot claims the stables with its own 21651 cast
+  (`Ab_AutonomousBot_ClaimsTheStables`: SMSG_SPELL_START and SMSG_SPELL_GO of 21651, the node contested by the Alliance, the bot's
+  bases-assaulted score); with the real goober neutral banner (classic-db 180087: lock 1479, data10 23932) Arathi Basin is accepted and an
+  autonomous bot claims the stables through 21651 and the trigger spell
+  (`Ab_WithTheRealGooberNeutralBanner_AutonomousBotClaimsTheStables_ThroughTheTriggerSpell`: SMSG_SPELL_GO of 21651 and of 23932, the node
+  contested by the Alliance); a goober banner whose spell is no banner trigger is refused and never queued
+  (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); Alterac Valley is refused and never queued.
+  With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, unrouted-goober and
+  managed-bot tests go red.
+
+The test world's battleground maps are flat with open paths, laid out compactly, with one-player-per-team templates; the battlemasters of
+both factions stand beside the human start, where the scenario world logs every race in; the ids (maps, triggers, flag and banner entries,
+spell 21651 and lock 1479 from the 5875 client's DBCs) are the real ones. The Arathi Basin test needs a skill catalog (an empty one):
+without it the 21651 cast went through and nothing was claimed, which is how the test was seen to depend on the real spell effect.
+
+## Limits
+
+* **Alterac Valley is out of scope.** Its objectives (graveyards and towers assaulted for five minutes, captains, the general, the
+  reinforcements), its NPC fights and its 40-player scale have no bot AI here; it is refused in the eligibility check (`Unsupported`,
+  logged once), so no bot ever queues for it, whatever the template, the battlemasters and the content say. No configuration key turns
+  it on.
+* **Arathi Basin banners: only what the server routes.** classic-db and vmangos make the five neutral banners (180087-180091) goobers
+  whose use casts a trigger spell (23932, 23935-23938) that vmangos scripts into the click (`BattlegroundBannerTriggerScript`); the server
+  routes them (`MatchRuntime.RoutesBannerUse`: a button with `noDamageImmune`, or a goober whose data10 is a banner trigger spell), so with
+  the real data the coordinator accepts Arathi Basin. A direct use (CMSG_GAMEOBJ_USE) of a routed banner is refused, so the match AI only
+  ever casts 21651 at a banner; the open-lock uses the goober, which casts its trigger spell at the bot, which clicks the node. The
+  coordinator decides with that same rule: content whose neutral banners the rule does not route (a goober with another spell) is
+  `MissingContent` and no bot queues for it, and the match AI never casts at a banner the rule does not route. Only the stables node is
+  exercised end to end with the goober shape (one bot, one node); the other four neutral banners are covered by the match tests
+  (docs/areas/battlegrounds.md).
+* **Opening a banner needs the skills feature.** The open-lock effect of 21651 is installed by the skills feature only when it has its skill
+  catalog (`Skills:*DbcPath`, docs/areas/skills.md); without one the cast completes and nothing opens, for bots and players alike.
+* **Navigation needs the battleground maps' mmaps** (489, 529; 30 for Alterac Valley would be needed if it were in scope). Without a
+  navigation mesh the bot's routes fall back to the terrain stepper, which refuses steep and unknown ground: the bots stand at the start.
+* **No spirit-guide wave** (above): a dead bot runs back to its body.
+* **The battlemaster walk is on one map**, a straight-line `MaxTravelYards` check: no flight paths, boats or portals to a battlemaster.
+* No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
+* **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues
+  the party bot with it (the server's rule). That bot is not free, so the coordinator neither follows nor ports it: its invitation lapses after
+  the server's two minutes and it leaves the queue then. The party AI has no battleground behaviour of its own.
+* The shares of the roles and the engagement distances (30 yards, 80 for the flag thief, 60 to return a flag) are this server's design,
+  not vmangos values; vmangos battle bots follow recorded waypoint paths instead.
