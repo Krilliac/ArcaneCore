@@ -71,7 +71,8 @@ public static partial class ContentImporterCli
                                 before z2829 store seconds; --dry-run writes nothing)
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
-                                exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
+                                exploration_basexp and game_weather, areatrigger_tavern, instance_encounter (the dungeon
+                                encounters of instance_dungeon_encounters joined to instance_encounters), transports, spell_proc_event,
                                 dbscripts_on_relay and dbscript_relay_template, dbscripts_on_quest_start/quest_end/gossip/event
                                 and script_waypoint (plus the script ids of quest_template and gossip_menu, and the
                                 gossip_menu_option rows that run a script), ScriptDev2's script_texts (and the carried

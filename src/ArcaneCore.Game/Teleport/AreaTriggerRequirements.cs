@@ -17,6 +17,51 @@ public readonly record struct AreaTriggerVerdict(bool Allowed, string? Message)
     public static AreaTriggerVerdict Refuse(string? message) => new(false, message);
 }
 
+/// <summary>Which requirement of an area trigger refused (<see cref="AreaTriggerCheck.Failed"/>).</summary>
+public enum AreaTriggerRequirement : byte
+{
+    /// <summary>Nothing refused.</summary>
+    None = 0,
+
+    /// <summary>The required level.</summary>
+    Level,
+
+    /// <summary>The required key item.</summary>
+    Item,
+
+    /// <summary>The required quest (an <see cref="IAreaTriggerGate"/> whose <see cref="IAreaTriggerGate.Requirement"/> is this).</summary>
+    Quest,
+
+    /// <summary>Any other gate (an instance script's block).</summary>
+    Gate,
+
+    /// <summary>The conditions-table reference.</summary>
+    Condition,
+}
+
+/// <summary>
+/// Requirements an <see cref="IAreaTriggerWaiver"/> may skip. The level is never waivable, nor a gate that is neither a quest nor
+/// the conditions table (an instance script's block).
+/// </summary>
+[Flags]
+public enum AreaTriggerWaivers : byte
+{
+    None = 0,
+    Item = 1,
+    Quest = 2,
+    Condition = 4,
+}
+
+/// <summary>A world feature that waives some entry requirements for a player on one teleport (consulted before <see cref="AreaTriggerRequirements.Check"/>).</summary>
+public interface IAreaTriggerWaiver
+{
+    /// <summary>The requirements to skip for <paramref name="player"/> entering through <paramref name="teleport"/> (world thread).</summary>
+    AreaTriggerWaivers Waives(Player player, AreaTriggerTeleport teleport);
+}
+
+/// <summary>The outcome of <see cref="AreaTriggerRequirements.Check"/>: the verdict and which requirement refused.</summary>
+public readonly record struct AreaTriggerCheck(AreaTriggerVerdict Verdict, AreaTriggerRequirement Failed);
+
 /// <summary>
 /// A system that can veto a teleport through an area trigger on grounds this assembly has no state for (the quest log, a later
 /// instance-lockout or faction system). Called on the world thread, once per teleport attempt, after the built-in requirements
@@ -25,6 +70,9 @@ public readonly record struct AreaTriggerVerdict(bool Allowed, string? Message)
 /// </summary>
 public interface IAreaTriggerGate
 {
+    /// <summary>The kind of requirement this gate enforces (what <see cref="AreaTriggerRequirements.Check"/> reports and what a waiver may skip).</summary>
+    AreaTriggerRequirement Requirement => AreaTriggerRequirement.Gate;
+
     /// <summary>Whether <paramref name="player"/> may use <paramref name="teleport"/>. Must not allocate per call beyond the verdict (a struct).</summary>
     AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport);
 }
@@ -54,12 +102,21 @@ public static class AreaTriggerRequirements
     /// </summary>
     public const string ItemRequiredText = "You must have item {0} to enter.";
 
-    /// <summary>Evaluate every requirement of <paramref name="teleport"/> for <paramref name="player"/>.</summary>
+    /// <summary>Evaluate every requirement of <paramref name="teleport"/> for <paramref name="player"/> (no waivers).</summary>
     /// <param name="player">The player stepping on the trigger (world thread).</param>
     /// <param name="teleport">The destination row with its requirements.</param>
     /// <param name="conditions">The conditions-table evaluator; null when none is registered, which refuses any row that names a condition (fail closed).</param>
     /// <param name="gates">The additional vetoes, in the order they are consulted; may be empty.</param>
     public static AreaTriggerVerdict Evaluate(Player player, AreaTriggerTeleport teleport, IConditionEvaluator? conditions, IEnumerable<IAreaTriggerGate> gates)
+        => Check(player, teleport, conditions, gates, AreaTriggerWaivers.None).Verdict;
+
+    /// <summary>
+    /// <see cref="Evaluate"/> with the failing requirement reported and some requirements waived (<paramref name="waivers"/>: the key item,
+    /// the quest gates, the conditions table). The order is the same: game master, level, items, gates, condition. The level and any
+    /// gate that is not a quest gate are never waived.
+    /// </summary>
+    public static AreaTriggerCheck Check(Player player, AreaTriggerTeleport teleport, IConditionEvaluator? conditions,
+        IEnumerable<IAreaTriggerGate> gates, AreaTriggerWaivers waivers)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(teleport);
@@ -68,43 +125,53 @@ public static class AreaTriggerRequirements
         // mangos-zero GetAreaTriggerLockStatus: "Gamemaster can always enter".
         if (player.IsGameMaster)
         {
-            return AreaTriggerVerdict.Allow;
+            return new(AreaTriggerVerdict.Allow, AreaTriggerRequirement.None);
         }
 
         if (player.Level < teleport.RequiredLevel)
         {
-            return Refuse(teleport, string.Format(CultureInfo.InvariantCulture, LevelRequiredText, teleport.RequiredLevel));
+            return new(Refuse(teleport, string.Format(CultureInfo.InvariantCulture, LevelRequiredText, teleport.RequiredLevel)), AreaTriggerRequirement.Level);
         }
 
         // mangos-classic Player::GetAreaTriggerLockStatus (Entities/Player.cpp:20010-20027):
         // when both columns name keys, either one suffices; a refusal names the first.
         // HasItemCount's default includes bags/keyring, not the bank.
-        if (MissingItem(player, teleport.RequiredItem) is { } first
-            && (teleport.RequiredItem2 == 0 || MissingItem(player, teleport.RequiredItem2) is not null))
+        if ((waivers & AreaTriggerWaivers.Item) == 0)
         {
-            return Refuse(teleport, ItemText(player, first));
-        }
+            if (MissingItem(player, teleport.RequiredItem) is { } first
+                && (teleport.RequiredItem2 == 0 || MissingItem(player, teleport.RequiredItem2) is not null))
+            {
+                return new(Refuse(teleport, ItemText(player, first)), AreaTriggerRequirement.Item);
+            }
 
-        if (teleport.RequiredItem == 0 && MissingItem(player, teleport.RequiredItem2) is { } second)
-        {
-            return Refuse(teleport, ItemText(player, second));
+            if (teleport.RequiredItem == 0 && MissingItem(player, teleport.RequiredItem2) is { } second)
+            {
+                return new(Refuse(teleport, ItemText(player, second)), AreaTriggerRequirement.Item);
+            }
         }
 
         foreach (IAreaTriggerGate gate in gates)
         {
+            AreaTriggerRequirement kind = gate.Requirement;
+            if (kind == AreaTriggerRequirement.Quest && (waivers & AreaTriggerWaivers.Quest) != 0)
+            {
+                continue;
+            }
+
             AreaTriggerVerdict verdict = gate.Check(player, teleport);
             if (!verdict.Allowed)
             {
-                return Refuse(teleport, verdict.Message);
+                return new(Refuse(teleport, verdict.Message), kind);
             }
         }
 
-        if (teleport.RequiredCondition != 0 && conditions?.IsSatisfied(teleport.RequiredCondition, player, null) != true)
+        if ((waivers & AreaTriggerWaivers.Condition) == 0
+            && teleport.RequiredCondition != 0 && conditions?.IsSatisfied(teleport.RequiredCondition, player, null) != true)
         {
-            return Refuse(teleport, null);
+            return new(Refuse(teleport, null), AreaTriggerRequirement.Condition);
         }
 
-        return AreaTriggerVerdict.Allow;
+        return new(AreaTriggerVerdict.Allow, AreaTriggerRequirement.None);
     }
 
     // The row's own text replaces whatever the failing check would have said (reference: failed_text_mangos_string_id wins).

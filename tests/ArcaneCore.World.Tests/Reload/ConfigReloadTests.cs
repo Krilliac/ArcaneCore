@@ -511,9 +511,23 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:{property.Name}");
         }
-        foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
+        }
+
+        // The dungeon-run section and its raid subsection are live key by key (docs/areas/playbots-groups.md, Dungeon and raid runs).
+        string runsPath = $"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{nameof(PlayerbotGroupOptions.DungeonRuns)}";
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRaidRunOptions)))
+        {
+            expected.Add($"{runsPath}:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotRaidRunOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{runsPath}:Raids:{property.Name}");
         }
 
         // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).

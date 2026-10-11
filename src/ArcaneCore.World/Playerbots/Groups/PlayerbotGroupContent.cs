@@ -199,6 +199,26 @@ internal static class PlayerbotGroupContent
         return (Math.Max(options.MinTank, size / 10 + 1), Math.Max(options.MinHealer, size / 5));
     }
 
+    /// <summary>
+    /// The group a dungeon or raid run takes: a dungeon the instance's player limit up to five (classic-db gives most five-player maps a
+    /// limit of ten, the party is still five), a raid its player limit (10, 20 or 40), from <c>map_template</c> (<see cref="InstanceGroupSize"/>).
+    /// </summary>
+    internal static int RunGroupSize(MapTemplate map) => InstanceGroupSize(map);
+
+    /// <summary>
+    /// The tanks and healers a run of <paramref name="size"/> needs. A dungeon party: <see cref="PlayerbotGroupOptions.MinTank"/> and
+    /// <see cref="PlayerbotGroupOptions.MinHealer"/>. A raid: tanks <c>ceil(size * TanksPerTen / 10)</c> and healers <c>ceil(size * HealerPercent / 100)</c>,
+    /// so 10, 20 and 40 players take 1, 2 and 4 tanks and 3, 5 and 10 healers at the defaults. This is ArcaneCore's rule after vanilla's
+    /// customary raid make-up (one tank per ten, a quarter healers); neither reference core defines a raid composition.
+    /// </summary>
+    internal static (int Tanks, int Healers) RunRoleNeeds(int size, bool raid, PlayerbotGroupOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!raid) return size < 3 ? (0, 0) : (options.MinTank, options.MinHealer);
+        PlayerbotRaidRunOptions raids = options.DungeonRuns.Raids;
+        return ((size * raids.TanksPerTen + 9) / 10, ((size * raids.HealerPercent) + 99) / 100);
+    }
+
     /// <summary>Whether a class can tank (vmangos IsTankClass: warrior, paladin, druid in bear form).</summary>
     internal static bool CanTank(Class @class) => @class is Class.Warrior or Class.Paladin or Class.Druid;
 
@@ -231,10 +251,19 @@ internal static class PlayerbotGroupContent
     /// </summary>
     internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        return Match(candidates, size, options, RoleNeeds(size, options));
+    }
+
+    /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
+    internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options,
+        (int Tanks, int Healers) needs)
+    {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(options);
         if (size < 2 || candidates.Count < size) return null;
-        (int tanks, int healers) = RoleNeeds(size, options);
+        (int tanks, int healers) = needs;
+        if (tanks + healers > size) return null;
         // Try each candidate as the level anchor (lowest level of the group), lowest first: the first window that fills wins.
         foreach (byte floor in candidates.Select(c => c.Level).Distinct().OrderBy(level => level))
         {
