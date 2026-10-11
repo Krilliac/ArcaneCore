@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -117,6 +118,32 @@ public sealed class PlayerbotThinkProbeTests
         Assert.DoesNotContain("nowhere", phases.Keys);
         PlayerbotThinkProbe.Phase("after"); // ended: ignored again
         Assert.Null(PlayerbotThinkProbe.Active);
+    }
+
+    [Fact]
+    public void TileAttribution_ReportsSlowestTileAndPrefetchState_WithoutLeakingIntoNextThink()
+    {
+        var probe = new PlayerbotThinkProbe();
+        probe.Begin();
+        try
+        {
+            PlayerbotThinkProbe.Phase("explore atlas find");
+            PathSearchCounters.RecordTileLoad(100, 0, 31, 32, prefetchHit: true);
+            PathSearchCounters.RecordTileLoad(400, 1, 22, 23, prefetchHit: false);
+        }
+        finally { probe.End(); }
+
+        Assert.Equal(2, probe.Search.TileLoads);
+        Assert.Equal(new TileLoadDetail(1, 22, 23, 400, false), probe.SlowestTile);
+        Assert.Contains("slowest tile map 1 (22, 23)", probe.Describe());
+        Assert.Contains("prefetch miss", probe.Describe());
+
+        var next = new PlayerbotThinkProbe();
+        next.Begin();
+        try { PlayerbotThinkProbe.Phase("tram ride"); }
+        finally { next.End(); }
+        Assert.Equal(0, next.Search.TileLoads);
+        Assert.Equal(default, next.SlowestTile);
     }
 
     internal sealed class ListLogger : ILogger

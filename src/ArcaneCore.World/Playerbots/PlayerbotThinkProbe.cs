@@ -86,6 +86,7 @@ internal sealed class PlayerbotThinkProbe
 
     /// <summary>The A* search work of the think (every search on this thread, <see cref="Find"/> or not).</summary>
     internal PathSearchTotals Search { get; private set; }
+    internal TileLoadDetail SlowestTile { get; private set; }
 
     /// <summary>The query that created the most nodes: its nodes, time, phase and ends.</summary>
     internal (long Nodes, long Ticks, string Phase, Vector3 From, Vector3 To, int MaxNodes) Largest { get; private set; }
@@ -114,8 +115,10 @@ internal sealed class PlayerbotThinkProbe
         _fallbackNodes = 0;
         Largest = default;
         Search = default;
+        SlowestTile = default;
         _elapsed = 0;
         _searchBefore = PathSearchCounters.Current;
+        PathSearchCounters.BeginTileCapture();
         _started = _phaseStarted = Stopwatch.GetTimestamp();
         t_active = this;
     }
@@ -127,6 +130,8 @@ internal sealed class PlayerbotThinkProbe
         Close(now);
         _elapsed = now - _started;
         Search = PathSearchCounters.Current - _searchBefore;
+        SlowestTile = PathSearchCounters.SlowestTile;
+        PathSearchCounters.EndTileCapture();
         if (ReferenceEquals(t_active, this)) t_active = null;
         return _elapsed;
     }
@@ -263,7 +268,12 @@ internal sealed class PlayerbotThinkProbe
         if (Clamped > 0 || Refused > 0)
             text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} fallback queries cut short, {Refused} refused");
         if (Search.TileLoads > 0)
+        {
             text.Append(CultureInfo.InvariantCulture, $"; tiles read {Search.TileLoads} ({Search.TileLoadMs:F1} ms)");
+            if (SlowestTile.Ticks > 0)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"; slowest tile map {SlowestTile.MapId} ({SlowestTile.X}, {SlowestTile.Y}) {Ms(SlowestTile.Ticks):F1} ms, { (SlowestTile.PrefetchHit ? "prefetch hit" : "prefetch miss") }");
+        }
         return text.ToString();
     }
 }

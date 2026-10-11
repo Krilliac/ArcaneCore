@@ -301,8 +301,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
-                PlayerbotThinkProbe.Phase("recovery");
+                PlayerbotThinkProbe.Phase("recovery hazard scan");
                 Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
+                PlayerbotThinkProbe.Phase("recovery update");
                 _recovery.Update(player, recoveryInterval);
             }
             return;
@@ -411,7 +412,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
-            PlayerbotThinkProbe.Phase("recovery");
+            PlayerbotThinkProbe.Phase("recovery update");
             _recovery.Update(player, interval);
             return;
         }
@@ -927,8 +928,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
     private PlayerbotStallWatch.Fingerprint Fingerprint(Player player)
     {
+        PlayerbotThinkProbe.Phase("stall inventory");
         uint items = 0;
         foreach (Item item in player.Inventory.AllItems) items += item.Count;
+        PlayerbotThinkProbe.Phase("stall quests");
         int quests = 0, rewarded = 0;
         uint objectives = 0;
         if (_session.Services.GetService<Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } state)
@@ -941,7 +944,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
+        PlayerbotThinkProbe.Phase("stall spells");
         int spells = _session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
+        PlayerbotThinkProbe.Phase("stall vitals");
         // Resting is standing still by design: health or mana rising above the best seen during the rest is its progress.
         ulong vitals = (ulong)player.Health + (player.PowerType == PowerType.Mana ? ArcaneCore.Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) : 0u);
         _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
@@ -1492,6 +1497,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _exploreHasPosition = true;
         if (_route is { Complete: false })
         {
+            PlayerbotThinkProbe.Phase("explore advance");
             if (ExploreMovementPaused(player, elapsedMs)) return;
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, _session.World.NowMs))
             {
@@ -1503,6 +1509,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (player.Map is null)
             return;
+        PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
@@ -1523,9 +1530,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             && (area.DistanceTo(player.X, player.Y) > area.ExploreRadius
                 || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
             destination = InwardLeg(area, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore wander plan");
         if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
         {
             _exploreRefusals = 0;
+            PlayerbotThinkProbe.Phase("explore advance");
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
                 _route = null;
         }
@@ -1607,6 +1616,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
             _exploreBlockedFilter ??= ExploreBlocked;
+            PlayerbotThinkProbe.Phase("explore atlas find");
             _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
                 _exploreBlockedFilter, out _, _exploreFactionFilter);
             if (_exploreCandidate is null)
@@ -1617,6 +1627,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         PlayerbotExploreAtlas.Candidate chosen = _exploreCandidate.Value;
+        PlayerbotThinkProbe.Phase("explore plan");
         if (ExploreMovementPaused(player, elapsedMs)) return true;
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
         if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
@@ -1627,6 +1638,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _goal = PlayerbotGoalKind.Explore;
         TargetEntry = chosen.Spawn.Entry;
+        PlayerbotThinkProbe.Phase("explore advance");
         if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
         {
             if (!_route!.Complete) BlockExploreCell(chosen);

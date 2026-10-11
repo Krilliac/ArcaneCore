@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -105,6 +106,9 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         }).Build();
         await using (ServiceProvider bootstrap = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).BuildServiceProvider())
             await bootstrap.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+        // Upgrade only the copied snapshot; the source database is read-only input.
+        await using (ServiceProvider worldBootstrap = new ServiceCollection().AddLogging().AddWorldDatabase(configuration).BuildServiceProvider())
+            await worldBootstrap.GetRequiredService<WorldDbInitializer>().InitializeAsync();
 
         int max = steps[^1];
         await using WorldTestHost host = WorldTestHost.Start(
@@ -487,8 +491,10 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             {
                 var total = new TickSample();
                 _total.AddTo(total);
+                ThinkStats thinks = _thinks;
+                _thinks = new ThinkStats(); // freeze the measured hold before formatting its report
                 return new StepResult(_ticks.Count, _ticks.Order().ToArray(), total, _maps.Order().ToArray(), _bot.Order().ToArray(),
-                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest], _thinks);
+                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest], thinks);
             }
         }
     }
