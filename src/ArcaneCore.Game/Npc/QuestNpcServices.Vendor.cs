@@ -288,7 +288,7 @@ public sealed partial class QuestNpcServices
     /// <summary>
     /// The client-facing order and cap from vmangos WorldSession::SendListInventory (ItemHandler.cpp),
     /// with its Player::IsVendorItemVisible filter (Player.cpp). Purchases use this same view;
-    /// vmangos Player::BuyItemFromVendor checks visibility but omits the packet's 150-row cap.
+    /// vmangos Player::BuyItemFromVendor checks visibility but omits the packet's 128-row cap (MAX_VENDOR_ITEMS).
     /// </summary>
     private IEnumerable<(VendorItem Row, ItemInfo Proto, uint Slot)> VisibleVendorItems(Player player, NpcInfo npc)
     {
