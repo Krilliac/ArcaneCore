@@ -477,9 +477,17 @@ internal sealed class PlayerbotRisk
     /// strength (<see cref="PlayerbotRiskModel.BeyondStrength"/>): a creature that kills outright, an elite well above it, or a fight
     /// whose risk at full health and mana is above the highest share any pull is ever taken at.
     /// </para>
+    /// <para>
+    /// The bot as the corpse run revives it, not as it is now: a reclaim gives no resurrection sickness, and a sickness the bot carries
+    /// from an earlier spirit-healer revival is temporary (<see cref="PlayerbotSickness"/>), so the bot's health is its health without
+    /// it (<see cref="PlayerbotSickness.UnsickenedMaxHealth"/>) and its damage the average of the fights it fought well
+    /// (<see cref="PlayerbotFightTracker.End"/> leaves the sick ones out). Live 2026-10-11 (analysis 4.1): judged with the sickened
+    /// health and damage, 47% of 4,633 "too strong" verdicts were against creatures at or below the bot's level; each sent the bot to
+    /// the healer, which sickened it again.
+    /// </para>
     /// </summary>
     internal PlayerbotEngagement? TooStrongNear(Player player, Vector3 body)
-        => TooStrongWithin(player, PlayerbotRecovery.Threats(player), body, CombatConstants.CorpseReclaimRadius);
+        => TooStrongWithin(player, PlayerbotRecovery.Threats(player), body, CombatConstants.CorpseReclaimRadius, unsickened: true);
 
     /// <summary>
     /// A creature too strong for the bot (<see cref="TooStrongNear"/>'s rule) whose aggro reach covers <paramref name="at"/> itself: one
@@ -488,15 +496,19 @@ internal sealed class PlayerbotRisk
     /// graveyard out of the ghost's sight).
     /// </summary>
     internal PlayerbotEngagement? TooStrongAt(Player player, Vector3 at)
-        => TooStrongWithin(player, PlayerbotRecovery.ThreatsAround(player, at, PlayerbotRecovery.BodyThreatYards), at, 0f);
+        => TooStrongWithin(player, PlayerbotRecovery.ThreatsAround(player, at, PlayerbotRecovery.BodyThreatYards), at, 0f, unsickened: false);
 
-    private PlayerbotEngagement? TooStrongWithin(Player player, IReadOnlyList<PlayerbotThreat> threats, Vector3 body, float radius)
+    /// <param name="unsickened">Judge the bot without its resurrection sickness (a body: <see cref="TooStrongNear"/>); else as it is
+    /// (the spirit healer's landing, where the bot stands sick).</param>
+    private PlayerbotEngagement? TooStrongWithin(Player player, IReadOnlyList<PlayerbotThreat> threats, Vector3 body, float radius,
+        bool unsickened)
     {
         if (!Enabled || player.Map is not { } map) return null;
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
         float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
-        uint health = Math.Max(1u, (uint)(player.MaxHealth * CombatConstants.CorpseReclaimRestorePercent));
+        uint maxHealth = unsickened ? PlayerbotSickness.UnsickenedMaxHealth(_session, player) : player.MaxHealth;
+        uint health = Math.Max(1u, (uint)(maxHealth * CombatConstants.CorpseReclaimRestorePercent));
         foreach (PlayerbotThreat threat in threats)
         {
             if (threat.Source is not { } creature
@@ -512,7 +524,7 @@ internal sealed class PlayerbotRisk
             {
                 BotLevel = player.Level,
                 BotHealth = health,
-                BotMaxHealth = player.MaxHealth,
+                BotMaxHealth = maxHealth,
                 BotManaPct = mana,
                 ManaDependence = ManaDependence(player.Class),
                 BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level),
@@ -583,6 +595,8 @@ internal sealed class PlayerbotRisk
         // Until the window is long enough the estimate's priors stand in: the creatures' template damage and the bot's damage.
         float priorIn = enemies.Sum(e => Enemy(e, RiskJoin.Target, player).Dps);
         float priorOut = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level);
+        // A fight under resurrection sickness (every blow a quarter) says nothing of the bot's damage once well.
+        if (PlayerbotSickness.IsSick(_session, player)) Tracker.MarkSick();
         PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs, priorIn, priorOut)
             with { Lethal = enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)) };
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);

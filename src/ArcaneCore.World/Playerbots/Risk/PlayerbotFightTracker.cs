@@ -41,6 +41,16 @@ internal sealed class PlayerbotFightTracker
     /// <summary>The last verdict (inspection).</summary>
     internal PlayerbotFightVerdict? LastVerdict { get; private set; }
 
+    private bool _sick;
+
+    /// <summary>
+    /// The fight being tracked is fought under resurrection sickness (<see cref="PlayerbotSickness"/>: every blow and spell deals a
+    /// quarter, MOD_DAMAGE_PERCENT_DONE -75%): its damage is not folded into <see cref="ObservedDps"/> when it ends. The average is the
+    /// bot's damage once well, which a corpse is judged by (<see cref="PlayerbotRisk.TooStrongNear"/>); live 2026-10-11, the sick fights
+    /// pulled it down for good, and the healer's sickness made every next body look too strong.
+    /// </summary>
+    internal void MarkSick() => _sick = true;
+
     /// <summary>Set the priors (from the pre-engagement estimate) for the start of a fight.</summary>
     internal void Prime(float dpsIn, float dpsOut)
     {
@@ -56,8 +66,9 @@ internal sealed class PlayerbotFightTracker
     /// </param>
     internal void End(float priorDps)
     {
-        if (_samples.Count >= 2 && Rate(out _, out float dpsOut, out bool measured) && measured && dpsOut > 0)
+        if (!_sick && _samples.Count >= 2 && Rate(out _, out float dpsOut, out bool measured) && measured && dpsOut > 0)
             ObservedDps = ((ObservedDps ?? priorDps) * 0.7f) + (dpsOut * 0.3f);
+        _sick = false;
         _samples.Clear();
         _anchors.Clear();
         LastVerdict = null;

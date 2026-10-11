@@ -510,6 +510,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             QuestId = _quests.QuestId;
             if (_town.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            // Under resurrection sickness no new fight: the quest exchanges and town errands above (a repair among them) still run.
+            if (StandDownWhileSick(player)) return;
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
             if (_quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player))
@@ -891,6 +893,26 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attacking = false;
         _lootOpened = false;
         TargetEntry = 0;
+    }
+
+    /// <summary>
+    /// While the bot carries resurrection sickness (<see cref="PlayerbotSickness"/>, with the risk estimate on), it pulls nothing and
+    /// travels nowhere for a fight: it stands with goal Rest until the sickness runs out (at most ten minutes), and that wait is no
+    /// stall. Called after the quest exchanges and the town errands (a repair, food) and before the trainer and quest travel, the
+    /// economy, exploring and the pull; a creature that attacks it is fought as ever (earlier in <see cref="Update"/>). Under the
+    /// sickness every blow and spell deals a quarter and every stat's base is a quarter (spell 15007's three -75% auras), and a
+    /// warrior, rogue, hunter or shaman regenerates no health (<see cref="PlayerbotRisk.FruitlessWaitMs"/>): a pull then is the next
+    /// death, and the next spirit healer the next sickness. Live 2026-10-11 (analysis bot-xp-analysis.md, 4.1): 61% of the running
+    /// level 11+ population bots were sick at any moment, at 7.5 healer revivals per running bot-hour.
+    /// </summary>
+    private bool StandDownWhileSick(Player player)
+    {
+        if (!_options.Risk.Enabled || PlayerbotSickness.Holder(_session, player) is not { IsPermanent: false, Duration: > 0 }) return false;
+        DropIntent();
+        _goal = PlayerbotGoalKind.Rest;
+        _stall.Reset(); // waiting the sickness out is bounded by its duration, not a stall
+        if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+        return true;
     }
 
     /// <param name="wantedPct">Eat or drink below this percentage (the ordinary 45/35 when 0).</param>
