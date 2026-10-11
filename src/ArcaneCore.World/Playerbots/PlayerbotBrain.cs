@@ -7,6 +7,8 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
@@ -35,6 +37,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
     private int _exploreRefusals;
+    private PlayerbotExploreAtlas.Candidate? _exploreCandidate;
+    private readonly Dictionary<(int X, int Y), uint> _exploreBlockedCells = [];
+    private uint _exploreSearchAfter;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private long _lootStartedMs;
     private readonly Queue<(WorldOpcode Opcode, byte[] Payload)> _lootActions = new();
@@ -757,6 +762,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
                 break;
+            case PlayerbotGoalKind.Explore:
+                if (_exploreCandidate is { } explore) BlockExploreCell(explore);
+                else _exploreRefusals = 3;
+                break;
             default:
                 _exploreRefusals = 3;
                 break;
@@ -888,6 +897,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         _target = null;
         _route = null;
+        _exploreCandidate = null;
         _attacking = false;
         _lootOpened = false;
         TargetEntry = 0;
@@ -1306,16 +1316,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void Explore(Player player, uint elapsedMs)
     {
+        _goal = PlayerbotGoalKind.Explore;
         if (_route is { Complete: false })
         {
             _goal = PlayerbotGoalKind.Explore;
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, _session.World.NowMs))
+            {
+                if (!_route.Complete && _exploreCandidate is { } refused) BlockExploreCell(refused);
                 _route = null;
+            }
             return;
         }
 
         if (player.Map is null)
             return;
+        if (TryExploreSpawns(player, elapsedMs)) return;
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
@@ -1347,6 +1362,103 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreRefusals++;
             PlayerbotMovementControl.Stop(_session, player);
         }
+    }
+
+    private void BlockExploreCell(PlayerbotExploreAtlas.Candidate candidate)
+    {
+        // A cell has no visible killable target, or its route was refused. Let respawns and path changes make it eligible again.
+        if (_exploreBlockedCells.Count >= 64 && !_exploreBlockedCells.ContainsKey((candidate.CellX, candidate.CellY)))
+            _exploreBlockedCells.Remove(_exploreBlockedCells.Keys.First());
+        _exploreBlockedCells[(candidate.CellX, candidate.CellY)] = unchecked(_session.World.NowMs + 60_000u);
+        _exploreCandidate = null;
+        TargetEntry = 0;
+    }
+
+    private bool TryExploreSpawns(Player player, uint elapsedMs)
+    {
+        // A named kill objective still owns travel and targeting. Static grinding is the idle fallback only.
+        if (_quests.PreferredCreatureEntry != 0) return false;
+        uint mapId = player.Map!.MapId;
+        if (mapId is not (0 or 1) || !_options.AllowedMaps.Contains(mapId)) return false;
+        var creatureFeature = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+        var atlas = creatureFeature?.ExploreAtlas;
+        var content = creatureFeature?.Content;
+        if (atlas is null || content is null) return false;
+        uint now = _session.World.NowMs;
+        foreach (var blocked in _exploreBlockedCells.ToArray())
+            if (unchecked((int)(blocked.Value - now)) <= 0) _exploreBlockedCells.Remove(blocked.Key);
+
+        if (_exploreCandidate is { } current)
+        {
+            float dx = current.Spawn.X - player.X, dy = current.Spawn.Y - player.Y;
+            if (current.Spawn.MapId != mapId || dx * dx + dy * dy <= 65f * 65f)
+            {
+                // Within sight but FindTargets found nothing to fight: this patch is depleted, gated, or unavailable.
+                BlockExploreCell(current);
+            }
+        }
+
+        if (_exploreCandidate is null)
+        {
+            if (unchecked((int)(_exploreSearchAfter - now)) > 0) return false;
+            FactionTemplateCatalog? factions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.FactionTemplates;
+            if (factions is not { Count: > 0 }) factions = _session.Services.GetService<FactionTemplateCatalog>();
+            if (factions is not { Count: > 0 })
+            {
+                CombatHooks hooks = CombatHooks.For(_session.World);
+                while (hooks is ArcaneCore.Game.Reputation.ReputationCombatHooks reputation) hooks = reputation.Fallback;
+                factions = (hooks as FactionCombatHooks)?.Factions;
+            }
+            FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
+            if (self is null) return false;
+            IReadOnlyList<PlayerbotHazard> hazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
+            PlayerbotHomeArea? home = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
+            bool AttackableFaction(uint faction)
+            {
+                FactionTemplateRecord? npc = factions!.Find(faction);
+                return npc is not null && (npc.IsHostileTo(self) || self.IsHostileTo(npc)
+                    || !npc.IsFriendlyTo(self) && !self.IsFriendlyTo(npc));
+            }
+            bool Eligible(CreatureSpawn spawn)
+            {
+                CreatureTemplate? template = content.FindTemplate(spawn.Entry);
+                if (template is null || !AttackableFaction(template.Faction) || !PlayerbotWorldDestinations.IsPresent(player, spawn)
+                    || home is not null && (!home.Contains(spawn) || home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)) return false;
+                // FactionCombatHooks.CanAttack: a neutral NPC is attackable by a player, but friendly relations in either
+                // direction prevent an optional pull. Visible targets still pass the live combat/reputation check.
+                var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
+                return !hazards.Any(hazard => hazard.Covers(point));
+            }
+            _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), Eligible,
+                (x, y) => _exploreBlockedCells.ContainsKey((x, y)), out _, AttackableFaction);
+            if (_exploreCandidate is null)
+            {
+                _exploreSearchAfter = unchecked(now + 5_000u);
+                return false;
+            }
+            if (atlas.HasStrongHazard(_exploreCandidate.Value, player.Level, AttackableFaction))
+            {
+                BlockExploreCell(_exploreCandidate.Value);
+                return true;
+            }
+        }
+
+        PlayerbotExploreAtlas.Candidate chosen = _exploreCandidate.Value;
+        var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
+        if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
+        {
+            BlockExploreCell(chosen);
+            PlayerbotMovementControl.Stop(_session, player);
+            return true; // One path query this think. The next think tries another cell.
+        }
+        _goal = PlayerbotGoalKind.Explore;
+        TargetEntry = chosen.Spawn.Entry;
+        if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+        {
+            if (!_route!.Complete) BlockExploreCell(chosen);
+            _route = null;
+        }
+        return true;
     }
 
     /// <summary>

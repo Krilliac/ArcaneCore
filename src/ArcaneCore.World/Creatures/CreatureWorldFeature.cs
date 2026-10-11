@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
     private readonly Dictionary<Map, CreatureMapSystem> _instanceSystems = new(ReferenceEqualityComparer.Instance);
     private CreatureContent _content = CreatureContent.Empty;
+    private PlayerbotExploreAtlas _exploreAtlas = new(CreatureContent.Empty);
     private bool _contentInstalled;
     private WorldRuntime? _world;
     private ICreatureHeightProvider? _height;
@@ -40,6 +42,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
 
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
+
+    /// <summary>Startup spawn index for level-appropriate playerbot exploration; rebuilt when creature definitions change.</summary>
+    internal PlayerbotExploreAtlas ExploreAtlas => _exploreAtlas;
+
+    internal void RefreshExploreAtlas() => _exploreAtlas = new PlayerbotExploreAtlas(Content);
 
     /// <summary>Built SMSG_CREATURE_QUERY_RESPONSE replies (cleared when the content is installed or its definitions swapped).</summary>
     public Packets.QueryResponseCache<CreatureTemplate> QueryCache { get; } = new();
@@ -156,6 +163,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     public void Install(CreatureContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
+        _exploreAtlas = new PlayerbotExploreAtlas(content);
         Volatile.Write(ref _content, content);
         Volatile.Write(ref _contentInstalled, true);
         QueryCache.Clear();
