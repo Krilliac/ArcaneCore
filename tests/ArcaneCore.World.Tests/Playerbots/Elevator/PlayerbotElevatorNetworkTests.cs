@@ -27,6 +27,7 @@ public sealed class PlayerbotElevatorNetworkTests
         (-5455f, -2443f) => (400u, 484u), // Freewind Post
         (-1221f, 1742f) => (405u, 0u), // Desolace
         (-2300f, -380f) => (215u, 0u), // Mulgore
+        (796f, 900f) => (406u, 0u), // Stonetalon Mountains
         (-1280f, 120f) => (1638u, 0u), // Thunder Bluff
         _ => (0u, 0u),
     });
@@ -118,6 +119,21 @@ public sealed class PlayerbotElevatorNetworkTests
         Assert.Equal((freewind, ElevatorLevel.Low), network.Choose(1, ElevatorTestData.ShimmeringFlatsStall, ElevatorTestData.CliffwatcherLonghorn, Zones));
         Assert.Equal((Lift(network, -4668f, -1839f), ElevatorLevel.High), network.Choose(1, ElevatorTestData.Dizzywig,
             ElevatorTestData.CliffwatcherLonghorn, Zones));
+    }
+
+    /// <summary>
+    /// Issue #191: quest 5881 is delivered to Grish Longrunner (spawn 21295) on The Barrens side of the Great Lift's top, 66 yards from it,
+    /// which bots in Stonetalon reach on foot. No lift is chosen for that trip (a bot already at the top does not ride down either); the
+    /// stalls there are the long walk's, not the lift's.
+    /// </summary>
+    [Fact]
+    public void ToGrishLongrunner_AtTheTopOfTheGreatLift_NoLift()
+    {
+        ElevatorNetwork network = ElevatorTestData.Network();
+        var grish = new Vector3(-4602.11f, -1835.37f, 86.1941f);
+        Assert.Null(network.Choose(1, new Vector3(796f, 900f, 100f), grish, Zones));
+        Assert.Null(network.Choose(1, ElevatorTestData.Dizzywig, grish, Zones));
+        Assert.Equal(ElevatorLevel.Low, network.Choose(1, ElevatorTestData.ShimmeringFlatsStall, grish, Zones)?.From);
     }
 
     /// <summary>Mulgore to Thunder Bluff: a Thunder Bluff lift up (the nearer way); The Barrens to Mulgore is walkable: no lift.</summary>
