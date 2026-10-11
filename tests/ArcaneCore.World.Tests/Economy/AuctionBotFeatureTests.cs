@@ -160,12 +160,16 @@ public sealed class AuctionBotFeatureTests
         Assert.Equal(EconomyOutcome.NotStarted, await own.Task.WaitAsync(Fixture.Budget));
     }
 
-    [Fact]
-    public async Task Reserved_rows_from_before_a_restart_are_rechecked_against_the_operation_ledger()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)] // both rechecks outlive the economy read budget, as a loaded host can make them
+    public async Task Reserved_rows_from_before_a_restart_are_rechecked_against_the_operation_ledger(int stalledRechecks)
     {
+        var reads = new StallingCommitReads(stalledRechecks);
         var item = new ItemInstanceData { Guid = 7000, Entry = Fixture.Entry, Count = 1, Charges = [0, 0, 0, 0, 0], Enchantments = new uint[21] };
         long created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        await using var fixture = await Fixture.CreateAsync(persist: true, extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" },
+        await using var fixture = await Fixture.CreateAsync(persist: true, wrapStore: reads.Wrap,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" },
             seed: async db =>
             {
                 // Listing 77 committed but its row was never resolved (the process died); listing 78 never ran.
@@ -189,7 +193,16 @@ public sealed class AuctionBotFeatureTests
             fixture.Bot.Tick();
             return true;
         });
-        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+
+        // A recheck the store cannot answer within its budget settles nothing: the row keeps its budget until a later tick asks again.
+        await reads.AllExpired.WaitAsync(Fixture.Budget);
+        if (stalledRechecks > 0)
+        {
+            Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Ledger.Pending.Count()));
+        }
+
+        // The update timer keeps ticking in production (AuctionHouseBot:UpdateIntervalSeconds); here the test is the timer.
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
         Assert.Equal(AuctionBotCustodyState.TerminalOk, fixture.Bot.Ledger.Find(AuctionBotCustodyLedger.ListingKey(77))!.State);
         Assert.Equal(AuctionBotCustodyState.TerminalBack, fixture.Bot.Ledger.Find(AuctionBotCustodyLedger.ListingKey(78))!.State);
         await using (CharacterDbContext db = fixture.NewContext())
@@ -202,7 +215,7 @@ public sealed class AuctionBotFeatureTests
         // New listings are durable before they start, and never reuse an auction id a row names.
         // The day's item budget is 3: committed 77 counts, rolled-back 78 does not, so two more fit.
         Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
-        await fixture.WaitUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
         List<AuctionBotCustodyRow> fresh = [.. fixture.Bot.Ledger.Rows.Where(r => r.AuctionId > 78)];
         Assert.Equal(2, fresh.Count);
         Assert.All(fresh, r => Assert.Equal(AuctionBotCustodyState.TerminalOk, r.State));
@@ -319,6 +332,74 @@ public sealed class AuctionBotFeatureTests
             => Task.FromResult<IReadOnlyList<StartingItem>>([]);
     }
 
+    /// <summary>
+    /// The first <c>stalls</c> operation-ledger reads never answer before their budget runs out (what a starved thread pool or a busy
+    /// disk does to a loaded host); every other call goes straight to the real store.
+    /// </summary>
+    private sealed class StallingCommitReads(int stalls)
+    {
+        private readonly int _stalls = stalls;
+        private int _remaining = stalls;
+        private int _expired;
+        private readonly TaskCompletionSource _allExpired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once every stalled read has been abandoned by its budget.</summary>
+        public Task AllExpired => _stalls == 0 ? Task.CompletedTask : _allExpired.Task;
+
+        public IEconomyStore Wrap(IEconomyStore inner) => new Store(inner, this);
+
+        private sealed class Store(IEconomyStore inner, StallingCommitReads owner) : IEconomyStore
+        {
+            public async Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+            {
+                if (Interlocked.Decrement(ref owner._remaining) >= 0)
+                {
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, cancellationToken);
+                    }
+                    finally
+                    {
+                        if (Interlocked.Increment(ref owner._expired) == owner._stalls)
+                        {
+                            owner._allExpired.TrySetResult();
+                        }
+                    }
+                }
+
+                return await inner.IsCommittedAsync(operationId, cancellationToken);
+            }
+
+            public Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+                => inner.CommitAsync(request, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+                => inner.GetMailsAsync(receiverId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+                => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+                => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+            public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+                => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+            public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+                => inner.GetAuctionsAsync(cancellationToken);
+
+            public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+                CancellationToken cancellationToken = default)
+                => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+            public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+                => inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+
+            public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default)
+                => inner.GetIdSeedAsync(cancellationToken);
+        }
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
@@ -365,6 +446,29 @@ public sealed class AuctionBotFeatureTests
             }
         }
 
+        /// <summary>
+        /// Wait as the bot's update timer would: tick, then check. A row whose outcome a read could not learn in time (a loaded host can
+        /// spend the whole economy read budget) is only rechecked by a later tick, so waiting without ticking can wait forever.
+        /// Only for tests whose sell and buy chances are 0, so a tick reconciles and flushes but starts nothing.
+        /// </summary>
+        public async Task TickUntilAsync(Func<bool> predicate)
+        {
+            using var timeout = new CancellationTokenSource(Budget);
+            while (!await OnWorld(() =>
+                   {
+                       if (predicate())
+                       {
+                           return true;
+                       }
+
+                       Bot.Tick();
+                       return false;
+                   }).WaitAsync(timeout.Token))
+            {
+                await Task.Delay(50, timeout.Token);
+            }
+        }
+
         public async Task<int> CountAsync<T>(System.Linq.Expressions.Expression<Func<T, bool>>? where = null)
             where T : class
         {
@@ -385,7 +489,7 @@ public sealed class AuctionBotFeatureTests
         }
 
         public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
-            Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null)
+            Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -440,7 +544,11 @@ public sealed class AuctionBotFeatureTests
             services.AddSingleton(configuration);
             services.AddLogging();
             services.AddScoped(_ => new CharacterDbContext(options));
-            services.AddScoped<IEconomyStore>(provider => new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()));
+            services.AddScoped<IEconomyStore>(provider =>
+            {
+                IEconomyStore store = new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>());
+                return wrapStore is null ? store : wrapStore(store);
+            });
             services.AddScoped<IItemStore>(provider => new EfItemStore(provider.GetRequiredService<CharacterDbContext>()));
             if (persist)
             {
