@@ -374,6 +374,7 @@ public sealed partial class Creature : Unit, ICombatCreature
     {
         CreatureTemplate t = Template;
         SetUInt32(UpdateFields.ObjectFieldEntry, t.Entry);
+        System?.RefreshFollowSlave(this); // a template link is keyed by the entry
 
         // ChooseDisplayId + GetCreatureDisplayInfoRandomGender (vmangos InitEntry).
         uint displayId = EventDisplayId != 0 ? EventDisplayId : ChooseDisplayId(t, _random); // a running game event may force the model

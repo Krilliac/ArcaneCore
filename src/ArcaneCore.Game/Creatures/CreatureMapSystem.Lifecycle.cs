@@ -331,6 +331,7 @@ public sealed partial class CreatureMapSystem
         creature.RunSpeed = creature.CreatureRunSpeed;
         creature.ClearChangedFields();
         _creatures[creature.Guid] = creature;
+        IndexCreature(creature);
         if (creature.IsNewObject)
         {
             _newCreatures.Add(creature);
@@ -369,6 +370,7 @@ public sealed partial class CreatureMapSystem
         }
 
         _creatures.Remove(creature.Guid);
+        UnindexCreature(creature);
         _corpseDespawns.Remove(creature);
         _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
         NotifySummonerOfRemoval(creature);
