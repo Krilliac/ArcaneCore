@@ -2,10 +2,12 @@ namespace ArcaneCore.Kernel.Characters;
 
 /// <summary>
 /// A managed playerbot's home area: the brain prefers goals inside the circle (map, centre, radius) and walks back to it when it
-/// strays. An ArcaneCore feature; no reference server has a bot home. One row per bot (<see cref="BotId"/> is the key).
+/// strays. With <see cref="ZoneClipped"/> (the default; characters schema 58) the area is also clipped to the zone of its centre, which
+/// the world resolves from the terrain whenever it applies the home. An ArcaneCore feature; no reference server has a bot home. One
+/// row per bot (<see cref="BotId"/> is the key).
 /// </summary>
 public sealed record PlayerbotHome(
-    Guid BotId, int CharacterId, uint MapId, float X, float Y, float Z, float Radius, string? Place, long SetUnix);
+    Guid BotId, int CharacterId, uint MapId, float X, float Y, float Z, float Radius, string? Place, long SetUnix, bool ZoneClipped = true);
 
 /// <summary>Radius limits of a <see cref="PlayerbotHome"/>. These are ArcaneCore choices, not retail values.</summary>
 public static class PlayerbotHomeBounds
@@ -16,7 +18,7 @@ public static class PlayerbotHomeBounds
     public const int MaxPlaceLength = 64;
 }
 
-/// <summary>Durable storage of the managed playerbots' home areas (characters schema 56), separate from the bot revision CAS.</summary>
+/// <summary>Durable storage of the managed playerbots' home areas (characters schema 56, zone clip 58), separate from the bot revision CAS.</summary>
 public interface IManagedPlayerbotHomeStore
 {
     Task<IReadOnlyList<PlayerbotHome>> LoadAllAsync(CancellationToken cancellationToken = default);

@@ -42,6 +42,53 @@ public sealed class ManagedPlayerbotHomeStoreTests
     }
 
     [Fact]
+    public async Task Sqlite_UpgradeFrom57_AddsTheZoneClipColumn_AndAnExistingHomeIsZoneClipped()
+    {
+        (SqliteConnection connection, CharacterDbContext db) = await OpenAsync();
+        await using (connection)
+        await using (db)
+        {
+            // A schema-57 database: the home table without the zone clip column, holding a home set before the clip existed.
+            await db.Set<SchemaVersionRow>().ExecuteUpdateAsync(update => update.SetProperty(row => row.Version, ManagedPlayerbotHomeZoneDataModule.Version - 1));
+            await db.Database.ExecuteSqlRawAsync("ALTER TABLE managed_playerbot_home DROP COLUMN IgnoreZone");
+            Guid bot = Guid.NewGuid();
+            await db.Database.ExecuteSqlRawAsync(
+                "INSERT INTO managed_playerbot_home (BotId, CharacterId, MapId, X, Y, Z, Radius, Place, SetUnix) VALUES ({0}, 9, 0, -10630, 1080, 40, 750, 'SentinelHill', 5)",
+                bot);
+
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+
+            Assert.Equal(58, ManagedPlayerbotHomeZoneDataModule.Version);
+            Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().AsNoTracking().SingleAsync()).Version);
+            PlayerbotHome home = Assert.Single(await new EfManagedPlayerbotHomeStore(db).LoadAllAsync());
+            Assert.Equal((bot, 750f, "SentinelHill"), (home.BotId, home.Radius, home.Place));
+            Assert.True(home.ZoneClipped);
+        }
+    }
+
+    [Fact]
+    public async Task Sqlite_ZoneClip_RoundTrips_OnInsertAndOnReplace()
+    {
+        (SqliteConnection connection, CharacterDbContext db) = await OpenAsync();
+        await using (connection)
+        await using (db)
+        {
+            var store = new EfManagedPlayerbotHomeStore(db);
+            PlayerbotHome unclipped = new(Guid.NewGuid(), 12, 0, -10630f, 1080f, 40f, 750f, "SentinelHill", 1, ZoneClipped: false);
+            await store.SetAsync(unclipped);
+            Assert.Equal([unclipped], await store.LoadAllAsync());
+            Assert.True(await db.Set<ManagedPlayerbotHomeRow>().AsNoTracking().Select(row => row.IgnoreZone).SingleAsync());
+
+            PlayerbotHome clipped = unclipped with { ZoneClipped = true, SetUnix = 2 };
+            await store.SetAsync(clipped);
+            Assert.Equal([clipped], await store.LoadAllAsync());
+
+            await store.SetAsync(unclipped);
+            Assert.False(Assert.Single(await store.LoadAllAsync()).ZoneClipped);
+        }
+    }
+
+    [Fact]
     public async Task Sqlite_SetLoadReplaceAndClear_RoundTripsTheHome()
     {
         (SqliteConnection connection, CharacterDbContext db) = await OpenAsync();

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
@@ -8,15 +9,27 @@ using ArcaneCore.World.Net;
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
-/// A bot's home area: a circle on one map (centre, radius in yards, two-dimensional distance). ArcaneCore's own feature, set by
-/// <c>.playerbot home</c> and kept in <c>managed_playerbot_home</c>; no reference server anchors a bot to an area, so the 0.75
-/// return hysteresis and the radius bounds (<see cref="ArcaneCore.Kernel.Characters.PlayerbotHomeBounds"/>) are ArcaneCore choices.
+/// A bot's home area: a circle on one map (centre, radius in yards, two-dimensional distance), clipped by default to the zone of its
+/// centre. ArcaneCore's own feature, set by <c>.playerbot home</c> and kept in <c>managed_playerbot_home</c>; no reference server
+/// anchors a bot to an area, so the 0.75 return hysteresis, the radius bounds (<see cref="ArcaneCore.Kernel.Characters.PlayerbotHomeBounds"/>)
+/// and the zone clip are ArcaneCore choices.
 /// <para>
-/// Thread affinity: world thread only (the quest and entry caches are plain dictionaries). The area itself is immutable; a bot whose
-/// home changes gets a new instance, which is also how the caches of <see cref="PlayerbotWorldDestinations"/> notice the change.
+/// <b>Zone clip.</b> A circle cannot follow a zone border: homed at Sentinel Hill with radius 750 it reaches Raven Hill in Duskwood
+/// (creatures of level 20 and more), where level-14 bots died again and again (QA death-loop findings, map 0 near -10650,450). With
+/// the clip a point counts as inside only when it is inside the circle <i>and</i> in the home's zone: the AreaTable zone (the
+/// top-level parent area) at that position, from the terrain's area flag (<see cref="PlayerbotZoneLookup"/>; vmangos
+/// <c>TerrainInfo::GetZoneAndAreaId</c> through <see cref="ArcaneCore.Game.Maps.Terrain.AreaTable.GetZoneAndAreaId"/>, the lookup
+/// <c>Map.GetZoneAndAreaId</c> uses). The home's zone is the zone at its centre. A position whose zone the terrain does not know
+/// (0) is outside (fail closed); a clipped home whose own centre has no known zone (<see cref="ZoneUnknown"/>) contains nothing at
+/// all, so its filters reject every creature, quest and destination until the operator re-homes it (or homes it with <c>nozone</c>).
+/// </para>
+/// <para>
+/// Thread affinity: world thread only (the quest and entry caches are plain dictionaries, the zone lookup reads the terrain). The area
+/// itself is immutable; a bot whose home changes gets a new instance, which is also how the caches of
+/// <see cref="PlayerbotWorldDestinations"/> notice the change.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotHomeArea(uint mapId, Vector3 centre, float radius, string? place)
+internal sealed class PlayerbotHomeArea
 {
     /// <summary>A walking-back bot stops once it is inside this fraction of the radius, so it does not oscillate at the edge.</summary>
     internal const float ReturnFraction = 0.75f;
@@ -26,14 +39,70 @@ internal sealed class PlayerbotHomeArea(uint mapId, Vector3 centre, float radius
 
     private readonly Dictionary<uint, bool> _quests = [];
     private readonly Dictionary<uint, bool> _entries = [];
+    private readonly PlayerbotZoneLookup? _zones;
     private CreatureContent? _cachedContent;
     private QuestStore? _cachedQuests;
     private int _cachedVersion = -1;
 
-    internal uint MapId { get; } = mapId;
-    internal Vector3 Centre { get; } = centre;
-    internal float Radius { get; } = radius;
-    internal string? Place { get; } = place;
+    /// <summary>An unclipped home: the circle alone.</summary>
+    internal PlayerbotHomeArea(uint mapId, Vector3 centre, float radius, string? place)
+        : this(mapId, centre, radius, place, zoneClipped: false, zones: null)
+    {
+    }
+
+    /// <summary>
+    /// A home; with <paramref name="zoneClipped"/> it is clipped to the zone <paramref name="zones"/> reports at the centre (no lookup,
+    /// or a centre whose zone is not known: <see cref="ZoneUnknown"/>, and the area contains nothing).
+    /// </summary>
+    /// <remarks>
+    /// The centre's zone is looked up on first use, not here: brains are built off the world thread too (a bot's start), and the
+    /// terrain is world-thread only. <paramref name="zoneUnknown"/> is called once, on the world thread, when that lookup finds no zone.
+    /// </remarks>
+    internal PlayerbotHomeArea(uint mapId, Vector3 centre, float radius, string? place, bool zoneClipped, PlayerbotZoneLookup? zones,
+        Action<PlayerbotHomeArea>? zoneUnknown = null)
+    {
+        MapId = mapId;
+        Centre = centre;
+        Radius = radius;
+        Place = place;
+        ZoneClipped = zoneClipped;
+        _zones = zoneClipped ? zones : null;
+        _zoneUnknown = zoneUnknown;
+        if (!zoneClipped || zones is null) _zoneId = 0;
+    }
+
+    private readonly Action<PlayerbotHomeArea>? _zoneUnknown;
+    private uint? _zoneId;
+
+    internal uint MapId { get; }
+    internal Vector3 Centre { get; }
+    internal float Radius { get; }
+    internal string? Place { get; }
+
+    /// <summary>Whether the area is clipped to the zone of its centre (the default for a new home; <c>nozone</c> turns it off).</summary>
+    internal bool ZoneClipped { get; }
+
+    /// <summary>The AreaTable zone of the centre for a clipped home; 0 when unclipped or not known. World thread.</summary>
+    internal uint ZoneId
+    {
+        get
+        {
+            if (_zoneId is { } known) return known;
+            uint zone = _zones!.ZoneAt(Centre.X, Centre.Y, Centre.Z);
+            _zoneId = zone;
+            if (zone == 0) _zoneUnknown?.Invoke(this);
+            return zone;
+        }
+    }
+
+    /// <summary>A clipped home whose centre's zone is not known: it contains nothing (fail closed).</summary>
+    internal bool ZoneUnknown => ZoneClipped && ZoneId == 0;
+
+    /// <summary>
+    /// <see cref="ZoneUnknown"/> as far as it is already known, without looking the zone up: true only once the brain's first use
+    /// (world thread) found no zone. Safe for status lines read from any thread.
+    /// </summary>
+    internal bool ZoneFoundUnknown => ZoneClipped && _zoneId == 0;
 
     /// <summary>The distance from the centre a walking-back bot stops at.</summary>
     internal float ReturnRadius => Radius * ReturnFraction;
@@ -48,16 +117,29 @@ internal sealed class PlayerbotHomeArea(uint mapId, Vector3 centre, float radius
         return MathF.Sqrt((dx * dx) + (dy * dy));
     }
 
-    /// <summary>Whether a point on <paramref name="map"/> lies inside the circle (another map: never).</summary>
-    internal bool Contains(uint map, float x, float y)
-        => map == MapId && float.IsFinite(x) && float.IsFinite(y) && DistanceTo(x, y) <= Radius;
+    /// <summary>
+    /// Whether a position of the home map is in the home's zone: always for an unclipped home; never when the home's zone is not
+    /// known or the terrain does not know the position's zone (fail closed).
+    /// </summary>
+    internal bool InZone(float x, float y, float z)
+        => !ZoneClipped || ZoneId is not 0 and var zone && _zones!.ZoneAt(x, y, z) == zone;
 
-    internal bool Contains(Unit unit) => Contains(unit.MapId, unit.X, unit.Y);
+    /// <summary>
+    /// Whether a point on <paramref name="map"/> lies inside the area: inside the circle and, for a clipped home, in its zone
+    /// (another map: never). The circle is tested first, so the zone is looked up only for points near the home.
+    /// </summary>
+    internal bool Contains(uint map, float x, float y, float z = 0f)
+        => map == MapId && float.IsFinite(x) && float.IsFinite(y) && DistanceTo(x, y) <= Radius && InZone(x, y, z);
 
-    /// <summary>Whether a creature spawn of the home map lies inside the circle.</summary>
-    internal bool Contains(CreatureSpawn spawn) => Contains(MapId, spawn.X, spawn.Y);
+    internal bool Contains(Unit unit) => Contains(unit.MapId, unit.X, unit.Y, unit.Z);
 
-    /// <summary>Whether any spawn of creature <paramref name="entry"/> on the home map lies inside the circle (cached).</summary>
+    /// <summary>Whether a creature spawn of the home map lies inside the area.</summary>
+    internal bool Contains(CreatureSpawn spawn) => Contains(MapId, spawn.X, spawn.Y, spawn.Z);
+
+    /// <summary>The zone part of the long form: <c>zone=40</c>, <c>zone=off</c> or <c>zone=unknown</c>.</summary>
+    internal string ZoneText => !ZoneClipped ? "off" : ZoneId == 0 ? "unknown" : ZoneId.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Whether any spawn of creature <paramref name="entry"/> on the home map lies inside the area (cached).</summary>
     internal bool HasSpawnInside(CreatureContent content, uint entry)
     {
         Sync(content, null);
@@ -112,13 +194,52 @@ internal sealed class PlayerbotHomeArea(uint mapId, Vector3 centre, float radius
     }
 }
 
+/// <summary>
+/// The AreaTable zone at a position of one map, for the zone clip of <see cref="PlayerbotHomeArea"/>. Over the terrain it is exactly
+/// what <c>Map.GetZoneAndAreaId</c> answers (vmangos <c>TerrainInfo::GetZoneAndAreaId</c>: the tile's area flag, then
+/// <see cref="AreaTable.GetZoneAndAreaId"/>, i.e. <c>TerrainManager::GetZoneAndAreaIdByAreaFlag</c>: the entry itself when it is a
+/// zone, else its parent zone), with the flag-to-zone answer cached: the AreaTable search is linear and the brains ask for every
+/// candidate creature near a home. 0 where the terrain does not know the area.
+/// <para>Thread affinity: world thread (the terrain loads tiles on demand; the cache is a plain dictionary).</para>
+/// </summary>
+internal sealed class PlayerbotZoneLookup
+{
+    private readonly Func<float, float, float, uint> _zoneAt;
+
+    /// <summary>A lookup over any function (tests: a fixture of two zones).</summary>
+    internal PlayerbotZoneLookup(Func<float, float, float, uint> zoneAt) => _zoneAt = zoneAt;
+
+    /// <summary>The terrain's lookup of <paramref name="mapId"/>.</summary>
+    internal static PlayerbotZoneLookup FromTerrain(TerrainManager terrain, uint mapId)
+    {
+        ArgumentNullException.ThrowIfNull(terrain);
+        // Everything here runs on the first lookup, on the world thread (TerrainManager.For is world-thread only).
+        TerrainInfo? info = null;
+        var zones = new Dictionary<ushort, uint>();
+        AreaTable? cachedAreas = null;
+        return new PlayerbotZoneLookup((x, y, z) =>
+        {
+            info ??= terrain.For(mapId);
+            // The area table can be replaced (content reload): the cache belongs to the table it was filled from.
+            AreaTable areas = terrain.Areas;
+            if (!ReferenceEquals(areas, cachedAreas)) { zones.Clear(); cachedAreas = areas; }
+            ushort flag = info.GetAreaFlag(x, y, z);
+            if (!zones.TryGetValue(flag, out uint zone)) zones[flag] = zone = areas.GetZoneAndAreaId(flag, mapId).ZoneId;
+            return zone;
+        });
+    }
+
+    /// <summary>The zone at a position (0: not known).</summary>
+    internal uint ZoneAt(float x, float y, float z) => float.IsFinite(x) && float.IsFinite(y) ? _zoneAt(x, y, z) : 0;
+}
+
 /// <summary>Where a bot stands against its home area (<see cref="PlayerbotHomeReturn.Evaluate"/>).</summary>
 internal enum PlayerbotHomeState : byte
 {
-    /// <summary>Inside the radius (or walking back and already inside the return radius).</summary>
+    /// <summary>Inside the radius (or walking back and already inside the return radius), and in the home's zone when it is clipped.</summary>
     Inside,
 
-    /// <summary>Outside the radius with no errand: walking back to the centre.</summary>
+    /// <summary>Outside the radius, or out of a clipped home's zone, with no errand: walking back to the centre.</summary>
     Returning,
 
     /// <summary>On another map than the home: the bot does not move itself; an operator teleports it (<c>.tele name</c>).</summary>
@@ -178,16 +299,20 @@ internal sealed class PlayerbotHomeReturn
         }
 
         Distance = area.DistanceTo(player.X, player.Y);
+        // A clipped home counts the bot outside while it stands in another zone, even inside the circle (Raven Hill from Sentinel
+        // Hill), so it walks back to the centre, which is in the zone. A home whose own zone is not known cannot be walked into:
+        // the walk uses the circle alone (the filters still reject everything, PlayerbotHomeArea.ZoneUnknown).
+        bool zoneOk = area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z);
         if (State == PlayerbotHomeState.Blocked)
         {
-            if (Distance <= area.Radius) { _route = null; _failures = 0; return State = PlayerbotHomeState.Inside; }
+            if (Distance <= area.Radius && zoneOk) { _route = null; _failures = 0; return State = PlayerbotHomeState.Inside; }
             if (unchecked((int)(nowMs - _blockedUntil)) < 0) return State;
             _failures = 0;
             State = PlayerbotHomeState.Returning;
         }
 
         bool returning = State == PlayerbotHomeState.Returning;
-        if (Distance <= (returning ? area.ReturnRadius : area.Radius))
+        if (Distance <= (returning ? area.ReturnRadius : area.Radius) && zoneOk)
         {
             _route = null;
             _failures = 0;
@@ -282,10 +407,10 @@ internal sealed class PlayerbotHomeReturn
     private PlayerbotHomeState _reportState;
     private int _reportRounded;
 
-    /// <summary>The long form for inspection: place, map, centre, radius, distance and state.</summary>
+    /// <summary>The long form for inspection: place, map, centre, radius, zone (<c>off</c>, <c>unknown</c> or the id), distance and state.</summary>
     internal string Describe(PlayerbotHomeArea area)
         => string.Create(CultureInfo.InvariantCulture,
-            $"place={area.Place ?? "none"} map={area.MapId} centre={area.Centre.X:F1},{area.Centre.Y:F1},{area.Centre.Z:F1} radius={area.Radius:F0} distance={(float.IsNaN(Distance) ? "n/a" : Distance.ToString("F1", CultureInfo.InvariantCulture))} state={State.ToString().ToLowerInvariant()}");
+            $"place={area.Place ?? "none"} map={area.MapId} centre={area.Centre.X:F1},{area.Centre.Y:F1},{area.Centre.Z:F1} radius={area.Radius:F0} zone={area.ZoneText} distance={(float.IsNaN(Distance) ? "n/a" : Distance.ToString("F1", CultureInfo.InvariantCulture))} state={State.ToString().ToLowerInvariant()}");
 }
 
 /// <summary>

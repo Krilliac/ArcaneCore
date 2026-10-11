@@ -28,7 +28,8 @@ pwsh -NoProfile -File tools/ops/provision-bots.ps1 -ProfileDirectory D:\arcane\p
   already created stay (`.playerbot stop <Name>`).
 * **`-Home`** anchors every bot to the place it was teleported to (`.playerbot home <Name> <place> <radius>`, after the teleports), so the brain
   keeps it in that area instead of following its quests across the map ([home area](../areas/playbots.md#home-area)). `-HomeRadius` is in yards,
-  50 to 5000, default 600. The run then also requires the server to have confirmed one `Playerbot home: N set` per bot, else the exit code is 5.
+  50 to 5000, default 600. The home is clipped to the zone of the place (a Sentinel Hill home does not reach into Duskwood); a place where the
+  server's terrain knows no zone is refused, so no home is confirmed there. The run then also requires the server to have confirmed one `Playerbot home: N set` per bot, else the exit code is 5.
   A bot that ends up on another map is reported `off-map` in `.playerbot status` and is not moved by the bot; teleport it with `.tele name`.
 * **Boost retry.** A boost the server refuses because the character is in combat, dead, settling a quest reward or not yet in the world is retried:
   up to `-BoostRetries` more passes (default 3), each after `-RetryWaitSeconds` (default 30), each boosting only the bots still not boosted. Bots refused as dead are revived (`.revive <Name>`) at the start of the retry pass, before their boost. Every pass

@@ -17,6 +17,12 @@ public sealed class ManagedPlayerbotHomeRow
     public float Radius { get; set; }
     public string? Place { get; set; }
     public long SetUnix { get; set; }
+
+    /// <summary>
+    /// True when the home is NOT clipped to its zone (<c>.playerbot home ... nozone</c>; characters schema 58). Stored inverted so the
+    /// rows of schema 56-57, which the added column gives the CLR default (false), are zone-clipped like every new home.
+    /// </summary>
+    public bool IgnoreZone { get; set; }
 }
 
 /// <summary>
@@ -61,7 +67,7 @@ public sealed class EfManagedPlayerbotHomeStore(CharacterDbContext db) : IManage
         List<ManagedPlayerbotHomeRow> rows = await db.Set<ManagedPlayerbotHomeRow>().AsNoTracking().OrderBy(row => row.BotId)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
         return [.. rows.Select(row => new PlayerbotHome(row.BotId, row.CharacterId, row.MapId, row.X, row.Y, row.Z,
-            row.Radius, row.Place, row.SetUnix))];
+            row.Radius, row.Place, row.SetUnix, ZoneClipped: !row.IgnoreZone))];
     }
 
     public async Task SetAsync(PlayerbotHome home, CancellationToken cancellationToken = default)
@@ -81,13 +87,14 @@ public sealed class EfManagedPlayerbotHomeStore(CharacterDbContext db) : IManage
                 .SetProperty(row => row.Z, home.Z)
                 .SetProperty(row => row.Radius, home.Radius)
                 .SetProperty(row => row.Place, home.Place)
-                .SetProperty(row => row.SetUnix, home.SetUnix), cancellationToken).ConfigureAwait(false);
+                .SetProperty(row => row.SetUnix, home.SetUnix)
+                .SetProperty(row => row.IgnoreZone, !home.ZoneClipped), cancellationToken).ConfigureAwait(false);
         if (changed == 0)
         {
             db.Set<ManagedPlayerbotHomeRow>().Add(new ManagedPlayerbotHomeRow
             {
                 BotId = home.BotId, CharacterId = home.CharacterId, MapId = home.MapId, X = home.X, Y = home.Y, Z = home.Z,
-                Radius = home.Radius, Place = home.Place, SetUnix = home.SetUnix,
+                Radius = home.Radius, Place = home.Place, SetUnix = home.SetUnix, IgnoreZone = !home.ZoneClipped,
             });
             try
             {
@@ -116,4 +123,32 @@ public sealed class EfManagedPlayerbotHomeStore(CharacterDbContext db) : IManage
             || home.Place is { Length: > PlayerbotHomeBounds.MaxPlaceLength })
             throw new ArgumentException("Playerbot home identity, centre, radius or place is invalid.", nameof(home));
     }
+}
+
+/// <summary>
+/// Characters schema 58 (wave 20): the zone clip of a playerbot home. A circle cannot follow a zone border (Sentinel Hill radius 750
+/// reaches Duskwood's Raven Hill), so a home is clipped to the zone of its centre unless it was set with <c>nozone</c>. The column is
+/// <see cref="ManagedPlayerbotHomeRow.IgnoreZone"/>, false for the existing rows: an upgraded home is clipped.
+/// </summary>
+public sealed class ManagedPlayerbotHomeZoneDataModule : IDataModule, ICharacterDataCleanup
+{
+    public const int Version = 58;
+
+    public DatabaseComponent Component => DatabaseComponent.Characters;
+    public int SchemaVersion => Version;
+    public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
+        [new AddColumnChange(ManagedPlayerbotHomeDataModule.Table, nameof(ManagedPlayerbotHomeRow.IgnoreZone))];
+
+    public void ConfigureModel(ModelBuilder modelBuilder)
+    {
+        // The column is a property of ManagedPlayerbotHomeRow, mapped by convention with the table (schema 56's module).
+    }
+
+    public void AddServices(IServiceCollection services)
+    {
+        // The home store of schema 56 reads and writes the column.
+    }
+
+    // The column lives on the home row, which schema 56's module removes with the character.
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }

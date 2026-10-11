@@ -251,7 +251,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// the quest is worth doing there (<see cref="PlayerbotHomeArea.QuestInside"/>). Without creature content nothing is allowed.
     /// </summary>
     private bool HomeAllows(PlayerbotHomeArea home, Player player, QuestNpcServices services, NpcInfo npc, Quest quest)
-        => home.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y)
+        => home.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y, npc.Z)
             && _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content is { } content
             && home.QuestInside(services.Quests, content, quest);
 

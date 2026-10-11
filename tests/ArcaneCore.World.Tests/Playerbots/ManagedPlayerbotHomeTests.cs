@@ -15,11 +15,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>
 /// <c>.playerbot home</c> end to end: the command, <see cref="ManagedPlayerbotFeature"/>'s store and running brains, the status and
 /// inspection lines. The tele values come from the test map data (<see cref="InMemoryMapDataStore"/>: Stormwind map 0 at
-/// -8913.23, 554.633, 93.7944; Nowhere map 99); the reply texts are PlayerbotCommands' own.
+/// -8913.23, 554.633, 93.7944; Nowhere map 99); the reply texts are PlayerbotCommands' own. The test world has no terrain data, so
+/// the zone clip reads a fixture (<see cref="ManagedPlayerbotFeature.ZoneLookups"/>): zone 12 everywhere unless a test says otherwise.
 /// </summary>
 public sealed class ManagedPlayerbotHomeTests
 {
     private const string Accepted = "Playerbot home accepted.";
+    private const uint FixtureZone = 12;
 
     [Fact]
     public async Task SetHome_PersistsAndAppliesToTheRunningBrain_AndSurvivesARestart()
@@ -56,6 +58,7 @@ public sealed class ManagedPlayerbotHomeTests
         PlayerbotHome row = Assert.Single(await homes.LoadAllAsync());
         Assert.Equal(id, row.BotId);
         Assert.Equal((0u, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind"), (row.MapId, row.X, row.Y, row.Z, row.Radius, row.Place));
+        Assert.True(row.ZoneClipped); // the default
         Assert.Equal((await owners.FindAsync(id))!.CharacterId, row.CharacterId);
 
         // A new process: the home is loaded at startup and applied to the brain of the restarted bot.
@@ -84,14 +87,14 @@ public sealed class ManagedPlayerbotHomeTests
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmprefix* Stormwind 300");
         Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 2 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 300), 0 skipped (not running).",
+        Assert.Equal("Playerbot home: 2 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 300, zone 12), 0 skipped (not running).",
             (await admin.ReadChatAsync()).Text);
 
         IReadOnlyList<PlayerbotHome> stored = await homes.LoadAllAsync();
         Assert.Equal(new[] { a, b }.Order(), stored.Select(h => h.BotId).Order());
         Assert.All(stored, h =>
         {
-            Assert.Equal((0u, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind"), (h.MapId, h.X, h.Y, h.Z, h.Radius, h.Place));
+            Assert.Equal((0u, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind", true), (h.MapId, h.X, h.Y, h.Z, h.Radius, h.Place, h.ZoneClipped));
         });
         Assert.Null(feature.HomeOf(other));
         await host.WaitForWorldAsync(() => feature.Snapshot().Where(s => s.BotId != other).All(s => s.Home is not null)
@@ -100,7 +103,7 @@ public sealed class ManagedPlayerbotHomeTests
         // No radius given: the default (600).
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Otherbot Stormwind");
         Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 600), 0 skipped (not running).",
+        Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 600, zone 12), 0 skipped (not running).",
             (await admin.ReadChatAsync()).Text);
         Assert.Equal(PlayerbotHomeBounds.DefaultRadius, feature.HomeOf(other)!.Radius);
         await feature.ShutdownBeforeWorldStopAsync();
@@ -192,7 +195,7 @@ public sealed class ManagedPlayerbotHomeTests
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmhere* here 200");
         Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
-        Assert.Equal("Playerbot home: 2 set (here, radius 200), 1 skipped (not running).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Playerbot home: 2 set (here, radius 200, zone clipped), 1 skipped (not running).", (await admin.ReadChatAsync()).Text);
 
         PlayerbotHome homeWest = feature.HomeOf(west)!, homeEast = feature.HomeOf(east)!;
         Assert.Null(feature.HomeOf(stopped));
@@ -337,12 +340,70 @@ public sealed class ManagedPlayerbotHomeTests
         string line;
         do line = (await admin.ReadChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));
-        Assert.StartsWith("BOTINSPECT home=place=Northshire map=0 centre=-8950.0,-132.5,83.5 radius=250 distance=", line);
+        Assert.StartsWith("BOTINSPECT home=place=Northshire map=0 centre=-8950.0,-132.5,83.5 radius=250 zone=12 distance=", line);
         Assert.EndsWith(" state=inside", line);
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Hmshowtwo");
         do line = (await admin.ReadChatAsync()).Text;
         while (!line.StartsWith("BOTINSPECT home=", StringComparison.Ordinal));
         Assert.Equal("BOTINSPECT home=none", line);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    /// <summary>
+    /// The zone clip option: <c>nozone</c> (before or after the radius) stores an unclipped home and the brain shows <c>zone=off</c>;
+    /// <c>zone</c> (the default) stores a clipped one; a clipped home whose centre has no zone the terrain knows is refused before
+    /// anything is stored (it would contain nothing), for a tele place and for <c>here</c>.
+    /// </summary>
+    [Fact]
+    public async Task SetHome_ZoneOption_StoresTheClip_AndRefusesACentreWithNoKnownZone()
+    {
+        var homes = new MemoryHomeStore();
+        uint zoneEverywhere = FixtureZone;
+        await using WorldTestHost host = StartHost(homes, zones: (x, y, z) => zoneEverywhere);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid bot = await BotAsync(feature, host, "Hmzoneone");
+        await using WorldTestClient admin = await host.EnterWorldAsync("HOMEADMIN6", "Hmadminsix", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+
+        async Task<string> Set(string command)
+        {
+            await admin.SendChatAsync(ChatType.Say, Language.Common, command);
+            Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
+            return (await admin.ReadChatAsync()).Text;
+        }
+
+        Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 300, no zone clip), 0 skipped (not running).",
+            await Set(".playerbot home Hmzoneone Stormwind 300 nozone"));
+        Assert.False(feature.HomeOf(bot)!.ZoneClipped);
+        Assert.False(Assert.Single(await homes.LoadAllAsync()).ZoneClipped);
+        // The reply comes after the running brain got the home (SetHomesAsync applies it on the world thread first).
+        Assert.Contains(" zone=off ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+
+        Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 400, zone 12), 0 skipped (not running).",
+            await Set(".playerbot home Hmzoneone Stormwind zone 400"));
+        Assert.True(feature.HomeOf(bot)!.ZoneClipped);
+        Assert.Equal(400f, feature.HomeOf(bot)!.Radius);
+        Assert.Contains(" zone=12 ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+
+        Assert.Equal("Playerbot home: 1 set (Stormwind map 0 at -8913.2,554.6,93.8 radius 500, no zone clip), 0 skipped (not running).",
+            await Set(".playerbot home Hmzoneone Stormwind nozone 500"));
+        Assert.False(feature.HomeOf(bot)!.ZoneClipped);
+
+        // The terrain knows no zone: a clipped home is refused and the stored one is left as it was.
+        zoneEverywhere = 0;
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmzoneone Stormwind 300");
+        Assert.Equal("Playerbot home: the terrain knows no zone at Stormwind; a zone-clipped home there would contain nothing (add nozone).",
+            (await admin.ReadChatAsync()).Text);
+        // Nothing left to store: refused at once, without the accepted line.
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmzoneone here 300");
+        Assert.Equal("Playerbot home: 0 set, 0 skipped (not running), 1 refused (no zone known at the bot's position; add nozone).",
+            (await admin.ReadChatAsync()).Text);
+        PlayerbotHome kept = Assert.Single(await homes.LoadAllAsync());
+        Assert.Equal((500f, false), (kept.Radius, kept.ZoneClipped));
+        // Without the clip it is accepted.
+        Assert.Equal("Playerbot home: 1 set (here, radius 300, no zone clip), 0 skipped (not running).",
+            await Set(".playerbot home Hmzoneone here 300 nozone"));
         await feature.ShutdownBeforeWorldStopAsync();
     }
 
@@ -355,15 +416,30 @@ public sealed class ManagedPlayerbotHomeTests
         return id;
     }
 
-    private static WorldTestHost StartHost(MemoryHomeStore homes, Action<PlayerbotOptions>? configure = null)
-        => PartyTestHost.Start(configure, services =>
+    private static WorldTestHost StartHost(MemoryHomeStore homes, Action<PlayerbotOptions>? configure = null,
+        Func<float, float, float, uint>? zones = null)
+    {
+        WorldTestHost host = PartyTestHost.Start(configure, services =>
         {
             services.AddSingleton<IManagedPlayerbotHomeStore>(homes);
             // The daemon registers the command's service (AddWorldDaemon); the test host registers only the feature.
             services.AddSingleton<IPlayerbotService>(sp => sp.GetRequiredService<ManagedPlayerbotFeature>());
         });
+        PlayerbotZoneLookup lookup = new(zones ?? ((x, y, z) => FixtureZone));
+        PartyTestHost.Feature(host).ZoneLookups = _ => lookup;
+        return host;
+    }
 
     private static WorldTestHost StartPersisted(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
+        ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore owners, MemoryHomeStore homes)
+    {
+        WorldTestHost host = StartPersistedHost(accounts, characters, owners, homes);
+        PlayerbotZoneLookup lookup = new((x, y, z) => FixtureZone);
+        host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>().ZoneLookups = _ => lookup;
+        return host;
+    }
+
+    private static WorldTestHost StartPersistedHost(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore owners, MemoryHomeStore homes)
         => WorldTestHost.Start(configureServices: services =>
         {

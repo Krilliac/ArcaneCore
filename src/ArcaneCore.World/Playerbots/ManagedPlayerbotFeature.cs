@@ -409,11 +409,36 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     internal readonly record struct HomeOutcome(int Set, int Failed);
 
     /// <summary>
-    /// Store the homes (characters schema 56) and apply them to the running brains on the world thread. A home that cannot be stored
-    /// is not applied (fail closed) and counted as failed. Throws when no home store is available or the radius is out of bounds.
+    /// The zone lookup of a map for the homes' zone clip (<see cref="PlayerbotZoneLookup"/>); null reads the world's terrain
+    /// (<see cref="PlayerbotZoneLookup.FromTerrain"/>). Tests without terrain data set a fixture. World thread.
+    /// </summary>
+    internal Func<uint, PlayerbotZoneLookup>? ZoneLookups { get; set; }
+
+    // One lookup per map, shared by the bots homed there; built on any thread, read on the world thread.
+    private readonly ConcurrentDictionary<uint, PlayerbotZoneLookup> _zoneLookups = new();
+
+    /// <summary>
+    /// The AreaTable zone at a home centre (<see cref="PlayerbotZoneLookup"/>, the terrain lookup <c>Map.GetZoneAndAreaId</c> uses);
+    /// 0 when the terrain does not know it. World thread: <c>.playerbot home</c> refuses a zone-clipped home whose centre has no
+    /// known zone (it would contain nothing).
+    /// </summary>
+    internal uint ZoneAt(uint mapId, System.Numerics.Vector3 position) => ZoneLookupOf(mapId)?.ZoneAt(position.X, position.Y, position.Z) ?? 0;
+
+    private PlayerbotZoneLookup? ZoneLookupOf(uint mapId)
+    {
+        if (_zoneLookups.TryGetValue(mapId, out PlayerbotZoneLookup? known)) return known;
+        PlayerbotZoneLookup? lookup = ZoneLookups is { } fixture ? fixture(mapId)
+            : _world is { } world ? PlayerbotZoneLookup.FromTerrain(ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world).Terrain, mapId) : null;
+        return lookup is null ? null : _zoneLookups.GetOrAdd(mapId, lookup);
+    }
+
+    /// <summary>
+    /// Store the homes (characters schema 56; the zone clip, schema 58) and apply them to the running brains on the world thread. A
+    /// home that cannot be stored is not applied (fail closed) and counted as failed. Throws when no home store is available or the
+    /// radius is out of bounds. <paramref name="zoneClipped"/> clips each home to the zone of its centre (the command's default).
     /// </summary>
     internal async Task<HomeOutcome> SetHomesAsync(IReadOnlyList<HomeTarget> targets, float radius, string? place,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool zoneClipped = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
@@ -433,7 +458,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 ManagedPlayerbot? bot = await bots.FindAsync(target.BotId, cancellationToken).ConfigureAwait(false);
                 if (bot is null) { failed++; continue; }
                 var home = new PlayerbotHome(target.BotId, bot.CharacterId, target.MapId, target.Centre.X, target.Centre.Y, target.Centre.Z,
-                    radius, cleanPlace, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    radius, cleanPlace, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), zoneClipped);
                 await store.SetAsync(home, cancellationToken).ConfigureAwait(false);
                 saved.Add(home);
             }
@@ -681,10 +706,18 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
         => new(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
 
-    /// <summary>The bot's home as a brain's area, or null when it has none.</summary>
+    /// <summary>
+    /// The bot's home as a brain's area, or null when it has none. A zone-clipped home takes the zone of its centre from the terrain on
+    /// first use (world thread); a centre whose zone is not known gives an area that contains nothing (fail closed), logged then.
+    /// </summary>
     private PlayerbotHomeArea? AreaOf(Guid botId)
         => _homes.TryGetValue(botId, out PlayerbotHome? home)
-            ? new PlayerbotHomeArea(home.MapId, new System.Numerics.Vector3(home.X, home.Y, home.Z), home.Radius, home.Place) : null;
+            ? new PlayerbotHomeArea(home.MapId, new System.Numerics.Vector3(home.X, home.Y, home.Z), home.Radius, home.Place,
+                home.ZoneClipped, home.ZoneClipped ? ZoneLookupOf(home.MapId) : null,
+                area => logger.LogWarning("Playerbot home of {BotId} is zone-clipped but the terrain knows no zone at its centre "
+                    + "(map {Map} {X:F1},{Y:F1}): the home contains nothing until it is set again, or set with nozone",
+                    botId, area.MapId, area.Centre.X, area.Centre.Y))
+            : null;
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
