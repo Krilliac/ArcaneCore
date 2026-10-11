@@ -45,6 +45,7 @@ internal static class BoostGearPlanner
     private const uint ItemExtraNotObtainable = 0x04; // vmangos ItemPrototype.h ITEM_EXTRA_NOT_OBTAINABLE
     private const uint QualityNormal = 1;             // vmangos SharedDefines.h ITEM_QUALITY_NORMAL (white)
     private const uint QualityRare = 3;               // ITEM_QUALITY_RARE (blue)
+    public const uint ItemLevelHeadroom = 5;          // ArcaneCore boost policy: near-level gear whose RequiredLevel permits use
 
     /// <summary>The default highest quality of a kit piece: rare (blue), what dungeons at the level give (<see cref="CharacterBoostOptions.MaxQuality"/>).</summary>
     public const uint DefaultMaxQuality = QualityRare;
@@ -77,7 +78,8 @@ internal static class BoostGearPlanner
 
     /// <summary>
     /// Whether a template may be part of a boost kit at <paramref name="level"/>: white up to <paramref name="maxQuality"/> (grey is vendor
-    /// trash; the default cap is <see cref="DefaultMaxQuality"/>), required level and item level within the level, not deprecated or flagged
+    /// trash; the default cap is <see cref="DefaultMaxQuality"/>), required level within the level and item level within
+    /// <see cref="ItemLevelHeadroom"/> above it, not deprecated or flagged
     /// unobtainable, no skill, spell, reputation, honor, city rank, quest start, duration or area/map bound, not a quest-bound item, an
     /// equippable inventory type that is not a shirt, tabard, bag, quiver or ammo, and obtainable (<paramref name="obtainable"/>). A random
     /// property is allowed here: <see cref="Plan"/> keeps such a template only when it can name the property the item gets.
@@ -87,7 +89,9 @@ internal static class BoostGearPlanner
         ArgumentNullException.ThrowIfNull(t);
         ArgumentNullException.ThrowIfNull(obtainable);
         return t.Quality >= QualityNormal && t.Quality <= maxQuality
-            && t.RequiredLevel <= level && t.ItemLevel <= level
+            // vmangos Player::CanUseItem checks RequiredLevel, not ItemLevel (Player.cpp:10058-10101). The extra five item levels
+            // admit ordinary usable greens and dungeon blues while keeping boost gear close to the character's level.
+            && t.RequiredLevel <= level && t.ItemLevel <= (uint)level + ItemLevelHeadroom
             && !t.HasFlag(ItemTemplateFlags.Deprecated) && (t.ExtraFlags & ItemExtraNotObtainable) == 0
             && t.RequiredSkill == 0 && t.RequiredSpell == 0 && t.RequiredReputationFaction == 0
             && t.RequiredHonorRank == 0 && t.RequiredCityRank == 0
@@ -251,6 +255,20 @@ internal static class BoostGearPlanner
     private static Candidate? Best(List<Candidate> usable, byte slot, PlayerbotStatWeights weights, Dictionary<byte, ItemTemplate> chosen)
     {
         List<Candidate> candidates = [.. usable.Where(c => Array.IndexOf(c.Slots, slot) >= 0 && SuitsSlot(c.Template, slot, weights, chosen))];
+        if (slot is InventorySlots.Head or InventorySlots.Shoulders or InventorySlots.Chest or InventorySlots.Waist
+            or InventorySlots.Legs or InventorySlots.Feet or InventorySlots.Wrists or InventorySlots.Hands)
+        {
+            // The wear rule already removed armor without proficiency. For a boost, prefer the highest trained armor type
+            // present in this slot, then score its pieces by build stats. vmangos Player::GetHighestKnownArmorProficiency
+            // ranks plate, mail, leather, cloth in that order (Player.cpp:8561-8571); a missing type falls back naturally.
+            uint bestArmorType = candidates.Where(c => c.Template.Class == (uint)ItemClass.Armor && c.Template.SubClass is >= 1 and <= 4)
+                .Select(c => c.Template.SubClass).DefaultIfEmpty(0u).Max();
+            if (bestArmorType != 0)
+            {
+                candidates = [.. candidates.Where(c => c.Template.Class == (uint)ItemClass.Armor && c.Template.SubClass == bestArmorType)];
+            }
+        }
+
         if (slot == InventorySlots.MainHand && weights.Style == PlayerbotWeaponStyle.TwoHand
             && candidates.Any(c => c.Template.GetInventoryType() == InventoryType.TwoHandWeapon))
         {

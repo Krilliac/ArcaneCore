@@ -77,6 +77,7 @@ How to read the tables:
 - [`World:Exploration`](#worldexploration)
 - [`World:GameEvents`](#worldgameevents)
 - [`World:GmCommands`](#worldgmcommands)
+- [`World:GmCommands:Boost`](#worldgmcommandsboost)
 - [`World:GmCommands:DebugDraw`](#worldgmcommandsdebugdraw)
 - [`World:GmCommands:FirstLoginTools`](#worldgmcommandsfirstlogintools)
 - [`World:Guild`](#worldguild)
@@ -1041,6 +1042,12 @@ How to read the tables:
 | `World:GmCommands:RetailLevels` | `bool` | `true` | - | Apply the vmangos account level of the commands declared before the retail command work (`RetailCommandLevels`); off keeps their ArcaneCore four-level declarations. |
 | `World:GmCommands:SecurityMap` | `Dictionary<AccountSecurity, byte>` | `{Administrator: 6, GameMaster: 3, Moderator: 1, Player: 0}` | - | The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4). |
 | `World:GmCommands:TicketMutationsPerMinute` | `int` | `10` | - | ArcaneCore only (no reference core limits these): the most ticket mutations (`CMSG_GMTICKET_CREATE`, `_UPDATETEXT`, `_DELETETICKET`) one account may send per minute. Beyond it the packet is refused before anything is read (create and update answer with their error code, a delete is answered with the ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default. |
+
+## `World:GmCommands:Boost`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:GmCommands:Boost:MaxQuality` | `uint` | `3` | - | The highest item quality a boost kit piece may have: 1 white, 2 green, 3 blue (default), 4 epic. Blue is what a character gets from the dungeons of its level; values outside 1-4 are clamped. White is always the lowest: grey items are never offered. |
 
 ## `World:GmCommands:DebugDraw`
 

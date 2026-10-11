@@ -195,6 +195,22 @@ public sealed class CharacterBoostPlannerTests
     private static ItemTemplate? PickFor(BoostGearPlan plan, byte slot)
         => plan.Picks.Where(p => p.Key == slot).Select(p => p.Value).SingleOrDefault();
 
+    [Theory]
+    [InlineData(Class.Warrior, 20, 3u)]
+    [InlineData(Class.Warrior, 40, 4u)]
+    [InlineData(Class.Hunter, 30, 2u)]
+    [InlineData(Class.Hunter, 40, 3u)]
+    public void Gear_PrefersTheBestTrainedArmorType_AndFallsBackWhenItIsAbsent(Class cls, byte level, uint preferred)
+    {
+        uint lower = preferred - 1;
+        ItemTemplate strongerLower = Piece(1, InventoryType.Chest, itemLevel: level, strength: 20) with { SubClass = lower };
+        ItemTemplate trained = Piece(2, InventoryType.Chest, itemLevel: level, strength: 8) with { SubClass = preferred };
+        Func<ItemTemplate, bool> canUse = t => t.SubClass <= preferred;
+
+        Assert.Equal(2u, PickFor(BoostGearPlanner.Plan([strongerLower, trained], Weights(strength: 1f), cls, false, canUse), InventorySlots.Chest)!.Entry);
+        Assert.Equal(1u, PickFor(BoostGearPlanner.Plan([strongerLower], Weights(strength: 1f), cls, false, canUse), InventorySlots.Chest)!.Entry);
+    }
+
     [Fact]
     public void Gear_OrderIsDeterministic_ScoreThenItemLevelThenEntry()
     {
@@ -301,7 +317,7 @@ public sealed class CharacterBoostPlannerTests
             "epic" => good with { Quality = 4 },
             "grey" => good with { Quality = 0 },
             "requiredLevel" => good with { RequiredLevel = level + 1 },
-            "itemLevel" => good with { ItemLevel = level + 1 },
+            "itemLevel" => good with { ItemLevel = level + BoostGearPlanner.ItemLevelHeadroom + 1 },
             "randomProperty" => good with { RandomProperty = 5 },
             "deprecated" => good with { Flags = (uint)ItemTemplateFlags.Deprecated },
             "notObtainable" => good with { ExtraFlags = 0x04 },   // vmangos ItemPrototype.h ITEM_EXTRA_NOT_OBTAINABLE
@@ -331,6 +347,18 @@ public sealed class CharacterBoostPlannerTests
         Assert.False(BoostGearPlanner.IsPoolItem(edge, 13, new HashSet<uint> { 7 }));
         Assert.Throws<ArgumentNullException>(() => BoostGearPlanner.IsPoolItem(null!, 14, new HashSet<uint>()));
         Assert.Throws<ArgumentNullException>(() => BoostGearPlanner.IsPoolItem(edge, 14, null!));
+    }
+
+    [Fact]
+    public void Pool_AdmitsAnItemFiveLevelsAboveTheCharacter_WhenItsRequiredLevelIsMet()
+    {
+        // ClassicDB Outrider's Bow (19558) is item level 63 and requires level 58. vmangos Player::CanUseItem
+        // checks RequiredLevel, not ItemLevel (Player.cpp:10058-10101). The boost keeps a five-level near-level cap.
+        ItemTemplate bow = Piece(19558, InventoryType.Ranged, itemLevel: 63) with { RequiredLevel = 58 };
+        HashSet<uint> sources = [bow.Entry];
+        Assert.True(BoostGearPlanner.IsPoolItem(bow, 58, sources));
+        Assert.False(BoostGearPlanner.IsPoolItem(bow with { ItemLevel = 64 }, 58, sources));
+        Assert.False(BoostGearPlanner.IsPoolItem(bow with { RequiredLevel = 59 }, 58, sources));
     }
 
     private const uint FireFestivalCrown = 23323;     // Crown of the Fire Festival, a head item rewarded by Midsummer quests
@@ -583,7 +611,7 @@ public sealed class CharacterBoostPlannerTests
             new ArcaneCore.Kernel.Crafting.SpellItemEnchantment(75, [5, 0, 0], [8, 0, 0], [(uint)ItemStatType.Stamina, 0, 0], "+8 Stamina", 0, 0),
             new ArcaneCore.Kernel.Crafting.SpellItemEnchantment(76, [5, 4, 0], [7, 10, 0], [(uint)ItemStatType.Intellect, 2, 0], "+7 Intellect", 0, 0),
         ]);
-        BoostSuffixes suffixes = BoostSuffixes.TryCreate(properties, enchants)!;
+        BoostSuffixes suffixes = BoostSuffixes.TryCreate(properties, enchants, _ => null)!;
 
         IReadOnlyList<BoostSuffix> rolls = suffixes.For(Piece(1, InventoryType.Chest) with { RandomProperty = 5 });
         Assert.Equal([1001, 1002], rolls.Select(r => r.PropertyId).ToArray());
@@ -593,9 +621,9 @@ public sealed class CharacterBoostPlannerTests
         Assert.Empty(suffixes.For(Piece(2, InventoryType.Chest)));                                    // no random property
         Assert.Empty(suffixes.For(Piece(3, InventoryType.Chest) with { RandomProperty = 77 }));       // a group with no rows
 
-        Assert.Null(BoostSuffixes.TryCreate(properties, ArcaneCore.Kernel.Crafting.EnchantCatalog.Empty));
-        Assert.Null(BoostSuffixes.TryCreate(ItemRandomPropertyCatalog.Empty, enchants));
-        Assert.Null(BoostSuffixes.TryCreate(null, enchants));
+        Assert.Null(BoostSuffixes.TryCreate(properties, ArcaneCore.Kernel.Crafting.EnchantCatalog.Empty, _ => null));
+        Assert.Null(BoostSuffixes.TryCreate(ItemRandomPropertyCatalog.Empty, enchants, _ => null));
+        Assert.Null(BoostSuffixes.TryCreate(null, enchants, _ => null));
     }
 
     [Fact]

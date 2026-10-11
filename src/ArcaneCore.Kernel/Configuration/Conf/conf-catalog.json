@@ -10429,6 +10429,22 @@
       "isCollection": false
     },
     {
+      "path": "World:GmCommands:Boost:MaxQuality",
+      "section": "World:GmCommands:Boost",
+      "type": "uint",
+      "kind": "scalar",
+      "elementType": "uint",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The highest item quality a boost kit piece may have: 1 white, 2 green, 3 blue (default), 4 epic. Blue is what a character gets from the dungeons of its level; values outside 1-4 are clamped. White is always the lowest: grey items are never offered.",
+      "allowed": "a whole number, 0 to 4294967295",
+      "docs": "docs/reference/configuration.md#worldgmcommandsboost",
+      "isCollection": false
+    },
+    {
       "path": "World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath",
       "section": "World:GmCommands:DebugDraw",
       "type": "string",

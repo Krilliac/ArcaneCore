@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Crafting;
 using ArcaneCore.Data.Items;
 using ArcaneCore.Game;
@@ -10,6 +11,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Gm.Character.Boost;
 using ArcaneCore.World.Playerbots.Progression;
+using ArcaneCore.World.Spells;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -19,7 +21,7 @@ namespace ArcaneCore.World.Tests.Gm.Character;
 
 /// <summary>
 /// Runs only when <c>ARCANECORE_TEST_WORLD_DB</c> names an imported SQLite world.db (opened read-only), <c>ARCANECORE_TEST_DBC_DIR</c> the
-/// build-5875 DBC directory (ItemRandomProperties.dbc, SpellItemEnchantment.dbc) and <c>ARCANECORE_CLASSICDB_DUMP</c> the classic-db dump
+/// build-5875 DBC directory (ItemRandomProperties.dbc, SpellItemEnchantment.dbc and the Spell DBC set) and <c>ARCANECORE_CLASSICDB_DUMP</c> the classic-db dump
 /// (item_enchantment_template): the random suffixes a live realm has. Reports Skipped naming the variables, never a silent pass.
 /// </summary>
 internal sealed class BoostRealContentFactAttribute : FactAttribute
@@ -33,6 +35,9 @@ internal sealed class BoostRealContentFactAttribute : FactAttribute
         if (Environment.GetEnvironmentVariable(Variable) is not { Length: > 0 } path || !File.Exists(path)
             || Environment.GetEnvironmentVariable(DbcVariable) is not { Length: > 0 } dbc || !File.Exists(Path.Combine(dbc, "ItemRandomProperties.dbc"))
             || !File.Exists(Path.Combine(dbc, "SpellItemEnchantment.dbc"))
+            || !File.Exists(Path.Combine(dbc, "Spell.dbc")) || !File.Exists(Path.Combine(dbc, "SpellCastTimes.dbc"))
+            || !File.Exists(Path.Combine(dbc, "SpellDuration.dbc")) || !File.Exists(Path.Combine(dbc, "SpellRange.dbc"))
+            || !File.Exists(Path.Combine(dbc, "SpellRadius.dbc"))
             || Environment.GetEnvironmentVariable(DumpVariable) is not { Length: > 0 } dump || !File.Exists(dump))
         {
             Skip = $"{Variable} (an imported SQLite world.db), {DbcVariable} (build-5875 DBCs) and {DumpVariable} (the classic-db dump) are required; the real-content boost kit checks did NOT run.";
@@ -59,6 +64,25 @@ public sealed class CharacterBoostRealContentTests(ITestOutputHelper output)
         return (s_content.Value.Totals(plan), plan);
     }
 
+    [BoostRealContentFact]
+    public void Sources_ExcludeAnEventOnlyVendorItem()
+    {
+        // ClassicDB Tree Frog Box (11026) is sold only by an event-spawned vendor; it has no permanent vendor,
+        // quest reward or loot source. The real-content probe must use the production event-source rule.
+        Assert.DoesNotContain(11026u, s_content.Value.Sources);
+    }
+
+    [BoostRealContentFact]
+    public void PoolStageCount_MatchesThePlannerFilter()
+    {
+        const byte level = 20;
+        RealBoostContent content = s_content.Value;
+        string line = content.PoolStages(level).Split('\n').Single(s => s.StartsWith("- final IsPoolItem: ", StringComparison.Ordinal));
+        int reported = int.Parse(line["- final IsPoolItem: ".Length..].Split(' ')[0], CultureInfo.InvariantCulture);
+        int actual = content.Items.Count(item => BoostGearPlanner.IsPoolItem(item, level, content.Sources));
+        Assert.Equal(actual, reported);
+    }
+
     /// <summary>
     /// A level-60 warrior (the shield-tank weights a non-bot warrior gets) wears a kit a fresh 60 out of the level-55-60 dungeons would have:
     /// strength and stamina it can tank with, a real weapon and a shield. The thresholds sit between the kit before this change (green, fixed
@@ -80,8 +104,15 @@ public sealed class CharacterBoostRealContentTests(ITestOutputHelper output)
         Assert.Empty(plan.EmptySlots);
         Assert.All(plan.Picks, p => Assert.True(p.Value.Quality >= 2, $"{BoostGearPlanner.SlotName(p.Key)} {p.Value.Name} is quality {p.Value.Quality}"));
         Assert.All(plan.Picks, p => Assert.True(BoostGearPlanner.GivesAnything(p.Value, plan.Suffixes.GetValueOrDefault(p.Key)), p.Value.Name));
+        // ClassicDB Rainbow Girdle and Gauntlets of Valor are genuine plate with useful Strength/Stamina plus secondary
+        // Intellect/Spirit. A blanket zero-caster-stat assertion incorrectly rejects them; primary stats must dominate.
         Assert.All(plan.Picks.Where(p => p.Value.Class == (uint)ItemClass.Armor && p.Value.SubClass == ArmorPlate), p =>
-            Assert.Equal(0, Stat(p.Value, plan.Suffixes.GetValueOrDefault(p.Key), ItemStatType.Intellect) + Stat(p.Value, plan.Suffixes.GetValueOrDefault(p.Key), ItemStatType.Spirit)));
+        {
+            BoostSuffix? suffix = plan.Suffixes.GetValueOrDefault(p.Key);
+            int primary = Stat(p.Value, suffix, ItemStatType.Strength) + Stat(p.Value, suffix, ItemStatType.Stamina);
+            int secondary = Stat(p.Value, suffix, ItemStatType.Intellect) + Stat(p.Value, suffix, ItemStatType.Spirit);
+            Assert.True(primary > 0 && primary >= secondary, $"{p.Value.Name}: primary {primary}, caster stats {secondary}");
+        });
     }
 
     /// <summary>A level-60 mage: intellect and stamina, a caster weapon and a wand, and no strength or agility gear.</summary>
@@ -114,17 +145,49 @@ public sealed class CharacterBoostRealContentTests(ITestOutputHelper output)
         Assert.Empty(plan.EmptySlots);
     }
 
-    /// <summary>Every class at 20, 40 and 60: no slot holds a piece that gives nothing, and no grey item.</summary>
+    /// <summary>Every class at six leveling milestones: no slot holds a piece that gives nothing, and no grey item.</summary>
     [BoostRealContentFact]
     public void EveryClassAndLevel_NoStatlessOrGreyPieces()
     {
-        foreach (byte level in new byte[] { 20, 40, 60 })
+        foreach (byte level in new byte[] { 10, 20, 30, 40, 50, 60 })
         {
             foreach (Class cls in RealBoostContent.Classes)
             {
                 BoostGearPlan plan = s_content.Value.Plan(cls, level);
                 Assert.All(plan.Picks, p => Assert.True(p.Value.Quality >= 1 && BoostGearPlanner.GivesAnything(p.Value, plan.Suffixes.GetValueOrDefault(p.Key)),
                     $"{cls} {level} {BoostGearPlanner.SlotName(p.Key)}: {p.Value.Name} ({p.Value.Entry})"));
+            }
+        }
+    }
+
+    [BoostRealContentFact]
+    public void EveryClassAtEveryLevel10Through60_WearsNearLevelLegalArmor()
+    {
+        foreach (byte level in Enumerable.Range(10, 51).Select(n => (byte)n))
+        {
+            foreach (Class cls in RealBoostContent.Classes)
+            {
+                uint armor = cls switch
+                {
+                    Class.Warrior or Class.Paladin => level >= 40 ? 4u : 3u,
+                    Class.Hunter or Class.Shaman => level >= 40 ? 3u : 2u,
+                    Class.Rogue or Class.Druid => 2u,
+                    _ => 1u,
+                };
+                BoostGearPlan plan = s_content.Value.Plan(cls, level);
+                Assert.All(plan.Picks, pick =>
+                {
+                    Assert.InRange(pick.Value.Quality, 1u, BoostGearPlanner.DefaultMaxQuality);
+                    Assert.True(pick.Value.RequiredLevel <= level && pick.Value.ItemLevel <= (uint)level + BoostGearPlanner.ItemLevelHeadroom,
+                        $"{cls} {level} {BoostGearPlanner.SlotName(pick.Key)}: {pick.Value.Name} requires {pick.Value.RequiredLevel}, item level {pick.Value.ItemLevel}");
+                    if (pick.Key is InventorySlots.Head or InventorySlots.Shoulders or InventorySlots.Chest or InventorySlots.Waist
+                        or InventorySlots.Legs or InventorySlots.Feet or InventorySlots.Wrists or InventorySlots.Hands)
+                    {
+                        // A level between the table milestones can have no eligible piece of the highest trained type in
+                        // one slot (e.g. Rugged Spaulders before a mail shoulder becomes available), so lower armor is valid.
+                        Assert.InRange(pick.Value.SubClass, 1u, armor);
+                    }
+                });
             }
         }
     }
@@ -136,26 +199,21 @@ public sealed class CharacterBoostRealContentTests(ITestOutputHelper output)
         => t.Stats.Where(s => s.Type == (uint)type).Sum(s => s.Value) + (suffix?.Stats.Where(s => s.Type == (uint)type).Sum(s => s.Value) ?? 0);
 
     [BoostRealContentFact]
-    public void DumpKits_ForEveryClass_At20_40_60()
+    public void DumpKits_ForEveryClass_At10_20_30_40_50_60()
     {
         RealBoostContent content = s_content.Value;
         var text = new StringBuilder();
-        foreach (byte level in new byte[] { 20, 40, 60 })
+        foreach (byte level in new byte[] { 10, 20, 30, 40, 50, 60 })
         {
             text.AppendLine(content.PoolStages(level));
         }
 
-        foreach (byte level in new byte[] { 20, 40, 60 })
+        foreach (byte level in new byte[] { 10, 20, 30, 40, 50, 60 })
         {
             foreach (Class cls in RealBoostContent.Classes)
             {
                 text.AppendLine(content.Describe(cls, level));
             }
-        }
-
-        foreach (ItemTemplate t in content.Items.Where(t => t.RandomProperty != 0).Take(3))
-        {
-            text.AppendLine($"DEBUG {t.Entry} {t.Name} rp {t.RandomProperty}: " + string.Join("; ", content.Suffixes.For(t).Select(x => $"{x.PropertyId} {x.Name} [{string.Join(",", x.Stats.Select(st => st.Type + ":" + st.Value))}]")));
         }
 
         output.WriteLine(text.ToString());
@@ -192,20 +250,44 @@ internal sealed class RealBoostContent
     {
         var properties = new ItemRandomPropertyCatalog(
             ItemRandomPropertiesDbcReader.Load(Path.Combine(dbcDirectory, "ItemRandomProperties.dbc")), ItemEnchantmentTemplateDumpReader.Load(dump));
-        BoostSuffixes suffixes = BoostSuffixes.TryCreate(properties, EnchantDbcReader.Load(Path.Combine(dbcDirectory, "SpellItemEnchantment.dbc")))
+        SpellDbcContent spellRows = SpellDbcImporter.ReadDirectory(dbcDirectory);
+        var spellStore = SpellStoreFactory.Build(new SpellContent(spellRows.Spells, spellRows.CastTimes, spellRows.Durations,
+            spellRows.Ranges, spellRows.Radii, [], []));
+        BoostSuffixes suffixes = BoostSuffixes.TryCreate(properties, EnchantDbcReader.Load(Path.Combine(dbcDirectory, "SpellItemEnchantment.dbc")), spellStore.Get)
             ?? throw new InvalidOperationException("the random property data loaded empty");
-        string connection = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        // SQLite otherwise tries to open a sidecar beside the live DB, which a read-only profile correctly denies. This test never
+        // writes to the DB and deliberately observes the on-disk snapshot, so immutable=1 is appropriate for this acceptance probe.
+        string immutableUri = new Uri(Path.GetFullPath(path)).AbsoluteUri + "?mode=ro&immutable=1";
+        string connection = new SqliteConnectionStringBuilder { DataSource = immutableUri, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
         ItemTemplate[] items;
         using (var db = new WorldDbContext(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite(connection).Options))
         {
             items = [.. db.Set<ItemTemplateRow>().AsNoTracking().AsEnumerable().Select(r => r.ToTemplate())];
         }
 
-        // BoostItemSources.Build over the same tables: vendors, non-event quest rewards, loot rows that name an item (not a reference).
+        // BoostItemSources.Build over the same tables: permanent vendors, non-event quest rewards, loot rows that name an
+        // item (not a reference). A vendor is event-only only when it has event spawns and no permanent spawn.
         using var sql = new SqliteConnection(connection);
         sql.Open();
         HashSet<uint> eventQuests = Ids(sql, "SELECT quest FROM game_event_quest");
-        var vendor = Ids(sql, "SELECT item FROM npc_vendor");
+        HashSet<uint> eventOnlyVendors = Ids(sql,
+            "SELECT DISTINCT c.Entry FROM creature_spawn c JOIN game_event_creature e ON e.guid = c.Guid WHERE e.event > 0");
+        eventOnlyVendors.ExceptWith(Ids(sql,
+            "SELECT DISTINCT c.Entry FROM creature_spawn c WHERE NOT EXISTS " +
+            "(SELECT 1 FROM game_event_creature e WHERE e.guid = c.Guid AND e.event > 0)"));
+        var vendor = new HashSet<uint>();
+        using (SqliteCommand command = sql.CreateCommand())
+        {
+            command.CommandText = "SELECT entry, item FROM npc_vendor";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!eventOnlyVendors.Contains((uint)reader.GetInt64(0)))
+                {
+                    vendor.Add((uint)reader.GetInt64(1));
+                }
+            }
+        }
         var rewards = new HashSet<uint>();
         string rewardColumns = string.Join(", ", Enumerable.Range(1, 6).Select(i => $"RewChoiceItemId{i}").Concat(Enumerable.Range(1, 4).Select(i => $"RewItemId{i}")));
         using (SqliteCommand command = sql.CreateCommand())
@@ -389,7 +471,8 @@ internal sealed class RealBoostContent
         }
 
         Stage("equippable (not shirt/tabard/bag/quiver/ammo)", s);
-        Stage($"required level and item level <= {level}", s.Where(t => t.RequiredLevel <= level && t.ItemLevel <= level));
+        Stage($"required level <= {level} and item level <= {(uint)level + BoostGearPlanner.ItemLevelHeadroom}",
+            s.Where(t => t.RequiredLevel <= level && t.ItemLevel <= (uint)level + BoostGearPlanner.ItemLevelHeadroom));
         Stage("obtainable (vendor, quest, loot)", s.Where(t => Sources.Contains(t.Entry)));
         Stage("final IsPoolItem", s.Where(t => BoostGearPlanner.IsPoolItem(t, level, Sources)));
         Stage("of which a known suffix when random", s.Where(t => t.RandomProperty == 0 || Suffixes.For(t).Count > 0));
