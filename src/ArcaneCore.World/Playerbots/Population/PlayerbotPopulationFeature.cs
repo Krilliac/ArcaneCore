@@ -125,6 +125,12 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private bool _atlasLocated;
     private IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? _located;
     private object? _locating;
+    private bool _locateRunning;
+    private int _locateHeldPasses;
+    private CancellationTokenSource? _locateCts;
+
+    /// <summary>The most passes creation and relocation wait for a running graveyard terrain lookup before going ahead on the fallback atlas.</summary>
+    internal const int MaxTerrainHoldPasses = 6;
     private string? _lastError;
 
     private ManagedPlayerbotFeature? Managed => services.GetService<ManagedPlayerbotFeature>();
@@ -239,7 +245,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         bool BoostAvailable,
         string BoostMissing,
         long ClockMs,
-        ManagedPlayerbotFeature Managed);
+        ManagedPlayerbotFeature Managed,
+        string? TerrainHold);
 
     private PassInput? Capture()
     {
@@ -253,6 +260,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         PlayerbotPopulationOptions pop = _options.Population;
         PopulationZoneAtlas atlas = AtlasFor(world, pop);
+        string? terrainHold = TerrainHold();
         var realZones = new HashSet<uint>();
         foreach (Player online in world.OnlinePlayers)
             if (online.Session is not WorldSession { IsManaged: true }) realZones.Add(online.ZoneId);
@@ -279,7 +287,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.Bands, samples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed);
+            ClockMs, managed, terrainHold);
     }
 
     /// <summary>
@@ -304,7 +312,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _atlasGraveyards = graveyards;
             _atlasKey = key;
             _located = null;
-            _locating = null; // a lookup still running for the old sources is ignored when it posts (its token is no longer current)
+            // A lookup still running for the old sources is cancelled, and ignored if it posts anyway (its token is no longer current),
+            // so repeated reloads never stack lookups.
+            _locating = null;
+            _locateRunning = false;
+            _locateCts?.Cancel();
+            _locateCts?.Dispose();
+            _locateCts = null;
         }
 
         if (!sourcesChanged && (_located is null || _atlasLocated)) return _atlas;
@@ -328,7 +342,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// <see cref="TerrainLocator"/> or, by default, <see cref="TerrainManager.ReadZoneAndAreaIdDetached"/> (its own file reads, never
     /// the world thread's tile cache). The result is posted back to the world thread (<see cref="WorldRuntime.Post"/>) and taken by
     /// the next capture; a result for sources that have changed since is dropped. Without a locator and without terrain data nothing
-    /// starts and the atlas stays unlocated.
+    /// starts and the atlas stays unlocated. A lookup that fails keeps the unlocated atlas until the sources change again (it is not
+    /// retried). Each lookup has its own token source, linked to the feature's stop, cancelled when the sources change.
     /// </summary>
     private void StartLocating(WorldRuntime world, AreaTable areas)
     {
@@ -339,10 +354,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         WorldSafeLoc[] locations = [.. _atlas.Zones.SelectMany(z => z.AllianceLocations.Concat(z.HordeLocations)).DistinctBy(l => l.Id)];
         var token = new object();
         _locating = token;
-        CancellationToken ct = _stop.Token;
+        _locateRunning = true;
+        _locateHeldPasses = 0;
+        _locateCts = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        CancellationToken ct = _locateCts.Token;
         _ = Task.Run(() =>
         {
-            Dictionary<uint, (uint ZoneId, uint AreaId)> result = [];
+            Dictionary<uint, (uint ZoneId, uint AreaId)>? result = [];
             try
             {
                 foreach (WorldSafeLoc location in locations)
@@ -351,19 +369,37 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     result[location.Id] = locate(location);
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup failed; the atlas keeps every graveyard link");
-                return;
+                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup failed; the atlas keeps every graveyard link until the area table, graveyards or maps change");
+                result = null;
             }
 
+            // Every outcome ends the run on the world thread, so a failed lookup never holds the population back.
             world.Post(() =>
             {
                 if (!ReferenceEquals(_locating, token)) return;
-                _located = result;
+                _locateRunning = false;
+                if (result is not null) _located = result;
             });
-        }, ct);
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// World thread, once per capture: why this pass must not create or relocate bots, or null. While the graveyard terrain lookup for
+    /// the current sources runs (started, its result not yet delivered), the atlas is the unlocated fallback, which would place a low
+    /// bot at Raven Hill again: creation and relocation wait. After <see cref="MaxTerrainHoldPasses"/> such passes they go ahead on the
+    /// fallback (a warning is logged once), so a hung read cannot stall the population.
+    /// </summary>
+    private string? TerrainHold()
+    {
+        if (!_locateRunning) return null;
+        _locateHeldPasses++;
+        if (_locateHeldPasses <= MaxTerrainHoldPasses) return "waiting for the graveyard terrain lookup";
+        if (_locateHeldPasses == MaxTerrainHoldPasses + 1)
+            logger.LogWarning("Playerbot population: the graveyard terrain lookup is still running after {Passes} passes; creating and relocating on the fallback atlas (every graveyard link kept)", MaxTerrainHoldPasses);
+        return null;
     }
 
     /// <summary>
@@ -429,7 +465,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     break;
             }
 
-            if (decision.State is "under-budget" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport && pop.MaxRelocationsPerInterval > 0)
+            bool relocate = decision.State is "under-budget" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
+                && pop.MaxRelocationsPerInterval > 0;
+            if (relocate && input.TerrainHold is { } relocationHold) ctx.Note ??= relocationHold; // no relocation on the fallback atlas either
+            else if (relocate)
             {
                 int moved = await RelocateAsync(ctx, ct).ConfigureAwait(false);
                 changed += moved;
@@ -531,6 +570,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         // 2. New bots, within the rate limit, the registry and the running cap.
+        if (ctx.Input.TerrainHold is { } hold && remaining > 0) stoppedBecause = hold;
         while (remaining > 0 && stoppedBecause is null)
         {
             if (pop.MaxCreatePerMinute == 0) break;

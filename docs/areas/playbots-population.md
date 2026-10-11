@@ -144,8 +144,22 @@ build. The feature starts a background task (`TerrainManager.ReadZoneAndAreaIdDe
 never touches the world thread's tile cache) when the atlas's sources change: the first pass, a content reload, an `AllowedMaps` or
 `ExcludedZones` change. The result is posted back with `WorldRuntime.Post`, and the next pass rebuilds the atlas with it. Until it
 is in, and always without terrain data (`World:Maps:DataDirectory` unset), nothing is known: every link is kept and the floor is the
-zone's lowest sub-area level. A result for sources that changed in the meantime is dropped. The atlas logs its zone and location
+zone's lowest sub-area level. A lookup for sources that change in the meantime is cancelled (each lookup has its own token source,
+linked to the feature's stop), and a result that still arrives is dropped, so repeated reloads never stack lookups. A lookup that
+fails is logged and keeps the fallback until the sources change again; it is not retried. The atlas logs its zone and location
 counts and the links it left out each time it is built.
+
+**Creation and relocation wait for the lookup.** While a lookup for the current sources is running (started, its result not yet
+delivered to the world thread), a pass creates no bot and relocates none, and the status says `held back: waiting for the
+graveyard terrain lookup`; restarting parked bots and parking go on. Otherwise the first pass after every start or reload would
+place bots from the fallback, which is the Duskwood bug again. After 6 such passes (`MaxTerrainHoldPasses`) creation and
+relocation go ahead on the fallback and a warning is logged, so a hung read cannot stall the population. A failed lookup ends the
+wait at once.
+
+**The detached reader and a missing tile.** `ReadZoneAndAreaIdDetached` returns (0, 0) for a position whose tile file is missing,
+unreadable or outside the map, so that graveyard's link is kept with no sub-area level. The cached path
+(`TerrainInfo.GetZoneAndAreaId`) instead reads a missing tile as area flag 0, which `AreaTable` resolves to the map's
+`linked_zone` area when the map has one. The two agree wherever a tile file exists.
 
 **The slack (an ArcaneCore choice, not a game rule).** A placement takes a bot of level L when `floor - ZoneLevelSlack <= L <=
 MaxLevel`. The lowest sub-area of a starter zone is level 4 or 5, so with no slack a level 1 bot would fit nowhere and a server

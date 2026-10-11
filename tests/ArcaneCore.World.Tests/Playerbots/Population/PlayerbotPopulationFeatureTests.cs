@@ -479,6 +479,69 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task WhileTheTerrainLookupRuns_NoBotIsCreated_AndOnceItIsIn_CreationGoesAhead()
+    {
+        // The first pass after a start or a reload would otherwise place bots from the unlocated fallback atlas (the Duskwood bug again).
+        using var release = new ManualResetEventSlim(false);
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            release.Wait(TimeSpan.FromSeconds(30));
+            return (0, 0);
+        };
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("held back: waiting for the graveyard terrain lookup", status.Reason);
+        Assert.DoesNotContain("created 1", status.Reason);
+        Assert.Empty(world.Members.Snapshot);
+
+        release.Set();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (world.Members.Snapshot.Count == 0 && DateTime.UtcNow < deadline)
+        {
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+            await Task.Delay(20);
+        }
+
+        Assert.Single(world.Members.Snapshot);
+        Assert.DoesNotContain("waiting for the graveyard terrain lookup", status.Reason);
+    }
+
+    [Fact]
+    public async Task AHungTerrainLookup_HoldsCreationForAtMostTheCap_ThenTheFallbackIsUsed()
+    {
+        using var release = new ManualResetEventSlim(false);
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        world.Feature.TerrainLocator = location =>
+        {
+            release.Wait(TimeSpan.FromSeconds(60));
+            return (0, 0);
+        };
+
+        try
+        {
+            for (int pass = 1; pass <= PlayerbotPopulationFeature.MaxTerrainHoldPasses; pass++)
+            {
+                world.Ticks.Set(200, 10);
+                PopulationStatus held = await world.PassAsync();
+                Assert.Contains("waiting for the graveyard terrain lookup", held.Reason);
+                Assert.Empty(world.Members.Snapshot);
+            }
+
+            world.Ticks.Set(200, 10);
+            PopulationStatus status = await world.PassAsync();
+            Assert.Contains("created 1", status.Reason);
+            Assert.Single(world.Members.Snapshot);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task ABotAtTheSlackBelowItsZone_StaysWhereItIs()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
