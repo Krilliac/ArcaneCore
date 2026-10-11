@@ -49,8 +49,8 @@ public sealed class CreaturePathBudgetTests
             spawns.Add(Spawn(i + 1, WolfEntry, 15f, ((int)i - (Wolves / 2)) * 0.5f));
         }
 
-        var content = new CreatureContent([Template()], spawns, [], [], [], CreatureAiContent.Empty);
-        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
+        var content = new CreatureContent([Template(configure: t => t.AIName = RecorderName)], spawns, [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile(), Factory = RecorderFactory() });
         system.PathBudget = budget;
         var paths = new CountingPathfinder(nodesPerSearch);
         WorldCollision.Of(runtime).Install(pathfinder: paths);
@@ -99,6 +99,45 @@ public sealed class CreaturePathBudgetTests
 
         Assert.All(c.Wolves, w => Assert.True(w.IsMoving));
         Assert.Equal((Wolves - 8) / 8, ticks); // 40 wolves, 8 per update, the first 8 already served: deterministic drain
+    }
+
+    [Fact]
+    public void WithAMovingTarget_EveryChaserStillGetsAPath_WithinABoundedNumberOfUpdates()
+    {
+        // The target moves 1 yd (beyond TargetMoveTolerance) every update, so served chasers ask again at every recheck and keep
+        // competing for the budget; a fixed creature order would serve the same early 16 for good and starve the rest.
+        using Crowd c = Start(new CreaturePathBudget(MaxSearches: 8, MaxNodes: long.MaxValue));
+        PullAll(c);
+        var everMoved = new HashSet<Creature>(c.Wolves.Where(w => w.IsMoving));
+
+        int ticks = 0;
+        while (everMoved.Count < Wolves && ticks < 30)
+        {
+            c.Player.Relocate(0, ticks + 1, c.Player.Z, 0, 0);
+            int before = c.Paths.Calls;
+            c.World.RunTick(50);
+            ticks++;
+            Assert.True(c.Paths.Calls - before <= 8, $"tick {ticks} ran {c.Paths.Calls - before} searches");
+            everMoved.UnionWith(c.Wolves.Where(w => w.IsMoving));
+        }
+
+        Assert.Equal(Wolves, everMoved.Count);
+        Assert.True(ticks <= 3 * (Wolves / 8), $"took {ticks} updates"); // 5 rounds of 8; three updates per round is generous
+    }
+
+    [Fact]
+    public void ADeferredFollower_DoesNotInformItsAi_OnEveryDeferredUpdate()
+    {
+        using Crowd c = Start(new CreaturePathBudget(MaxSearches: 0, MaxNodes: long.MaxValue));
+        Creature wolf = c.Wolves[0];
+        var ai = Assert.IsType<RecorderAI>(wolf.AI);
+        wolf.Motion.MoveFollow(c.Player, 3f, 0f);
+
+        c.World.RunTick(50);
+        c.World.RunTick(50);
+
+        Assert.DoesNotContain(ai.Calls, call => call.StartsWith("inform:Follow", StringComparison.Ordinal));
+        Assert.True(c.System.DeferredPathSearches > 0);
     }
 
     [Fact]

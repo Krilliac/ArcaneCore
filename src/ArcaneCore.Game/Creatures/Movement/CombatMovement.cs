@@ -24,7 +24,7 @@ internal interface ICreaturePathQuery
     bool HasPathBudget { get; }
 
     /// <summary>A chase/follow re-path was put off to a later update because <see cref="HasPathBudget"/> was false.</summary>
-    void NoteDeferred();
+    void NoteDeferred(Creature creature);
 }
 
 /// <summary>
@@ -58,6 +58,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     private int _recheckMs;
     private Vector3? _aimedAt;
     private bool _reachable = true;
+    private bool _deferred;
 
     public Unit Target { get; } = target;
 
@@ -105,6 +106,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             return true;
         }
 
+        _deferred = false;
         _recheckMs -= (int)Math.Min(diffMs, int.MaxValue);
         if (_recheckMs <= 0 || (!creature.IsMoving && _reachable))
         {
@@ -113,7 +115,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 
         // vmangos TargetedMovementGenerator::Update: a finalized spline informs once the re-measure is done (never while the
         // creature cannot move, which returned above).
-        if (!creature.IsMoving)
+        // A chaser whose re-path was deferred has not finished anything: it must not inform on every deferred update.
+        if (!creature.IsMoving && !_deferred)
         {
             OnSplineFinalized(creature, mover);
         }
@@ -177,8 +180,9 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
         {
             // Over this update's search budget: keep the current spline (or standing), and re-path on the next update.
-            budgeted.NoteDeferred();
+            budgeted.NoteDeferred(creature);
             _recheckMs = 0;
+            _deferred = true;
             return;
         }
 

@@ -250,7 +250,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         if (!HasPathBudget)
         {
-            // Over the tick's budget and the caller cannot wait (waypoint, flee, home, formation): the straight line, as on NOPATH.
+            // Over the tick's budget and the caller cannot wait (waypoint, flee, home, formation). DELIBERATE DEGRADATION: the
+            // straight line, which may cut through walls or terrain. vmangos goes straight only on PATHFIND_NOPATH, never for budget
+            // exhaustion; this is the price of bounding the world thread for requests that cannot be deferred.
             DirectFallbackPaths++;
             return [destination];
         }
@@ -298,16 +300,28 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// <summary>Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap.</summary>
     public bool HasPathBudget => _pathSearchesThisTick < PathBudget.MaxSearches && _pathNodesThisTick < PathBudget.MaxNodes;
 
-    /// <summary>Count a chase/follow request put off because <see cref="HasPathBudget"/> was false.</summary>
-    internal void NoteDeferredPath() => DeferredPathSearches++;
+    private Creature? _pathFirstDeferred;
+
+    /// <summary>
+    /// Count a chase/follow request put off because <see cref="HasPathBudget"/> was false. The first creature deferred in an update is
+    /// where the next update's creature walk starts, so no chaser waits behind the same early creatures forever.
+    /// </summary>
+    internal void NoteDeferredPath(Creature creature)
+    {
+        DeferredPathSearches++;
+        _pathFirstDeferred ??= creature;
+    }
 
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
     private PathResult SearchPath(Vector3 start, Vector3 destination)
     {
-        long nodes = PathSearchCounters.NodesCreated;
+        PathSearchTotals before = PathSearchCounters.Current;
         PathResult path = Map.Collision.FindPath(start, destination);
-        _pathSearchesThisTick++;
-        _pathNodesThisTick += PathSearchCounters.NodesCreated - nodes;
+        PathSearchTotals spent = PathSearchCounters.Current - before;
+
+        // Only searches that ran A* count: without navigation data the "search" is a straight line and costs nothing.
+        _pathSearchesThisTick += (int)spent.Searches;
+        _pathNodesThisTick += spent.Nodes;
         return path;
     }
 
@@ -419,8 +433,15 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         _scratchCreatures.Clear();
         _scratchCreatures.AddRange(_creatures.Values);
         bool activeCellsOnly = Map.UpdatesActiveCellsOnly;
-        foreach (Creature creature in _scratchCreatures)
+
+        // Fair deferral: the walk starts at the creature whose path search was deferred first last update, so deferred chasers are
+        // served before the ones that were served (a fixed order starves the late creatures while demand stays above the budget).
+        int count = _scratchCreatures.Count;
+        int start = _pathFirstDeferred is { } resume ? Math.Max(0, _scratchCreatures.IndexOf(resume)) : 0;
+        _pathFirstDeferred = null; // deferrals from here on (this walk, or a pull before the next update) choose the next start
+        for (int walked = 0; walked < count; walked++)
         {
+            Creature creature = _scratchCreatures[(start + walked) % count];
             // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
             if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
