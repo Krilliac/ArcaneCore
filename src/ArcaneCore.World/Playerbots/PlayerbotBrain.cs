@@ -963,7 +963,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>
     /// A creature the goals do not choose now: unreachable, of an entry set aside (stall, death loop), or outside the bot's home area
-    /// (a creature on another map than the home is not judged: the bot is off-map and behaves as one with no home).
+    /// (outside the circle or, for a zone-clipped home, out of the home's zone: <see cref="PlayerbotHomeArea.Contains(Unit)"/>; a
+    /// creature on another map than the home is not judged: the bot is off-map and behaves as one with no home). This holds wherever
+    /// the bot is on the home map, so a bot away on an errand (a vendor in Stormwind) picks no fight on the road (fail closed).
     /// The defensive-attacker path does not use this: a bot always fights back.
     /// </summary>
     private bool IsSkipped(Creature creature)
@@ -1035,13 +1037,20 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         float angle = _exploreRefusals >= 3
             ? (attempt + player.Guid.Low) * 2.39996323f
             : player.Orientation + (spread * MathF.PI * 2f / 3f);
-        // Beyond 0.8 of the home radius the next leg heads for the centre instead of wandering further out.
-        if (_home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && home.DistanceTo(player.X, player.Y) > home.ExploreRadius)
-            angle = MathF.Atan2(home.Centre.Y - player.Y, home.Centre.X - player.X);
+        // Beyond 0.8 of the home radius the next leg heads for the centre instead of wandering further out; so does a leg that
+        // would end out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle).
+        bool onHomeMap = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId;
+        if (onHomeMap && _home!.DistanceTo(player.X, player.Y) > _home.ExploreRadius)
+            angle = MathF.Atan2(_home.Centre.Y - player.Y, _home.Centre.X - player.X);
         var destination = new System.Numerics.Vector3(
             player.X + (MathF.Cos(angle) * 48f),
             player.Y + (MathF.Sin(angle) * 48f),
             player.Z);
+        if (onHomeMap && _home!.ZoneClipped && !_home.InZone(destination.X, destination.Y, destination.Z))
+        {
+            angle = MathF.Atan2(_home.Centre.Y - player.Y, _home.Centre.X - player.X);
+            destination = new System.Numerics.Vector3(player.X + (MathF.Cos(angle) * 48f), player.Y + (MathF.Sin(angle) * 48f), player.Z);
+        }
         if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
         {
             _exploreRefusals = 0;

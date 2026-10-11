@@ -144,29 +144,46 @@ to autonomous mode resumes the brain with whatever state it had before.
 A managed bot can be anchored to an area. Without one it follows its own goals anywhere on the map (its starting-zone quest log, trainers,
 corpse runs, risk-weighted pulls); 200 bots teleported into Westfall spread over five zones within ten minutes. This is an ArcaneCore feature:
 no reference server anchors a bot, so every number here is an ArcaneCore choice. Code: `Playerbots/PlayerbotHome.cs`, the brain's
-`TryReturnHome`, `PlayerbotQuestGoals` and `PlayerbotWorldDestinations`. Tests: `PlayerbotHomeTests`, `ManagedPlayerbotHomeTests`,
-`ManagedPlayerbotHomeStoreTests`.
+`TryReturnHome`, `PlayerbotQuestGoals` and `PlayerbotWorldDestinations`. Tests: `PlayerbotHomeTests`, `PlayerbotHomeZoneTests`,
+`ManagedPlayerbotHomeTests`, `ManagedPlayerbotHomeStoreTests`.
 
-* **Setting it.** `.playerbot home $name|$prefix* <$tele|here> [#radius]` and `.playerbot home $name|$prefix* clear` (Administrator). A selector is one
+* **Setting it.** `.playerbot home $name|$prefix* <$tele|here> [#radius] [zone|nozone]` and `.playerbot home $name|$prefix* clear` (Administrator). A selector is one
   bot by name or id, or every bot (running or not) whose name starts with a prefix of 2 to 11 letters and one trailing `*` (`Wfbot*`), so a stray `a*`
   cannot anchor the fleet. `$tele` is a `game_tele` name (its map and position are the centre); `here` is each running bot's own position. The map must be
   one bots may enter (`World:Playerbots:AllowedMaps`). The reply is `accepted` at once and the result line (`N set ... M skipped ... K failed`) follows.
 * **Radius.** In yards, two-dimensional distance, **50 to 5000, default 600** (`PlayerbotHomeBounds`). A value outside is refused before anything changes.
-* **Storage.** `managed_playerbot_home` (characters schema 56), one row per bot, separate from the bot revision. A home that cannot be stored is not applied
-  (fail closed) and is counted as failed. It is re-applied when the bot starts.
-* **Staying inside.** Goal selection ignores creatures outside the circle (`IsSkipped`; a bot still fights back against whatever attacks it), new quests are
-  taken only from a giver inside the circle and only if every creature that ends the quest and every creature it asks to kill has a spawn inside
-  (`QuestInside`), and the destinations of the world walks (quest givers, enders, kill spawns) are the ones inside.
-* **Walking home.** A bot on the home map outside the radius, with no errand, drops its intent and walks to the centre through the ordinary route planner
+* **Zone clip (default on).** A circle cannot follow a zone border: homed at Sentinel Hill with radius 750 (or Westfall with 1200) it reached Raven Hill
+  in Duskwood (creatures 202/213/539/565/569, level 20 and more), and level-14 bots died there again and again (QA death-loop findings, map 0 near
+  -10650,450). So a home is also clipped to the **zone of its centre**: a point is inside only when it is inside the circle *and* in that zone. The zone
+  is the AreaTable zone (the top-level parent area) at the position, from the terrain's area flag: `PlayerbotZoneLookup` answers exactly what
+  `Map.GetZoneAndAreaId` answers (vmangos `TerrainInfo::GetZoneAndAreaId` through `AreaTable.GetZoneAndAreaId`, i.e.
+  `TerrainManager::GetZoneAndAreaIdByAreaFlag`), with the flag-to-zone answer cached. The home's zone is taken from its centre when the brain first uses
+  it (world thread), so it follows the terrain data, not a stored number. **Fail closed:** a position whose zone the terrain does not know is outside; a
+  clipped home whose centre has no known zone contains nothing (every creature, quest and destination is rejected; logged once, `zone=unknown`), and
+  `.playerbot home` refuses to set one (`... refused (no zone known ...; add nozone)`, or for a tele place a one-line refusal). `nozone` (before or after
+  the radius) turns the clip off and gives the plain circle; `zone` states the default.
+* **Storage.** `managed_playerbot_home` (characters schema 56), one row per bot, separate from the bot revision; the zone clip is the column `IgnoreZone`
+  (characters schema 58, `ManagedPlayerbotHomeZoneDataModule`), stored inverted so the rows that existed before it read as **clipped**. A home that cannot
+  be stored is not applied (fail closed) and is counted as failed. It is re-applied when the bot starts.
+* **Staying inside.** "Inside" means inside the circle and, for a clipped home, in its zone. Goal selection ignores creatures outside the area (`IsSkipped`; a
+  bot still fights back against whatever attacks it), new quests are taken only from a giver inside the area and only if every creature that ends the quest
+  and every creature it asks to kill has a spawn inside (`QuestInside`), the destinations of the world walks (quest givers, enders, kill spawns) are the
+  ones inside, and an exploring bot whose next leg would end out of the zone aims it at the centre instead.
+* **Walking home.** A bot on the home map outside the radius, or inside it but out of a clipped home's zone (a bot that wandered over to Raven Hill), with
+  no errand, drops its intent and walks to the centre through the ordinary route planner
   (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the
-  radius and stops at **0.75** (`ReturnFraction`), so it does not oscillate at the edge; an exploring bot beyond **0.8** of the radius (`ExploreFraction`)
+  radius and stops at **0.75** (`ReturnFraction`) and back in the zone, so it does not oscillate at the edge; the way back itself may cross other zones (it
+  is never restricted). A clipped home whose zone is not known is walked by the circle alone. An exploring bot beyond **0.8** of the radius (`ExploreFraction`)
   aims its next leg at the centre instead of further out. A stall reported by `PlayerbotStallWatch` sets the walk aside for 30 s at once (state
   `blocked`); the brain's own no-movement stalls (the bot stands still for the stuck time on a route) and failed route plans count instead, and the
   third in a row sets it aside. The goals carry on while it is set aside.
 * **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
   `PlayerbotTrainerDestinations.HasCandidate`), a quest exchange already under way, and the turn-in of a completed quest (the way to its ender is never
-  restricted) may take the bot anywhere; the bot walks home afterwards. Combat, looting, rest, retreat and the ghost recovery run before the home check and
-  are not touched; a dead bot recovers its corpse and walks home after the resurrection.
+  restricted) may take the bot anywhere, in any zone; the bot walks home afterwards. The zone clip does not change this: a capital trip for a trainer or a
+  vendor is allowed as before (decided: these NPCs stand in towns, and starving a bot of training and repairs is worse than the walk). What the clip does
+  keep closed is combat by choice out of the zone: while the bot is on the home map the grind filter rejects every creature outside the area wherever
+  the bot is, so a bot on its way to Stormwind picks no fight on the road (it still defends itself). Combat, looting, rest, retreat and the ghost
+  recovery run before the home check and are not touched; a dead bot recovers its corpse and walks home after the resurrection.
 * **Off-map policy.** Bots have no teleport, taxi or hearthstone logic, so a bot on another map than its home does not move itself: it is reported
   `off-map` and left alone. An operator brings it back with `.tele name <Name> <place>`. This is deliberate: nothing in the brain may cross a map.
   While off-map the in-area filters are **off** (`PlayerbotBrain.SyncHomeFilters`): the circle has no meaning on another map, and applying it would skip
@@ -174,7 +191,8 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   it is on) and the filters apply again the moment it is on the home map.
 * **Scripted and party bots.** A scripted controller, a party AI or a bot-led group drives the bot and ignores its home (shown as `suspended`).
 * **Seeing it.** `.playerbot status` appends `home=inside:120`, `returning:810`, `off-map` or `blocked:810` (distance rounded to 10 yards);
-  `.playerbot inspect` prints the place, map, centre, radius, exact distance and state.
+  `.playerbot inspect` prints the place, map, centre, radius, zone (`zone=40`, `zone=off`, `zone=unknown`), exact distance and state. The set reply names
+  the zone of a tele place (`... radius 750, zone 40`) or `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
 
 ### Faults and quarantine

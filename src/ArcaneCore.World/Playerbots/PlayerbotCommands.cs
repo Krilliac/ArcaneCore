@@ -31,7 +31,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 new ChatCommand("invite", AccountSecurity.GameMaster,
                     "Syntax: .playerbot invite $id|$name\nPut a running bot into your group; it follows you and takes your commands.", Invite),
                 new ChatCommand("home", AccountSecurity.Administrator,
-                    "Syntax: .playerbot home $name|$prefix* <$tele|here> [#radius]\n.playerbot home $name|$prefix* clear\nAnchor bots to an area: a game_tele place (or each bot's own position with here) and a radius in yards (50 to 5000, default 600). A prefix such as Wfbot* names every bot whose name starts with it. clear removes the home.", Home),
+                    "Syntax: .playerbot home $name|$prefix* <$tele|here> [#radius] [zone|nozone]\n.playerbot home $name|$prefix* clear\nAnchor bots to an area: a game_tele place (or each bot's own position with here) and a radius in yards (50 to 5000, default 600), clipped to the zone of the centre unless nozone is given. A prefix such as Wfbot* names every bot whose name starts with it. clear removes the home.", Home),
                 new ChatCommand("chat", AccountSecurity.GameMaster,
                     "Syntax: .playerbot chat <status|flags|pardon>\nThe bots' chat replies and their safety screening.",
                     Children:
@@ -255,11 +255,13 @@ public sealed class PlayerbotCommands : ICommandGroup
     }
 
     /// <summary>
-    /// <c>.playerbot home $name|$prefix* &lt;$tele|here&gt; [#radius]</c> and <c>... clear</c> (Administrator; world thread, where commands
-    /// run). The selector is one bot or every bot whose name starts with the prefix, running or not. A tele name is a
+    /// <c>.playerbot home $name|$prefix* &lt;$tele|here&gt; [#radius] [zone|nozone]</c> and <c>... clear</c> (Administrator; world thread,
+    /// where commands run). The selector is one bot or every bot whose name starts with the prefix, running or not. A tele name is a
     /// <c>game_tele</c> row (the place's map and position become the centre); <c>here</c> is each matched running bot's own position.
-    /// A trailing number is the radius in yards. The command is accepted at once and the homes are stored (characters schema 56) and
-    /// applied to the running brains off the world thread, as the other lifecycle commands are.
+    /// A trailing number is the radius in yards; <c>nozone</c> turns off the zone clip (on by default: the area is clipped to the zone
+    /// of its centre, <see cref="PlayerbotHomeArea"/>), and a clipped home whose centre has no zone the terrain knows is refused. The
+    /// command is accepted at once and the homes are stored (characters schema 56, zone clip 58) and applied to the running brains off
+    /// the world thread, as the other lifecycle commands are.
     /// </summary>
     private static bool Home(CommandContext context, string text)
     {
@@ -298,10 +300,16 @@ public sealed class PlayerbotCommands : ICommandGroup
             return true;
         }
 
+        // Trailing options, in either order: the radius and zone|nozone (the zone clip, on by default).
         float radius = PlayerbotHomeBounds.DefaultRadius;
-        if (rest.Length >= 2 && float.TryParse(rest[^1], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed))
+        bool zoneClipped = true, radiusGiven = false, zoneGiven = false;
+        while (rest.Length >= 2)
         {
-            radius = parsed;
+            if (!zoneGiven && rest[^1].Equals("zone", StringComparison.OrdinalIgnoreCase)) zoneGiven = true;
+            else if (!zoneGiven && rest[^1].Equals("nozone", StringComparison.OrdinalIgnoreCase)) { zoneGiven = true; zoneClipped = false; }
+            else if (!radiusGiven && float.TryParse(rest[^1], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed))
+            { radiusGiven = true; radius = parsed; }
+            else break;
             rest = rest[..^1];
         }
 
@@ -314,7 +322,16 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         string place = string.Join(' ', rest);
         var targets = new List<ManagedPlayerbotFeature.HomeTarget>(matches.Count);
-        int skipped = 0;
+        int skipped = 0, unzoned = 0;
+        // A zone-clipped home whose centre has no known zone would contain nothing (PlayerbotHomeArea.ZoneUnknown): refused here, on
+        // the world thread where the terrain is read, before anything is stored.
+        bool ZoneKnown(uint map, System.Numerics.Vector3 centre)
+        {
+            if (!zoneClipped || service.ZoneAt(map, centre) != 0) return true;
+            unzoned++;
+            return false;
+        }
+
         string? placeName;
         string description;
         if (place.Equals("here", StringComparison.OrdinalIgnoreCase))
@@ -322,16 +339,18 @@ public sealed class PlayerbotCommands : ICommandGroup
             foreach (PlayerbotStatus match in matches)
             {
                 if (service.TryGetPosition(match.BotId, out uint map, out System.Numerics.Vector3 position) && service.AllowsHomeMap(map))
-                    targets.Add(new(match.BotId, map, position));
+                {
+                    if (ZoneKnown(map, position)) targets.Add(new(match.BotId, map, position));
+                }
                 else
                     skipped++;
             }
 
             placeName = null;
-            description = string.Create(CultureInfo.InvariantCulture, $"here, radius {radius:F0}");
+            description = string.Create(CultureInfo.InvariantCulture, $"here, radius {radius:F0}, {(zoneClipped ? "zone clipped" : "no zone clip")}");
             if (targets.Count == 0)
             {
-                context.Reply($"Playerbot home: 0 set, {skipped} skipped (not running).");
+                context.Reply($"Playerbot home: 0 set, {skipped} skipped (not running){Unzoned(unzoned)}.");
                 return true;
             }
         }
@@ -352,11 +371,19 @@ public sealed class PlayerbotCommands : ICommandGroup
                 return true;
             }
 
+            var centre = new System.Numerics.Vector3(tele.X, tele.Y, tele.Z);
+            if (!ZoneKnown(tele.MapId, centre))
+            {
+                context.Reply($"Playerbot home: the terrain knows no zone at {tele.Name}; a zone-clipped home there would contain nothing (add nozone).");
+                return true;
+            }
+
             foreach (PlayerbotStatus match in matches)
-                targets.Add(new(match.BotId, tele.MapId, new System.Numerics.Vector3(tele.X, tele.Y, tele.Z)));
+                targets.Add(new(match.BotId, tele.MapId, centre));
             placeName = tele.Name;
+            string zoneText = zoneClipped ? $"zone {service.ZoneAt(tele.MapId, centre)}" : "no zone clip";
             description = string.Create(CultureInfo.InvariantCulture,
-                $"{tele.Name} map {tele.MapId} at {tele.X:F1},{tele.Y:F1},{tele.Z:F1} radius {radius:F0}");
+                $"{tele.Name} map {tele.MapId} at {tele.X:F1},{tele.Y:F1},{tele.Z:F1} radius {radius:F0}, {zoneText}");
         }
 
         context.Reply("Playerbot home accepted.");
@@ -364,15 +391,19 @@ public sealed class PlayerbotCommands : ICommandGroup
         {
             try
             {
-                ManagedPlayerbotFeature.HomeOutcome outcome = await service.SetHomesAsync(targets, radius, placeName).ConfigureAwait(false);
+                ManagedPlayerbotFeature.HomeOutcome outcome = await service.SetHomesAsync(targets, radius, placeName, default, zoneClipped)
+                    .ConfigureAwait(false);
                 context.Reply($"Playerbot home: {outcome.Set} set ({description}), {skipped} skipped (not running)"
-                    + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
+                    + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
         });
         return true;
     }
+
+    private static string Unzoned(int count)
+        => count == 0 ? string.Empty : $", {count} refused (no zone known at the bot's position; add nozone)";
 
     /// <summary><c>.playerbot battlegrounds</c>: the battlegrounds coordinator's report (world thread, where commands run).</summary>
     private static bool BattlegroundsCommand(CommandContext context, string text)
