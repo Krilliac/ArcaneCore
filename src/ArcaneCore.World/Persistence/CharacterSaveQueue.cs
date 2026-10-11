@@ -49,6 +49,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private long _lastWarning;
     private bool _warning;
 
+    // Test seam: observe the hand-off to waiters before the consumer takes another slot.
+    internal Action? AfterWaitersCompletedForTesting { get; set; }
+
     /// <param name="scopes">Where the scoped <see cref="ICharacterStore"/> comes from.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="options">Backlog warning thresholds (<c>World:SaveQueueWarnDepth</c>, <c>World:SaveQueueWarnAgeMs</c>); the defaults when null.</param>
@@ -387,6 +390,23 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             error = ex;
         }
 
+        lock (_gate)
+        {
+            slot.InFlight = false;
+            slot.InFlightTicks = 0;
+            Refresh(slot);
+            if (slot.State is not null || slot.Waiters.Count > 0)
+            {
+                // Arrived while this write was in flight: it follows the write.
+                AddHint(slot, priority: slot.Waiters.Count > 0);
+            }
+            else
+            {
+                Reap(slot);
+            }
+        }
+
+        // Publish a barrier result only after its slot no longer counts as in flight.
         foreach (Waiter waiter in waiters)
         {
             if (dropped && waiter.Settlement)
@@ -403,21 +423,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
         }
 
-        lock (_gate)
-        {
-            slot.InFlight = false;
-            slot.InFlightTicks = 0;
-            Refresh(slot);
-            if (slot.State is not null || slot.Waiters.Count > 0)
-            {
-                // Arrived while this write was in flight: it follows the write.
-                AddHint(slot, priority: slot.Waiters.Count > 0);
-            }
-            else
-            {
-                Reap(slot);
-            }
-        }
+        AfterWaitersCompletedForTesting?.Invoke();
     }
 
     private async Task RecoverAsync(int id, CancellationToken cancellationToken)

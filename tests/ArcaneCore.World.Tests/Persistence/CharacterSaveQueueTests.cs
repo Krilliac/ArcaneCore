@@ -85,6 +85,39 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
+    public async Task FailedBarrierCompletesAfterItsInFlightSlotIsCleared()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingAtCompletion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Queue.AfterWaitersCompletedForTesting = () => pendingAtCompletion.TrySetResult(kit.Queue.Pending);
+        kit.Store.OnSave = async (_, token) =>
+        {
+            if (kit.Store.Attempts.Count == 1)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+
+            throw new IOException("still unavailable");
+        };
+
+        kit.Queue.Enqueue(State(1, 33));
+        Task barrier = kit.Queue.FlushCharacterAsync(1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(barrier.IsCompleted);
+        release.TrySetResult();
+        await Assert.ThrowsAsync<IOException>(() => barrier.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, await pendingAtCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Empty(kit.Store.Saved);
+
+        kit.Store.OnSave = null;
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(33u, Assert.Single(kit.Store.Saved).Money);
+    }
+
+    [Fact]
     public async Task QuarantineSuppressesQueuedSnapshotsAndBarrierCannotResumeTheId()
     {
         await using var kit = new Kit();
