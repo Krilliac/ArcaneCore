@@ -7,17 +7,22 @@ public enum NameCatalogResult { Allowed, Profane, Reserved }
 
 public sealed class NameCatalog
 {
-    public static NameCatalog Empty { get; } = new([], [], []);
+    public static NameCatalog Empty { get; } = new(NamePatternSet.Empty, NamePatternSet.Empty, [], null);
 
-    private readonly ImmutableArray<Regex> _profane;
-    private readonly ImmutableArray<Regex> _reserved;
+    private readonly NamePatternSet _profane;
+    private readonly NamePatternSet _reserved;
     private readonly ImmutableHashSet<string> _reservedExact;
     private readonly ImmutableArray<Regex> _filterProfane = [];
 
     public NameCatalog(IReadOnlyList<Regex> profane, IReadOnlyList<Regex> reserved, IReadOnlyList<NameCatalogSource> sources, IReadOnlySet<string>? reservedExact = null)
+        : this(new NamePatternSet(profane), new NamePatternSet(reserved), sources, reservedExact)
     {
-        _profane = [.. profane];
-        _reserved = [.. reserved];
+    }
+
+    public NameCatalog(NamePatternSet profane, NamePatternSet reserved, IReadOnlyList<NameCatalogSource> sources, IReadOnlySet<string>? reservedExact = null)
+    {
+        _profane = profane;
+        _reserved = reserved;
         Sources = [.. sources];
         _reservedExact = (reservedExact as IEnumerable<string> ?? Enumerable.Empty<string>())
             .Select(ReservedNameNormalization.Normalize)
@@ -43,16 +48,14 @@ public sealed class NameCatalog
 
     public NameCatalogResult Check(string name)
     {
-        foreach (Regex pattern in _profane)
-            try { if (pattern.IsMatch(name)) return NameCatalogResult.Profane; }
-            catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; }
+        try { if (_profane.IsMatch(name)) return NameCatalogResult.Profane; }
+        catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; }
         foreach (Regex pattern in _filterProfane)
             try { if (pattern.IsMatch(name)) return NameCatalogResult.Profane; }
             catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; }
         if (_reservedExact.Contains(name.ToLowerInvariant())) return NameCatalogResult.Reserved;
-        foreach (Regex pattern in _reserved)
-            try { if (pattern.IsMatch(name)) return NameCatalogResult.Reserved; }
-            catch (RegexMatchTimeoutException) { return NameCatalogResult.Reserved; }
+        try { if (_reserved.IsMatch(name)) return NameCatalogResult.Reserved; }
+        catch (RegexMatchTimeoutException) { return NameCatalogResult.Reserved; }
         return NameCatalogResult.Allowed;
     }
 
@@ -63,10 +66,8 @@ public sealed class NameCatalog
     public bool IsSqlReservedOnly(string name)
     {
         if (!IsReservedExact(name)) return false;
-        foreach (Regex pattern in _reserved)
-            try { if (pattern.IsMatch(name)) return false; }
-            catch (RegexMatchTimeoutException) { return false; }
-        return true;
+        try { return !_reserved.IsMatch(name); }
+        catch (RegexMatchTimeoutException) { return false; }
     }
 }
 

@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Spells;
@@ -22,18 +24,36 @@ public static class NamesDbcReader
     private const string WarmUpInput = "Warmupname";
     private const int WarmUpAttempts = 5;
 
-    public static NameCatalogSource Read(string path, string kind, out IReadOnlyList<Regex> patterns)
+    /// <summary>
+    /// Rows per combined regex. Every NonBacktracking regex keeps its own symbolic-automaton caches (BDD dictionaries and state
+    /// arrays), so one regex per row cost about 0.5 GB of live heap for the two real DBCs; a handful of combined regexes keeps
+    /// that roughly constant while each chunk still builds and matches quickly.
+    /// </summary>
+    internal const int DefaultChunkRows = 256;
+
+    private const RegexOptions PatternOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+
+    public static NameCatalogSource Read(string path, string kind, out NamePatternSet patterns)
     {
         using FileStream stream = File.OpenRead(path);
         if (stream.Length > MaxFileBytes) throw new InvalidDataException($"{kind} exceeds the {MaxFileBytes}-byte file limit");
         if (stream.Length > int.MaxValue) throw new InvalidDataException($"{kind} is too large to load");
         byte[] bytes = new byte[checked((int)stream.Length)];
         stream.ReadExactly(bytes);
-        patterns = Read(DbcFile.Parse(bytes), kind, path);
-        return new NameCatalogSource(kind, Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), patterns.Count);
+        DbcFile file = DbcFile.Parse(bytes);
+        patterns = Read(file, kind, path);
+        return new NameCatalogSource(kind, Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), file.RecordCount);
     }
 
-    public static IReadOnlyList<Regex> Read(DbcFile file, string kind, string source = "synthetic")
+    /// <summary>
+    /// Returns a set that matches a name exactly when any DBC row's pattern matches it: rows that are plain caseless literals
+    /// go to one multi-string search, the rest into a few combined regexes (<see cref="DefaultChunkRows"/> rows each).
+    /// </summary>
+    public static NamePatternSet Read(DbcFile file, string kind, string source = "synthetic")
+        => Build(ReadPatternStrings(file, kind), DefaultChunkRows, useLiterals: true);
+
+    /// <summary>Reads and validates every row (each compiled once and discarded) and returns the unescaped pattern texts.</summary>
+    internal static List<string> ReadPatternStrings(DbcFile file, string kind)
     {
         ArgumentNullException.ThrowIfNull(file);
         if (file.FieldCount != FieldCount || file.RecordSize != FieldCount * 4)
@@ -41,18 +61,16 @@ public static class NamesDbcReader
         if (file.RecordCount > MaxRecords)
             throw new InvalidDataException($"{kind} exceeds the {MaxRecords}-record limit");
 
-        var result = new List<Regex>(file.RecordCount);
+        var result = new List<string>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)
         {
             string pattern = file.GetStringStrict(row, 1);
             if (pattern.Length > MaxPatternLength)
                 throw new InvalidDataException($"{kind} row {row} exceeds the pattern limit");
             pattern = pattern.Replace("\\^", "^").Replace("\\$", "$");
-            Regex compiled;
             try
             {
-                compiled = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
-                    RegexTimeout);
+                _ = new Regex(pattern, PatternOptions, RegexTimeout);
             }
             catch (ArgumentException error)
             {
@@ -62,9 +80,114 @@ public static class NamesDbcReader
             {
                 throw new InvalidDataException($"unsupported {kind} regex at row {row}", error);
             }
+            result.Add(pattern);
+        }
+        return result;
+    }
 
-            WarmUp(compiled);
-            result.Add(compiled);
+    /// <summary>Splits validated patterns into literal rows and regex rows, and builds the set.</summary>
+    internal static NamePatternSet Build(IReadOnlyList<string> patterns, int chunkRows, bool useLiterals)
+    {
+        List<string> regexRows = patterns as List<string> ?? [.. patterns];
+        HashSet<string>? literals = null;
+        if (useLiterals)
+        {
+            regexRows = new List<string>(patterns.Count);
+            literals = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string pattern in patterns)
+            {
+                if (TryGetCaselessLiteral(pattern, out string? literal)) literals.Add(literal);
+                else regexRows.Add(pattern);
+            }
+        }
+
+        SearchValues<string>? search = literals is { Count: > 0 }
+            ? SearchValues.Create([.. literals], StringComparison.Ordinal)
+            : null;
+        return new NamePatternSet([.. Combine(regexRows, chunkRows)], search, patterns.Count);
+    }
+
+    /// <summary>
+    /// A row is a caseless literal when it is only digits, CJK/Hangul/kana characters and non-metacharacter ASCII punctuation
+    /// (a backslash before such punctuation is that punctuation character). For these an ordinal substring search answers what
+    /// the IgnoreCase | CultureInvariant regex would, because none of those characters has a case or a case-equivalent.
+    /// ASCII letters are excluded on purpose (the regex folds e.g. K with the Kelvin sign, which an ordinal search would not).
+    /// </summary>
+    internal static bool TryGetCaselessLiteral(string pattern, [NotNullWhen(true)] out string? literal)
+    {
+        literal = null;
+        if (pattern.Length == 0) return false;
+        var builder = new System.Text.StringBuilder(pattern.Length);
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c == '\\')
+            {
+                if (++i >= pattern.Length || !IsLiteralPunctuation(pattern[i])) return false;
+                c = pattern[i];
+            }
+            else if (!(char.IsAsciiDigit(c) || IsLiteralPunctuation(c) || IsCaselessScript(c)))
+            {
+                return false;
+            }
+            builder.Append(c);
+        }
+        literal = builder.ToString();
+        return true;
+    }
+
+    /// <summary>ASCII punctuation that is a plain character in a .NET pattern (not a metacharacter, whitespace or '#').</summary>
+    private static bool IsLiteralPunctuation(char c) => c is '<' or '>' or '-' or '~' or '@' or '!' or '%' or '&' or '\'' or ',' or '/' or ':' or ';' or '=' or '`' or '"' or '_';
+
+    private static bool IsCaselessScript(char c)
+        => c is (>= '\uAC00' and <= '\uD7A3')   // Hangul syllables
+            or (>= '\u1100' and <= '\u11FF')    // Hangul Jamo
+            or (>= '\u3131' and <= '\u318E')    // Hangul compatibility Jamo
+            or (>= '\u4E00' and <= '\u9FFF')    // CJK unified ideographs
+            or (>= '\u3041' and <= '\u30FF');   // Hiragana and Katakana
+
+    /// <summary>
+    /// Joins already-validated patterns into <c>(?:p1)|(?:p2)|...</c> regexes of at most <paramref name="chunkRows"/> rows.
+    /// Each row sits in its own non-capturing group, so its anchors and inline options keep their per-row meaning. A chunk
+    /// whose combination does not parse (a row valid alone but not inside a group) falls back to one regex per row.
+    /// </summary>
+    internal static List<Regex> Combine(IReadOnlyList<string> patterns, int chunkRows)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(chunkRows, 1);
+        var result = new List<Regex>((patterns.Count / chunkRows) + 1);
+        var text = new System.Text.StringBuilder();
+        for (int start = 0; start < patterns.Count; start += chunkRows)
+        {
+            int end = Math.Min(start + chunkRows, patterns.Count);
+            text.Clear();
+            for (int i = start; i < end; i++)
+            {
+                if (i > start) text.Append('|');
+                text.Append("(?:").Append(patterns[i]).Append(')');
+            }
+
+            Regex? combined = null;
+            try
+            {
+                combined = new Regex(text.ToString(), PatternOptions, RegexTimeout);
+            }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException)
+            {
+            }
+
+            if (combined is not null)
+            {
+                WarmUp(combined);
+                result.Add(combined);
+                continue;
+            }
+
+            for (int i = start; i < end; i++)
+            {
+                var single = new Regex(patterns[i], PatternOptions, RegexTimeout);
+                WarmUp(single);
+                result.Add(single);
+            }
         }
         return result;
     }
