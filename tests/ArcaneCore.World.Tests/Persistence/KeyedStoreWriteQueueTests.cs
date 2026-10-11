@@ -109,6 +109,28 @@ public sealed class KeyedStoreWriteQueueTests
     }
 
     [Fact]
+    public async Task ALockedDatabase_IsNotRetriedInline_TheWriteIsRetainedAndLandsOnTheNextRetainedRetry()
+    {
+        await using Rig rig = Rig.Create();
+        int attempts = 0;
+        bool locked = true;
+        rig.Queue.Save("group:1", s =>
+        {
+            Interlocked.Increment(ref attempts);
+            return Volatile.Read(ref locked) ? Task.FromException(new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5)) : s.SetAsync("group:1", 1);
+        });
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+
+        Assert.Equal(1, Volatile.Read(ref attempts)); // not three: the lock wait is never repeated inline
+        Assert.Equal(["group:1"], rig.Queue.RetainedKeys);
+
+        Volatile.Write(ref locked, false);
+        await rig.Queue.RetryRetainedAsync().WaitAsync(Wait);
+        Assert.Equal(["group:1=1"], rig.Store.Log);
+        Assert.Empty(rig.Queue.RetainedKeys);
+    }
+
+    [Fact]
     public async Task WritesOfDifferentKeys_RunInTheOrderTheyWereSaved()
     {
         await using Rig rig = Rig.Create();

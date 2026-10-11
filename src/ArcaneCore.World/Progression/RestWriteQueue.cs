@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -304,6 +305,11 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             {
                 failure = ex;
                 logger.LogWarning(ex, "rested-state write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, MaxAttempts);
+                if (DatabaseTransience.IsBusy(ex))
+                {
+                    break; // another connection holds the database: keep the write retained, never wait out the lock again inline
+                }
+
                 if (attempt < MaxAttempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);

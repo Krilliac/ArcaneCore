@@ -63,6 +63,22 @@ public sealed class DatabaseOptions
     /// </summary>
     public int SqliteBusyTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs;
 
+    /// <summary>
+    /// SQLite only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) one character save may wait for the write lock before it
+    /// fails as "database is locked" and the save queue retains the snapshot and retries it later with a backoff, instead of holding the single
+    /// save consumer for the connection's 30 s Default Timeout. It is applied to the save's connection as its Default Timeout, so it also bounds the
+    /// transaction's BEGIN; SQLite's own wait is still bounded by <c>Database:SqliteBusyTimeoutMs</c>, so the longer of the two is the real bound.
+    /// 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
+    /// </summary>
+    public int SqliteWriteTimeoutMs { get; set; } = ArcaneCore.Data.Stores.EfCharacterStore.DefaultSqliteWriteTimeoutMs;
+
+    /// <summary>
+    /// How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the
+    /// code that closed it, on every provider. A transaction that holds the write lock this long is what makes other writers fail with
+    /// "database is locked", so the next holder names itself in the log (docs/areas/persistence.md).
+    /// </summary>
+    public int SlowTransactionWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowTransactionInterceptor.DefaultWarnMs;
+
     public DatabaseConnectionOptions? Auth { get; set; }
 
     [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]

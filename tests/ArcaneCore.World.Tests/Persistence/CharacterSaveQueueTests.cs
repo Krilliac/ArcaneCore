@@ -3,6 +3,8 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Persistence;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -658,6 +660,272 @@ public sealed class CharacterSaveQueueTests
         Assert.Equal(0, kit.Queue.Pending);
         Assert.Equal(TimeSpan.Zero, kit.Queue.OldestPendingAge);
         await kit.Queue.StopAsync();
+    }
+
+    // ---- a locked SQLite database (another writer holds characters.db) ----
+
+    private static SqliteException Busy() => new("SQLite Error 5: 'database is locked'.", 5);
+
+    private static async Task<bool> BecomesTrueAsync(Func<bool> condition, int seconds)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return true;
+    }
+
+    /// <summary>Character <paramref name="lockedId"/> fails with SQLite BUSY until <see cref="Locked.Release"/>; every other character saves.</summary>
+    private sealed class Locked
+    {
+        private int _attempts;
+        private int _unlocked;
+        public int Attempts => Volatile.Read(ref _attempts);
+        public void Release() => Volatile.Write(ref _unlocked, 1);
+        public bool IsReleased => Volatile.Read(ref _unlocked) == 1;
+        public int Next() => Interlocked.Increment(ref _attempts);
+    }
+
+    [Fact]
+    public async Task DatabaseLockedOnOneSave_DoesNotHoldTheConsumer_AndTheSnapshotIsWrittenOnceTheLockIsGone()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var laterWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Id != 1)
+            {
+                return;
+            }
+
+            int attempt = @lock.Next();
+            if (attempt == 1)
+            {
+                firstAttempt.TrySetResult();
+                await firstEnds.Task.WaitAsync(token); // the driver's lock wait, ended by the test
+                throw Busy();
+            }
+
+            await laterWait.Task.WaitAsync(token); // a later attempt that finds the lock still held waits again (the incident's 30 s)
+            if (!@lock.IsReleased)
+            {
+                throw Busy();
+            }
+        };
+        try
+        {
+            kit.Queue.Enqueue(State(1, 11));
+            kit.Queue.Enqueue(State(2, 22));
+            kit.Queue.Start();
+            await firstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            firstEnds.TrySetResult();
+
+            // Before the fix the consumer retried character 1 inline and sat in that wait, so character 2 never got its turn.
+            Assert.True(await BecomesTrueAsync(() => kit.Store.Saved.Any(s => s.Id == 2), seconds: 4),
+                "character 2 was not saved while character 1's save was waiting on the database lock: the consumer is held by the retry");
+            Assert.DoesNotContain(kit.Store.Saved, s => s.Id == 1);
+
+            @lock.Release();
+            laterWait.TrySetResult();
+            Assert.True(await BecomesTrueAsync(() => kit.Store.Saved.Any(s => s.Id == 1), seconds: 10), "the retained snapshot of character 1 was never written");
+            await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(11u, kit.Store.Saved.Single(s => s.Id == 1).Money);
+            Assert.Equal(0, kit.Queue.Pending);
+        }
+        finally
+        {
+            @lock.Release();
+            laterWait.TrySetResult();
+            firstEnds.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ABarrierWaitsForTheRetainedLockedSnapshot_AndCompletesWhenItIsWritten()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    throw Busy();
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
+
+        Task barrier = kit.Queue.FlushCharacterAsync(1);
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 2 && kit.Queue.Pending == 0, seconds: 5), "the barrier did not retry the retained snapshot");
+        Assert.False(barrier.IsCompleted, "the barrier completed while the snapshot was still unwritten");
+        Assert.Empty(kit.Store.Saved);
+
+        @lock.Release();
+        await barrier.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(new uint[] { 11 }, kit.Store.Saved.Select(s => s.Money));
+        Assert.Equal(0, kit.Queue.Pending);
+    }
+
+    [Fact]
+    public async Task ASettlementSaveWaitingOnTheLock_IsCancelledByItsToken_AndItsSnapshotStillGetsWritten()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    throw Busy();
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        using var cancel = new CancellationTokenSource();
+        Task settlement = kit.Queue.SaveForSettlementAsync(State(1, 11), cancel.Token);
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
+        Assert.False(settlement.IsCompleted, "the settlement save reported a result while the database was locked");
+
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => settlement.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        @lock.Release();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(new uint[] { 11 }, kit.Store.Saved.Select(s => s.Money));
+    }
+
+    [Fact]
+    public async Task ANewerSnapshotSupersedesTheRetainedLockedOne_AndTheOlderIsNeverWrittenAfterIt()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    throw Busy();
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
+        kit.Queue.Enqueue(State(1, 22));
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 2 && kit.Queue.Pending == 0, seconds: 5));
+
+        @lock.Release();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(new uint[] { 22 }, kit.Store.Saved.Select(s => s.Money));
+    }
+
+    [Fact]
+    public async Task ShutdownDrainWritesTheRetainedLockedSnapshot_AndRefusesWhileTheLockStays()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    throw Busy();
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
+
+        // Still locked at shutdown: the drain retries inline, then reports the character instead of dropping it silently.
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(20)));
+        Assert.Contains("1", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task ShutdownDrainWritesTheRetainedLockedSnapshotOnceTheLockIsGone()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    throw Busy();
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
+
+        @lock.Release();
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(new uint[] { 11 }, kit.Store.Saved.Select(s => s.Money));
+    }
+
+    [Fact]
+    public async Task ABusyFailureWrappedByEfIsDeferredToo()
+    {
+        await using var kit = new Kit();
+        var @lock = new Locked();
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = (state, _) =>
+        {
+            if (state.Id == 1)
+            {
+                @lock.Next();
+                if (!@lock.IsReleased)
+                {
+                    firstAttempt.TrySetResult();
+                    throw new DbUpdateException("An error occurred while saving the entity changes.", new SqliteException("SQLite Error 6: 'database table is locked'.", 6));
+                }
+            }
+
+            return Task.CompletedTask;
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Enqueue(State(2, 22));
+        kit.Queue.Start();
+        Assert.True(await BecomesTrueAsync(() => kit.Store.Saved.Any(s => s.Id == 2), seconds: 4));
+        Assert.Equal([1, 2], kit.Store.Attempts.Select(a => a.Id).Take(2)); // character 2 came right after the first failure: no inline retry
+        @lock.Release();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains(kit.Store.Saved, s => s.Id == 1 && s.Money == 11);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, Action poke)

@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
@@ -729,7 +730,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
                 return null;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && !DatabaseTransience.IsBusy(ex))
             {
                 _logger.LogWarning(ex, "social write for {Kind} {Id} failed (attempt {Attempt}); retrying", key.Kind, key.A, attempt);
                 await Task.Delay(Math.Max(0, _options.RetryDelayMs) * attempt).ConfigureAwait(false);

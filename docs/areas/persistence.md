@@ -108,6 +108,20 @@ The timeout never exceeds the connection's own `Default Timeout`, and when the d
 a whole operation) is unchanged. MariaDB, MySQL and PostgreSQL ignore the key. Out-of-range values are a `check-config` error and the
 interceptor refuses them at start.
 
+### A locked database does not stall the write queues
+
+A writer that holds the SQLite file for a minute (the 2026-10-11 incident) used to hold the single save consumer for ~97 s: each save waited the
+connection's 30 s `Default Timeout` and was retried inline three times, while every other character save and quest reward waited behind it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Database:SqliteWriteTimeoutMs` | `5000` | SQLite only. The longest one character save (and quest/taxi save) waits for the write lock. Set as the save connection's `Default Timeout` (whole seconds, rounded up) for the duration of the save, which also bounds EF's `BEGIN IMMEDIATE`. 0 keeps the connection string's timeout. |
+| `Database:SlowTransactionWarnMs` | `2000` | All providers. A transaction open longer than this is logged at WARN when it commits, rolls back or fails, naming the DbContext and the code that closed it (`SlowTransactionInterceptor`). 0 disables. |
+
+- **Interaction with `busy_timeout`.** `busy_timeout` makes SQLite wait inside one call (5000 ms); the driver then repeats the call until the command timeout has elapsed. With both at their defaults a locked save fails after about 5 s. If `SqliteBusyTimeoutMs` is the smaller, the bound is the write timeout plus up to one busy slice and the driver's 150 ms poll; if it is the larger, the bound is `SqliteBusyTimeoutMs`. The driver ignores cancellation tokens during the wait, so a timeout is the only bound.
+- **`CharacterSaveQueue`.** A busy/locked failure (SQLite 5/6, also inside `DbUpdateException`) is not retried inline. The snapshot is retained, the whole queue pauses (1 s, 2 s, then 5 s while it keeps happening; reset by the next successful write) and the consumer moves on. Retained snapshots are retried when the queue is idle and at least every 16th pick, by a barrier (`FlushCharacterAsync`, which waits until the snapshot is written or its token fires), or by a newer snapshot of the character (merged over it). Shutdown ignores the pause and retries inline, then names the characters it could not write.
+- **Other queues.** Creature respawn, keyed (GM audit, groups, last address), honor, reputation, taxi, rested state, explored zones and social queues no longer repeat a lock wait inline: the write stays retained and is retried by that queue's own retained-retry path. The creature respawn queue gained a retained-retry timer (30 s). The instance write queue keeps its inline retries (it has no retention).
+
 ### Decision: keep `BEGIN IMMEDIATE`, WAL and `synchronous=FULL`
 
 The obvious ways to make a write-heavy SQLite file faster were considered and **rejected**; two tests pin the current behaviour so a later

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -26,6 +27,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     /// <summary>Consecutive priority picks after which an ordinary snapshot is taken when one is waiting.</summary>
     private const int PriorityBurst = 7;
 
+    /// <summary>Picks after which a retained busy failure is retried even though other snapshots are still waiting, so a saturated queue cannot starve it.</summary>
+    private const int RetainedEvery = 16;
+
+    /// <summary>Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s.</summary>
+    private static readonly long[] BusyBackoffTicks = [Stopwatch.Frequency, 2 * Stopwatch.Frequency, 5 * Stopwatch.Frequency];
+
     private static readonly long ReportGateTicks = Stopwatch.Frequency;
     private static readonly long ReportRepeatTicks = 30 * Stopwatch.Frequency;
 
@@ -45,6 +52,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private int _pending;
     private int _priorityRun;
     private bool _stopped;
+    private long _busyUntil; // Stopwatch ticks before which the consumer starts no write (a lock holder was just seen); 0 = none
+    private int _busyStreak; // consecutive "database is locked" failures since the last successful write
+    private int _sinceRetained; // picks since a retained busy failure was last retried
     private long _lastReportCheck;
     private long _lastWarning;
     private bool _warning;
@@ -267,20 +277,48 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         while (true)
         {
             MaybeReport();
-            Slot? slot;
+            Slot? slot = null;
+            long pauseTicks = 0;
             lock (_gate)
             {
-                slot = TakeNext();
-                if (slot is null && _stopped)
+                long now = Stopwatch.GetTimestamp();
+                if (!_stopped && _busyUntil > now)
                 {
-                    break;
+                    // A write just failed because another connection holds the database: starting another write now would wait out
+                    // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle).
+                    pauseTicks = _busyUntil - now;
+                }
+                else
+                {
+                    if (_sinceRetained >= RetainedEvery)
+                    {
+                        slot = TakeRetained();
+                    }
+
+                    slot ??= TakeNext();
+                    if (slot is null)
+                    {
+                        slot = TakeRetained(); // idle: retry the retained busy failures
+                    }
+                    else if (_sinceRetained < RetainedEvery)
+                    {
+                        _sinceRetained++;
+                    }
+
+                    if (slot is null && _stopped)
+                    {
+                        break;
+                    }
                 }
             }
 
             if (slot is null)
             {
-                // Wake at least once a second so an idle queue still reports that its backlog cleared.
-                await _signal.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                // Wake at least once a second so an idle queue still reports that its backlog cleared; wake when a pause ends.
+                TimeSpan wait = pauseTicks > 0
+                    ? TimeSpan.FromTicks(Math.Min(TimeSpan.TicksPerSecond, (long)(pauseTicks * (double)TimeSpan.TicksPerSecond / Stopwatch.Frequency) + TimeSpan.TicksPerMillisecond))
+                    : TimeSpan.FromSeconds(1);
+                await _signal.WaitAsync(wait).ConfigureAwait(false);
                 continue;
             }
 
@@ -358,6 +396,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
         Exception? error = null;
         bool dropped = false;
+        bool deferred = false; // the database was locked: the snapshot is retained and the waiters stay queued for the retry
         try
         {
             if (state is not null)
@@ -376,13 +415,21 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
                 if (!dropped)
                 {
-                    await SaveRetainingFailureAsync(state, token, settlement).ConfigureAwait(false);
+                    deferred = await SaveRetainingFailureAsync(state, token, settlement).ConfigureAwait(false);
+                }
+            }
+            else if (settlement)
+            {
+                // A settlement waiter whose snapshot was retained by a locked database and is now being retried.
+                lock (_gate)
+                {
+                    dropped = _quarantined.Contains(slot.Id);
                 }
             }
 
-            if (barrier && !dropped)
+            if ((barrier || state is null) && !dropped && !deferred)
             {
-                await RecoverAsync(slot.Id, default).ConfigureAwait(false);
+                deferred = await RecoverAsync(slot.Id, token).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -395,6 +442,17 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             slot.InFlight = false;
             slot.InFlightTicks = 0;
             Refresh(slot);
+            if (deferred && error is null)
+            {
+                // Keep the waiters (barriers and settlements) attached to the slot, ahead of any that arrived meanwhile: they complete
+                // when the retained snapshot is finally written, or are cancelled by their own tokens.
+                slot.Waiters.InsertRange(0, waiters);
+                foreach (Waiter waiter in waiters)
+                {
+                    Register(slot, waiter);
+                }
+            }
+
             if (slot.State is not null || slot.Waiters.Count > 0)
             {
                 // Arrived while this write was in flight: it follows the write.
@@ -404,6 +462,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             {
                 Reap(slot);
             }
+        }
+
+        if (deferred && error is null)
+        {
+            return;
         }
 
         // Publish a barrier result only after its slot no longer counts as in flight.
@@ -425,7 +488,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }
     }
 
-    private async Task RecoverAsync(int id, CancellationToken cancellationToken)
+    /// <summary>Retry the retained snapshot of a character, if any. True when the database was locked again and the snapshot stays retained for a later retry.</summary>
+    private async Task<bool> RecoverAsync(int id, CancellationToken cancellationToken)
     {
         CharacterState? retained;
         lock (_gate)
@@ -434,19 +498,24 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             // authoritative storage before the owner explicitly resumes this ID.
             if (_quarantined.Contains(id))
             {
-                return;
+                return false;
             }
 
             retained = _failed.GetValueOrDefault(id)?.State;
         }
 
-        if (retained is not null)
-        {
-            await SaveRetainingFailureAsync(retained, cancellationToken).ConfigureAwait(false);
-        }
+        return retained is not null && await SaveRetainingFailureAsync(retained, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken, bool trustedSettlement = false)
+    /// <summary>
+    /// Write <paramref name="state"/>; on failure retain it in <c>_failed</c>. A failure that is SQLite reporting the file busy or locked (another
+    /// connection holds it; the store's bounded wait has already elapsed) is NOT retried inline: the snapshot is retained, the whole queue pauses
+    /// for a backoff (1 s, 2 s, then 5 s while it keeps happening, reset by the next successful write) and the method returns true, so the consumer
+    /// moves on and the snapshot is retried later (<see cref="TakeRetained"/>, a barrier, or a newer snapshot of the character). Any other failure, and any failure while
+    /// the queue is stopping (the drain has nothing else to do), is retried inline up to <see cref="MaxAttempts"/> times and then thrown.
+    /// Returns false when the snapshot was written (or dropped by quarantine).
+    /// </summary>
+    private async Task<bool> SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken, bool trustedSettlement = false)
     {
         for (int attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -459,7 +528,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                         throw new InvalidOperationException($"character {state.Id} is quarantined");
                     }
 
-                    return;
+                    return false;
                 }
             }
 
@@ -471,9 +540,26 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 lock (_gate)
                 {
                     _failed.Remove(state.Id);
+                    _busyStreak = 0;
+                    _busyUntil = 0;
                 }
 
-                return;
+                return false;
+            }
+            catch (Exception ex) when (DatabaseTransience.IsBusy(ex) && !cancellationToken.IsCancellationRequested && !IsStopping())
+            {
+                TimeSpan pause;
+                lock (_gate)
+                {
+                    _failed[state.Id] = new FailedSave(state, ex, Deferred: true);
+                    long ticks = BusyBackoffTicks[Math.Min(_busyStreak, BusyBackoffTicks.Length - 1)];
+                    _busyStreak++;
+                    _busyUntil = Stopwatch.GetTimestamp() + ticks;
+                    pause = Stopwatch.GetElapsedTime(0, ticks);
+                }
+
+                _logger.LogWarning(ex, "saving character {Id} failed: the database is locked by another writer; snapshot retained, saves pause {PauseMs} ms then retry", state.Id, (long)pause.TotalMilliseconds);
+                return true;
             }
             catch (Exception ex) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested)
             {
@@ -496,9 +582,44 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 throw;
             }
         }
+
+        return false;
+    }
+
+    private bool IsStopping()
+    {
+        lock (_gate)
+        {
+            return _stopped;
+        }
     }
 
     // ---- slot bookkeeping (every method below runs under _gate) ----
+
+    /// <summary>
+    /// A character whose snapshot was retained because the database was locked and which nothing else is about to write (no waiting snapshot,
+    /// no waiter, no write in flight): its slot, so the consumer retries it. Null when there is none.
+    /// </summary>
+    private Slot? TakeRetained()
+    {
+        foreach ((int id, FailedSave failed) in _failed)
+        {
+            if (!failed.Deferred || _quarantined.Contains(id))
+            {
+                continue;
+            }
+
+            if (_slots.TryGetValue(id, out Slot? existing) && (existing.InFlight || existing.State is not null || existing.Waiters.Count > 0 || existing.NormalHint || existing.PriorityHint))
+            {
+                continue; // the ordinary path writes it (merged with the retained snapshot)
+            }
+
+            _sinceRetained = 0;
+            return existing ?? GetSlot(id);
+        }
+
+        return null;
+    }
 
     private Slot GetSlot(int id)
     {
@@ -745,7 +866,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }).ToArray()), inventory.AmmoId) : null,
     };
 
-    private sealed record FailedSave(CharacterState State, Exception Failure);
+    private sealed record FailedSave(CharacterState State, Exception Failure, bool Deferred = false);
 
     /// <summary>Someone awaiting a character's write: a settlement pre-reward save (its own snapshot) or a barrier.</summary>
     private sealed class Waiter(TaskCompletionSource done, bool settlement, CancellationToken token)

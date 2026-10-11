@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Honor;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -452,7 +453,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
                 return;
             }
-            catch (Exception ex) when (attempt < MaxAttempts)
+            catch (Exception ex) when (attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
             {
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);

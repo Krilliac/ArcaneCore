@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,12 +27,17 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 {
     private const int MaxAttempts = 3;
 
+    /// <summary>The marker the retry timer queues: not a store write, so the consumer sweeps the retained writes when it reaches it.</summary>
+    private static readonly Func<ICreatureRespawnStore, Task> RetrySweep = static _ => Task.CompletedTask;
+
     private readonly Dictionary<(uint Map, uint Instance), Dictionary<uint, long>> _times = [];
     private readonly Channel<Op> _channel = Channel.CreateUnbounded<Op>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<OpKey, Retained> _retained = [];
     private readonly Dictionary<uint, long> _forgottenAt = [];
+    private readonly CancellationTokenSource _timerStop = new();
     private long _sequence;
+    private Task? _timer;
     private Task? _consumer;
     private int _pending;
 
@@ -67,7 +73,72 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    /// <summary>
+    /// How often writes retained after a failure (a locked SQLite database fails a write after the store's bounded wait and is not retried inline, so the
+    /// consumer is never held) are retried while the queue runs. Tests shorten it.
+    /// </summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _consumer = Task.Run(ConsumeAsync);
+        _timer = Task.Run(RetryTimerAsync);
+    }
+
+    private async Task RetryTimerAsync()
+    {
+        using var timer = new PeriodicTimer(RetainedRetryInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_timerStop.Token).ConfigureAwait(false))
+            {
+                if (RetainedCount > 0)
+                {
+                    _channel.Writer.TryWrite(new Op(default, 0, RetrySweep));
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopping
+        }
+    }
+
+    /// <summary>On the consumer: retry every retained write once, in the order <see cref="StopAsync"/> uses. A write superseded meanwhile (its key was rewritten or forgotten) is left alone.</summary>
+    private async Task SweepRetainedAsync()
+    {
+        Op[] retry;
+        lock (_gate)
+        {
+            retry = [.. _retained.Values.Select(r => r.Op).OrderByDescending(o => o.Key.InstanceWide).ThenBy(o => o.Key.InstanceId).ThenBy(o => o.Key.SpawnGuid)];
+        }
+
+        foreach (Op op in retry)
+        {
+            Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
+            lock (_gate)
+            {
+                if (!_retained.TryGetValue(op.Key, out Retained? current) || !ReferenceEquals(current.Op, op))
+                {
+                    continue;
+                }
+
+                if (failure is null)
+                {
+                    _retained.Remove(op.Key);
+                }
+                else
+                {
+                    _retained[op.Key] = new Retained(op, failure);
+                }
+            }
+        }
+    }
 
     public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId)
         => _times.TryGetValue((mapId, instanceId), out Dictionary<uint, long>? times) ? new Dictionary<uint, long>(times) : new Dictionary<uint, long>();
@@ -133,6 +204,12 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     public async Task StopAsync()
     {
+        await _timerStop.CancelAsync().ConfigureAwait(false);
+        if (_timer is not null)
+        {
+            await _timer.ConfigureAwait(false);
+        }
+
         _channel.Writer.TryComplete();
         if (_consumer is not null)
         {
@@ -227,7 +304,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return null;
             }
-            catch (Exception ex) when (attempt < MaxAttempts)
+            catch (Exception ex) when (attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
             {
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
@@ -244,6 +321,12 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     {
         await foreach (Op op in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            if (ReferenceEquals(op.Write, RetrySweep))
+            {
+                await SweepRetainedAsync().ConfigureAwait(false);
+                continue; // not a counted write
+            }
+
             Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
             lock (_gate)
             {

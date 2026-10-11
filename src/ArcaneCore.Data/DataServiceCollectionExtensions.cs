@@ -12,6 +12,9 @@ using ArcaneCore.Kernel.WorldData;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Data;
@@ -22,12 +25,24 @@ namespace ArcaneCore.Data;
 /// </summary>
 public static class DataServiceCollectionExtensions
 {
+    /// <summary>
+    /// The registrations every database shares: the bound <see cref="DatabaseOptions"/> and the one <see cref="SlowTransactionInterceptor"/>
+    /// (a singleton, so EF reuses one internal service provider across the contexts' option builds).
+    /// </summary>
+    private static void AddDatabaseCommon(IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
+        services.TryAddSingleton(static provider => new SlowTransactionInterceptor(
+            provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SlowTransactionWarnMs,
+            (provider.GetService<ILoggerFactory>()?.CreateLogger<SlowTransactionInterceptor>() as ILogger) ?? NullLogger.Instance));
+    }
+
     /// <summary>Accounts and realm list (realm daemon, world daemon, account tool).</summary>
     public static IServiceCollection AddAuthDatabase(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
+        AddDatabaseCommon(services, configuration);
         services.AddDbContext<AuthDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>()));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
@@ -39,9 +54,9 @@ public static class DataServiceCollectionExtensions
     /// <summary>Player characters (world daemon).</summary>
     public static IServiceCollection AddCharacterDatabase(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
+        AddDatabaseCommon(services, configuration);
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>()));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
@@ -53,9 +68,9 @@ public static class DataServiceCollectionExtensions
     /// <summary>Static world content (world daemon, content importer).</summary>
     public static IServiceCollection AddWorldDatabase(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
+        AddDatabaseCommon(services, configuration);
         services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World)));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World), provider.GetRequiredService<SlowTransactionInterceptor>()));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
@@ -86,13 +101,18 @@ public static class DataServiceCollectionExtensions
         return resolved;
     }
 
-    /// <summary>Point a context at its configured engine.</summary>
-    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options)
+    /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> (when given) is attached on every provider.</summary>
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             throw new InvalidOperationException(
                 "No database connection string configured (Database:ConnectionString, or Database:<Auth|Characters|World>:ConnectionString).");
+        }
+
+        if (slowTransactions is not null)
+        {
+            builder.AddInterceptors(slowTransactions);
         }
 
         switch (options.Provider)

@@ -1,12 +1,16 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Data.Quests;
 
 /// <summary>EF Core implementation of <see cref="ICharacterQuestStore"/> (characters schema v3).</summary>
-public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQuestStore
+/// <param name="db">The scope's context.</param>
+/// <param name="databases">Supplies <c>Database:SqliteWriteTimeoutMs</c> for the save methods; the shipped default when null.</param>
+public sealed class EfCharacterQuestStore(CharacterDbContext db, IOptions<DatabaseOptions>? databases = null) : ICharacterQuestStore
 {
     /// <summary>vmangos TaxiMaskSize (8 words cover node ids 1..256).</summary>
     public const int TaxiMaskSize = 8;
@@ -27,6 +31,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
 
     public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts, CancellationToken cancellationToken = default)
     {
+        using IDisposable bound = SqliteWriteBound.Apply(db, databases); // a lock holder fails this save after the write bound, not after 30 s
         if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
         {
             return; // deleted while the save was queued (as EfCharacterStore.SaveStateAsync)
@@ -76,6 +81,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
 
     public async Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default)
     {
+        using IDisposable bound = SqliteWriteBound.Apply(db, databases); // a lock holder fails this save after the write bound, not after 30 s
         if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
         {
             return;

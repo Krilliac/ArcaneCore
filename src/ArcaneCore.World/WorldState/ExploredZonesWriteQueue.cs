@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -310,6 +311,11 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             {
                 failure = ex;
                 logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, MaxAttempts);
+                if (DatabaseTransience.IsBusy(ex))
+                {
+                    break; // another connection holds the database: keep the write retained, never wait out the lock again inline
+                }
+
                 if (attempt < MaxAttempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);

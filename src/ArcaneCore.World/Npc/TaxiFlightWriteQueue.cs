@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Npc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -416,7 +417,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < MaxAttempts)
+            catch (Exception ex) when (attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
             {
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
