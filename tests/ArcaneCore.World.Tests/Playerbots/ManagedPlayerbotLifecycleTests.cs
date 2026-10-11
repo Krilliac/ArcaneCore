@@ -89,16 +89,71 @@ public sealed class ManagedPlayerbotLifecycleTests
         }
 
         owners.FailUpdatesOf(ids[3]);
-        AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
-        owners.FailUpdatesOf(null);
-
-        Assert.Contains(failure.InnerExceptions, e => e is InvalidOperationException { Message: "fixture-update-failure" });
-        foreach (Guid id in ids.Where(id => id != ids[3]))
+        try
         {
-            Assert.Equal(ManagedPlayerbotState.Stopped, owners.Peek(id)!.State);
-            Assert.Null(host.Registry.Find(owners.Peek(id)!.AccountId));
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
+
+            Assert.Contains(failure.InnerExceptions, e => e is InvalidOperationException { Message: "fixture-update-failure" });
+            foreach (Guid id in ids.Where(id => id != ids[3]))
+            {
+                Assert.Equal(ManagedPlayerbotState.Stopped, owners.Peek(id)!.State);
+                Assert.Null(host.Registry.Find(owners.Peek(id)!.AccountId));
+            }
+            Assert.NotEqual(ManagedPlayerbotState.Stopped, owners.Peek(ids[3])!.State);
         }
-        Assert.NotEqual(ManagedPlayerbotState.Stopped, owners.Peek(ids[3])!.State);
+        finally { owners.FailUpdatesOf(null); }
+    }
+
+    [Fact]
+    public async Task Shutdown_EveryStopFailing_AttemptsEveryBatch_WhateverTheHashOrder()
+    {
+        // Every stop fails, so each of the 34 bots (two batches of 32) must report its own failure: a batch that never ran, in any
+        // enumeration order, leaves fewer than 34. (The one-failing test above proves the others still reach Stopped.)
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 40, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        const int count = 34;
+        for (int i = 0; i < count; i++)
+        {
+            Guid id = Assert.IsType<Guid>((await feature.CreateAsync($"Allfail{(char)('a' + i / 26)}{(char)('a' + i % 26)}", 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+        }
+
+        owners.FailAllUpdates(true);
+        try
+        {
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
+            Assert.Equal(count, failure.InnerExceptions.Count(e => e is InvalidOperationException { Message: "fixture-update-failure" }));
+        }
+        finally { owners.FailAllUpdates(false); }
+    }
+
+    /// <summary>
+    /// The checkpoint runs on a pool thread, but a bot's goal is read from the coordinators' world-thread-owned collections: every read
+    /// (GoalReadProbe) must happen on the world thread. RED before the fix: the checkpoint read the goal three times per bot off-thread.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckpoint_ReadsEveryBotsGoal_OnTheWorldThread()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Checkgoal", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+
+        int offThread = 0;
+        feature.GoalReadProbe = () => { if (!host.World.IsWorldThread) Interlocked.Increment(ref offThread); };
+        for (int tick = 0; tick < 110; tick++) await host.World.AdvanceClockAsync(50); // the checkpoint starts at 5000 ms
+        Task checkpoint = await host.World.InvokeAsync(() => feature.LastCheckpoint);
+        Assert.NotSame(Task.CompletedTask, checkpoint); // a checkpoint did start
+        await checkpoint.WaitAsync(TimeSpan.FromSeconds(30));
+        feature.GoalReadProbe = null;
+
+        Assert.Equal(0, Volatile.Read(ref offThread));
     }
 
     [Fact]
@@ -852,6 +907,11 @@ public sealed class ManagedPlayerbotLifecycleTests
         /// <summary>Every update of <paramref name="botId"/> throws until this is called with null.</summary>
         public void FailUpdatesOf(Guid? botId) => _failBot = botId;
 
+        private volatile bool _failAll;
+
+        /// <summary>Every update of every bot throws while this is true.</summary>
+        public void FailAllUpdates(bool fail) => _failAll = fail;
+
         private Guid? _holdBot;
         private TaskCompletionSource? _held;
         private TaskCompletionSource<Guid>? _nextUpdateHeld;
@@ -894,7 +954,7 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         private bool Update(ManagedPlayerbot bot, long expectedRevision)
         {
-            if (_failBot == bot.BotId) throw new InvalidOperationException("fixture-update-failure");
+            if (_failAll || _failBot == bot.BotId) throw new InvalidOperationException("fixture-update-failure");
             if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("fixture-update-failure"); }
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
             {
