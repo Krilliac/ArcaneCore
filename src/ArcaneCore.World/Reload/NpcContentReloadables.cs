@@ -65,6 +65,10 @@ public abstract class NpcTableReloadable(
         {
             NpcStore? previous = null;
             transaction.Step(owner.Name, () => previous = feature.Services.ReplaceNpcs(store), () => feature.Services.ReplaceNpcs(previous!));
+            foreach (string problem in owner.Name == "npc_vendor" ? store.VendorDiagnostics.Take(10) : [])
+            {
+                transaction.Note($"vendor templates: {problem}");
+            }
         }
     }
 

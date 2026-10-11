@@ -238,6 +238,24 @@ public sealed class NpcReloadTests
     }
 
     [Fact]
+    public async Task VendorReloadSkipsInvalidTemplateRows_AndNotesThem()
+    {
+        ReloadContentFixture content = Content();
+        content.VendorItems.Clear();
+        content.VendorTemplateIds[Entry] = 133;
+        content.VendorTemplateItems.Add(new VendorItem { Entry = 133, Item = 301 });
+        await using WorldTestHost host = ReloadContentTestServices.Start(content);
+        QuestNpcServices services = Services(host);
+
+        content.VendorTemplateItems.Add(new VendorItem { Entry = 133, Item = 302, MaxCount = 4, IncrTime = 0 });
+        ReloadResult result = await Coordinator(host).ReloadAsync("npc_vendor");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal([301u], services.Npcs.VendorItems(Entry).Select(v => v.Item));
+        Assert.Contains(result.Notes, n => n.Contains("item 302", StringComparison.Ordinal) && n.Contains("incrtime=0", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AFailingStore_ChangesNothing()
     {
         ReloadContentFixture content = Content();

@@ -77,11 +77,44 @@ public sealed class NpcDumpImporterTests : IAsyncLifetime
         Assert.Equal(134u, (await db.Set<CreatureTemplateRow>().SingleAsync()).VendorTemplateId);
 
         var emptied = new NpcDumpImporter();
-        emptied.Read(new StringReader("CREATE TABLE `npc_vendor_template` (`entry` int, `item` int);"));
+        emptied.Read(new StringReader("CREATE TABLE `npc_vendor_template` (`entry` int, `item` int, `maxcount` int, `incrtime` int, `slot` int, `condition_id` int);"));
         Assert.True(emptied.SawVendorTemplateTable);
         Assert.Equal(0, await emptied.RefreshVendorTemplatesAsync(db));
         Assert.Empty(await db.Set<VendorTemplateItemRow>().ToListAsync());
         Assert.Equal(2900u, (await db.Set<VendorItem>().SingleAsync()).Item);
+    }
+
+    [Fact]
+    public void AVendorTemplateTableWithoutSlotOrConditionId_IsSkippedWithAWarning_NotAnAbort()
+    {
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `npc_vendor` (`entry`,`item`,`maxcount`,`incrtime`,`slot`,`condition_id`) VALUES (100,200,0,0,0,0);
+            INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`) VALUES (133,2901,0,0),(133,2902,0,0);
+            INSERT INTO `npc_trainer` (`entry`,`spell`,`spellcost`,`reqskill`,`reqskillvalue`,`reqlevel`) VALUES (7,8,9,0,0,1);
+            """));
+
+        NpcImportReport report = importer.BuildReport();
+        Assert.Equal((1, 1, 0), (report.Vendors, report.Trainers, report.VendorTemplates));
+        Assert.False(importer.SawVendorTemplateTable);
+        Assert.Equal(1, report.Skipped);
+        Assert.Contains(report.Diagnostics, d => d.Contains("npc_vendor_template", StringComparison.Ordinal) && d.Contains("slot", StringComparison.Ordinal)
+            && d.Contains("condition_id", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AMalformedVendorTemplateCreateTable_IsSkippedToo_AndAnyLaterRowsOfItAreIgnored()
+    {
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader("""
+            CREATE TABLE `npc_vendor_template` (`entry` int, `item` int, `maxcount` int, `incrtime` int);
+            INSERT INTO `npc_vendor_template` VALUES (133,2901,0,0);
+            INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`,`slot`,`condition_id`) VALUES (133,2902,0,0,1,0);
+            """));
+
+        Assert.False(importer.SawVendorTemplateTable);
+        Assert.Equal(0, importer.BuildReport().VendorTemplates);
+        Assert.Equal(1, importer.BuildReport().Skipped);
     }
 
     private readonly TestDatabases _databases = new();

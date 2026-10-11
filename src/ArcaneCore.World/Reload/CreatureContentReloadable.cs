@@ -1,8 +1,11 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reload;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Reload;
@@ -25,6 +28,9 @@ namespace ArcaneCore.World.Reload;
 /// template; the reload reports how many.</item>
 /// <item>A world that started with no creature data at all (the shared empty content) takes the whole
 /// content, spawns included, through <see cref="CreatureWorldFeature.Install"/>.</item>
+/// <item>A creature's shared vendor id (<c>vendor_id</c>, world schema 53 <c>VendorTemplateId</c>) is read from its template every time
+/// a vendor window opens (vmangos Creature.cpp:3423-3427), so this reload also refreshes the vendor links of the live NPC store when the
+/// quest and NPC feature is present; the shared stock rows themselves stay with <c>.reload npc_vendor</c>.</item>
 /// <item>The optional <c>&lt;entry&gt;</c> argument of the vmangos command (one template) is not supported;
 /// the whole table is reloaded.</item>
 /// </list>
@@ -43,10 +49,18 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
         ICreatureDataStore store = scope.ServiceProvider.GetService<ICreatureDataStore>()
             ?? throw new InvalidOperationException("no creature data store is registered");
         CreatureContent fresh = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
-        return new CreatureCandidate(feature, fresh);
+
+        NpcStore? npcStore = null;
+        if (services.GetService<QuestNpcFeature>() is { } npcFeature && scope.ServiceProvider.GetService<INpcContentStore>() is { } npcContent)
+        {
+            NpcContent links = await npcContent.LoadAsync(cancellationToken).ConfigureAwait(false);
+            npcStore = new NpcStore(npcFeature.Services.Npcs.Content with { VendorTemplateIds = links.VendorTemplateIds }, npcFeature.Services.Npcs.ScriptedTaxiPathIds);
+        }
+
+        return new CreatureCandidate(feature, fresh, services.GetService<QuestNpcFeature>(), npcStore);
     }
 
-    private sealed class CreatureCandidate(CreatureWorldFeature feature, CreatureContent fresh) : ContentCandidate
+    private sealed class CreatureCandidate(CreatureWorldFeature feature, CreatureContent fresh, QuestNpcFeature? npcFeature, NpcStore? npcStore) : ContentCandidate
     {
         public override string Summary => $"{fresh.TemplateCount} creature templates";
 
@@ -66,6 +80,12 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
             CreatureContent current = feature.Content;
+            if (npcFeature is not null && npcStore is not null)
+            {
+                NpcStore? previousNpcs = null;
+                transaction.Step("vendor template links", () => previousNpcs = npcFeature.Services.ReplaceNpcs(npcStore), () => npcFeature.Services.ReplaceNpcs(previousNpcs!));
+            }
+
             if (ReferenceEquals(current, CreatureContent.Empty))
             {
                 transaction.Step("creature content", () => feature.Install(fresh), () => feature.Install(CreatureContent.Empty));

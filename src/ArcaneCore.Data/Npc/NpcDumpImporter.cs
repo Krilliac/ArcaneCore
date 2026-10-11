@@ -37,6 +37,7 @@ public sealed class NpcDumpImporter
     private readonly Dictionary<(uint, uint), TrainerSpell> _trainers = [];
     private readonly List<string> _diagnostics = [];
     private bool _sawVendorTemplateTable;
+    private bool _vendorTemplateTableRejected;
     private readonly HashSet<(string Table, IReadOnlyList<string> Columns)> _validatedLayouts = [];
     private static readonly ConcurrentDictionary<Type, Dictionary<string, PropertyInfo>> PropertyCache = new();
     private int _replaced;
@@ -46,14 +47,15 @@ public sealed class NpcDumpImporter
     {
         foreach (object item in new MySqlDumpReader(dump).Read())
         {
-            if (item is DumpTable definition && string.Equals(definition.Name, "npc_vendor_template", StringComparison.OrdinalIgnoreCase))
+            if (item is DumpTable definition && string.Equals(definition.Name, VendorTemplateTable, StringComparison.OrdinalIgnoreCase))
             {
-                _sawVendorTemplateTable = true;
+                string[] absent = [.. Required[VendorTemplateTable].Where(c => !definition.Columns.Contains(c, StringComparer.OrdinalIgnoreCase))];
+                if (absent.Length > 0) RejectVendorTemplateTable(absent);
+                else if (!_vendorTemplateTableRejected) _sawVendorTemplateTable = true;
             }
             if (item is not DumpRow row)
                 continue;
             string table = row.Table.ToLowerInvariant();
-            if (table == "npc_vendor_template") _sawVendorTemplateTable = true;
             // Conditions are owned by ConditionsDumpImporter and are intentionally not consumed here.
 
             if (!Required.TryGetValue(table, out string[]? required))
@@ -61,8 +63,26 @@ public sealed class NpcDumpImporter
             if (!_validatedLayouts.Contains((table, row.Columns)))
             {
                 if (required.Any(c => !row.Has(c)))
-                    throw new InvalidDataException($"{table} is missing one or more required columns: {string.Join(", ", required.Where(c => !row.Has(c)))}");
+                {
+                    string missing = string.Join(", ", required.Where(c => !row.Has(c)));
+                    // npc_vendor_template arrived after the other tables: a dump whose copy lacks slot or condition_id loses only the
+                    // shared stock, with a warning, instead of aborting the whole import.
+                    if (table == VendorTemplateTable)
+                    {
+                        RejectVendorTemplateTable(required.Where(c => !row.Has(c)));
+                        continue;
+                    }
+
+                    throw new InvalidDataException($"{table} is missing one or more required columns: {missing}");
+                }
+
                 _validatedLayouts.Add((table, row.Columns));
+            }
+
+            if (table == VendorTemplateTable)
+            {
+                if (_vendorTemplateTableRejected) continue;
+                _sawVendorTemplateTable = true;
             }
 
             try
@@ -111,6 +131,18 @@ public sealed class NpcDumpImporter
         _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count);
 
     public bool SawVendorTemplateTable => _sawVendorTemplateTable;
+
+    private const string VendorTemplateTable = "npc_vendor_template";
+
+    private void RejectVendorTemplateTable(IEnumerable<string> absentColumns)
+    {
+        if (_vendorTemplateTableRejected) return;
+        _vendorTemplateTableRejected = true;
+        _sawVendorTemplateTable = false;
+        _vendorTemplates.Clear();
+        _skipped++;
+        _diagnostics.Add($"{VendorTemplateTable}: skipped, the table is missing required columns: {string.Join(", ", absentColumns)}");
+    }
 
     /// <summary>Refresh the newly supported shared vendor table without replacing existing direct vendor rows.</summary>
     public async Task<int> RefreshVendorTemplatesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
