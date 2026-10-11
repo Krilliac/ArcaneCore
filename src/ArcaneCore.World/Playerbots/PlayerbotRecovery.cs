@@ -388,6 +388,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             MarkProgress(now);
             PlayerbotMotion.ForgetLoops(player);
             BodyKeptOverLanding = false;
+            BodyKeptOverSickness = PlayerbotUnsafeBody.None;
             EscapedLanding = false;
             _refusal = null;
             _keepBody = default;
@@ -428,9 +429,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // graveyard among the Skeletal Horrors; they died there again and again. A third death there is a death loop, whose request
         // above takes the healer whatever the landing: at most two kept bodies per death-loop window.
         // Not once the fallback went back to this body (ResumeCorpseRun): its healer could not be reached, or there was none.
+        // Nor, mostly, for a bot the healer would sicken (KeepBodyOverSickness): the corpse run is its way back but for a death loop.
         if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
             && _corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
-            && !KeepBodyOverLanding(player, corpse!))
+            && !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason))
         {
             // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
@@ -737,6 +739,56 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         return keep;
+    }
+
+    /// <summary>
+    /// The unsafe-body verdict a body was kept over because the spirit healer would sicken the bot (<see cref="KeepBodyOverSickness"/>),
+    /// or None (inspection and tests).
+    /// </summary>
+    internal PlayerbotUnsafeBody BodyKeptOverSickness { get; private set; }
+
+    /// <summary>
+    /// Whether to keep the corpse run although the body was judged unsafe, because the spirit healer would cost the bot resurrection
+    /// sickness (its level is at least <see cref="PlayerbotSickness.SicknessLevel"/>, vmangos Player::ResurrectPlayer applySickness: every
+    /// stat and all its damage -75% for up to ten minutes) and a quarter of its durability (SendSpiritResurrect, DurabilityLossAll(0.25)),
+    /// while a corpse run gives neither. Kept: a repeat death there (<see cref="PlayerbotUnsafeBody.DiedHere"/>: the third is a death loop,
+    /// whose request takes the healer anyway, <see cref="TakeSpiritHealer"/>), a body outside the home (<see cref="PlayerbotUnsafeBody.OutsideHome"/>:
+    /// the living bot walks home), and a camp too strong for the bot (<see cref="PlayerbotUnsafeBody.TooStrong"/>, judged without its
+    /// sickness, <see cref="PlayerbotRisk.TooStrongNear"/>) while a spot inside the reclaim radius is clear of every threat round the
+    /// body (<see cref="FindReviveSpot"/>; the corpse run revives the bot there, out of their reach). A strong camp over the whole reclaim
+    /// disc is a body that cannot be had: the healer then, as before. The waits of the corpse run keep their bound (<see cref="NoProgressMs"/>).
+    /// <para>
+    /// Live 2026-10-11 08:53-14:57 UTC (analysis bot-xp-analysis.md, 4.1): 5,789 spirit-healer revivals of population bots in six hours
+    /// (7.5 per running bot-hour; 4,633 "too strong", 1,156 "already died there"), 61% of the running level 11+ bots sick at any moment
+    /// and 45% of their worn items broken: each healer revival weakened the bot, the weakened bot died again, and took the healer again.
+    /// </para>
+    /// </summary>
+    private bool KeepBodyOverSickness(Player player, Corpse corpse, PlayerbotUnsafeBody reason)
+    {
+        if (!PlayerbotSickness.HealerSickens(session, player)) return false;
+        bool keep = reason switch
+        {
+            PlayerbotUnsafeBody.DiedHere or PlayerbotUnsafeBody.OutsideHome => true,
+            PlayerbotUnsafeBody.TooStrong => ClearSpotNear(player, corpse),
+            _ => false,
+        };
+        if (keep && BodyKeptOverSickness == PlayerbotUnsafeBody.None)
+        {
+            BodyKeptOverSickness = reason;
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} keeps its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map} although {Reason}: the spirit healer would give level {Level} resurrection sickness and a quarter of its durability",
+                player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId, Describe(reason), player.Level);
+        }
+
+        return keep;
+    }
+
+    /// <summary>A spot inside the reclaim radius of the body clear of every threat round it (the geometry of <see cref="FindReviveSpot"/>).</summary>
+    private bool ClearSpotNear(Player player, Corpse corpse)
+    {
+        var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+        List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
+        return FindReviveSpot(body, body, hostiles, candidate => candidate) is not null;
     }
 
     /// <summary>

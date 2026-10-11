@@ -12,14 +12,18 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
+using System.Numerics;
 
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// Bounded ordinary vendor/trainer goals for one managed player: repairs (mangoszero RepairAllAction: any equipped item broken or
 /// under a quarter of its durability, at an NPC with the repair flag), food and drink, a hunter's ammunition, gray items, junk
-/// when the bags are full, and trainer spells. Every request goes through the real NPC handler.
+/// when the bags are full, and trainer spells. Every request goes through the real NPC handler. Badly worn gear
+/// (<see cref="NeedsRepairTrip"/>) is also a reason to travel to a repair NPC out of sight (<see cref="TravelToRepair"/>).
 /// </summary>
 internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions options)
 {
@@ -61,7 +65,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     internal uint TargetEntry { get; private set; }
 
     internal bool HasCandidate(Player player)
-        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null;
+        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null || RepairTripWanted(player);
 
     internal bool Update(Player player, uint elapsedMs)
     {
@@ -107,7 +111,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
         NpcInfo? npc = FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair);
         if (npc is null)
-            return false;
+            return TravelToRepair(player, services, elapsedMs);
+        ClearRepairTrip();
         TargetEntry = npc.Entry;
         Goal = (npc.NpcFlags & NpcFlags.Trainer) != 0
             ? PlayerbotGoalKind.Train : PlayerbotGoalKind.Vendor;
@@ -233,6 +238,194 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Gear worn badly enough to travel for (<see cref="TravelToRepair"/>): a worn item at 0 durability (vmangos Player::_ApplyItemMods
+    /// skips a broken item, so it gives no armor and no stats), or all worn durability together under a fifth of its maximum. Live
+    /// 2026-10-11 (analysis bot-xp-analysis.md, 4.1): 1,069 of 2,399 worn durable items of the population bots were at 0, and the median
+    /// bot's average durability was 32%, because a repair happened only when a repair NPC was in sight.
+    /// </summary>
+    internal static bool NeedsRepairTrip(Player player)
+    {
+        ulong durability = 0, max = 0;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { MaxDurability: > 0 } item) continue;
+            if (item.Durability == 0) return true;
+            durability += item.Durability;
+            max += item.MaxDurability;
+        }
+
+        return max > 0 && durability * 5 < max;
+    }
+
+    /// <summary>The longest a repair trip goes without getting closer to its NPC before the spawn is set aside.</summary>
+    internal const uint RepairTripStuckMs = 5_000;
+
+    /// <summary>How long the bot leaves repair trips alone after one found nothing to go to (no affordable repair, no NPC, no way).</summary>
+    internal const uint RepairTripBackoffMs = 30_000;
+
+    /// <summary>At most this many repair NPC spawns of the map are kept as trip goals (the nearest first).</summary>
+    private const int MaxRepairSpawns = 64;
+
+    private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
+    private readonly HashSet<uint> _blockedRepairSpawns = [];
+    private (uint MapId, CreatureContent? Content, int Version) _repairIndex;
+    private PlayerbotRoute? _repairRoute;
+    private uint _repairSpawn;
+    private uint _repairTripBackoffUntil;
+    private uint _repairStuckMs;
+    private float _repairBest = float.PositiveInfinity;
+
+    /// <summary>
+    /// A repair trip is worth starting: the gear needs it (<see cref="NeedsRepairTrip"/>), the last repair did not come to nothing a
+    /// minute ago (<see cref="RepairBackoffMs"/>), the bot is not resting from an earlier trip that found nothing, and it can pay for at
+    /// least one of its damaged worn items (<see cref="CheapestWornRepair"/>): with too little money the gear stays as it is, and the
+    /// question is asked again at the next think.
+    /// </summary>
+    private bool RepairTripWanted(Player player)
+    {
+        if (!player.IsAlive || player.Money == 0 || !NeedsRepairTrip(player)) return false;
+        uint now = session.World.NowMs;
+        if (_repairBackoffUntil != 0 && unchecked(now - _repairBackoffUntil) > int.MaxValue) return false;
+        if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return false;
+        return session.Services.GetService<QuestNpcFeature>()?.Services is { } services
+            && CheapestWornRepair(player, services) is { } cost && cost <= player.Money;
+    }
+
+    /// <summary>
+    /// The price of the cheapest damaged worn item's repair, by the server's own pricing (<see cref="IItemService.Repair"/>, asked with
+    /// a payment that refuses every price, so nothing is repaired or paid; no reputation discount: the real price is at most this).
+    /// Null when nothing worn can be priced (no repair prices loaded: the repair would change nothing).
+    /// </summary>
+    internal static uint? CheapestWornRepair(Player player, QuestNpcServices services)
+    {
+        if (services.Deps.Items is not { } items) return null;
+        uint? cheapest = null;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { MaxDurability: > 0 } item || item.Durability >= item.MaxDurability)
+                continue;
+            items.Repair(player, item.Guid, 1f, cost =>
+            {
+                cheapest = Math.Min(cheapest ?? uint.MaxValue, cost);
+                return false;
+            });
+        }
+
+        return cheapest;
+    }
+
+    /// <summary>
+    /// Walk toward the nearest repair NPC of the map (a creature_template with UNIT_NPC_FLAG_REPAIR that the bot's faction may approach,
+    /// <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>) while <see cref="RepairTripWanted"/> holds; once it is in sight the
+    /// ordinary visit (<see cref="FindNpc"/>, <see cref="TryRepair"/>: CMSG_REPAIR_ITEM through vmangos HandleRepairItemOpcode, each item
+    /// paid for or skipped when unaffordable) takes over. A spawn the walk cannot plan to, or stops closing on for
+    /// <see cref="RepairTripStuckMs"/>, is set aside for this trip; with none left the trip rests for <see cref="RepairTripBackoffMs"/>.
+    /// True while a movement step was taken.
+    /// </summary>
+    private bool TravelToRepair(Player player, QuestNpcServices services, uint elapsedMs)
+    {
+        if (!RepairTripWanted(player) || player.Map is not { } map)
+        {
+            ClearRepairTrip();
+            return false;
+        }
+
+        uint now = session.World.NowMs;
+        RefreshRepairSpawns(player, map.MapId, services);
+        Vector3 here = new(player.X, player.Y, player.Z);
+        // The spawn being walked to: closing on it resets the stuck clock; a route walked to its end (a route toward a far goal is
+        // one leg of the way, PlayerbotNavigation.TryPlanToward) is planned again from here, and only no closing for
+        // RepairTripStuckMs sets the spawn aside.
+        if (_repairSpawn != 0 && _repairSpawns.FirstOrDefault(s => s.Spawn.Guid == _repairSpawn) is { Spawn: not null } current)
+        {
+            Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
+            float left = Vector3.Distance(here, at);
+            if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
+            else _repairStuckMs += elapsedMs;
+            if (_repairStuckMs < RepairTripStuckMs && Suspensions?.IsEntrySuspended(current.Entry, now) != true)
+            {
+                Goal = PlayerbotGoalKind.Vendor;
+                TargetEntry = current.Entry;
+                // A leg walked to its end (the motion stops there without completing the route) is followed by the next one.
+                if (_repairRoute is null || _repairRoute.Complete || _repairRoute.Points.Count == 0
+                    || Vector3.Distance(here, _repairRoute.Points[^1]) < 1f)
+                    _repairRoute = PlayerbotNavigation.TryPlanToward(player, at, options, out PlayerbotRoute? leg) ? leg : null;
+                if (_repairRoute is not null && PlayerbotNavigation.TryAdvance(session, _repairRoute, options, elapsedMs, now)) return true;
+                _repairRoute = null;
+                return false; // planned again at the next think, until the stuck clock runs out
+            }
+
+            _blockedRepairSpawns.Add(_repairSpawn);
+            ClearRepairTrip();
+        }
+
+        foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid))
+                     .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
+        {
+            if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
+            if (!PlayerbotNavigation.TryPlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, out PlayerbotRoute? route) || route is null)
+            {
+                _blockedRepairSpawns.Add(spawn.Guid);
+                continue;
+            }
+
+            _repairRoute = route;
+            _repairSpawn = spawn.Guid;
+            _repairBest = Vector3.Distance(here, new Vector3(spawn.X, spawn.Y, spawn.Z));
+            _repairStuckMs = 0;
+            Goal = PlayerbotGoalKind.Vendor;
+            TargetEntry = entry;
+            if (PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
+            _blockedRepairSpawns.Add(spawn.Guid);
+            ClearRepairTrip();
+        }
+
+        // Nothing to walk to: rest from trips a while, then look again with every spawn.
+        ClearRepairTrip();
+        _blockedRepairSpawns.Clear();
+        _repairTripBackoffUntil = Math.Max(1u, unchecked(now + RepairTripBackoffMs));
+        return false;
+    }
+
+    private void ClearRepairTrip()
+    {
+        _repairRoute = null;
+        _repairSpawn = 0;
+        _repairStuckMs = 0;
+        _repairBest = float.PositiveInfinity;
+    }
+
+    /// <summary>The repair NPC spawns of the map the bot may approach, kept until the map or the creature content changes.</summary>
+    private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services)
+    {
+        CreatureContent? content = session.Services.GetService<CreatureWorldFeature>()?.Content;
+        if (content is null) { _repairSpawns.Clear(); return; }
+        if (_repairIndex.MapId == mapId && ReferenceEquals(_repairIndex.Content, content) && _repairIndex.Version == content.DefinitionsVersion)
+            return;
+        _repairIndex = (mapId, content, content.DefinitionsVersion);
+        _repairSpawns.Clear();
+        _blockedRepairSpawns.Clear();
+        ClearRepairTrip();
+        FactionTemplateCatalog? factions = session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        foreach (CreatureTemplate template in content.Templates)
+        {
+            if (((NpcFlags)template.NpcFlags & NpcFlags.Repair) == 0
+                || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
+            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
+                if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z)) _repairSpawns.Add((template.Entry, spawn));
+        }
+
+        // Bounded: the nearest of the map's repair NPCs from where the bot was when the index was built.
+        if (_repairSpawns.Count > MaxRepairSpawns)
+        {
+            _repairSpawns.Sort((a, b) => Vector3.DistanceSquared(here, new Vector3(a.Spawn.X, a.Spawn.Y, a.Spawn.Z))
+                .CompareTo(Vector3.DistanceSquared(here, new Vector3(b.Spawn.X, b.Spawn.Y, b.Spawn.Z))));
+            _repairSpawns.RemoveRange(MaxRepairSpawns, _repairSpawns.Count - MaxRepairSpawns);
+        }
     }
 
     private static uint EquippedDurability(Player player)
