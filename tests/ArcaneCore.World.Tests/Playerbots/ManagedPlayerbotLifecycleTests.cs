@@ -512,26 +512,6 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
-    [Fact]
-    public async Task StartupAsync_DeletesARegistryRowWhoseCharacterIsGone_AndDoesNotRestoreIt()
-    {
-        var accounts = new InMemoryAccountStore();
-        var characters = new InMemoryCharacterStore();
-        var owners = new MemoryManagedPlayerbotStore();
-        Account owner = await accounts.CreateAsync(new Account { Username = "PBORPHAN", Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
-        var bot = new ManagedPlayerbot(Guid.NewGuid(), owner.Id, 4242, owner.Username, true,
-            ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, 1, 1);
-        await owners.CreateAsync(bot);
-
-        await using WorldTestHost host = Start(accounts, characters, owners, restoreOnStartup: true);
-        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
-        await feature.StartupAsync(default);
-
-        Assert.Empty(await owners.LoadAllAsync());
-        Assert.DoesNotContain(feature.Snapshot(), b => b.BotId == bot.BotId);
-        Assert.Equal("bot-not-found", (await feature.StartAsync(bot.BotId.ToString())).Code);
-    }
-
     /// <summary>
     /// A restore at startup that cannot log the bot in (here: it is saved on a map outside AllowedMaps, as a bot that logged out in a
     /// dungeon would be) is a fault like any other: the bot

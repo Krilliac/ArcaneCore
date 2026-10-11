@@ -118,9 +118,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
     private int _placementRefusals;
     private long _pausedAtPass;
+    private readonly Dictionary<Guid, int> _pendingFailures = [];
+    private readonly Dictionary<Guid, long> _pendingRetryAt = [];
     // A member row whose Band is this value is pending deletion: its bot was created and could not be placed. The row is written
-    // before the bot is deleted and removed after, so a failed or interrupted deletion is retried by the next pass (ReconcileAsync)
-    // and the bot is never restarted or counted meanwhile (a real band index is below the configured band count).
+    // before the bot is stopped and deleted and removed after, so a failed or interrupted deletion is retried by a later pass (on a
+    // growing interval). The pass takes the member out of every count and never restarts it. Until the stop completes the bot is
+    // still desired-enabled: a restart in that window restores it, and the first pass then stops and deletes it without counting
+    // it in any band (a real band index is below the configured band count).
     internal const byte PendingDeleteBand = byte.MaxValue;
     private const int MaxPlacementRefusals = 3;
     private const int PauseLiftsAfterPasses = 10;
@@ -319,9 +323,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions pop = input.Pop;
         int effectiveTarget = PopulationBudgetController.EffectiveTarget(pop, _options.MaxBots);
         int[] desired = PopulationBandPlanner.DesiredPerBand(effectiveTarget, input.Bands);
-        int[] have = new int[input.Bands.Length];
-        foreach (PopulationBotFacts bot in input.Running)
-            if (PopulationBandPlanner.BandOf(input.Bands, bot.Level) is var band and >= 0) have[band]++;
+        int[] have = new int[input.Bands.Length]; // filled once the pending-deletion members are known
 
         PopulationDecision decision = new(PopulationAction.Hold, 0, "error", "the pass did not complete");
         int ownedRunning = 0, ownedParked = 0;
@@ -342,11 +344,19 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose.
+            var pendingIds = new HashSet<Guid>();
             foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
             {
                 members.Remove(pending.BotId);
+                pendingIds.Add(pending.BotId);
+                // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
+                if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
                 await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
             }
+
+            // A pending bot that a restart restored is running for a moment: it is not part of any band.
+            foreach (PopulationBotFacts bot in input.Running)
+                if (!pendingIds.Contains(bot.BotId) && PopulationBandPlanner.BandOf(input.Bands, bot.Level) is var band and >= 0) have[band]++;
 
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
@@ -560,23 +570,35 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         try
         {
-            await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
+            // Not cancellable: a stop that a shutdown interrupts would leave a desired-enabled bot for the next start to restore.
+            await managed.StopAsync(botId.ToString(), CancellationToken.None).ConfigureAwait(false);
             PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
             // "bot-not-found" means the registry row is already gone (a deletion that finished before a crash).
             if (!deleted.Success && deleted.Code != "bot-not-found")
             {
-                Fail($"delete of unplaced bot {name ?? botId.ToString()} refused: {deleted.Code}; retried next pass");
+                Backoff(botId);
+                Fail($"delete of unplaced bot {name ?? botId.ToString()} refused: {deleted.Code}; retried later");
                 return false;
             }
 
             await store.DeleteAsync(botId, CancellationToken.None).ConfigureAwait(false);
+            _pendingFailures.Remove(botId);
+            _pendingRetryAt.Remove(botId);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried next pass");
+            Backoff(botId);
+            Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
             return false;
         }
+    }
+
+    private void Backoff(Guid botId)
+    {
+        int failures = Math.Min(8, _pendingFailures.GetValueOrDefault(botId) + 1);
+        _pendingFailures[botId] = failures;
+        _pendingRetryAt[botId] = Volatile.Read(ref _passes) + failures;
     }
 
     private static bool IsStartable(PassContext ctx, PlayerbotPopulationMember member)

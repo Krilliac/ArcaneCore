@@ -164,7 +164,8 @@ public sealed class PlayerbotPopulationFeatureTests
 
         shutdown.Armed = false;
         stop.SetValue(world.Feature, new CancellationTokenSource());
-        await PassWithTicksAsync(world);
+        // A failed deletion is retried on a growing interval: the first retry is within a pass or two.
+        for (int pass = 0; pass < 3 && world.Members.Snapshot.Count > 0; pass++) await PassWithTicksAsync(world);
         Assert.Empty(await world.Owners.LoadAllAsync());
         Assert.Empty(world.Members.Snapshot);
     }
@@ -185,6 +186,26 @@ public sealed class PlayerbotPopulationFeatureTests
             Fired = true;
             cancel();
         }
+    }
+
+    [Fact]
+    public async Task APendingMember_WhoseBotWasRestoredRunning_IsStoppedAndDeleted_WithoutCountingInABand()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        // The state after a crash between the mark and the stop: marked pending, but the bot is desired and running again.
+        PlayerbotOperationResult made = await world.Bots.CreateAsync("Restoredone", 1, 1);
+        Guid id = Assert.IsType<Guid>(made.BotId);
+        Assert.True((await world.Bots.StartAsync(id.ToString())).Success);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        world.Members.Seed(new PlayerbotPopulationMember(id, (await world.Owners.LoadAllAsync()).Single().CharacterId, 0,
+            PlayerbotPopulationFeature.PendingDeleteBand, now, now));
+        world.Feature.Provisioner.AreaLevelSource = _ => 60; // nothing else can be placed in this pass
+
+        PopulationStatus status = await PassWithTicksAsync(world);
+        Assert.Equal(0, status.Bands.Sum(b => b.Have)); // never counted towards a band, not even for the pass it was running in
+        Assert.Equal(0, status.OwnedRunning);
+        Assert.DoesNotContain(await world.Owners.LoadAllAsync(), b => b.BotId == id);
+        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == id);
     }
 
     private sealed class SwitchableDeleteHook : ICharacterDeleteHook

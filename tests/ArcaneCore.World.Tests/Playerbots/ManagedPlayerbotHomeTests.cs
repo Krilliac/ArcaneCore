@@ -24,6 +24,44 @@ public sealed class ManagedPlayerbotHomeTests
     private const uint FixtureZone = 12;
 
     [Fact]
+    public async Task StartupAsync_DeletesAnOrphanRegistryRow_ForgetsItsHome_AndDoesNotRestoreIt()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var homes = new MemoryHomeStore();
+        Account owner = await accounts.CreateAsync(new Account { Username = "PBORPHAN", Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
+        var bot = new ManagedPlayerbot(Guid.NewGuid(), owner.Id, 4242, owner.Username, true,
+            ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, 1, 1);
+        await owners.CreateAsync(bot);
+        await homes.SetAsync(new PlayerbotHome(bot.BotId, 4242, 0, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind", 1));
+
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            var options = new PlayerbotOptions
+            {
+                Enabled = true, RestoreOnStartup = true, MaxBots = 4, ThinkIntervalMs = 100, MaxActionsPerTick = 2, MaxPathPoints = 32,
+                MaxRouteYards = 100, AllowedMaps = [0, 1],
+            };
+            services.AddSingleton<IAccountStore>(accounts);
+            services.AddSingleton<IAccountAdmin>(accounts);
+            services.AddSingleton<ICharacterStore>(characters);
+            services.AddSingleton<ICharacterLifeStore>(characters);
+            services.AddSingleton<IManagedPlayerbotStore>(owners);
+            services.AddSingleton<IManagedPlayerbotHomeStore>(homes);
+            services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
+            services.AddSingleton<IManagedPlayerbotProvisionStore>(new ManagedPlayerbotLifecycleTests.MemoryProvisionStore(accounts));
+        });
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+
+        Assert.Empty(await owners.LoadAllAsync());           // the orphan row is gone (it held a MaxRegisteredBots slot)
+        Assert.Null(feature.HomeOf(bot.BotId));              // and so is its in-memory home
+        Assert.DoesNotContain(feature.Snapshot(), b => b.BotId == bot.BotId);
+        Assert.Null(await owners.FindAsync(bot.BotId));      // no restore attempt re-created or faulted it
+    }
+
+    [Fact]
     public async Task SetHome_PersistsAndAppliesToTheRunningBrain_AndSurvivesARestart()
     {
         var accounts = new InMemoryAccountStore();

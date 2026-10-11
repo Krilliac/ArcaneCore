@@ -86,9 +86,12 @@ Per pass, up to the decision's count, in this order:
    retries a quarantined bot itself. Three refused starts end the pass's starting.
 2. **Create new bots**, within the creation caps below. Each is planned (`PopulationBandPlanner.Plan`), created through
    `IPlayerbotService.CreateAsync` (the ordinary `CMSG_CHAR_CREATE` rules; a refused name is retried with the next candidate, at
-   most five times), recorded in `playerbot_population_member`, started, boosted to its level and teleported to its place. If
-   boosting or teleporting is refused, the bot stays owned and stopped and the next pass restarts it where it stands (its race's
-   starting area).
+   most five times), recorded in `playerbot_population_member`, started, boosted to its level and teleported to its place. The
+   zone, level, graveyard and race faction are chosen together before anything is created (`PopulationZoneAtlas.PickSafe`), so
+   an unsafe zone is skipped and a refused plan creates nothing. Creation does not run at all when the teleport service is
+   missing (`TeleportAvailable`, "the teleport service is not available"). If the placement is still refused after the bot was
+   created (for example a content reload between plan and teleport), the unplaced level-1 bot is **deleted**, not parked: see
+   "Failure behaviour".
 
 **Caps, enforced only while adding** (a pass that hits one says so in its status line, `held back: ...`):
 
@@ -244,7 +247,7 @@ the `IntegratedSchemaTests` expectation and `docs/reference/schema.md` change).
 | `BotId` (key) | The managed playerbot (`ManagedPlayerbot.BotId`). |
 | `CharacterId` (unique) | The bot's character; the row goes with the character (`ICharacterDataCleanup`). |
 | `ZoneId` | The zone the population last placed the bot in (0: not placed yet). |
-| `Band` | The index of the band it was created for (informational; bands are matched by level). |
+| `Band` | The index of the band it was created for (informational; bands are matched by level), or **255** (`PendingDeleteBand`): the bot could not be placed and is being deleted. A pending member is never restarted and never counted in a band or in the owned totals. |
 | `CreatedUnix`, `UpdatedUnix` | Unix seconds. |
 
 `EfPlayerbotPopulationStore.UpsertAsync` inserts a row or updates `ZoneId`, `Band` and `UpdatedUnix` of the row with the same bot
@@ -257,6 +260,19 @@ Fail closed: an error in capture or in a pass is logged, published as `state err
 and the next interval tries again; nothing throws into the world thread. A refusal of a single bot (start, creation, boost,
 teleport, park) is recorded as the last problem and ends only that bot's step. A shutdown cancels the pass and waits up to thirty
 seconds for it.
+
+**A bot that cannot be placed is deleted.** When the placement is refused after creation, the member row is first marked
+pending (`Band` = 255, written even during a shutdown), then the bot is stopped and deleted (its character through the ordinary
+character deletion, then its registry row; the owner account stays), and only then is the member row removed. The bot is deleted
+before the member row, so a deletion that fails (a refusing delete hook, the feature stopping, a cancelled shutdown, a crash)
+leaves the marked row, never an unowned stray. At the start of every pass the pending members are taken out of the counts and
+their deletion is retried, on a growing interval (after 1, 2 ... at most 8 passes) so that a permanently refused delete does not
+overwrite the last problem every pass. A pending bot that a restart restored as running is stopped and deleted by that first pass
+and is not counted in any band.
+
+**Creation pauses after three refusals in a row.** Three placements refused one pass after another (counted from the refusal, reset
+by any successful placement) pause creation: passes 4 to 13 report "creation paused: 3 placements refused in a row" and create
+nothing, and pass 14 plans again. Restarting parked members and parking are not affected.
 
 ## Tests
 
