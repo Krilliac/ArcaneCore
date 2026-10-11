@@ -26,6 +26,51 @@ lock beyond the queue's and never throws, so it cannot slow the world thread. On
 The parser formats are the real log templates; the contract tests build the real strings and parse them, so rewording one of those
 warnings fails a test instead of silently blinding QA.
 
+### Direct signals (no log line)
+
+Any feature can report without a log line through `IPlayerbotQaSink` (DI singleton `PlayerbotQaSink`): `Report(signal)` does one
+non-blocking write to the same signal queue; `ReportFor(unit, signal)` fills the bot key and class only when the unit is a managed
+playerbot (a player of a managed session that is not the console: `WorldSession.IsPlayerbot`) and reports nothing for a real player or a
+creature. With QA disabled `Enabled` is false and both return at once. A signal carries optional ids next to the old fields: `Spell`,
+`SpellName`, `SpellRank`, `EffectIndex` / `EffectName` / `EffectValue`, `Aura`, `Reason` (a code: the gap of a spell, the cast result of
+a refusal), `Item`, `Npc`, `GameObject`, `BotClass`, and `FromCoverage` (a static fact: it marks a finding without counting an
+occurrence, a sample or a bot). A direct signal's bot key is made from the character guid (not the bot id the log lines carry; the two
+never meet in one finding). Findings keep the ids (and the classes that met them) in `findings.json`; older files load unchanged.
+
+Every kind has one row in `QaKinds` (label, GitHub label slug, severity weight, bot-independent, one-occurrence, spell kind). A new kind
+needs its row and its cases in the fingerprint, the subject and the classifier; `PlayerbotQaKindExhaustivenessTests` runs every kind
+through every switch (and the publisher), and an unknown kind throws in the fingerprint and the classifier instead of passing as a stall.
+
+### Spell signals
+
+`PlayerbotQaSpellMonitor` is an `ISpellCastObserver` on the world's spell system, registered while QA runs. Each callback first checks
+that the caster is a managed playerbot (two type checks) and returns for anyone else, so **real players are never reported**. The common
+path of a bot's cast allocates nothing (a test measures `GC.GetAllocatedBytesForCurrentThread` over a thousand calls): the facts of a
+spell are computed on its first cast and cached by id, the counters are value-keyed, a signal is built only when one is reported, and the
+same (kind, spell, detail) is reported at most once a minute.
+
+| Kind | When | Fingerprint | Cause |
+|---|---|---|---|
+| spell unsupported | A bot casts a spell with a gap (`PlayerbotQaSpellGapAnalyzer`): an effect with no handler; an aura type with no handler that `AuraSupport` marks Unsupported (a Referenced type works); a DUMMY or OVERRIDE_CLASS_SCRIPTS aura nothing reads (no script, proc script, dummy-aura case, periodic dummy, known reader; the Judgement script reads the seals'); a DUMMY with no spell script, or a SCRIPT_EFFECT with neither a script-effect entry nor a spell script, when it is the spell's only working effect. Also an implicit target the cast could not select (the spell system's `OnUnsupported` seam). Bot-independent: **one occurrence is enough**. | spell, effect index, gap code | NotImplemented |
+| spell refused | `SpellHandlers` hands the result of a managed bot's refused CMSG_CAST_SPELL to the monitor. `PlayerbotQaSpellRefusals`: Error, Unknown, NotFound, SpellUnavailable, NotKnown (the detail says whether the bot's book holds the spell), BadTargets, BadImplicitTargets, LevelRequirement and TrainingPoints are **suspicious** and reported at once; every other result is a rule of play (no mana, cooldown, range, line of sight, moving, ...) reported only when **one bot gets it 8 times within 60 s** (it does not learn). | spell, cast result | the table's (BehaviourBug for bot logic) |
+| spell no effect | 3 hits in a row of one bot's spell that should deal damage, heal or leave an aura (on the effects aimed at that target) and did none. A miss, resist, immunity or reflect is no hit; an overheal of a full target, a target that is dead, and the spell's aura found on the target count as working. | spell | NotImplemented |
+
+A gap code `no-consumer` (a DUMMY aura nothing known reads) is **advisory**: any rule can read such an aura by spell id, icon or family,
+so it is listed and counted but never published.
+
+### Spell coverage (static)
+
+The first pass after the spell table is loaded (on the QA task, never the world thread) computes `PlayerbotQaSpellCoverage`: of the spells
+bots can cast, which have a gap. The spells bots can cast are the class spell books at trainer level: the class spells class trainers
+teach (`npc_trainer`, the LEARN_SPELL targets of the teaching spell or the row's spell), the start spells of every race and class and the
+talent rank spells, restricted to the class spell families (an NPC spell of the same name never counts) and without passives; those a
+class rotation or an escape names are the rotation spells. It runs again only if the first run saw no trainer rows and they loaded since.
+Each gap becomes a `spell unsupported` finding marked as coverage with no occurrence, keyed like a bot's cast of it, so the first bot cast
+counts on the same finding. A finding with no occurrence is left out of the ranked list, the chat top and the publisher; `report.md` ends
+with a **Spell coverage** section (the summary, the gaps shared by the most spells, every gap) and `report.json` has `SpellCoverage`
+(the numbers, `Offenders`, `Gaps`). A coverage finding never evicts a finding of real occurrences at `MaxFindings` (it is evicted first).
+`.playerbot qa spells [n]` shows the summary, the five most shared gaps and the top spell findings bots met.
+
 ## Fingerprint: one problem is one finding
 
 `PlayerbotQaFingerprint` builds a canonical key from the kind and **content ids only** (quest, target entry, goal, map, a 50-yard
@@ -52,6 +97,7 @@ content is not loaded.
   errand out of its home; it set the goal aside for that bot only. Such a stall is its own finding (its key ends `|outside`; the keys of
   the other stalls are unchanged; a death loop is never marked) and is **never published** to GitHub; the report lists it. A shared set-aside counts only stalls made
   inside the home (docs/areas/playbots.md, Home area), so it is never an outside-home finding.
+* **NotImplemented**: a spell gap or a spell with no effect, and the server-side refusals (Error, Unknown, SpellUnavailable).
 * **Unknown**: anything else; the detail says what was checked.
 
 A stall's `quest=` is the last quest the bot's brain remembers, not necessarily what it was doing: it stays set after the quest goal
@@ -60,7 +106,8 @@ its own target, and its Unknown detail reads `no missing content found for goal 
 remembered quest was checked, titled and explained as that quest (GitHub #154: every line said `goal=Explore target=0 quest=109`, 178 of
 179 such bots had already turned 109 in, yet the issue read as a quest-109 problem).
 
-Severity ranks findings: a weight per kind (quarantine/disabled 45, fault 40, set-aside 35, death loop 30, relay data 25, stall 15),
+Severity ranks findings: a weight per kind (quarantine/disabled 45, fault 40, set-aside 35, death loop 30, spell unsupported 30, spell no
+effect 28, relay data 25, spell refused 20, stall 15),
 plus `10 * log2(1 + count)`, plus 5 per distinct bot (at most 20), plus 10 for a finding seen in the last hour.
 
 ## Report and exports
@@ -150,7 +197,17 @@ transient failure stops the pass (the rest would fail the same way); a refusal (
 ### Rate caps
 
 `MaxIssuesPerHour` (default 5) and `MaxCommentsPerHour` (default 10) are rolling-hour limits (0 turns the action off). The times
-are saved in `findings.json`, so restarting the server does not reset them. A finding over a cap stays pending and is picked up in a
+are saved in `findings.json`, so restarting the server does not reset them.
+
+Spell findings can be numerous (a first deploy meets every unimplemented spell at once), so they have two more caps on top of the hourly
+one, counted only for the spell kinds: `MaxSpellIssuesPerPass` (default 2) per publish pass and `MaxSpellIssuesPerDay` (default 10) per
+rolling 24 hours (saved with the hourly times). With the defaults a first deploy opens at most 2 spell issues per pass, 5 per hour (the
+shared cap) and 10 per day, highest severity first; the rest wait. A gap only the start-up coverage lists is never published on its own
+(the report lists them all), so the issues are the spells bots really cast; advisory gaps are never published. Each issue is one spell
+effect (its fingerprint); its body has a **Spell** table (spell and rank, effect index, name and value, aura type, gap or cast result,
+the bots and classes that met it, a `Wowhead classic spell=<id>` reference as text, nothing fetched) and the reproduction
+(`.learn <id>` and `.cast <id>` on a character or a selected bot). `World:Playerbots:Qa:GitHub:KindLabels` (off) adds a per-kind label such as
+`bot-qa:spell-unsupported`; leave it off with the `gh` transport until the labels exist in the repository (`gh` refuses unknown labels). A finding over a cap stays pending and is picked up in a
 later pass, highest severity first. Publishing runs on a task of its own (at most one at a time; a pass that finds the previous one still
 running does not start another), so a long `Retry-After` wait or a slow GitHub never stops the bot warnings from being drained. Requests time out after `RequestTimeoutSeconds` (15) and replies over 16 MiB are refused.
 
@@ -174,4 +231,8 @@ read a dry-run file before the first publish.
   request itself and never follows a redirect, and a pagination link to another host is refused.
 * Nothing in the publisher throws into the world: a failed pass logs and leaves the findings as they were.
 * Tests: `tests/ArcaneCore.World.Tests/Playerbots/Qa/` (parser contract, fingerprint, classifier, log tap, redactor, report, store and
-  ledger, GitHub client and publisher against a fake `HttpMessageHandler`, the commands on an in-process world).
+  ledger, GitHub client and publisher against a fake `HttpMessageHandler`, the commands on an in-process world; the kind exhaustiveness,
+  the sink and the spell caps, the spell monitor on a real spell system with its allocation check and refusal table, each spell kind from a
+  bot's cast to the created issue, the coverage). `PlayerbotQaSpellCoverageRealContentTests` prints the coverage of an imported world
+  (`ARCANECORE_TEST_WORLD_DB`; `ARCANECORE_QA_COVERAGE_CONFIG` may name a profile's `appsettings.json` whose content sections, the DBC
+  paths, let the skills, talents and enchanting features install their handlers) and writes `%TEMP%/arcanecore-qa-spell-coverage.md`.
