@@ -104,8 +104,23 @@ internal sealed class PlayerbotRisk
     /// <summary>The longest an escape route is walked (<see cref="EscapeRoute"/>).</summary>
     internal const uint EscapeLifeMs = 20_000;
 
-    /// <summary>The exits planned at most for one escape (the least exposed first, <see cref="PlayerbotHazards.TryFindGap"/>).</summary>
+    /// <summary>The exits planned at most for one escape (the least exposed first, <see cref="PlayerbotHazards.FindGaps"/>).</summary>
     internal const int MaxEscapePlans = 3;
+
+    /// <summary>The gate waits up to this much longer than <see cref="BoxedMs"/>, by the bot's guid (bots revived together spread).</summary>
+    internal const uint MaxBoxedPhaseMs = 2_000;
+
+    /// <summary>The most escapes in <see cref="EscapeWindowMs"/>.</summary>
+    internal const int MaxEscapesPerWindow = 3;
+
+    /// <summary>The window <see cref="MaxEscapesPerWindow"/> counts in.</summary>
+    internal const uint EscapeWindowMs = 300_000;
+
+    /// <summary>
+    /// A planned escape route may pass this much deeper into the aggro reaches (summed over its samples, yards) than its straight line
+    /// and still count as keeping to it (the navigation's corners round off a line by a fraction of a yard).
+    /// </summary>
+    internal const float RouteExposureSlack = 1f;
 
     /// <summary>How often the visible creatures are looked over for hazards.</summary>
     internal const uint HazardScanMs = 2_000;
@@ -678,14 +693,19 @@ internal sealed class PlayerbotRisk
     /// every goal walk refused and every goal only backing off; this is the way out, under three conditions:
     /// <list type="bullet">
     /// <item>evidence of a ring, not of one guarded destination: the hazard is a strong creature's, the bot has not moved
-    /// <see cref="BoxedProgressYards"/> from where the clock started for <see cref="BoxedMs"/> of world time (any number of refusals in
+    /// <see cref="BoxedProgressYards"/> from where the clock started for <see cref="BoxedMs"/> of world time plus a phase of up to
+    /// <see cref="MaxBoxedPhaseMs"/> by its guid (bots revived together do not all run the fan on one tick; any number of refusals in
     /// one tick count for nothing), and no straight line round it is clear for its first <see cref="PlayerbotHazards.GapOpenYards"/>
     /// (<see cref="PlayerbotHazards.TryFindGap"/>; two creatures guarding a quest giver leave open lines: the goal backs off and the
     /// stall watch sets it aside, as before);</item>
-    /// <item>the least exposed way out: the line of the fan that passes least deep into the creatures' aggro reach (the gap between
-    /// two of them), never through a death, retreat, lethal or fled hazard, planned on the navigation and checked against those again;</item>
+    /// <item>the least exposed way out: one fan (<see cref="PlayerbotHazards.FindGaps"/>) gives the <see cref="MaxEscapePlans"/> lines
+    /// that pass least deep into the creatures' aggro reach (the gaps between them), never through a death, retreat, lethal or fled
+    /// hazard; each is planned on the navigation and checked against those again, and held to its line
+    /// (<see cref="PlayerbotHazards.RouteExposure"/>): a route the navigation bent deeper into the reaches than its line goes only when
+    /// no route keeps to its line;</item>
     /// <item>bounded: one route, pinned (<see cref="EscapeRoute"/>, exempt from strong hazards only), walked for at most
-    /// <see cref="EscapeLifeMs"/>, ended by combat or a death, and at most one escape per <see cref="BoxedMs"/>.</item>
+    /// <see cref="EscapeLifeMs"/>, ended by combat or a death, at most one escape per <see cref="BoxedMs"/> and at most
+    /// <see cref="MaxEscapesPerWindow"/> per <see cref="EscapeWindowMs"/>.</item>
     /// </list>
     /// </summary>
     internal void Refused(Player player, PlayerbotHazard hazard)
@@ -701,21 +721,52 @@ internal sealed class PlayerbotRisk
             return;
         }
 
-        if (unchecked(now - _boxedSinceMs) < BoxedMs) return;
+        // Bots revived together would reach the gate on the same tick: each waits a little longer, by its guid (0 to 2 s).
+        uint phase = (uint)((player.Guid.Low * 2654435761UL) % MaxBoxedPhaseMs);
+        if (unchecked(now - _boxedSinceMs) < BoxedMs + phase) return;
         _boxedSinceMs = Math.Max(1u, now);
-        ulong tried = 0;
-        for (int plan = 0; plan < MaxEscapePlans; plan++)
+        if (!MayEscape(now)) return;
+        Span<PlayerbotGap> gaps = stackalloc PlayerbotGap[MaxEscapePlans];
+        int found = Hazards.FindGaps(player.MapId, here, now, 0, gaps);
+        PlayerbotRoute? chosen = null;
+        bool chosenStrays = true;
+        float chosenExposure = float.PositiveInfinity;
+        for (int i = 0; i < found; i++)
         {
-            if (!Hazards.TryFindGap(player.MapId, here, now, tried, out Vector3 exit, out int direction)) return;
-            tried |= 1UL << direction;
-            if (!PlayerbotNavigation.TryPlanUnguarded(player, exit, _options, out PlayerbotRoute? route) || route is null) continue;
+            if (!PlayerbotNavigation.TryPlanUnguarded(player, gaps[i].Exit, _options, out PlayerbotRoute? route) || route is null) continue;
             if (Hazards.FirstOnRoute(player.MapId, route.Points, now, strong: false) is not null) continue;
-            _escapeRoute = route;
-            _escapeUntilMs = Math.Max(1u, unchecked(now + EscapeLifeMs));
-            Escapes++;
-            return;
+            // The navigation may bend the way into a reach its straight line kept out of: such a route goes last, after any that keeps
+            // to its line, and among those of a kind the least exposed goes first.
+            float exposure = Hazards.RouteExposure(player.MapId, route.Points, now);
+            bool strays = exposure > gaps[i].Exposure + RouteExposureSlack;
+            if (chosen is not null && (strays, exposure).CompareTo((chosenStrays, chosenExposure)) >= 0) continue;
+            (chosen, chosenStrays, chosenExposure) = (route, strays, exposure);
+            if (!strays) break; // the best line's own route keeps to it
         }
+
+        if (chosen is null) return;
+        _escapeRoute = chosen;
+        _escapeUntilMs = Math.Max(1u, unchecked(now + EscapeLifeMs));
+        _escapeTimes[Escapes % MaxEscapesPerWindow] = Math.Max(1u, now);
+        Escapes++;
+        LastEscapeStrays = chosenStrays;
     }
+
+    /// <summary>
+    /// At most <see cref="MaxEscapesPerWindow"/> escapes in <see cref="EscapeWindowMs"/>: a bot that cannot get clear (a slow walker,
+    /// a ring that re-forms round it) stops escaping and leaves its goal to the stall watch.
+    /// </summary>
+    private bool MayEscape(uint now)
+    {
+        if (Escapes < MaxEscapesPerWindow) return true;
+        uint oldest = _escapeTimes[Escapes % MaxEscapesPerWindow];
+        return unchecked(now - oldest) >= EscapeWindowMs;
+    }
+
+    private readonly uint[] _escapeTimes = new uint[MaxEscapesPerWindow];
+
+    /// <summary>Whether the last escape's route strayed into more aggro reach than its straight line (inspection, tests).</summary>
+    internal bool LastEscapeStrays { get; private set; }
 
     /// <summary>When the boxed-in clock started (0: not started; tests).</summary>
     internal uint BoxedSinceMs => _boxedSinceMs;

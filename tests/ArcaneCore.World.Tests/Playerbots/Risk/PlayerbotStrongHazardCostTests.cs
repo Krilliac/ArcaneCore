@@ -109,5 +109,19 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         Console.WriteLine($"escape fan: {micros:F1} us per call, {allocated} bytes over {Calls} calls, gap found {found}/{Calls}");
         Assert.Equal(0L, allocated);
         Assert.True(micros < 2_000, $"{micros:F1} us per call");
+
+        // One escape attempt as PlayerbotRisk.Refused makes it: one fan for its best MaxEscapePlans lines.
+        Span<PlayerbotGap> best = stackalloc PlayerbotGap[PlayerbotRisk.MaxEscapePlans];
+        before = GC.GetAllocatedBytesForCurrentThread();
+        watch.Restart();
+        int lines = 0;
+        for (int i = 0; i < Calls; i++) lines = hazards.FindGaps(0, from, 2_000, 0, best);
+        watch.Stop();
+        allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        double attempt = watch.Elapsed.TotalMicroseconds / Calls;
+        output.WriteLine($"escape attempt (one fan, best {lines}): {attempt:F1} us, {allocated} bytes over {Calls}");
+        Console.WriteLine($"escape attempt (one fan, best {lines}): {attempt:F1} us, {allocated} bytes over {Calls}");
+        Assert.Equal(PlayerbotRisk.MaxEscapePlans, lines);
+        Assert.Equal(0L, allocated);
     }
 }

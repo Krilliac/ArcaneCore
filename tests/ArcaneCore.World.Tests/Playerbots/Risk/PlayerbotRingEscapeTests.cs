@@ -30,9 +30,13 @@ public sealed class PlayerbotRingEscapeTests
     private const float RingYards = 44f;
     private const float AggroYards = 9f;
 
-    private static async Task<(RiskTestWorld World, Creature[] Ring)> GapRingAsync(Action<PlayerbotOptions>? configure = null)
+    /// <summary>The ring of test 7 (<see cref="RingYards"/>; at 30 yards the gaps close and the test must fail).</summary>
+    private const float WalkOutRingYards = RingYards;
+
+    private static async Task<(RiskTestWorld World, Creature[] Ring)> GapRingAsync(Action<PlayerbotOptions>? configure = null,
+        bool aggroOnSight = false, float ringYards = RingYards)
     {
-        RiskTestWorld world = await RiskTestWorld.StartAsync(configure);
+        RiskTestWorld world = await RiskTestWorld.StartAsync(configure, aggroOnSight: aggroOnSight);
         Creature[] ring = await world.OnWorldAsync(() =>
         {
             Player player = world.Player;
@@ -43,7 +47,7 @@ public sealed class PlayerbotRingEscapeTests
             for (int i = 0; i < 12; i++)
             {
                 float angle = i * MathF.Tau / 12f;
-                list[i] = world.Spawn(Golem, MathF.Cos(angle) * RingYards, MathF.Sin(angle) * RingYards);
+                list[i] = world.Spawn(Golem, MathF.Cos(angle) * ringYards, MathF.Sin(angle) * ringYards);
             }
 
             return list;
@@ -76,14 +80,17 @@ public sealed class PlayerbotRingEscapeTests
         finally { PlayerbotNavigation.Guard(player, null); }
     });
 
-    /// <summary>Three refusals 3 s apart without moving: the third grants the escape.</summary>
+    /// <summary>The gate's longest wait: <see cref="PlayerbotRisk.BoxedMs"/> and the bot's phase (up to <see cref="PlayerbotRisk.MaxBoxedPhaseMs"/>).</summary>
+    private const uint GateMs = PlayerbotRisk.BoxedMs + PlayerbotRisk.MaxBoxedPhaseMs;
+
+    /// <summary>Refusals at 0, 3 and 8 s without moving: the second grants nothing, the third the escape.</summary>
     private static async Task EscapeAsync(RiskTestWorld world, float degrees = 0f)
     {
         Assert.False(await RefuseAsync(world, degrees));
         await world.Host.World.AdvanceClockAsync(3_000);
         Assert.False(await RefuseAsync(world, degrees));
         await world.OnWorldAsync(() => { Assert.Equal(0, world.Brain.Risk.Escapes); return true; });
-        await world.Host.World.AdvanceClockAsync(3_000);
+        await world.Host.World.AdvanceClockAsync(GateMs - 3_000);
         await RefuseAsync(world, degrees);
         await world.OnWorldAsync(() => { Assert.Equal(1, world.Brain.Risk.Escapes); return true; });
     }
@@ -293,17 +300,20 @@ public sealed class PlayerbotRingEscapeTests
     }
 
     /// <summary>
-    /// 7. Brain-driven: the ringed bot walks out through the gap on its own (its explore legs refused, then the escape), never in
-    /// combat with any ring creature, which stand where they were.
+    /// 7. Brain-driven, with on-sight aggro (<see cref="RiskTestWorld.StartAsync"/> <c>aggroOnSight</c>): the ringed bot walks out
+    /// through the gap on its own (its explore legs refused, then the escape). At every think it stays outside every ring creature's
+    /// aggro reach, neither it nor any ring creature enters combat, and the creatures stand where they were.
     /// </summary>
     [Fact]
     public async Task ARingedBot_WalksOutThroughTheGap_WithoutAggro()
     {
-        (RiskTestWorld world, Creature[] ring) = await GapRingAsync();
+        (RiskTestWorld world, Creature[] ring) = await GapRingAsync(aggroOnSight: true, ringYards: WalkOutRingYards);
         await using RiskTestWorld owned = world;
         (Vector3 start, Vector3[] spawns) = await world.OnWorldAsync(() => (new Vector3(world.Player.X, world.Player.Y, world.Player.Z),
             ring.Select(c => new Vector3(c.X, c.Y, c.Z)).ToArray()));
         bool escaping = false, fought = false;
+        float nearest = float.PositiveInfinity;
+        Vector3 nearestAt = start;
         bool @out = await world.ThinkUntilAsync(30_000, () =>
         {
             Player player = world.Player;
@@ -312,6 +322,9 @@ public sealed class PlayerbotRingEscapeTests
                 .Any(h => h.Kind == PlayerbotHazards.StrongKind && h.Covers(here));
         }, () =>
         {
+            var here = new Vector3(world.Player.X, world.Player.Y, world.Player.Z);
+            foreach (Vector3 creature in spawns)
+                if (Flat(here, creature) < nearest) (nearest, nearestAt) = (Flat(here, creature), here);
             escaping |= world.Brain.Goal == PlayerbotGoalKind.Escape;
             fought |= world.Player.Combat.IsInCombat || ring.Any(c => c.Combat.IsInCombat);
         });
@@ -319,12 +332,122 @@ public sealed class PlayerbotRingEscapeTests
         {
             Assert.True(@out, $"the bot did not walk out: at {world.Player.X - start.X:F1},{world.Player.Y - start.Y:F1} goal {world.Brain.Goal} escapes {world.Brain.Risk.Escapes}");
             Assert.True(escaping, "the goal was never Escape");
+            Assert.True(nearest > AggroYards,
+                $"the bot came {nearest:F2} yd from a ring creature (reach {AggroYards}) at {nearestAt.X - start.X:F1},{nearestAt.Y - start.Y:F1}");
             Assert.False(fought, "the bot or a ring creature entered combat");
             Assert.Equal(1, world.Brain.Risk.Escapes);
             for (int i = 0; i < ring.Length; i++)
                 Assert.True(Flat(new Vector3(ring[i].X, ring[i].Y, ring[i].Z), spawns[i]) < 0.5f, "a ring creature moved");
             return true;
         });
+    }
+
+    /// <summary>
+    /// 7b. The control of test 7: with <c>aggroOnSight</c> a creature does attack a bot that walks within its 9-yard reach (so test 7's
+    /// "no combat" means something).
+    /// </summary>
+    [Fact]
+    public async Task OnSightAggro_Works_InTheHarness()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(aggroOnSight: true);
+        Creature golem = await world.OnWorldAsync(() =>
+        {
+            world.Player.Level = 10;
+            world.Player.MaxHealth = 400;
+            world.Player.Health = 400;
+            return world.Spawn(Golem, 3, 20);
+        });
+        await world.SeeAsync(golem);
+        PlayerbotRoute route = await world.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.TryPlan(world.Player, Far(world.Player, 90f, 40f), world.Options, out PlayerbotRoute? planned));
+            return planned!;
+        });
+        bool attacked = false;
+        for (int i = 0; i < 100 && !attacked; i++)
+        {
+            attacked = await world.OnWorldAsync(() =>
+            {
+                world.Session.ManagedBudget = new ArcaneCore.World.Net.ManagedActionBudget(8);
+                PlayerbotNavigation.TryAdvance(world.Session, route, world.Options, RiskTestWorld.ThinkMs, world.Host.World.NowMs);
+                return world.Player.Combat.IsInCombat || golem.Combat.IsInCombat;
+            });
+            await world.Host.World.AdvanceClockAsync(RiskTestWorld.ThinkMs);
+        }
+
+        Assert.True(attacked, "a creature 3 yards off the bot's way did not attack it");
+    }
+
+    /// <summary>
+    /// 7c. The planned route is held to its line: the navigation bends the way of the best gap (15 degrees) to within 5 yards of a
+    /// ring creature, inside its reach; the escape takes the next gap's route instead, which keeps to its line.
+    /// </summary>
+    [Fact]
+    public async Task AnEscapeRouteBentIntoAReach_GivesWayToTheNextGap()
+    {
+        (RiskTestWorld world, Creature[] ring) = await GapRingAsync();
+        await using RiskTestWorld owned = world;
+        Vector3 bentExit = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            world.Brain.Risk.ScanHazards(player);
+            Assert.True(world.Brain.Risk.Hazards.TryFindGap(player.MapId, new Vector3(player.X, player.Y, player.Z),
+                world.Host.World.NowMs, 0, out Vector3 exit, out _));
+            var creature = new Vector3(ring[0].X, ring[0].Y, ring[0].Z);
+            ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(pathfinder: new BendingPathfinder(exit, creature));
+            return exit;
+        });
+        await EscapeAsync(world);
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotRoute route = world.Brain.Risk.EscapeRoute!;
+            Assert.True(Flat(route.Points[^1], bentExit) > 5f, "the escape took the bent route of the best gap");
+            Assert.False(world.Brain.Risk.LastEscapeStrays);
+            foreach (Vector3 p in Sample(route.Points))
+                foreach (Creature c in ring)
+                    Assert.True(Flat(p, new Vector3(c.X, c.Y, c.Z)) > AggroYards, $"the escape passes {p}, in a ring creature's reach");
+            return true;
+        });
+    }
+
+    /// <summary>A navigation that bends every way to <c>bentEnd</c> past <c>near</c> (4 yards from it); every other way is straight.</summary>
+    private sealed class BendingPathfinder(Vector3 bentEnd, Vector3 near) : ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end,
+            ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Flat(end, bentEnd) > 1f) return new(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, end]);
+            Vector3 towards = Vector3.Normalize(new Vector3(start.X - near.X, start.Y - near.Y, 0));
+            Vector3 corner = new(near.X + (towards.X * 4f), near.Y + (towards.Y * 4f), start.Z);
+            return new(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, corner, end]);
+        }
+    }
+
+    /// <summary>
+    /// 7d. At most <see cref="PlayerbotRisk.MaxEscapesPerWindow"/> escapes in <see cref="PlayerbotRisk.EscapeWindowMs"/>: a bot that
+    /// never gets clear stops escaping; once the window has passed it may again.
+    /// </summary>
+    [Fact]
+    public async Task Escapes_AreCappedPerWindow()
+    {
+        (RiskTestWorld world, _) = await GapRingAsync();
+        await using RiskTestWorld owned = world;
+        await EscapeAsync(world);
+        for (int round = 2; round <= PlayerbotRisk.MaxEscapesPerWindow + 1; round++)
+        {
+            await world.OnWorldAsync(() => { world.Brain.Risk.EndEscape(); return true; });
+            await world.Host.World.AdvanceClockAsync(GateMs);
+            await RefuseAsync(world);
+            int expected = Math.Min(round, PlayerbotRisk.MaxEscapesPerWindow);
+            await world.OnWorldAsync(() => { Assert.Equal(expected, world.Brain.Risk.Escapes); return true; });
+        }
+
+        await world.OnWorldAsync(() => { world.Brain.Risk.EndEscape(); return true; });
+        await world.Host.World.AdvanceClockAsync(PlayerbotRisk.EscapeWindowMs);
+        await RefuseAsync(world); // standing still all along: the window has passed, the next escape is granted
+        await world.OnWorldAsync(() => { Assert.Equal(PlayerbotRisk.MaxEscapesPerWindow + 1, world.Brain.Risk.Escapes); return true; });
     }
 
     /// <summary>8. A death place across the nearest gap: the chosen exit keeps out of it (another gap).</summary>
