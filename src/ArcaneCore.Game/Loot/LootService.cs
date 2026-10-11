@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
@@ -381,7 +382,7 @@ public sealed partial class LootService : IViewerFieldFilter
     public void OnCreatureDamaged(Unit attacker, Unit victim, uint damage)
     {
         if (damage == 0 || victim is not Creature { IsPet: false, DeathState: CreatureDeathState.Alive } creature
-            || !creature.LootTapPlayerGuid.IsEmpty || DuelRules.ControllingPlayer(attacker) is not { } player)
+            || !creature.LootTapPlayerGuid.IsEmpty || KillRewards.CreditedPlayer(attacker) is not { } player)
         {
             return;
         }
@@ -426,7 +427,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         if (creature.LootTapPlayerGuid.IsEmpty)
         {
-            player = killer is null ? null : DuelRules.ControllingPlayer(killer);
+            player = KillRewards.CreditedPlayer(killer);
         }
         if (player is null || !ReferenceEquals(player.Map, map))
         {

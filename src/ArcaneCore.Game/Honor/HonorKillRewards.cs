@@ -86,14 +86,14 @@ public sealed class HonorKillRewards
             return;
         }
 
-        Player? owner = DuelRules.ControllingPlayer(attacker);
+        Player? owner = KillRewards.CreditedPlayer(attacker);
         state.Ledger.Record(owner?.Guid.Value ?? 0, damage, _honor.Clock.UnixMilliseconds);
     }
 
     /// <summary>Unit::DealDamage (Unit.cpp:804-807): a creature that is not a pet is tapped by the first player to damage it.</summary>
     private void RecordTap(Unit attacker, Creature creature)
     {
-        if (creature.IsPet || DuelRules.ControllingPlayer(attacker) is not { } owner)
+        if (creature.IsPet || KillRewards.CreditedPlayer(attacker) is not { } owner)
         {
             return;
         }
@@ -132,7 +132,7 @@ public sealed class HonorKillRewards
         }
 
         Player? tapper = tap is null
-            ? (killer is null ? null : DuelRules.ControllingPlayer(killer))
+            ? KillRewards.CreditedPlayer(killer)
             : map.FindPlayer(tap.Player);
         RewardCreatureKill(tapper, tap?.Group, creature);
     }

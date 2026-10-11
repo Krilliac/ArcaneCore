@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Reputation;
 /// <c>RewardReputation(Unit*)</c> gives nothing for a pet victim (patch 1.10, Player.cpp:6361-6365) or for a victim a player
 /// controls (the PvP flag of the group helper; a totem or a charmed unit). The killer need not be alive.
 /// <para>
-/// Limit: experience and quest kill credit still go to the killer's group. The Alterac Valley reputation for killing enemy
+/// Experience and quest kill credit resolve the same tap (<see cref="KillRewards.ResolveTap"/>). The Alterac Valley reputation for killing enemy
 /// players (Group.cpp:2305-2320) belongs to the battleground area.
 /// </para>
 /// </summary>
@@ -42,10 +42,7 @@ public static class ReputationKillCredit
 
         // Unit.cpp:981-1000: pPlayerTap starts as the killer's player and becomes the original loot recipient when he is online;
         // pGroupTap is the group of the tap while it exists, else pPlayerTap's group.
-        Player? tapper = (victim.LootTapPlayerGuid.IsEmpty ? null : victim.Map?.FindPlayer(victim.LootTapPlayerGuid)) ?? killer;
-        RewardGroup? group = victim.LootTapGroup is { MemberCount: > 0 } tapGroup
-            ? new RewardGroup([.. tapGroup.Members.Select(m => m.Guid)], tapGroup.IsRaid)
-            : tapper is null ? null : groupOf(tapper);
+        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(killer, victim, groupOf);
         if (tapper is null && group is null)
         {
             return [];
@@ -67,46 +64,10 @@ public static class ReputationKillCredit
             return [];
         }
 
-        IReadOnlyList<Player> recipients = Recipients(tapper, victim, group, distance);
+        IReadOnlyList<Player> recipients = KillRewards.TapRecipients(tapper, victim, group, distance);
         foreach (Player recipient in recipients)
         {
             service.RewardKill(recipient, victim);
-        }
-
-        return recipients;
-    }
-
-    /// <summary>
-    /// Group::RewardGroupAtKill (Group.cpp:2384-2405): the members of <paramref name="group"/> at reward distance in group order,
-    /// then <paramref name="tapper"/> when he is not one of them and is at reward distance; without a group the tapper alone.
-    /// </summary>
-    private static IReadOnlyList<Player> Recipients(Player? tapper, Creature victim, RewardGroup? group, float distance)
-    {
-        if (group is null)
-        {
-            return tapper is null ? [] : [tapper];
-        }
-
-        if (tapper is not null && group.Members.Contains(tapper.Guid))
-        {
-            return KillRewards.Recipients(tapper, victim, group, distance);
-        }
-
-        // Any member on the victim's map anchors the distance pass (KillRewards measures every member, the anchor too).
-        Player? anchor = null;
-        foreach (ObjectGuid guid in group.Members)
-        {
-            if (victim.Map?.FindPlayer(guid) is { } member)
-            {
-                anchor = member;
-                break;
-            }
-        }
-
-        List<Player> recipients = anchor is null ? [] : [.. KillRewards.Recipients(anchor, victim, group, distance)];
-        if (tapper is not null && KillRewards.Recipients(tapper, victim, new RewardGroup([tapper.Guid], false), distance).Count > 0)
-        {
-            recipients.Add(tapper);
         }
 
         return recipients;

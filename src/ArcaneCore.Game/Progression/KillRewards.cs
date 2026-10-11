@@ -1,5 +1,7 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Totems;
 
 namespace ArcaneCore.Game.Progression;
@@ -16,6 +18,70 @@ public sealed record RewardGroup(IReadOnlyList<ObjectGuid> Members, bool IsRaid)
 /// </summary>
 public static class KillRewards
 {
+    /// <summary>
+    /// The player a killing blow (or any damage) is credited to: vmangos Unit::GetCharmerOrOwnerPlayerOrPlayerItself
+    /// (Unit.cpp:4806-4812), which Unit::Kill starts pPlayerTap from (Unit.cpp:981). The unit itself when it is a player, else
+    /// the player that charms or owns it (a hunter's pet, a warlock's demon, a totem, a guardian, a charmed creature), else the
+    /// player a stand-in unit reports through <see cref="IPlayerControlledUnit"/>; null for a unit no player controls.
+    /// </summary>
+    public static Player? CreditedPlayer(Unit? unit)
+        => unit is null ? null : unit.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(unit);
+
+    /// <summary>
+    /// Unit::Kill's tap for a creature victim (Unit.cpp:981-1000): pPlayerTap is <paramref name="killingPlayer"/> (see
+    /// <see cref="CreditedPlayer"/>) replaced by the creature's original loot recipient while he is on the victim's map; pGroupTap
+    /// is the group of the tap while it has members, else pPlayerTap's current group (<paramref name="groupOf"/>; a group that
+    /// does not hold him is ignored). Both null when nobody is credited.
+    /// </summary>
+    public static (Player? Tapper, RewardGroup? Group) ResolveTap(Player? killingPlayer, Creature victim, Func<Player, RewardGroup?> groupOf)
+    {
+        ArgumentNullException.ThrowIfNull(victim);
+        ArgumentNullException.ThrowIfNull(groupOf);
+        Player? tapper = (victim.LootTapPlayerGuid.IsEmpty ? null : victim.Map?.FindPlayer(victim.LootTapPlayerGuid)) ?? killingPlayer;
+        RewardGroup? group = victim.LootTapGroup is { MemberCount: > 0 } tapGroup
+            ? new RewardGroup([.. tapGroup.Members.Select(m => m.Guid)], tapGroup.IsRaid)
+            : tapper is not null && groupOf(tapper) is { } current && current.Members.Contains(tapper.Guid) ? current : null;
+        return (tapper, group);
+    }
+
+    /// <summary>
+    /// Group::RewardGroupAtKill (Group.cpp:2384-2405): the members of <paramref name="group"/> at reward distance in group order,
+    /// then <paramref name="tapper"/> when he is not one of them (he left the group after the tap) and is at reward distance;
+    /// without a group the tapper alone (Player::RewardSinglePlayerAtKill).
+    /// </summary>
+    public static IReadOnlyList<Player> TapRecipients(Player? tapper, Creature victim, RewardGroup? group, float distance)
+    {
+        ArgumentNullException.ThrowIfNull(victim);
+        if (group is null)
+        {
+            return tapper is null ? [] : [tapper];
+        }
+
+        if (tapper is not null && group.Members.Contains(tapper.Guid))
+        {
+            return Recipients(tapper, victim, group, distance);
+        }
+
+        // Any member on the victim's map anchors the distance pass (Recipients measures every member, the anchor too).
+        Player? anchor = null;
+        foreach (ObjectGuid guid in group.Members)
+        {
+            if (victim.Map?.FindPlayer(guid) is { } member)
+            {
+                anchor = member;
+                break;
+            }
+        }
+
+        List<Player> recipients = anchor is null ? [] : [.. Recipients(anchor, victim, group, distance)];
+        if (tapper is not null && Recipients(tapper, victim, new RewardGroup([tapper.Guid], false), distance).Count > 0)
+        {
+            recipients.Add(tapper);
+        }
+
+        return recipients;
+    }
+
     public static IReadOnlyList<Player> Recipients(Player actor, Unit source, RewardGroup? group, float distance)
     {
         ArgumentNullException.ThrowIfNull(actor);

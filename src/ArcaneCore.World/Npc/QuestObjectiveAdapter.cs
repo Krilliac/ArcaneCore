@@ -67,9 +67,15 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
         _spells.Clear();
     }
 
+    /// <summary>
+    /// vmangos Unit::Kill (Unit.cpp:977-1000, 1094-1097): the player behind the killing blow (a pet's, totem's, guardian's or
+    /// charmed creature's master; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, the creature's original loot recipient
+    /// and the group of the tap replace it, and KilledMonster goes to that group (Group.cpp:2373-2380) or the tapper alone. A
+    /// creature no player controls credits nobody.
+    /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (!Authoritative(killer, victim, out Player? player, out Creature? creature))
+        if (!Authoritative(KillRewards.CreditedPlayer(killer), victim, out Player? player, out Creature? creature))
         {
             return;
         }
@@ -81,18 +87,18 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
             return;
         }
 
-        RewardGroup? group = groups?.Invoke(player);
-        if (group is null || !group.Members.Contains(player.Guid))
+        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, groups ?? (_ => null));
+        if (group is null)
         {
-            if (player.IsAlive)
+            if (tapper is { IsAlive: true })
             {
-                objectives.KilledMonsterCredit(player, creature.Entry, creature.Guid);
+                objectives.KilledMonsterCredit(tapper, creature.Entry, creature.Guid);
             }
 
             return;
         }
 
-        foreach (Player member in KillRewards.Recipients(player, creature, group, rewardDistance))
+        foreach (Player member in KillRewards.TapRecipients(tapper, creature, group, rewardDistance))
         {
             if (!KillRewards.CanReceiveQuestCredit(member))
             {

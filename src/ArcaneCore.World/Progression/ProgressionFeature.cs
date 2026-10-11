@@ -123,9 +123,16 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
         }
     }
 
+    /// <summary>
+    /// vmangos Unit::Kill (Unit.cpp:977-1000, 1094-1097): the player behind the killing blow (the killer, or the player that owns or
+    /// charms a pet, demon, totem, guardian or charmed creature; <see cref="KillRewards.CreditedPlayer"/>) starts the tap, which the
+    /// creature's original loot recipient and the group of the tap replace; that group shares the experience (RewardGroupAtKill),
+    /// else the tapper alone (RewardSinglePlayerAtKill). A creature no player controls rewards nobody: the share of non-player damage
+    /// (Creature::IsLootAllowedDueToDamageOrigin) is not tracked, so a tap alone does not earn a guard's or another creature's kill.
+    /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (killer is not Player { IsInWorld: true } player || victim is not Creature creature
+        if (KillRewards.CreditedPlayer(killer) is not { IsInWorld: true } player || victim is not Creature creature
             || creature.Map is not { } map || !ReferenceEquals(player.Map, map)
             || !ReferenceEquals(map.FindPlayer(player.Guid), player))
         {
@@ -134,7 +141,8 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
 
         bool nonRaidDungeon = _world is { } world
             && WorldMaps.Of(world).Registry.Find(map.MapId) is { IsDungeon: true, IsRaid: false };
-        IReadOnlyList<Player> recipients = KillRewards.Recipients(player, creature, _groups(player), Progression.Options.GroupXpDistance);
+        (Player? tapper, RewardGroup? group) = KillRewards.ResolveTap(player, creature, _groups);
+        IReadOnlyList<Player> recipients = KillRewards.TapRecipients(tapper, creature, group, Progression.Options.GroupXpDistance);
         KillRewards.AwardExperience(Progression, recipients, creature, nonRaidDungeon);
     }
 
