@@ -281,6 +281,13 @@ than two bots left), `leader-gone`, or `leader-stopped` (the leader's bot stoppe
 the run goes on. A given-up run walks out of the instance first, then disbands; every bot still in it sets the wing aside. Totals:
 `completed` and `given-up` in the runs line.
 
+After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
+disbands. The coordinator records each `SMSG_INSTANCE_RESET` or `SMSG_INSTANCE_RESET_FAILED` reply, including the map and failure
+reason (offline member or occupied instance); a refusal does not hold the group together. This is the group-leader reset path in
+vmangos `WorldSession::HandleResetInstancesOpcode` (`Handlers/MiscHandler.cpp`) and `Group::ResetInstances` (`Group/Group.cpp`).
+The Deadmines scenario test runs the same bots twice and checks a new instance with living boss and trash; it uses synthetic content,
+not an imported-world or client replay.
+
 **Trash** (`PlayerbotRunRoute.NextPull`, pure): the leader plans a path to the current boss every 3 seconds; a hostile, living creature
 not already in combat that stands within 15 yards of a point still ahead on that path is in the way, because walking
 past it would pull it anyway; a pack is the creatures within 10 yards of its first member (how classic-db places its groups). The leader

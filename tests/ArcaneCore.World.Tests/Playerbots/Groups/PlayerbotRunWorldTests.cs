@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -41,6 +42,7 @@ public sealed class PlayerbotRunWorldTests
     private const uint OnyxiaTrigger = 9201, MoltenCoreTrigger = 9202, NaxxramasTrigger = 9203;
     private const uint DrakefireAmulet = 16309;
     private const uint NaxxramasCondition = 9001;
+    private const uint LifecycleTrash = 990741;
 
     private static readonly AreaTriggerTeleport DeadminesTeleport = new(DungeonEntry.EntranceTrigger, "Deadmines - Entering", "You must be at least level 10 to enter.", 10,
         DungeonEntry.Deadmines, -16.4f, -383.07f, 61.78f, 1.9f);
@@ -55,6 +57,71 @@ public sealed class PlayerbotRunWorldTests
         RequiredCondition: NaxxramasCondition);
 
     // --- the dungeon -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task CompletedRun_ResetsBeforeDisband_AndTheSameBotsEnterAFreshInstance()
+    {
+        await using GroupTestWorld world = await StartAsync(withLifecycleTrash: true);
+        (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Rerun");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup first = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        uint firstInstance = world.Player(bots[0].Id).Map!.InstanceId;
+        Assert.NotEqual(0u, firstInstance);
+        Creature firstTrash = VisibleCreature(world, bots[0].Id, LifecycleTrash);
+        Assert.True(firstTrash.IsAlive);
+        Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.True(first.Run!.Complete, world.Trace());
+        Assert.False(firstTrash.IsAlive);
+        Assert.Equal(1, world.Coordinator.RunTotals.Completed);
+        int resetEvent = world.Coordinator.Events.FindIndex(e => e.EndsWith("reset instance 36", StringComparison.Ordinal));
+        int disbandEvent = world.Coordinator.Events.FindIndex(e => e.Contains("disbanded (completed)", StringComparison.Ordinal));
+        Assert.True(resetEvent >= 0 && disbandEvent > resetEvent, world.Trace());
+        Assert.All(bots, b => Assert.Null(world.Instances().GetPlayerBind(world.Player(b.Id).Guid, DungeonEntry.Deadmines)));
+
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup second = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        Assert.Equal(bots.Select(b => b.Id).Order(), second.Members.Select(m => m.BotId).Order());
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+        uint secondInstance = world.Player(bots[0].Id).Map!.InstanceId;
+        Assert.NotEqual(firstInstance, secondInstance);
+        Assert.Equal(BossEntry, second.Run!.CurrentBoss!.Entry);
+        Assert.True(VisibleCreature(world, bots[0].Id, BossEntry).IsAlive);
+        Assert.True(VisibleCreature(world, bots[0].Id, LifecycleTrash).IsAlive);
+    }
+
+    [Fact]
+    public async Task ResetRefusedWhileMemberInside_IsLogged_AndRunStillDisbands()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Refuse");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+
+        // Force the precise refusal interleaving: the run has completed, but a member is still inside when the leader resets.
+        await world.OnWorldAsync(() =>
+        {
+            group.Run!.Apply(PlayerbotRunSignal.Arrived);
+            group.Run.Apply(PlayerbotRunSignal.AllInside);
+            group.Run.Apply(PlayerbotRunSignal.BossDead(BossEntry));
+            group.Run.Apply(PlayerbotRunSignal.Left);
+            Assert.True(group.Run.Complete);
+            group.Succeeded = true;
+            group.State = PlayerbotGroupState.Disbanding;
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset instance 36 failed: General", StringComparison.Ordinal));
+        Assert.All(bots, b => Assert.Null(world.GroupManager.GetGroup(world.Player(b.Id).Guid)));
+    }
 
     [Fact]
     public async Task FiveBotsInTheBand_WithATankAndAHealer_FormADungeonRun_TheOneOutOfTheBandIsLeftOut()
@@ -436,8 +503,32 @@ public sealed class PlayerbotRunWorldTests
     private static void AssertNoted(GroupTestWorld world, string text)
         => Assert.True(world.Coordinator.Events.Any(e => e.EndsWith(text, StringComparison.Ordinal)), $"not noted: {text}{Environment.NewLine}{world.Trace()}");
 
-    private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null)
-        => GroupTestWorld.StartAsync([], configure, dungeon: true, Register, Bosses());
+    private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false)
+        => GroupTestWorld.StartAsync([], configure, dungeon: true, Register,
+            withLifecycleTrash ? [.. Bosses(), LifecycleTrashSpawn()] : Bosses());
+
+    private static Creature VisibleCreature(GroupTestWorld world, Guid botId, uint entry)
+    {
+        Player player = world.Player(botId);
+        return player.VisibleObjects.Select(g => player.Map!.FindObject(g)).OfType<Creature>().Single(c => c.Entry == entry);
+    }
+
+    // Scenario-only pack member on the straight entrance-to-boss route; 600 s respawn exceeds both runs.
+    private static (CreatureTemplate Template, CreatureSpawn Spawn) LifecycleTrashSpawn() =>
+    (
+        new CreatureTemplate
+        {
+            Entry = LifecycleTrash, Name = "Lifecycle Trash", Faction = 14, CreatureType = 7, MinLevel = 12, MaxLevel = 12,
+            DisplayIds = [903], MinLevelHealth = 80, MaxLevelHealth = 80, MinMeleeDamage = 2, MaxMeleeDamage = 3,
+            MeleeBaseAttackTime = 2000,
+        },
+        new CreatureSpawn
+        {
+            Guid = LifecycleTrash, Entry = LifecycleTrash, MapId = DungeonEntry.Deadmines,
+            X = -16.4f, Y = -365f, Z = global::ArcaneCore.World.Tests.Playerbots.Scenarios.DeadminesTestContent.InsideFloor,
+            SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600,
+        }
+    );
 
     private static (CreatureTemplate Template, CreatureSpawn Spawn)[] Bosses() =>
     [

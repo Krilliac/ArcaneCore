@@ -1,7 +1,9 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Data.World.Instances;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
@@ -11,6 +13,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -359,6 +362,44 @@ public sealed partial class PlayerbotGroupCoordinator
         if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
         if (run.Complete) _runsCompleted++;
         else _runsGivenUp++;
+    }
+
+    /// <summary>
+    /// A completed run asks the server to reset while its leader still owns the group. The ordinary
+    /// disband follows even if an offline member or an occupied map makes the reset fail.
+    /// vmangos WorldSession::HandleResetInstancesOpcode and Group::ResetInstances(INSTANCE_RESET_ALL).
+    /// </summary>
+    private void ResetCompletedRun(BotGroup group)
+    {
+        if (!group.Succeeded || group.Run is not { Step: PlayerbotRunStep.Leave or PlayerbotRunStep.Complete }
+            || !_bots.TryGetValue(group.LeaderBotId, out PlayerbotGroupBot bot)
+            || bot.Session.Player is not { } leader || leader.Guid != group.LeaderGuid) return;
+
+        WorldSession session = bot.Session;
+        session.DrainManagedPackets(WorldOpcode.SmsgInstanceReset, WorldOpcode.SmsgInstanceResetFailed);
+        if (!Act(session, WorldOpcode.CmsgResetInstances, [], budgeted: false))
+        {
+            Note($"group {group.Id} reset request was not handled");
+            logger.LogWarning("Playerbot group {Group} reset request was not handled", group.Id);
+            return;
+        }
+
+        foreach (ManagedSessionPacket packet in session.DrainManagedPackets(WorldOpcode.SmsgInstanceReset, WorldOpcode.SmsgInstanceResetFailed))
+        {
+            if (packet.Opcode == WorldOpcode.SmsgInstanceReset && packet.Payload.Length >= 4)
+            {
+                uint map = BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload);
+                Note($"group {group.Id} reset instance {map}");
+                logger.LogInformation("Playerbot group {Group} reset instance {Map}", group.Id, map);
+            }
+            else if (packet.Opcode == WorldOpcode.SmsgInstanceResetFailed && packet.Payload.Length >= 8)
+            {
+                var reason = (InstanceResetFailedReason)BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload);
+                uint map = BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload.AsSpan(4));
+                Note($"group {group.Id} reset instance {map} failed: {reason}");
+                logger.LogWarning("Playerbot group {Group} reset instance {Map} failed: {Reason}", group.Id, map, reason);
+            }
+        }
     }
 
     // --- the policy seam and the entry waiver --------------------------------------------------------------------------

@@ -1152,6 +1152,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             Totals = (Totals.Formed, Totals.Completed + 1, Totals.Failed);
         }
 
+        ResetCompletedRun(group);
         foreach (Member member in group.Members.Where(m => !m.Real).ToArray()) Release(group, member);
         _groups.Remove(group);
         NoteRunEnded(group);
