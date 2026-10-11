@@ -9,9 +9,11 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// an <see cref="ISpellCastObserver"/> for OnCast and OnSummon, and chained handlers for DUMMY, SCRIPT_EFFECT and DISPEL that keep whatever was
 /// installed before (another lane's handler, the built-in dispel) and call it after the script.
 /// <para>
-/// SCRIPT_EFFECT (77) has no behaviour of its own: vmangos EffectScriptEffect falls through to the database script table
-/// (SpellEffects.cpp:3685-3700, :4560-4570), which is empty here, so a spell no script claims does nothing instead of being
-/// reported as an unsupported effect (the six mage Teleport spells and the five Create Healthstone ranks carry one).
+/// SCRIPT_EFFECT (77) has no behaviour of its own: vmangos runs the spell's script (OnEffectExecute, Spell.cpp:5254-5257) and then
+/// EffectScriptEffect, whose id switch falls through to the database script table (SpellEffects.cpp:3685-3700, :4560-4570), which is
+/// empty here, so a spell no script claims does nothing instead of being reported as an unsupported effect. Spells whose script effect
+/// does real work need an <see cref="ISpellScript"/> or a <see cref="ScriptEffectRegistry"/> entry: the five Create Healthstone ranks,
+/// for one, create their item from Warlock.CreateHealthstoneScript (vmangos spell_warlock.cpp:260-368).
 /// </para>
 /// Install once per <see cref="SpellSystem"/> (a second call throws).
 /// </summary>
