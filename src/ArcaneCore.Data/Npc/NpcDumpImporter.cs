@@ -45,6 +45,7 @@ public sealed class NpcDumpImporter
 
     public void Read(TextReader dump)
     {
+        _vendorTemplateTableRejected = false;
         foreach (object item in new MySqlDumpReader(dump).Read())
         {
             if (item is DumpTable definition && string.Equals(definition.Name, VendorTemplateTable, StringComparison.OrdinalIgnoreCase))
@@ -131,6 +132,9 @@ public sealed class NpcDumpImporter
         _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count);
 
     public bool SawVendorTemplateTable => _sawVendorTemplateTable;
+
+    /// <summary>The dump's npc_vendor_template lacked required columns and was skipped (see <see cref="NpcImportReport.Diagnostics"/>).</summary>
+    public bool VendorTemplateTableRejected => _vendorTemplateTableRejected;
 
     private const string VendorTemplateTable = "npc_vendor_template";
 

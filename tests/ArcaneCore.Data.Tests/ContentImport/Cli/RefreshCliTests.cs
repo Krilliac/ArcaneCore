@@ -571,11 +571,13 @@ public sealed class RefreshCliTests : IDisposable
         await using (WorldDbContext seed = Open(world))
         {
             seed.Set<VendorTemplateItemRow>().Add(new VendorTemplateItemRow { Entry = 6, Item = 999 });
+            seed.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow { Entry = 1329, Name = "Linked", VendorTemplateId = 6 });
             await seed.SaveChangesAsync();
         }
 
         string dump = PathOf("world.sql");
         File.WriteAllText(dump, Dump + Environment.NewLine
+            + "INSERT INTO `creature_template` (`Entry`,`Name`,`ModelId1`,`MinLevel`,`MaxLevel`,`VendorTemplateId`) VALUES (1329,'Linked',1,5,5,7);" + Environment.NewLine
             + "INSERT INTO `npc_vendor_template` (`entry`,`item`,`maxcount`,`incrtime`) VALUES (7,2902,0,0);");
 
         (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
@@ -583,7 +585,11 @@ public sealed class RefreshCliTests : IDisposable
         Assert.True(code == ExitCodes.Ok, error + output);
         await using WorldDbContext db = Open(world);
         Assert.Equal(999u, (await db.Set<VendorTemplateItemRow>().SingleAsync()).Item);
+        Assert.Equal(6u, (await db.Set<CreatureTemplateRow>().SingleAsync(r => r.Entry == 1329)).VendorTemplateId); // links stay consistent with the stock
         Assert.DoesNotContain("npc_vendor_template  ", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("creature_template (VendorTemplateId)", output, StringComparison.Ordinal);
+        Assert.Contains("npc_vendor_template: skipped, the table is missing required columns: slot, condition_id", output, StringComparison.Ordinal);
+        Assert.Contains("VendorTemplateId is not refreshed", output, StringComparison.Ordinal);
     }
 
     [Fact]

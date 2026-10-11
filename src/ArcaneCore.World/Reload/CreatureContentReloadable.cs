@@ -51,13 +51,14 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
         CreatureContent fresh = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
 
         NpcStore? npcStore = null;
-        if (services.GetService<QuestNpcFeature>() is { } npcFeature && scope.ServiceProvider.GetService<INpcContentStore>() is { } npcContent)
+        QuestNpcFeature? npcFeature = services.GetService<QuestNpcFeature>();
+        if (npcFeature is not null && scope.ServiceProvider.GetService<INpcContentStore>() is { } npcContent)
         {
             NpcContent links = await npcContent.LoadAsync(cancellationToken).ConfigureAwait(false);
             npcStore = new NpcStore(npcFeature.Services.Npcs.Content with { VendorTemplateIds = links.VendorTemplateIds }, npcFeature.Services.Npcs.ScriptedTaxiPathIds);
         }
 
-        return new CreatureCandidate(feature, fresh, services.GetService<QuestNpcFeature>(), npcStore);
+        return new CreatureCandidate(feature, fresh, npcFeature, npcStore);
     }
 
     private sealed class CreatureCandidate(CreatureWorldFeature feature, CreatureContent fresh, QuestNpcFeature? npcFeature, NpcStore? npcStore) : ContentCandidate

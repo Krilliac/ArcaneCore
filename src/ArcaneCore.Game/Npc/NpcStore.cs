@@ -146,8 +146,9 @@ public sealed class NpcStore
                 diagnostics.Add($"Creature (Entry: {entry}) has vendor_id = {templateId} for nonexistent vendor template");
         }
 
+        // vmangos builds the unused list from the accepted map (ObjectMgr.cpp:10841), so a template whose rows were all rejected is reported too.
         HashSet<uint> used = [.. content.VendorTemplateIds.Values];
-        foreach (uint entry in defined.Order().Where(entry => !used.Contains(entry)))
+        foreach (uint entry in templates.Keys.Order().Where(entry => !used.Contains(entry)))
             diagnostics.Add($"npc_vendor_template has vendor template {entry} not used by any vendors");
         return templates;
     }

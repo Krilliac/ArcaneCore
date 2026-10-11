@@ -291,6 +291,13 @@ public static partial class ContentImporterCli
         (IReadOnlyCollection<RelayScriptRow> relaySteps, IReadOnlyCollection<RelayScriptTemplateRow> relayTemplates) = relays.RelaySnapshot();
         warnings.AddRange(graveyardReport.Warnings);
         warnings.AddRange(battlegroundReport.Warnings);
+        // A malformed npc_vendor_template is skipped; the creature links are then left alone too, so links and stock stay consistent.
+        bool vendorStockRejected = gossip.VendorTemplateTableRejected;
+        if (vendorStockRejected)
+        {
+            warnings.AddRange(gossip.BuildReport().Diagnostics.Where(d => d.StartsWith("npc_vendor_template", StringComparison.Ordinal)));
+            warnings.Add("npc_vendor_template: the world's shared vendor stock is left as it is, and creature_template.VendorTemplateId is not refreshed either");
+        }
 
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         void Count(string table, long rows, bool present)
@@ -423,8 +430,8 @@ public static partial class ContentImporterCli
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshScriptNamesAsync(db, token).ConfigureAwait(false);
                     // The links actually changed (a dry run reads no database, so it reports none).
-                    int linksChanged = await relays.RefreshVendorTemplateIdsAsync(db, token).ConfigureAwait(false);
-                    if (relays.HasVendorTemplateIdColumn)
+                    int linksChanged = vendorStockRejected ? 0 : await relays.RefreshVendorTemplateIdsAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasVendorTemplateIdColumn && !vendorStockRejected)
                     {
                         counts["creature_template (VendorTemplateId)"] = linksChanged;
                     }

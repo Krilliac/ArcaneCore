@@ -120,7 +120,9 @@ and all_gossips (`ServerCommands.cpp:925-933`, `985-994`); `npc_text` is in neit
   `vendor_id` from the template whenever a vendor window opens (`Creature.cpp:3423-3427`), so `.reload creature_template` also
   rebuilds the live vendor links from the database; the shared stock rows themselves are only re-read by `.reload npc_vendor`. Template
   rows that fail the vmangos load checks (maxcount/incrtime pairing, duplicates, more than 254 items, a creature `vendor_id` with no
-  rows, rows no creature uses; `ObjectMgr.cpp:10836-10862`, `11262-11330`) are logged (startup) or noted (reload) and skipped.
+  rows, rows no creature uses; `ObjectMgr.cpp:10836-10862`, `11262-11330`) are logged (startup) or noted (`.reload npc_vendor`) and skipped;
+  `.reload creature_template` rebuilds only the links and does not report them. Direct `npc_vendor` rows get no load-time maxcount/incrtime
+  or item-cap check; the vendor window sends at most `MaxVendorItems` (150) entries.
 **Loot tables** (`LootContentReloadables`: `all_loot`, the eight per-table `*_loot_template` reloadables and
 `skill_fishing_base_level`; `LootContent.Rows` and friends, `GameObjectLootFeature.ReplaceLootContent`, `LootService.ReplaceContent`):
 the whole `LootContent` is read through `ILootDataStore` off the world thread and the next immutable content is composed from it and

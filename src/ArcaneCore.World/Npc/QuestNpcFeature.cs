@@ -152,6 +152,11 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         {
             _logger.LogWarning("Vendor templates: {Problem}", problem);
         }
+
+        if (Services.Npcs.VendorDiagnostics.Count > 64)
+        {
+            _logger.LogWarning("Vendor templates: {Omitted} more problem(s) not shown", Services.Npcs.VendorDiagnostics.Count - 64);
+        }
         // Duplicate adapter providers fail here, at startup; the report itself waits for the first tick because features that
         // attach later (the spell system) supply part of what the quests need.
         _ = Services.ProvidedAdapters;
