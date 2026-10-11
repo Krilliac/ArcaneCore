@@ -22,7 +22,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
-public sealed class PlayerbotQuestReturnTests
+public sealed partial class PlayerbotQuestReturnTests
 {
     [Theory]
     [InlineData(false)]

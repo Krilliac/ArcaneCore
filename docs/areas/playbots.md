@@ -98,6 +98,16 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
 and logged once.
 
+**Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
+(3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at
+(2770.4, 1275.2, 319.1), the real mesh with steep polygons excluded ends at the bot's feet. With them allowed,
+its route approaches the ender after first climbing more than 23 yards (and ultimately above Z 438); that violates
+the bot's 1.5-yard steep escape climb bound. When the only indexed ender of a completed quest has this topology,
+`PlayerbotWorldDestinations` sets that quest and entry aside for this bot for ten minutes at the first failed plan
+and logs the measured climb. Other spawns still rotate normally. The real-terrain regression is
+`Quest6562_FromAshenvaleRidge_SetsAsideTheUnsafeSteepAscent`. This does not establish a walkable approach from
+the ridge or complete the dungeon quest for the bot; it lets the bot pursue another goal immediately.
+
 Some walkable ground is a navigation-mesh **island**: polygons the mesh joins to nothing round them, so every route from there ends at the
 island's edge nearest the goal and the next plan is refused, whatever the goal. Inside the round wall of the Molsen Farm in Westfall
 (x -10305..-10274, y 1355..1385) the collision data closes it too: the wall stands 1.7 to 3 yards above the ground inside, and no floor

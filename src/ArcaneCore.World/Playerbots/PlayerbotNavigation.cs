@@ -471,6 +471,36 @@ internal static class PlayerbotNavigation
     /// <summary>How far above where the bot stands a way off steep ground may lead (<see cref="TryLeaveSteepGround"/>).</summary>
     internal const float SteepEscapeClimbYards = 1.5f;
 
+    /// <summary>
+    /// Explain a refused route when the ordinary mesh cannot leave the bot's spot, but the mesh with steep polygons allowed
+    /// approaches the goal only by climbing above the safe steep-ground escape bound. This is a local topology diagnosis, not
+    /// proof that the quest is impossible from every approach.
+    /// </summary>
+    internal static bool RequiresSteepAscent(Player player, Vector3 goal, PlayerbotOptions options, out float ascent)
+    {
+        ascent = 0;
+        if (player.Map is not { } map || !Finite(goal)) return false;
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        PathResult ordinary = Query(map, start, goal, options, partial: true, steep: false);
+        if ((ordinary.Type & PathType.NotUsingPath) != 0
+            || (ordinary.Type & PathType.NoPath) == 0 &&
+                ((ordinary.Type & PathType.Incomplete) == 0 || Vector2.Distance(Flat(ordinary.End), Flat(start)) > SteepPatchYards))
+            return false;
+
+        PathResult steep = Query(map, start, goal, options, partial: true, steep: true);
+        if (!steep.HasPath || (steep.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.DestForced)) != 0
+            || Vector3.Distance(steep.End, goal) > 8f) return false;
+        foreach (Vector3 corner in steep.Points.Skip(1).Take(SteepEscapeCorners))
+        {
+            if (!Finite(corner)) return false;
+            ascent = MathF.Max(ascent, corner.Z - start.Z);
+            if (ascent > SteepEscapeClimbYards) return true;
+        }
+
+        ascent = 0;
+        return false;
+    }
+
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
     private const int SteepEscapeCorners = 16;
 

@@ -10,6 +10,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -193,6 +194,17 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);
+                // A completed quest with just one indexed ender cannot be reached by retrying this failed plan every think.
+                // Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.
+                if (returnQuestId == questId && questId != 0 && _entries.Count == 1
+                    && SetAsideSteepAscent(player, destination, questId, entry.Entry, now, Suspensions, _options, out float ascent))
+                {
+                    TargetEntry = entry.Entry;
+                    QuestId = questId;
+                    _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>()?.LogWarning(
+                        "Playerbot {Bot} sets aside quest {Quest} target {Entry}: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route requires climbing at least {Ascent:F1} yards on steep ground",
+                        player.Guid, questId, entry.Entry, player.X, player.Y, player.Z, player.MapId, ascent);
+                }
                 return false; // Rotate to another indexed spawn on the next think; one path attempt per think.
             }
             _route = route;
@@ -220,6 +232,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
+
+    /// <summary>Set aside one quest for this bot when the only route from its current spot requires an unsafe steep ascent.</summary>
+    internal static bool SetAsideSteepAscent(Player player, Vector3 destination, uint questId, uint entry, uint now,
+        PlayerbotSuspensions? suspensions, PlayerbotOptions options, out float ascent)
+    {
+        ascent = 0;
+        if (questId == 0 || suspensions is null
+            || !PlayerbotNavigation.RequiresSteepAscent(player, destination, options, out ascent)) return false;
+        suspensions.SuspendQuest(questId, now);
+        suspensions.SuspendEntry(entry, now);
+        return true;
+    }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
     {
