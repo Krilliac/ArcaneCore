@@ -434,6 +434,16 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             {
                 auras = auras.Where(saved => !IsRebuiltGhostAura(player, saved));
             }
+            else if (player.IsAlive)
+            {
+                // A living player carries no ghost form. A stored ghost without a body is brought back to life at half health
+                // (PlayerLife.ApplyVitals, vmangos Player::LoadCorpse "Prevent Dead Player login without corpse",
+                // Player.cpp:15427-15440); vmangos loads the auras first (Player.cpp:14971) and that ResurrectPlayer removes the
+                // ghost form again (RemoveGhostForm, Player.cpp:4571-4578). Restoring the saved 8326 here made a LIVING player with
+                // PLAYER_FLAGS_GHOST (SPELL_AURA_GHOST), whose next release was refused as "already a ghost" (live 2026-10-11:
+                // 21 bots stored IsGhost without a body, recovery faults playerbot-recovery-spirit-healer-failed).
+                auras = auras.Where(saved => saved.SpellId is not (CombatConstants.GhostSpellId or CombatConstants.WispGhostSpellId));
+            }
 
             System.RestoreAuras(player, auras, UnixNowMs);
         }

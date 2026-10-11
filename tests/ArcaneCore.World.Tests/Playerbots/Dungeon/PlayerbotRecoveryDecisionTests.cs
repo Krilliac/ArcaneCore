@@ -65,7 +65,8 @@ public sealed class PlayerbotRecoveryDecisionTests
     [InlineData(true, false, false, false, "WalkToHealer")]
     [InlineData(true, false, true, false, "WalkToHealer")]
     [InlineData(false, false, true, false, "WalkToGraveyard")]
-    [InlineData(false, false, false, false, "Fault")]
+    [InlineData(false, false, false, false, "WaitForHealer")]
+    [InlineData(false, false, false, true, "Fault")]
     [InlineData(true, false, true, true, "Fault")]
     public void DecideSpiritHealer(bool healer, bool inReach, bool graveyard, bool stalled, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
@@ -539,7 +540,9 @@ public sealed class PlayerbotRecoveryDecisionTests
 
     /// <summary>
     /// A ghost with no way back and no spirit healer or graveyard anywhere faults — but only once the fallback has failed too, with
-    /// its own code; before the stuck bound it keeps trying.
+    /// its own code: finding neither is no fault by itself (a healer not yet seen, an area not yet known are transients), so the
+    /// ghost waits and looks again, and faults when the fallback has made no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>.
+    /// Before, the first look that found neither threw at once.
     /// </summary>
     [Fact]
     public async Task WithoutAnySpiritHealer_TheRecoveryFaultsOnlyWhenTheFallbackFails()
@@ -556,14 +559,20 @@ public sealed class PlayerbotRecoveryDecisionTests
 
         var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
         InvalidOperationException? fault = null;
-        long faultAt = 0, start = (long)host.Host.World.Uptime.TotalMilliseconds;
-        for (int think = 0; think < 60 && fault is null; think++)
+        long faultAt = 0, fallbackAt = -1, start = (long)host.Host.World.Uptime.TotalMilliseconds;
+        bool waited = false;
+        for (int think = 0; think < 240 && fault is null; think++)
         {
             fault = await host.OnWorldAsync(() =>
             {
                 host.Session.ManagedBudget = new ManagedActionBudget(4);
                 try { recovery.Update(host.Player, 500); return null; }
                 catch (InvalidOperationException error) { return error; }
+                finally
+                {
+                    waited |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.WaitForHealer;
+                    if (fallbackAt < 0 && recovery.UsingSpiritHealer) fallbackAt = (long)host.Host.World.Uptime.TotalMilliseconds;
+                }
             });
             faultAt = (long)host.Host.World.Uptime.TotalMilliseconds;
             if (fault is null) await host.AdvanceAsync(500);
@@ -571,7 +580,9 @@ public sealed class PlayerbotRecoveryDecisionTests
 
         Assert.NotNull(fault);
         Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
+        Assert.True(waited, "the ghost never waited for a healer");
         Assert.True(faultAt - start > PlayerbotRecovery.StuckMs, $"faulted after {faultAt - start} ms");
+        Assert.True(fallbackAt >= 0 && faultAt - fallbackAt > PlayerbotRecovery.NoProgressMs, $"faulted {faultAt - fallbackAt} ms into the fallback");
     }
 
     private sealed class TestDeathClock(long seconds) : DeathClock
