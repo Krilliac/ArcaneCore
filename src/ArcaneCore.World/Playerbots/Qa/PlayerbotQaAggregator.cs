@@ -53,7 +53,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         {
             if (!_byId.TryGetValue(id, out QaFinding? finding))
             {
-                if (_byId.Count >= maxFindings && !EvictOne())
+                if (_byId.Count >= maxFindings && !EvictOne(signal.FromCoverage))
                 {
                     Interlocked.Increment(ref _rejected);
                     return null;
@@ -230,16 +230,27 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         if (signal.GameObject != 0) finding.GameObject = signal.GameObject;
     }
 
-    private bool EvictOne()
+    /// <summary>
+    /// Make room for one finding. A finding no bot met (Count 0: only the start-up spell coverage lists it, and the next start lists it again) goes
+    /// first; a coverage signal may only evict such a finding, so the coverage never pushes out a finding of real occurrences.
+    /// </summary>
+    private bool EvictOne(bool coverageOnly)
+    {
+        QaFinding? victim = Victim(static f => f.Count == 0);
+        if (victim is null && !coverageOnly) victim = Victim(static _ => true);
+        return victim is not null && _byId.Remove(victim.Id);
+    }
+
+    private QaFinding? Victim(Func<QaFinding, bool> eligible)
     {
         QaFinding? victim = null;
         foreach (QaFinding f in _byId.Values)
         {
-            if (f.Publication.Pinned) continue;
+            if (f.Publication.Pinned || !eligible(f)) continue;
             if (victim is null || f.Severity < victim.Severity || (f.Severity == victim.Severity && f.LastSeenUtc < victim.LastSeenUtc)) victim = f;
         }
 
-        return victim is not null && _byId.Remove(victim.Id);
+        return victim;
     }
 
     private ulong BotHash(Guid bot)

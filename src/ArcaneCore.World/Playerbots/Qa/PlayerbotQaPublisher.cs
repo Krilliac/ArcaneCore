@@ -251,6 +251,7 @@ internal sealed class PlayerbotQaPublisher
         // A spell gap is reported on its first real occurrence (a bot cast it); a gap only the start-up coverage lists (Count 0) stays in the
         // report's Spell coverage section and is never published on its own, so a first deploy cannot open one issue per uncast spell.
         if (f.Count < (QaKinds.Of(f.Kind).SingleOccurrence ? 1 : git.MinOccurrences)) return false;
+        if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
         return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed);

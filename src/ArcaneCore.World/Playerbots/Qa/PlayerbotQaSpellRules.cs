@@ -24,6 +24,12 @@ internal static class QaSpellGaps
     /// <summary>An implicit target type the spell system cannot select (seen only while a bot casts it).</summary>
     internal const string Target = "target";
 
+    /// <summary>
+    /// Whether a gap is advisory: listed and counted, never published. A DUMMY or OVERRIDE_CLASS_SCRIPTS aura can be read by any rule that looks for the
+    /// spell id, the icon or the family (the registries cannot know them all), so "read by nothing" is a lead, not a defect.
+    /// </summary>
+    internal static bool IsAdvisory(string code) => string.Equals(code, NoConsumer, StringComparison.Ordinal);
+
     /// <summary>The gap in a few words for a title: <c>aura ModStun not implemented</c>.</summary>
     internal static string Describe(string code, string detail) => code switch
     {

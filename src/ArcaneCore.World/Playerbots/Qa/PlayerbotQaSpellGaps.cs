@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Talents;
 
@@ -85,7 +86,9 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
         AuraType type = effect.AuraType;
         if (type is AuraType.Dummy or AuraType.OverrideClassScripts)
         {
-            bool read = system.HasDummyAuraHandler(spell.Id) || system.HasPeriodicDummyAura(spell.Id) || TalentEffectCoverage.HasConsumer(system, spell, effect);
+            // A known reader outside the registries: the Judgement script reads the DUMMY aura of every seal (PaladinSpellScripts).
+            bool read = system.HasDummyAuraHandler(spell.Id) || system.HasPeriodicDummyAura(spell.Id) || TalentEffectCoverage.HasConsumer(system, spell, effect)
+                || (type == AuraType.Dummy && PaladinSpells.IsSeal(spell));
             return read ? null : QaSpellGaps.NoConsumer;
         }
 

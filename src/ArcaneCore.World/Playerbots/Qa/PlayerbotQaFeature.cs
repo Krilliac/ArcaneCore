@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +37,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private string _directory = string.Empty;
     private long _ingestFailures;
     private bool _exportFailureLogged;
+    private bool _coverageFailureLogged;
+    private QaSpellCoverageReport? _coverage;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -46,6 +50,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     /// <summary>The spell watcher of the bots' casts (registered on the world's spell system while QA runs; null otherwise).</summary>
     internal PlayerbotQaSpellMonitor? SpellMonitor { get; private set; }
+
+    /// <summary>The static spell coverage of the bots (computed by the first pass that finds the spell table loaded; null before).</summary>
+    internal QaSpellCoverageReport? SpellCoverage => Volatile.Read(ref _coverage);
 
     internal PlayerbotQaRedactor Redactor { get; } = new();
 
@@ -183,6 +190,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     {
         if (Aggregator is null || _publisher is null) return;
         Drain();
+        TryComputeSpellCoverage();
         if (services.GetService<IPlayerbotService>() is { } bots)
         {
             Redactor.SetNames(bots.Snapshot().Select(bot => bot.Name));
@@ -211,6 +219,37 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _log.LogError(ex, "Bot QA publishing failed; the findings stay pending and the next pass tries again");
+        }
+    }
+
+    /// <summary>
+    /// Compute the static spell coverage (<see cref="PlayerbotQaSpellCoverage"/>) on the QA task, once the spell table is loaded, and fold each gap in as a
+    /// coverage finding. It is computed again only when the first run had no class trainer rows and they have loaded since. True when it ran now.
+    /// A failure is logged once and retried on the next pass.
+    /// </summary>
+    internal bool TryComputeSpellCoverage()
+    {
+        if (Aggregator is null || services.GetService<SpellFeature>() is not { } spells || spells.System.Store.Count == 0) return false;
+        IReadOnlyList<TrainerSpell> rows = services.GetService<QuestNpcFeature>()?.Services?.Npcs.Content.TrainerSpells ?? [];
+        if (_coverage is { } done && (done.TrainerRows > 0 || rows.Count == 0)) return false;
+        try
+        {
+            IEnumerable<uint> talents = services.GetService<Talents.TalentFeature>()?.Catalog?.Talents.SelectMany(t => t.RankSpells) ?? [];
+            QaSpellCoverageReport report = PlayerbotQaSpellCoverage.Build(spells.System, rows, talents, DateTime.UtcNow);
+            foreach (QaSignal gap in PlayerbotQaSpellCoverage.Signals(report)) Aggregator.Ingest(gap, _facts, report.ComputedUtc);
+            Volatile.Write(ref _coverage, report);
+            _log.LogInformation("Bot QA: {Coverage}", report.Describe());
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (!_coverageFailureLogged)
+            {
+                _coverageFailureLogged = true;
+                _log.LogError(ex, "Bot QA could not compute the spell coverage; the next pass tries again");
+            }
+
+            return false;
         }
     }
 
@@ -263,8 +302,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         try
         {
             System.IO.Directory.CreateDirectory(_directory);
-            WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor));
-            WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor));
+            QaSpellCoverageReport? coverage = SpellCoverage;
+            WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor, coverage));
+            WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor, coverage));
             _exportFailureLogged = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
