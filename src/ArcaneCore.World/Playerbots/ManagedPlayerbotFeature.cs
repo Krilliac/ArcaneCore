@@ -1014,7 +1014,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             {
                 if (!PlayerbotMovementControl.Update(active.Session, driven))
                     PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
-                return;
+                return "elevator";
             }
         }
         active.PartyDriven = party;

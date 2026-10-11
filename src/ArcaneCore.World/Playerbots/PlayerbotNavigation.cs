@@ -220,8 +220,8 @@ internal static class PlayerbotNavigation
         // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
         // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
         // straight-line steps still get their turn.
-        if (Plan(player, portals[pick], portals[pick], options, partial: true, out route, out _)) return true;
-        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, out route, out _)) return true;
+        if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _)) return true;
+        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _)) return true;
         route = null;
         return null;
     }
