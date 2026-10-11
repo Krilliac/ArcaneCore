@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      12 keys
-#   WORLD                       328 keys
+#   WORLD                       329 keys
 #
 ###############################################################################
 
@@ -7420,41 +7420,6 @@ World.Maps.GridPrefetchDistance = 200
 World.Maps.GridUnload = true
 
 #
-#    World.Maps.UpdateActiveCellsOnly
-#        Description: On continents, update creatures only in the cells within
-#                     GridActivationDistance of a player or active object (vmangos Map::UpdateCells
-#                     → UpdateActiveCellsSynch, Maps/Map.cpp:815-857): a creature elsewhere in a
-#                     loaded grid stands still, its AI and movement paused, until a player comes
-#                     near; its respawn time is wall-clock and its corpse decay catches up on the
-#                     first update (WorldObject::UpdateHelper::UpdateRealTime,
-#                     Objects/Object.h:477-481). False updates every creature of the loaded grids
-#                     each tick (the behaviour before 2026-10-11).
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#world
-#
-World.Maps.UpdateActiveCellsOnly = true
-
-#
-#    World.Maps.VisibilityRelocationLowerLimit
-#        Description: How far (yards, 3D) a unit (player or creature) must move from where its last
-#                     movement-triggered visibility pass was scheduled before the next one is
-#                     (vmangos Visibility.RelocationLowerLimit, default 10, World.cpp:830;
-#                     Unit::OnRelocated). Moves within it keep the visible sets of the last pass;
-#                     the grey distance (Map.VisibilityGreyDistance) and the next pass cover the
-#                     difference. Game objects get a pass on every move. 0 runs a pass on every
-#                     move.
-#        Type: float
-#        Default: 10
-#        Allowed: a number, '.' is the decimal point
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#world
-#
-World.Maps.VisibilityRelocationLowerLimit = 10
-
-#
 #    World.MaxCommandsPerTick
 #        Description: Maximum queued world commands admitted before the map pass of one tick.
 #        Type: int
@@ -10473,6 +10438,34 @@ World.Playerbots.Population.AllianceSharePct = 50
 # World.Playerbots.Population.Classes.8 = 11
 
 #
+#    World.Playerbots.Population.CreatureLevelMargin
+#        Description: A bot is not placed at a graveyard where most creatures hostile to its faction
+#                     within CreatureSurveyRadius are more than this many levels above it (0..10),
+#                     and is relocated from a zone where every graveyard of its faction is like
+#                     that. Uses the creature survey; without creature data or faction templates
+#                     nothing is surveyed and only the area floor counts.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CreatureLevelMargin = 3
+
+#
+#    World.Playerbots.Population.CreatureSurveyRadius
+#        Description: The radius in yards around each graveyard the creature survey counts hostile
+#                     creature spawns in (0..300; 0 turns the survey off). The survey runs with the
+#                     graveyard terrain lookup, off the world thread, when the atlas is built.
+#        Type: int
+#        Default: 100
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CreatureSurveyRadius = 100
+
+#
 #    World.Playerbots.Population.Enabled
 #        Description: Run the population manager (off by default). Off: no bot is created, started,
 #                     parked or moved by it.
@@ -10656,11 +10649,13 @@ World.Playerbots.Population.WindowTicks = 200
 
 #
 #    World.Playerbots.Population.ZoneLevelSlack
-#        Description: How many levels below a placement's floor a bot may be (0..10). The floor is
-#                     the level of the sub-area the graveyard stands in, or the zone's lowest
-#                     sub-area level when the terrain does not know; a starter zone's is level 4 or
-#                     5, so the default 4 lets a level 1 bot start there. A bot further below every
-#                     floor of its zone is relocated like an out-levelled one.
+#        Description: How many levels below a placement's floor a bot may be while the floor is at
+#                     most ZoneLevelSlackMaxFloor (0..10). The floor is the level of the sub-area
+#                     the graveyard stands in, or the zone's lowest sub-area level when the terrain
+#                     does not know; a starter zone's is level 4 to 7, so the default 4 lets a level
+#                     1 bot start there. Above ZoneLevelSlackMaxFloor the slack shrinks by one level
+#                     for every two floor levels, to 0. A bot below every place of its zone it could
+#                     have been put is relocated like an out-levelled one.
 #        Type: int
 #        Default: 4
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -10668,6 +10663,21 @@ World.Playerbots.Population.WindowTicks = 200
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.ZoneLevelSlack = 4
+
+#
+#    World.Playerbots.Population.ZoneLevelSlackMaxFloor
+#        Description: The highest placement floor that gets the whole ZoneLevelSlack (1..60). Above
+#                     it the slack shrinks by one level for every two floor levels (default: 3 at
+#                     floors 13-14, 2 at 15-16, 1 at 17-18, 0 from 19), so a level 38 bot is not
+#                     placed at a level 41 graveyard. 60 gives every floor the whole slack (the rule
+#                     before the taper).
+#        Type: int
+#        Default: 12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ZoneLevelSlackMaxFloor = 12
 
 #
 #    World.Playerbots.RestoreOnStartup

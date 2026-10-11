@@ -1,16 +1,22 @@
 using System.Globalization;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -121,9 +127,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private PopulationZoneAtlas _atlas = PopulationZoneAtlas.Empty;
     private object? _atlasAreas;
     private object? _atlasGraveyards;
+    private object? _atlasCreatures;
     private string _atlasKey = string.Empty;
     private bool _atlasLocated;
-    private IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? _located;
+    private PopulationLocated? _located;
+    private (PopulationZoneAtlas Atlas, PopulationBand[] Bands, PopulationLevelRule Rule, PopulationFactions Factions)? _coverageChecked;
     private object? _locating;
     private bool _locateRunning;
     private int _locateHeldPasses;
@@ -146,6 +154,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// Set it before the first pass.
     /// </summary>
     internal Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? TerrainLocator { get; set; }
+
+    /// <summary>
+    /// The creature survey level of a graveyard for a team, called with the terrain lookup on a background thread; a test supplies a
+    /// fake. Null surveys the creature spawns (<see cref="PopulationCreatureSurvey"/>) when creature content and faction templates are
+    /// loaded and <c>CreatureSurveyRadius</c> is above 0. Set it before the first pass.
+    /// </summary>
+    internal Func<WorldSafeLoc, Team, int>? CreatureSurveyor { get; set; }
+
+    /// <summary>What the background lookup found: where each graveyard stands, and its creature survey level by team.</summary>
+    private sealed record PopulationLocated(IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)> Where,
+        IReadOnlyDictionary<(uint LocationId, Team Team), int> Creatures);
 
     /// <summary>The atlas the last capture used (world thread; tests).</summary>
     internal PopulationZoneAtlas Atlas => _atlas;
@@ -304,12 +323,17 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         AreaTable areas = WorldMaps.Of(world).Areas;
         GraveyardCatalog graveyards = WorldGraveyards.Of(world).Catalog;
-        string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones);
-        bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards) || key != _atlasKey;
+        CreatureContent? creatures = services.GetService<CreatureWorldFeature>()?.Content;
+        // The creature definitions version: `.reload creature_template` swaps templates (levels, factions) in the same content.
+        string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones) + "|" + pop.CreatureSurveyRadius
+            + "|" + creatures?.DefinitionsVersion;
+        bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards)
+            || !ReferenceEquals(creatures, _atlasCreatures) || key != _atlasKey;
         if (sourcesChanged)
         {
             _atlasAreas = areas;
             _atlasGraveyards = graveyards;
+            _atlasCreatures = creatures;
             _atlasKey = key;
             _located = null;
             // A lookup still running for the old sources is cancelled, and ignored if it posts anyway (its token is no longer current),
@@ -321,20 +345,54 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _locateCts = null;
         }
 
-        if (!sourcesChanged && (_located is null || _atlasLocated)) return _atlas;
+        if (!sourcesChanged && (_located is null || _atlasLocated))
+        {
+            LogCoverage(pop);
+            return _atlas;
+        }
 
-        IReadOnlyDictionary<uint, (uint ZoneId, uint AreaId)>? located = _located;
+        PopulationLocated? located = _located;
         _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
-            located is null ? null : l => located.GetValueOrDefault(l.Id));
+            located is null ? null : l => located.Where.GetValueOrDefault(l.Id),
+            located is null || located.Creatures.Count == 0 ? null : (l, t) => located.Creatures.GetValueOrDefault((l.Id, t)));
         _atlasLocated = located is not null;
         logger.LogInformation(
-            "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Dropped} graveyard links left out as standing in another zone{List}",
+            "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Surveyed} graveyard/faction pairs with a creature survey level; {Dropped} graveyard links left out as standing in another zone{List}",
             located is null ? " (graveyard terrain lookup not in yet)" : string.Empty,
-            _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde), _atlas.Dropped.Count,
+            _atlas.Zones.Count, _atlas.LocationCount, _atlas.CountFor(Team.Alliance), _atlas.CountFor(Team.Horde),
+            _atlas.Zones.SelectMany(z => z.CreatureLevels.Keys).Distinct().Count(), _atlas.Dropped.Count,
             _atlas.Dropped.Count == 0 ? string.Empty
                 : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
-        if (located is null && _locating is null) StartLocating(world, areas);
+        if (located is null && _locating is null) StartLocating(world, areas, pop);
+        LogCoverage(pop);
         return _atlas;
+    }
+
+    /// <summary>
+    /// World thread: warn once per (atlas, bands, rule, factions) when a band with a weight has no zone for a faction the population
+    /// creates bots for under the level rule in force (<see cref="PopulationZoneAtlas.UncoveredBands"/>): its deficit can never be filled
+    /// by a new bot. Quiet while the atlas is the unlocated fallback (it is replaced within a few passes).
+    /// </summary>
+    private void LogCoverage(PlayerbotPopulationOptions pop)
+    {
+        if (!_atlasLocated) return;
+        PopulationLevelRule rule = PopulationLevelRule.From(pop);
+        // Nothing to build when nothing changed (every pass): the atlas and band list are replaced, never mutated; the rule is a record.
+        if (_coverageChecked is { } last && ReferenceEquals(last.Atlas, _atlas) && ReferenceEquals(last.Bands, pop.Bands) && last.Rule == rule
+            && last.Factions == pop.Factions) return;
+        _coverageChecked = (_atlas, pop.Bands, rule, pop.Factions);
+        Team[] teams = pop.Factions switch
+        {
+            PopulationFactions.Alliance => [Team.Alliance],
+            PopulationFactions.Horde => [Team.Horde],
+            _ => [Team.Alliance, Team.Horde],
+        };
+        IReadOnlyList<(PopulationBand Band, Team Team)> uncovered = _atlas.UncoveredBands(pop.Bands, teams, rule);
+        if (uncovered.Count == 0) return;
+        logger.LogWarning(
+            "Playerbot population: no zone takes a bot of {Bands} under the level rule (ZoneLevelSlack {Slack}, ZoneLevelSlackMaxFloor {MaxFloor}, CreatureLevelMargin {Margin}); those bands get no new bots",
+            string.Join(", ", uncovered.Select(u => string.Create(CultureInfo.InvariantCulture, $"levels {u.Band.MinLevel}-{u.Band.MaxLevel} for the {u.Team}"))),
+            pop.ZoneLevelSlack, pop.ZoneLevelSlackMaxFloor, pop.CreatureLevelMargin);
     }
 
     /// <summary>
@@ -345,12 +403,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// starts and the atlas stays unlocated. A lookup that fails keeps the unlocated atlas until the sources change again (it is not
     /// retried). Each lookup has its own token source, linked to the feature's stop, cancelled when the sources change.
     /// </summary>
-    private void StartLocating(WorldRuntime world, AreaTable areas)
+    private void StartLocating(WorldRuntime world, AreaTable areas, PlayerbotPopulationOptions pop)
     {
         TerrainManager terrain = WorldMaps.Of(world).Terrain;
         Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = TerrainLocator
             ?? (terrain.Enabled ? l => terrain.ReadZoneAndAreaIdDetached(l.MapId, l.X, l.Y, areas) : null);
-        if (locate is null) return;
+        Func<WorldSafeLoc, Team, int>? survey = CreatureSurveyor ?? Surveyor(world, pop.CreatureSurveyRadius);
+        if (locate is null && survey is null) return;
         WorldSafeLoc[] locations = [.. _atlas.Zones.SelectMany(z => z.AllianceLocations.Concat(z.HordeLocations)).DistinctBy(l => l.Id)];
         var token = new object();
         _locating = token;
@@ -360,19 +419,26 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         CancellationToken ct = _locateCts.Token;
         _ = Task.Run(() =>
         {
-            Dictionary<uint, (uint ZoneId, uint AreaId)>? result = [];
+            Dictionary<uint, (uint ZoneId, uint AreaId)> where = [];
+            Dictionary<(uint LocationId, Team Team), int> creatures = [];
+            PopulationLocated? result = null;
             try
             {
                 foreach (WorldSafeLoc location in locations)
                 {
                     ct.ThrowIfCancellationRequested();
-                    result[location.Id] = locate(location);
+                    if (locate is not null) where[location.Id] = locate(location);
+                    if (survey is null) continue;
+                    foreach (Team team in SurveyedTeams)
+                        if (survey(location, team) is var level and > 0) creatures[(location.Id, team)] = level;
                 }
+
+                result = new PopulationLocated(where, creatures);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup failed; the atlas keeps every graveyard link until the area table, graveyards or maps change");
+                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
             }
 
@@ -384,6 +450,39 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 if (result is not null) _located = result;
             });
         }, CancellationToken.None);
+    }
+
+    private static readonly Team[] SurveyedTeams = [Team.Alliance, Team.Horde];
+
+    /// <summary>
+    /// World thread: the creature survey for the graveyard lookup, over the creature spawns of the content in force (immutable lists;
+    /// templates read through <see cref="CreatureContent.FindTemplate"/>, safe from any thread), the faction templates combat uses, and
+    /// without the spawns of positive game events (absent while no event runs). Null when the radius is 0 or either is missing.
+    /// </summary>
+    private Func<WorldSafeLoc, Team, int>? Surveyor(WorldRuntime world, int radius)
+    {
+        if (radius <= 0 || services.GetService<CreatureWorldFeature>()?.Content is not { } creatures) return null;
+        if (FactionTemplatesOf(world) is not { Count: > 0 } factions)
+        {
+            logger.LogInformation("Playerbot population: no faction templates loaded; graveyards are placed by area level only (no creature survey)");
+            return null;
+        }
+
+        HashSet<uint> gated = [];
+        if (services.GetService<GameEventFeature>()?.Service?.Rows is { } rows)
+            foreach ((int signedEvent, IReadOnlyList<uint> guids) in rows.Creatures)
+                if (signedEvent > 0) gated.UnionWith(guids);
+        return (location, team) => PopulationCreatureSurvey.LevelNear(location, team, radius, creatures.GetSpawns(location.MapId),
+            creatures.FindTemplate, factions, gated);
+    }
+
+    /// <summary>The faction templates of the world's combat hooks (unwrapping the reputation hooks), or a registered catalog.</summary>
+    private FactionTemplateCatalog? FactionTemplatesOf(WorldRuntime world)
+    {
+        if (services.GetService<FactionTemplateCatalog>() is { Count: > 0 } registered) return registered;
+        CombatHooks hooks = CombatHooks.For(world);
+        while (hooks is ReputationCombatHooks reputation) hooks = reputation.Fallback;
+        return (hooks as FactionCombatHooks)?.Factions;
     }
 
     /// <summary>
@@ -674,6 +773,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
+        PopulationLevelRule rule = PopulationLevelRule.From(pop);
         int moved = 0;
         // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
         // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
@@ -681,12 +781,12 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         // walked over a border into a harder zone) is moved the same way. The worst misfit first.
         foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Vetoed
                 && atlas.Find(f.ZoneId) is not null)
-            .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f)).ThenBy(f => f.BotId))
+            .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f, rule)).ThenBy(f => f.BotId))
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
             PopulationZone current = atlas.Find(bot.ZoneId)!;
-            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, pop.ZoneLevelSlack))
+            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
                 if (member.ZoneId != current.ZoneId)
@@ -699,7 +799,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 continue;
             }
 
-            PopulationPlacement? placement = atlas.Pick(bot.Level, bot.Level, bot.Team, pop.ZoneLevelSlack, ctx.Assigned, _random);
+            PopulationPlacement? placement = atlas.Pick(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random);
             if (placement is null) continue;
             string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
@@ -713,7 +813,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         return moved;
 
         // How far the bot is outside its zone's levels, above or below (0 or less when it fits).
-        static int Misfit(PopulationZone zone, PopulationBotFacts bot) => Math.Max(bot.Level - zone.MaxLevel, zone.FloorFor(bot.Team) - bot.Level);
+        static int Misfit(PopulationZone zone, PopulationBotFacts bot, PopulationLevelRule rule)
+            => Math.Max(bot.Level - zone.MaxLevel, zone.LowestLevelFor(bot.Team, rule) - bot.Level);
     }
 
     /// <summary>The status as chat lines (<c>.playerbot population status</c>).</summary>
