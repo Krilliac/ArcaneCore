@@ -12,6 +12,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Npc;
@@ -243,16 +244,57 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     }
 
     /// <summary>
-    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner (a button whose
-    /// <c>noDamageImmune</c>, data4, is set) is a click on it.
+    /// Whether a use or an opening of an object of <paramref name="template"/> reaches the battleground's node click (vmangos
+    /// <c>EventPlayerClickedOnFlag</c>):
+    /// <list type="bullet">
+    /// <item>a button whose <c>noDamageImmune</c> (data4) is set - the faction and contested banners: Spell::EffectOpenLock hands the opening
+    /// to the battleground itself (SpellEffects.cpp:2122-2133), see <see cref="OnObjectUsed"/>;</item>
+    /// <item>a goober whose spell (data10) is a banner trigger spell (<see cref="BattlegroundConstants.BannerTriggerSpells"/>) - the neutral
+    /// banners: its use casts that spell at the user (GameObject.cpp:1609, 2001-2026), whose script makes the click (battleground.cpp:185-196),
+    /// see <see cref="OnBannerTriggered"/>.</item>
+    /// </list>
+    /// Anything else (a flag stand or dropped flag has its own use handler) is not a banner.
+    /// </summary>
+    internal static bool RoutesBannerUse(GameObjectTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return (GameObjectType)template.Type switch
+        {
+            GameObjectType.Button => template.GetData(4) != 0,
+            GameObjectType.Goober => Array.IndexOf(BattlegroundConstants.BannerTriggerSpells, template.GetData(GameObjectMapSystem.GooberSpellData)) >= 0,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// vmangos Spell::EffectOpenLock (SpellEffects.cpp:2122-2133): opening an Arathi Basin or Alterac Valley banner button (one that
+    /// <see cref="RoutesBannerUse"/>) is a click on it. A goober banner's use clicks through its trigger spell instead (<see cref="OnBannerTriggered"/>).
     /// </summary>
     private void OnObjectUsed(Player player, GameObject go)
     {
-        if (go.Type == GameObjectType.Button && go.Template.GetData(4) != 0
+        if (go.Type == GameObjectType.Button && RoutesBannerUse(go.Template)
             && Type is BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley && CanUseBattlegroundObject(player))
         {
             Battleground.EventPlayerClickedOnFlag(player.Guid, UseOf(player, go));
         }
+    }
+
+    /// <summary>
+    /// A neutral banner's trigger spell went off (vmangos BattlegroundBannerTriggerScript, src/scripts/battlegrounds/battleground.cpp:185-196:
+    /// <c>bg->EventPlayerClickedOnFlag(player, m_casterGo)</c>). The banner is a goober (classic-db 180087-180091, 180418) whose use - a click, or
+    /// the opening spell's open-lock effect through Spell::SendLoot (SpellEffects.cpp:2053-2063) - casts its goober.spellId at the user
+    /// (GameObject.cpp:1609, 2001-2026). The opening spell's battleground gate (Spell::CheckCast, Spell.cpp:5990-5997:
+    /// Player::CanUseBattleGroundObject) is checked here, where the button banners check it too (<see cref="OnObjectUsed"/>); a banner that is
+    /// not on this match's map is not this match's, and only an object that <see cref="RoutesBannerUse"/> is a banner.
+    /// </summary>
+    public void OnBannerTriggered(Player player, GameObject banner)
+    {
+        if (Map is not { } map || !ReferenceEquals(banner.Map, map) || !RoutesBannerUse(banner.Template) || !CanUseBattlegroundObject(player))
+        {
+            return;
+        }
+
+        Battleground.EventPlayerClickedOnFlag(player.Guid, UseOf(player, banner));
     }
 
     // ---- the battleground buff traps (vmangos GameObject::Update, GameObject.cpp:476-551, and BattleGround::HandleTriggerBuff) ----

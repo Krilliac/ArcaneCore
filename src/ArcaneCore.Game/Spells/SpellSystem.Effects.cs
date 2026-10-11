@@ -22,6 +22,9 @@ public sealed class SpellEffectContext
 
     public Unit Caster => Cast.Caster;
 
+    /// <summary>The game object casting the spell by itself (vmangos <c>Spell::m_casterGo</c>), or null.</summary>
+    public GameObjects.GameObject? CasterGameObject => Cast.CasterGameObject;
+
     public SpellInfo Spell => Cast.Spell;
 
     public Unit Target { get; }

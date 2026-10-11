@@ -159,6 +159,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         {
             spells.System.HolderRemoved += OnAuraHolderRemoved;
             spells.System.HolderAdded += OnAuraHolderAdded;
+            RegisterBannerTriggers(spells.System);
         }
 
         InstallMatchHooks();
@@ -247,6 +248,39 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         {
             match.Update(diffMs);
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>spell_battleground_banner_trigger</c> (src/scripts/battlegrounds/battleground.cpp:176-196) on the neutral banners' trigger
+    /// spells (<see cref="BattlegroundConstants.BannerTriggerSpells"/>). A spell another area already scripts is left to it (logged).
+    /// </summary>
+    private void RegisterBannerTriggers(SpellSystem spells)
+    {
+        ScriptEffectRegistry registry = ScriptEffectRegistry.For(spells);
+        foreach (uint spellId in BattlegroundConstants.BannerTriggerSpells)
+        {
+            if (registry.SpellIds.Contains(spellId))
+            {
+                _logger.LogWarning("spell {Spell} already has a script effect; the battleground banner trigger is not installed for it", spellId);
+                continue;
+            }
+
+            registry.Add(spellId, OnBannerTrigger);
+        }
+    }
+
+    /// <summary>
+    /// BattlegroundBannerTriggerScript::OnEffectExecute (battleground.cpp:185-196): effect 0 of a spell a game object cast (<c>m_casterGo</c>)
+    /// at a player hands the object to the player's battleground as a click on it (<c>bg->EventPlayerClickedOnFlag(player, m_casterGo)</c>).
+    /// </summary>
+    private void OnBannerTrigger(SpellEffectContext context)
+    {
+        if (context.EffectIndex != 0 || context.CasterGameObject is not { } banner || context.Target is not Player player)
+        {
+            return;
+        }
+
+        MatchOf(player.Guid)?.OnBannerTriggered(player, banner);
     }
 
     // ------------------------------------------------------------------ matches and their maps
