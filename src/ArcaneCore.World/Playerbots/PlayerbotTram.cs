@@ -1,0 +1,745 @@
+using System.Globalization;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Transports;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace ArcaneCore.World.Playerbots;
+
+/// <summary>
+/// One end of the Deeprun Tram, built from the world's area triggers (<see cref="TramNetwork.Build"/>): the entrance on the continent
+/// (<c>areatrigger_template</c> + <c>areatrigger_teleport</c> to the tram map), the platform it lands on, and the exit trigger on the tram
+/// map with its teleport back out beside the entrance. classic-db 5875: Stormwind 2173 → (67.8, 2491.0, -4.3), exit 2171 → (-8354.2, 524.1,
+/// 91.8); Ironforge 2175 → (69.2, 10.4, -4.3), exit 2166 → (-4839.5, -1317.7, 501.9).
+/// </summary>
+internal sealed record TramPlatform(AreaTriggerTemplate Entrance, AreaTriggerTeleport EntranceTeleport, AreaTriggerTemplate Exit,
+    AreaTriggerTeleport ExitTeleport)
+{
+    /// <summary>The trigger's name (the entrance teleport's, e.g. "Deeprun Tram - Stormwind Instance").</summary>
+    public string Name => string.IsNullOrWhiteSpace(EntranceTeleport.Name) ? $"trigger {Entrance.Id}" : EntranceTeleport.Name;
+
+    /// <summary>The continent the entrance and the way out lie on.</summary>
+    public uint ContinentMap => Entrance.MapId;
+
+    public Vector3 EntranceCentre => new(Entrance.X, Entrance.Y, Entrance.Z);
+
+    /// <summary>Where the entrance puts a player on the tram map.</summary>
+    public Vector3 Landing => new(EntranceTeleport.TargetX, EntranceTeleport.TargetY, EntranceTeleport.TargetZ);
+
+    public Vector3 ExitCentre => new(Exit.X, Exit.Y, Exit.Z);
+
+    /// <summary>Where the exit puts a player on the continent.</summary>
+    public Vector3 Arrival => new(ExitTeleport.TargetX, ExitTeleport.TargetY, ExitTeleport.TargetZ);
+}
+
+/// <summary>
+/// The Deeprun Tram as the world data describes it: map 369 (Map.dbc "DeeprunTram", vmangos <c>map_template</c> 369, a map of its own,
+/// neither a continent nor a dungeon), its two platforms (<see cref="TramPlatform"/>) and the cars that shuttle between them (the six
+/// GAMEOBJECT_TYPE_TRANSPORT "Subway" spawns 176080-176085, moved by TransportAnimation.dbc; <see cref="GameObjectMapSystem.MapWideElevators"/>).
+/// Immutable; cached per trigger table (<see cref="Of"/>).
+/// </summary>
+internal sealed class TramNetwork
+{
+    /// <summary>The Deeprun Tram map.</summary>
+    public const uint TramMapId = 369;
+
+    /// <summary>An exit counts as an entrance's way back when it lands within this of the entrance (13 and 13 yards in classic-db).</summary>
+    public const float PairYards = 60f;
+
+    private static readonly ConditionalWeakTable<IReadOnlyCollection<AreaTriggerTemplate>, Box> Cache = [];
+
+    private sealed class Box(TramNetwork? network)
+    {
+        public TramNetwork? Network { get; } = network;
+    }
+
+    private TramNetwork(TramPlatform a, TramPlatform b) => Platforms = [a, b];
+
+    /// <summary>The two platforms, in entrance trigger id order.</summary>
+    public IReadOnlyList<TramPlatform> Platforms { get; }
+
+    public uint ContinentMap => Platforms[0].ContinentMap;
+
+    /// <summary>The network of the world's current trigger table (null when the data does not describe one).</summary>
+    public static TramNetwork? Of(WorldMaps maps)
+    {
+        ArgumentNullException.ThrowIfNull(maps);
+        IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
+        return Cache.GetValue(triggers, t => new Box(Build(t, maps.FindAreaTriggerTeleport))).Network;
+    }
+
+    /// <summary>
+    /// The network the triggers describe, or null (fail closed): exactly two entrances on one continent lead to <see cref="TramMapId"/>, and
+    /// each has its own exit on the tram map, the exit nearest the entrance's landing, whose teleport lands back within
+    /// <see cref="PairYards"/> of that entrance.
+    /// </summary>
+    public static TramNetwork? Build(IEnumerable<AreaTriggerTemplate> triggers, Func<uint, AreaTriggerTeleport?> teleportOf)
+    {
+        ArgumentNullException.ThrowIfNull(triggers);
+        ArgumentNullException.ThrowIfNull(teleportOf);
+        var entrances = new List<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)>();
+        var exits = new List<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)>();
+        foreach (AreaTriggerTemplate trigger in triggers.OrderBy(t => t.Id))
+        {
+            if (teleportOf(trigger.Id) is not { } teleport) continue;
+            if (trigger.MapId != TramMapId && teleport.TargetMap == TramMapId) entrances.Add((trigger, teleport));
+            else if (trigger.MapId == TramMapId && teleport.TargetMap != TramMapId) exits.Add((trigger, teleport));
+        }
+
+        if (entrances.Count != 2 || entrances[0].Trigger.MapId != entrances[1].Trigger.MapId) return null;
+        var platforms = new List<TramPlatform>(2);
+        foreach ((AreaTriggerTemplate entrance, AreaTriggerTeleport into) in entrances)
+        {
+            Vector3 landing = new(into.TargetX, into.TargetY, into.TargetZ);
+            (AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)? exit = exits
+                .OrderBy(e => Vector3.DistanceSquared(landing, new Vector3(e.Trigger.X, e.Trigger.Y, e.Trigger.Z)))
+                .Select(e => ((AreaTriggerTemplate, AreaTriggerTeleport)?)e).FirstOrDefault();
+            if (exit is not { } way || way.Teleport.TargetMap != entrance.MapId
+                || Vector2.Distance(new(way.Teleport.TargetX, way.Teleport.TargetY), new(entrance.X, entrance.Y)) > PairYards)
+                return null;
+            platforms.Add(new TramPlatform(entrance, into, way.Trigger, way.Teleport));
+        }
+
+        return platforms[0].Exit.Id == platforms[1].Exit.Id ? null : new TramNetwork(platforms[0], platforms[1]);
+    }
+
+    /// <summary>The platform whose landing is nearest <paramref name="position"/> on the tram map.</summary>
+    public TramPlatform NearestOnTramMap(Vector3 position)
+        => Platforms.OrderBy(p => Vector2.DistanceSquared(Flat(p.Landing), Flat(position))).First();
+
+    public TramPlatform Other(TramPlatform platform) => ReferenceEquals(platform, Platforms[0]) ? Platforms[1] : Platforms[0];
+
+    /// <summary>
+    /// Whether a bot at <paramref name="bot"/> on <paramref name="mapId"/> goes to <paramref name="goal"/> (same map) by the tram, and from
+    /// which platform to which. It does when the goal lies on the other platform's side (nearer that platform's way out than this
+    /// platform's entrance) and walking to this entrance plus walking from the other exit to the goal is shorter, in straight lines,
+    /// than the straight line itself: the ride replaces the walk between the two cities (3,960 yards apart in a straight line, and no
+    /// road a bot can follow between them: the Dun Morogh and Elwynn regions are walled apart by mountains).
+    /// </summary>
+    public (TramPlatform From, TramPlatform To)? Choose(uint mapId, Vector3 bot, Vector3 goal)
+    {
+        if (mapId != ContinentMap || !Finite(bot) || !Finite(goal)) return null;
+        TramPlatform from = Platforms.OrderBy(p => Vector2.DistanceSquared(Flat(p.EntranceCentre), Flat(bot))).First();
+        TramPlatform to = Other(from);
+        float goalToExit = Vector2.Distance(Flat(goal), Flat(to.Arrival));
+        if (goalToExit >= Vector2.Distance(Flat(goal), Flat(from.EntranceCentre))) return null;
+        float via = Vector2.Distance(Flat(bot), Flat(from.EntranceCentre)) + goalToExit;
+        return via < Vector2.Distance(Flat(bot), Flat(goal)) ? (from, to) : null;
+    }
+
+    internal static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
+
+    private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+}
+
+/// <summary>When a car stands at a platform: the first stop window found ahead of now, in ms from now.</summary>
+internal readonly record struct TramDock(uint ArriveMs, uint DepartMs, Vector3 Position);
+
+/// <summary>The stages of one bot's tram trip (<see cref="PlayerbotTram"/>).</summary>
+internal enum TramStage { ToEntrance, ToPlatform, Waiting, Aboard, ToExit, Done, Failed }
+
+/// <summary>What <see cref="PlayerbotTram.Drive"/> did this think.</summary>
+internal enum TramStep { Idle, Traveling, Arrived, Failed }
+
+/// <summary>
+/// A bot's trip through the Deeprun Tram (<see cref="PlayerbotTram"/>). <see cref="To"/> is where it gets off; a trip that only takes the
+/// bot off the tram map (a login there, a failure) has <see cref="To"/> = the platform it is at.
+/// </summary>
+internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatform to, Vector3 goal, uint nowMs, uint? previousTeleportTarget)
+{
+    public TramNetwork Network { get; } = network;
+    public TramPlatform From { get; } = from;
+    public TramPlatform To { get; set; } = to;
+    public Vector3 Goal { get; } = goal;
+    public uint? PreviousTeleportTarget { get; } = previousTeleportTarget;
+    public TramStage Stage { get; set; } = TramStage.ToEntrance;
+    public uint StageMs { get; set; } = nowMs;
+    public uint PlatformSinceMs { get; set; }
+    public string? Failure { get; set; }
+    public PlayerbotRoute? Route { get; set; }
+    public float Best { get; set; } = float.PositiveInfinity;
+    public uint BestMs { get; set; } = nowMs;
+    public GameObject? Car { get; set; }
+    public TramDock Dock { get; set; }
+    public uint DockChosenMs { get; set; }
+    public Vector3 Offset { get; set; }
+    public uint LastBeatMs { get; set; }
+    public bool LeftPlatform { get; set; }
+    public uint NextPlanMs { get; set; }
+}
+
+/// <summary>
+/// Autonomous bots ride the Deeprun Tram between Stormwind and Ironforge the way a player does (docs/areas/playbots.md, "Travel by the
+/// Deeprun Tram"): walk into the entrance trigger, arrive on the tram map, walk to the platform beside a car that will stop there, wait,
+/// step aboard when it stands at the platform, ride it through the tunnel, step off when it stands at the other platform, and walk into
+/// that platform's exit trigger. The trip is begun by a goal that travels (<see cref="PlayerbotWorldDestinations"/>) when
+/// <see cref="TramNetwork.Choose"/> says the destination lies on the other side, and is then driven by the brain before anything else
+/// (<see cref="PlayerbotBrain"/>), so nothing else moves the bot meanwhile.
+/// <para>
+/// The client half is the bot's own: aboard, it reports MSG_MOVE_HEARTBEAT with MOVEFLAG_ONTRANSPORT, the car's GUID and its offset, at
+/// the world position the car's animation and the offset give (<see cref="PlayerbotMotion.SendAboard"/>; the server computes the car's
+/// position as vmangos ElevatorTransport::Update does, <see cref="GameObjectMapSystem.ElevatorPosition(GameObject)"/>). Observers' clients
+/// place it on their own car by the offset.
+/// </para>
+/// <para>
+/// Map 369 stays off <see cref="PlayerbotOptions.AllowedMaps"/>: the bot may take the entrance only while its trip heads there
+/// (<see cref="PlayerbotAreaTriggers.AllowTeleportsTo"/>), and may walk on the tram map only while a trip is under way
+/// (<see cref="PlayerbotMapPolicy.MayMoveOn"/>). A bot found on the tram map without a trip (a login there after a save on the way)
+/// takes the nearest platform's exit. Fails closed: a car that never stops at the platform within two cycles of the animation, a
+/// platform the bot cannot reach, an exit it cannot walk into, each ends the trip with a stall reason; on the tram map the bot leaves by
+/// the exit of the platform it is at (the server's own teleport of that exit when it cannot walk there), and the trip is not tried
+/// again for <see cref="RetryAfterFailureMs"/>.
+/// </para>
+/// <para>Thread affinity: world thread.</para>
+/// </summary>
+internal static class PlayerbotTram
+{
+    /// <summary>
+    /// Half the car's width and length: the collision bounds of Subwaycar.m2 (GameObjectDisplayInfo 3831; vmaps
+    /// <c>temp_gameobject_models</c>: x ±9.18, y ±6.62, z -16.85 .. 0.53 around the object's position).
+    /// </summary>
+    internal const float CarHalfLength = 9.18f, CarHalfWidth = 6.62f;
+
+    /// <summary>Where a bot waits beside a car: this far from the track's centre line (the car's side plus two yards).</summary>
+    internal const float BesideYards = CarHalfWidth + 2f;
+
+    /// <summary>How far inside the car's sides a passenger stands at least.</summary>
+    internal const float InsideMarginYards = 1.5f;
+
+    /// <summary>A heartbeat aboard at least this often, as a moving client reports itself.</summary>
+    internal const uint HeartbeatMs = PlayerbotMotion.HeartbeatIntervalMs;
+
+    /// <summary>Walking that gains less than this on its target within <see cref="NoProgressMs"/> is stuck.</summary>
+    internal const float ProgressYards = 5f;
+
+    internal const uint NoProgressMs = 60_000;
+
+    /// <summary>A failed trip is not tried again for this long.</summary>
+    internal const uint RetryAfterFailureMs = 600_000;
+
+    /// <summary>A car stops at a platform when its position 500 ms later is within this.</summary>
+    internal const float StandingYards = 0.05f;
+
+    /// <summary>The stop window must leave this much time to step aboard.</summary>
+    internal const uint BoardMarginMs = 2_000;
+
+    private const uint SampleMs = 250;
+
+    /// <summary>After a path query found nothing, the next one waits this long.</summary>
+    internal const uint PlanRetryMs = 2_000;
+
+    private static readonly ConditionalWeakTable<Player, TramTrip> Trips = [];
+    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
+
+    /// <summary>The bot's trip, done or not (inspection and tests).</summary>
+    internal static TramTrip? TripOf(Player player) => Trips.TryGetValue(player, out TramTrip? trip) ? trip : null;
+
+    /// <summary>Whether a trip is under way (not done, not failed).</summary>
+    internal static bool IsTraveling(Player player)
+        => Trips.TryGetValue(player, out TramTrip? trip) && trip.Stage is not (TramStage.Done or TramStage.Failed);
+
+    /// <summary>Whether the bot may plan and walk on <paramref name="map"/> because of a trip: the tram map, while one is under way.</summary>
+    internal static bool AllowsWalkingOn(Player player, Map map) => map.MapId == TramNetwork.TramMapId && IsTraveling(player);
+
+    /// <summary>The reason the bot's last trip failed (inspection), null after a trip that arrived.</summary>
+    internal static string? LastFailure(Player player)
+        => Trips.TryGetValue(player, out TramTrip? trip) && trip.Stage == TramStage.Failed ? trip.Failure : null;
+
+    /// <summary>
+    /// Begin a trip towards <paramref name="goal"/> when the tram is the way there (<see cref="TramNetwork.Choose"/>), the world describes
+    /// the tram and no trip failed lately. True when a trip is under way afterwards.
+    /// </summary>
+    internal static bool TryBegin(WorldSession session, Player player, Vector3 goal)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (IsTraveling(player)) return true;
+        if (!player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return false;
+        uint now = session.World.NowMs;
+        if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
+        if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network
+            || network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal) is not { } leg) return false;
+        uint? previous = PlayerbotAreaTriggers.TeleportTargetOf(player);
+        var trip = new TramTrip(network, leg.From, leg.To, goal, now, previous);
+        Trips.AddOrUpdate(player, trip);
+        PlayerbotAreaTriggers.AllowTeleportsTo(player, TramNetwork.TramMapId);
+        return true;
+    }
+
+    /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>
+    internal static void Cancel(Player player)
+    {
+        if (!Trips.TryGetValue(player, out TramTrip? trip)) return;
+        Trips.Remove(player);
+        if (trip.Stage is not (TramStage.Done or TramStage.Failed)) PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+    }
+
+    /// <summary>
+    /// One think of the trip, before anything else the brain does. <see cref="TramStep.Idle"/>: no trip and not on the tram map (the
+    /// brain goes on). On the tram map without a trip, a trip off it begins. <see cref="TramStep.Arrived"/> and <see cref="TramStep.Failed"/>
+    /// are reported once, when the bot stands on the continent again; <paramref name="failure"/> then says why.
+    /// </summary>
+    internal static TramStep Drive(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
+    {
+        failure = null;
+        if (!player.IsInWorld || player.Map is not { } map) return IsTraveling(player) ? TramStep.Traveling : TramStep.Idle;
+        uint now = session.World.NowMs;
+        if (!Trips.TryGetValue(player, out TramTrip? trip) || trip.Stage is TramStage.Done or TramStage.Failed)
+        {
+            if (map.MapId != TramNetwork.TramMapId || !player.IsAlive) return TramStep.Idle;
+            if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network)
+            {
+                // No platforms in the data: nothing to walk to. The way out is the bot's bind point (TeleportToHomebind). Reported once per
+                // RetryAfterFailureMs, sent or refused: a refused teleport leaves the bot to the brain (it cannot move on this map), whose
+                // stall watch reports it again later; it never loops here silently.
+                TeleportService? homebind = session.Services.GetService<TeleportFeature>()?.Teleports;
+                if (homebind?.IsBeingTeleported(player) == true) return TramStep.Traveling;
+                if (FailedAt.TryGetValue(player, out StrongBox<uint>? lately) && unchecked(now - lately.Value) < RetryAfterFailureMs)
+                    return TramStep.Idle;
+                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                failure = homebind is not null && homebind.TeleportToHomebind(player)
+                    ? "tram: on the Deeprun Tram map, but the world data describes no platforms; sent to its bind point"
+                    : "tram: on the Deeprun Tram map, but the world data describes no platforms, and the bind-point teleport was refused";
+                return TramStep.Failed;
+            }
+
+            TramPlatform here = network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
+            trip = new TramTrip(network, here, here, here.Arrival, now, PlayerbotAreaTriggers.TeleportTargetOf(player))
+            {
+                Stage = TramStage.ToExit,
+            };
+            Trips.AddOrUpdate(player, trip);
+        }
+
+        if (!player.IsAlive)
+        {
+            Cancel(player);
+            return TramStep.Idle;
+        }
+
+        if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return TramStep.Traveling;
+        switch (trip.Stage)
+        {
+            case TramStage.ToEntrance:
+                return ToEntrance(session, player, map, trip, options, elapsedMs, now);
+            case TramStage.ToPlatform:
+            case TramStage.Waiting:
+                return AtPlatform(session, player, map, trip, options, elapsedMs, now);
+            case TramStage.Aboard:
+                return Ride(session, player, map, trip, now);
+            case TramStage.ToExit:
+                return ToExit(session, player, map, trip, options, elapsedMs, now, out failure);
+            default:
+                return TramStep.Idle;
+        }
+    }
+
+    private static TramStep ToEntrance(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
+    {
+        if (map.MapId == TramNetwork.TramMapId)
+        {
+            // Through the entrance: from here only the ride's own consent is needed (the exits lead back to the continent).
+            PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+            // The landing of the entrance taken: its platform is where the bot boards, the other one where it gets off.
+            TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
+            trip.To = trip.Network.Other(here);
+            Enter(trip, TramStage.ToPlatform, now);
+            trip.PlatformSinceMs = now;
+            return TramStep.Traveling;
+        }
+
+        if (map.MapId != trip.From.ContinentMap)
+            return Fail(session, player, trip, now, $"tram: left for map {map.MapId} on the way to the {trip.From.Name} entrance");
+        if (!Walk(session, player, trip, trip.From.EntranceCentre, options, elapsedMs, now, toward: true))
+        {
+            return Fail(session, player, trip, now, string.Create(CultureInfo.InvariantCulture,
+                $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}"));
+        }
+
+        return TramStep.Traveling;
+    }
+
+    private static TramStep AtPlatform(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
+    {
+        if (map.MapId != TramNetwork.TramMapId) return Fail(session, player, trip, now, "tram: left the tram map before boarding");
+        TramPlatform here = trip.Network.Other(trip.To);
+        uint cycle = 0;
+        if (map.FindUpdater<GameObjectMapSystem>() is { } objects)
+            foreach (GameObject running in objects.MapWideElevators) cycle = Math.Max(cycle, objects.ElevatorCycle(running));
+        if (cycle == 0) return LeaveAfterFailure(trip, here, now, "tram: no tram car runs (no map-wide car with an animation on the tram map)");
+        if (unchecked(now - trip.PlatformSinceMs) > (2 * cycle) + 30_000)
+        {
+            return LeaveAfterFailure(trip, here, now, string.Create(CultureInfo.InvariantCulture,
+                $"tram: no car stopped at the {here.Name} platform within {((2 * cycle) + 30_000) / 1000}s"));
+        }
+
+        GameObjectMapSystem system = map.FindUpdater<GameObjectMapSystem>()!;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        if (trip.Car is null || !trip.Car.IsInWorld || !ReferenceEquals(trip.Car.Map, map)
+            || unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000)
+        {
+            // Pick (again): the car that stops here soonest at a time the bot can be beside it.
+            if (!ChooseCar(player, map, system, trip, here, options, now, out string? why))
+                return LeaveAfterFailure(trip, here, now, why ?? $"tram: no car stops at the {here.Name} platform");
+        }
+
+        if (trip.Stage == TramStage.ToPlatform)
+        {
+            if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now))
+                return TramStep.Traveling;
+            PlayerbotMovementControl.Stop(session, player);
+            Enter(trip, TramStage.Waiting, now);
+        }
+
+        GameObject car = trip.Car!;
+        if (Standing(system, car, 0) is not { } at || !AtEnd(at, here, trip.To)) return TramStep.Traveling;
+        if (Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(at)) > BesideYards + CarHalfLength)
+        {
+            trip.Car = null; // not beside the car (the walk stopped short): pick and walk again
+            return TramStep.Traveling;
+        }
+
+        uint left = StandingFor(system, car, at, cycle);
+        if (left < InsideMarginMs) return TramStep.Traveling; // about to leave: wait for the next stop
+        if (!PlayerbotMovementControl.Stop(session, player)) return TramStep.Traveling;
+
+        // Step aboard: the point of the car's floor nearest to where the bot stands, at the height it stands (the platform is level
+        // with the car's floor: the model's floor is 11.0 yards under the object's position, the platform 11.3).
+        float x = bot.X, y = bot.Y, z = bot.Z, o = 0;
+        ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, at.X, at.Y, at.Z, car.Orientation);
+        x = Math.Clamp(x, -(CarHalfLength - InsideMarginYards), CarHalfLength - InsideMarginYards);
+        y = Math.Clamp(y, -(CarHalfWidth - InsideMarginYards), CarHalfWidth - InsideMarginYards);
+        var offset = new Vector3(x, y, z);
+        if (!SendAboard(session, player, car, at, offset)) return TramStep.Traveling;
+        trip.Offset = offset;
+        trip.LastBeatMs = now;
+        trip.LeftPlatform = false;
+        Enter(trip, TramStage.Aboard, now);
+        return TramStep.Traveling;
+    }
+
+    private static uint WalkMs(Vector3 from, Vector3 to, float speed)
+        => (uint)(Vector2.Distance(TramNetwork.Flat(from), TramNetwork.Flat(to)) / speed * 1000f) + 1_000;
+
+    /// <summary>A stop shorter than this is not boarded.</summary>
+    private const uint InsideMarginMs = 1_000;
+
+    private static bool ChooseCar(Player player, Map map, GameObjectMapSystem system, TramTrip trip, TramPlatform here, PlayerbotOptions options,
+        uint now, out string? failure)
+    {
+        failure = null;
+        trip.Car = null;
+        trip.Route = null;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        float speed = MathF.Max(1f, options.MoveSpeed);
+        var candidates = new List<(GameObject Car, TramDock Dock, uint Ready)>();
+        foreach (GameObject car in system.MapWideElevators)
+        {
+            if (!car.IsInWorld || !ReferenceEquals(car.Map, map)) continue;
+            uint cycle = system.ElevatorCycle(car);
+            if (cycle == 0) continue;
+            // The first stop here that the bot can still reach in time (a straight walk at its speed, plus a second).
+            TramDock? next = NextDock(cycle, ahead => system.ElevatorProgressAhead(car, ahead) is { } p ? Position(system, car, p) : null,
+                here.Landing, trip.To.Landing,
+                d => d.DepartMs > Math.Max(d.ArriveMs, WalkMs(bot, d.Position, speed)) + BoardMarginMs);
+            if (next is { } dock) candidates.Add((car, dock, Math.Max(dock.ArriveMs, WalkMs(bot, dock.Position, speed))));
+        }
+
+        if (candidates.Count == 0)
+        {
+            failure = system.MapWideElevators.Count == 0 ? "tram: no tram car on the tram map"
+                : $"tram: no car stops at the {here.Name} platform";
+            return false;
+        }
+
+        foreach ((GameObject car, TramDock dock, _) in candidates.OrderBy(c => c.Ready).ThenBy(c => c.Car.Guid.Value))
+        {
+            if (Beside(player, map, car, dock.Position, here, options, out PlayerbotRoute? route) is not { } spot) continue;
+            trip.Car = car;
+            trip.Dock = dock;
+            trip.DockChosenMs = now;
+            trip.Route = route;
+            Enter(trip, route is null ? TramStage.Waiting : TramStage.ToPlatform, now);
+            return true;
+        }
+
+        failure = string.Create(CultureInfo.InvariantCulture,
+            $"tram: no way from {bot.X:F1},{bot.Y:F1},{bot.Z:F1} to the side of a car at the {here.Name} platform");
+        return false;
+    }
+
+    /// <summary>
+    /// The spot on the platform beside a car standing at <paramref name="dock"/> (either side of the track, <see cref="BesideYards"/> from
+    /// its centre line, where a floor level with the landing is), with the route to it (null when the bot stands there already).
+    /// </summary>
+    private static Vector3? Beside(Player player, Map map, GameObject car, Vector3 dock, TramPlatform here, PlayerbotOptions options,
+        out PlayerbotRoute? route)
+    {
+        route = null;
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(bot))))
+        {
+            if (Vector2.Distance(TramNetwork.Flat(spot), TramNetwork.Flat(bot)) <= 1.5f) return spot;
+            if (PlayerbotNavigation.TryPlan(player, spot, options, out PlayerbotRoute? planned) && planned is not null
+                && Vector2.Distance(TramNetwork.Flat(planned.Points[^1]), TramNetwork.Flat(spot)) <= 2f)
+            {
+                route = planned;
+                return spot;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The platform spots on both sides of a car at <paramref name="at"/>, where the floor is level with <paramref name="floorZ"/>.</summary>
+    private static IEnumerable<Vector3> Sides(Map map, GameObject car, Vector3 at, float floorZ)
+    {
+        // The car's length runs along its local x axis (TransportAnimation moves it along x); its sides are along local y.
+        float sideX = -MathF.Sin(car.Orientation), sideY = MathF.Cos(car.Orientation);
+        foreach (float sign in (float[])[1f, -1f])
+        {
+            float x = at.X + (sideX * BesideYards * sign), y = at.Y + (sideY * BesideYards * sign);
+            float floor = map.Collision.GetHeight(x, y, floorZ + 3f);
+            if (float.IsFinite(floor) && floor > TerrainTile.InvalidHeight && MathF.Abs(floor - floorZ) <= 3f)
+                yield return new Vector3(x, y, floor);
+        }
+    }
+
+    private static TramStep Ride(WorldSession session, Player player, Map map, TramTrip trip, uint now)
+    {
+        if (map.MapId != TramNetwork.TramMapId || trip.Car is not { IsInWorld: true } car || !ReferenceEquals(car.Map, map)
+            || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(car) is not { } carAt)
+        {
+            return Fail(session, player, trip, now, "tram: the car the bot rode is gone");
+        }
+
+        TramPlatform here = trip.Network.Other(trip.To);
+        Vector3 at = new(carAt.X, carAt.Y, carAt.Z);
+        uint cycle = system.ElevatorCycle(car);
+        if (!trip.LeftPlatform && Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(here.Landing))
+                > Vector2.Distance(TramNetwork.Flat(trip.Dock.Position), TramNetwork.Flat(here.Landing)) + 5f)
+            trip.LeftPlatform = true;
+        if (Standing(system, car, 0) is { } stop && AtEnd(stop, trip.To, here) && trip.LeftPlatform)
+        {
+            // At the other platform: step off on the side nearest its exit.
+            Vector3? off = Sides(map, car, stop, trip.To.Landing.Z)
+                .OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(trip.To.ExitCentre)))
+                .Select(s => (Vector3?)s).FirstOrDefault();
+            if (off is not { } ground)
+                return LeaveAfterFailure(trip, trip.To, now, $"tram: no platform floor beside the car at the {trip.To.Name} platform");
+            if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation)) return TramStep.Traveling;
+            Enter(trip, TramStage.ToExit, now);
+            return TramStep.Traveling;
+        }
+
+        if (unchecked(now - trip.StageMs) > cycle + 30_000)
+        {
+            // The car never stood at the other platform (it should within one cycle): off where it stands, out by the nearest exit.
+            TramPlatform nearest = trip.Network.NearestOnTramMap(at);
+            Vector3? off = Sides(map, car, at, nearest.Landing.Z).Select(s => (Vector3?)s).FirstOrDefault();
+            if (off is { } ground) PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation);
+            return LeaveAfterFailure(trip, nearest, now, $"tram: the car did not stop at the {trip.To.Name} platform within {(cycle + 30_000) / 1000}s");
+        }
+
+        if (unchecked(now - trip.LastBeatMs) >= HeartbeatMs)
+        {
+            if (SendAboard(session, player, car, at, trip.Offset)) trip.LastBeatMs = now;
+        }
+
+        return TramStep.Traveling;
+    }
+
+    private static TramStep ToExit(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now,
+        out string? failure)
+    {
+        failure = null;
+        if (map.MapId != TramNetwork.TramMapId)
+        {
+            // Out: the exit put the bot on the continent.
+            PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+            if (trip.Failure is { } why)
+            {
+                trip.Stage = TramStage.Failed;
+                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                failure = why;
+                return TramStep.Failed;
+            }
+
+            trip.Stage = TramStage.Done;
+            return TramStep.Arrived;
+        }
+
+        TramPlatform exit = trip.To;
+        if ((player.Movement.Flags & Protocol.MovementFlags.OnTransport) != 0)
+            PlayerbotMotion.SendStepOff(session, player, new Vector3(player.X, player.Y, player.Z), player.Orientation);
+        if (Walk(session, player, trip, exit.ExitCentre, options, elapsedMs, now, toward: true)) return TramStep.Traveling;
+
+        // The exit cannot be walked into from here: the server sends the bot where the exit would (the trigger's own teleport).
+        PlayerbotMovementControl.Stop(session, player);
+        trip.Failure ??= string.Create(CultureInfo.InvariantCulture,
+            $"tram: no way to the {exit.Name} exit from {player.X:F1},{player.Y:F1},{player.Z:F1}");
+        TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+        if (teleports is null || !teleports.TeleportTo(player, exit.ExitTeleport.TargetMap, exit.ExitTeleport.TargetX, exit.ExitTeleport.TargetY,
+                exit.ExitTeleport.TargetZ, exit.ExitTeleport.TargetOrientation))
+        {
+            // Reported once; a bot still on the tram map begins a fresh way out at a later think.
+            trip.Stage = TramStage.Failed;
+            FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+            failure = trip.Failure + "; the exit teleport was refused";
+            return TramStep.Failed;
+        }
+
+        return TramStep.Traveling;
+    }
+
+    /// <summary>
+    /// Follow (planning when needed, one path query per <see cref="PlanRetryMs"/> while none is found) a route to <paramref name="target"/>;
+    /// false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>. <paramref name="toward"/>: a goal that
+    /// may lie beyond one route (<see cref="PlayerbotNavigation.TryPlanToward"/>).
+    /// </summary>
+    private static bool Walk(WorldSession session, Player player, TramTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs, uint now,
+        bool toward)
+    {
+        float left = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), target);
+        if (left + ProgressYards <= trip.Best)
+        {
+            trip.Best = left;
+            trip.BestMs = now;
+        }
+        else if (unchecked(now - trip.BestMs) > NoProgressMs)
+        {
+            return false;
+        }
+
+        if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
+        trip.Route = null;
+        // One path query per PlanRetryMs while none is found (the mesh tiles ahead may still be loading); the progress bound above ends it.
+        if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
+        bool planned = toward ? PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next)
+            : PlayerbotNavigation.TryPlan(player, target, options, out next);
+        if (!planned || next is null)
+        {
+            trip.NextPlanMs = unchecked(now + PlanRetryMs);
+            return true;
+        }
+
+        trip.Route = next;
+        PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
+        return true;
+    }
+
+    private static TramStep Fail(WorldSession session, Player player, TramTrip trip, uint now, string why)
+    {
+        PlayerbotMovementControl.Stop(session, player);
+        if (player.Map?.MapId == TramNetwork.TramMapId)
+            return LeaveAfterFailure(trip, trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z)), now, why);
+        PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+        trip.Failure = why;
+        trip.Stage = TramStage.Failed;
+        FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+        return TramStep.Failed;
+    }
+
+    /// <summary>On the tram map: note the failure and leave by the exit of <paramref name="platform"/>; reported once the bot is out.</summary>
+    private static TramStep LeaveAfterFailure(TramTrip trip, TramPlatform platform, uint now, string why)
+    {
+        trip.Failure ??= why;
+        trip.To = platform;
+        trip.Route = null;
+        trip.Best = float.PositiveInfinity;
+        trip.BestMs = now;
+        Enter(trip, TramStage.ToExit, now);
+        return TramStep.Traveling;
+    }
+
+    private static void Enter(TramTrip trip, TramStage stage, uint now)
+    {
+        if (trip.Stage != stage)
+        {
+            trip.Stage = stage;
+            trip.StageMs = now;
+            trip.NextPlanMs = now;
+            trip.Best = float.PositiveInfinity;
+            trip.BestMs = now;
+            if (stage is TramStage.ToExit or TramStage.ToEntrance) trip.Route = null;
+        }
+    }
+
+    private static bool SendAboard(WorldSession session, Player player, GameObject car, Vector3 carAt, Vector3 offset)
+    {
+        Vector3 world = Seat(car, carAt, offset);
+        return PlayerbotMotion.SendAboard(session, player, car.Guid.Value, world, player.Orientation, offset, 0f);
+    }
+
+    /// <summary>The world position of <paramref name="offset"/> on a car at <paramref name="carAt"/> (vmangos CalculatePassengerPosition).</summary>
+    internal static Vector3 Seat(GameObject car, Vector3 carAt, Vector3 offset)
+    {
+        float x = offset.X, y = offset.Y, z = offset.Z, o = 0;
+        ShipTransport.CalculatePassengerPosition(ref x, ref y, ref z, ref o, carAt.X, carAt.Y, carAt.Z, car.Orientation);
+        return new Vector3(x, y, z);
+    }
+
+    private static Vector3? Position(GameObjectMapSystem system, GameObject car, uint progress)
+        => system.ElevatorPositionAt(car, progress) is { } at ? new Vector3(at.X, at.Y, at.Z) : null;
+
+    /// <summary>Where the car stands <paramref name="aheadMs"/> from now when it is not moving then (null while it moves).</summary>
+    private static Vector3? Standing(GameObjectMapSystem system, GameObject car, uint aheadMs)
+    {
+        if (system.ElevatorProgressAhead(car, aheadMs) is not { } p || system.ElevatorProgressAhead(car, aheadMs + 500) is not { } q
+            || Position(system, car, p) is not { } a || Position(system, car, q) is not { } b) return null;
+        return Vector3.Distance(a, b) <= StandingYards ? a : null;
+    }
+
+    /// <summary>How long the car standing at <paramref name="at"/> stays there (ms, bounded by the cycle).</summary>
+    private static uint StandingFor(GameObjectMapSystem system, GameObject car, Vector3 at, uint cycle)
+    {
+        for (uint ahead = SampleMs; ahead < cycle; ahead += SampleMs)
+        {
+            if (system.ElevatorProgressAhead(car, ahead) is not { } p || Position(system, car, p) is not { } then
+                || Vector3.Distance(then, at) > StandingYards) return ahead - SampleMs;
+        }
+
+        return cycle;
+    }
+
+    /// <summary>Whether a car at <paramref name="at"/> stands at <paramref name="platform"/>'s end of the tunnel (nearer its landing).</summary>
+    private static bool AtEnd(Vector3 at, TramPlatform platform, TramPlatform other)
+        => Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(platform.Landing))
+            < Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(other.Landing));
+
+    /// <summary>
+    /// The first stop of a car at <paramref name="here"/>'s end of the tunnel from now (sampled every 250 ms over one cycle of
+    /// <paramref name="cycle"/> ms plus the stop itself): when it arrives, when it leaves, and where it stands. Null when it never stops
+    /// there. <paramref name="positionAt"/> gives the car's position that many ms from now.
+    /// </summary>
+    internal static TramDock? NextDock(uint cycle, Func<uint, Vector3?> positionAt, Vector3 here, Vector3 other, Func<TramDock, bool>? usable = null)
+    {
+        ArgumentNullException.ThrowIfNull(positionAt);
+        if (cycle == 0) return null;
+        bool AtHere(Vector3 p) => Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(here)) < Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(other));
+        Vector3? StandingAt(uint t) => positionAt(t) is { } a && positionAt(t + 500) is { } b && Vector3.Distance(a, b) <= StandingYards && AtHere(a) ? a : null;
+        // Two cycles: a stop that is too short or too soon in this one comes round again in the next.
+        for (uint t = 0; t <= 2 * cycle; t += SampleMs)
+        {
+            if (StandingAt(t) is not { } at) continue;
+            uint end = t;
+            while (end - t < cycle && StandingAt(end + SampleMs) is { } still && Vector3.Distance(still, at) <= StandingYards) end += SampleMs;
+            // It still stands at 'end' and its position 500 ms later is the same, so it leaves after end + 500.
+            var dock = new TramDock(t, end + 500, at);
+            if (usable is null || usable(dock)) return dock;
+            t = end;
+        }
+
+        return null;
+    }
+}

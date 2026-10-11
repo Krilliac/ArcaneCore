@@ -180,6 +180,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (VisibleTarget(player, entry.Entry, returnQuestId)) return false;
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
+            // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
+            // and the destination plans again from the other platform's exit (PlayerbotTram).
+            if (PlayerbotTram.TryBegin(_session, player, destination))
+            {
+                ClearRoute();
+                TargetEntry = entry.Entry;
+                QuestId = questId;
+                return true;
+            }
+
             if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);

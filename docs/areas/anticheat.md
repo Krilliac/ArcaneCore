@@ -46,7 +46,7 @@ Weights follow the fork. A finding adds its weight (clamped 0..100) to the chara
 | Water walk / hover / slow fall | Flag | 25 / 25 / 15 | the flag without a grant, living players only | an aura that grants it is on the player, an order of that kind is pending (the client may assert the flag until it has the order), `AntiCheatFeature.Grant` |
 | Levitating | Flag | 40 | a creature flag (vmangos `HandleFlagTests`) | granted |
 | Flying while swimming | Flag | 40 | vmangos' swim-fly hack; flying alone is not judged (vmangos neither) | granted |
-| Fake transport | Flag | 20 | `ON_TRANSPORT` starts with a GUID that is no ship of the transport system near the player (200 yd) and no TRANSPORT game object (elevator, tram) on the map near it (600 yd); any other GUID kind | transports disabled or no game object system (Unknown); a fake claim never hides the speed checks |
+| Fake transport | Flag | 20 | `ON_TRANSPORT` starts with a GUID that is no ship of the transport system near the player (200 yd) and no TRANSPORT game object (elevator, tram) on the map near it (600 yd, measured from where its TransportAnimation.dbc path puts it now: a Deeprun Tram car is 2,480 yd from its spawn at the other platform; `TramCarVisibilityTests`); any other GUID kind | transports disabled or no game object system (Unknown); a fake claim never hides the speed checks |
 | Move start while rooted | Physics | 15 | `MSG_MOVE_START_*` / jump while an acknowledged root is in force | the root is not acknowledged yet or an unroot is pending |
 | Moving while rooted | Physics | 20 | forward/backward/strafe flags while rooted | same |
 | Infinite jump | Jump | 30 | `MSG_MOVE_JUMP` while airborne (no `FALL_LAND` or swim since the last jump) | after any re-baseline |
@@ -152,6 +152,6 @@ reconnect at once). The `Net:Protection:World*` packet budgets are restart-only.
 
 * The thresholds are the fork's and vmangos' and have not been tuned against real 1.12 client traffic; the log-only default
   is there to collect that data before anything acts.
-* Elevator and tram transports are judged by their game object only; ArcaneCore does not move players with them.
+* Elevator and tram transports are judged by their game object and its animated position only; ArcaneCore does not move players with them (the client's world position aboard is kept).
 * `MOVEFLAG_LEVITATING` on a player is treated as a hack as vmangos does; a real client capture of priest Levitate (1.12)
   should confirm the client never sets it.
