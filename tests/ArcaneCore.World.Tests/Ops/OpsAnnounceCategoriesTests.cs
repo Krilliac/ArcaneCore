@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Characters;
@@ -191,6 +192,92 @@ public sealed class OpsAnnounceCategoriesTests
         ledger.Record("unhandled", Throw(new InvalidOperationException("fatal")));
         Assert.Contains("Unhandled", Assert.Single(sink.Sent).StaffChat);
         Assert.Equal(2, ledger.Total);
+    }
+
+    [Fact]
+    public void Faults_AnUnobservedTaskException_IsCriticalOnlyWhenItEndsTheProcess()
+    {
+        (OpsAnnouncer announcer, RecordingSink sink, _) = Rig(o => o.Faults.MinimumSeverity = AnnounceSeverity.Critical);
+        var ledger = new FaultLedger();
+        var feature = new FaultAnnouncerFeature(new ServiceCollection().AddSingleton<IOpsAnnouncer>(announcer).AddSingleton(ledger).BuildServiceProvider());
+        feature.Attach(null!);
+
+        // Diagnostics:OnUnobservedTask Log: the process lives on (CrashHandler.OnUnobserved), so this is Error, below the Critical floor.
+        ledger.Record("unobserved-task", Throw(new InvalidOperationException("kept running")));
+        Assert.Empty(sink.Sent);
+
+        // A terminating policy: the crash hook records it as terminating, and it is Critical.
+        ledger.Record("unobserved-task", Throw(new TimeoutException("ends the process")), terminating: true);
+        Assert.Contains("Unhandled", Assert.Single(sink.Sent).StaffChat);
+    }
+
+    [Fact]
+    public void Faults_AStormOfDistinctUnobservedTaskExceptions_UnderLog_StaysRateLimited()
+    {
+        // Critical bypasses the rate bucket, so a non-terminating unobserved task exception must not be Critical: distinct signatures
+        // (each passes the duplicate window) would otherwise each become a staff line.
+        (OpsAnnouncer announcer, RecordingSink sink, _) = Rig(o =>
+        {
+            o.Faults.RateBurst = 2;
+            o.Faults.RatePerMinute = 1;
+        });
+        var ledger = new FaultLedger();
+        var feature = new FaultAnnouncerFeature(new ServiceCollection().AddSingleton<IOpsAnnouncer>(announcer).AddSingleton(ledger).BuildServiceProvider());
+        feature.Attach(null!);
+
+        Exception[] distinct =
+        [
+            new InvalidOperationException("a"), new TimeoutException("b"), new FormatException("c"),
+            new ArgumentException("d"), new NotSupportedException("e"), new KeyNotFoundException("f"),
+        ];
+        foreach (Exception ex in distinct)
+        {
+            ledger.Record("unobserved-task", Throw(ex));
+        }
+
+        Assert.Equal(distinct.Length, ledger.Distinct);
+        Assert.Equal(2, sink.Sent.Count); // the burst, then the bucket holds the rest back
+        Assert.All(sink.Sent, d => Assert.Contains("Unobserved task exception", d.StaffChat));
+    }
+
+    [Fact]
+    public void AStaffHandledAnnouncement_WithNoWorldLine_IsCountedAsStaffDirect_NotOff()
+    {
+        (OpsAnnouncer announcer, RecordingSink sink, _) = Rig(); // AntiCheat: WorldMessage off by default
+        var outcomes = new System.Collections.Concurrent.ConcurrentQueue<(string? Category, string? Outcome, bool? StaffDirect)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == "ArcaneCore.Announce" && instrument.Name == "arcanecore.announce")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            string? category = null, outcome = null;
+            bool? direct = null;
+            foreach (KeyValuePair<string, object?> tag in tags)
+            {
+                switch (tag.Key)
+                {
+                    case "category": category = tag.Value as string; break;
+                    case "outcome": outcome = tag.Value as string; break;
+                    case "staff_direct": direct = tag.Value as bool?; break;
+                }
+            }
+
+            outcomes.Enqueue((category, outcome, direct));
+        });
+        listener.Start();
+
+        announcer.Announce(AnnounceCategory.AntiCheat, AnnounceSeverity.Error, "Anti-cheat kicked a player", "Alice (account 7)", staffHandled: true);
+        announcer.Announce(AnnounceCategory.Wiring, AnnounceSeverity.Error, "wiring", gmOnly: true); // an ordinary staff line: sent
+
+        Assert.Single(sink.Sent); // the Wiring line only; the AntiCheat staff line was the caller's own
+        Assert.Contains(outcomes, o => o is { Category: "AntiCheat", Outcome: AnnounceOutcome.StaffDirect, StaffDirect: true });
+        Assert.Contains(outcomes, o => o is { Category: "Wiring", Outcome: AnnounceOutcome.Sent, StaffDirect: false });
+        Assert.DoesNotContain(outcomes, o => o is { StaffDirect: true, Outcome: AnnounceOutcome.Off }); // other tests may announce in parallel; none is ever this
     }
 
     private static Exception Throw(Exception ex)

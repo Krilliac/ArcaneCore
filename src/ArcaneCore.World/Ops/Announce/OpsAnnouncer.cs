@@ -98,6 +98,12 @@ public static class AnnounceOutcome
     public const string Disabled = "disabled";
     public const string BelowMinimum = "below_minimum";
     public const string Off = "off";
+
+    /// <summary>
+    /// Nothing for the announcer to deliver, because the caller told the staff itself (<c>staffHandled</c>) and there is no world
+    /// line: the staff were notified directly, not left uninformed as <see cref="Off"/> would suggest.
+    /// </summary>
+    public const string StaffDirect = "staff_direct";
     public const string RateLimited = "rate_limited";
     public const string Duplicate = "duplicate";
 }
@@ -107,7 +113,7 @@ internal static class AnnounceMeters
     private static readonly Meter Meter = new("ArcaneCore.Announce", "1.0");
 
     public static readonly Counter<long> Announcements = Meter.CreateCounter<long>(
-        "arcanecore.announce", "{announcement}", "Operational announcements by category, severity and outcome (sent, disabled, below_minimum, off, rate_limited, duplicate).");
+        "arcanecore.announce", "{announcement}", "Operational announcements by category, severity, outcome (sent, disabled, below_minimum, off, staff_direct, rate_limited, duplicate) and staff_direct (the caller sent the staff line itself).");
 }
 
 /// <summary>
@@ -187,11 +193,17 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         bool toWorld = options.WorldMessage && !gmOnly;
 
         string outcome = Decide(category, severity, options, toStaff || toWorld, dedupKey ?? text, out int suppressed);
+        if (outcome == AnnounceOutcome.Off && staffHandled)
+        {
+            outcome = AnnounceOutcome.StaffDirect; // the staff already have the line; only the (switched off) world line is missing
+        }
+
         AnnounceMeters.Announcements.Add(
             1,
             new KeyValuePair<string, object?>("category", category.ToString()),
             new KeyValuePair<string, object?>("severity", severity.ToString()),
-            new KeyValuePair<string, object?>("outcome", outcome));
+            new KeyValuePair<string, object?>("outcome", outcome),
+            new KeyValuePair<string, object?>("staff_direct", staffHandled));
 
         // A repeat inside the duplicate window is expected noise (a SQLite lock storm repeats every few seconds): Debug, and counted in the metric.
         _logger.Log(

@@ -114,13 +114,14 @@ public sealed class FaultLedger
     /// <summary>
     /// Count <paramref name="exception"/> as caught at <paramref name="site"/> and say whether the caller should log it now
     /// (<see cref="FaultRecording.ShouldLog"/>). Swallows its own failures except OutOfMemoryException: a caller that must not be interrupted wraps the call.
+    /// <paramref name="terminating"/>: the process ends because of this fault (the crash hooks say so); carried on <see cref="FaultNotice.Terminating"/>.
     /// </summary>
-    public FaultRecording Record(string site, Exception exception)
+    public FaultRecording Record(string site, Exception exception, bool terminating = false)
     {
         ArgumentNullException.ThrowIfNull(exception);
         try
         {
-            return RecordCore(string.IsNullOrWhiteSpace(site) ? "unknown" : site, exception);
+            return RecordCore(string.IsNullOrWhiteSpace(site) ? "unknown" : site, exception, terminating);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -209,7 +210,7 @@ public sealed class FaultLedger
         return text.ToString();
     }
 
-    private FaultRecording RecordCore(string site, Exception exception)
+    private FaultRecording RecordCore(string site, Exception exception, bool terminating)
     {
         string signature = SignatureOf(site, exception, out string type, out IReadOnlyList<string> frames);
         string id = HashOf(signature);
@@ -240,7 +241,7 @@ public sealed class FaultLedger
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
         if (recording.ShouldLog && FaultNoticed is { } noticed)
         {
-            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed);
+            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed, terminating);
             foreach (Action<FaultNotice> handler in noticed.GetInvocationList())
             {
                 try
@@ -521,7 +522,8 @@ public sealed record FaultLedgerLimits(int MaxSignatures = 512, int LogLimit = 1
 public readonly record struct FaultRecording(string Id, long Count, bool ShouldLog, long Suppressed);
 
 /// <summary>A fault the ledger wants logged now (<see cref="FaultLedger.FaultNoticed"/>): its signature id, where and what, how often so far and how many repeats were held back since the previous notice.</summary>
-public sealed record FaultNotice(string Id, string Site, string ExceptionType, string Message, long Count, long Suppressed);
+/// <param name="Terminating">The process ends because of this fault (an unhandled exception, or an unobserved task exception under a policy other than Log).</param>
+public sealed record FaultNotice(string Id, string Site, string ExceptionType, string Message, long Count, long Suppressed, bool Terminating = false);
 
 /// <summary>A point-in-time copy of one ledger entry (safe to hold and read from any thread).</summary>
 public sealed record FaultSnapshot(

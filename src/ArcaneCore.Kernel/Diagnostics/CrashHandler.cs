@@ -153,7 +153,7 @@ public sealed class CrashHandler : IDisposable
     {
         var exception = e.ExceptionObject as Exception;
         Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
-        RecordFault("unhandled", exception);
+        RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
         Terminate(_options.OnUnhandled == UnhandledExceptionPolicy.FailFast, exception);
     }
 
@@ -162,7 +162,7 @@ public sealed class CrashHandler : IDisposable
         UnobservedTaskPolicy policy = _options.OnUnobservedTask;
         bool terminating = policy != UnobservedTaskPolicy.Log;
         Report(CrashKind.UnobservedTask, e.Exception, terminating ? LogLevel.Critical : LogLevel.Error, terminating);
-        RecordFault("unobserved-task", e.Exception);
+        RecordFault("unobserved-task", e.Exception, terminating);
         if (!terminating)
         {
             e.SetObserved();
@@ -173,7 +173,7 @@ public sealed class CrashHandler : IDisposable
     }
 
     /// <summary>Count the fault in the ledger after the report is written and before the policy runs. Any failure here, out-of-memory included, is swallowed: the crash report and the termination policy must not be skipped (and the unobserved-task hook runs on the finalizer thread).</summary>
-    private static void RecordFault(string site, Exception? exception)
+    private static void RecordFault(string site, Exception? exception, bool terminating)
     {
         if (exception is null)
         {
@@ -182,7 +182,7 @@ public sealed class CrashHandler : IDisposable
 
         try
         {
-            FaultLedger.Shared.Record(site, exception);
+            FaultLedger.Shared.Record(site, exception, terminating);
         }
         catch
         {
