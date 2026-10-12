@@ -19,6 +19,7 @@ public sealed partial class WorldSession
     private DuplicatePacketDetector? _duplicates;
     private DuplicatePacketDetector.SessionState? _duplicateState;
     private int _rejectionsSent;
+    private int _lootReleasesSent;
 
     private void InitObservability(IServiceProvider services)
     {
@@ -30,16 +31,21 @@ public sealed partial class WorldSession
 
         if (services.GetService<DuplicatePacketDetector>() is { Enabled: true } detector)
         {
-            _duplicates = detector;
-            _duplicateState = detector.NewSession();
+            _duplicates = detector; // the per-session state is made on the first checked send: a managed bot is only known after construction
         }
     }
 
     /// <summary>Refusals this session has been sent (counted whether or not the line was rate limited away); a handler compares it before and after to tell whether it answered.</summary>
     internal int ClientRejectionsSent => Volatile.Read(ref _rejectionsSent);
 
-    /// <summary>True when a handler that is about to drop a request should build its reason text (the silent-drop log is on). Check it before allocating the text.</summary>
-    internal bool SilentDropLogEnabled => _rejections is { LogSilentDrops: true };
+    /// <summary>
+    /// Replies this session has been sent that answer a CMSG_LOOT: the refusals above plus SMSG_LOOT_RELEASE_RESPONSE (LootService.Refuse
+    /// answers a refused open with it, and it is not a decoded refusal because the same packet also closes a normal loot window).
+    /// </summary>
+    internal int ClientLootAnswersSent => Volatile.Read(ref _rejectionsSent) + Volatile.Read(ref _lootReleasesSent);
+
+    /// <summary>True when a handler that is about to drop a request should build its reason text (the silent-drop log is on and its level, Debug for a bot, Information for a player, is enabled). Check it before allocating the text.</summary>
+    internal bool SilentDropLogEnabled => _rejections is { } rejections && rejections.WouldLogSilentDrop(IsPlayerbot);
 
     private SessionLogContext LogContext()
     {
@@ -50,18 +56,36 @@ public sealed partial class WorldSession
     /// <summary>Called by Send for every outbound packet: decode refusals and look for duplicates. Never throws.</summary>
     private void ObserveOutbound(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
-        if (_rejections is { } rejections && ClientRejectionDecoder.IsCandidate(opcode)
-            && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection rejection))
+        if (_rejections is { } rejections)
         {
-            Interlocked.Increment(ref _rejectionsSent);
-            rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
+            if (opcode == WorldOpcode.SmsgLootReleaseResponse)
+            {
+                Interlocked.Increment(ref _lootReleasesSent);
+            }
+            else if (ClientRejectionDecoder.IsCandidate(opcode) && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection rejection))
+            {
+                Interlocked.Increment(ref _rejectionsSent);
+                rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
+            }
         }
 
-        if (_duplicates is { } detector && _duplicateState is { } state && (!_managed || detector.IncludeBots)
-            && detector.Observe(state, opcode, payload, out DuplicatePacketHit hit))
+        if (_duplicates is { } detector && (!_managed || detector.IncludeBots))
         {
-            detector.Report(state, LogContext(), hit);
+            DuplicatePacketDetector.SessionState state = _duplicateState ?? InitDuplicateState(detector);
+            if (detector.Observe(state, opcode, payload, out DuplicatePacketHit hit))
+            {
+                detector.Report(state, LogContext(), hit);
+            }
         }
+    }
+
+    /// <summary>True once the duplicate detector has allocated this session's state (tests: a managed bot must never get one while bots are excluded).</summary>
+    internal bool HasDuplicateState => Volatile.Read(ref _duplicateState) is not null;
+
+    private DuplicatePacketDetector.SessionState InitDuplicateState(DuplicatePacketDetector detector)
+    {
+        Interlocked.CompareExchange(ref _duplicateState, detector.NewSession(), null);
+        return _duplicateState!;
     }
 
     /// <summary>

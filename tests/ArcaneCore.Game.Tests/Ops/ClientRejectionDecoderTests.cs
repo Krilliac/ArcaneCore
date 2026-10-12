@@ -61,6 +61,18 @@ public sealed class ClientRejectionDecoderTests
     }
 
     [Fact]
+    public void ACloseWindowTradeStatus_IsARejectionOnlyWhenItCarriesAnInventoryError()
+    {
+        Assert.False(ClientRejectionDecoder.TryDecode(WorldOpcode.SmsgTradeStatus, EconomyPackets.TradeStatus(TradeStatus.CloseWindow), out _));
+
+        ClientRejection full = Decode(WorldOpcode.SmsgTradeStatus,
+            EconomyPackets.TradeStatus(TradeStatus.CloseWindow, inventoryResult: ArcaneCore.Game.Items.InventoryResult.InventoryFull, targetError: true));
+        Assert.Equal(ClientRejectionKind.TradeStatus, full.Kind);
+        Assert.Equal("CloseWindow", full.ReasonName);
+        Assert.Equal((uint)ArcaneCore.Game.Items.InventoryResult.InventoryFull, full.Arg);
+    }
+
+    [Fact]
     public void ARealLootWindowAndShortPayloadsAreNotRejections_AndOtherOpcodesAreNotCandidates()
     {
         byte[] window = new byte[14];

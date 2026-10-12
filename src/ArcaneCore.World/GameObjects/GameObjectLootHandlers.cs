@@ -125,9 +125,9 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
         var reader = new PacketReader(payload);
         ObjectGuid source = new(reader.ReadUInt64());
-        int answered = session.ClientRejectionsSent;
+        int answered = session.ClientLootAnswersSent;
         LootResult result = loot.Open(player, source);
-        if (result != LootResult.Ok && session.SilentDropLogEnabled && session.ClientRejectionsSent == answered)
+        if (result != LootResult.Ok && session.SilentDropLogEnabled && session.ClientLootAnswersSent == answered)
         {
             session.LogSilentDrop(WorldOpcode.CmsgLoot, "loot open refused: " + result, source.Value, source.Entry, (uint)result);
         }

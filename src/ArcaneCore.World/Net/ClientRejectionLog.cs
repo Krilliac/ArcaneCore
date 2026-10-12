@@ -38,6 +38,9 @@ public sealed partial class ClientRejectionLog
 
     public bool LogSilentDrops => _options.Enabled && _options.LogSilentDrops;
 
+    /// <summary>True when a silent-drop line for a bot (Debug) or a player (Information) would be written, so a handler can skip building its reason text.</summary>
+    public bool WouldLogSilentDrop(bool isBot) => LogSilentDrops && _logger.IsEnabled(isBot ? LogLevel.Debug : LogLevel.Information);
+
     /// <summary>A fresh per-session bucket.</summary>
     public TokenBucket NewBucket() => new(Math.Clamp(_options.BurstPerSession, 1, 1000), Math.Clamp(_options.RefillPerMinute, 1, 6000));
 

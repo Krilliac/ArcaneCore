@@ -91,6 +91,8 @@ public static class ClientRejectionDecoder
     /// <summary>True when a packet of this opcode can be a refusal (the payload decides).</summary>
     public static bool IsCandidate(WorldOpcode opcode) => (uint)(ushort)opcode < (uint)Candidates.Length && Candidates[(ushort)opcode];
 
+    private const uint TradeStatusCloseWindow = (uint)TradeStatus.CloseWindow;
+
     /// <summary>The trade statuses that mean the trade cannot go on (not the normal flow: open, accept, complete, close, cancel).</summary>
     private static bool IsTradeFailure(uint status) => status is 0 or 5 or 6 or 10 or 11 or (>= 14 and <= 22);
 
@@ -181,6 +183,13 @@ public static class ClientRejectionDecoder
             case WorldOpcode.SmsgTradeStatus:
                 if (payload.Length < 4 || !IsTradeFailure(U32(payload, 0)))
                 {
+                    // CLOSE_WINDOW is the normal close unless it carries an inventory error (a side without room): u32 status, u32 inventory result, u8 target flag, u32 0.
+                    if (payload.Length >= 8 && U32(payload, 0) == TradeStatusCloseWindow && U32(payload, 4) != 0)
+                    {
+                        rejection = new ClientRejection(ClientRejectionKind.TradeStatus, TradeStatusCloseWindow, 0, 0, U32(payload, 4));
+                        return true;
+                    }
+
                     return false;
                 }
 
