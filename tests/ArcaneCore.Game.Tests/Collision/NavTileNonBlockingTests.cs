@@ -84,12 +84,17 @@ public sealed class NavTileNonBlockingTests : IDisposable
     {
         NavMeshPathfinder nav = Gated();
 
+        // A dedicated thread, never a pool thread: the background read runs on the pool, and a pool thread that finished the call could
+        // legitimately pick the read up afterwards (the assertion below was flaky when the two shared a thread).
         int callThread = 0;
-        PathResult pending = await Prompt(() =>
+        var answer = new TaskCompletionSource<PathResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        new Thread(() =>
         {
             callThread = Environment.CurrentManagedThreadId;
-            return nav.FindPath(0, From, To, NonBlocking);
-        });
+            answer.SetResult(nav.FindPath(0, From, To, NonBlocking));
+        }).Start();
+        Assert.Same(answer.Task, await Task.WhenAny(answer.Task, Task.Delay(TimeSpan.FromSeconds(10))));
+        PathResult pending = await answer.Task;
         Assert.Equal(PathType.TilesPending, pending.Type);
         Assert.False(pending.HasPath);
         Assert.False(nav.GetNavMesh(0)!.IsTerrainTileLoaded(31, 31));
