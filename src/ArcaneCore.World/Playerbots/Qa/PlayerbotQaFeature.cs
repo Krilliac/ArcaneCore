@@ -112,10 +112,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
                 aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
             foreach (QaAbsorbed duplicate in aggregator.PendingDuplicates())
             {
-                if (aggregator.Get(duplicate.Survivor) is { } survivor && survivor.Publication.Issue > 0)
+                if (aggregator.Get(duplicate.Survivor) is { } survivor && survivor.Publication.HoldsIssue)
                 {
                     _log.LogInformation("Bot QA: issue #{Issue} -> duplicate of #{Survivor} ({Action})", duplicate.Issue, survivor.Publication.Issue,
-                        options.GitHub.CloseAbsorbedDuplicates ? "will be commented and closed" : "left alone: World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates is off");
+                        options.GitHub.CloseAbsorbedDuplicates
+                            ? (survivor.Publication.State == QaPublicationState.Failed ? "will be commented and closed once the survivor's issue is confirmed open (its last publish failed)" : "will be commented and closed")
+                            : "left alone: World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates is off");
                 }
             }
         }

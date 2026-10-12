@@ -35,7 +35,10 @@ internal sealed class ScriptedTransport : IQaIssueTransport
     /// <summary>Issue-list calls that fail with a transient error before one succeeds.</summary>
     public int ListFailures { get; set; }
 
-    public bool SupportsSearch => false;
+    public bool SupportsSearch { get; set; }
+
+    /// <summary>Issues that exist but are missing from the list (the list was cut short): only <see cref="GetIssueAsync"/> sees them.</summary>
+    public HashSet<int> Unlisted { get; } = [];
 
     public int Add(string body, bool open = true)
     {
@@ -53,12 +56,13 @@ internal sealed class ScriptedTransport : IQaIssueTransport
             throw new PlayerbotQaPublishException("list failed", transient: true);
         }
 
-        var index = new QaIssueIndex(complete: true);
-        foreach ((int number, (bool open, string body)) in _issues) index.Add(new QaIssueRef(number, open, $"https://github.com/x/y/issues/{number}"), body);
+        var index = new QaIssueIndex(complete: Unlisted.Count == 0);
+        foreach ((int number, (bool open, string body)) in _issues.Where(p => !Unlisted.Contains(p.Key))) index.Add(new QaIssueRef(number, open, $"https://github.com/x/y/issues/{number}"), body);
         return Task.FromResult(index);
     }
 
-    public Task<(QaIssueRef Issue, string Body)?> GetIssueAsync(int number, CancellationToken cancellationToken) => Task.FromResult<(QaIssueRef, string)?>(null);
+    public Task<(QaIssueRef Issue, string Body)?> GetIssueAsync(int number, CancellationToken cancellationToken)
+        => Task.FromResult<(QaIssueRef, string)?>(_issues.TryGetValue(number, out (bool Open, string Body) issue) ? (new QaIssueRef(number, issue.Open, $"https://github.com/x/y/issues/{number}"), issue.Body) : null);
 
     public Task<QaIssueRef?> SearchByMarkerAsync(string id, CancellationToken cancellationToken) => Task.FromResult<QaIssueRef?>(null);
 
@@ -472,6 +476,72 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
         Assert.True(github.IsOpen(issue));
     }
 
+    /// <summary>A survivor b that holds issue #N on the ABSORBED finding's marker (handed over mid-create), plus its transport and clock.</summary>
+    private static (string Survivor, int Issue) HandedOver(PlayerbotQaAggregator aggregator, ScriptedTransport github)
+    {
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 3, countB: 4);
+        int issue = github.Add(PlayerbotQaIssueComposer.MarkerOf(a) + "\n\nbody a");
+        aggregator.Pin(a);
+        Assert.Equal(b, Ingest(aggregator, bridge));
+        aggregator.Apply(a, new QaPublicationUpdate(Published(issue), QaData.T0, 3));
+        aggregator.Unpin(a);
+        return (b, issue);
+    }
+
+    [Fact]
+    public async Task AFailedSurvivorOfAHandedOverIssue_IsNotAgedOut_TheAliasIsKept_AndNothingIsFiledTwice()
+    {
+        PlayerbotQaAggregator aggregator = New(stale: TimeSpan.FromHours(24));
+        var github = new ScriptedTransport { CommentFailures = 1 };
+        (string b, int issue) = HandedOver(aggregator, github);
+        var time = new ManualTime(QaData.T0);
+        PlayerbotQaPublisher publisher = Publisher(aggregator, Options(), () => github, time: time);
+
+        time.Advance(TimeSpan.FromHours(25));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        Assert.Equal(QaPublicationState.Failed, aggregator.Get(b)!.Publication.State);
+
+        time.Advance(TimeSpan.FromHours(48)); // GitHub was unusable for longer than the stale limit
+        Assert.Equal(0, aggregator.AgeOut(time.GetUtcNow().UtcDateTime));
+        Assert.NotNull(aggregator.Get(b));
+        Assert.Equal(issue, aggregator.Get(b)!.Publication.Issue);
+        Assert.Contains(aggregator.Export().Absorbed!, x => x.Survivor == b);
+
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        Assert.DoesNotContain(github.Calls, c => c.StartsWith("create", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AHandedOverIssue_BeyondACutShortList_IsStillTheSurvivorsIssue()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        var github = new ScriptedTransport { SupportsSearch = true };
+        (string b, int issue) = HandedOver(aggregator, github);
+        github.Unlisted.Add(issue); // only a direct GET sees it, and its body has the absorbed finding's marker
+        var time = new ManualTime(QaData.T0);
+        PlayerbotQaPublisher publisher = Publisher(aggregator, Options(), () => github, time: time);
+
+        time.Advance(TimeSpan.FromHours(25));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+
+        Assert.DoesNotContain(github.Calls, c => c.StartsWith("create", StringComparison.Ordinal));
+        Assert.Equal([$"comment {issue}"], github.Calls);
+        Assert.Equal(issue, aggregator.Get(b)!.Publication.Issue);
+    }
+
+    [Fact]
+    public void AFailedSurvivorHoldingAnIssue_KeepsItsOwnReportedCount_WhenAnAbsorbedFindingIsMergedIn()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 3, countB: 3);
+        aggregator.Apply(a, new QaPublicationUpdate(new QaPublication(QaPublicationState.Failed, 40, "x"), null, 3));
+        aggregator.Apply(b, new QaPublicationUpdate(new QaPublication(QaPublicationState.Failed, 12, "x"), null, 1));
+
+        Assert.Equal(b, Ingest(aggregator, bridge)); // #12 < #40
+
+        Assert.Equal(1, aggregator.Get(b)!.OccurrencesReported);
+    }
+
     [Fact]
     public void AbsorbedFindingWithAFailedPublication_KeepsItsIssueTracked_AndClosableAsADuplicate()
     {
@@ -486,7 +556,7 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
     }
 
     [Fact]
-    public void APendingFinding_MergedWithAFailedOneThatHoldsAnIssue_KeepsThatIssue()
+    public void APendingFinding_MergedWithAFailedOneHoldingAnIssue_EndsHoldingThatIssue_AndNothingIsToClose()
     {
         PlayerbotQaAggregator aggregator = New();
         (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 1, countB: 4); // b is the busiest, and Pending

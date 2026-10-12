@@ -398,11 +398,11 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         return false;
     }
 
-    private static int PublicationRank(QaFinding f) => f.Publication.State switch
+    private static int PublicationRank(QaPublication p) => p.State switch
     {
         QaPublicationState.Published => 0,
         QaPublicationState.KnownClosed => 1,
-        _ when f.Publication.Issue > 0 => 2, // Failed: the issue exists, only the last call failed
+        _ when p.HoldsIssue => 2, // Failed: the issue exists, only the last call failed
         _ => 3,
     };
 
@@ -415,7 +415,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     private QaFinding MergeAll(List<QaFinding> findings)
     {
         QaFinding survivor = findings
-            .OrderBy(static f => PublicationRank(f))
+            .OrderBy(static f => PublicationRank(f.Publication))
             .ThenBy(static f => f.Publication.Issue)
             .ThenByDescending(static f => f.Count)
             .ThenBy(static f => f.Id, StringComparer.Ordinal)
@@ -427,7 +427,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             Absorb(survivor, other);
             Remove(other);
             Merged++;
-            bool issue = other.Publication.Issue > 0; // any state: a Failed publication keeps the number of an issue that exists
+            bool issue = other.Publication.HoldsIssue; // any state: a Failed publication keeps the number of an issue that exists
             _absorbed[other.Id] = new QaAbsorbed(other.Id, survivor.Id, issue ? other.Publication.Issue : 0, !issue || other.Publication.State == QaPublicationState.KnownClosed);
             foreach (string earlier in _absorbed.Where(p => p.Value.Survivor == other.Id).Select(p => p.Key).ToList()) _absorbed[earlier] = _absorbed[earlier] with { Survivor = survivor.Id, Commented = false }; // the comment named the old survivor
             if (issue)
@@ -471,9 +471,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             into.CauseDetail = from.CauseDetail;
         }
 
-        if (!into.Publication.Pinned) into.OccurrencesReported = Math.Max(into.OccurrencesReported, from.OccurrencesReported);
+        if (!into.Publication.HoldsIssue) into.OccurrencesReported = Math.Max(into.OccurrencesReported, from.OccurrencesReported);
         if (from.LastCommentUtc is { } commented && (into.LastCommentUtc is null || commented > into.LastCommentUtc)) into.LastCommentUtc = commented;
-        if ((into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) || (into.Publication.Issue <= 0 && from.Publication.Issue > 0)) into.Publication = from.Publication;
+        if (into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) into.Publication = from.Publication;
         List<QaSample> samples = [.. into.Samples, .. from.Samples];
         samples.Sort(static (x, y) => x.AtUtc.CompareTo(y.AtUtc));
         into.Samples.Clear();
@@ -515,7 +515,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             {
                 // The finding was merged into another while the publisher worked on it: its outcome is the survivor's (or, when the survivor has an
                 // issue of its own, the absorbed issue is recorded to be closed as a duplicate), never lost.
-                if (_absorbed.TryGetValue(id, out QaAbsorbed? gone) && update.Publication.Pinned) ApplyToAbsorbed(gone, update);
+                if (_absorbed.TryGetValue(id, out QaAbsorbed? gone) && update.Publication.HoldsIssue) ApplyToAbsorbed(gone, update);
                 return;
             }
 
@@ -604,7 +604,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             return;
         }
 
-        if (survivor.Publication.Issue <= 0)
+        if (!survivor.Publication.HoldsIssue)
         {
             survivor.Publication = update.Publication;
             if (update.LastCommentUtc is { } at) survivor.LastCommentUtc = at;
@@ -644,7 +644,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             }
 
             foreach (QaFindingView view in state.Findings
-                .OrderBy(v => v.Publication is { State: QaPublicationState.Published } ? 0 : v.Publication is { State: QaPublicationState.KnownClosed } ? 1 : 2)
+                .OrderBy(v => PublicationRank(v.Publication ?? QaPublication.Pending))
                 .ThenByDescending(v => v.Severity).ThenBy(v => v.Id, StringComparer.Ordinal))
             {
                 if (view.Id is not { Length: PlayerbotQaFingerprint.FullChars } || view.Key is null
@@ -703,7 +703,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 // The cap never drops a published or known-closed finding: its issue number is the only local memory of the issue.
-                if (_byId.Count >= maxFindings && !finding.Publication.Pinned)
+                if (_byId.Count >= maxFindings && !finding.Publication.HoldsIssue)
                 {
                     dropped++;
                     continue;
@@ -786,7 +786,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         QaFinding? victim = null;
         foreach (QaFinding f in _byId.Values)
         {
-            if (f.Publication.Pinned || IsProtected(f.Id) || !eligible(f)) continue;
+            if (f.Publication.HoldsIssue || IsProtected(f.Id) || !eligible(f)) continue;
             if (victim is null || Cheaper(f, victim)) victim = f;
         }
 
@@ -816,7 +816,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     }
 
     private bool IsStale(QaPublication publication, bool coverage, DateTime lastSeenUtc, DateTime now)
-        => staleAfter is { } limit && !publication.Pinned && !coverage && now - lastSeenUtc > limit;
+        => staleAfter is { } limit && !publication.HoldsIssue && !coverage && now - lastSeenUtc > limit;
 
     /// <summary>
     /// Drop every finding not seen within the age limit that is not published or known-closed (and not a start-up coverage finding, which a

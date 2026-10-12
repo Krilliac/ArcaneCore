@@ -11,7 +11,6 @@ internal sealed partial class QaIssueIndex(bool complete)
 {
     private readonly Dictionary<string, QaIssueRef> _byId = new(StringComparer.Ordinal);
     private readonly Dictionary<int, QaIssueRef> _byNumber = [];
-    private readonly HashSet<int> _marked = [];
 
     /// <summary>Whether the whole labelled list was read (it did not stop at the page or item limit); an issue missing from a complete index is not labelled.</summary>
     public bool Complete { get; } = complete;
@@ -22,8 +21,8 @@ internal sealed partial class QaIssueIndex(bool complete)
 
     public QaIssueRef? ByNumber(int number) => _byNumber.GetValueOrDefault(number);
 
-    /// <summary>Whether issue <paramref name="number"/> carries a Bot QA marker (of any finding): it is a bot issue, not one whose marker a person edited away.</summary>
-    public bool HasMarker(int number) => _marked.Contains(number);
+    /// <summary>Whether <paramref name="body"/> carries a Bot QA marker of ANY finding (an issue handed over by a merged finding carries that finding's, not the holder's).</summary>
+    public static bool HasAnyMarker(string body) => !string.IsNullOrEmpty(body) && MarkerPattern().IsMatch(body);
 
     /// <summary>Index <paramref name="issue"/> under every exact <c>&lt;!-- arcanecore-bot-qa:id --&gt;</c> marker in <paramref name="body"/>.</summary>
     public void Add(QaIssueRef issue, string body)
@@ -33,7 +32,6 @@ internal sealed partial class QaIssueIndex(bool complete)
         foreach (Match match in MarkerPattern().Matches(body))
         {
             _byId.TryAdd(match.Groups["id"].Value, issue);
-            _marked.Add(issue.Number);
         }
     }
 

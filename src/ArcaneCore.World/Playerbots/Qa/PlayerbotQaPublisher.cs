@@ -299,15 +299,15 @@ internal sealed class PlayerbotQaPublisher
 
             QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
             QaIssueRef? found = index.ByMarker(id);
-            // A finding that holds issue #N and finds #N in the list has its issue, whatever marker its body carries (an issue handed over by a merged finding has that finding's).
-            // A failed attempt keeps the number too: it holds the issue as long as the body still carries some finding's marker (a person editing the marker away frees it).
-            if (found is null && current.Publication.Issue > 0 && (current.Publication.Pinned || index.HasMarker(current.Publication.Issue))) found = index.ByNumber(current.Publication.Issue);
-            string marker = PlayerbotQaIssueComposer.MarkerOf(id);
+            // A finding that holds issue #N (any state: a failed attempt keeps the number) and finds #N in the list has its issue, whatever marker its body carries
+            // (an issue handed over by a merged finding has that finding's). The same for Published and Failed; a marker a person edited away does not free the number.
+            if (found is null && current.Publication.HoldsIssue) found = index.ByNumber(current.Publication.Issue);
             if (found is null && current.Publication.Issue > 0 && index.ByNumber(current.Publication.Issue) is null)
             {
                 if (!await TakeLookupAsync(pass, cancellationToken).ConfigureAwait(false)) return true;
                 var known = await client.GetIssueAsync(current.Publication.Issue, cancellationToken).ConfigureAwait(false);
-                if (known is { } k && k.Body.Contains(marker, StringComparison.Ordinal)) found = k.Issue;
+                // Beyond a cut-short list the body is all there is to go on: any bot marker, this finding's or the one of a merged finding whose issue was handed over.
+                if (known is { } k && QaIssueIndex.HasAnyMarker(k.Body)) found = k.Issue;
             }
 
             if (found is null && client.SupportsSearch)
@@ -410,7 +410,7 @@ internal sealed class PlayerbotQaPublisher
         foreach (QaAbsorbed duplicate in _state.PendingDuplicates())
         {
             QaFindingView? survivor = _state.Get(duplicate.Survivor);
-            if (survivor is null || !survivor.Publication.Pinned || survivor.Publication.Issue <= 0) continue;
+            if (survivor is null || !survivor.Publication.HoldsIssue) continue;
             if (survivor.Publication.Issue == duplicate.Issue)
             {
                 _state.MarkDuplicateHandled(duplicate.Id);
@@ -519,7 +519,7 @@ internal sealed class PlayerbotQaPublisher
         DateTime now = _time.GetUtcNow().UtcDateTime;
         foreach (QaFindingView f in eligible)
         {
-            if (f.Publication.Pinned) continue;
+            if (f.Publication.HoldsIssue) continue;
             if (f.Publication.State == QaPublicationState.DryRun && f.OccurrencesReported == f.Count) continue;
             QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, LabelsFor(f), _build, _redactor);
             try

@@ -384,7 +384,7 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
     }
 
     [Fact]
-    public async Task Publish_IssueNumberKnownLocally_ButMarkerGone_FallsBackToTheSearch_AndCreatesWhenAbsent()
+    public async Task Publish_IssueNumberKnownLocally_ButMarkerGone_KeepsTheNumber_AndNeverCreates()
     {
         var github = new FakeGitHub();
         int stale = github.Add("someone edited the marker away");
@@ -392,8 +392,8 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
 
         await rig.Run();
 
-        Assert.Equal(1, github.Creates);
-        Assert.NotEqual(stale, rig.State.Get(A)!.Publication.Issue);
+        Assert.Equal(0, github.Creates); // the same policy for a Failed and a Published finding: a number in the list is the finding's, whatever its body says
+        Assert.Equal(stale, rig.State.Get(A)!.Publication.Issue);
     }
 
     [Fact]

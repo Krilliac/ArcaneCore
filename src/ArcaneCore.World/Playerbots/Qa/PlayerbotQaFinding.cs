@@ -58,6 +58,10 @@ internal sealed record QaPublication(QaPublicationState State, int Issue = 0, st
     [JsonIgnore]
     public bool Pinned => State is QaPublicationState.Published or QaPublicationState.KnownClosed;
 
+    /// <summary>The finding has a GitHub issue, in any state: a failed attempt keeps the number of the issue it was working on, and that issue exists.</summary>
+    [JsonIgnore]
+    public bool HoldsIssue => Issue > 0;
+
     public override string ToString() => State switch
     {
         QaPublicationState.Published => string.Create(CultureInfo.InvariantCulture, $"Published#{Issue}"),
