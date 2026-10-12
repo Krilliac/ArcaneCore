@@ -225,6 +225,19 @@ public sealed class TextEmoteDbcTests
         return states;
     }
 
+    /// <summary>Every packet up to and including the Values update that carries UNIT_NPC_EMOTESTATE = 0 (read timeout per packet), then what follows it.</summary>
+    private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> ReadUntilStateEndsAsync(WorldTestClient client)
+    {
+        var seen = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        while (!EmoteStatesIn(seen).Contains(0u))
+        {
+            seen.Add(await client.ReadAsync());
+        }
+
+        seen.AddRange(await client.CollectAsync());
+        return seen;
+    }
+
     private static async Task DanceAsync(WorldTestHost host, WorldTestClient waver, WorldTestClient watcher)
     {
         await waver.SendAsync(WorldOpcode.CmsgTextEmote, TextEmote(9, 0, 0)); // a state emote
@@ -247,7 +260,7 @@ public sealed class TextEmoteDbcTests
             await waver.SendAsync(opcode, await BlockAsync(host, flags, dx));
             await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Waver")!.GetUInt32(UpdateFields.UnitNpcEmotestate) == 0, "the emote state to end");
 
-            List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectAsync();
+            List<(WorldOpcode Opcode, byte[] Payload)> seen = await ReadUntilStateEndsAsync(watcher);
             Assert.Contains(seen, p => p.Opcode == opcode);
             Assert.Contains(0u, EmoteStatesIn(seen)); // the update the watcher got carries UNIT_NPC_EMOTESTATE = 0
         }
@@ -265,7 +278,7 @@ public sealed class TextEmoteDbcTests
             await DanceAsync(host, waver, watcher);
 
             await waver.SendAsync(WorldOpcode.MsgMoveHeartbeat, await BlockAsync(host, flags, dx, turn));
-            Assert.Contains(await watcher.CollectAsync(), p => p.Opcode == WorldOpcode.MsgMoveHeartbeat); // handled and relayed before the check
+            Assert.Contains(await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat), p => p.Opcode == WorldOpcode.MsgMoveHeartbeat); // handled and relayed before the check
             Assert.Equal(14u, await EmoteState(host));
         }
     }
@@ -286,7 +299,7 @@ public sealed class TextEmoteDbcTests
             });
 
             Assert.Equal(0u, await EmoteState(host));
-            Assert.Contains(0u, EmoteStatesIn(await watcher.CollectAsync()));
+            Assert.Contains(0u, EmoteStatesIn(await ReadUntilStateEndsAsync(watcher)));
         }
     }
 
@@ -314,7 +327,7 @@ public sealed class TextEmoteDbcTests
             ack.WriteUInt32(0);
             await waver.SendAsync(WorldOpcode.MsgMoveTeleportAck, ack.ToArray());
             await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Waver")!.GetUInt32(UpdateFields.UnitNpcEmotestate) == 0, "the emote state to end");
-            Assert.Contains(0u, EmoteStatesIn(await watcher.CollectAsync()));
+            Assert.Contains(0u, EmoteStatesIn(await ReadUntilStateEndsAsync(watcher)));
         }
     }
 
