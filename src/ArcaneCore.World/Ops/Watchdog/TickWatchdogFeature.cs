@@ -51,6 +51,12 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             return new TickBodySummary(stats.Samples, stats.P50Micros, stats.P99Micros, stats.MaxMicros, stats.Overruns);
         };
         monitor.HangDetail = inProgress => Describe(world, inProgress);
+        if (services.GetService<HostLoadSampler>() is { Enabled: true } hostLoad)
+        {
+            monitor.HostLoad = hostLoad;
+            world.HostLoad = hostLoad;
+        }
+
         world.WorldTick += OnTick;
         logger.LogInformation("tick watchdog attached: budget {BudgetMs} ms, hang {HangMs} ms, ring {Ring} frames",
             monitor.BudgetMicros / 1000, monitor.HangMicros == long.MaxValue ? 0 : monitor.HangMicros / 1000, monitor.Ring.Capacity);

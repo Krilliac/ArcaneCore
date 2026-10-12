@@ -550,6 +550,8 @@ public sealed class WorldRuntime : IDisposable
                 MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
                     ? map.ReusableDiagnostics()
                     : null;
+                // The collector's counters around this map's update, for the slow line's "gc" share (two cached-delegate reads of four counters).
+                GcSnapshot gcBeforeMap = diagnostics is not null ? GcSource() : default;
                 try
                 {
                     map.Update(diffMs, diagnostics);
@@ -564,7 +566,7 @@ public sealed class WorldRuntime : IDisposable
                     mapUpdated(map, Micros(Stopwatch.GetTimestamp() - mapStart));
                 }
 
-                LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
+                LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics, gcBeforeMap);
                 if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
             }
         }
@@ -657,7 +659,7 @@ public sealed class WorldRuntime : IDisposable
         _stopSignal.Dispose();
     }
 
-    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics)
+    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics, GcSnapshot gcBefore)
     {
         if (thresholdMs <= 0)
         {
@@ -667,20 +669,45 @@ public sealed class WorldRuntime : IDisposable
         long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
         if (micros > thresholdMs * 1000L)
         {
+            string host = HostLoadText(micros);
             if (diagnostics is { Completed: true } timing)
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId,
-                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects}, visibility candidates {VisibilityCandidates})",
+                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects}, visibility candidates {VisibilityCandidates}); top: {Top}; {Gc}{Host}",
                     what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
                     timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
                     timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
-                    timing.NewObjects, timing.VisibilityCandidates);
+                    timing.NewObjects, timing.VisibilityCandidates, timing.FormatTop(3), GcSource().Since(gcBefore).Format(), host);
             }
             else
             {
-                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
-                    what, map.MapId, map.InstanceId, micros / 1000);
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms{Host}",
+                    what, map.MapId, map.InstanceId, micros / 1000, host);
             }
+        }
+    }
+
+    /// <summary>
+    /// The host-load sampler the slow-update lines ask "was it the machine, the collector or the code" (set by the tick watchdog feature;
+    /// null: the lines carry no host text). Read on the world thread only when a line is about to be written.
+    /// </summary>
+    public ArcaneCore.Kernel.Ops.Watchdog.HostLoadSampler? HostLoad { get; set; }
+
+    private string HostLoadText(long windowMicros)
+    {
+        if (HostLoad is not { } sampler)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string text = sampler.Describe(windowMicros);
+            return text.Length == 0 ? string.Empty : "; " + text;
+        }
+        catch (Exception ex)
+        {
+            return $"; host load unavailable ({ex.GetType().Name})";
         }
     }
 

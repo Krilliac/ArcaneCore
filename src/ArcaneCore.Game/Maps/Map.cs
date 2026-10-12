@@ -674,9 +674,24 @@ public sealed class Map
             _heartbeatSnapshotDirty = false;
         }
         foreach (Unit unit in _heartbeatUnits)
+        {
             if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
                 && unit is not Player { IsQuestSettlementPending: true })
-                unit.UpdateHeartbeat(diffMs);
+            {
+                // Players (and so bots) are timed one by one for the slow-map top-3; creatures, the bulk, are the remainder of the phase.
+                if (diagnostics is not null && unit is Player)
+                {
+                    long beatStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    unit.UpdateHeartbeat(diffMs);
+                    diagnostics.AddPlayerHeartbeat(System.Diagnostics.Stopwatch.GetTimestamp() - beatStart);
+                }
+                else
+                {
+                    unit.UpdateHeartbeat(diffMs);
+                }
+            }
+        }
+
         diagnostics?.EndHeartbeat();
 
         // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).

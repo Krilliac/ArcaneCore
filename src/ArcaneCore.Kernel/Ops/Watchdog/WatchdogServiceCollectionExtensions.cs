@@ -37,10 +37,12 @@ public static class WatchdogServiceCollectionExtensions
         services.TryAddSingleton<ThreadPoolProbe>();
         services.TryAddSingleton<HeartbeatWriter>();
         services.TryAddSingleton<CounterDump>();
+        services.TryAddSingleton<HostLoadSampler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, MemoryMonitor>(sp => sp.GetRequiredService<MemoryMonitor>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, ThreadPoolProbe>(sp => sp.GetRequiredService<ThreadPoolProbe>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, HeartbeatWriter>(sp => sp.GetRequiredService<HeartbeatWriter>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, CounterDump>(sp => sp.GetRequiredService<CounterDump>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, HostLoadSampler>(sp => sp.GetRequiredService<HostLoadSampler>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WatchdogHost>());
         return services;
     }
