@@ -29,6 +29,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly List<DestinationEntry> _entries = [];
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, uint> _farBlockedUntil = [];
+    private readonly Dictionary<uint, uint> _visited = [];
     private uint _mapId;
     private int _contentVersion = -1;
     private CreatureContent? _content;
@@ -164,6 +165,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (_backoffUntil != 0) _backoffUntil = 0;
 
         RefreshEntries(player, map.MapId, preferredCreatureEntry, returnQuestId);
+        bool hunting = preferredCreatureEntry != 0 && returnQuestId == 0;
+        if (hunting)
+        {
+            NoteArrival(player, preferredCreatureEntry, now);
+            if (_route is not null && _routeTarget == preferredCreatureEntry && IsVisited(_routeSpawnGuid, now)) ClearRoute();
+        }
+
         LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         if (_route is not null)
         {
@@ -209,6 +217,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         PlayerNpcState? state = services?.StateOf(player);
+        if (hunting && _visited.Count > 0 && AllVisitedOrBlocked(preferredCreatureEntry, now))
+        {
+            // Every known spawn of the entry was just found empty (or cannot be reached): no destination until the earliest
+            // respawn, instead of walking back to the nearest one. The brain falls through to exploring meanwhile.
+            TargetEntry = 0;
+            QuestId = 0;
+            return false;
+        }
+
         if (_entries.Count > 0 && _entries.Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
             .All(entry => IsBlocked(entry.Spawn.Guid, now)))
         {
@@ -221,6 +238,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (DestinationEntry entry in _entries
             .Where(entry => !IsBlocked(entry.Spawn.Guid, now) && IsPresent(player, entry.Spawn))
             .Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
+            .Where(entry => !hunting || !IsVisited(entry.Spawn.Guid, now))
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
             if (++scanned > MaxEntryScan) break;
@@ -302,6 +320,87 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (attempted) Backoff(now);
         return false;
+    }
+
+    /// <summary>A spawn point the bot reached with nothing of the hunted entry alive in sight is a visit: how near (yards) the bot must stand to it.</summary>
+    internal const float ArrivalYards = 8f;
+
+    /// <summary>Spawns of one entry this near a visited spawn (yards) are one camp and are visited with it.</summary>
+    internal const float CampYards = 10f;
+
+    /// <summary>Shortest and longest time (ms) a visited spawn is skipped, whatever its respawn delay.</summary>
+    internal const uint MinVisitMs = 30_000, MaxVisitMs = 600_000;
+
+    /// <summary>The most visited spawns remembered; the earliest to expire goes first.</summary>
+    internal const int MaxVisits = 64;
+
+    /// <summary>Visited spawns still remembered (tests, inspection).</summary>
+    internal int VisitedCount => _visited.Count;
+
+    private bool IsVisited(uint spawnGuid, uint now)
+    {
+        if (!_visited.TryGetValue(spawnGuid, out uint until)) return false;
+        if (unchecked((int)(until - now)) > 0) return true;
+        _visited.Remove(spawnGuid);
+        return false;
+    }
+
+    /// <summary>
+    /// The bot stands at a spawn point of the hunted entry and sees no live creature of it: the point (and the spawns within
+    /// <see cref="CampYards"/>, one camp) is skipped until its creatures are due back (the spawn's respawn delay), so the walk
+    /// goes on to the next spawn instead of back to the nearest, which is the one the bot is standing at.
+    /// </summary>
+    private void NoteArrival(Player player, uint preferred, uint now)
+    {
+        Vector3 here = new(player.X, player.Y, player.Z);
+        CreatureSpawn? reached = null;
+        foreach (DestinationEntry entry in _entries)
+        {
+            if (entry.Entry != preferred || IsVisited(entry.Spawn.Guid, now)) continue;
+            if (Vector3.DistanceSquared(here, new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z)) > ArrivalYards * ArrivalYards) continue;
+            reached = entry.Spawn;
+            break;
+        }
+
+        if (reached is null || VisibleTarget(player, preferred, 0)) return;
+        Vector3 center = new(reached.X, reached.Y, reached.Z);
+        foreach (DestinationEntry entry in _entries)
+        {
+            if (entry.Entry != preferred || IsVisited(entry.Spawn.Guid, now)) continue;
+            if (Vector3.DistanceSquared(center, new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z)) > CampYards * CampYards) continue;
+            if (_visited.Count >= MaxVisits) EvictVisit(now);
+            ulong respawnMs = ((ulong)entry.Spawn.SpawnTimeMinSeconds + entry.Spawn.SpawnTimeMaxSeconds) / 2 * 1000;
+            _visited[entry.Spawn.Guid] = unchecked(now + (uint)Math.Clamp(respawnMs, MinVisitMs, MaxVisitMs));
+        }
+    }
+
+    private void EvictVisit(uint now)
+    {
+        uint oldest = 0;
+        int least = int.MaxValue;
+        foreach ((uint guid, uint until) in _visited)
+        {
+            int left = unchecked((int)(until - now));
+            if (left > least) continue;
+            least = left;
+            oldest = guid;
+        }
+
+        _visited.Remove(oldest);
+    }
+
+    private bool AllVisitedOrBlocked(uint preferred, uint now)
+    {
+        bool any = false, visited = false;
+        foreach (DestinationEntry entry in _entries)
+        {
+            if (entry.Entry != preferred) continue;
+            any = true;
+            if (IsVisited(entry.Spawn.Guid, now)) visited = true;
+            else if (!IsBlocked(entry.Spawn.Guid, now)) return false;
+        }
+
+        return any && visited;
     }
 
     private bool GiverInHome(CreatureSpawn spawn) => Home is not { } home || home.Contains(spawn);

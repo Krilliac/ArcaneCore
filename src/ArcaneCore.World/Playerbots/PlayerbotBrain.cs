@@ -1053,6 +1053,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
                 if (_target is { } target) MarkUnreachable(target);
+                // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
+                // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
+                // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends.
+                else if (_goal == PlayerbotGoalKind.Grind && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);

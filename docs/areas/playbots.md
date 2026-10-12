@@ -523,6 +523,15 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
   objective is hunted at the creatures that drop the item (read once from the loot tables; items with more than 24 droppers, elites and
   creatures that do not spawn on the bot's map are left out).
+* **Empty camps.** With nothing of the quest's entry in sight the bot walks to its spawn points (`PlayerbotWorldDestinations`). A spawn
+  point it reaches (within 8 yards) with no live creature of the entry in sight is marked visited, with the spawns of the entry within 10
+  yards of it (one camp), for the spawn's respawn delay (the mean of its min and max, clamped to 30 s to 10 min; at most 64 visits, the
+  earliest to expire goes first); the walk then goes to the nearest spawn not visited. When every known spawn of the entry is visited (or
+  unreachable) the bot has no destination for it until the earliest visit ends and explores meanwhile. Before, the nearest spawn was
+  picked again on arrival: live 2026-10-12 (bot QA #368, "stall: goal Grind target 80") 54 bots stalled 177 times at the empty kobold camp of
+  quest 21, some nine times each. A stall of a Grind goal that has no target creature also sets the entry aside for that bot for 10 minutes
+  (`PlayerbotSuspensions`, as for a quest goal), so the quest's objective is passed over instead of planned again; it is the bot's own
+  set-aside, not shared with other bots (an entry set aside for everyone would also stop bots killing it where it stands in sight).
 
 ### Home area
 
