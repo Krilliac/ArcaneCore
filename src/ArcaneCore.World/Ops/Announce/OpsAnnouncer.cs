@@ -279,7 +279,8 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         }
     }
 
-    private static string BuildDetail(string? gmDetail, IReadOnlyList<AnnounceField>? fields)
+    /// <summary>The GM-only detail line: the cleaned detail then the cleaned fields, cut at <c>MaxDetail</c> characters without splitting a surrogate pair.</summary>
+    public static string BuildDetail(string? gmDetail, IReadOnlyList<AnnounceField>? fields)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(gmDetail))
@@ -300,7 +301,14 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
             }
         }
 
-        return sb.Length > MaxDetail ? sb.ToString(0, MaxDetail) : sb.ToString();
+        if (sb.Length <= MaxDetail)
+        {
+            return sb.ToString();
+        }
+
+        // Clean only lets whole pairs through, so a high surrogate at the cut is always followed by its low half: cut before it.
+        int cut = char.IsHighSurrogate(sb[MaxDetail - 1]) ? MaxDetail - 1 : MaxDetail;
+        return sb.ToString(0, cut);
     }
 
     /// <summary>One line, no control or bidi format characters, whole surrogate pairs only, no client escape codes (a pipe would let typed text inject colours or links), at most <paramref name="max"/> characters.</summary>
@@ -354,7 +362,7 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         return sb.ToString();
     }
 
-    private static bool IsBidiFormat(char c) => c is '\u200E' or '\u200F' || (c >= '\u202A' && c <= '\u202E') || (c >= '\u2066' && c <= '\u2069');
+    private static bool IsBidiFormat(char c) => c is '\u061C' or '\u200E' or '\u200F' || (c >= '\u202A' && c <= '\u202E') || (c >= '\u2066' && c <= '\u2069');
 
     private sealed class CategoryState(int burst, long nowMs)
     {

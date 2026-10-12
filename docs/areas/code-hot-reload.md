@@ -413,6 +413,9 @@ module already registered, a hook class that overrides nothing) rejects the whol
   a module cannot shadow those entries.
 * If applying the creature AI or script hooks fails after validation (not expected), the reply is a failure ("only partly applied": the
   opcode and command tables had already changed), the announcement is `Failed` and the audit log gets `module-failed`.
+  **A module whose commit Failed stays recorded as loaded** (its opcode handlers and commands are live and `.hotmodule list`
+  shows it), even though its creature AI and script hooks may not be. There is no automatic clean-up: restart the server to clear
+  it.
 * Not available to modules yet: spell scripts (their registry and effect chain are built once with the spell system),
   map-specific entry AI, `IWorldFeature`s and tables.
 

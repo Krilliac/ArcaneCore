@@ -26,7 +26,7 @@ public sealed class ScriptHooksFeature(IServiceProvider services) : IWorldFeatur
     private readonly Dictionary<Player, Action<Item, byte, Game.Items.EquipmentChange>> _equipBindings = [];
     private WorldRuntime? _world;
     private ILogger _logger = NullLogger<ScriptHooksFeature>.Instance;
-    private bool _equipSubscribed, _socialSubscribed, _spellSubscribed;
+    private bool _equipSubscribed, _socialSubscribed, _spellSubscribed, _socialWarned, _spellWarned;
 
     /// <summary>Every module type in this assembly, ordered by full name.</summary>
     public static IReadOnlyList<Type> ModuleTypes { get; } = AssemblyDiscovery.FindTypes<IScriptModule>();
@@ -110,7 +110,11 @@ public sealed class ScriptHooksFeature(IServiceProvider services) : IWorldFeatur
         }
         else
         {
-            _logger.LogWarning("No social feature: the group and guild script hooks never run");
+            if (!_socialWarned)
+            {
+                _socialWarned = true;
+                _logger.LogWarning("No social feature: the group and guild script hooks never run");
+            }
         }
     }
 
@@ -129,7 +133,11 @@ public sealed class ScriptHooksFeature(IServiceProvider services) : IWorldFeatur
         }
         else
         {
-            _logger.LogWarning("No spell feature: the spell script hooks never run");
+            if (!_spellWarned)
+            {
+                _spellWarned = true;
+                _logger.LogWarning("No spell feature: the spell script hooks never run");
+            }
         }
     }
 

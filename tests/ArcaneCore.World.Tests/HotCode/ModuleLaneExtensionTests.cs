@@ -198,4 +198,38 @@ public sealed class ModuleLaneExtensionTests : IDisposable
         Assert.Contains(events[0].Fields!, f => f.Name == "sha256" && f.Value.Length == 12);
         Assert.All(events, e => Assert.Equal("HotFixture", e.Area));
     }
+
+    [Fact]
+    public async Task ACommitThatFailsAfterValidation_IsReportedFailed_AuditedModuleFailed_AndTheModuleStaysRecordedAsLoaded()
+    {
+        Install("game1", "HotGame", "HotGame");
+        int aiCalls = 0;
+        // Validate asks for the factory first and Commit second: the second answer is gone, as if the creature AI system vanished in between.
+        var seams = new ModuleGameSeams(() => ++aiCalls == 1 ? _ai : null, () => _hooks, () => [], _world.Post, NullLogger.Instance);
+        var host = new ModuleHost(
+            new HotModuleOptions { Enabled = true, Directory = _root },
+            _world, _opcodes, _commands,
+            new HotCodeAudit(Path.Combine(_dir, "audit.log")),
+            NullLogger.Instance,
+            TimeSpan.FromSeconds(10),
+            reporter: _reporter,
+            seams: seams);
+
+        ModuleResult result = await host.LoadAsync("HotGame");
+
+        Assert.False(result.Ok);
+        Assert.True(result.Failed);
+        Assert.Contains("only partly applied", result.Detail);
+        Assert.Equal(2, aiCalls);
+        HotSwapEvent evt = Assert.Single(_reporter.Events);
+        Assert.Equal(HotSwapResult.Failed, evt.Result);
+        Assert.Equal("load", evt.Action);
+        string audit = await File.ReadAllTextAsync(Path.Combine(_dir, "audit.log"));
+        Assert.Contains("module-failed", audit);
+        Assert.DoesNotContain("module-load", audit);
+        Assert.DoesNotContain("module-rejected", audit);
+        // docs/areas/code-hot-reload.md: the module stays recorded as loaded; only a restart clears it.
+        Assert.Equal("HotGame", Assert.Single(host.List()).Name);
+        Assert.False(_ai.HasScript(990001, "HotGameAI"));
+    }
 }
