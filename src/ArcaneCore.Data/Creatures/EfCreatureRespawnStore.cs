@@ -92,7 +92,7 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
             {
                 foreach (uint[] part in guids.Distinct().Chunk(ChunkSize))
                 {
-                    List<uint> chunk = [.. part]; // a List: C# 14 would bind an array's Contains to the span overload, which EF cannot translate
+                    List<uint> chunk = [.. part]; // a List: C# 14 would bind an array's Contains to the span overload, which EF Core 9 cannot translate (EF 10 can)
                     await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == instance && chunk.Contains(r.SpawnGuid))
                         .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -130,7 +130,7 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
         }
     }
 
-    /// <summary>Keys per set-based statement: well under every provider's parameter limit (SQLite 32766, SQL Server 2100).</summary>
+    /// <summary>Keys per set-based statement: bounds statement size and per-statement work (SQLite and PostgreSQL pass the list as one parameter; 500 also stays far under every per-key parameter limit).</summary>
     private const int ChunkSize = 500;
 
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
