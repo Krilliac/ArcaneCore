@@ -297,7 +297,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
         PlayerbotClassRotation? rotation = PlayerbotRotations.For(player.Class);
         SpellInfo[] known = [.. feature.Spellbook.GetSpells(player).Select(feature.System.Store.Get).OfType<SpellInfo>()];
-        _abilities = PlayerbotAbilities.Resolve(known, rotation?.Abilities ?? []);
+        _abilities = PlayerbotAbilities.Resolve(known, rotation?.Abilities ?? [], feature.System.Store);
         PlayerbotAbilities abilities = _abilities;
         _role = PlayerbotRoles.Assign(player.Class, id => abilities.HasSpellOrRank(id, feature.System.Store.Get));
         return _abilities;
@@ -376,7 +376,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private static bool IsExplicitUnit(SpellInfo spell) => spell.Effects[0].TargetA is SpellImplicitTarget.UnitFriend
         or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitFriendAndParty or SpellImplicitTarget.UnitParty
-        or SpellImplicitTarget.UnitCasterPet;
+        or SpellImplicitTarget.UnitFriendChainHeal or SpellImplicitTarget.UnitCasterPet;
 
     /// <summary>The server took the request: its SMSG_SPELL_START / GO, or the cast, next-swing or auto-repeat slot now holds it.</summary>
     private bool Accepted(SpellFeature feature, Player player, SpellInfo spell)

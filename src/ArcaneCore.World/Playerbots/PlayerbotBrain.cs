@@ -1709,19 +1709,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return player.IsWithinLineOfSight(tagger);
     }
 
-    /// <summary>A direct heal that lands on a unit other than its caster (a self-only heal such as Desperate Prayer would heal the bot, not its tagger).</summary>
-    private static readonly Func<Game.Spells.SpellInfo, bool> HealsAnotherUnit = static spell =>
-    {
-        foreach (Game.Spells.SpellEffectInfo effect in spell.Effects)
-        {
-            if (!effect.IsEmpty && effect.Effect == Game.Spells.SpellEffectName.Heal
-                && effect.TargetA is Game.Spells.SpellImplicitTarget.Unit or Game.Spells.SpellImplicitTarget.UnitFriend
-                    or Game.Spells.SpellImplicitTarget.UnitFriendAndParty) return true;
-        }
-
-        return false;
-    };
-
     /// <summary>
     /// A healer class with a direct heal tops the tagger it helps up (below 85% health) before it fights the mob, when
     /// <see cref="IsSafeHealTarget"/> holds. The combat view is built once for the heals (<see cref="PlayerbotCombatSpells.FirstCastable"/>).
@@ -1732,8 +1719,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.Class is not (Game.Class.Priest or Game.Class.Paladin or Game.Class.Druid or Game.Class.Shaman)) return false;
         if (player.Map?.FindPlayer(_contention.AssistTagger) is not { } tagger || !IsSafeHealTarget(player, tagger)
             || tagger.MaxHealth == 0 || tagger.Health * 100f >= 85f * tagger.MaxHealth) return false;
-        IReadOnlyList<Game.Spells.SpellInfo> heals = _combatSpells.Abilities(player).DirectHeals;
-        return _combatSpells.FirstCastable(player, heals, tagger, HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+        // A self-only heal such as Desperate Prayer would heal the bot, not its tagger; a scripted (Holy Light) or chain (Healing Wave) heal lands on the target.
+        PlayerbotAbilities abilities = _combatSpells.Abilities(player);
+        return _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
     }
 
     private void RememberAttackers(Player player)
