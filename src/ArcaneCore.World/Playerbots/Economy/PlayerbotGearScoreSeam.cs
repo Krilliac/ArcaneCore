@@ -38,6 +38,7 @@ internal static class PlayerbotGearScoreSeam
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.gearscore", e);
             return null;
         }
     }

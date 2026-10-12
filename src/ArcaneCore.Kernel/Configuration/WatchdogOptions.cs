@@ -27,6 +27,9 @@ public sealed class WatchdogOptions
     /// <summary>The thread-pool starvation probe.</summary>
     public ThreadPoolProbeOptions ThreadPool { get; } = new();
 
+    /// <summary>The host-load sampler that lets a slow-tick line say whether the machine, the garbage collector or the code was to blame.</summary>
+    public HostLoadOptions HostLoad { get; } = new();
+
     /// <summary>The process-supervisor heartbeat (systemd, a liveness file or stdout).</summary>
     public HeartbeatOptions Heartbeat { get; } = new();
 
@@ -57,6 +60,16 @@ public sealed class TickMonitorOptions
 
     /// <summary><c>true</c>: the heartbeat is withheld while a tick has run longer than <see cref="HangMs"/>, so a supervisor watchdog restarts a hung world. Default true.</summary>
     public bool GatesHeartbeat { get; set; } = true;
+}
+
+/// <summary>Host-load sampler (<c>Ops:Watchdog:HostLoad</c>): process and machine CPU, GC counts and pause time, thread-pool depth, sampled on the monitoring thread and differenced over the window of a slow tick.</summary>
+public sealed class HostLoadOptions
+{
+    /// <summary><c>false</c>: nothing is sampled and the hang, overrun and slow-map lines carry no host-load text. Default true.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>How many seconds of samples (one per watchdog check) are kept to difference against; a slow window longer than this is measured from the oldest sample. 10-3600. Default 120.</summary>
+    public int HistorySeconds { get; set; } = 120;
 }
 
 /// <summary>Managed-heap pressure monitor (<c>Ops:Watchdog:Memory</c>), sampled with <c>GC.GetGCMemoryInfo</c> on the monitoring thread.</summary>

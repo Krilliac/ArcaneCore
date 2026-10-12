@@ -55,7 +55,7 @@
 #   NAMES                       2 keys
 #   NET                         16 keys
 #   NPCSERVICES                 8 keys
-#   OPS                         42 keys
+#   OPS                         55 keys
 #   PAGETEXT                    1 keys
 #   PERFORMANCELOG              4 keys
 #   PETS                        7 keys
@@ -5196,6 +5196,141 @@ Ops.Metrics.Realm = ""
 Ops.Metrics.RealmPrometheusPrefix = "http://localhost:9465/metrics/"
 
 #----------------------------------------------------------------------------
+# Ops:Observability
+#----------------------------------------------------------------------------
+
+#
+#    Ops.Observability.ClientRejections.BurstPerSession
+#        Description: Lines a session may log in a burst before the refill rate applies. 1-1000.
+#                     Default 20.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.BurstPerSession = 20
+
+#
+#    Ops.Observability.ClientRejections.Enabled
+#        Description: false: no refusal is decoded or logged and the send path does no extra work.
+#                     Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.Enabled = true
+
+#
+#    Ops.Observability.ClientRejections.LogSilentDrops
+#        Description: true: handlers that return without answering the client log the reason (at
+#                     Debug for a bot, Information for a player). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.LogSilentDrops = true
+
+#
+#    Ops.Observability.ClientRejections.RefillPerMinute
+#        Description: Lines a session earns back per minute once its burst is spent; a refusal over
+#                     the limit is counted and summarised in the next line that is written. 1-6000.
+#                     Default 60.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.RefillPerMinute = 60
+
+#
+#    Ops.Observability.DuplicatePackets.CaptureStacks
+#        Description: true: the warning carries a compact call stack of the second send, and of the
+#                     first as well once the opcode has duplicated before in this process. Default
+#                     true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.CaptureStacks = true
+
+#
+#    Ops.Observability.DuplicatePackets.Enabled
+#        Description: false: nothing is hashed and the send path does no extra work. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.Enabled = true
+
+#
+#    Ops.Observability.DuplicatePackets.IncludeBots
+#        Description: true: playerbot sessions are checked as well. Default false (bots are
+#                     excluded).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.IncludeBots = false
+
+#
+#    Ops.Observability.DuplicatePackets.RingSize
+#        Description: Recent packets remembered per session; older ones are overwritten. 4-256.
+#                     Default 16.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.RingSize = 16
+
+#
+#    Ops.Observability.DuplicatePackets.WarnBurstPerSession
+#        Description: Warnings a session may log in a burst. 1-100. Default 3.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WarnBurstPerSession = 3
+
+#
+#    Ops.Observability.DuplicatePackets.WarnPerMinute
+#        Description: Warnings a session earns back per minute after its burst. 1-600. Default 6.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WarnPerMinute = 6
+
+#
+#    Ops.Observability.DuplicatePackets.WindowMs
+#        Description: Two identical packets closer together than this many milliseconds are a
+#                     duplicate (a world tick is 50 ms). 1-5000. Default 100.
+#        Type: int
+#        Default: 100
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WindowMs = 100
+
+#----------------------------------------------------------------------------
 # Ops:Watchdog
 #----------------------------------------------------------------------------
 
@@ -5293,6 +5428,31 @@ Ops.Watchdog.Heartbeat.Mode = Auto
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.Heartbeat.WarnIntervalSeconds = 30
+
+#
+#    Ops.Watchdog.HostLoad.Enabled
+#        Description: false: nothing is sampled and the hang, overrun and slow-map lines carry no
+#                     host-load text. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.Enabled = true
+
+#
+#    Ops.Watchdog.HostLoad.HistorySeconds
+#        Description: How many seconds of samples (one per watchdog check) are kept to difference
+#                     against; a slow window longer than this is measured from the oldest sample.
+#                     10-3600. Default 120.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.HistorySeconds = 120
 
 #
 #    Ops.Watchdog.Memory.Action

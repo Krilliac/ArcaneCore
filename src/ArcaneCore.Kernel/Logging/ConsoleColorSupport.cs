@@ -56,6 +56,7 @@ public static class ConsoleColorSupport
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
         {
+            // no console API: plain output; the logging subsystem cannot log its own set-up failure
             return false;
         }
     }

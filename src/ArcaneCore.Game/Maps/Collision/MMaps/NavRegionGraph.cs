@@ -15,6 +15,9 @@ public enum NavRegionRouteStatus
     Exhausted,
 }
 
+/// <summary>A <c>.mmtile</c> that <see cref="NavRegionGraph.Build"/> could not read and left out of the graph: the file, the Detour tile coordinates in its name (-1 when the name has none) and why.</summary>
+public sealed record SkippedNavTile(string File, int TileX, int TileY, Exception Error);
+
 /// <summary>
 /// The coarse connectivity of one map's whole navigation mesh: every <c>.mmtile</c> of the map is read once, its polygons that pass a
 /// filter are split into regions (the parts of the tile its own polygon links join), and regions of adjacent tiles are joined where their
@@ -48,8 +51,9 @@ public sealed class NavRegionGraph
     private readonly int[] _firstLink;
     private readonly Link[] _links;
 
-    private NavRegionGraph(uint mapId, Dictionary<(int X, int Y), int[]> polyRegions, int[] firstLink, Link[] links, long polygons)
+    private NavRegionGraph(uint mapId, Dictionary<(int X, int Y), int[]> polyRegions, int[] firstLink, Link[] links, long polygons, SkippedNavTile[] skipped)
     {
+        SkippedTiles = skipped;
         MapId = mapId;
         _polyRegions = polyRegions;
         _firstLink = firstLink;
@@ -67,6 +71,9 @@ public sealed class NavRegionGraph
 
     /// <summary>Polygons of those tiles that passed the filter.</summary>
     public long PolygonCount { get; }
+
+    /// <summary>The tiles of the map that were unreadable or corrupt and are missing from the graph (empty when every file parsed); the caller reports them, this static builder has no logger.</summary>
+    public IReadOnlyList<SkippedNavTile> SkippedTiles { get; }
 
     public int RegionCount => _firstLink.Length - 1;
 
@@ -207,7 +214,8 @@ public sealed class NavRegionGraph
     /// <summary>
     /// Read every <c>NNNXXYY.mmtile</c> of <paramref name="mapId"/> in <paramref name="directory"/> and build the graph for polygons with
     /// some flag of <paramref name="include"/> and none of <paramref name="exclude"/> (off-mesh connections never count, as in a path query).
-    /// Unreadable tiles are skipped, as the live loader skips them.
+    /// Unreadable or corrupt tiles are left out and listed in <see cref="SkippedTiles"/>; the live mesh load only reports a tile when a path
+    /// query lazily loads it, so a tile no query has needed yet would otherwise go unnoticed.
     /// </summary>
     public static NavRegionGraph Build(string directory, uint mapId, NavTerrain include, NavTerrain exclude, CancellationToken cancel = default)
     {
@@ -215,6 +223,7 @@ public sealed class NavRegionGraph
         var tiles = new Dictionary<(int X, int Y), TileRegions>();
         int regionCount = 0;
         long polygons = 0;
+        var skipped = new List<SkippedNavTile>();
         string prefix = $"{mapId:D3}";
         IEnumerable<string> files = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, prefix + "????.mmtile") : [];
         foreach (string file in files.Order(StringComparer.Ordinal))
@@ -232,6 +241,10 @@ public sealed class NavRegionGraph
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
+                // left out of the graph and listed in SkippedTiles for the caller to report (this static builder has no logger)
+                string name = Path.GetFileName(file);
+                bool named = int.TryParse(name.AsSpan(3, 2), out int nameX) & int.TryParse(name.AsSpan(5, 2), out int nameY);
+                skipped.Add(new SkippedNavTile(file, named ? nameX : -1, named ? nameY : -1, ex));
                 continue;
             }
 
@@ -310,7 +323,7 @@ public sealed class NavRegionGraph
         }
 
         first[regionCount] = links.Count;
-        return new NavRegionGraph(mapId, tiles.ToDictionary(t => t.Key, t => t.Value.Regions), first, [.. links], polygons);
+        return new NavRegionGraph(mapId, tiles.ToDictionary(t => t.Key, t => t.Value.Regions), first, [.. links], polygons, [.. skipped]);
     }
 
     /// <summary>The tile's passable polygons grouped by the tile's own links (union-find); -1 for a polygon that does not pass.</summary>

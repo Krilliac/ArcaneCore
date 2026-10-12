@@ -340,6 +340,7 @@ public sealed class MemoryMonitor : IWatchdogMonitor
             }
             catch (InvalidOperationException)
             {
+                // notifications are not available in this GC mode; polling continues
                 return;
             }
 

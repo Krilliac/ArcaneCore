@@ -107,6 +107,11 @@ internal sealed class PlayerbotLocalPlanner : IAsyncDisposable
         }
         catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
         {
+            if (error is not OperationCanceledException)
+            {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.local-planner", error); // the planner has no logger; the caller falls back to its own choice
+            }
+
             return null;
         }
         finally { _inference.Release(); }

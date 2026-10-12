@@ -30,7 +30,15 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         uint spellId = reader.ReadUInt32();
         SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+        int answered = session.ClientRejectionsSent;
         SpellCastResult result = Spells(session).HandleCastRequest(player, spellId, targets);
+        if (result != SpellCastResult.CastOk && session.SilentDropLogEnabled && session.ClientRejectionsSent == answered)
+        {
+            // Refused and the client heard nothing (an unknown or unlearned spell, or a path that returns before SendCastResult).
+            session.LogSilentDrop(WorldOpcode.CmsgCastSpell, "cast refused without a reply: " + result,
+                (targets.GameObject.IsEmpty ? targets.Unit : targets.GameObject).Value, spellId, (uint)result);
+        }
+
         if (result != SpellCastResult.CastOk && session.IsPlayerbot)
         {
             // Bot QA: a managed bot's refused cast (a real player's never reaches this; nothing when QA is off).

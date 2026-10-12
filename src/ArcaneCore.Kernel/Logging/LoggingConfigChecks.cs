@@ -127,6 +127,7 @@ public sealed class LoggingConfigChecks : IConfigCheck
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
+            // an unresolvable path is compared as text; the path itself is validated and reported by the other checks
             return string.Equals(a, b, StringComparison.Ordinal);
         }
     }

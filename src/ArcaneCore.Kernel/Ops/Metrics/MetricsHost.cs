@@ -106,6 +106,7 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
             }
             catch (Exception) when (_stop.IsCancellationRequested || !listener.IsListening)
             {
+                // the listener was stopped: shutdown
                 return;
             }
             catch (HttpListenerException ex)
@@ -168,6 +169,7 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
         }
         catch (OperationCanceledException)
         {
+            // shutdown
         }
     }
 }

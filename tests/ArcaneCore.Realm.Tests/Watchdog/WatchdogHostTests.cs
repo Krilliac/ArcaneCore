@@ -100,7 +100,7 @@ public sealed class WatchdogHostTests
         => new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => v.Value)).Build();
 
     [Fact]
-    public void AddRealmWatchdog_RegistersTheHostAndTheFourSharedMonitors_Once()
+    public void AddRealmWatchdog_RegistersTheHostAndTheFiveSharedMonitors_Once()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -110,7 +110,7 @@ public sealed class WatchdogHostTests
 
         Assert.Equal(250, provider.GetRequiredService<WatchdogOptions>().CheckIntervalMs);
         IWatchdogMonitor[] monitors = [.. provider.GetServices<IWatchdogMonitor>()];
-        Assert.Equal(["memory", "threadpool", "heartbeat", "counters"], monitors.Select(m => m.Name));
+        Assert.Equal(["memory", "threadpool", "heartbeat", "counters", "hostload"], monitors.Select(m => m.Name));
         Assert.Single(provider.GetServices<IHostedService>().OfType<WatchdogHost>());
         Assert.Same(CounterRegistry.Default, provider.GetRequiredService<CounterRegistry>());
         Assert.Same(WatchdogClock.System, provider.GetRequiredService<WatchdogClock>());
@@ -129,7 +129,7 @@ public sealed class WatchdogHostTests
         Assert.Contains(tick, provider.GetServices<IWatchdogMonitor>());
         Assert.Same(tick, Assert.Single(provider.GetServices<ILivenessSource>()));
         Assert.Same(_clock, provider.GetRequiredService<WatchdogClock>());
-        Assert.Equal(5, provider.GetServices<IWatchdogMonitor>().Count());
+        Assert.Equal(6, provider.GetServices<IWatchdogMonitor>().Count());
         Assert.IsType<HeartbeatWriter>(provider.GetRequiredService<HeartbeatWriter>());
     }
 

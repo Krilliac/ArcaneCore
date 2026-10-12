@@ -76,6 +76,7 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
             issues.Add(Error($"{Root}:Heartbeat:FilePath", "Heartbeat:Mode is File but no FilePath is set.", "set the liveness file path, or choose another mode"));
         }
 
+        Range(issues, $"{Root}:HostLoad:HistorySeconds", o.HostLoad.HistorySeconds, 10, 3600, "10-3600 seconds");
         NonNegative(issues, $"{Root}:Counters:DumpIntervalSeconds", o.Counters.DumpIntervalSeconds);
         return issues;
     }

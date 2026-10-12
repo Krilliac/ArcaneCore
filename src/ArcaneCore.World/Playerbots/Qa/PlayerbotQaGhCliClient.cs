@@ -101,6 +101,7 @@ internal sealed class QaProcessRunner : IQaProcessRunner
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.qa-gh-kill", ex); // a gh process that could not be killed is left running: counted
         }
     }
 }

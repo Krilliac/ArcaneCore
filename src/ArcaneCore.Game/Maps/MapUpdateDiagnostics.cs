@@ -32,6 +32,11 @@ internal sealed class MapUpdateDiagnostics
     /// <summary>Marking the cells around players and active objects (<see cref="Map.UpdatesActiveCellsOnly"/>), between the heartbeat and the first updater.</summary>
     internal long ActiveCellsMicros { get; private set; }
 
+    /// <summary>Part of <see cref="HeartbeatMicros"/> spent in player heartbeats (bots are players too); the rest is creatures, pets and other units.</summary>
+    internal long HeartbeatPlayersMicros => _heartbeatPlayersTicks * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+
+    private long _heartbeatPlayersTicks;
+
     /// <summary>Per-updater simulation time, in attach order (only filled when diagnostics are on).</summary>
     internal List<(IMapUpdater Updater, long Micros)> Updaters { get; } = [];
 
@@ -59,6 +64,7 @@ internal sealed class MapUpdateDiagnostics
     {
         SimulationMicros = VisibilityMicros = ValuesMicros = FlushMicros = CleanupMicros = 0;
         PacketsMicros = HeartbeatMicros = ActiveCellsMicros = GridMicros = TerrainMicros = DeferredMicros = 0;
+        _heartbeatPlayersTicks = 0;
         Players = MovedObjects = ChangedObjects = NewObjects = 0;
         VisibilityCandidates = 0;
         Completed = false;
@@ -80,6 +86,9 @@ internal sealed class MapUpdateDiagnostics
         _phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
         _subStart = _phaseStart;
     }
+
+    /// <summary>Add one player's heartbeat time (Stopwatch ticks, summed and converted to microseconds once so no per-player truncation is lost); called only while diagnostics are on.</summary>
+    internal void AddPlayerHeartbeat(long stopwatchTicks) => _heartbeatPlayersTicks += stopwatchTicks;
 
     internal void EndPackets() => PacketsMicros = Sub();
     internal void EndHeartbeat() => HeartbeatMicros = Sub();
@@ -175,6 +184,71 @@ internal sealed class MapUpdateDiagnostics
     }
 
     private static string Ms(long micros) => (micros / 1000.0).ToString("F1", CultureInfo.InvariantCulture) + " ms";
+
+    /// <summary>One named share of a map update.</summary>
+    internal readonly record struct Contributor(string Name, long Micros);
+
+    /// <summary>
+    /// The <paramref name="count"/> largest sub-phases of the update, longest first (slow path only: it allocates). Names say which
+    /// subsystem the time belongs to: session packets (bots send theirs through the same queue), player heartbeats, creature AI and
+    /// unit heartbeats (AI timers, auras and regeneration run in a unit's heartbeat), each map updater by its subsystem, visibility
+    /// and relocation, values, flush, grid lifecycle, terrain and deferred work.
+    /// </summary>
+    internal Contributor[] TopContributors(int count)
+    {
+        var all = new List<Contributor>(Updaters.Count + 10)
+        {
+            new("session packets", PacketsMicros),
+            new("player heartbeats", HeartbeatPlayersMicros),
+            new("creature AI and unit heartbeats", Math.Max(0, HeartbeatMicros - HeartbeatPlayersMicros)),
+            new("visibility and relocation", VisibilityMicros),
+            new("values updates", ValuesMicros),
+            new("flush", FlushMicros),
+            new("grid lifecycle", GridMicros),
+            new("terrain cleanup", TerrainMicros),
+            new("deferred work", DeferredMicros),
+        };
+        foreach ((IMapUpdater updater, long micros) in Updaters)
+        {
+            all.Add(new Contributor(SubsystemOf(updater), micros));
+        }
+
+        // Several updaters can share a subsystem label; sum them so the ranking is by subsystem.
+        var merged = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (Contributor c in all)
+        {
+            merged[c.Name] = merged.GetValueOrDefault(c.Name) + c.Micros;
+        }
+
+        return [.. merged.Select(kv => new Contributor(kv.Key, kv.Value))
+            .Where(c => c.Micros > 0)
+            .OrderByDescending(c => c.Micros)
+            .ThenBy(c => c.Name, StringComparer.Ordinal)
+            .Take(Math.Max(0, count))];
+    }
+
+    /// <summary>The subsystem an updater belongs to, by type name (the type name itself when it has no friendlier label).</summary>
+    internal static string SubsystemOf(IMapUpdater updater) => updater.GetType().Name switch
+    {
+        "CreatureMapSystem" => "creature AI (CreatureMapSystem)",
+        "MapLocomotion" => "movement (MapLocomotion)",
+        "MapCollision" => "collision and pathing (MapCollision)",
+        "MapCombat" => "combat (MapCombat)",
+        "PetMapSystem" or "MapUnitControl" => "pets (" + updater.GetType().Name + ")",
+        "GameObjectMapSystem" => "gameobjects (GameObjectMapSystem)",
+        "SpellObjectSystem" or "TrapSystem" or "TotemMapUpdater" => "spell objects (" + updater.GetType().Name + ")",
+        "ReactiveUpdater" or "LiquidAuraInterruptUpdater" or "StealthDetectionUpdater" or "EnchantUpdater" => "spells and auras (" + updater.GetType().Name + ")",
+        var name => name,
+    };
+
+    /// <summary>"name 812 ms, name 400 ms, name 90 ms" for <see cref="TopContributors"/>; "none" when nothing was timed.</summary>
+    internal string FormatTop(int count)
+    {
+        Contributor[] top = TopContributors(count);
+        return top.Length == 0
+            ? "none"
+            : string.Join(", ", top.Select(c => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{c.Name} {c.Micros / 1000.0:F1} ms")));
+    }
 
     private long Sub()
     {
