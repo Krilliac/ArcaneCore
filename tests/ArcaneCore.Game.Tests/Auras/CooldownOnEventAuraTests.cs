@@ -305,7 +305,7 @@ public sealed class CooldownOnEventAuraTests : IDisposable
         // 5875 SMSG_INITIAL_SPELLS cooldown entry: u16 spell, u16 item, u16 category, u32 recovery, u32 category recovery.
         byte[] packet = SpellPackets.BuildInitialSpells([StealthRank1], listed);
         int at = 1 + 2 + 4 + 2; // flag, spell count, one spell (u16 id + u16 slot), cooldown count
-        Assert.Equal((ushort)StealthRank1, BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(at))); // synthetic id wraps to u16
+        Assert.Equal(unchecked((ushort)StealthRank1), BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(at))); // synthetic id wraps to u16
         Assert.Equal(Category, (uint)BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(at + 4)));
         Assert.Equal(entry.CategoryCooldownMs, BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(at + 10)));
     }
