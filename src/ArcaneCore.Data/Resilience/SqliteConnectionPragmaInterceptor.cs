@@ -39,7 +39,9 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>
     /// The bound in milliseconds on any command's lock wait on the connections this interceptor opens (0: none, the connection string's Default Timeout stands).
     /// Applied by lowering the connection's Default Timeout (whole seconds, rounded up) at open, before <c>busy_timeout</c> is derived from it, so EF's
-    /// <c>BEGIN IMMEDIATE</c>, which the driver creates with that timeout, is bounded too. Used for the characters database, whose write queues must not sit in a
+    /// <c>BEGIN IMMEDIATE</c>, which the driver creates with that timeout, is bounded too. This is only the backstop: a command created BEFORE the open
+    /// (EF's ExecuteUpdate/Delete and raw SQL) has already copied the old Default Timeout, so <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
+    /// also lowers it in the connection string. Used for the characters database, whose write queues must not sit in a
     /// 30 s lock wait.
     /// </summary>
     public int WriteTimeoutMs { get; }
