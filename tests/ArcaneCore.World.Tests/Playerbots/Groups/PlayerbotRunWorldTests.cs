@@ -567,8 +567,37 @@ public sealed class PlayerbotRunWorldTests
     private static void AssertNoted(GroupTestWorld world, string text)
         => Assert.True(world.Coordinator.Events.Any(e => e.EndsWith(text, StringComparison.Ordinal)), $"not noted: {text}{Environment.NewLine}{world.Trace()}");
 
-    private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false)
-        => GroupTestWorld.StartAsync([], configure, dungeon: true, Register,
+    /// <summary>
+    /// Quest groups never take the last group slot: with MaxGroups 2 and four bots waiting on an elite quest for two (two pairs, one goal),
+    /// the second pair waits while a due dungeon run takes the slot the first pair left. Match() runs before StartRuns() in every scan, so
+    /// before the reserve a quest group refilled every slot the moment one freed and no run ever started (w29: four quest groups held the
+    /// slots 97.6% of the time, zero runs formed).
+    /// </summary>
+    [Fact]
+    public async Task WithTheSlotsFullOfQuestGroups_ADueDungeonRun_StillStarts()
+    {
+        await using GroupTestWorld world = await StartAsync(o => { o.MaxBots = 12; o.Groups.MaxGroups = 2; }, quests: [EntranceEliteQuest]);
+        world.Coordinator.RunRoll = () => 1d; // no run until the quest bots hold the slots
+        var pairs = new List<(Guid Id, string Name)>();
+        foreach (string name in new[] { "Slota", "Slotb", "Slotc", "Slotd" }) pairs.Add(await world.AddBotAsync(name, Human, Mage, 13, [Fireball], EntranceArea));
+        Assert.True(await world.RunUntilAsync(60_000, () => pairs.All(b => world.HasQuest(b.Id, EntranceEliteQuest))), world.Trace());
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count >= 1), world.Trace());
+        await world.RunAsync(10_000); // the second pair would have formed by now without the reserve
+
+        var party = await AddPartyAsync(world, "Slotrun");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)),
+            "no dungeon run started while quest groups held the slots" + Environment.NewLine + world.Trace());
+        // No quest group ended to free the slot: the run took the one that was kept for it.
+        Assert.Equal((0, 0), (world.Coordinator.Totals.Completed, world.Coordinator.Totals.Failed));
+        Assert.True(world.Coordinator.Groups.Count(g => g.Run is null) <= 1, world.Trace());
+        Assert.True(world.Coordinator.Groups.Count <= 2, world.Trace());
+        Assert.Equal(1, world.Coordinator.QuestGroupLimit);
+        Assert.All(party, m => Assert.True(world.Coordinator.GroupOf(m.Id)?.Run is not null, world.Trace()));
+    }
+
+    private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false, uint[]? quests = null)
+        => GroupTestWorld.StartAsync(quests ?? [], configure, dungeon: true, Register,
             withLifecycleTrash ? [.. Bosses(), LifecycleTrashSpawn()] : Bosses());
 
     private static Creature VisibleCreature(GroupTestWorld world, Guid botId, uint entry)

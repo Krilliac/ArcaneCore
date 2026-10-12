@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
+using System.Text;
 using ArcaneCore.Data.World.Instances;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
@@ -339,15 +340,103 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private uint GoalTimeoutOf(BotGroup group)
     {
-        if (group.Run is not { } run) return GoalTimeoutMs;
+        if (group.Run is not { } run) return unchecked(GoalTimeoutMs + group.ExtraTimeMs);
         int minutes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxRunMinutes : _options.Groups.DungeonRuns.MaxRunMinutes;
         return (uint)Math.Max(1, minutes) * 60_000u;
     }
 
-    private uint StepLimitOf(BotGroup group)
-        => group.Run is not null && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Regrouping
-            ? (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u
-            : StepTimeoutMs;
+    /// <summary>The longest the current step of <paramref name="group"/> may last: a run's travel budget, an instance group's distance budget, else <see cref="StepTimeoutMs"/>.</summary>
+    internal uint StepLimitOf(BotGroup group)
+    {
+        if (group.Run is not null && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Regrouping)
+            return (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u;
+        if (group.StepBudgetMs != 0 && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling) return group.StepBudgetMs;
+        return StepTimeoutMs;
+    }
+
+    /// <summary>Seconds of the travel budget that do not depend on the distance (forming up, resting after a pull, a short fight).</summary>
+    internal const float TravelBudgetBaseSeconds = 120f;
+
+    /// <summary>
+    /// The factor on the walking time of the straight line: the path is longer than the line (the Moonbrook mine is 320 yards of path for
+    /// 22 yards of line), and the group stops to fight and to rest on the way.
+    /// </summary>
+    internal const float TravelBudgetMargin = 3f;
+
+    /// <summary>
+    /// How long a group may take to gather or to walk <paramref name="yards"/> (straight line) at <paramref name="moveSpeed"/> yards a
+    /// second: <c>yards / speed * <see cref="TravelBudgetMargin"/> + <see cref="TravelBudgetBaseSeconds"/></c>, at least
+    /// <see cref="StepTimeoutMs"/> and at most <paramref name="capMs"/> (<c>TravelTimeoutMinutes</c>; never below the minimum).
+    /// </summary>
+    internal static uint TravelBudgetMs(float yards, float moveSpeed, uint capMs)
+    {
+        if (!float.IsFinite(yards) || yards < 0f) return StepTimeoutMs;
+        double seconds = (yards / Math.Max(1f, moveSpeed) * TravelBudgetMargin) + TravelBudgetBaseSeconds;
+        return (uint)Math.Clamp(seconds * 1000d, StepTimeoutMs, Math.Max(StepTimeoutMs, capMs));
+    }
+
+    /// <summary>
+    /// An instance group (not a run: a run has its flat travel budget) gets a budget that grows with the distance it has to cover in this
+    /// step, measured when the step begins: gathering, the farthest member to the leader plus the leader's walk to the approach point;
+    /// travelling, the leader's walk. Open-world quest groups keep <see cref="StepTimeoutMs"/>: their objective is where they met.
+    /// The goal's own bound grows by what was granted (<see cref="BotGroup.ExtraTimeMs"/>).
+    /// </summary>
+    private void BudgetTravel(BotGroup group, PlayerbotGroupState state)
+    {
+        group.StepBudgetMs = 0;
+        if (group.Run is not null || !group.Goal.InInstance || _world is null || group.LeaderPlayer(_world) is not { } leader) return;
+        float yards = 0f;
+        if (state == PlayerbotGroupState.Gathering)
+            foreach (Member member in group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid))
+                if (_world.FindOnlinePlayer(member.Guid) is { IsAlive: true } player && ReferenceEquals(player.Map, leader.Map))
+                    yards = Math.Max(yards, Distance(player, leader));
+        if (leader.MapId == group.Goal.MeetingMap) yards += Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Approach);
+        uint cap = (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u;
+        uint budget = TravelBudgetMs(yards, _options.MoveSpeed, cap);
+        if (budget <= StepTimeoutMs) return;
+        group.StepBudgetMs = budget;
+        group.ExtraTimeMs = unchecked(group.ExtraTimeMs + budget - StepTimeoutMs);
+    }
+
+    /// <summary>
+    /// One line for a gather, travel or enter timeout: the budget, and for the leader and every bot member its map, position, state and
+    /// distances (to the approach point and to the leader). Level and class stand for the bot, as in the stall reports.
+    /// </summary>
+    internal static string DescribeTimeout(string reason, uint seconds, uint budgetSeconds, string goal, string state,
+        IEnumerable<(string Who, uint MapId, Vector3 Position, float ToApproach, float ToLeader, bool Alive, string Step)> members)
+    {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"{reason} after {seconds}s of {budgetSeconds}s ({state}) for {goal}:");
+        foreach ((string who, uint mapId, Vector3 position, float toApproach, float toLeader, bool alive, string step) in members)
+            text.Append(CultureInfo.InvariantCulture,
+                $" [{who} map {mapId} at {position.X:F1},{position.Y:F1},{position.Z:F1} {toApproach:F0}yd to goal {toLeader:F0}yd to leader {(alive ? "alive" : "dead")} {step}]");
+        return text.ToString();
+    }
+
+    /// <summary>Note and log <see cref="DescribeTimeout"/> for <paramref name="group"/> before it gives up on <paramref name="reason"/>.</summary>
+    private void ReportTimeout(BotGroup group, Player leader, string reason)
+    {
+        if (_world is null) return;
+        var members = new List<(string, uint, Vector3, float, float, bool, string)>();
+        var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
+        foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
+        {
+            if (_world.FindOnlinePlayer(member.Guid) is not { } player)
+            {
+                members.Add(($"{member.Role.ToString().ToLowerInvariant()} offline", 0, default, 0f, 0f, false, "none"));
+                continue;
+            }
+
+            var at = new Vector3(player.X, player.Y, player.Z);
+            members.Add(($"L{player.Level} {player.Class} {member.Role.ToString().ToLowerInvariant()}{(member.Guid == leader.Guid ? " leader" : string.Empty)}",
+                player.MapId, at, Vector3.Distance(at, group.Approach), Vector3.Distance(at, leaderAt), player.IsAlive, member.AI?.Step ?? "none"));
+        }
+
+        string line = DescribeTimeout(reason, unchecked(Now - group.StateSinceMs) / 1000, StepLimitOf(group) / 1000, group.Goal.ToString(),
+            group.State.ToString().ToLowerInvariant(), members);
+        Note($"group {group.Id} {line}");
+        logger.LogWarning("Playerbot group {Group} {Line}", group.Id, line);
+    }
 
     /// <summary>The Engaging state of a run: bosses die, a boss may be absent, the group wipes or finishes and loots.</summary>
     internal void AdvanceRun(BotGroup group, Player leader, PlayerbotRunMachine run, uint now)
