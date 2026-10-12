@@ -43,3 +43,9 @@ UPDATE character_ownership SET active = 0, owner_node = NULL, owner_incarnation 
 ```
 
 Keep `epoch` and `write_sequence`: the epoch is monotonic and a stale process still holding an older token must stay rejected. Use `FALSE` instead of `0` on PostgreSQL. Never clear the row while a World process might still be running.
+
+## Integration note (cluster L0 tip)
+
+Merge `9b76c494` (L0.1 on train 16) introduced one behavioural resolution that neither parent had: async navigation requests are issued with
+`PathOptions.NonBlockingTiles = false` (`PlayerbotAsyncNavigationPlan.TryGet`). The world thread plans with non-blocking tile reads; the worker is off
+the world thread and reads the tile itself, otherwise it would cache a "tiles pending" answer as a path. History is not rewritten; this note is the record.
