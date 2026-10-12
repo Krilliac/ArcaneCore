@@ -25,7 +25,9 @@ internal sealed class MapUpdateDiagnostics
     internal long HeartbeatMicros { get; private set; }
 
     /// <summary>Part of <see cref="HeartbeatMicros"/> spent in player heartbeats (bots are players too); the rest is creatures, pets and other units.</summary>
-    internal long HeartbeatPlayersMicros { get; private set; }
+    internal long HeartbeatPlayersMicros => _heartbeatPlayersTicks * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+
+    private long _heartbeatPlayersTicks;
 
     /// <summary>Per-updater simulation time, in attach order (only filled when diagnostics are on).</summary>
     internal List<(IMapUpdater Updater, long Micros)> Updaters { get; } = [];
@@ -42,7 +44,8 @@ internal sealed class MapUpdateDiagnostics
     internal void Reset()
     {
         SimulationMicros = VisibilityMicros = ValuesMicros = FlushMicros = CleanupMicros = 0;
-        PacketsMicros = HeartbeatMicros = HeartbeatPlayersMicros = GridMicros = TerrainMicros = DeferredMicros = 0;
+        PacketsMicros = HeartbeatMicros = GridMicros = TerrainMicros = DeferredMicros = 0;
+        _heartbeatPlayersTicks = 0;
         Players = MovedObjects = ChangedObjects = NewObjects = 0;
         VisibilityCandidates = 0;
         Completed = false;
@@ -56,9 +59,8 @@ internal sealed class MapUpdateDiagnostics
         _subStart = _phaseStart;
     }
 
-    /// <summary>Add one player's heartbeat time (Stopwatch ticks); called only while diagnostics are on.</summary>
-    internal void AddPlayerHeartbeat(long stopwatchTicks)
-        => HeartbeatPlayersMicros += stopwatchTicks * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+    /// <summary>Add one player's heartbeat time (Stopwatch ticks, summed and converted to microseconds once so no per-player truncation is lost); called only while diagnostics are on.</summary>
+    internal void AddPlayerHeartbeat(long stopwatchTicks) => _heartbeatPlayersTicks += stopwatchTicks;
 
     internal void EndPackets() => PacketsMicros = Sub();
     internal void EndHeartbeat() => HeartbeatMicros = Sub();

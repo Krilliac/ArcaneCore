@@ -702,7 +702,7 @@ public sealed class WorldRuntime : IDisposable
 
         try
         {
-            string text = sampler.Describe(windowMicros);
+            string text = sampler.Describe(windowMicros, useStoredEnd: true); // world thread: the newest stored sample, no GetSystemTimes call
             return text.Length == 0 ? string.Empty : "; " + text;
         }
         catch (Exception ex)

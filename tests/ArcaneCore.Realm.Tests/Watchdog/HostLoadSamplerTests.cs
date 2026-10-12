@@ -13,7 +13,13 @@ public sealed class HostLoadSamplerTests
     {
         public HostLoadReading Current { get; set; }
 
-        public HostLoadReading Read() => Current;
+        public int Reads { get; private set; }
+
+        public HostLoadReading Read()
+        {
+            Reads++;
+            return Current;
+        }
     }
 
     private static HostLoadReading Reading(long procSeconds, long busySeconds, long totalSeconds, long pauseMs = 0, int g0 = 0, int g1 = 0, int g2 = 0)
@@ -53,6 +59,31 @@ public sealed class HostLoadSamplerTests
         HostLoadReading none = default;
         HostLoadReport unknown = HostLoadSampler.Compute(0, none with { Cpus = 4 }, 4 * Second, none with { Cpus = 4 });
         Assert.Contains("machine cpu unknown", unknown.Format());
+    }
+
+    [Fact]
+    public void ReportWithStoredEnd_TakesNoFreshProbeRead_AndEndsAtTheNewestStoredSample()
+    {
+        var clock = new FakeClock();
+        var probe = new FakeProbe { Current = Reading(0, 0, 0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, clock, probe);
+        sampler.Check(clock.NowMicros);
+        clock.AdvanceMs(1000);
+        probe.Current = Reading(1, 24, 24);
+        sampler.Check(clock.NowMicros);
+        clock.AdvanceMs(500);
+        probe.Current = Reading(50, 500, 500); // not stored: a fresh read would see it
+        int readsBefore = probe.Reads;
+
+        HostLoadReport stored = sampler.Report(1000 * 1000, useStoredEnd: true)!.Value;
+
+        Assert.Equal(readsBefore, probe.Reads);
+        Assert.Equal(1, stored.WindowMicros / Second); // from the first sample to the second, 1 s
+        Assert.InRange(stored.ProcessCpuPercent, 0, 10);
+
+        HostLoadReport fresh = sampler.Report(1000 * 1000)!.Value;
+        Assert.Equal(readsBefore + 1, probe.Reads);
+        Assert.True(fresh.ProcessCpuPercent > stored.ProcessCpuPercent);
     }
 
     [Fact]
