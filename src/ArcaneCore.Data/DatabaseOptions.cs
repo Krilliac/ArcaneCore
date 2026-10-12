@@ -115,6 +115,9 @@ public sealed class DatabaseOptions
     /// </summary>
     public int SlowCommandWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowCommandInterceptor.DefaultWarnMs;
 
+    /// <summary>SQLite-only settings (<c>Database:Sqlite</c>): the background WAL checkpointer (<c>Database:Sqlite:Checkpoint</c>). Other engines ignore them.</summary>
+    public ArcaneCore.Data.Resilience.SqliteDatabaseOptions Sqlite { get; set; } = new();
+
     public DatabaseConnectionOptions? Auth { get; set; }
 
     [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]
