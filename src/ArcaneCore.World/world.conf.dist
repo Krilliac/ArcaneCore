@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       340 keys
+#   WORLD                       342 keys
 #
 ###############################################################################
 
@@ -10393,6 +10393,19 @@ World.Playerbots.MaxBots = 8
 World.Playerbots.MaxBulkCommand = 50
 
 #
+#    World.Playerbots.MaxDeliveryYards
+#        Description: Maximum same-map straight-line trip from a quest giver to its nearest present
+#                     ender for an unhomed bot (0 disables the distance limit; 0..100000).
+#        Type: float
+#        Default: 1200
+#        Allowed: a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance
+#                 limit
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxDeliveryYards = 1200
+
+#
 #    World.Playerbots.MaxFaults
 #        Description: The faults within FaultWindowSeconds that disable a bot for good
 #                     (DesiredEnabled off; 1..100).
@@ -10943,6 +10956,20 @@ World.Playerbots.RestoreOnStartup = false
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Risk.DangerMemorySeconds = 300
+
+#
+#    World.Playerbots.Risk.DeathLoopMemorySeconds
+#        Description: Seconds a reported death-loop zone is avoided (0..86400). The 2700-second
+#                     default outlives the 600-second loop window by 4.5 times, giving the bot time
+#                     to finish a different errand before reconsidering the place. A second loop
+#                     there doubles this duration, capped at one day.
+#        Type: int
+#        Default: 2700
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.DeathLoopMemorySeconds = 2700
 
 #
 #    World.Playerbots.Risk.Enabled

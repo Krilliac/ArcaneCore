@@ -12813,6 +12813,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:MaxDeliveryYards",
+      "section": "World:Playerbots",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "1200",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Maximum same-map straight-line trip from a quest giver to its nearest present ender for an unhomed bot (0 disables the distance limit; 0..100000).",
+      "allowed": "a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:MaxFaults",
       "section": "World:Playerbots",
       "type": "int",
@@ -13599,6 +13615,22 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "Seconds a bot remembers the creatures it retreated from or died to and the places that happened (0..86400): it does not pull a remembered creature again, and a remembered place raises the risk of fights there.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Risk:DeathLoopMemorySeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2700",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Seconds a reported death-loop zone is avoided (0..86400). The 2700-second default outlives the 600-second loop window by 4.5 times, giving the bot time to finish a different errand before reconsidering the place. A second loop there doubles this duration, capped at one day.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

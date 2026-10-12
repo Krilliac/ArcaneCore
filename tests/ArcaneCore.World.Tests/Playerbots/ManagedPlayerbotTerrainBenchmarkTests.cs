@@ -513,6 +513,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         private readonly Dictionary<string, (int Count, double Ms)> _bySlowestPhase = new(StringComparer.Ordinal);
         private readonly Dictionary<string, (int Count, double Ms)> _byLargestSearch = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<(double Ms, int Queries, long Nodes)>> _phaseThinks = new(StringComparer.Ordinal);
+        private readonly List<double> _questDestinationPhases = [];
         private readonly List<(double Ms, string Line)> _slowest = [];
         private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches, _allQueries, _clamped, _refused;
         private double _slowQueryMs, _slowTotalMs;
@@ -529,6 +530,8 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _allQueries += probe.Queries;
             _clamped += probe.Clamped;
             _refused += probe.Refused;
+            foreach ((string name, double phaseMs) in probe.Phases())
+                if (name == "quest destinations") _questDestinationPhases.Add(phaseMs);
             string phase = probe.SlowestPhase;
             if (!_phaseThinks.TryGetValue(phase, out List<(double Ms, int Queries, long Nodes)>? samples))
                 _phaseThinks[phase] = samples = [];
@@ -560,6 +563,13 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             string P(double pct) => sorted.Length == 0 ? "-" : sorted[Math.Clamp((int)Math.Ceiling(pct / 100 * sorted.Length) - 1, 0, sorted.Length - 1)].ToString("F2", CultureInfo.InvariantCulture);
             yield return string.Create(CultureInfo.InvariantCulture,
                 $"thinks {sorted.Length}: p50 {P(50)} ms, p95 {P(95)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allQueries} queries, {_allSearches} searches, {_allNodes} nodes; fallback queries cut short by the think budget {_clamped}, refused {_refused}");
+            if (_questDestinationPhases.Count > 0)
+            {
+                double[] phaseTimes = [.. _questDestinationPhases.Order()];
+                double RankPhase(double pct) => phaseTimes[Math.Clamp((int)Math.Ceiling(pct / 100 * phaseTimes.Length) - 1, 0, phaseTimes.Length - 1)];
+                yield return string.Create(CultureInfo.InvariantCulture,
+                    $"quest destinations phase: n {phaseTimes.Length}, p50 {RankPhase(50):F3} ms, p95 {RankPhase(95):F3} ms, max {phaseTimes[^1]:F3} ms");
+            }
             foreach ((string phase, List<(double Ms, int Queries, long Nodes)> samples) in _phaseThinks.OrderByDescending(p => p.Value.Count))
             {
                 double[] times = samples.Select(s => s.Ms).Order().ToArray();

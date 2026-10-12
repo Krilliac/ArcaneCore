@@ -248,6 +248,49 @@ public sealed class PlayerbotQaClassifierTests
     }
 
     [Fact]
+    public void DeathLoop_DrowningSourcesOverrideNearbyCreature()
+    {
+        QaSignal signal = DeathLoop("1024") with
+        {
+            Bot = new QaBotObservation(9, "Orc", "Horde", "Warrior", "Rest", 0, 649, 550f,
+                "Drowning", [], ["Drowning", "Drowning", "Drowning"]),
+        };
+        QaClassification result = PlayerbotQaClassifier.Classify(signal, new FakeFacts());
+
+        Assert.Equal(QaCause.BehaviourBug, result.Cause);
+        Assert.Contains("drowning", result.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DeathLoop_MostCreatureSourcesStillUseAttackerFacts()
+    {
+        QaSignal signal = DeathLoop("1024") with
+        {
+            Bot = new QaBotObservation(9, "Orc", "Horde", "Warrior", "Combat", 0, 649, 550f,
+                "Creature", [], ["Creature", "Drowning", "Creature"]),
+        };
+        QaClassification result = PlayerbotQaClassifier.Classify(signal, new FakeFacts());
+
+        Assert.Equal(QaCause.Unknown, result.Cause);
+        Assert.Contains("attackers 1024", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeathLoop_MostBehaviourSources_ClassifyAsBehaviourBugEvenWithAPlayerKill()
+    {
+        // Deliberate rule: with no attacker entry the loop is a behaviour bug when most (not all) death sources are
+        // environmental/self deaths, so one stray player kill in a drowning loop does not hide the drowning.
+        QaSignal signal = DeathLoop("none") with
+        {
+            Bot = new QaBotObservation(9, "Orc", "Horde", "Warrior", "Rest", 0, 649, 550f,
+                "Fall", [], ["Fall", "Fall", "Player"]),
+        };
+        QaClassification result = PlayerbotQaClassifier.Classify(signal, new FakeFacts());
+
+        Assert.Equal(QaCause.BehaviourBug, result.Cause);
+    }
+
+    [Fact]
     public void SharedSetAside_ThirtyMinutes_RaisesSeverity()
     {
         // "weight per kind + 10*log2(1+count) + 5*min(bots,20) + 10 when seen in the last hour" (the class's documented formula).

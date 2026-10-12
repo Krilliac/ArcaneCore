@@ -130,6 +130,43 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
         return changed == 1;
     }
 
+    public async Task<IReadOnlyList<bool>> UpdateManyAsync(IReadOnlyList<ManagedPlayerbotUpdate> updates, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+        foreach (ManagedPlayerbotUpdate update in updates) Validate(update.Bot);
+        var results = new bool[updates.Count];
+        for (int start = 0; start < updates.Count; start += ManagedPlayerbotUpdate.MaxBatch)
+        {
+            int end = Math.Min(updates.Count, start + ManagedPlayerbotUpdate.MaxBatch);
+            // One EF transaction per chunk (so SlowTransactionInterceptor sees it): one fsync for up to MaxBatch rows. The row's identity
+            // check is part of its WHERE, so a mismatch or a stale revision is a zero-row update, not a failure of the chunk.
+            await using Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction =
+                await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            for (int i = start; i < end; i++)
+            {
+                ManagedPlayerbot bot = updates[i].Bot;
+                long expected = updates[i].ExpectedRevision;
+                if (expected < 0 || bot.Revision != expected + 1) continue;
+                results[i] = await db.Set<ManagedPlayerbotRow>()
+                    .Where(row => row.BotId == bot.BotId && row.Revision == expected && row.AccountId == bot.AccountId
+                        && row.CharacterId == bot.CharacterId && row.AccountName == bot.AccountName && row.CreatedUnix == bot.CreatedUnix)
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(row => row.DesiredEnabled, bot.DesiredEnabled)
+                        .SetProperty(row => row.State, bot.State)
+                        .SetProperty(row => row.Goal, bot.Goal)
+                        .SetProperty(row => row.TargetEntry, bot.TargetEntry)
+                        .SetProperty(row => row.QuestId, bot.QuestId)
+                        .SetProperty(row => row.Revision, bot.Revision)
+                        .SetProperty(row => row.UpdatedUnix, bot.UpdatedUnix)
+                        .SetProperty(row => row.ErrorCode, bot.ErrorCode), cancellationToken).ConfigureAwait(false) == 1;
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return results;
+    }
+
     public async Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
         => await db.Set<ManagedPlayerbotRow>()
             .Where(row => row.BotId == botId && row.AccountId == accountId && row.CharacterId == characterId)

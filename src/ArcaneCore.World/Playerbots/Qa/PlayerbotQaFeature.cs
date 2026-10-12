@@ -200,6 +200,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
         Persist();
         Export();
+        // The pass runs every ExportIntervalSeconds (5 minutes by default): the retreat counters ride on it as the periodic summary line.
+        _log.LogInformation("Bot QA: {Retreats}", PlayerbotRetreatStats.Shared.Describe());
         if (!_options.GitHub.Enabled || !_publishing.IsCompleted) return;
         IReadOnlyList<QaFindingView> findings = Aggregator.Snapshot();
         _publishing = Task.Run(() => PublishAsync(findings, cancellationToken), CancellationToken.None);

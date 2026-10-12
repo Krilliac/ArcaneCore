@@ -3,6 +3,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots.Combat;
 
@@ -167,6 +168,30 @@ internal static class PlayerbotGroupContent
         }
 
         return droppers.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+    }
+
+    /// <summary>
+    /// Whether an item is worth a dungeon group: it has droppers (<paramref name="droppers"/>, <see cref="DropIndex"/>) and every one that
+    /// spawns anywhere spawns only on an instance map (<paramref name="isInstanceMap"/>). One dropper that spawns on a continent (or any map
+    /// that is not an instance, or is unknown) rejects the whole item: a bot gets such an item in the open world, and a dungeon group for
+    /// the one instance dropper would be a detour for something it could loot at home (Wool Cloth, Murloc Eye, Copper Modulator).
+    /// Droppers with no spawn at all say nothing; an item none of whose droppers spawns anywhere is no goal either.
+    /// </summary>
+    internal static bool DroppedOnlyInInstances(IReadOnlyList<uint> droppers, CreatureContent creatures, Func<uint, bool> isInstanceMap)
+    {
+        ArgumentNullException.ThrowIfNull(droppers);
+        ArgumentNullException.ThrowIfNull(creatures);
+        ArgumentNullException.ThrowIfNull(isInstanceMap);
+        bool inside = false;
+        foreach (uint dropper in droppers)
+            foreach (uint map in creatures.MapsWithSpawns)
+            {
+                if (creatures.GetSpawns(map, dropper).Count == 0) continue;
+                if (!isInstanceMap(map)) return false;
+                inside = true;
+            }
+
+        return inside;
     }
 
     internal static int QuestGroupSize(QuestTemplate template)

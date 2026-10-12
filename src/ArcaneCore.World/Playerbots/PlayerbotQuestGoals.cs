@@ -20,6 +20,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly PlayerbotQuestTripFeasibility _trip = new();
+
+    internal int TripEvaluations => _trip.Evaluations;
     private PlayerbotRoute? _route;
     private ObjectGuid _stageNpc;
     private uint _stageQuest;
@@ -86,7 +89,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>
     /// A home-bound bot keeps a completed quest if its ender is in its home or within a short local trip. A bot without a
-    /// home also abandons a proven handoff to the other continent, which its travel planner cannot make.
+    /// home also abandons a proven infeasible ender trip.
     /// Use the ordinary client abandon packet so the journal, source items and persistence follow the same path as a player.
     /// </summary>
     internal bool AbandonDistantCompletedQuest(Player player)
@@ -97,9 +100,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return false;
         foreach ((uint id, QuestStatusData status) in state.Quests.Statuses.OrderBy(row => row.Key))
         {
-            if (status.Status != QuestStatus.Complete || status.Rewarded || IsRefused(id)
+            if (status.Status != QuestStatus.Complete || status.Rewarded
                 || services.Quests.Get(id) is not { IsActive: true } || !services.IsRewardable(id)) continue;
-            if (!PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id))
+            // A refused abandon packet must not be sent on every think, regardless of home.
+            if (IsRefused(id)) continue;
+            if (!_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
+                Home is null ? _options.MaxDeliveryYards : 0, player, completed: true))
             {
                 if (Home is not { } home) continue;
                 bool reasonable = services.Quests.CreatureEndersOf(id)
@@ -108,7 +114,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     .Any(spawn => ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn));
                 if (reasonable) continue;
             }
-            if (TryAbandonCompletedQuest(_session, player, id, out bool attempted)) return true;
+            if (TryAbandonCompletedQuest(_session, player, id, out bool attempted))
+            {
+                // A homed bot abandons on its own position and never gets a durable mark. An unhomed bot only abandons
+                // what static content proved infeasible and the bot cannot reach from where it stands.
+                if (Home is null) Suspensions?.MarkUnreachableQuest(id);
+                return true;
+            }
             if (attempted) Refuse(id, _session.World.NowMs);
             return false;
         }
@@ -308,14 +320,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (!services.IsRewardable(id) || IsRefused(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
-                if (services.Quests.Get(id) is not { } quest
-                    || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
+                if (services.Quests.Get(id) is not { } quest)
                     continue;
-                if (_stage == Stage.None && (content is not null
-                    && PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id)
-                    || !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot, services.Npcs))) continue;
-                if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
-                if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
+                // A new quest follows the rule the travel planner uses too (home, item-only repeatables, journal, trip feasibility).
+                // Mid-exchange the quest was already chosen: only the journal is asked again, as before.
+                if (_stage == Stage.None)
+                {
+                    if (!PlayerbotWorldDestinations.MayTakeQuest(player, services, state, content, loot, Home,
+                            Home?.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y, npc.Z) ?? true, quest, _trip,
+                            Home is null ? _options.MaxDeliveryYards : 0))
+                        continue;
+                }
+                else if (_stage != Stage.Accept && (services.CanTakeQuest(player, id) != true
+                    || state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }))
                     continue;
                 return new QuestTarget(npc, quest,
                     _stage == Stage.Accept ? QuestAction.Accept : QuestAction.AcceptQuery);
@@ -336,15 +353,6 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
         return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
     }
-
-    /// <summary>
-    /// Whether a quest the bot has not taken may be taken from <paramref name="npc"/> inside the home area: the giver stands inside it and
-    /// the quest is worth doing there (<see cref="PlayerbotHomeArea.QuestInside"/>). Without creature content nothing is allowed.
-    /// </summary>
-    private bool HomeAllows(PlayerbotHomeArea home, Player player, QuestNpcServices services, NpcInfo npc, Quest quest)
-        => home.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y, npc.Z)
-            && _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content is { } content
-            && home.QuestInside(services.Quests, content, quest);
 
     private void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
@@ -422,6 +430,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         _refused.Remove(questId);
         return false;
     }
+
+    /// <summary>Sets <paramref name="questId"/> aside for <see cref="RefusedQuestMs"/>: neither this controller nor quest travel (<see cref="IsRefused"/>) takes it up.</summary>
+    internal void SetAside(uint questId) => Refuse(questId, _session.World.NowMs);
 
     private void Refuse(uint questId, uint now)
     {

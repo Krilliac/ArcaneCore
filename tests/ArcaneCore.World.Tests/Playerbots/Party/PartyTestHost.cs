@@ -205,6 +205,14 @@ internal static class PartyTestHost
                 && current.CharacterId == characterId
                 && _items.TryRemove(new KeyValuePair<Guid, ManagedPlayerbot>(botId, current)));
 
+        public async Task<IReadOnlyList<bool>> UpdateManyAsync(IReadOnlyList<ManagedPlayerbotUpdate> updates, CancellationToken cancellationToken = default)
+        {
+            var results = new bool[updates.Count];
+            for (int i = 0; i < updates.Count; i++)
+                results[i] = await UpdateAsync(updates[i].Bot, updates[i].ExpectedRevision, cancellationToken);
+            return results;
+        }
+
         public Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
