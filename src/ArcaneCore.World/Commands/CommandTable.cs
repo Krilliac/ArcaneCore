@@ -251,7 +251,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
                 return;
             case CommandLookupResult.UnknownSubcommand:
                 context.Reply(GmStrings.NoSuchSubcommand);
-                ShowHelpForCommand(context, found.Table, found.Rest);
+                ShowHelpForCommand(context, found.Table, found.Rest, 1, found.Path);
                 return;
         }
 
@@ -290,7 +290,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
             context.Reply(command.Help.Length > 0 ? command.Help : GmStrings.CmdSyntax);
             if (command.SubCommands.Count > 0)
             {
-                ShowHelpForSubCommands(context, command.SubCommands, command.Name);
+                ShowHelpForSubCommands(context, command.SubCommands, found.Path);
             }
         }
     }
@@ -300,7 +300,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
     /// names in <paramref name="table"/> and its sub-commands; for an unknown word in a nested table
     /// (or no word), that table's commands. Returns false when nothing was shown.
     /// </summary>
-    public bool ShowHelpForCommand(CommandContext context, IReadOnlyList<ChatCommand> table, string text)
+    public bool ShowHelpForCommand(CommandContext context, IReadOnlyList<ChatCommand> table, string text, int page = 1, string pathPrefix = "")
     {
         CommandLookup found = Search(table, text, context.Security);
         ChatCommand? command = found.Command;
@@ -321,7 +321,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
             context.Reply(command.Help);
         }
 
-        if (children is not null && ShowHelpForSubCommands(context, children, command?.Name ?? string.Empty))
+        if (children is not null && ShowHelpForSubCommands(context, children, JoinPath(pathPrefix, found.Path), page))
         {
             return true;
         }
@@ -334,21 +334,41 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
         return command is not null || children is not null;
     }
 
+    private static string JoinPath(string prefix, string path)
+        => prefix.Length == 0 ? path : path.Length == 0 ? prefix : prefix + " " + path;
+
     /// <summary>
     /// vmangos ShowHelpForSubCommands (Chat.cpp:2081-2116): the commands of <paramref name="table"/>
     /// the invoker may use (a group also counts when one of its sub-commands is usable), one indented
     /// line each, " ..." marking a group; "Commands available to you:" for the root table,
     /// "Command %s have subcommands:" otherwise. Returns false when there is nothing to list.
+    /// <para>
+    /// Players and GMs get <see cref="CommandListing"/>'s packed page <paramref name="page"/> instead of the vertical
+    /// list (it no longer fits the client's chat scrollback); the console keeps the full vertical list.
+    /// </para>
     /// </summary>
-    public bool ShowHelpForSubCommands(CommandContext context, IReadOnlyList<ChatCommand> table, string commandName)
+    public bool ShowHelpForSubCommands(CommandContext context, IReadOnlyList<ChatCommand> table, string commandPath, int page = 1)
     {
+        if (!context.IsConsole)
+        {
+            if (!table.Any(c => IsListed(c, context.Security)))
+            {
+                return false;
+            }
+
+            context.Reply(string.Join('\n', ReferenceEquals(table, Roots)
+                ? CommandListing.Overview(this, context.Security, page)
+                : CommandListing.SubCommands(this, table, commandPath, context.Security, page)));
+            return true;
+        }
+
         List<string> lines = [.. table.Where(c => IsListed(c, context.Security)).Select(c => "    " + c.Name + (c.SubCommands.Count > 0 ? " ..." : string.Empty))];
         if (lines.Count == 0)
         {
             return false;
         }
 
-        context.Reply(ReferenceEquals(table, Roots) ? GmStrings.CommandsAvailable : GmStrings.SubcommandsList(commandName));
+        context.Reply(ReferenceEquals(table, Roots) ? GmStrings.CommandsAvailable : GmStrings.SubcommandsList(commandPath[(commandPath.LastIndexOf(' ') + 1)..]));
         foreach (string line in lines)
         {
             context.Reply(line);
@@ -401,7 +421,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
 
     // A group is listed when it, or any command below it, is available (vmangos lists a node by its
     // own level, and its group levels are the lowest of their commands).
-    private bool IsListed(ChatCommand command, AccountSecurity security)
+    internal bool IsListed(ChatCommand command, AccountSecurity security)
         => IsAvailable(command, security) || command.SubCommands.Any(c => IsListed(c, security));
 
     private ChatCommand? Find(IReadOnlyList<ChatCommand> level, string word, AccountSecurity security, bool filterByLevel = false)

@@ -127,12 +127,11 @@ public sealed class RetailTableTests
         Assert.Equal("This command is not available to you.", await Say(player, ".kick Someone"));
         Assert.Equal("There is no such command", await Say(player, ".nonsense"));
 
-        // UNKNOWN_SUBCOMMAND: the message, then the sub-command list of the group (Chat.cpp:1958, 2113-2163).
+        // UNKNOWN_SUBCOMMAND: the message, then the packed sub-command list of the group (Chat.cpp:1958, 2113-2163 order).
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server nonsense");
         Assert.Equal("There is no such subcommand", (await player.ReadChatAsync()).Text);
-        Assert.Equal("Command  have subcommands:", (await player.ReadChatAsync()).Text);   // vmangos prints no name here (showCommand is null)
-        Assert.Equal("    info", (await player.ReadChatAsync()).Text);
-        Assert.Equal("    motd", (await player.ReadChatAsync()).Text);
+        Assert.Equal("Command server subcommands (page 1/1)", (await player.ReadChatAsync()).Text);   // the group's path (vmangos prints no name here)
+        Assert.Equal("info, motd", (await player.ReadChatAsync()).Text);
     }
 
     [Fact]
@@ -143,18 +142,14 @@ public sealed class RetailTableTests
         await player.CollectAsync();
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
-        Assert.Equal("Commands available to you:", (await player.ReadChatAsync()).Text);
-        Assert.Equal("    modify ...", (await player.ReadChatAsync()).Text); // its player-level "xprate" (vmangos Chat.cpp:630)
-        Assert.Equal("    server ...", (await player.ReadChatAsync()).Text);
-        Assert.Equal("    commands", (await player.ReadChatAsync()).Text);
-        Assert.Equal("    help", (await player.ReadChatAsync()).Text);
-        Assert.Equal("    save", (await player.ReadChatAsync()).Text);
+        // A packed overview in retail table order ("modify" is listed for its player-level "xprate", vmangos Chat.cpp:630).
+        Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
+        Assert.Equal("modify (1), server (2), commands, help, save", (await player.ReadChatAsync()).Text);
+        Assert.StartsWith("Search: .commands <text>", (await player.ReadChatAsync()).Text);
 
-        // ".help" alone: the help of ".help", then the list (HandleHelpCommand, MiscCommands.cpp:37-48).
+        // ".help" alone is the same overview.
         await player.SendChatAsync(ChatType.Say, Language.Common, ".help");
-        Assert.StartsWith("Syntax: .help", (await player.ReadChatAsync()).Text);
-        Assert.StartsWith("Display usage", (await player.ReadChatAsync()).Text);
-        Assert.Equal("Commands available to you:", (await player.ReadChatAsync()).Text);
+        Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
         await player.CollectAsync();
 
         // ".help nosuch" -> the no-such-command text; ".help kick" shows even a command the caller may not run.

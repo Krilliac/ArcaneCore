@@ -238,9 +238,9 @@ public sealed class CommandTableSourceTests
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".hotprobe");
         Assert.Equal("hotprobe: ran", (await player.ReadChatAsync()).Text);
-        // Wave-2 integration: .help prints its own syntax first (GM lane); the command list is .commands.
+        // The command list is .commands (a packed, paged overview; .help alone shows the same).
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
-        Assert.Equal("Commands available to you:", (await player.ReadChatAsync()).Text);
+        Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
         var listed = new List<string>();
         for (int i = 0; i < 12 && !listed.Any(line => line.Contains("hotprobe")); i++)
         {
