@@ -661,9 +661,19 @@ public sealed partial class SpellSystem
             return;
         }
 
-        AddCooldown(GetOrCreateState(owner), holder.Spell, triggered: false, onEvent: true);
+        UnitSpellState ownerState = GetOrCreateState(owner);
+        AddCooldown(ownerState, holder.Spell, triggered: false, onEvent: true);
         if (owner is Player player)
         {
+            // vmangos Player::AddCooldown (Player.cpp:22220-22230): the client keeps a category cooldown under the spell that started it, so when
+            // another spell of the category holds it (another Prowl or Stealth rank) that spell is told as well.
+            uint category = holder.Spell.Category;
+            if (category != 0 && ownerState.CategoryOwners.TryGetValue(category, out uint categoryOwner) && categoryOwner != holder.Spell.Id
+                && ownerState.CategoryCooldowns.ContainsKey(category))
+            {
+                player.Session.Send(WorldOpcode.SmsgCooldownEvent, SpellPackets.BuildCooldownEvent(categoryOwner, player.Guid));
+            }
+
             player.Session.Send(WorldOpcode.SmsgCooldownEvent, SpellPackets.BuildCooldownEvent(holder.Spell.Id, player.Guid));
         }
     }

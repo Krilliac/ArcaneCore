@@ -1585,6 +1585,12 @@ public sealed partial class SpellSystem
 
         if (category != 0 && categoryRecovery > 0)
         {
+            // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
+            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
+            {
+                state.CategoryOwners[category] = spell.Id;
+            }
+
             state.CategoryCooldowns[category] = now + categoryRecovery;
         }
 
@@ -1617,7 +1623,9 @@ public sealed partial class SpellSystem
         if (Store.Get(spellId) is { } spell)
         {
             uint category = state.CooldownOwners.GetValueOrDefault(spellId).Category;
-            removed |= state.CategoryCooldowns.Remove(category != 0 ? category : spell.Category);
+            uint cleared = category != 0 ? category : spell.Category;
+            removed |= state.CategoryCooldowns.Remove(cleared);
+            state.CategoryOwners.Remove(cleared);
             state.CooldownOwners.Remove(spellId);
         }
 

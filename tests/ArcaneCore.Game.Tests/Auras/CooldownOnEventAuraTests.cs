@@ -19,6 +19,14 @@ public sealed class CooldownOnEventAuraTests : IDisposable
     private const uint PlainBuff = 945002;
     private const uint ShortStealth = 945003;
     private const uint Hit = 945004;
+    private const uint StealthRank1 = 945010; // real Stealth/Prowl shape: no own recovery, 10 s category 38
+    private const uint StealthRank2 = 945011;
+    private const uint OtherCategorySpell = 945012;
+    private const uint ShiftStealth = 945013; // carries a ModShapeshift aura like Stealth's form 30
+    private const uint OtherShift = 945015;
+    private const uint FriendStealth = 945014; // aura on an explicit friendly target
+    private const uint CategoryMs = 10_000;
+    private const uint Category = 38;
     private const AuraType Probe = SpellHandlerModuleTests.FixtureAura;
     private const uint CooldownMs = 10_000;
 
@@ -26,6 +34,7 @@ public sealed class CooldownOnEventAuraTests : IDisposable
     private readonly Player _player;
     private readonly Player _enemy;
     private readonly FakeSession _session;
+    private readonly FakeSession _enemySession;
 
     public CooldownOnEventAuraTests()
     {
@@ -40,14 +49,32 @@ public sealed class CooldownOnEventAuraTests : IDisposable
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
             },
+            Category38(StealthRank1),
+            Category38(StealthRank2),
+            Category38(OtherCategorySpell) with { Attributes = SpellAttributes.None },
+            Category38(ShiftStealth) with
+            {
+                Effects = [Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift, misc: 30)],
+            },
+            Spell(OtherShift, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift, misc: 1)) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
+            Category38(FriendStealth) with
+            {
+                Effects = [Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, Probe)],
+            },
             Spell(Hit, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with
             {
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
             });
         (_player, _session) = _kit.AddPlayer(1);
-        (_enemy, _) = _kit.AddPlayer(2, 2);
-        _kit.Spellbook.Teach(_player, StealthLike, ShortStealth, PlainBuff);
+        (_enemy, _enemySession) = _kit.AddPlayer(2, 2);
+        _kit.Spellbook.Teach(_player, StealthLike, ShortStealth, PlainBuff, StealthRank1, StealthRank2, OtherCategorySpell, ShiftStealth, FriendStealth);
     }
 
     public void Dispose() => _kit.Dispose();
@@ -61,6 +88,13 @@ public sealed class CooldownOnEventAuraTests : IDisposable
         RecoveryTime = CooldownMs,
         StartRecoveryCategory = 0,
         StartRecoveryTime = 0,
+    };
+
+    private static SpellInfo Category38(uint id) => Stealthy(id, 60_000) with
+    {
+        RecoveryTime = 0,
+        Category = Category,
+        CategoryRecoveryTime = CategoryMs,
     };
 
     private SpellCastResult Cast(uint spell) => _kit.System.CastSpell(_player, spell, SpellCastTargets.ForSelf(), triggered: false);
@@ -186,5 +220,97 @@ public sealed class CooldownOnEventAuraTests : IDisposable
         _kit.System.CancelAura(_player, PlainBuff);
 
         Assert.Empty(CooldownEvents(PlainBuff));
+    }
+
+    [Fact]
+    public void ACategoryOnlyCooldown_BlocksOtherSpellsOfTheCategory_UntilItExpires()
+    {
+        Cast(StealthRank1);
+        _kit.System.CancelAura(_player, StealthRank1);
+
+        Assert.False(Ready(StealthRank1));
+        Assert.False(Ready(StealthRank2));
+        Assert.False(Ready(OtherCategorySpell));
+        Assert.Equal(SpellCastResult.NotReady, Cast(StealthRank2));
+        _kit.Advance(CategoryMs - 1_000, step: 1000);
+        Assert.False(Ready(StealthRank2));
+        _kit.Advance(1_000, step: 1000);
+        Assert.True(Ready(StealthRank2));
+        Assert.True(Ready(OtherCategorySpell));
+        Assert.Equal(SpellCastResult.CastOk, Cast(StealthRank2));
+    }
+
+    [Fact]
+    public void AnotherRankEnding_WhileTheCategoryIsHeldByTheFirst_AlsoTellsTheClientAboutTheCategoryOwner()
+    {
+        Cast(StealthRank1);
+        _kit.System.CancelAura(_player, StealthRank1);
+        _session.Clear();
+        _kit.System.RemoveAuras(_player, StealthRank2, AuraRemoveMode.Cancel); // no-op: not active
+        Assert.Empty(CooldownEvents(StealthRank2));
+
+        // rank 2 is applied while rank 1's category cooldown runs (a triggered cast ignores the cooldown), then ends
+        _kit.System.CastSpell(_player, StealthRank2, SpellCastTargets.ForSelf(), triggered: true);
+        _kit.System.CancelAura(_player, StealthRank2);
+
+        var order = Packets(_session, WorldOpcode.SmsgCooldownEvent).Select(p => BinaryPrimitives.ReadUInt32LittleEndian(p)).ToList();
+        Assert.Equal([StealthRank1, StealthRank2], order); // the owner first, then the spell that ended
+    }
+
+    [Fact]
+    public void TheOwnSpellEnding_SendsOnlyOneEvent_WhenItHoldsTheCategoryItself()
+    {
+        Cast(StealthRank1);
+        _session.Clear();
+
+        _kit.System.CancelAura(_player, StealthRank1);
+
+        Assert.Single(Packets(_session, WorldOpcode.SmsgCooldownEvent));
+    }
+
+    [Fact]
+    public void ReplacingTheAuraByTheSameSpell_StartsNoCooldownAndSendsNoEvent()
+    {
+        Cast(StealthLike);
+        _session.Clear();
+
+        _kit.System.RemoveAuras(_player, StealthLike, AuraRemoveMode.Stack);
+
+        Assert.Empty(CooldownEvents(StealthLike));
+        Assert.True(Ready(StealthLike));
+    }
+
+    [Fact]
+    public void WhenCasterAndTargetDiffer_TheCasterGetsTheCooldownAndTheEvent_NotTheTarget()
+    {
+        FakeSession enemySession = _enemySession;
+        _kit.Spellbook.Teach(_enemy, FriendStealth);
+        enemySession.Clear();
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_enemy, FriendStealth, SpellCastTargets.ForUnit(_player.Guid), triggered: false));
+        Assert.True(_kit.System.HasAura(_player, FriendStealth));
+        _session.Clear();
+
+        _kit.System.RemoveAuras(_player, FriendStealth, AuraRemoveMode.Dispel);
+
+        Assert.Contains(Packets(enemySession, WorldOpcode.SmsgCooldownEvent), p => BinaryPrimitives.ReadUInt32LittleEndian(p) == FriendStealth);
+        Assert.Empty(CooldownEvents(FriendStealth)); // nothing for the target's client
+        Assert.False(_kit.System.IsSpellReady(_enemy, _kit.Store.Get(FriendStealth)!));
+        Assert.True(Ready(FriendStealth));
+    }
+
+    [Fact]
+    public void ProwlEndingByAFormChange_StartsTheCooldown()
+    {
+        Cast(ShiftStealth);
+        _session.Clear();
+        // a new form's holder keeps itself and removes every other shapeshift holder (SpellSystem.Forms.cs; nothing in src calls it yet)
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_player, OtherShift, SpellCastTargets.ForSelf(), triggered: true));
+        SpellAuraHolder keep = _kit.System.GetAuras(_player).Single(h => h.Spell.Id == OtherShift);
+        _kit.System.RemoveOtherShapeshiftHolders(_player, keep);
+        Assert.False(_kit.System.HasAura(_player, ShiftStealth));
+        Assert.True(_kit.System.HasAura(_player, OtherShift));
+
+        Assert.Single(CooldownEvents(ShiftStealth));
+        Assert.False(Ready(ShiftStealth));
     }
 }
