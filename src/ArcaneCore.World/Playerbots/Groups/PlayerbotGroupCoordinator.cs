@@ -620,7 +620,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// Group slots quest, instance-item and risk groups leave to dungeon runs. Without them <see cref="Match"/> (which runs before
     /// <see cref="StartRuns"/> in every scan) refilled every slot the moment one freed, and a run, which starts on a chance roll, never found
     /// one: in w29 four quest groups held the slots 97.6% of the time and no run ever formed. A fixed reserve is used rather than running
-    /// <c>StartRuns</c> first: the roll then can only claim a slot when one is free, and it is never starved or the quest groups starved by it.
+    /// <c>StartRuns</c> first: the roll then can only claim a slot when one is free. Runs are capped only by their own per-kind caps, so when those add up
+    /// to <c>MaxGroups</c> or more, runs can still hold every slot and quest groups wait for a run to end (with the defaults one quest slot
+    /// always stays free).
     /// </summary>
     internal const int ReservedRunSlots = 1;
 

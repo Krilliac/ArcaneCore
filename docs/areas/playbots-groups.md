@@ -163,7 +163,7 @@ targets still dissolves on the second bound.
 
 * With few bots most needs find no partners: the goal is set aside after the timeout and the bot keeps soloing what it can.
 * `MaxGroups` caps the groups; `Enabled` off forms no new group (running ones finish).
-  One slot is kept for dungeon runs (`MaxGroups - 1` for quest, instance-item and risk groups while runs can start). A failed goal is set aside 10 minutes, doubling per repeated failure for the same bot up to 2 h. Instance groups gather and walk on a distance budget (`distance / MoveSpeed * 3 + 120 s`, 300 s minimum, `TravelTimeoutMinutes` cap); a gather or travel timeout logs every member's map, position and distances. An item objective is an instance goal only when no creature that drops it spawns outside an instance.
+  When `MaxGroups` is above 1, one slot is kept for dungeon runs (`MaxGroups - 1` for quest, instance-item and risk groups while runs can start). A failed goal is set aside 10 minutes, doubling per repeated failure for the same bot up to 2 h. Instance groups gather and walk on a distance budget (`distance / MoveSpeed * 3 + 120 s`, 300 s minimum, `TravelTimeoutMinutes` cap); a gather or travel timeout logs every bot member's (never a real player's) map, position and distances. An item objective is an instance goal only when no creature that drops it spawns outside an instance.
 * A bot that logs in inside an instance (a world restart while it was in one) is let in: the login gate is now
   `PlayerbotMapPolicy.MayStayOnMap` (its map is allowed, or it is the dungeon it is in), as `playbots-dungeons.md` planned. A free bot
   inside an instance without a group walks out through the exit (a group of one in `leaving`): the brain has no way out.

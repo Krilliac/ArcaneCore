@@ -399,7 +399,7 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// One line for a gather, travel or enter timeout: the budget, and for the leader and every bot member its map, position, state and
+    /// One line for a gather or travel timeout (the enter timeout sends none): the budget, and for the leader and every bot member its map, position, state and
     /// distances (to the approach point and to the leader). Level and class stand for the bot, as in the stall reports.
     /// </summary>
     internal static string DescribeTimeout(string reason, uint seconds, uint budgetSeconds, string goal, string state,
