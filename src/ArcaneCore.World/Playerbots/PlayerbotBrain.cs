@@ -292,6 +292,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void ResumeAfterGroup()
     {
         DropIntent();
+        _waterRoute = null; // planned where the group took over, not here
+        _waterRetryAt = 0;
+        _dryMs = 0;
         _lootActions.Clear();
         _lootResponseReceived = false;
         _restUntilMs = 0;
@@ -387,23 +390,23 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _deathIntentRetired = false;
         _recovery.Reset();
 
-        // The water escape owns a bot that would otherwise stand still under water: a rest, a loot or a sickness wait, or an
-        // escape already under way. A bot that is walking a route or riding a trip is never diverted by it (see the idle check after
+        // The water escape owns a bot that would otherwise stand still under water: a rest or a loot wait, or an escape already
+        // under way. A sick bot still walks its quest returns and errands, so sickness alone is not a reason: the sickness stand-down
+        // stops it first and the idle check below then takes it out. A bot that is walking a route or riding a trip is never diverted by it (see the idle check after
         // the trips and the retreat below). Movement itself continues on world ticks; a route is planned only on entry or after it ends.
         bool submerged = PlayerbotWater.Submerged(player);
         if (!submerged)
         {
             _waterRoute = null;
             // The retry bound is cleared only after the bot has stayed dry for a while, so a ford edge does not re-search every second.
-            _dryMs = checked(_dryMs + elapsedMs);
+            if (_dryMs < 10_000) _dryMs += elapsedMs;
             if (_dryMs >= 10_000) _waterRetryAt = 0;
         }
         else
         {
             _dryMs = 0;
             if (!player.Combat.IsInCombat
-                && (_waterRoute is not null || _restUntilMs != 0 || _lootActions.Count > 0
-                    || PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 }))
+                && (_waterRoute is not null || _restUntilMs != 0 || _lootActions.Count > 0))
             {
                 EscapeWater(player, elapsedMs);
                 return;

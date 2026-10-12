@@ -3,10 +3,13 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Playerbots;
+using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
 using Xunit;
 
@@ -42,6 +45,34 @@ public sealed class PlayerbotWaterTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>Positive control for the two "is not diverted" tests: the same setup with a bot that is idle in a health wait (the case the
+    /// escape owns) ends up in the Escape goal, so a negative result there means the water block was reached and declined.</summary>
+    [Fact]
+    public async Task SubmergedIdleBotInAWait_IsTakenOutByTheEscape()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                player.Health = 20;
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                brain.Risk.BeginWait(player);
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task MovingBotCrossingShallowWater_IsNotDivertedByTheEscape()
     {
@@ -54,12 +85,53 @@ public sealed class PlayerbotWaterTests
             {
                 Player player = session.Player!;
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
-                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
                 MovementInfo moving = player.Movement; moving.Flags |= MovementFlags.Forward; // walking a route through a ford
                 var packet = new PacketWriter(); moving.Write(packet);
                 session.ManagedBudget = new ManagedActionBudget(4);
                 session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, packet.ToArray());
                 Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                // After the heartbeat: the movement handler re-samples the terrain and clears a flag set before it, which would make the
+                // brain see a dry bot and this test pass whatever the water block does.
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                Assert.True(PlayerbotWater.Submerged(player));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.NotEqual(PlayerbotGoalKind.Escape, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A sick bot still walks its quest returns and errands (the sickness stand-down only stops an idle bot): crossing a ford while sick
+    /// must not be pulled back to the bank, or the route and the escape fight each other until the sickness ends (review, cycle 2).
+    /// </summary>
+    [Fact]
+    public async Task SickMovingBotCrossingShallowWater_IsNotDivertedByTheEscape()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                PlayerbotSicknessTestKit.Apply(host.WorldServices, player);
+                MovementInfo moving = player.Movement; moving.Flags |= MovementFlags.Forward; // walking a quest return through a ford
+                var packet = new PacketWriter(); moving.Write(packet);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, packet.ToArray());
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                // After the heartbeat: the movement handler re-samples the terrain and clears a flag set before it (the test used to
+                // pass for that reason alone: the brain saw a dry bot and never reached the water block).
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                Assert.True(PlayerbotWater.Submerged(player));
+                Assert.True(PlayerbotSickness.Holder(host.WorldServices.GetRequiredService<SpellFeature>().System, player)
+                    is { IsPermanent: false, Duration: > 0 }, "the bot must carry a running, non-permanent sickness");
                 session.ManagedBudget = new ManagedActionBudget(4);
                 brain.Update(500);
 
