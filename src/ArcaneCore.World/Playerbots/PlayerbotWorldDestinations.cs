@@ -216,7 +216,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             PlayerbotRoute? route = walk;
-            if (route is null && !PlayerbotNavigation.TryPlanToward(player, destination, _options, out route))
+            if (route is null && !PlayerbotNavigation.TryPlanToward(player, destination, _options, out route,
+                completedQuestReturn: returnQuestId != 0 && returnQuestId == questId))
             {
                 // A far failed search is expensive. Defer the next far spawn until the backoff expires instead of
                 // running another capped search on the very next think; nearby alternatives still rotate promptly.
@@ -261,7 +262,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
 
-    /// <summary>Failed plans of one completed quest from one spot (within <see cref="SpotYards"/>) before the climb is diagnosed.</summary>
+    /// <summary>Failed plans of one completed quest from one spot (within <see cref="SpotYards"/>) before the route refusal is diagnosed.</summary>
     internal const int ConfirmFailures = 3;
 
     /// <summary>The quest's set-asides for this bot after which it is abandoned instead of set aside again.</summary>
@@ -278,14 +279,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>
     /// One more failed plan of the completed quest <paramref name="questId"/> (a single ender). A single failure proves nothing
     /// (<see cref="PlayerbotNavigation.TryPlanToward"/> also refuses a bot momentarily on a steep patch): only the
-    /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed (<see cref="PlayerbotNavigation.RequiresSteepAscent"/>, two
-    /// capped queries), once per quest and spot; a bot that moved starts the count again. A confirmed climb sets the quest and its
+    /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed for a steep ascent or a hazard on a connected route,
+    /// once per quest and spot; a bot that moved starts the count again. A confirmed refusal sets the quest and its
     /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
     /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up).
     /// <para>
     /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
     /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
-    /// but behind steep ground.
+    /// but behind steep ground or guarded by mobs it cannot fight.
     /// </para>
     /// </summary>
     private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now)
@@ -301,7 +302,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (++_failCount < ConfirmFailures || _failDiagnosed || Suspensions is not { } suspensions) return;
         _failDiagnosed = true;
-        if (!PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent)) return;
+        bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
+        PlayerbotHazard hazard = default;
+        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard)) return;
+        string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
+            : $"the route crosses a {hazard.Kind} hazard";
         _failCount = 0;
         _failDiagnosed = false;
         int times = _setAsides.GetValueOrDefault(questId) + 1;
@@ -312,17 +317,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (times >= AbandonAfterSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
         {
             _setAsides.Remove(questId);
+            suspensions.MarkUnreachableQuest(questId);
             log?.LogWarning(
-                "Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route climbs {Ascent:F1} yards of steep ground",
-                player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, ascent);
+                "Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
+                player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
             return;
         }
 
         suspensions.SuspendQuest(questId, now);
         suspensions.SuspendEntry(entry, now);
         log?.LogWarning(
-            "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; the mesh route climbs {Ascent:F1} yards of steep ground",
-            player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, ascent);
+            "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
+            player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
     }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)

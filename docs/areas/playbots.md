@@ -152,6 +152,16 @@ this set-aside covers the enders that are near on the map but behind steep groun
 `AtTheAshenvaleStall_TheRidgeIsNoMeshIsland_AndTheBrainWalksTheBotOff`; the decision itself is tested through the brain in
 `PlayerbotQuestSteepReturnTests`. None of this establishes a walkable approach from the ridge or completes the quest.
 
+**Enders among hostile creatures (bot QA #251/#261, #242, #243).** On a completed quest's return trip, a strong hazard
+caused only by overlapping mobs may be crossed when each mob is manageable alone at full health and is no more than three
+levels above the bot (`PlayerbotRiskModel.BeyondStrengthAlone`, `PlayerbotRisk.MaxLevelsAbove`). A mob individually beyond the
+bot's strength, an over-level mob, a lethal spell, a remembered flee, and a death or retreat place still block the route;
+`TryAdvance` applies the same rule if hazards change while walking. A connected route blocked by one of these hazards is
+diagnosed after the same three failures from one spot as a steep ascent, then the quest is set aside for ten minutes. The
+third set-aside abandons the quest; its ID is retained in a bounded, per-bot persistent refusal so its giver cannot offer it
+again to that bot. `PlayerbotQuestEnderPocketTests` covers the hand-in and over-level refusal with synthetic creatures;
+`FromStarbreezeStall_TheMeshRoutesToGaerolas` probes the extracted terrain without simulating live combat.
+
 Bot QA #218 exposed a second stop near Je'neu: from three Ashenvale approach points the region route reached
 the last walkable point about 5.6 yards from his centre and found no further mesh route. The bot had required
 5 yards between centres, while the quest server accepts strict 3D distance below 5 yards plus both bounding
