@@ -443,7 +443,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task WithTheFenceOn_TheStoresDoNotVerifyASecondTime_AndWithItOff_TheyStillDo(DatabaseProvider provider)
+    public async Task WithTheFenceOn_TheStoresDoNotVerifyASecondTime_AndWithItOff_TheyIssueNoOwnershipStatementAtAll(DatabaseProvider provider)
     {
         var onLog = new CommandLog();
         var offLog = new CommandLog();
@@ -452,7 +452,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
 
         // On: the transaction interceptor verifies with raw commands that EF's command log never sees, so the stores add none of their own.
         Assert.Equal(0, on);
-        Assert.True(off > 0, "with the fence off the stores' own verification is the only fence and must still run");
+        Assert.Equal(0, off); // fence off: no ownership statement (the unfenced world watches the row once per autosave interval instead)
 
         // Zero statements also holds if the interceptor verified nothing, so prove it did: a snapshot carrying a stale explicit token is
         // refused although the process's ambient token is valid.
@@ -468,6 +468,54 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         await AssertRejectedAsync(() => new EfCharacterStore(db).SaveStateAsync(State(id, 9, first)));
         Assert.Equal(before, await ReadMapAsync(connection, id));
     }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WithTheFenceOff_AnUntokenedSave_IssuesOnlyTheStatementsTrain16Did(DatabaseProvider provider)
+    {
+        // Train 16 (000f778c): SaveStateAsync read the rows with no transaction, then SaveChanges opened its own transaction for the writes;
+        // SaveQuestsAsync and SaveTaxiMaskAsync did the same. No explicit BEGIN before the reads, no character_ownership statement.
+        var log = new CommandLog();
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: false, log);
+        int id = await CreateCharacterAsync(connection, "Plain");
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        Assert.False(CharacterOwnershipGuard.IsFenceActive(db));
+
+        log.Clear();
+        await new EfCharacterStore(db).SaveStateAsync(State(id, 4, null));
+        IReadOnlyList<string> state = log.Texts;
+        log.Clear();
+        await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [], ownership: null);
+        IReadOnlyList<string> quests = log.Texts;
+        log.Clear();
+        await new EfCharacterQuestStore(db).SaveTaxiMaskAsync(id, [1u], ownership: null);
+        IReadOnlyList<string> taxi = log.Texts;
+
+        foreach (IReadOnlyList<string> statements in new[] { state, quests, taxi })
+        {
+            Assert.DoesNotContain(statements, t => t.Contains(CharacterOwnershipDataModule.Table, StringComparison.Ordinal));
+            // The only transaction is SaveChanges' own, begun after the last read: nothing precedes the reads.
+            const string Begin = "<begin transaction>";
+            int begins = statements.Count(t => t == Begin);
+            Assert.True(begins <= 1, string.Join("\n", statements));
+            if (begins == 1)
+                Assert.True(statements.Select((t, i) => (t, i)).Where(p => p.t.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)).All(p => p.i < statements.ToList().IndexOf(Begin)),
+                    "a read ran inside the transaction (it would hold the write lock through the reads): " + string.Join("\n", statements));
+        }
+
+        // The exact shape, statement kinds in order (the Train 16 list): SaveState reads then writes; quests with no upserts only read;
+        // the taxi mask reads then writes.
+        static string Kinds(IReadOnlyList<string> s) => string.Join(",", s.Select(t => t == "<begin transaction>" ? "BEGIN" : t.TrimStart().Split(' ')[0].ToUpperInvariant()));
+        Assert.Equal(ExpectedStateKinds, Kinds(state));
+        Assert.Equal(ExpectedQuestKinds, Kinds(quests));
+        Assert.Equal(ExpectedTaxiKinds, Kinds(taxi));
+    }
+
+    private const string ExpectedStateKinds = "SELECT,UPDATE";
+    private const string ExpectedQuestKinds = "SELECT,SELECT";
+    private const string ExpectedTaxiKinds = "SELECT,SELECT,INSERT";
 
     [Theory]
     [MemberData(nameof(Providers))]

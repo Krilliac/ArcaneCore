@@ -48,11 +48,13 @@ internal static class CharacterOwnershipGuard
     /// The explicit check for a transaction the caller began with <see cref="CharacterWriteFence.BeginTransactionAsync(DbContext, CharacterOwnershipToken?, CancellationToken)"/>:
     /// skipped only when the interceptor already verified that very transaction against that very token: the store began it, the snapshot
     /// carries a token (a null token makes the interceptor verify the ambient one, which is not the snapshot's claim) and the fence is on.
-    /// Run otherwise (fence off, an untokened snapshot, or a transaction the caller joined). The token test comes first so the fence-off
-    /// path, which carries no token, never touches <see cref="IsFenceActive"/>.
+    /// Fence off with no token (the live default): nothing is checked and nothing is issued, so the save is the SQL it was before the fence existed;
+    /// a world with fencing off watches the ownership row once per autosave interval instead (WorldHost). Otherwise run: a tokened snapshot whose
+    /// transaction the interceptor did not verify, or a transaction the caller joined.
     /// </summary>
     internal static Task VerifyUnlessFencedAsync(CharacterDbContext db, CharacterOwnershipToken? token, bool beganFenced, CancellationToken cancellationToken)
-        => beganFenced && token is not null && IsFenceActive(db) ? Task.CompletedTask : VerifyAsync(db, token, cancellationToken);
+        => token is null && !IsFenceActive(db) ? Task.CompletedTask // fence off, untokened: exactly the SQL train 16 issued, no ownership statement
+            : beganFenced && token is not null && IsFenceActive(db) ? Task.CompletedTask : VerifyAsync(db, token, cancellationToken);
 
     public static async Task VerifyAsync(CharacterDbContext db, CharacterOwnershipToken? token, CancellationToken cancellationToken)
     {

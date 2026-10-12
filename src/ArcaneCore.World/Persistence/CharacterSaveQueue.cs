@@ -627,7 +627,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             throw new InvalidOperationException("character save queue has a terminal ownership failure", failure);
     }
 
-    private void EnterTerminalFailure(CharacterState current, Exception failure)
+    /// <summary>Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and <see cref="FatalFailure"/> is raised once. Safe from any thread.</summary>
+    public void FailTerminal(Exception failure) => EnterTerminalFailure(null, failure);
+
+    private void EnterTerminalFailure(CharacterState? current, Exception failure)
     {
         List<Waiter> waiters = [];
         bool publish;
@@ -636,7 +639,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             publish = _terminalFailure is null;
             _terminalFailure ??= failure;
             _stopped = true;
-            _failed[current.Id] = new FailedSave(current, failure, Deferred: false, Terminal: true);
+            if (current is not null) _failed[current.Id] = new FailedSave(current, failure, Deferred: false, Terminal: true);
 
             // No queued snapshot may be replayed under an unknown owner. Keep each one in the
             // diagnostic failure ledger, but remove it from all scheduling lanes.

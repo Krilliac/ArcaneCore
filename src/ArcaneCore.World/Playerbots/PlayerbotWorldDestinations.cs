@@ -188,16 +188,22 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     private TileWait _tileWait;
 
+    /// <summary>Test seam: run on the world thread right after an answered async plan was replayed (a test records a pending tile lookup that the replay would have met here).</summary>
+    internal Action? PreparedPlanProbe { get; set; }
+
     /// <summary>Returns true while travel owns the intent: a movement attempt or pending navigation; false permits another goal.</summary>
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
     {
         WaitingForTiles = false;
-        if (Volatile.Read(ref _permanentlyStopped) != 0 || !_options.Enabled || !player.IsInWorld || !player.IsAlive
-            || player.Map is not { } map || elapsedMs == 0)
+        if (Volatile.Read(ref _permanentlyStopped) != 0 || (player.IsInWorld && !player.IsAlive))
         {
+            // Stopped for good, or dead: the route and the trip are over.
             Stop();
             return false;
         }
+
+        // Transient guards (disabled, not in the world for a moment, no map, a zero step) leave the route and the trip alone, as before the lanes.
+        if (!_options.Enabled || !player.IsInWorld || player.Map is not { } map || elapsedMs == 0) return false;
         _planningDeferred = false;
         uint now = _session.World.NowMs;
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
@@ -316,6 +322,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     long pendingMark = PlayerbotNavigation.PendingMark;
                     bool prepared = PlayerbotNavigation.TryPlanTowardPrepared(player, destination, _options, plan,
                         out route, out bool deferred, completedQuestReturn: completedQuestReturn);
+                    PreparedPlanProbe?.Invoke();
                     if (!deferred)
                     {
                         // The world-thread parts of a prepared plan (the region graph's locate) can still meet a tile being read.
@@ -333,7 +340,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                         return true;
                     }
                 }
-                ClearNavigation();
+                // A pending replay keeps the answered plan: the next think replays it (the tile is read by then) instead of asking the worker
+                // again, so the wait (_tileWait) runs on from its first hold and is bounded by TileWait.MaxMs.
+                if (planned != PlanOutcome.Pending) ClearNavigation();
             }
             else if (planned != PlanOutcome.Route && TryBeginNavigation(player, map, destination, entry, questId, preferredCreatureEntry, returnQuestId))
             {

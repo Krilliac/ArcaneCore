@@ -30,7 +30,8 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts,
         CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
-        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        bool unfenced = ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
             ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;
@@ -95,7 +96,8 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     public async Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
         CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
-        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        bool unfenced = ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
             ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;

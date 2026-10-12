@@ -230,7 +230,9 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
-        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        // Fence off and no token: no explicit transaction and no ownership statement, the SQL of before the fence (SaveChanges wraps itself).
+        bool unfenced = state.Ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
             ? await CharacterWriteFence.BeginTransactionAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false)
             : null;

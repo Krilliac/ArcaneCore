@@ -77,12 +77,14 @@ public sealed class CharacterOwnershipTests : IAsyncLifetime
             CharacterOwnershipToken token = (await new ArcaneCore.Data.Characters.Ownership.EfCharacterOwnershipStore(claimDb)
                 .TryAcquireAsync("world", "owner", Guid.NewGuid()))!;
 
-            CharacterState missing = State(character.Id, 10, null);
-            await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => new EfCharacterStore(setup).SaveStateAsync(missing));
+            // A world with fencing off writes untokened and is not checked per save (it watches the row instead, see WorldHost), so the
+            // fence-off context accepts an untokened save; the stale-token save is the one a tokened (fenced) world is refused.
 
             CharacterState stale = State(character.Id, 20, token with { Epoch = token.Epoch - 1 });
             await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => new EfCharacterStore(setup).SaveStateAsync(stale));
             Assert.Equal(0u, (await new EfCharacterStore(setup).GetByIdAsync(character.Id))!.MapId);
+            await new EfCharacterStore(setup).SaveStateAsync(State(character.Id, 10, null));
+            Assert.Equal(10u, (await new EfCharacterStore(setup).GetByIdAsync(character.Id))!.MapId);
         }
     }
 

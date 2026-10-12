@@ -73,6 +73,45 @@ public sealed class WorldHostCharacterFencingTests
         Assert.Equal(0, kit.Ownership.AcquireCalls);
     }
 
+
+    [Fact]
+    public async Task UnfencedWorld_StopsThroughTheTerminalPath_WhenAFencedWorldClaimsTheDatabase()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(20));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        // Unclaimed: the watch reads the row (once per interval) and the world keeps running.
+        await Task.Delay(150);
+        Assert.False(fatal.Task.IsCompleted);
+        Assert.True(kit.Ownership.IsOwnedCalls >= 2, $"polled {kit.Ownership.IsOwnedCalls} times");
+
+        kit.Ownership.Owned = true; // a fenced world claims the characters database
+        Exception error = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("claimed by a fenced world", error.Message);
+        Assert.Throws<InvalidOperationException>(() => kit.SaveQueue.Enqueue(new CharacterState(1, 0, 12, 0, 0, 83.5f, 0, 1, 0)));
+    }
+
+    [Fact]
+    public async Task UnfencedWorld_ReadsTheOwnershipRowOncePerInterval_NotPerSave_AndAFencedWorldNeverPolls()
+    {
+        await using TestKit slow = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromHours(1));
+        await slow.Host.StartAsync(CancellationToken.None);
+        int atStart = slow.Ownership.IsOwnedCalls; // the startup refusal check
+        for (int i = 1; i <= 20; i++)
+        {
+            slow.SaveQueue.Enqueue(new CharacterState(i, 0, 12, 0, 0, 83.5f, 0, 1, 0));
+            await slow.SaveQueue.FlushCharacterAsync(i);
+        }
+
+        Assert.Equal(atStart, slow.Ownership.IsOwnedCalls);
+
+        await using TestKit fenced = TestKit.Create(enabled: true, claimWatchInterval: TimeSpan.FromMilliseconds(10));
+        await fenced.Host.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+        Assert.Equal(0, fenced.Ownership.IsOwnedCalls);
+    }
     [Fact]
     public async Task FailedTerminalDrainRetainsOwnership()
     {
@@ -111,7 +150,7 @@ public sealed class WorldHostCharacterFencingTests
         public InMemoryCharacterStore Store { get; }
         public CharacterOwnershipContext Context { get; }
 
-        public static TestKit Create(bool enabled)
+        public static TestKit Create(bool enabled, TimeSpan? claimWatchInterval = null)
         {
             var store = new InMemoryCharacterStore();
             var ownership = new RecordingOwnership();
@@ -128,7 +167,7 @@ public sealed class WorldHostCharacterFencingTests
                 NullLogger<WorldRuntime>.Instance);
             var options = Options.Create(new CharacterFencingOptions { Enabled = enabled, OwnerNode = "test" });
             var host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes,
-                NullLogger<WorldHost>.Instance, options, ownershipContext: context);
+                NullLogger<WorldHost>.Instance, options, ownershipContext: context) { ClaimWatchInterval = claimWatchInterval };
             return new TestKit(provider, world, saveQueue, host, ownership, feature, store, context);
         }
 
@@ -158,7 +197,14 @@ public sealed class WorldHostCharacterFencingTests
         public bool Owned { get; set; }
         public int AcquireCalls { get; private set; }
         public int ReleaseCalls { get; private set; }
-        public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default) => Task.FromResult(Owned);
+        private int _isOwnedCalls;
+        public int IsOwnedCalls => Volatile.Read(ref _isOwnedCalls);
+
+        public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _isOwnedCalls);
+            return Task.FromResult(Owned);
+        }
 
         public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation,
             CancellationToken cancellationToken = default)

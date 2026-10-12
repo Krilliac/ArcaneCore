@@ -30,12 +30,23 @@ public sealed class WorldHost(
     private readonly IHostApplicationLifetime? _applicationLifetime = applicationLifetime;
     private readonly Guid _incarnation = Guid.NewGuid();
     private CharacterOwnershipToken? _ownership;
+    private bool _watchClaims;
+    private CancellationTokenSource? _claimWatchStop;
+    private Task _claimWatch = Task.CompletedTask;
+
+    /// <summary>How often a world running with fencing off looks for a claim (test seam); null follows the autosave interval.</summary>
+    internal TimeSpan? ClaimWatchInterval { get; init; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _fencing.Validate();
         await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         saveQueue.FatalFailure += OnFatalSaveFailure;
+        if (!_fencing.Enabled && _watchClaims)
+        {
+            _claimWatchStop = new CancellationTokenSource();
+            _claimWatch = Task.Run(() => WatchForClaimAsync(_claimWatchStop.Token));
+        }
 
         await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
         {
@@ -60,6 +71,14 @@ public sealed class WorldHost(
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         List<Exception> failures = [];
+        if (_claimWatchStop is { } watchStop)
+        {
+            await watchStop.CancelAsync().ConfigureAwait(false);
+            await _claimWatch.ConfigureAwait(false);
+            watchStop.Dispose();
+            _claimWatchStop = null;
+        }
+
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -105,6 +124,7 @@ public sealed class WorldHost(
 
         if (!_fencing.Enabled)
         {
+            _watchClaims = true;
             if (await store.IsOwnedAsync("world", cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException("the characters database is already owned; disabled fencing cannot start a duplicate world writer");
             return;
@@ -135,6 +155,39 @@ public sealed class WorldHost(
                 ownershipContext.Current = null;
         }
         catch (Exception ex) { failures.Add(ex); }
+    }
+
+    /// <summary>
+    /// A world with fencing off writes untokened and does not verify ownership per save (that keeps the save path exactly as it was). Instead it
+    /// reads the ownership row once per autosave interval, on the thread pool, and stops for good (the save queue's terminal path, which
+    /// requests shutdown) if a fenced world has claimed the database meanwhile.
+    /// </summary>
+    private async Task WatchForClaimAsync(CancellationToken stop)
+    {
+        try
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                int autosaveMs = world.Options.AutosaveIntervalMs;
+                await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromMilliseconds(autosaveMs > 0 ? autosaveMs : 60_000), stop).ConfigureAwait(false);
+                try
+                {
+                    await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                    ICharacterOwnershipStore? store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>();
+                    if (store is not null && await store.IsOwnedAsync("world", stop).ConfigureAwait(false))
+                    {
+                        saveQueue.FailTerminal(new InvalidOperationException(
+                            "the characters database was claimed by a fenced world while this world runs with fencing disabled"));
+                        return;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    logger.LogWarning(ex, "Could not read the characters ownership row; will retry next interval");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private void OnFatalSaveFailure(Exception error)
