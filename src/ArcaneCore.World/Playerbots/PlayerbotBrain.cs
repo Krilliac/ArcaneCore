@@ -26,7 +26,8 @@ namespace ArcaneCore.World.Playerbots;
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
 internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null)
+    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
+    PlayerbotNavigationExecutor? navigationExecutor = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -71,7 +72,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotTownGoals _town = new(session, options);
     private readonly PlayerbotEconomy _economy = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
-    private readonly PlayerbotWorldDestinations _destinations = new(session, options);
+    private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
@@ -208,10 +209,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _observedPlayer = null;
         }
         _planningStop.Cancel();
+        _destinations.Dispose();
         _planningStop.Dispose();
     }
 
     internal PlayerbotGoalKind Goal => _goal;
+    internal void CancelNavigationPlanning() => _destinations.CancelPlanning();
     internal Creature? InspectionTarget => _target;
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
@@ -310,6 +313,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.SkipQuest ??= _quests.IsRefused;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
+        _destinations.ValidatePlanning(player);
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
         WatchKills(player);
@@ -321,6 +325,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         bool dead = !player.IsAlive;
         if (dead)
         {
+            _destinations.Stop();
             _stall.Reset();
             // The walk home planned from where the bot fell: after the resurrection (maybe far away) it plans afresh.
             _homeReturn.Reset();
@@ -455,7 +460,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         PlayerbotThinkProbe.Phase("stall watch");
-        if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
+        if (_destinations.IsPlanning)
+        {
+            _stall.Reset();
+        }
+        else if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
@@ -1094,6 +1103,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void DropIntent()
     {
+        _destinations.CancelPlanning();
         _target = null;
         _route = null;
         _exploreCandidate = null;

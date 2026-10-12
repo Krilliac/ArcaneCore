@@ -39,6 +39,7 @@ public enum ChangeObject
     Table = 0,
     Column = 1,
     Index = 2,
+    Row = 3,
 }
 
 /// <summary>One schema change evaluated against the live catalog.</summary>

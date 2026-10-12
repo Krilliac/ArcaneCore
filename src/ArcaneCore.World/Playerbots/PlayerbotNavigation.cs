@@ -93,6 +93,18 @@ internal static class PlayerbotNavigation
             && path.Points.All(Finite) && float.IsFinite(path.Length)
             && path.Length <= maxDistance;
 
+    internal static bool TryPlanTowardPrepared(Player player, Vector3 goal, PlayerbotOptions options,
+        PlayerbotAsyncNavigationPlan plan, out PlayerbotRoute? route, out bool deferred, bool completedQuestReturn = false)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        plan.ResetPass();
+        using IDisposable scope = plan.Activate();
+        bool planned = TryPlanToward(player, goal, options, out route, completedQuestReturn);
+        deferred = plan.Deferred || plan.NextRequest is not null;
+        if (deferred) route = null;
+        return planned && !deferred;
+    }
+
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
@@ -136,6 +148,7 @@ internal static class PlayerbotNavigation
         bool completedQuestReturn = false)
     {
         route = null;
+        if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
@@ -244,8 +257,20 @@ internal static class PlayerbotNavigation
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false)
     {
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
         route.CompletedQuestReturn = completedQuestReturn;
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
             || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn) is not { } hazard) return true;
 
@@ -400,7 +425,7 @@ internal static class PlayerbotNavigation
     {
         long before = PathSearchCounters.CappedSearches;
         PathResult path = QueryOnce(map, from, to, options, partial, steep, searchNodes);
-        capped = PathSearchCounters.CappedSearches != before;
+        capped = PathSearchCounters.CappedSearches != before || PlayerbotThinkProbe.ConsumeLastQueryCapped();
         return path;
     }
 

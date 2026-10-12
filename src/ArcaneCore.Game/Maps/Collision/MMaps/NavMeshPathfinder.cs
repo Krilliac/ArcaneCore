@@ -42,6 +42,12 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     public bool Enabled => true;
 
     /// <summary>
+    /// A private, serially used ground-navigation context over the same immutable data directory.
+    /// No live tiles, query state, prefetch jobs or collision-model service are shared with the owner.
+    /// </summary>
+    public NavMeshPathfinder CreateIndependent() => new(_directory, _logger);
+
+    /// <summary>
     /// The collision-model line test a flier's straight shortcut needs (vmangos
     /// <c>Map::FindCollisionModel</c>); <see cref="WorldCollision.Install"/> keeps it current.
     /// Without vmaps nothing blocks, as everywhere else.
@@ -83,7 +89,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         => LoadTile(mapId, tileX, tileY, out _);
 
     private bool LoadTile(uint mapId, int tileX, int tileY, out bool prefetchHit)
+        => LoadTile(mapId, tileX, tileY, CancellationToken.None, out prefetchHit);
+
+    private bool LoadTile(uint mapId, int tileX, int tileY, CancellationToken cancellationToken, out bool prefetchHit)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         prefetchHit = false;
         if (GetNavMesh(mapId) is not { } mesh)
         {
@@ -112,6 +122,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         {
             return false;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
@@ -326,6 +338,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
         options ??= PathOptions.Default;
+        options.CancellationToken.ThrowIfCancellationRequested();
         if (!IsFinite(start) || !IsFinite(end))
         {
             return PathResult.None(start);
@@ -343,12 +356,13 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         _queryStamp++;
         _queryLoads = 0;
-        EnsureTile(mapId, start);
-        EnsureTile(mapId, end);
+        EnsureTile(mapId, start, options.CancellationToken);
+        EnsureTile(mapId, end, options.CancellationToken);
         mesh.TileLoader = (x, y) =>
         {
+            options.CancellationToken.ThrowIfCancellationRequested();
             Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
-            return EnsureTile(mapId, center) ? mesh.GetTile(x, y) : null;
+            return EnsureTile(mapId, center, options.CancellationToken) ? mesh.GetTile(x, y) : null;
         };
         try
         {
@@ -364,8 +378,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     /// Make sure the navigation tile under world position <paramref name="at"/> is loaded for this query (<see cref="PathOptions.LoadTiles"/>),
     /// within <see cref="MaxTilesPerQuery"/> and <see cref="MaxOnDemandTiles"/>. False when it is not (no such tile, or over a bound).
     /// </summary>
-    private bool EnsureTile(uint mapId, Vector3 at)
+    private bool EnsureTile(uint mapId, Vector3 at, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (Terrain.TerrainTile.TileOf(at.X, at.Y) is not { } terrain || GetNavMesh(mapId) is not { } mesh)
         {
             return false;
@@ -412,7 +427,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool loaded = LoadTile(mapId, terrain.X, terrain.Y, out bool prefetchHit);
+        bool loaded = LoadTile(mapId, terrain.X, terrain.Y, cancellationToken, out bool prefetchHit);
+        cancellationToken.ThrowIfCancellationRequested();
         PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
             mapId, terrain.X, terrain.Y, prefetchHit);
         if (!loaded)

@@ -21,6 +21,7 @@ namespace ArcaneCore.World.Playerbots;
 internal sealed class PlayerbotThinkProbe
 {
     [ThreadStatic] private static PlayerbotThinkProbe? t_active;
+    [ThreadStatic] private static bool t_lastCachedCapped;
 
     private const int MaxPhases = 32;
     private readonly string[] _names = new string[MaxPhases];
@@ -187,7 +188,23 @@ internal sealed class PlayerbotThinkProbe
     /// </summary>
     internal static PathResult Find(MapCollision collision, Vector3 from, Vector3 to, PathOptions options)
     {
-        if (t_active is not { } probe) return collision.FindPath(from, to, options);
+        t_lastCachedCapped = false;
+        if (t_active is not { } probe)
+        {
+            if (PlayerbotAsyncNavigationPlan.Current is { } detached)
+            {
+                if (detached.TryGet(from, to, options with { CancellationToken = default }, out PlayerbotNavigationResult answer))
+                {
+                    t_lastCachedCapped = answer.Capped;
+                    return answer.Path ?? PathResult.None(from);
+                }
+
+                t_lastCachedCapped = true;
+                return PathResult.None(from);
+            }
+
+            return collision.FindPath(from, to, options);
+        }
         long nodesBefore = PathSearchCounters.NodesCreated;
         bool fallback = probe._fallbackDepth > 0;
         if (probe.NodeBudget > 0 && fallback)
@@ -206,6 +223,21 @@ internal sealed class PlayerbotThinkProbe
             }
         }
 
+        if (PlayerbotAsyncNavigationPlan.Current is { } plan)
+        {
+            if (plan.TryGet(from, to, options with { CancellationToken = default }, out PlayerbotNavigationResult answer))
+            {
+                probe.RecordCached(answer.Search.Nodes, answer.Capped, fallback, from, to, options.MaxSearchNodes);
+                t_lastCachedCapped = answer.Capped;
+                return answer.Path ?? PathResult.None(from);
+            }
+
+            // An uncached query is deliberately reported as capped. The navigation plan marks
+            // the owner pass deferred, so this cannot become unreachable/risk evidence.
+            t_lastCachedCapped = true;
+            return PathResult.None(from);
+        }
+
         long started = Stopwatch.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
         long ticks = Stopwatch.GetTimestamp() - started;
@@ -216,6 +248,22 @@ internal sealed class PlayerbotThinkProbe
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
         return path;
+    }
+
+    internal static bool ConsumeLastQueryCapped()
+    {
+        bool capped = t_lastCachedCapped;
+        t_lastCachedCapped = false;
+        return capped;
+    }
+
+    private void RecordCached(long nodes, bool capped, bool fallback, Vector3 from, Vector3 to, int maxNodes)
+    {
+        Queries++;
+        if (fallback) _fallbackNodes += nodes;
+        if (capped) Search = Search with { Capped = Search.Capped + 1 };
+        if (nodes > Largest.Nodes)
+            Largest = (nodes, 0, _phase, from, to, maxNodes);
     }
 
     private static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;

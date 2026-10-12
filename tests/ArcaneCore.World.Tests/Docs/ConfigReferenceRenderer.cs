@@ -37,12 +37,21 @@ internal static class ConfigProduction
     {
         var summaries = new ConfigSourceSummaries(SourceFiles().Select(f => f.Text));
         Dictionary<string, string> reload = WorldConfigKeys.All.ToDictionary(k => k.Path, k => k.Live ? "live" : "restart", StringComparer.Ordinal);
-        return ConfigCatalog.Build(
+        ConfigCatalogResult catalog = ConfigCatalog.Build(
             ConfigExceptionTable.Sections(),
             summaries.Find,
             ConfigDocOverrides.Texts,
             ConfigExceptionTable.SkippedProperties,
             path => reload.GetValueOrDefault(path));
+
+        // OwnerNode resolves Environment.MachineName at runtime. Keep the generated catalog deterministic and leave the
+        // key unset in .conf.dist so binding preserves that runtime identity on each host.
+        return catalog with
+        {
+            Entries = [.. catalog.Entries.Select(entry => entry.Path == "Cluster:Fencing:OwnerNode"
+                ? entry with { Default = "\"<machine-name>\"", RawDefault = null }
+                : entry)]
+        };
     }
 }
 

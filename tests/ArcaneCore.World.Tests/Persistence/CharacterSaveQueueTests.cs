@@ -16,6 +16,23 @@ namespace ArcaneCore.World.Tests.Persistence;
 public sealed class CharacterSaveQueueTests
 {
     [Fact]
+    public async Task OwnershipRejectionIsTerminalAndFailsFutureEnqueueAndShutdown()
+    {
+        await using var kit = new Kit();
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Queue.FatalFailure += ex => fatal.TrySetResult(ex);
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Exception observed = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsType<CharacterOwnershipRejectedException>(observed);
+        Assert.Throws<InvalidOperationException>(() => kit.Queue.Enqueue(State(2, 22)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
     public async Task BarrierWaitsForEarlierSnapshotsAndRetainsTheirOrder()
     {
         await using var kit = new Kit();
@@ -68,6 +85,114 @@ public sealed class CharacterSaveQueueTests
         Assert.Equal(earlier.Home, saved.Home);
         Assert.Equal(4u, saved.Inventory!.Items[0].Item.Count);
         Assert.Equal(4, kit.Store.Attempts.Count);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task FailedOptionalDataIsMergedWhenOwnershipTokenMatches()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => kit.Store.Attempts.Count <= 3
+            ? Task.FromException(new IOException("injected character failure")) : Task.CompletedTask;
+        var ownership = new CharacterOwnershipToken("world", 7, Guid.NewGuid());
+        CharacterState earlier = State(1, 11) with
+        {
+            Ownership = ownership,
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
+                new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+            Life = new CharacterLife(100, [1, 2, 3, 4, 5], 9, 0, false, null),
+        };
+
+        kit.Queue.Enqueue(earlier);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
+        kit.Queue.Enqueue(State(1, 22) with { Ownership = ownership });
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(22u, saved.Money);
+        Assert.Equal(earlier.ActionButtons, saved.ActionButtons);
+        Assert.Equal(earlier.Home, saved.Home);
+        InventorySnapshot expectedInventory = Assert.IsType<InventorySnapshot>(earlier.Inventory);
+        InventorySnapshot actualInventory = Assert.IsType<InventorySnapshot>(saved.Inventory);
+        Assert.Equal(expectedInventory.AmmoId, actualInventory.AmmoId);
+        InventoryItemData expectedItem = Assert.Single(expectedInventory.Items);
+        InventoryItemData actualItem = Assert.Single(actualInventory.Items);
+        Assert.Equal(expectedItem.ContainerGuid, actualItem.ContainerGuid);
+        Assert.Equal(expectedItem.Slot, actualItem.Slot);
+        Assert.Equal(expectedItem.Item.Guid, actualItem.Item.Guid);
+        Assert.Equal(expectedItem.Item.Entry, actualItem.Item.Entry);
+        Assert.Equal(expectedItem.Item.Count, actualItem.Item.Count);
+        Assert.Equal(expectedItem.Item.Charges, actualItem.Item.Charges);
+        Assert.Equal(expectedItem.Item.Enchantments, actualItem.Item.Enchantments);
+        Assert.Equal(earlier.Life, saved.Life);
+        Assert.Equal(ownership, saved.Ownership);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task FailedOptionalDataIsNotMergedWhenOwnershipTokenChanges()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => kit.Store.Attempts.Count <= 3
+            ? Task.FromException(new IOException("injected character failure")) : Task.CompletedTask;
+        CharacterState earlier = State(1, 11) with
+        {
+            Ownership = new CharacterOwnershipToken("world", 7, Guid.NewGuid()),
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
+                new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+            Life = new CharacterLife(100, [1, 2, 3, 4, 5], 9, 0, false, null),
+        };
+        CharacterOwnershipToken newerOwnership = new("world", 8, Guid.NewGuid());
+
+        kit.Queue.Enqueue(earlier);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
+        CharacterState newer = State(1, 22) with { Ownership = newerOwnership };
+        kit.Queue.Enqueue(newer);
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(newer, saved);
+        Assert.Null(saved.ActionButtons);
+        Assert.Null(saved.Home);
+        Assert.Null(saved.Inventory);
+        Assert.Null(saved.Life);
+        Assert.Equal(newerOwnership, saved.Ownership);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task FailedOptionalDataIsNotMergedWhenNewSnapshotGainsOwnership()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => kit.Store.Attempts.Count <= 3
+            ? Task.FromException(new IOException("injected character failure")) : Task.CompletedTask;
+        CharacterState earlier = State(1, 11) with
+        {
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
+                new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+            Life = new CharacterLife(100, [1, 2, 3, 4, 5], 9, 0, false, null),
+        };
+        CharacterOwnershipToken newerOwnership = new("world", 7, Guid.NewGuid());
+
+        kit.Queue.Enqueue(earlier);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
+        CharacterState newer = State(1, 22) with { Ownership = newerOwnership };
+        kit.Queue.Enqueue(newer);
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(newer, saved);
+        Assert.Null(saved.ActionButtons);
+        Assert.Null(saved.Home);
+        Assert.Null(saved.Inventory);
+        Assert.Null(saved.Life);
+        Assert.Equal(newerOwnership, saved.Ownership);
         await kit.Queue.StopAsync();
     }
 

@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -228,18 +229,27 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
-        if (!await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
+        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        try
         {
-            return;
+            if (await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
     }
 
     /// <summary>Stage state and inventory on this context, leaving the commit to the caller.</summary>
     internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken)
     {
+        await CharacterOwnershipGuard.VerifyAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false);
         CharacterRecord? character = await db.Characters
             .FirstOrDefaultAsync(c => c.Id == state.Id, cancellationToken)
             .ConfigureAwait(false);

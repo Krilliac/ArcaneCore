@@ -10,6 +10,9 @@ public sealed class PlayerbotOptions
     /// <summary>Run server-managed playerbots (off by default).</summary>
     public bool Enabled { get; set; }
 
+    /// <summary>Run far playerbot navigation queries on the bounded private worker (off by default during rollout). Restart required: the worker is created when the feature attaches.</summary>
+    public bool AsyncNavigationEnabled { get; set; }
+
     /// <summary>Log the saved managed bots back in when the world starts.</summary>
     public bool RestoreOnStartup { get; set; }
 

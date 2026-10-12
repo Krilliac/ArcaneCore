@@ -78,7 +78,7 @@ public static class SchemaPlanner
             _script = script;
             _offline = offline;
             _allowReservedGaps = allowReservedGaps;
-            _ops = SchemaChangeDecider.ReadModel(db);
+            _ops = SchemaChangeDecider.ReadModel(db, definition);
         }
 
         public async Task<SchemaPlan> PlanAsync(CancellationToken ct)
@@ -178,6 +178,14 @@ public static class SchemaPlanner
             foreach (string table in SchemaChangeDecider.ModelTables(_db, _definition))
             {
                 await CreateTableAsync(table, noLater, actions, ct).ConfigureAwait(false);
+            }
+
+            // Fresh creation creates model tables directly rather than replaying every module step;
+            // retain each module's idempotent seed in the plan so the SQL manifest and readiness
+            // review show the same row the bootstrapper applies after the tables.
+            foreach (EnsureRowChange seed in _definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>())
+            {
+                await PlanChangeAsync(seed, noLater, actions, ct).ConfigureAwait(false);
             }
 
             string description = state == SchemaState.Missing
@@ -336,6 +344,19 @@ public static class SchemaPlanner
 
                     break;
 
+                case EnsureRowChange seed:
+                    if (!_ops.Tables.ContainsKey(seed.Table))
+                        throw new InvalidOperationException($"table {seed.Table} is not in the model");
+                    bool seedTableExists = await TableExistsAsync(seed.Table, ct).ConfigureAwait(false);
+                    actions.Add(new PlannedAction(
+                        ChangeObject.Row, seed.Table, seed.KeyColumn,
+                        seedTableExists ? ChangeDecision.Create : ChangeDecision.MissingTable,
+                        seedTableExists
+                            ? $"row {seed.KeyColumn}={seed.KeyValue} will be ensured"
+                            : $"cannot ensure row {seed.KeyColumn}={seed.KeyValue}: the table does not exist in the database.",
+                        Script: _script && seedTableExists ? Render(seed) : null));
+                    break;
+
                 default:
                     throw new InvalidOperationException($"unsupported schema change {change}");
             }
@@ -448,6 +469,29 @@ public static class SchemaPlanner
             ISqlGenerationHelper sql = _db.GetService<ISqlGenerationHelper>();
             return $"UPDATE {sql.DelimitIdentifier(_definition.VersionTable)} SET {sql.DelimitIdentifier("Version")} = {version} " +
                    $"WHERE {sql.DelimitIdentifier("Id")} = 1;";
+        }
+
+        private IReadOnlyList<string> Render(EnsureRowChange seed)
+        {
+            ISqlGenerationHelper sql = _db.GetService<ISqlGenerationHelper>();
+            IRelationalTypeMappingSource mappings = _db.GetService<IRelationalTypeMappingSource>();
+            Dictionary<string, object?> values = new(StringComparer.Ordinal) { [seed.KeyColumn] = seed.KeyValue };
+            foreach ((string column, object? value) in seed.Values)
+                values.Add(column, value);
+            string table = sql.DelimitIdentifier(seed.Table);
+            string[] columns = [.. values.Keys];
+            string list = string.Join(", ", columns.Select(sql.DelimitIdentifier));
+            string Literal(object? value)
+            {
+                RelationalTypeMapping? mapping = mappings.FindMapping(value?.GetType() ?? typeof(string));
+                return mapping?.GenerateSqlLiteral(value)
+                    ?? throw new InvalidOperationException($"No relational type mapping exists for schema seed value type '{value?.GetType().FullName ?? "null"}'.");
+            }
+
+            string literals = string.Join(", ", values.Values.Select(Literal));
+            string key = sql.DelimitIdentifier(seed.KeyColumn);
+            string keyLiteral = Literal(seed.KeyValue);
+            return [$"INSERT INTO {table} ({list}) SELECT {literals} WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {key} = {keyLiteral});"];
         }
 
         private string? InsertStatement(int version)
