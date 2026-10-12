@@ -59,6 +59,21 @@ public sealed class PlayerbotAsyncCompletedReturnTests
         }
     }
 
+    [Fact]
+    public void WorkerRequest_ReadsTilesBlocking_EvenWhenTheWorldThreadQueryDoesNot()
+    {
+        // The world thread plans with non-blocking tile reads (a pending answer is held, not read); the worker is off the world thread and
+        // must read the tile itself, or it would cache a "tiles pending" answer as if it were the path.
+        var plan = new PlayerbotAsyncNavigationPlan(0, Vector3.Zero);
+        var options = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
+
+        Assert.False(plan.TryGet(Vector3.Zero, new Vector3(10, 0, 0), options, out _));
+
+        PlayerbotNavigationRequest request = Assert.IsType<PlayerbotNavigationRequest>(plan.NextRequest);
+        Assert.True(request.Options.LoadTiles);
+        Assert.False(request.Options.NonBlockingTiles);
+    }
+
     private sealed class ThrowingPathfinder : IPathfinder
     {
         public bool Enabled => true;
