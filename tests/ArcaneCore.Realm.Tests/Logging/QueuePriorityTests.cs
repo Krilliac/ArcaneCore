@@ -86,8 +86,9 @@ public sealed class QueuePriorityTests
             large = Math.Min(large, PriorityWriteCost(65536, 50));
         }
 
-        // An O(capacity) eviction is about a thousand times dearer at 65536 slots than at 64; allow a generous factor for noise.
-        Assert.True(large < small * 30 + 2000, $"priority write into a full ring: {small:F0} ticks at capacity 64, {large:F0} ticks at capacity 65536");
+        // An O(capacity) eviction is hundreds of times dearer at 65536 slots than at 64 (about 1000+ ticks against a handful); 8x plus a
+        // 100-tick (10 microsecond) floor absorbs scheduler noise and still fails that.
+        Assert.True(large <= small * 8 + 100, $"priority write into a full ring: {small:F0} ticks at capacity 64, {large:F0} ticks at capacity 65536");
     }
 
     [Fact]

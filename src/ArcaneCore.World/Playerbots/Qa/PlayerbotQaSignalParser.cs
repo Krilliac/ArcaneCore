@@ -38,7 +38,7 @@ internal static partial class PlayerbotQaSignalParser
         RegexOptions.CultureInvariant)]
     private static partial Regex SetAsidePattern();
 
-    [GeneratedRegex(@"^Playerbot (?<bot>\S+) (?<what>[A-Za-z]{1,32}) failed \((?<type>[A-Za-z0-9_.`+]{1,200}): (?<msg>.*)\)\s*$",
+    [GeneratedRegex(@"^Playerbot (?<bot>\S+) (?<what>[A-Za-z]{1,32}) failed \((?<type>[A-Za-z0-9_.`+]{1,200}): (?<msg>.*?)\)(?: \(\d+ more since\))?\s*$",
         RegexOptions.CultureInvariant | RegexOptions.Singleline)]
     private static partial Regex FaultPattern();
 

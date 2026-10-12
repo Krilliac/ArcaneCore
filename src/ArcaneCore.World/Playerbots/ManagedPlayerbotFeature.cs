@@ -1660,7 +1660,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         FaultRecording recording = FaultLedger.Shared.Record("playerbot", ex);
         // Error, not Warning: an action fault is an exception the server did not expect, and Error is what the console colours red. The
         // line text ("Playerbot {BotId} {What} failed ({Type}: {Message})") is what PlayerbotQaSignalParser matches; the level is not part of it.
-        if (recording.ShouldLog)
+        if (recording.ShouldLog && recording.Suppressed > 0)
+        {
+            // like FaultLedger.Log: a repeat after held-back occurrences says how many it stands for (the QA parser accepts the suffix)
+            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since)", active.Record.BotId, what, ex.GetType().Name, ex.Message, recording.Suppressed);
+        }
+        else if (recording.ShouldLog)
         {
             logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
         }
