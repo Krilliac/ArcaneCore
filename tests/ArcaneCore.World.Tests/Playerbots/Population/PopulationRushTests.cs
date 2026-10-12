@@ -160,17 +160,44 @@ public sealed class PopulationRushTests
         }
     }
 
+    // The brake's real-time clock, moved by the test.
+    private sealed class StepClock : TimeProvider
+    {
+        private long _ms = 1_000_000;
+
+        public override long TimestampFrequency => 1000;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _ms);
+
+        public void Advance(int ms) => Interlocked.Add(ref _ms, ms);
+    }
+
+    // One brake window (1 s) of fake time per step; true real time is only the polling.
+    private static async Task<int> StepUntilAsync(PopulationTestHost world, StepClock clock, Func<PopulationRushStatus, bool> done, int maxSteps = 200)
+    {
+        for (int steps = 1; steps <= maxSteps; steps++)
+        {
+            clock.Advance(1100);
+            await Task.Delay(60);
+            if (done(world.Feature.RushStatus)) return steps;
+        }
+
+        throw new TimeoutException($"not reached after {maxSteps} window steps; rush is {world.Feature.RushStatus}");
+    }
+
     [Fact]
     public async Task TheBrake_PausesTheRush_WhileTheTickP95StaysOverTheCeiling_AndLiftsItWhenTheWorldRecovers()
     {
         await using PopulationTestHost world = await StartAsync();
+        var clock = new StepClock();
+        world.Feature.RushClock = clock;
         await using var slow = new SlowWorld(world, 120); // twice the 60 ms budget, over the default 90 ms ceiling
-        var clock = Stopwatch.StartNew();
         Assert.Null(world.Feature.StartRush(6, 1));
 
-        PopulationRushStatus paused = await WaitRushAsync(world, r => r.State == "paused", "the brake to pause the rush");
-        // 3 windows of 1 s: the trip takes real seconds (3 to 8), not a tick count.
-        Assert.InRange(clock.Elapsed.TotalSeconds, 2.5, 10);
+        int steps = await StepUntilAsync(world, clock, r => r.State == "paused");
+        PopulationRushStatus paused = world.Feature.RushStatus;
+        // Three windows over the ceiling are needed (the first step only starts a window): not fewer, and not many more.
+        Assert.InRange(steps, 3, 6);
         Assert.Contains("paused by the brake", paused.Reason);
         await Task.Delay(1000); // a bot already being created when the brake tripped may still finish
         int createdWhilePaused = world.Feature.RushStatus.Created;
@@ -178,7 +205,8 @@ public sealed class PopulationRushTests
         Assert.Equal(createdWhilePaused, world.Feature.RushStatus.Created); // nothing is made while paused
 
         slow.Set(10);
-        PopulationRushStatus resumed = await WaitRushAsync(world, r => r.State is "running" or "done", "the rush to resume");
+        await StepUntilAsync(world, clock, r => r.State is "running" or "done");
+        PopulationRushStatus resumed = world.Feature.RushStatus;
         Assert.NotEqual("paused", resumed.State);
         PopulationRushStatus done = await WaitRushAsync(world, r => r.State == "done", "the resumed rush to finish");
         Assert.Equal(6, done.Created);
@@ -188,14 +216,17 @@ public sealed class PopulationRushTests
     public async Task TheBrake_StopsCreationInTheMiddleOfAPass()
     {
         await using PopulationTestHost world = await StartAsync();
+        var clock = new StepClock();
+        world.Feature.RushClock = clock;
         await using var slow = new SlowWorld(world, 120);
         PopulationRushStatus? pausedInPass = null;
         var tripped = Stopwatch.StartNew();
         world.Owners.AfterCreate = async created =>
         {
             if (created != 2) return;
-            // The pass holds the 3rd..6th bot back until the brake has tripped, in real time.
-            pausedInPass = await WaitRushAsync(world, r => r.State == "paused", "the brake to trip during the pass", seconds: 30);
+            // The pass holds the 3rd..6th bot back until the brake has tripped.
+            await StepUntilAsync(world, clock, r => r.State == "paused");
+            pausedInPass = world.Feature.RushStatus;
             tripped.Stop();
         };
 

@@ -133,6 +133,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
     private readonly PopulationRush _rush = new();
 
+    /// <summary>The real-time clock of the rush brake (a test replaces it).</summary>
+    internal TimeProvider RushClock { get; set; } = TimeProvider.System;
+
     /// <summary>The rush itself (tests).</summary>
     internal PopulationRush Rush => _rush;
 
@@ -282,7 +285,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int ceiling = pop.RushCeilingMs();
         _rush.SetBrake(ceiling, pop.RushBrakeWindows);
         // Real time, not ticks: a world ticking slowly must trip the brake as soon as a fast one would.
-        long wallMs = Environment.TickCount64;
+        TimeProvider clock = RushClock;
+        long wallMs = (long)(clock.GetTimestamp() * 1000.0 / clock.TimestampFrequency);
         long totalTicks = source.TotalSamples;
         if (brake.WindowDue(wallMs, totalTicks, pop.RushBrakeWindowSeconds * 1000) && source.Samples > 0)
         {
@@ -311,10 +315,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     }
 
     /// <summary>Run one pass now and wait for it (tests; the world's own timer starts passes the same way). A pass already running is awaited instead.</summary>
-    internal async Task RunPassNowAsync()
+    internal async Task RunPassNowAsync(bool shedOnly = false)
     {
         WorldRuntime world = _world ?? throw new InvalidOperationException("the population feature is not attached");
-        Task pass = await world.InvokeAsync(() => _pass.IsCompleted ? StartPass() : _pass).ConfigureAwait(false);
+        Task pass = await world.InvokeAsync(() => _pass.IsCompleted ? StartPass(shedOnly: shedOnly) : _pass).ConfigureAwait(false);
         await pass.ConfigureAwait(false);
     }
 
@@ -720,7 +724,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             bool relocate = decision.State is "under-budget" or "under-budget-confirming" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
-                && pop.MaxRelocationsPerInterval > 0 && !pop.FreshLaunch; // a fresh-launch bot is never moved out of its starting zone
+                && pop.MaxRelocationsPerInterval > 0 && !pop.FreshLaunch && !input.ShedOnly; // a fresh-launch bot is never moved out of its starting zone
             if (relocate && input.TerrainHold is { } relocationHold) ctx.Note ??= relocationHold; // no relocation on the fallback atlas either
             else if (relocate)
             {

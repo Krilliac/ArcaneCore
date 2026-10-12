@@ -424,7 +424,7 @@ moves a fresh bot out of its starting zone; the status says `fresh launch`.
 windows (about 15 s) the rush pauses and logs a warning; the flag is also checked between bots inside a pass, so creation stops
 at once. It resumes after as many windows under `ResumeBelowPct` of the ceiling. The ceiling is `RushBrakeP95Ms`, by default
 (0) 1.5 times `TickP95BudgetMs`. While a rush runs or is paused the interval pass still runs to shed: it parks owned bots when the
-p95 is over `TickP95BudgetMs` (`ParkWhenOverBudget`), and never adds, moves or parks for the target. `.playerbot population status` adds a `Rush <state>` line with created/failed,
+p95 is over `TickP95BudgetMs` (`ParkWhenOverBudget`), and never adds, moves or parks for the target. These shed-only passes run during a rush even when `Population.Enabled` is `false`. `.playerbot population status` adds a `Rush <state>` line with created/failed,
 requested and achieved rate, the tick p95 and the brake windows seen. A fleet reset stops a running rush. Note: bots above
 `TargetOnline` are parked by the ordinary passes after the rush, so set `TargetOnline` to the rush size when the bots should stay
 online.

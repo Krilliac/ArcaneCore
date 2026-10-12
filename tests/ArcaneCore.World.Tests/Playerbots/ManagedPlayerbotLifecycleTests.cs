@@ -950,9 +950,15 @@ public sealed class ManagedPlayerbotLifecycleTests
         /// <summary>Runs after each stored registration with the number of rows now stored (a test holds a creation pass here).</summary>
         public Func<int, Task>? AfterCreate { get; set; }
 
+        private Exception? _nextCreateException;
+
+        /// <summary>The next registration throws this (a cancellation, for one) before storing anything.</summary>
+        public Exception? NextCreateException { set => Volatile.Write(ref _nextCreateException, value); }
+
         public async Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
         {
             if (FailNextCreate) { FailNextCreate = false; throw new InvalidOperationException("fixture-create-failure"); }
+            if (Interlocked.Exchange(ref _nextCreateException, null) is { } next) throw next;
             if (!_items.TryAdd(bot.BotId, bot)) throw new InvalidOperationException("duplicate-owner");
             if (AfterCreate is { } after) await after(_items.Count).ConfigureAwait(false);
         }

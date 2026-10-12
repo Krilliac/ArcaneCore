@@ -416,7 +416,11 @@ public sealed class FleetResetTests
     [Fact]
     public async Task Reset_CancelsABotsTradeWithARealPlayer_AndTouchesNeitherItemsNorGold()
     {
-        await using PopulationTestHost world = await StartAsync();
+        var content = new ArcaneCore.World.Tests.Items.ItemTestContent();
+        content.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = 9001, Class = 15, Name = "Trade Token", DisplayId = 1, Quality = 1, MaxCount = 20 });
+        Task<PopulationTestHost> starting;
+        using (content.Use()) starting = StartAsync();
+        await using PopulationTestHost world = await starting;
         Guid[] ids = await CreateBotsAsync(world, 1, started: 1);
         await using WorldTestClient real = await world.Host.EnterWorldAsync("REALTRADE", "Realtrade");
         var economy = world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Economy.EconomyFeature>();
@@ -431,6 +435,8 @@ public sealed class FleetResetTests
                 .GetField("_trades", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(economy)!;
             var trade = new ArcaneCore.Game.Economy.TradeSession(bot, me) { Opened = true };
             trade.SideOf(me).Gold = 1000;
+            Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, me.Inventory.AddItem(9001, 5, out ArcaneCore.Game.Items.Item? offered));
+            trade.SideOf(me)[0] = offered!.Guid;
             trades[bot] = trade;
             trades[me] = trade;
             Assert.NotNull(economy.TradeOf(me));
@@ -449,6 +455,7 @@ public sealed class FleetResetTests
             return (economy.TradeOf(me) is not null, me.Money, me.Inventory.AllItems.Select(i => i.Guid.Low).Order().ToArray());
         });
         Assert.False(open);
+        Assert.True(items.Length > 0); // the offered item is still carried by its owner
         Assert.Equal(goldBefore, gold);
         Assert.Equal(itemsBefore, items);
     }
@@ -497,6 +504,27 @@ public sealed class FleetResetTests
         world.Population.FreshLaunch = false;
         world.Population.Enabled = false;
         Assert.Null(world.Bots.RefillWarning);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AReusedAccount_WhoseRegistryInsertFails_LeavesNoCharacterBehind_AndStaysReusable(bool cancel)
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 1, started: 0);
+        ManagedPlayerbot old = (await world.Owners.LoadAllAsync()).Single();
+        Assert.True((await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { })).Success);
+
+        world.Owners.NextCreateException = cancel ? new OperationCanceledException() : new InvalidOperationException("fixture registry failure");
+        if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => world.Bots.CreateAsync("Sparefail", 1, 1));
+        else Assert.False((await world.Bots.CreateAsync("Sparefail", 1, 1)).Success);
+
+        Assert.Empty(await world.Host.Characters.GetByAccountAsync(old.AccountId)); // no orphan: a character the registry does not know
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        PlayerbotOperationResult again = await world.Bots.CreateAsync("Sparegood", 1, 1);
+        Assert.True(again.Success, again.Code);
+        Assert.Equal(old.AccountName, (await world.Owners.LoadAllAsync()).Single().AccountName);
     }
 
     private sealed class FakeClock : TimeProvider

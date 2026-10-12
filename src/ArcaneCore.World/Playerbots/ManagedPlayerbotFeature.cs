@@ -272,8 +272,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
             string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
             logger.LogWarning("Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
-            // A reused account that took no character stays spare (the next claim checks it again).
-            if (spare is not null) _spareAccounts.Enqueue(new SpareAccount(spare.Id, spare.Username));
+            // A reused account has no provisioning journal, so what this attempt put on it is removed here (cancellation included).
+            if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -282,6 +282,50 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
         finally { _operations.Release(); }
+    }
+
+    /// <summary>
+    /// A creation on a reused account failed. The account was empty when it was claimed, so any character on it came from this attempt
+    /// and no registry row names it (unless one was stored after all, then nothing is touched): delete it like a player's delete
+    /// would, then make the account spare again. If a character cannot be deleted the account is retired (not offered again) and the
+    /// character is logged. Runs with no cancellation token on purpose: a shutdown mid-creation is exactly when this matters.
+    /// </summary>
+    private async Task RetireOrRequeueSpareAsync(Account spare)
+    {
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IServiceProvider provider = scope.ServiceProvider;
+            IReadOnlyList<CharacterRecord> held = await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false);
+            if (held.Count != 0)
+            {
+                IReadOnlyList<ManagedPlayerbot> registered = await provider.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(CancellationToken.None).ConfigureAwait(false);
+                Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(spare.Username, CancellationToken.None).ConfigureAwait(false);
+                if (registered.Any(b => b.AccountId == spare.Id) || owner is null || owner.Id != spare.Id
+                    || owner.Security != AccountSecurity.Player || owner.SessionKey is not null) return; // in use, or not ours: leave it alone
+                WorldSession session = await NewSessionAsync(owner, null, provider, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    foreach (CharacterRecord character in held)
+                        if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
+                            logger.LogError("Playerbot creation on reused account '{Account}' failed and character {CharacterId} could not be deleted; the account is retired", spare.Username, character.Id);
+                }
+                finally
+                {
+                    session.Kick();
+                    try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
+                    catch (TimeoutException) { logger.LogWarning("Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
+                }
+
+                if ((await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false)).Count != 0) return;
+            }
+
+            _spareAccounts.Enqueue(new SpareAccount(spare.Id, spare.Username));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogError(ex, "Playerbot cleanup of reused account '{Account}' failed; the account is retired ({Type}: {Message})", spare.Username, ex.GetType().Name, ex.Message);
+        }
     }
 
     /// <summary>
