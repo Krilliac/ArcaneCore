@@ -129,6 +129,11 @@ public sealed class PlayerbotRecoveryDecisionTests
     public void JudgeBody(bool diedHere, bool tooStrong, bool outside, bool nearer, string expected)
         => Assert.Equal(Enum.Parse<PlayerbotUnsafeBody>(expected), PlayerbotRecovery.JudgeBody(diedHere, tooStrong, outside, nearer));
 
+    [Fact]
+    public void SubmergedBody_IsAHazardEvenBeforeARepeatedDeath()
+        => Assert.Equal(PlayerbotUnsafeBody.Hazard,
+            PlayerbotRecovery.JudgeBody(false, false, false, false, bodySubmerged: true));
+
     /// <summary>
     /// The death memory the repeat-death rule reads (<see cref="PlayerbotStallWatch.DeathsNear"/>): deaths inside the window
     /// (<see cref="PlayerbotStallWatch.DeathLoopWindowMs"/>) within <see cref="PlayerbotStallWatch.DeathLoopYards"/> on the same map,
@@ -190,6 +195,20 @@ public sealed class PlayerbotRecoveryDecisionTests
         Assert.All(hostiles, hostile => Assert.False(hostile.Reaches(spot.Value, SpotClearance),
             $"{Vector3.Distance(spot.Value, hostile.Position):F1} yards from a hostile"));
         Assert.Equal(spot, asked[0]); // nearest first: the first clear candidate the search asked about was reachable
+    }
+
+    [Fact]
+    public void FindReviveSpot_RejectsSubmergedCandidateAndMeshEndpoint()
+    {
+        var body = new Vector3(0, 0, 0);
+        var ghost = new Vector3(0, 0, 0);
+        bool Dry(Vector3 point) => point.X >= 5f;
+
+        Vector3? spot = PlayerbotRecovery.FindReviveSpot(ghost, body, [], candidate => candidate, Dry);
+        Assert.NotNull(spot);
+        Assert.True(Dry(spot.Value));
+        Assert.NotEqual(body, spot.Value);
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, [], _ => body, Dry));
     }
 
     /// <summary>A body whose whole reclaim disc is inside the camp's reach has no spot: the ghost goes on waiting, as before.</summary>
