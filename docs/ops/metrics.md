@@ -54,6 +54,7 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_net_bytes_in_bytes_total` / `_out_` | counter | world and logon socket bytes, headers included |
 | `arcanecore_net_opcode_packets_in_total` / `_out_total` `{protocol,opcode}` | counter | packets per opcode (see below) |
 | `arcanecore_net_opcode_bytes_in_bytes_total` / `_out_` `{protocol,opcode}` | counter | bytes per opcode, headers included |
+| `arcanecore_net_opcode_unhandled_total{protocol,opcode}` | counter | client packets that had no registered handler and were dropped (`opcode` is the reference name, or `unknown` for values without one); the first of each opcode is also a log Warning, and `.server wiring` lists them (docs/ops/wiring-audit.md) |
 | `arcanecore_playerbot_chat_screening_timeouts_total{kind}` | counter | bot chat safety patterns that ran out of time (`kind`: `input` screening a player's line, `output` screening a model reply, `strip` removing personal data before sending or from a flag excerpt; docs/areas/playbots.md) |
 | `arcanecore_gc_collections_total{generation}` | counter | `GC.CollectionCount` |
 | `arcanecore_gc_heap_size_bytes`, `arcanecore_gc_allocated_bytes_total`, `arcanecore_gc_pause_time_seconds_total` | gauge/counter | GC and allocation |
