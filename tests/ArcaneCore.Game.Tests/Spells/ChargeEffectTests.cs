@@ -372,6 +372,30 @@ public sealed class ChargeEffectTests
         Assert.Equal(1u, charge.PointCount);
     }
 
+    [Fact]
+    public void ChargingPlayer_EndsAStateEmote_ButAChargingCreatureKeepsIt()
+    {
+        using SpellTestKit kit = Kit();
+        Map map = kit.World.GetMap(0);
+        var creatures = new CreatureMapSystem(map, Content([Template()], [Spawn(1, WolfEntry, 40, 0, Z)]), random: new Random(1));
+        map.AddUpdater(creatures);
+        kit.System.Units = new MapObjectResolver();
+        (Player caster, _) = kit.AddPlayer(1, 0, 0);
+        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        kit.World.RunTick(50);
+        Creature wolf = Assert.Single(creatures.Creatures);
+        const uint Dance = 14;
+        caster.SetUInt32(UpdateFields.UnitNpcEmotestate, Dance);
+        wolf.SetUInt32(UpdateFields.UnitNpcEmotestate, Dance);
+
+        // vmangos UpdateSplinePosition -> Player::SetPosition (Unit.cpp:10672): the player's spline step ends the state; a creature's does not.
+        kit.System.CastSpell(wolf, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.Equal(Dance, wolf.GetUInt32(UpdateFields.UnitNpcEmotestate));
+
+        kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.Equal(0u, caster.GetUInt32(UpdateFields.UnitNpcEmotestate));
+    }
+
     // --- blink ----------------------------------------------------------------------------------------------------------------
 
     [Fact]

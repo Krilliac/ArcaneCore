@@ -158,6 +158,12 @@ public static class ForcedMovement
             heading -= 2 * MathF.PI; // a leg along -x with a rounding error in y comes out as -epsilon + 2 pi, which rounds up to 2 pi
         }
 
+        if (unit is Player mover)
+        {
+            // vmangos UpdateSplinePosition -> Player::SetPosition (Unit.cpp:10672): the spline moves the player, so a state emote ends. A creature keeps its state.
+            mover.ClearEmoteState();
+        }
+
         unit.Relocate(end.X, end.Y, end.Z, heading, unit.Movement.Time);
         if (unit is Player moved)
         {
