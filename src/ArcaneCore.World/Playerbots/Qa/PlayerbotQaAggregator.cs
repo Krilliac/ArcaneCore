@@ -86,6 +86,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     /// <summary>Findings folded into another one by <see cref="Restore"/> or a bridging signal (running total).</summary>
     internal long Merged { get; private set; }
 
+    /// <summary>
+    /// Called (outside the lock, on the ingesting thread) with the view of each finding that did not exist before and came from a real
+    /// occurrence (not the start-up coverage). Must be quick and must not throw; a throwing callback is ignored.
+    /// </summary>
+    internal Action<QaFindingView>? FindingCreated { get; set; }
+
     /// <summary>The salt for the persisted bot hashes.</summary>
     internal byte[] Salt => _salt;
 
@@ -107,6 +113,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         QaClassification cause = PlayerbotQaClassifier.Classify(signal, facts); // content reads stay outside the lock
         ulong? bot = signal.BotKey is { } guid ? BotHash(guid) : null;
         Probe? probe = signal.FromCoverage ? null : ProbeOf(signal);
+        QaFindingView? created = null;
+        string? ingested;
         lock (_gate)
         {
             QaFinding? finding;
@@ -154,6 +162,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
                 if (!signal.FromCoverage && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
                 Add(finding);
+                created = signal.FromCoverage ? null : finding.ToView();
             }
 
             if (signal.FromCoverage)
@@ -230,8 +239,26 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
             finding.Severity = PlayerbotQaClassifier.Severity(finding.Kind, finding.Count, finding.DistinctBots, finding.LastSeenUtc, now);
             _snapshot = null;
-            return finding.Id;
+            ingested = finding.Id;
+            if (created is not null)
+            {
+                created = finding.ToView();
+            }
         }
+
+        if (created is not null && FindingCreated is { } callback)
+        {
+            try
+            {
+                callback(created);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // The ingest path must never fail because a subscriber did.
+            }
+        }
+
+        return ingested;
     }
 
     /// <summary>What decides which finding a stall or death loop is: a signal's, or a finding's own (kept for it).</summary>

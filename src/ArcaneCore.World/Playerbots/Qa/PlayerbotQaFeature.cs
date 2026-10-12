@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -123,6 +124,11 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
+        if (services.GetService<IOpsAnnouncer>() is { } announcer)
+        {
+            aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
+        }
+
         // Only a host that registered the ledger (UseArcaneDiagnostics) feeds server faults; a bare provider has no ledger to read.
         if ((FaultSource ?? services.GetService<FaultLedger>()) is { } ledger) _faultFeed = new PlayerbotQaFaultFeed(ledger);
         if (services.GetService<SpellFeature>() is { } spells)
