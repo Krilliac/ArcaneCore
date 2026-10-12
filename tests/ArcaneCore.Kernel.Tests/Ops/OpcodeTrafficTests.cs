@@ -10,6 +10,10 @@ public sealed class OpcodeTrafficTests
 {
     private static string UniqueMeter() => "ArcaneCore.Test." + Guid.NewGuid().ToString("N");
 
+    // Outside the ArcaneMeters.Prefix namespace: any MetricsStore alive in this process (other test classes run in
+    // parallel and start one) enables every ArcaneCore* instrument by design, which would make "no listener" untrue.
+    private static string UnlistenedMeter() => "OpcodeTrafficTests.Unlistened." + Guid.NewGuid().ToString("N");
+
     private static MeterListener Listen(Meter meter)
     {
         var listener = new MeterListener
@@ -96,7 +100,7 @@ public sealed class OpcodeTrafficTests
     [Fact]
     public void Table_WithoutAListener_RecordsNothing()
     {
-        using var meter = new Meter(UniqueMeter());
+        using var meter = new Meter(UnlistenedMeter());
         var traffic = new OpcodeTrafficMeter(meter);
         OpcodeTable table = traffic.Register("t", Known());
 
@@ -105,6 +109,21 @@ public sealed class OpcodeTrafficTests
         table.RecordInBytes(2, 10);
         table.RecordOut(2, 10);
 
+        Assert.Equal(default, table.Read(2));
+    }
+
+    [Fact]
+    public void Table_WithoutAListener_RecordsNothing_EvenWhileAMetricsStoreIsLive()
+    {
+        // Deterministic stand-in for a parallel test class that started a MetricsStore before this meter existed.
+        using var store = new MetricsStore();
+        store.Start();
+        using var meter = new Meter(UnlistenedMeter());
+        var traffic = new OpcodeTrafficMeter(meter);
+        OpcodeTable table = traffic.Register("t", Known());
+
+        Assert.False(traffic.Enabled);
+        table.RecordIn(2, 10);
         Assert.Equal(default, table.Read(2));
     }
 
