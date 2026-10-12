@@ -3,8 +3,6 @@ using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
-using ArcaneCore.World.Ops.Validation;
-using ArcaneCore.World.Gm.FirstLogin;
 using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Ops.Cli;
@@ -64,19 +62,16 @@ public static class OpsCli
         return report.IsInvalid ? ExitCodes.InvalidConfiguration : ExitCodes.Success;
     }
 
+    /// <summary>The assemblies whose <see cref="IConfigCheck"/> classes the world daemon runs: the Kernel's (logging, resilience, watchdog, metrics) and this one's.</summary>
+    public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, typeof(OpsCli).Assembly];
+
+    /// <summary>
+    /// Every check the world daemon runs: the .conf file check (it needs the catalog and the daemon, so it is supplied here) first, then
+    /// every other <see cref="IConfigCheck"/> of <see cref="CheckAssemblies"/> found by reflection (<see cref="ConfigCheckDiscovery"/>).
+    /// </summary>
+    public static IReadOnlyList<IConfigCheck> CreateChecks()
+        => [new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.World), .. ConfigCheckDiscovery.Create(CheckAssemblies)];
+
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration,
-        [
-            new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.World),
-            new WorldConfigChecks(),
-            new DiagnosticsConfigChecks(),
-            new LoggingConfigChecks(),
-            new ResilienceConfigChecks(),
-            new NetProtectionConfigChecks(),
-            new ArcaneCore.Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
-            new ArcaneCore.Kernel.Ops.Metrics.MetricsOptionsValidation(),
-            new GmFirstLoginToolsConfigChecks(),
-            new ClientData.ClientDataConfigChecks(),
-            new Economy.AuctionBotConfigChecks(),
-        ]);
+        => ConfigReport.Run(configuration, CreateChecks());
 }

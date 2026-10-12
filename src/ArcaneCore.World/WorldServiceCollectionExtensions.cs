@@ -57,6 +57,8 @@ public static class WorldServiceCollectionExtensions
         services.AddPlayerbotQa(configuration); // bot QA: findings from the bots' warnings (docs/areas/playbots-qa.md)
 
         services.AddSingleton(_ => BuildOpcodeTable());
+        services.AddSingleton(Net.UnhandledOpcodeTracker.Shared); // client opcodes with no handler: counted, warned once, metric arcanecore.net.opcode.unhandled
+        services.AddSingleton(sp => new Ops.Diagnostics.WiringAudit(sp)); // .server wiring and the start-up summary (docs/ops/wiring-audit.md)
         services.AddSingleton(sp => ChatCommands.CreateTable(configuration, sp));
         services.AddSingleton(sp => new CommandTableSource(sp.GetRequiredService<CommandTable>()));
         services.AddWorldFeatures();

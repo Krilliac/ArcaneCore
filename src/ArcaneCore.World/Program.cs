@@ -74,21 +74,8 @@ catch (HotCodeRefusedException ex)
     return 78; // EX_CONFIG
 }
 
-// The HostOptions section (e.g. ShutdownTimeout) is not bound by the default builder; a full save
-// drain for many players must not be cut short by the host default (docs/areas/ops-perf.md).
-builder.Services.Configure<HostOptions>(builder.Configuration.GetSection("HostOptions"));
-builder.Services.AddArcaneCoreLogging(builder.Configuration);
-builder.Services.AddAuthDatabase(builder.Configuration);
-builder.Services.AddCharacterDatabase(builder.Configuration);
-builder.Services.AddWorldDatabase(builder.Configuration);
-builder.Services.AddDatabaseResilience(builder.Configuration); // breakers + bootstrap retry for the three databases (docs/ops/resilience.md)
-builder.Services.AddWorldDaemon(builder.Configuration);
-builder.Services.AddWorldConsole(builder.Configuration); // typed GM commands at the console window, off when stdin is redirected (docs/areas/server-console.md); after the listener so it stops first
-builder.Services.AddNetProtection(builder.Configuration);
-builder.Services.AddWorldWatchdog(builder.Configuration);
-builder.Services.AddWorldMetrics(builder.Configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)
-builder.Services.AddWorldOpsDiagnostics(builder.Configuration); // .debug alloc / .debug dump, dumps off by default (docs/ops/diagnostics.md)
-builder.Services.AddSingleton(clientData);
+// Every registration the daemon runs with, in one place the CI guard also builds with scope and build validation on (WiringAuditTests).
+builder.Services.AddWorldProductionServices(builder.Configuration, clientData);
 
 IHost host = builder.Build();
 conf.Reporter.Attach(host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.Config"));

@@ -13,16 +13,16 @@ namespace ArcaneCore.Realm.Ops.Cli;
 /// </summary>
 public static class RealmOpsCli
 {
-    /// <summary>Every problem of the realm's configuration: the .conf file's keys and values, logging, resilience, watchdog and metrics.</summary>
+    /// <summary>The assemblies whose <see cref="IConfigCheck"/> classes the realm runs: the Kernel's (logging, resilience, watchdog, metrics) and this one's.</summary>
+    public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, typeof(RealmOpsCli).Assembly];
+
+    /// <summary>The .conf file check (it needs the catalog and the daemon, so it is supplied here) first, then every other <see cref="IConfigCheck"/> of <see cref="CheckAssemblies"/> found by reflection.</summary>
+    public static IReadOnlyList<IConfigCheck> CreateChecks()
+        => [new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.Realm), .. ConfigCheckDiscovery.Create(CheckAssemblies)];
+
+    /// <summary>Every problem of the realm's configuration, from every check <see cref="CreateChecks"/> returns.</summary>
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration,
-        [
-            new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.Realm),
-            new LoggingConfigChecks(),
-            new ResilienceConfigChecks(),
-            new Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
-            new Kernel.Ops.Metrics.MetricsOptionsValidation(),
-        ]);
+        => ConfigReport.Run(configuration, CreateChecks());
 
     /// <summary>Runs the verb of <paramref name="command"/>; the exit code is 78 when check-config finds an error, otherwise the verb's own code.</summary>
     public static int Run(DaemonCommand command, IConfigurationRoot configuration, TextWriter standardOutput, TextWriter standardError)
