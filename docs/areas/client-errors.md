@@ -40,6 +40,55 @@ server fault in those areas, use `SMSG_NOTIFICATION`.
 |---|---|---|
 | `CharResult` (`ArcaneCore.Protocol`) | `CharNameSuccess` 0x50 -> **0x52**; added `CharNameConsecutiveSpaces` 0x50, `CharCreateServerQueue` 0x36, `CharCreateOnlyExisting` 0x37, `CharDeleteFailedLockedForTransfer` 0x3B, `CharLoginLockedForTransfer` 0x44 | The client's response table puts `CHAR_NAME_CONSECUTIVE_SPACES` at 0x50 and `CHAR_NAME_SUCCESS` at 0x52 (gtker had 0x50; vmangos agrees with the binary). |
 | `SpellCastResult` | added `AutotrackInterrupted` 0x08 | The client switch maps 0x08 to `SPELL_FAILED_AUTOTRACK_INTERRUPTED`. |
-| `InventoryResult`, `LootError`, `MailResult` | doc comments only (values unchanged) | 59 shows `ERR_CANT_BE_DISENCHANTED` (no string in 1.12.1), so it is not "none". Loot 15 and 16 show the default "no permission" text. Mail 16-19 show the internal mail error. |
+| `InventoryResult`, `MailResult` | doc comments only (values unchanged) | 59 shows `ERR_CANT_BE_DISENCHANTED` (no string in 1.12.1), so it is not "none". Mail 6-13 and 16-19 show the internal mail error. |
+| `LootError` | none here (the loot lane owns the file) | Loot 15 and 16 show the default "no permission" text; there is no loot internal-error code. |
 
 Golden tests: `tests/ArcaneCore.World.Tests/ClientErrors/ClientErrorCodeGoldenTests.cs`.
+
+## Telling the client the server failed: `ClientError`
+
+`ArcaneCore.Game.ClientErrors.ClientError` is the one place that turns a server-side failure into the client's own
+words for the action that failed. Every call logs the cause at Error (throttled by the fault ledger), records a
+fault-ledger entry under the site `client-error/<kind>`, and sends a fixed packet. Neither the cause nor any
+exception text ever reaches the packet: the payload depends on the context alone.
+
+```csharp
+ClientError.SpellCast(session, spellId, "gather: lock lookup failed", logger, ex); // SMSG_CAST_RESULT failed, 0x1C
+ClientError.ItemMove(session, item1, item2, "swap: slot map out of sync", logger);  // SMSG_INVENTORY_CHANGE_FAILURE 40
+ClientError.Generic(session, "auction: ...", logger);                                // SMSG_NOTIFICATION "Internal error"
+ClientError.Internal(session, ClientErrorContext.Mail(mailId, MailAction.Send), "...", logger, ex); // SMSG_SEND_MAIL_RESULT 6
+```
+
+| Context | Packet | Payload |
+|---|---|---|
+| `SpellCast(spellId)` | SMSG_CAST_RESULT (0x130) | u32 spell, u8 2, u8 0x1C |
+| `ItemMove(item1, item2)` | SMSG_INVENTORY_CHANGE_FAILURE (0x112) | u8 40, u64 item1, u64 item2, u8 0 |
+| `CharacterCreate` / `CharacterDelete` / `CharacterLogin` | SMSG_CHAR_CREATE / SMSG_CHAR_DELETE / SMSG_CHARACTER_LOGIN_FAILED | u8 0x2F / 0x3A / 0x41 |
+| `Mail(mailId, action)` | SMSG_SEND_MAIL_RESULT (0x239) | u32 mail, u32 action, u32 6 |
+| `Generic` | SMSG_NOTIFICATION (0x1CB) | "Internal error" |
+
+Without an exception, the ledger entry is a `ServerRejectionException` carrying the cause, whose stack includes the
+rejecting call site, so two callers rejecting are two ledger signatures.
+
+**Rate limit.** Unsolicited errors (`Generic`, `SpellCast`, `ItemMove`) are limited per session to
+`ClientError.Burst` (3) in a sliding `ClientError.WindowMs` (10 s); past that the fault is still logged and recorded but
+nothing is sent. Answers the client is waiting for (character screen, mail) are never limited.
+
+**Handler faults.** An opcode handler that throws something other than the malformed-packet outcome is a server bug
+(`WorldSession.HandlerFaults.cs`):
+
+- World handlers (world thread): the fault is contained. The client gets the context error for the opcode
+  (CMSG_CAST_SPELL -> spell, the item move/equip/use opcodes -> item, anything else -> notification) and the session's
+  next packet is handled. The `WorldSession.HandlerFaultStorm`-th (5th) fault inside
+  `WorldSession.HandlerFaultStormWindowMs` (60 s) disconnects, as every handler fault did before. A session already being
+  dropped sends nothing and only records the fault.
+- Session handlers (session task): CMSG_CHAR_CREATE, CMSG_CHAR_DELETE and CMSG_PLAYER_LOGIN faults at the character
+  screen are answered with their failure code and the session stays. Any other session-handler fault, or one after the
+  login has begun, still leaves the session.
+- A malformed packet still disconnects (docs/ops/netguard.md).
+
+A contained fault may leave state the handler half-changed; that is the trade for not disconnecting a player over one
+bug. The storm rule bounds how long a session can run in that state.
+
+Tests: `ClientErrorTests` (packets, rate limit, no leak, ledger), `HandlerFaultDispatchTests` (a throwing cast, item
+move and char-create handler through a real session, and the storm), `WorldProtectionTests` (the generic case).

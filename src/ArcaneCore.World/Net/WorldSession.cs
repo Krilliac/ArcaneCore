@@ -372,11 +372,21 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 // The controlled outcome of PacketReader: the packet did not fit its layout. Contained
                 // here so a client fault never reaches the map update. A server bug in a handler is
-                // not a client fault and propagates to Map.ProcessPackets (Error with the exception, kick).
+                // not a client fault: see the next clause.
                 _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode));
                 Kick();
                 return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A server bug in a handler: the player is told in the client's own words, the fault is logged with
+                // its exception and recorded, and the session goes on unless it is closing or faulting in a storm
+                // (WorldSession.HandlerFaults.cs, docs/areas/client-errors.md).
+                if (!ContainWorldHandlerFault(packet.Handler.Opcode, packet.Payload, player, ex))
+                {
+                    return;
+                }
             }
         }
     }
@@ -671,6 +681,13 @@ public sealed partial class WorldSession : IPlayerSession
         {
             _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
             return false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && IsContainedSessionFault(opcode))
+        {
+            // Character create, delete or login threw at the character screen: answer with its failure code
+            // (WorldSession.HandlerFaults.cs). Any other session-handler fault still leaves the session.
+            ContainSessionHandlerFault(opcode, ex);
+            return true;
         }
     }
 

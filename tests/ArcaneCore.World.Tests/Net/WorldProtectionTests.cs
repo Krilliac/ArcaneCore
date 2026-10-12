@@ -197,7 +197,8 @@ public sealed class WorldProtectionTests
     /// A handler's own <see cref="IndexOutOfRangeException"/> is a server bug, not a client fault: it
     /// must never be reported as "malformed" (a Warning without the exception, blaming the player).
     /// On the session task it escapes the session as a session fault, which the production host logs
-    /// at Error with the stack trace; on the world thread Map.ProcessPackets does the same and kicks.
+    /// at Error with the stack trace; on the world thread the session contains it, logs it at Error with
+    /// the stack trace and tells the player (ClientError), without disconnecting.
     /// Before the fix both paths logged "malformed CMSG_X; disconnecting" and nothing else.
     /// </summary>
     [Fact]
@@ -217,13 +218,18 @@ public sealed class WorldProtectionTests
         host.Opcodes.OnWorld(worldOpcode, (_, _, _) => { int[] table = new int[1]; _ = table[int.Parse("7", System.Globalization.CultureInfo.InvariantCulture)]; });
         host.Opcodes.OnSession(sessionOpcode, SessionStates.Authenticated, (_, _) => { int[] table = new int[1]; _ = table[int.Parse("7", System.Globalization.CultureInfo.InvariantCulture)]; return Task.CompletedTask; });
 
-        // World thread: the player is kicked by Map.ProcessPackets, the world keeps ticking, and no line blames the client.
+        // World thread: the fault is contained (docs/areas/client-errors.md). The player is told "Internal error"
+        // (SMSG_NOTIFICATION, the generic context), stays connected, the world keeps ticking, and no line blames the client.
         await using (WorldTestClient inWorld = await host.EnterWorldAsync("BUGGYW", "Buggyw"))
         {
             await inWorld.SendAsync(worldOpcode, new byte[4]);
-            Assert.True(await inWorld.IsClosedByServerAsync(), "a handler fault on the world thread disconnects the player");
+            Assert.Equal(System.Text.Encoding.ASCII.GetBytes("Internal error\0"), await inWorld.ReadUntilAsync(WorldOpcode.SmsgNotification));
             await host.OnWorldAsync(() => { }); // the world thread is alive and answering
             AssertNothingBlamedTheClient(log);
+            lock (log.Messages)
+            {
+                Assert.Contains(log.Messages, m => m.Contains("internal error", StringComparison.Ordinal));
+            }
         }
 
         // Session task: the exception leaves the session (the host logs it at Error as a session error).

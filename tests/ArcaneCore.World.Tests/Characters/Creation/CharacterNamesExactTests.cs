@@ -97,6 +97,7 @@ public sealed class CharacterNamesExactTests
         Assert.Equal(0x4D, (byte)CharResult.CharNameMultipleApostrophes);
         Assert.Equal(0x4E, (byte)CharResult.CharNameThreeConsecutive);
         Assert.Equal(0x4F, (byte)CharResult.CharNameInvalidSpace);
-        Assert.Equal(0x50, (byte)CharResult.CharNameSuccess);
+        Assert.Equal(0x50, (byte)CharResult.CharNameConsecutiveSpaces); // the 1.12.1 binary (docs/areas/client-errors.md)
+        Assert.Equal(0x52, (byte)CharResult.CharNameSuccess);
     }
 }

@@ -20,6 +20,8 @@ public enum SpellCastResult : byte
     AlreadyOpen = 0x06,
     /// <summary>A more powerful spell is already active</summary>
     AuraBounced = 0x07,
+    /// <summary>SPELL_FAILED_AUTOTRACK_INTERRUPTED. Missing from the reference headers; the 1.12.1 client's cast-result switch maps 0x08 to it (docs/areas/client-errors.md).</summary>
+    AutotrackInterrupted = 0x08,
     /// <summary>You have no target.</summary>
     BadImplicitTargets = 0x09,
     /// <summary>Invalid target</summary>
@@ -58,7 +60,7 @@ public enum SpellCastResult : byte
     EquippedItemClassMainhand = 0x1A,
     /// <summary>Must have a %s equipped in the offhand</summary>
     EquippedItemClassOffhand = 0x1B,
-    /// <summary>Internal error</summary>
+    /// <summary>SPELL_FAILED_ERROR "Internal error": the code for a server-side failure (ClientError.SpellCast; client binary verified, docs/areas/client-errors.md).</summary>
     Error = 0x1C,
     /// <summary>Fizzled</summary>
     Fizzle = 0x1D,
