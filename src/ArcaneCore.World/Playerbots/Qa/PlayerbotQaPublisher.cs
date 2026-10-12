@@ -300,7 +300,8 @@ internal sealed class PlayerbotQaPublisher
             QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
             QaIssueRef? found = index.ByMarker(id);
             // A finding that holds issue #N and finds #N in the list has its issue, whatever marker its body carries (an issue handed over by a merged finding has that finding's).
-            if (found is null && current.Publication.Issue > 0) found = index.ByNumber(current.Publication.Issue);
+            // A failed attempt keeps the number too: it holds the issue as long as the body still carries some finding's marker (a person editing the marker away frees it).
+            if (found is null && current.Publication.Issue > 0 && (current.Publication.Pinned || index.HasMarker(current.Publication.Issue))) found = index.ByNumber(current.Publication.Issue);
             string marker = PlayerbotQaIssueComposer.MarkerOf(id);
             if (found is null && current.Publication.Issue > 0 && index.ByNumber(current.Publication.Issue) is null)
             {

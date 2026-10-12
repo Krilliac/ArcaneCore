@@ -11,6 +11,7 @@ internal sealed partial class QaIssueIndex(bool complete)
 {
     private readonly Dictionary<string, QaIssueRef> _byId = new(StringComparer.Ordinal);
     private readonly Dictionary<int, QaIssueRef> _byNumber = [];
+    private readonly HashSet<int> _marked = [];
 
     /// <summary>Whether the whole labelled list was read (it did not stop at the page or item limit); an issue missing from a complete index is not labelled.</summary>
     public bool Complete { get; } = complete;
@@ -21,12 +22,19 @@ internal sealed partial class QaIssueIndex(bool complete)
 
     public QaIssueRef? ByNumber(int number) => _byNumber.GetValueOrDefault(number);
 
+    /// <summary>Whether issue <paramref name="number"/> carries a Bot QA marker (of any finding): it is a bot issue, not one whose marker a person edited away.</summary>
+    public bool HasMarker(int number) => _marked.Contains(number);
+
     /// <summary>Index <paramref name="issue"/> under every exact <c>&lt;!-- arcanecore-bot-qa:id --&gt;</c> marker in <paramref name="body"/>.</summary>
     public void Add(QaIssueRef issue, string body)
     {
         _byNumber.TryAdd(issue.Number, issue);
         if (string.IsNullOrEmpty(body)) return;
-        foreach (Match match in MarkerPattern().Matches(body)) _byId.TryAdd(match.Groups["id"].Value, issue);
+        foreach (Match match in MarkerPattern().Matches(body))
+        {
+            _byId.TryAdd(match.Groups["id"].Value, issue);
+            _marked.Add(issue.Number);
+        }
     }
 
     /// <summary>Index an issue the pass created for finding <paramref name="id"/>.</summary>
