@@ -64,7 +64,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// already within reach: it does not detour to a visible quest NPC that is not on the way (GitHub w27: the Flame Crest NPCs starved
     /// quest 5601's trip home). The brain sets it every think that reaches the quest-return check, so it can be stale across the early
     /// returns before that check (death, recovery, escape): harmless, because nothing calls <see cref="Update"/> then and the next think
-    /// that reaches the check rewrites it.
+    /// that reaches the check rewrites it. It is also overwritten in the very think that gives a stall up (the give-up suspends the quest,
+    /// then the same think re-evaluates the return): the stall's own view of the trip is <see cref="PlayerbotBrain.StallReturnQuest"/>.
     /// </summary>
     internal uint ReturnQuest { get; set; }
 

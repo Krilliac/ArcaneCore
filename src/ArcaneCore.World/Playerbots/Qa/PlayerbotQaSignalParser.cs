@@ -90,13 +90,14 @@ internal static partial class PlayerbotQaSignalParser
         {
             if (!Position(m, out float x, out float y, out float z) || !U(m, "t", out uint target) || !U(m, "q", out uint quest)
                 || !U(m, "m", out uint map) || !I(m, "s", out int seconds)) return false;
+            int qa = message.IndexOf(" qa[", StringComparison.Ordinal); // the anchor QaBotObservation.FromLog uses
             signal = new QaSignal
             {
                 Kind = QaSignalKind.Stall, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
                 HasPosition = true, Map = map, X = x, Y = y, Z = z, Seconds = seconds, Message = Clean(message, m),
                 Bot = QaBotObservation.FromLog(message),
                 OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
-                ReturnTrip = message.Contains(ReturnTripToken + " qa[", StringComparison.Ordinal),
+                ReturnTrip = qa >= 0 && message.AsSpan(0, qa).EndsWith(ReturnTripToken, StringComparison.Ordinal),
             };
             return true;
         }

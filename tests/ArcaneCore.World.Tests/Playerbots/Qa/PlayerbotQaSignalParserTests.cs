@@ -324,6 +324,27 @@ public sealed class PlayerbotQaSignalParserTests
         Assert.EndsWith("; it gives up that goal", log.Lines[0], StringComparison.Ordinal);
     }
 
+    private const string QaContext = " qa[level=10,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=400,graveyard=0,distance=unknown,source=None,attackerFacts=none]";
+
+    private static QaSignal LoggedStall(string report)
+    {
+        var log = new CapturingLogger();
+        ManagedPlayerbotFeature.LogStall(log, QaData.Bot1, "Wfbotcg", 1, 0, report, outsideHome: false, everyone: null, QaContext);
+        return QaData.Parse(Assert.Single(log.Lines));
+    }
+
+    [Fact]
+    public void TheReturnTripMark_IsReadOnlyImmediatelyBeforeTheFirstQaContext()
+    {
+        const string stall = "stalled 120s: goal=Quest target=1376 quest=400 at -8285.0,554.0,101.0 map 0";
+        Assert.True(LoggedStall(stall + PlayerbotQaSignalParser.ReturnTripToken).ReturnTrip);
+        Assert.False(LoggedStall(stall).ReturnTrip);
+        // The token somewhere in the body, not directly before the qa context.
+        Assert.False(LoggedStall(stall + " return-trip at the ender").ReturnTrip);
+        // The words after the first qa context (an attacker list, a fault text) never mark a stall.
+        Assert.False(QaData.Parse(QaData.BotLine(QaData.Bot1, "Wfbotcg", stall + QaContext + " return-trip qa[x]")).ReturnTrip);
+    }
+
     /// <summary>
     /// The outside-home mark belongs to a living stall's line. A death loop also counts as a stall and its report comes first
     /// (<see cref="PlayerbotBrain.StallReport"/>), while the brain's flag still holds the last give-up: the death loop is logged without the

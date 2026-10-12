@@ -266,10 +266,20 @@ public sealed partial class PlayerbotQuestReturnTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 walkingHome.Update(500);
                 Assert.Equal(PlayerbotGoalKind.Quest, walkingHome.Goal);
+                walkingHome.GiveUpStalledGoal(player);
+                Assert.Equal(QuestInteractionFixture.QuestId, walkingHome.StallReturnQuest);
                 Assert.Contains(" return-trip qa[", walkingHome.QaReportContext(player, stall(QuestInteractionFixture.QuestId)), StringComparison.Ordinal);
                 // The stall names another quest than the one returned: not the walk home.
                 Assert.DoesNotContain("return-trip", walkingHome.QaReportContext(player, stall(QuestInteractionFixture.UnrelatedId)), StringComparison.Ordinal);
-                // A brain that never entered the walk home (on its way to take the quest from the same NPC).
+                // Only a living stall is marked, and only one of the Quest goal.
+                Assert.DoesNotContain("return-trip", walkingHome.QaReportContext(player,
+                    $"death loop: died 3 times in 60s within 20 yd of 0.0,0.0,0.0 map 0 attackers=none goal=Quest quest={QuestInteractionFixture.QuestId}"), StringComparison.Ordinal);
+                Assert.DoesNotContain("return-trip", walkingHome.QaReportContext(player,
+                    $"stalled 120s: goal=Group target=0 quest={QuestInteractionFixture.QuestId} at 0.0,0.0,0.0 map 0"), StringComparison.Ordinal);
+                // On its way to take the quest from the NPC that also ends it.
+                takingIt.HoldGoalForTests(PlayerbotGoalKind.Quest, QuestInteractionFixture.Entry, QuestInteractionFixture.QuestId);
+                takingIt.GiveUpStalledGoal(player);
+                Assert.Equal(0u, takingIt.StallReturnQuest);
                 Assert.DoesNotContain("return-trip", takingIt.QaReportContext(player, stall(QuestInteractionFixture.QuestId)), StringComparison.Ordinal);
                 return true;
             });
