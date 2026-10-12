@@ -15,9 +15,9 @@ namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
 /// <see cref="ILootQuestJournal"/> over the quest feature's journals (vmangos
-/// Player::HasQuestForItem, GetQuestStatus, ItemAddedQuestCheck, CastedCreatureOrGO). Without
-/// the quest feature every answer is "no" and events are dropped. Money and item changes also
-/// queue a character save. World thread.
+/// Player::HasQuestForItem, GetQuestStatus, CastedCreatureOrGO). Without
+/// the quest feature every answer is "no" and events are dropped. Looted items are counted by the quest feature's inventory
+/// listener (ItemAddedQuestCheck), not here; money and item loot only queue a character save. World thread.
 /// </summary>
 internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntime world) : ILootQuestJournal
 {

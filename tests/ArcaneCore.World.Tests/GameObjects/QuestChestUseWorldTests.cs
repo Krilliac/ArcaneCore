@@ -80,11 +80,11 @@ public sealed class QuestChestUseWorldTests
             [
                 new SpellTemplateRow
                 {
-                    Id = OpeningKneeling, SpellName = "Opening", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 6,
+                    Id = OpeningKneeling, SpellName = "Opening", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 6, Attributes = 65936,
                     Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = 13, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                 },
             ],
-            [new SpellCastTimeRow { Id = 6, CastTime = 0, MinCastTime = 0 }], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [],
+            [new SpellCastTimeRow { Id = 6, CastTime = 5000, MinCastTime = 5000 }], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [],
             [new PlayerCreateSpellRow { Race = 1, Class = 1, Spell = OpeningKneeling }],
             [])));
     }
@@ -145,18 +145,29 @@ public sealed class QuestChestUseWorldTests
     }
 
     [Fact]
-    public async Task CastingOpeningOnTheCactusApple_WithTheQuest_OpensTheLootWithTheApple()
+    public async Task CastingOpeningOnTheCactusApple_WithTheQuest_RunsTheCastBar_OpensTheLoot_CountsTheApple_AndUsesTheChestUp()
     {
+        // What the 5875 client does for lock 43 (lock type 13, docs: D:/WoW-RE-Research/protocol/gameobject-interaction.md): CMSG_CAST_SPELL of the
+        // known "Opening" spell at the object, never CMSG_GAMEOBJ_USE. The chest is ready (state 1) and not locked (flag 0x2 clear).
         QuestJournalFixture quests = Quests();
-        await using WorldTestHost host = Start(quests, out _);
+        await using WorldTestHost host = Start(quests, out GameObjectTestContext context);
         await using WorldTestClient client = await EnterWithQuestAsync(host, quests);
         ulong chest = ChestGuid();
         await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, chest);
+        (GameObjectState state, uint flags) = await host.OnWorldAsync(() =>
+        {
+            GameObject go = context.Feature!.FindSystem(0)!.Find(new ObjectGuid(chest))!;
+            return (go.State, (uint)go.Flags);
+        });
+        Assert.Equal(GameObjectState.Ready, state);
+        Assert.Equal(0u, flags & 0x2);
 
         var cast = new PacketWriter(16);
         cast.WriteUInt32(OpeningKneeling);
         new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = new ObjectGuid(chest) }.Write(cast);
         await client.SendAsync(WorldOpcode.CmsgCastSpell, cast.ToArray());
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellStart);       // the cast bar
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
         var loot = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
         Assert.Equal(chest, loot.ReadUInt64());
         loot.ReadByte();
@@ -164,6 +175,21 @@ public sealed class QuestChestUseWorldTests
         Assert.Equal((byte)1, loot.ReadByte());
         Assert.Equal((byte)0, loot.ReadByte());
         Assert.Equal(Apple, loot.ReadUInt32());
+
+        await client.SendAsync(WorldOpcode.CmsgAutostoreLootItem, [0]);
+        await client.ReadUntilAsync(WorldOpcode.SmsgLootRemoved);
+        await client.SendAsync(WorldOpcode.CmsgLootRelease, BitConverter.GetBytes(chest));
+        await client.ReadUntilAsync(WorldOpcode.SmsgLootReleaseResponse);
+        (uint inBags, uint counter) = await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Appler")!;
+            var services = ((WorldSession)p.Session).Services.GetRequiredService<QuestNpcFeature>().Services;
+            return (p.Inventory.GetItemCount(Apple), services.StateOf(p)!.Quests.Get(QuestId)!.ItemCount[0]);
+        });
+        Assert.Equal((1u, 1u), (inBags, counter));
+        await host.WaitForWorldAsync(
+            () => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(chest)) is { IsSpawned: false },
+            "the used-up apple despawns");
     }
 
     [Fact]
@@ -183,53 +209,18 @@ public sealed class QuestChestUseWorldTests
         Assert.Equal(GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle, flags);
     }
 
-    /// <summary>Whether an update packet carries a block (create or values) of the chest whose payload holds the u32 9 (Activate|Sparkle).</summary>
-    private static bool CarriesActivate(byte[] body, ulong guid)
+    /// <summary>
+    /// The chest's GAMEOBJECT_DYN_FLAGS as this client received them: from its first create block when <paramref name="wantCreate"/>, else
+    /// from the first values block that sets the field, and from either kind when it is null. Null when no such block arrives in time.
+    /// </summary>
+    private static async Task<uint?> ReceivedDynFlagsAsync(WorldTestClient client, ulong chest, bool? wantCreate)
     {
-        var packed = new List<byte>();
-        byte mask = 0;
-        for (int i = 0; i < 8; i++)
-        {
-            byte b = (byte)(guid >> (8 * i));
-            if (b != 0)
-            {
-                mask |= (byte)(1 << i);
-                packed.Add(b);
-            }
-        }
-
-        packed.Insert(0, mask);
-        byte[] needle = [.. packed];
-        for (int at = 0; at + needle.Length < body.Length; at++)
-        {
-            if (!body.AsSpan(at, needle.Length).SequenceEqual(needle))
-            {
-                continue;
-            }
-
-            ReadOnlySpan<byte> rest = body.AsSpan(at + needle.Length, Math.Min(160, body.Length - at - needle.Length));
-            for (int j = 0; j + 4 <= rest.Length; j++)
-            {
-                if (rest[j] == 9 && rest[j + 1] == 0 && rest[j + 2] == 0 && rest[j + 3] == 0)
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static async Task<bool> SawActivateAsync(WorldTestClient client, ulong chest, bool untilCreate)
-    {
-        bool sawCreate = false;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
-        while (!timeout.IsCancellationRequested)
+        while (true)
         {
             Task<(WorldOpcode Op, byte[] Payload)> read = client.ReadAsync();
-            if (await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(6), timeout.Token)) != read)
+            if (await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(6))) != read)
             {
-                break;
+                return null;
             }
 
             (WorldOpcode op, byte[] payload) = await read;
@@ -244,16 +235,28 @@ public sealed class QuestChestUseWorldTests
                 continue;
             }
 
-            if (CarriesActivate(body, chest))
+            foreach (UpdateBlock block in UpdateBlockReader.Parse(body))
             {
-                return true;
+                bool isCreate = block.Type is ObjectUpdateType.CreateObject or ObjectUpdateType.CreateObject2;
+                if (block.Guid != chest || (wantCreate is { } only && isCreate != only))
+                {
+                    continue;
+                }
+
+                if (isCreate && wantCreate == true)
+                {
+                    return block.Values.GetValueOrDefault(UpdateFields.GameobjectDynFlags);
+                }
+
+                if (block.Values.TryGetValue(UpdateFields.GameobjectDynFlags, out uint value))
+                {
+                    return value;
+                }
             }
-
-            sawCreate |= untilCreate;
         }
-
-        return false;
     }
+
+    private const uint ActivateAndSparkle = (uint)(GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle);
 
     [Fact]
     public async Task ACactusAppleSeenBeforeTheQuest_GetsAnActivateUpdate_WhenTheQuestIsAccepted()
@@ -277,15 +280,15 @@ public sealed class QuestChestUseWorldTests
             services.GmAddQuest(p, services.Quests.Get(QuestId)!);
         });
 
-        Assert.True(await SawActivateAsync(client, chest, untilCreate: false), "no dynamic flags update with Activate|Sparkle reached the client");
+        Assert.Equal(ActivateAndSparkle, await ReceivedDynFlagsAsync(client, chest, wantCreate: false));
     }
 
     [Fact]
-    public async Task ACactusAppleCreatedForAPlayerWithTheQuest_CarriesActivateInItsCreateBlock()
+    public async Task ACactusAppleForAPlayerWhoAlreadyHasTheQuest_ReachesTheClientWithActivate()
     {
         QuestJournalFixture quests = Quests();
         await using WorldTestHost host = Start(quests, out _);
         await using WorldTestClient client = await EnterWithQuestAsync(host, quests);
-        Assert.True(await SawActivateAsync(client, ChestGuid(), untilCreate: true), "the create block carried no Activate|Sparkle");
+        Assert.Equal(ActivateAndSparkle, await ReceivedDynFlagsAsync(client, ChestGuid(), wantCreate: null));
     }
 }

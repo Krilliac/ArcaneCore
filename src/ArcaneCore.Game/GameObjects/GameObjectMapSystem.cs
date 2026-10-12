@@ -1424,7 +1424,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return value | quest;
     }
 
-    /// <summary>Re-send GAMEOBJECT_DYN_FLAGS for quest objects whose answer changed for one of their viewers.</summary>
+    /// <summary>
+    /// Re-send GAMEOBJECT_DYN_FLAGS for quest objects whose answer differs, for one of their viewers, from what that viewer was last sent
+    /// (recorded by <see cref="IViewerFieldFilter.Filter"/>; a viewer never sent the field counts as having seen 0).
+    /// </summary>
     private void RefreshQuestFlags()
     {
         foreach (GameObject go in _objects.Values)
