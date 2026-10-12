@@ -30,6 +30,7 @@ internal sealed class ZulFarrakRuntimeFactAttribute : FactAttribute
             || Environment.GetEnvironmentVariable(DbcVariable) is not { Length: > 0 } dbc
             || !File.Exists(Path.Combine(dbc, "FactionTemplate.dbc")))
             Skip = $"{WorldVariable} and {DbcVariable}/FactionTemplate.dbc are required for imported Weegli runtime acceptance.";
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 

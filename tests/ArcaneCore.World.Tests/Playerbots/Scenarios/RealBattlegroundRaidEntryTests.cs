@@ -31,6 +31,7 @@ internal sealed class RealWorldContentFactAttribute : FactAttribute
         {
             Skip = $"{Variable} must name a refreshed SQLite world.db; real battleground and raid entry did NOT run.";
         }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 

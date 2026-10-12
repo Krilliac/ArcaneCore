@@ -35,6 +35,7 @@ internal sealed class BotTerrainBenchmarkFactAttribute : FactAttribute
             Skip = $"{Variable}, {LiveSnapshotReplayFactAttribute.WorldVariable} and {RealTerrainBotFactAttribute.Variable} are not all set: "
                 + "the managed-bot terrain benchmark did NOT run (docs/integration/tick-scaling-20261009.md).";
         }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 
