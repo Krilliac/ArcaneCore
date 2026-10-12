@@ -702,7 +702,7 @@ public sealed class WorldRuntime : IDisposable
 
         try
         {
-            string text = sampler.Describe(windowMicros); // a fresh probe read (~0.5 ms GetSystemTimes): slow-map lines are rare, and a stored sample
+            string text = sampler.Describe(windowMicros); // a fresh probe read (one GetSystemTimes, or /proc/stat on Linux): slow-map lines are rare, and a stored sample
             // usually ends before the slow update, which would report a zero-length window as "0%"
             return text.Length == 0 ? string.Empty : "; " + text;
         }

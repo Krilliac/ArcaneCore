@@ -85,18 +85,23 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     [Fact]
     public void TheFeed_SkipsEnvironmentSites_ButKeepsThemInTheLedger()
     {
+        // Literal site names, as production records them (PlayerbotLocalPlanner, WorldSession.PacketCapture, ProcessDumpService): a renamed or
+        // misspelled entry in EnvironmentSites fails here instead of silently filing nothing.
+        string[] environment = ["playerbot.local-planner", "net.packet-capture", "dump.free-space"];
+        Assert.Equal(environment.Order(), PlayerbotQaFaultFeed.EnvironmentSites.Order());
         var ledger = new FaultLedger();
-        foreach (string site in PlayerbotQaFaultFeed.EnvironmentSites)
+        foreach (string site in environment)
         {
             ledger.Record(site, One(site));
         }
 
+        ledger.Record("playerbot.party-zone-names", Two("party")); // its catch sees code defects (NRE, missing key): it is filed
         ledger.Record("worldtick", Two("real"));
-        Assert.Equal(PlayerbotQaFaultFeed.EnvironmentSites.Count + 1, ledger.Distinct);
+        Assert.Equal(environment.Length + 2, ledger.Distinct);
 
         IReadOnlyList<QaSignal> signals = new PlayerbotQaFaultFeed(ledger).Pull();
 
-        Assert.Equal("worldtick", Assert.Single(signals).Goal);
+        Assert.Equal(["playerbot.party-zone-names", "worldtick"], signals.Select(s => s.Goal).Order());
     }
 
     [Fact]
