@@ -402,7 +402,8 @@ tries and it is void. `.playerbot fleet reset confirm <code>` executes: the popu
 bot is stopped gracefully (batches of 32), then every character of a bot account is deleted through the same path as
 CMSG_CHAR_DELETE (`CharacterDeletion.TryDeleteAsync`: the delete hooks, then every characters-database module's
 `ICharacterDataCleanup` in one transaction). Guild leadership is handed on (or the guild disbanded) first, a bot in a group with
-real players leaves it, and the registry, population member, home and set-aside rows go too. The bot accounts are kept.
+real players leaves it, and the registry, population member, home and set-aside rows go too. The emptied bot accounts are kept and reused for the next bots created in the same server run (after a restart they stay as unused empty accounts).
+**Turn `FreshLaunch` on (and `.reload config`) before you confirm:** with the population enabled and `FreshLaunch` off it refills the fleet at once with boosted bots at their usual levels, not level 1; the preview prints a warning in that case.
 Ownership comes only from the managed-bot registry confirmed against the account store (the account is the registered bot
 account, has no session key, is not a staff account); name patterns are never used. If any character on a bot account is not the
 registered bot's, or the registry points at a real account, the reset refuses and logs, and deletes nothing. A real player's
@@ -418,9 +419,12 @@ moves a fresh bot out of its starting zone; the status says `fresh launch`.
 **`.playerbot population rush <count> [perSecond]`** and **`rush stop`** (Administrator; default 5 per second, at most 50; count
 1..1000). Creates and starts `count` new population bots at that rate, bypassing the add-budget confirmation windows and the
 `MaxCreatePerMinute` limit, with the same account creation as `.playerbot create` and the existing `MaxBots` and
-`MaxRegisteredBots` limits (a cap ends the rush as `halted` with the reason). One rush at a time. The brake: if the tick p95
-exceeds `RushBrakeP95Ms` in `RushBrakeWindows` consecutive windows the rush pauses and logs a warning; it resumes after as many
-windows under `ResumeBelowPct` of the ceiling. `.playerbot population status` adds a `Rush <state>` line with created/failed,
+`MaxRegisteredBots` limits (a cap ends the rush as `halted` with the reason). One rush at a time. The brake runs in real time: a window is
+`RushBrakeWindowSeconds` (5) seconds, and if the tick p95 of a window is over the ceiling in `RushBrakeWindows` (3) consecutive
+windows (about 15 s) the rush pauses and logs a warning; the flag is also checked between bots inside a pass, so creation stops
+at once. It resumes after as many windows under `ResumeBelowPct` of the ceiling. The ceiling is `RushBrakeP95Ms`, by default
+(0) 1.5 times `TickP95BudgetMs`. While a rush runs or is paused the interval pass still runs to shed: it parks owned bots when the
+p95 is over `TickP95BudgetMs` (`ParkWhenOverBudget`), and never adds, moves or parks for the target. `.playerbot population status` adds a `Rush <state>` line with created/failed,
 requested and achieved rate, the tick p95 and the brake windows seen. A fleet reset stops a running rush. Note: bots above
 `TargetOnline` are parked by the ordinary passes after the rush, so set `TargetOnline` to the rush size when the bots should stay
 online.
@@ -456,8 +460,9 @@ and swapped as one value on reload.
 | `Relocation` / `MaxRelocationsPerInterval` | `Teleport` / `2` | What to do with an out-levelled bot; moves per pass (0..50). |
 | `ExcludedZones` | `[]` | Zone ids bots are never placed in (at most 256). |
 | `FreshLaunch` | `false` | New population bots are level 1 at their race's native start, with the default kit, no boost and no teleport (see "Fresh launch"). |
-| `RushBrakeP95Ms` | `500` | The tick p95 above which a `rush` pauses (50..10000). |
-| `RushBrakeWindows` | `3` | Consecutive windows over `RushBrakeP95Ms` before the pause, and under 80 % of it (`ResumeBelowPct`) before the resume (1..20). |
+| `RushBrakeP95Ms` | `0` | The tick p95 above which a `rush` pauses (50..10000); 0 = 1.5 x `TickP95BudgetMs`. |
+| `RushBrakeWindows` | `3` | Consecutive windows over the ceiling before the pause, and under `ResumeBelowPct` of it before the resume (1..20). |
+| `RushBrakeWindowSeconds` | `5` | The real-time length of one brake window (1..60). |
 
 ## The characters table (schema 57)
 

@@ -6,39 +6,55 @@ namespace ArcaneCore.World.Playerbots.Population;
 internal enum PopulationRushBrakeChange { None, Paused, Resumed }
 
 /// <summary>
-/// The safety brake of <c>.playerbot population rush</c>: the tick p95 over <c>RushBrakeP95Ms</c> in <c>RushBrakeWindows</c> consecutive
-/// windows pauses the rush; it resumes after as many consecutive windows under <c>ResumeBelowPct</c> of that ceiling. A window is
-/// <c>WindowTicks</c> ticks no earlier window used (the tick source's running total), so a burst is never counted twice.
+/// The safety brake of <c>.playerbot population rush</c>. Time is real: a window is <c>RushBrakeWindowSeconds</c> seconds of the
+/// monotonic clock (the caller passes it in), however fast or slow the world ticks. The tick p95 over the ticks that arrived in a
+/// window above the ceiling (<see cref="PlayerbotPopulationOptions.RushCeilingMs"/>) in <c>RushBrakeWindows</c> consecutive windows
+/// pauses the rush; it resumes after as many consecutive windows under <c>ResumeBelowPct</c> of the ceiling. A slow world therefore
+/// trips the brake after the same number of seconds as a fast one, not after the same number of ticks.
 /// <para>Thread affinity: the world thread (the population feature's update).</para>
 /// </summary>
 internal sealed class PopulationRushBrake
 {
-    private long _countedAt = -1;
+    private long _windowStartMs = -1;
+    private long _windowStartTicks;
 
     public bool Paused { get; private set; }
 
     /// <summary>Consecutive windows over the ceiling while running, or under the resume line while paused.</summary>
     public int Windows { get; private set; }
 
-    /// <summary>Whether a fresh window has filled since the last observation (cheap: no sorting).</summary>
-    public bool WindowDue(int samples, long totalSamples, int windowTicks)
-        => samples >= windowTicks && (_countedAt < 0 || totalSamples - _countedAt >= windowTicks);
+    /// <summary>The ticks that arrived since the current window began.</summary>
+    public long TicksInWindow(long totalTicks) => Math.Max(0, totalTicks - _windowStartTicks);
 
-    public PopulationRushBrakeChange Observe(long totalSamples, double p95Ms, PlayerbotPopulationOptions options)
+    /// <summary>
+    /// Whether the current window has run <paramref name="windowMs"/> and saw at least one tick (cheap: no sorting). The first call
+    /// only starts the first window.
+    /// </summary>
+    public bool WindowDue(long nowMs, long totalTicks, int windowMs)
+    {
+        if (_windowStartMs < 0)
+        {
+            (_windowStartMs, _windowStartTicks) = (nowMs, totalTicks);
+            return false;
+        }
+
+        return nowMs - _windowStartMs >= windowMs && totalTicks > _windowStartTicks;
+    }
+
+    public PopulationRushBrakeChange Observe(long nowMs, long totalTicks, double p95Ms, int ceilingMs, PlayerbotPopulationOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _countedAt = totalSamples;
-        double ceiling = options.RushBrakeP95Ms;
+        (_windowStartMs, _windowStartTicks) = (nowMs, totalTicks);
         if (!Paused)
         {
-            Windows = p95Ms > ceiling ? Windows + 1 : 0;
+            Windows = p95Ms > ceilingMs ? Windows + 1 : 0;
             if (Windows < options.RushBrakeWindows) return PopulationRushBrakeChange.None;
             Paused = true;
             Windows = 0;
             return PopulationRushBrakeChange.Paused;
         }
 
-        Windows = p95Ms < ceiling * options.ResumeBelowPct / 100.0 ? Windows + 1 : 0;
+        Windows = p95Ms < ceilingMs * options.ResumeBelowPct / 100.0 ? Windows + 1 : 0;
         if (Windows < options.RushBrakeWindows) return PopulationRushBrakeChange.None;
         Paused = false;
         Windows = 0;
@@ -81,6 +97,9 @@ internal sealed class PopulationRush
     /// <summary>The most bots one rush pass creates (a pass creates them one after another).</summary>
     public const int MaxPerPass = 50;
 
+    /// <summary>Why a pass stopped creating because the brake paused the rush; not a reason for the rush to end.</summary>
+    public const string PausedNote = "rush paused";
+
     /// <summary>The most passes in a row that create nothing for a reason no cap explains before the rush gives up.</summary>
     public const int MaxFruitlessPasses = 3;
 
@@ -109,6 +128,15 @@ internal sealed class PopulationRush
     public bool StopRequested
     {
         get { lock (_gate) return _stopRequested; }
+    }
+
+    /// <summary>Why creation must stop now (checked between bots inside a pass), or null.</summary>
+    public string? CreationBlock
+    {
+        get
+        {
+            lock (_gate) return _stopRequested ? "rush stopped" : _state == "paused" ? PausedNote : null;
+        }
     }
 
     public int Remaining
@@ -180,7 +208,7 @@ internal sealed class PopulationRush
             }
 
             if (created >= wanted) { _fruitless = 0; return false; }
-            if (note is not null && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal))
+            if (note is not null && note != PausedNote && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal))
             {
                 (_state, _reason, _endedMs) = ("halted", note, nowMs);
                 return true;

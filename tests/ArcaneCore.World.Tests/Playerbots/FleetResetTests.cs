@@ -295,6 +295,210 @@ public sealed class FleetResetTests
         Assert.Single(await world.Owners.LoadAllAsync());
     }
 
+    private static ArcaneCore.Game.Guilds.GuildManager GuildsOf(PopulationTestHost world)
+        => world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Guilds;
+
+    // A running bot and an online real player, and the ids of both characters.
+    private static async Task<(Guid Bot, uint BotCharacter, WorldTestClient Real, uint RealCharacter)> BotAndRealAsync(PopulationTestHost world)
+    {
+        Guid[] ids = await CreateBotsAsync(world, 1, started: 1);
+        await world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().GuildsLoaded.WaitAsync(TimeSpan.FromSeconds(10));
+        uint botCharacter = (uint)(await world.Owners.LoadAllAsync()).Single().CharacterId;
+        WorldTestClient real = await world.Host.EnterWorldAsync("REALGUILD", "Realguild");
+        uint realCharacter = await world.Host.World.InvokeAsync(() => world.Host.World.FindOnlinePlayer("Realguild")!.Guid.Low);
+        return (ids[0], botCharacter, real, realCharacter);
+    }
+
+    [Fact]
+    public async Task Reset_WhenTheBotLeadsAGuildWithARealMember_TheRealMemberKeepsTheGuildAndLeadsIt()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        (_, uint bot, WorldTestClient real, uint realId) = await BotAndRealAsync(world);
+        await using WorldTestClient keep = real;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).Create(bot, "Botled Wolves", out _));
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).AdminInvite(realId, "Botled Wolves"));
+            return true;
+        });
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Equal(1, result.GuildsReleased);
+        (string? name, uint leader, int members, bool botIn) = await world.Host.World.InvokeAsync(() =>
+        {
+            var guild = GuildsOf(world).GetGuildOf(realId);
+            return (guild?.Name, guild?.LeaderId ?? 0u, guild?.Members.Count ?? 0, GuildsOf(world).GetGuildOf(bot) is not null);
+        });
+        Assert.Equal(("Botled Wolves", realId, 1, false), (name, leader, members, botIn));
+        Assert.Null(await world.Host.Characters.GetByIdAsync((int)bot));
+        Assert.NotNull(await world.Host.Characters.GetByIdAsync((int)realId));
+    }
+
+    [Fact]
+    public async Task Reset_WhenTheBotIsAMemberOfARealPlayersGuild_TheGuildStaysWithoutTheBot()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        (_, uint bot, WorldTestClient real, uint realId) = await BotAndRealAsync(world);
+        await using WorldTestClient keep = real;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).Create(realId, "Real Ravens", out _));
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).AdminInvite(bot, "Real Ravens"));
+            return true;
+        });
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Equal(0, result.GuildsReleased); // it led nothing
+        (uint leader, int members, bool botIn, string name) = await world.Host.World.InvokeAsync(() =>
+        {
+            var guild = GuildsOf(world).GetGuildOf(realId)!;
+            return (guild.LeaderId, guild.Members.Count, GuildsOf(world).GetGuildOf(bot) is not null, guild.Name);
+        });
+        Assert.Equal((realId, 1, false, "Real Ravens"), (leader, members, botIn, name));
+    }
+
+    [Fact]
+    public async Task Reset_WhenTheBotIsTheOnlyMemberOfItsGuild_TheGuildIsDisbanded()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        (_, uint bot, WorldTestClient real, _) = await BotAndRealAsync(world);
+        await using WorldTestClient keep = real;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).Create(bot, "Lonely Bots", out _));
+            return true;
+        });
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Equal(1, result.GuildsReleased);
+        Assert.Null(await world.Host.World.InvokeAsync(() => GuildsOf(world).GetByName("Lonely Bots")));
+    }
+
+    private sealed class RefusingDeleteHook : ArcaneCore.World.Characters.ICharacterDeleteHook
+    {
+        public Task OnCharacterDeletingAsync(ArcaneCore.World.Net.WorldSession session, CharacterRecord character)
+            => throw new InvalidOperationException("fixture refuses the deletion");
+    }
+
+    [Fact]
+    public async Task Reset_WhenTheDeletionIsRefusedAfterTheHandOver_TheBotKeepsItsCharacterButLeftTheGuild_AndItIsReportedAsFailed()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<ArcaneCore.World.Characters.ICharacterDeleteHook, RefusingDeleteHook>());
+        (_, uint bot, WorldTestClient real, uint realId) = await BotAndRealAsync(world);
+        await using WorldTestClient keep = real;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).Create(bot, "Refused Wolves", out _));
+            Assert.Equal(ArcaneCore.Game.Guilds.GuildAdminResult.Ok, GuildsOf(world).AdminInvite(realId, "Refused Wolves"));
+            return true;
+        });
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { });
+
+        Assert.Equal(("reset-incomplete", 1, 0), (result.Code, result.CharactersFailed, result.CharactersDeleted));
+        Assert.NotNull(await world.Host.Characters.GetByIdAsync((int)bot));
+        Assert.Single(await world.Owners.LoadAllAsync()); // the registry row stays with the character
+        (uint leader, bool botIn) = await world.Host.World.InvokeAsync(() =>
+            (GuildsOf(world).GetGuildOf(realId)!.LeaderId, GuildsOf(world).GetGuildOf(bot) is not null));
+        Assert.Equal((realId, false), (leader, botIn)); // the real player's guild is whole either way
+    }
+
+    [Fact]
+    public async Task Reset_CancelsABotsTradeWithARealPlayer_AndTouchesNeitherItemsNorGold()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        Guid[] ids = await CreateBotsAsync(world, 1, started: 1);
+        await using WorldTestClient real = await world.Host.EnterWorldAsync("REALTRADE", "Realtrade");
+        var economy = world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Economy.EconomyFeature>();
+        (uint[] itemsBefore, uint goldBefore) = await world.Host.World.InvokeAsync(() =>
+        {
+            var me = world.Host.World.FindOnlinePlayer("Realtrade")!;
+            me.Money = 5000;
+            var bot = world.Bots.FindSession(ids[0])!.Player!;
+            // The economy store is not wired in this host (Enabled is false, so InitiateTrade refuses): seed the open trade the way
+            // InitiateTrade and BeginTrade leave it.
+            var trades = (System.Collections.IDictionary)typeof(ArcaneCore.World.Economy.EconomyFeature)
+                .GetField("_trades", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(economy)!;
+            var trade = new ArcaneCore.Game.Economy.TradeSession(bot, me) { Opened = true };
+            trade.SideOf(me).Gold = 1000;
+            trades[bot] = trade;
+            trades[me] = trade;
+            Assert.NotNull(economy.TradeOf(me));
+            return (me.Inventory.AllItems.Select(i => i.Guid.Low).Order().ToArray(), me.Money);
+        });
+
+        FleetResetCensus census = await world.Bots.TakeFleetCensusAsync();
+        Assert.Equal(1, census.TradingWithPlayers);
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { });
+
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.Equal(1, result.TradesCancelled);
+        (bool open, uint gold, uint[] items) = await world.Host.World.InvokeAsync(() =>
+        {
+            var me = world.Host.World.FindOnlinePlayer("Realtrade")!;
+            return (economy.TradeOf(me) is not null, me.Money, me.Inventory.AllItems.Select(i => i.Guid.Low).Order().ToArray());
+        });
+        Assert.False(open);
+        Assert.Equal(goldBefore, gold);
+        Assert.Equal(itemsBefore, items);
+    }
+
+    [Fact]
+    public async Task AfterAReset_NewBotsReuseTheEmptiedAccounts_ThenGetFreshOnes()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 2, started: 0);
+        HashSet<string> old = [.. (await world.Owners.LoadAllAsync()).Select(b => b.AccountName)];
+        Assert.True((await world.Bots.ResetFleetAsync(new FleetResetPromise(2, 2), _ => { })).Success);
+
+        Guid[] reused = await CreateBotsAsync(world, 2, started: 0);
+        ManagedPlayerbot[] now = [.. await world.Owners.LoadAllAsync()];
+        Assert.Equal(old.Order(), now.Select(b => b.AccountName).Order());
+        Assert.All(now, b => Assert.Single(world.Host.Characters.GetByAccountAsync(b.AccountId).GetAwaiter().GetResult()));
+
+        PlayerbotOperationResult third = await world.Bots.CreateAsync("Resetbotz", 1, 1);
+        Assert.True(third.Success, third.Code);
+        Assert.DoesNotContain((await world.Owners.LoadAllAsync()).Single(b => b.BotId == third.BotId).AccountName, old);
+        Assert.Equal(2, reused.Length);
+    }
+
+    [Fact]
+    public async Task Reset_WhenTheFleetSwappedACharacterSinceThePreview_RefusesEvenWithTheSameCounts()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 2, started: 0);
+        FleetResetCensus census = await world.Bots.TakeFleetCensusAsync();
+        var promise = new FleetResetPromise(census.Characters, census.Accounts, [.. census.CharacterIds.Select(id => id + 1000)]);
+
+        FleetResetResult result = await world.Bots.ResetFleetAsync(promise, _ => { });
+
+        Assert.Equal("fleet-changed", result.Code);
+        Assert.Contains("2 new ones appeared", result.Message);
+        Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count);
+    }
+
+    [Fact]
+    public async Task ThePreview_WarnsWhenThePopulationWouldRefillTheFleetWithBoostedBots()
+    {
+        await using PopulationTestHost world = await StartAsync(o => { o.Population.Enabled = true; o.Population.FreshLaunch = false; });
+        Assert.Contains("Turn FreshLaunch on", world.Bots.RefillWarning);
+        world.Population.FreshLaunch = true;
+        Assert.Null(world.Bots.RefillWarning);
+        world.Population.FreshLaunch = false;
+        world.Population.Enabled = false;
+        Assert.Null(world.Bots.RefillWarning);
+    }
+
     private sealed class FakeClock : TimeProvider
     {
         private long _ticks = DateTimeOffset.UtcNow.UtcTicks;

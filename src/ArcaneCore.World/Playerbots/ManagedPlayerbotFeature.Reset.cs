@@ -120,16 +120,16 @@ public sealed partial class ManagedPlayerbotFeature
             }
 
             IReadOnlyList<CharacterRecord> held = await characters.GetByAccountAsync(bot.AccountId, cancellationToken).ConfigureAwait(false);
-            if (held.FirstOrDefault(c => !registryCharacters[bot.AccountId].Contains(c.Id)) is { } stray)
-            {
-                refusal ??= $"character {stray.Id} ('{stray.Name}') is on bot account '{bot.AccountName}' but is not that bot's registry character";
-                continue;
-            }
-
             if (await characters.GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false) is { } registryCharacter
                 && registryCharacter.AccountId != bot.AccountId)
             {
                 refusal ??= $"the registry of bot {bot.BotId} names character {registryCharacter.Id} of account {registryCharacter.AccountId}, not of its own bot account {bot.AccountId}";
+                continue;
+            }
+
+            if (held.FirstOrDefault(c => !registryCharacters[bot.AccountId].Contains(c.Id)) is { } stray)
+            {
+                refusal ??= $"character {stray.Id} ('{stray.Name}') is on bot account '{bot.AccountName}' but is not that bot's registry character";
                 continue;
             }
 

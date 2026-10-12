@@ -947,11 +947,14 @@ public sealed class ManagedPlayerbotLifecycleTests
         public Task<ManagedPlayerbot?> FindAsync(Guid botId, CancellationToken cancellationToken = default)
             => Task.FromResult(_items.GetValueOrDefault(botId));
 
-        public Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
+        /// <summary>Runs after each stored registration with the number of rows now stored (a test holds a creation pass here).</summary>
+        public Func<int, Task>? AfterCreate { get; set; }
+
+        public async Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
         {
             if (FailNextCreate) { FailNextCreate = false; throw new InvalidOperationException("fixture-create-failure"); }
             if (!_items.TryAdd(bot.BotId, bot)) throw new InvalidOperationException("duplicate-owner");
-            return Task.CompletedTask;
+            if (AfterCreate is { } after) await after(_items.Count).ConfigureAwait(false);
         }
 
         private Guid? _failBot;

@@ -31,17 +31,19 @@ public sealed class PopulationRushTests
     [Fact]
     public void TheBrake_PausesAfterNConsecutiveWindowsOverTheCeiling_AndResumesAfterNUnderTheResumeLine()
     {
-        var options = new PlayerbotPopulationOptions { RushBrakeP95Ms = 500, RushBrakeWindows = 3, ResumeBelowPct = 80, WindowTicks = 100 };
+        var options = new PlayerbotPopulationOptions { RushBrakeP95Ms = 500, RushBrakeWindows = 3, ResumeBelowPct = 80, RushBrakeWindowSeconds = 5 };
         var brake = new PopulationRushBrake();
-        long total = 0;
+        long total = 0, now = 1000;
         PopulationRushBrakeChange Window(double p95)
         {
             total += 100;
-            Assert.True(brake.WindowDue(100, total, options.WindowTicks));
-            return brake.Observe(total, p95, options);
+            now += 5000;
+            Assert.True(brake.WindowDue(now, total, 5000));
+            return brake.Observe(now, total, p95, options.RushCeilingMs(), options);
         }
 
-        Assert.False(brake.WindowDue(99, 99, 100)); // not a full window
+        Assert.False(brake.WindowDue(now, total, 5000)); // the first call only starts the window
+        Assert.False(brake.WindowDue(now + 4999, total + 100, 5000)); // not five seconds yet
         Assert.Equal(PopulationRushBrakeChange.None, Window(600));
         Assert.Equal(PopulationRushBrakeChange.None, Window(499)); // under the ceiling: the count starts again
         Assert.Equal(PopulationRushBrakeChange.None, Window(600));
@@ -56,7 +58,7 @@ public sealed class PopulationRushTests
         Assert.False(brake.Paused);
 
         // A window is not counted twice: no new ticks, no new window.
-        Assert.False(brake.WindowDue(100, total + 99, 100));
+        Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
     }
 
     private static Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
@@ -68,6 +70,7 @@ public sealed class PopulationRushTests
             o.Population.MaxCreatePerMinute = 1; // the rush bypasses it
             o.Population.WindowTicks = 20;
             o.Population.RushBrakeWindows = 3;
+            o.Population.RushBrakeWindowSeconds = 1;
             configure?.Invoke(o);
         }, dataStore: store);
 
@@ -127,32 +130,54 @@ public sealed class PopulationRushTests
         Assert.Equal(3, teams.Count(t => t == ArcaneCore.Game.Entities.Team.Alliance));
     }
 
+    // A world that keeps ticking at the p95 a test sets (volatile): 20 ticks every 20 ms.
+    private sealed class SlowWorld : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _feeder;
+        private double _p95;
+
+        public SlowWorld(PopulationTestHost world, double p95)
+        {
+            _p95 = p95;
+            _feeder = Task.Run(async () =>
+            {
+                while (!_stop.IsCancellationRequested)
+                {
+                    world.Ticks.Set(20, Volatile.Read(ref _p95));
+                    try { await Task.Delay(20, _stop.Token); } catch (OperationCanceledException) { }
+                }
+            });
+        }
+
+        public void Set(double p95) => Volatile.Write(ref _p95, p95);
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stop.CancelAsync();
+            await _feeder;
+            _stop.Dispose();
+        }
+    }
+
     [Fact]
     public async Task TheBrake_PausesTheRush_WhileTheTickP95StaysOverTheCeiling_AndLiftsItWhenTheWorldRecovers()
     {
-        await using PopulationTestHost world = await StartAsync(o => o.Population.RushBrakeP95Ms = 500);
-        world.Ticks.Set(20, 900);
-        Assert.Null(world.Feature.StartRush(6, 3));
-
-        // Three fresh windows over the ceiling pause it (one window per Set: each adds WindowTicks ticks to the running total).
-        for (int i = 0; i < 3; i++)
-        {
-            await Task.Delay(150);
-            world.Ticks.Set(20, 900);
-        }
+        await using PopulationTestHost world = await StartAsync();
+        await using var slow = new SlowWorld(world, 120); // twice the 60 ms budget, over the default 90 ms ceiling
+        var clock = Stopwatch.StartNew();
+        Assert.Null(world.Feature.StartRush(6, 1));
 
         PopulationRushStatus paused = await WaitRushAsync(world, r => r.State == "paused", "the brake to pause the rush");
+        // 3 windows of 1 s: the trip takes real seconds (3 to 8), not a tick count.
+        Assert.InRange(clock.Elapsed.TotalSeconds, 2.5, 10);
         Assert.Contains("paused by the brake", paused.Reason);
-        int createdWhilePaused = paused.Created;
+        await Task.Delay(1000); // a bot already being created when the brake tripped may still finish
+        int createdWhilePaused = world.Feature.RushStatus.Created;
         await Task.Delay(1500);
         Assert.Equal(createdWhilePaused, world.Feature.RushStatus.Created); // nothing is made while paused
 
-        for (int i = 0; i < 4; i++)
-        {
-            world.Ticks.Set(20, 10);
-            await Task.Delay(150);
-        }
-
+        slow.Set(10);
         PopulationRushStatus resumed = await WaitRushAsync(world, r => r.State is "running" or "done", "the rush to resume");
         Assert.NotEqual("paused", resumed.State);
         PopulationRushStatus done = await WaitRushAsync(world, r => r.State == "done", "the resumed rush to finish");
@@ -160,24 +185,57 @@ public sealed class PopulationRushTests
     }
 
     [Fact]
-    public async Task TheBrake_TripsOnASlowWorld_WithinBoundedWallClockTime_AtTwiceTheTickBudget()
+    public async Task TheBrake_StopsCreationInTheMiddleOfAPass()
     {
-        await using PopulationTestHost world = await StartAsync(o => o.Population.TickP95BudgetMs = 60);
-        using var stop = new CancellationTokenSource();
-        Task feeder = Task.Run(async () =>
+        await using PopulationTestHost world = await StartAsync();
+        await using var slow = new SlowWorld(world, 120);
+        PopulationRushStatus? pausedInPass = null;
+        var tripped = Stopwatch.StartNew();
+        world.Owners.AfterCreate = async created =>
         {
-            while (!stop.IsCancellationRequested) { world.Ticks.Set(5, 120); await Task.Delay(20); }
+            if (created != 2) return;
+            // The pass holds the 3rd..6th bot back until the brake has tripped, in real time.
+            pausedInPass = await WaitRushAsync(world, r => r.State == "paused", "the brake to trip during the pass", seconds: 30);
+            tripped.Stop();
+        };
+
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Assert.Null(world.Feature.StartRush(6, 50));
+            world.Feature.Rush.Pacer.Add(2000, 50); // one pass of all 6 bots
+            return true;
         });
-        var clock = Stopwatch.StartNew();
-        Assert.Null(world.Feature.StartRush(6, 2));
 
-        PopulationRushStatus paused = await WaitRushAsync(world, r => r.State == "paused", "the brake to pause the rush", seconds: 25);
-        clock.Stop();
-        await stop.CancelAsync();
-        await feeder;
+        await WaitRushAsync(world, r => r.State == "paused" && r.Created == 2, "the pass to end after the pause");
+        await Task.Delay(500);
+        Assert.NotNull(pausedInPass);
+        Assert.InRange(tripped.Elapsed.TotalSeconds, 0, 12);
+        Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count); // bots 3 to 6 were never created
+        Assert.Equal("paused", world.Feature.RushStatus.State);
+    }
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(25), $"tripped after {clock.Elapsed}");
-        Assert.True(paused.Created < 6);
+    [Fact]
+    public async Task WhileTheRushIsPausedOrRunning_TheBudgetStillParksOwnedBots()
+    {
+        await using PopulationTestHost world = await StartAsync(o =>
+        {
+            o.Population.IntervalSeconds = 2;
+            o.Population.ConfirmWindows = 1;
+            o.Population.MinRunSeconds = 0;
+            o.MaxBots = 8;
+        });
+        await using var slow = new SlowWorld(world, 120);
+        Assert.Null(world.Feature.StartRush(6, 1));
+
+        await WaitRushAsync(world, r => r.State == "paused" && r.Created >= 1, "the brake to pause the rush");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (world.RunningCount >= world.Feature.RushStatus.Created)
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"no bot was shed: {world.RunningCount} running of {world.Feature.RushStatus.Created} created");
+            await Task.Delay(100);
+        }
+
+        Assert.True(world.Feature.RushStatus.Created > world.RunningCount);
     }
 
     [Fact]
@@ -239,7 +297,7 @@ public sealed class PopulationRushTests
         line = await SayAsync(admin, ".playerbot population status", l => l.StartsWith("Rush done:", StringComparison.Ordinal));
         Assert.Contains("3 of 3 created (0 failed)", line);
         Assert.Contains("Tick p95", line);
-        Assert.Contains("brake at 500 ms", line);
+        Assert.Contains("brake at 90 ms", line);
 
         await using WorldTestClient player = await world.Host.EnterWorldAsync("RUSHPLAYER", "Rushplayer");
         await player.CollectAsync();

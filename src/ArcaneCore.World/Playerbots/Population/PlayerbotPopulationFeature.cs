@@ -133,6 +133,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
     private readonly PopulationRush _rush = new();
 
+    /// <summary>The rush itself (tests).</summary>
+    internal PopulationRush Rush => _rush;
+
     /// <summary>The rush (<c>.playerbot population rush</c>): how it stands, readable from any thread.</summary>
     public PopulationRushStatus RushStatus => _rush.Snapshot(ClockMs);
 
@@ -147,8 +150,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (Managed.ResetInProgress) return "a fleet reset is running";
         if (_rush.Active) return "a rush is already running; stop it first";
         _rush.Begin(count, perSecond, ClockMs);
-        logger.LogInformation("Playerbot population rush started: {Count} new bots at {PerSecond} per second (fresh launch {Fresh}, brake {Brake} ms in {Windows} windows)",
-            count, perSecond, _options.Population.FreshLaunch, _options.Population.RushBrakeP95Ms, _options.Population.RushBrakeWindows);
+        logger.LogInformation("Playerbot population rush started: {Count} new bots at {PerSecond} per second (fresh launch {Fresh}, brake {Brake} ms in {Windows} windows of {Seconds} s)",
+            count, perSecond, _options.Population.FreshLaunch, _options.Population.RushCeilingMs(), _options.Population.RushBrakeWindows,
+            _options.Population.RushBrakeWindowSeconds);
         return null;
     }
 
@@ -239,14 +243,20 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         PlayerbotPopulationOptions pop = _options.Population;
+        if (_rush.Active && !_options.Enabled) StopRush("playerbots were turned off");
         if (_rush.Active)
         {
-            if (!_options.Enabled) StopRush("playerbots were turned off");
-            else
+            // While a rush runs (or is paused by its brake) the interval pass still runs, but only to shed: it parks owned bots when the
+            // tick p95 is over the budget and never adds, parks for the target, or moves anyone. It goes first, so a rush that is busy
+            // every update cannot starve it. The brake in RushUpdate cannot stop it either.
+            if (_sinceMs >= pop.IntervalSeconds * 1000L && _pass.IsCompleted)
             {
-                RushUpdate(elapsedMs, pop);
-                return; // no interval pass while a rush runs: its passes are the passes
+                _sinceMs = 0;
+                StartPass(shedOnly: true);
             }
+
+            RushUpdate(elapsedMs, pop);
+            return;
         }
 
         if (!_options.Enabled || !pop.Enabled)
@@ -269,16 +279,22 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         IPopulationTickSource source = Source;
         PopulationRushBrake brake = _rush.Brake;
-        _rush.SetBrake(pop.RushBrakeP95Ms, pop.RushBrakeWindows);
-        if (brake.WindowDue(source.Samples, source.TotalSamples, pop.WindowTicks))
+        int ceiling = pop.RushCeilingMs();
+        _rush.SetBrake(ceiling, pop.RushBrakeWindows);
+        // Real time, not ticks: a world ticking slowly must trip the brake as soon as a fast one would.
+        long wallMs = Environment.TickCount64;
+        long totalTicks = source.TotalSamples;
+        if (brake.WindowDue(wallMs, totalTicks, pop.RushBrakeWindowSeconds * 1000) && source.Samples > 0)
         {
-            double p95 = source.P95Ms(pop.WindowTicks);
-            switch (brake.Observe(source.TotalSamples, p95, pop))
+            double p95 = source.P95Ms((int)Math.Min(brake.TicksInWindow(totalTicks), WorldTickWindow.Capacity));
+            switch (brake.Observe(wallMs, totalTicks, p95, ceiling, pop))
             {
                 case PopulationRushBrakeChange.Paused:
-                    _rush.Pause(string.Create(CultureInfo.InvariantCulture, $"paused by the brake: tick p95 {p95:0.0} ms over {pop.RushBrakeP95Ms} ms in {pop.RushBrakeWindows} windows"));
-                    logger.LogWarning("Playerbot population rush PAUSED: tick p95 {P95:0.0} ms is over the {Ceiling} ms ceiling in {Windows} consecutive windows; {Created} of {Requested} created",
-                        p95, pop.RushBrakeP95Ms, pop.RushBrakeWindows, _rush.Snapshot(ClockMs).Created, _rush.Snapshot(ClockMs).Requested);
+                    _rush.Pause(string.Create(CultureInfo.InvariantCulture,
+                        $"paused by the brake: tick p95 {p95:0.0} ms over {ceiling} ms in {pop.RushBrakeWindows} windows of {pop.RushBrakeWindowSeconds} s"));
+                    PopulationRushStatus paused = _rush.Snapshot(ClockMs);
+                    logger.LogWarning("Playerbot population rush PAUSED: tick p95 {P95:0.0} ms is over the {Ceiling} ms ceiling in {Windows} consecutive {Seconds} s windows; {Created} of {Requested} created",
+                        p95, ceiling, pop.RushBrakeWindows, pop.RushBrakeWindowSeconds, paused.Created, paused.Requested);
                     break;
                 case PopulationRushBrakeChange.Resumed:
                     _rush.Resume(string.Create(CultureInfo.InvariantCulture, $"resumed: tick p95 {p95:0.0} ms is back under the resume line"));
@@ -303,10 +319,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     }
 
     /// <summary>World thread: capture the facts and start the pass task.</summary>
-    private Task StartPass(int rushCount = 0)
+    private Task StartPass(int rushCount = 0, bool shedOnly = false)
     {
         PassInput? input;
-        try { input = Capture(rushCount); }
+        try { input = Capture(rushCount, shedOnly); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             logger.LogWarning(ex, "Playerbot population could not capture the world ({Type}: {Message})", ex.GetType().Name, ex.Message);
@@ -340,9 +356,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         ManagedPlayerbotFeature Managed,
         string? TerrainHold,
         bool TeleportAvailable,
-        int RushCount = 0);
+        int RushCount = 0,
+        bool ShedOnly = false);
 
-    private PassInput? Capture(int rushCount = 0)
+    private PassInput? Capture(int rushCount = 0, bool shedOnly = false)
     {
         WorldRuntime world = _world!;
         ManagedPlayerbotFeature? managed = Managed;
@@ -386,7 +403,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.FreshLaunch ? FreshBands : pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed, terrainHold, teleports is not null, rushCount);
+            ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly);
     }
 
     /// <summary>
@@ -663,7 +680,14 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 decision = new PopulationDecision(PopulationAction.Add, input.RushCount, "rush", $"rush batch of {input.RushCount}");
             }
             else
-                decision = PopulationBudgetController.Decide(input.Samples, input.P95Ms, input.RunningAll, ownedRunning, effectiveTarget, pop, windows);
+            {
+                // Shed-only (a rush is running): the budget may stop bots, nothing else. A rush deliberately exceeds the target, so the
+                // target is taken as unlimited (it would otherwise answer "over-target" before the budget is looked at).
+                decision = PopulationBudgetController.Decide(input.Samples, input.P95Ms, input.RunningAll, ownedRunning,
+                    input.ShedOnly ? int.MaxValue : effectiveTarget, pop, windows);
+                if (input.ShedOnly && decision.Action == PopulationAction.Add)
+                    decision = new PopulationDecision(PopulationAction.Hold, 0, "rush-running", "a rush is running: only parks for the tick budget run");
+            }
 
             var ctx = new PassContext(input, scope.ServiceProvider, store, known, members, desired, have, effectiveTarget);
             int changed = 0;
@@ -875,7 +899,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         while (created < count)
         {
             bool rush = ctx.Input.RushCount > 0;
-            if (rush && _rush.StopRequested) return (created, "rush stopped", false);
+            // Between bots, not only between passes: a brake that trips mid-pass stops the creation at once.
+            if (rush && _rush.CreationBlock is { } blocked) return (created, blocked, false);
             if (!rush && pop.MaxCreatePerMinute == 0) return (created, null, false);
             if (_placementRefusals >= MaxPlacementRefusals) return (created, $"creation paused: {MaxPlacementRefusals} placements refused in a row", false);
             while (_createTimes.Count > 0 && ctx.Input.ClockMs - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();

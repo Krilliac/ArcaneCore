@@ -39,7 +39,9 @@ public sealed class FreshLaunchTests
     {
         var options = new PlayerbotPopulationOptions();
         Assert.False(options.FreshLaunch);
-        Assert.Equal(500, options.RushBrakeP95Ms);
+        Assert.Equal(0, options.RushBrakeP95Ms); // 0: 1.5 x TickP95BudgetMs
+        Assert.Equal(90, options.RushCeilingMs());
+        Assert.Equal(5, options.RushBrakeWindowSeconds);
         Assert.Equal(3, options.RushBrakeWindows);
         options.Validate();
         options.RushBrakeP95Ms = 49;
