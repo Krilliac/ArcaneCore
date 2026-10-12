@@ -116,6 +116,21 @@ internal sealed class PlayerbotExploreAtlas
     private static int ThreatCellOf(float coordinate) => (int)MathF.Floor(coordinate / ThreatCellYards);
     private static int Strength(Threat threat) => (threat.Rank == 0 ? 0 : 100) + threat.MinLevel;
 
+    /// <summary>
+    /// Whether any cell within <paramref name="rings"/> rings of <paramref name="from"/> lists a creature for a bot of
+    /// <paramref name="level"/> (at most (2*rings+1)^2 dictionary probes). It ignores eligibility, hazards and blocked cells: it
+    /// answers only whether the area holds anything of the bot's level band at all.
+    /// </summary>
+    internal bool HasCellNear(uint map, uint level, Vector3 from, int rings)
+    {
+        if (level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return false;
+        int cx = CellOf(from.X), cy = CellOf(from.Y);
+        for (int x = cx - rings; x <= cx + rings; x++)
+            for (int y = cy - rings; y <= cy + rings; y++)
+                if (_cells.TryGetValue((map, (byte)level, x, y), out Cell? cell) && cell.ByFaction.Count > 0) return true;
+        return false;
+    }
+
     /// <summary>A candidate near an elite or creature at least five levels higher is a poor unattended grinding site.</summary>
     internal bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> hostileFaction)
     {

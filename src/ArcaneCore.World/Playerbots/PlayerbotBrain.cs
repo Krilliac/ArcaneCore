@@ -317,6 +317,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
         _destinations.SetQuestAside ??= _quests.SetAside;
+        _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
@@ -995,6 +996,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
                 else _exploreRefusals = 3;
+                if (_home is null && IsStrandedAmongStrongCreatures(player))
+                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false);
                 break;
             default:
                 _exploreRefusals = 3;
@@ -1009,6 +1012,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
         EscapeIsland(player, out _);
+    }
+
+    /// <summary>The rings of explore-atlas cells (160 yards each) around an unhomed bot that must hold a creature of its level before it is not stranded (about 480 yards).</summary>
+    internal const int StrandedExploreRings = 3;
+
+    /// <summary>
+    /// Whether the explore atlas lists no creature for the bot's level within <see cref="StrandedExploreRings"/> rings on its map:
+    /// every walk to the nearest one crosses ground held by creatures too strong for it (live 2026-10-12, bot QA #286 and others: level
+    /// 7 to 8 bots in Silverpine and Dun Morogh among level 10 to 14 creatures, the nearest fit over 1000 yards away).
+    /// </summary>
+    private bool IsStrandedAmongStrongCreatures(Player player)
+    {
+        var atlas = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.ExploreAtlas;
+        return atlas is not null && atlas.HasIndexedMap(player.MapId)
+            && !atlas.HasCellNear(player.MapId, player.Level, new(player.X, player.Y, player.Z), StrandedExploreRings);
     }
 
     /// <summary>
@@ -1669,6 +1687,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return "teleported to its bind point less than 5 minutes ago";
         return null;
     }
+
+    /// <summary>The non-urgent bind-point teleport a completed quest's unreachable ender asks for (<see cref="PlayerbotWorldDestinations.TeleportToBind"/>; tests).</summary>
+    internal bool TeleportToBindPointForQuest(Player player, string why) => TryTeleportToBindPoint(player, why, urgent: false);
 
     /// <summary>
     /// Teleport the bot to its bind point (where its hearthstone leads; vmangos <c>Player::TeleportToHomebind</c>) when
