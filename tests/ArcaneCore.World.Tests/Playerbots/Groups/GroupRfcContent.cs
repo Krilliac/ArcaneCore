@@ -14,8 +14,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 /// classic-db z2815 (instance_template, instance_dungeon_encounters, instance_encounters,
 /// areatrigger_teleport, creature and creature_template). Trigger volumes are from build-5875 AreaTrigger.dbc.
 /// The three trash positions, scaled combat stats and graveyard are test fixtures, not imported-world content.
-/// The map's linked zone is set to AreaTable.dbc's RFC area 2437 so the no-terrain ghost test can resolve its graveyard;
-/// classic-db instance_template's linked_zone for RFC is 0.
+/// The map's linked zone 2437 is the build-5875 Map.dbc value (field 19, read by MapDbcReader), the same one production
+/// loads; the no-terrain ghost test needs it to resolve the graveyard.
 /// </summary>
 internal static class GroupRfcContent
 {

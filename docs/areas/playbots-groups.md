@@ -370,7 +370,7 @@ It checks the three-creature Ragefire Trogg/Shaman test pack dies before any bos
 checks Wiped, Retry, Enter and Clear with the same dead trash still dead. A second case has no resurrection spell: its ghosts walk back
 to the RFC entrance and revive inside. The fixture uses classic-db z2815 entries, levels, bosses and teleports and build-5875 trigger
 volumes, with compact test pack positions, scaled combat stats, an open corridor path and a test graveyard. Without terrain data, the
-fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the classic-db `instance_template` linked zone is 0).
+fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the build-5875 Map.dbc linked zone, field 19, which production reads too).
 `StartRun(plan, bots)` starts a selected catalogue
 wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
 join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
