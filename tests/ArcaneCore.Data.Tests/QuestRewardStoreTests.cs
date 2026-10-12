@@ -83,24 +83,39 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task QuestSaveAlreadyHoldingOlderRow_CannotOverwriteAnInterleavedReward(DatabaseProvider provider)
+    public async Task QuestSaveHoldingTheOwnershipGate_SerializesAnInterleavedReward(DatabaseProvider provider)
     {
+        // The quest save now verifies the ownership fence inside its own transaction, and that verification
+        // writes the fence row, so an interleaved reward can no longer commit between the save's read and its
+        // UPDATE (the old test forced exactly that and would wait out the busy timeout). The reward must instead
+        // queue behind the save, and the pair must end in one consistent state: a lost update is the failure.
         Seed seed = await CreateAsync(provider);
+        Task<QuestRewardCommitResult>? reward = null;
         var interceptor = new BeforeQuestSave(async () =>
         {
-            Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, seed.Request));
+            reward = Task.Run(() => CommitAsync(seed.Connection, seed.Request));
+            await Task.Delay(500);
+            Assert.False(reward.IsCompleted, "the reward committed while the quest save held the ownership gate");
         });
+        CharacterQuestStatus old = seed.Request.ExpectedQuest with { Status = 3, MobCount1 = 0 };
         await using (CharacterDbContext db = Context(seed.Connection, interceptor))
         {
-            // SavingChanges runs after SaveQuestsAsync has loaded the old row and
-            // staged these counters, but before it issues its UPDATE statement.
-            CharacterQuestStatus old = seed.Request.ExpectedQuest with { Status = 3, MobCount1 = 0 };
-            await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => new EfCharacterQuestStore(db)
-                .SaveQuestsAsync(old.CharacterId, [old]));
-            Assert.True(interceptor.Fired);
+            await new EfCharacterQuestStore(db).SaveQuestsAsync(old.CharacterId, [old]);
         }
 
-        await AssertPersistedAsync(seed, rewarded: true);
+        Assert.True(interceptor.Fired);
+        QuestRewardCommitResult result = await reward!;
+        if (result == QuestRewardCommitResult.Committed)
+        {
+            await AssertPersistedAsync(seed, rewarded: true);
+        }
+        else
+        {
+            // The save changed the quest row the reward expected, so the reward is refused whole.
+            Assert.Equal(QuestRewardCommitResult.Conflict, result);
+            await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+            Assert.Equal(old, Assert.Single((await new EfCharacterQuestStore(db).LoadAsync(old.CharacterId)).Quests));
+        }
     }
 
     [Theory]
