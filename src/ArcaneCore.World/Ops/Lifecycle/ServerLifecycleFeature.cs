@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -53,19 +55,53 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         _stopTimer.Dispose();
     }
 
-    /// <summary>vmangos HandleServerShutDown/Restart/Idle* (ServerCommands.cpp:409-502); world thread.</summary>
-    public void Request(uint seconds, ShutdownMask options, byte exitCode)
+    /// <summary>vmangos HandleServerShutDown/Restart/Idle* (ServerCommands.cpp:409-502); world thread. <paramref name="actor"/> is who asked, for the staff announcement only.</summary>
+    public void Request(uint seconds, ShutdownMask options, byte exitCode, string? actor = null)
     {
         Publish(_countdown.Request(seconds, options, exitCode, ActiveSessionCount()));
+        if (_countdown.IsPending)
+        {
+            AnnounceRequest(seconds, options, exitCode, actor);
+        }
+
         AfterChange();
     }
 
-    /// <summary>vmangos HandleServerShutDownCancelCommand; world thread.</summary>
-    public void Cancel()
+    /// <summary>vmangos HandleServerShutDownCancelCommand; world thread. <paramref name="actor"/> is who asked, for the staff announcement only.</summary>
+    public void Cancel(string? actor = null)
     {
-        Publish(_countdown.Cancel());
+        ShutdownMask mask = _countdown.Mask;
+        ServerMessage? message = _countdown.Cancel();
+        Publish(message);
+        if (message is not null)
+        {
+            // The countdown reaches every player as the client's own server message (Publish); the announcer adds the staff line and, if asked for, a chat line.
+            Announcer()?.Announce(
+                AnnounceCategory.Shutdown,
+                AnnounceSeverity.Info,
+                mask.HasFlag(ShutdownMask.Restart) ? "The scheduled server restart was cancelled" : "The scheduled server shutdown was cancelled",
+                actor is null ? null : $"by {actor}",
+                dedupKey: "shutdown-cancel");
+        }
+
         AfterChange();
     }
+
+    private void AnnounceRequest(uint seconds, ShutdownMask options, byte exitCode, string? actor)
+    {
+        bool restart = options.HasFlag(ShutdownMask.Restart);
+        bool idle = options.HasFlag(ShutdownMask.Idle);
+        string what = restart ? "restart" : "shutdown";
+        string when = idle ? "when no players remain" : $"in {ServerTimeText.Format(seconds)}".TrimEnd('.');
+        Announcer()?.Announce(
+            AnnounceCategory.Shutdown,
+            AnnounceSeverity.Warning,
+            $"Server {what} scheduled {when}",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{(actor is null ? string.Empty : $"by {actor}; ")}exit code {exitCode}"),
+            dedupKey: "shutdown-request");
+    }
+
+    private IOpsAnnouncer? Announcer() => services.GetService<IOpsAnnouncer>();
 
     /// <summary>Advance the countdown by whole seconds (world thread; the timer and tests call it).</summary>
     public void Advance(uint elapsedSeconds)
@@ -101,6 +137,12 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             int code = _countdown.ExitCode;
             ExitCodes.Current = code;
             logger.LogWarning("Server stopping on request (exit code {ExitCode})", code);
+            Announcer()?.Announce(
+                AnnounceCategory.Shutdown,
+                AnnounceSeverity.Warning,
+                _countdown.Mask.HasFlag(ShutdownMask.Restart) ? "The server is restarting now" : "The server is shutting down now",
+                $"exit code {code}",
+                dedupKey: "shutdown-now");
             StopRequested?.Invoke(code);
             services.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
