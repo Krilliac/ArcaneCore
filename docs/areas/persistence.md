@@ -103,7 +103,7 @@ milliseconds, instead of reporting busy at once and leaving the wait to `Microso
 |---|---|---|
 | `Database:SqliteBusyTimeoutMs` | `5000` | 0 to 60000 ms. 0 leaves SQLite's "fail at once" behaviour. |
 | `Database:<Component>:SqliteBusyTimeoutMs` | unset | Per component (Auth, Characters, World); unset inherits the shared value. |
-| `Database:SqliteSynchronous` | `Full` | `Full` or `Normal` (any case; anything else is a start-up validation error). Applied as `PRAGMA synchronous` by the same interceptor on every connection. See "Decision" below for the durability trade-off. |
+| `Database:SqliteSynchronous` | `Full` | `Full` or `Normal` (any case; anything else is a start-up validation error). Applied as `PRAGMA synchronous` by the same interceptor on every connection, and `Normal` only to a database in WAL mode (checked with `PRAGMA journal_mode` at every open): otherwise that database stays on `Full` and an error is logged once per file. See "Decision" below for the durability trade-off. |
 | `Database:<Component>:SqliteSynchronous` | unset | Per component (Auth, Characters, World); unset inherits the shared value. |
 
 The timeout never exceeds the connection's own `Default Timeout`, and when the database guard is on (`Resilience:Database:Enabled`, `QueryTimeoutMs` above 0) it is **clamped, silently, to `Resilience:Database:QueryTimeoutMs`** (the effective value is `min(configured, QueryTimeoutMs)`; a configured value above it is not an error). Reason: the guard abandons a call past its deadline, but the abandoned call keeps waiting in SQLite's busy handler and disposing its scope blocks until it returns, so a longer busy timeout lengthened every refused logon (measured 7.0-7.6 s against a 2 s deadline before the clamp). `DatabaseGuard`'s pessimistic-timeout contract (the outer bound on
@@ -140,7 +140,10 @@ change has to be deliberate.
   and the stall makes other writers fail as "database is locked"), `Database:Characters:SqliteSynchronous = NORMAL` (or the shared
   `Database:SqliteSynchronous`) removes the fsync at commit. In WAL mode the database stays consistent and an application crash loses
   nothing (the WAL is in the OS cache); a power loss or OS crash can lose the most recent commits, which the save queue had already reported as
-  written. That is an accepted operator decision for that deployment, not the default. Set it only on the databases that need it, e.g.
+  written. `NORMAL` is applied only when the database is actually in WAL mode: the schema bootstrap's WAL switch is best effort (it logs a
+  warning and carries on if another connection holds the file), and `NORMAL` in a rollback-journal mode can corrupt the database on power
+  loss, so the interceptor fails closed to `FULL` and logs an error (`NormalIsRefusedOnADatabaseNotInWalMode_FallsBackToFull_AndLogsAnError`).
+  On the very first start of a brand-new file the bootstrap's own connection opens before the WAL switch and logs that error once; later connections get `NORMAL`. That is an accepted operator decision for that deployment, not the default. Set it only on the databases that need it, e.g.
   `--set Database:Characters:SqliteSynchronous=NORMAL`. `WalAndSynchronousFullArePinned` still asserts the default; `SynchronousIsNormalOnlyWhereConfigured_AndFullByDefault`
   asserts the override. The slow-transaction warning names the setting in effect for the context.
 - **`BEGIN IMMEDIATE`**: kept. EF's `BeginTransaction` on `Microsoft.Data.Sqlite` takes the write lock at `BEGIN`, before any statement

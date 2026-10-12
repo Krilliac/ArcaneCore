@@ -130,6 +130,18 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
     /// What the end call spends its time on, for the message: on SQLite it names the <c>synchronous</c> setting actually in effect for the context (read from the
     /// <see cref="SqliteConnectionPragmaInterceptor"/> its options carry), because under NORMAL a commit does not fsync the WAL. Slow path only.
     /// </summary>
+    private static string? DataSourceOf(DbContext? context)
+    {
+        try
+        {
+            return context?.Database.GetDbConnection().DataSource;
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
     private static string EndCallKind(DbContext? context)
     {
         SqliteConnectionPragmaInterceptor? pragma = null;
@@ -145,7 +157,7 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
             }
         }
 
-        return pragma?.Synchronous switch
+        return pragma?.EffectiveFor(DataSourceOf(context)) switch
         {
             SqliteSynchronousMode.Full => "commit: the WAL fsync under synchronous=FULL, i.e. disk I/O",
             SqliteSynchronousMode.Normal => "commit: no WAL fsync under synchronous=NORMAL, so disk I/O contention or a WAL checkpoint",

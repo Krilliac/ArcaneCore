@@ -15,7 +15,7 @@ public enum DatabaseProvider
 /// <summary>
 /// SQLite's <c>PRAGMA synchronous</c> levels a deployment may choose (<c>Database:SqliteSynchronous</c>). Full (SQLite's default, 2) fsyncs the WAL at every commit.
 /// Normal (1) skips that fsync in WAL mode: the database stays consistent, but the most recent commits can be lost on power loss or an OS crash
-/// (never on an application crash).
+/// (never on an application crash). Normal is applied only to a database that is in WAL mode; any other (rollback-journal) database stays on Full, with an error logged.
 /// </summary>
 public enum SqliteSynchronousMode
 {
@@ -51,7 +51,8 @@ public sealed class DatabaseConnectionOptions
 
     /// <summary>
     /// SQLite only: this component's <c>PRAGMA synchronous</c> (Full or Normal), overriding <c>Database:SqliteSynchronous</c>. Unset inherits it.
-    /// Normal in WAL mode avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash. Other engines ignore it.
+    /// Normal avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash; it is applied only when the database is in WAL mode, otherwise the
+    /// database stays on Full and an error is logged. Other engines ignore it.
     /// </summary>
     public SqliteSynchronousMode? SqliteSynchronous { get; set; }
 }
@@ -82,9 +83,11 @@ public sealed class DatabaseOptions
 
     /// <summary>
     /// SQLite only: the <c>PRAGMA synchronous</c> set on every connection, Full (default) or Normal. Full fsyncs the WAL at every commit, so a committed save survives power loss.
-    /// Normal (WAL mode) skips that fsync, which removes multi-second commit stalls on a slow disk (and the "database is locked" failures they cause in other writers); the database
-    /// stays consistent, but the most recent commits can be lost on power loss or an OS crash, never on an application crash. Each component may override it with
-    /// <c>Database:&lt;Component&gt;:SqliteSynchronous</c>. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
+    /// Normal skips that fsync, which removes multi-second commit stalls on a slow disk (and the "database is locked" failures they cause in other writers); the database
+    /// stays consistent, but the most recent commits can be lost on power loss or an OS crash, never on an application crash. Normal is applied only to a database that is in WAL mode
+    /// (the schema bootstrap switches file databases to WAL, best effort): a database that is not in WAL mode (the switch failed or was refused) stays on Full and an error is logged,
+    /// because Normal outside WAL can corrupt the database on power loss. Each component may override it with a Database:Auth, Database:Characters or Database:World
+    /// SqliteSynchronous key. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
     public SqliteSynchronousMode SqliteSynchronous { get; set; } = SqliteSynchronousMode.Full;
 

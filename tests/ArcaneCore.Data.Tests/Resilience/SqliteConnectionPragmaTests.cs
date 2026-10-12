@@ -121,8 +121,8 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     public async Task WalAndSynchronousFullArePinned()
     {
         // Durability note (docs/areas/persistence.md): journal_mode=WAL is applied by the schema bootstrap, and synchronous stays at
-        // SQLite's default FULL. NORMAL in WAL mode can lose the most recent commits on power loss, which the save queue's
-        // "never lose a save" rule does not allow, and the fsync is not where the time goes.
+        // SQLite's default FULL unless Database:SqliteSynchronous opts a database into NORMAL (which can lose the most recent commits on
+        // power loss or an OS crash, and is applied only in WAL mode). FULL is the shipped default.
         string characters = Connection("characters.db");
         await using ServiceProvider provider = Build(("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters));
         int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
@@ -137,9 +137,10 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     [Fact]
     public async Task SynchronousIsNormalOnlyWhereConfigured_AndFullByDefault()
     {
-        string auth = Connection("auth.db");
-        string characters = Connection("characters.db");
-        string world = Connection("world.db");
+        // NORMAL is only applied to a database already in WAL mode (the schema bootstrap normally puts it there), so put the files there first.
+        string auth = WalConnection("auth.db");
+        string characters = WalConnection("characters.db");
+        string world = WalConnection("world.db");
 
         // Unset: FULL (2) everywhere, today's behaviour.
         await using (ServiceProvider provider = Build(("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
@@ -186,7 +187,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     {
         foreach ((SqliteSynchronousMode mode, long expected) in new[] { (SqliteSynchronousMode.Normal, 1L), (SqliteSynchronousMode.Full, 2L) })
         {
-            var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(Connection($"sync-{mode}.db")).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, mode));
+            var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(WalConnection($"sync-{mode}.db")).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, mode));
             await using var db = new DbContext(builder.Options);
             await db.Database.OpenConnectionAsync();
             Assert.Equal(expected, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
@@ -325,6 +326,18 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         var sqlite = (SqliteConnection)db.Database.GetDbConnection();
         Assert.Equal(1, sqlite.DefaultTimeout);
         Assert.Equal(300L, await ScalarAsync(sqlite, "PRAGMA busy_timeout"));
+    }
+
+    /// <summary>A connection string for a database file that is already in WAL mode (the mode is persistent in the file).</summary>
+    private string WalConnection(string name)
+    {
+        string connection = Connection(name);
+        using var raw = new SqliteConnection(connection);
+        raw.Open();
+        using SqliteCommand command = raw.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL;";
+        Assert.Equal("wal", command.ExecuteScalar());
+        return connection;
     }
 
     private string Connection(string name, int defaultTimeout = 30)

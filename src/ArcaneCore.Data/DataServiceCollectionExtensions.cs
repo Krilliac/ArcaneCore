@@ -47,7 +47,7 @@ public static class DataServiceCollectionExtensions
         AddDatabaseCommon(services, configuration);
         services.AddDbContext<AuthDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>(),
-                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>()));
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider)));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
@@ -63,7 +63,7 @@ public static class DataServiceCollectionExtensions
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
                 provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
-                provider.GetRequiredService<SlowCommandInterceptor>()));
+                provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider)));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
@@ -78,13 +78,17 @@ public static class DataServiceCollectionExtensions
         AddDatabaseCommon(services, configuration);
         services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World), provider.GetRequiredService<SlowTransactionInterceptor>(),
-                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>()));
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>(), pragmaLogger: PragmaLogger(provider)));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
         DataModules.AddServices(services, DatabaseComponent.World);
         return services;
     }
+
+    /// <summary>The logger the SQLite pragma interceptor reports a refused <c>synchronous=NORMAL</c> to (a cached per-category logger, so the interceptor cache key stays stable); null without logging.</summary>
+    private static ILogger? PragmaLogger(IServiceProvider provider)
+        => provider.GetService<ILoggerFactory>()?.CreateLogger(typeof(SqliteConnectionPragmaInterceptor).FullName!);
 
     /// <summary>
     /// The component's configured connection options, with the SQLite busy timeout CLAMPED (not rejected) to the database guard's
@@ -135,7 +139,7 @@ public static class DataServiceCollectionExtensions
     }
 
     /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> and <paramref name="slowCommands"/> (when given) are attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
-    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null)
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null, ILogger? pragmaLogger = null)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
@@ -168,7 +172,7 @@ public static class DataServiceCollectionExtensions
 
             case DatabaseProvider.Sqlite:
                 builder.UseSqlite(WithWriteBound(options.ConnectionString, sqliteWriteTimeoutMs))
-                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs, options.SqliteSynchronous ?? SqliteSynchronousMode.Full));
+                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs, options.SqliteSynchronous ?? SqliteSynchronousMode.Full, pragmaLogger));
                 break;
 
             default:
