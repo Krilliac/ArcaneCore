@@ -148,6 +148,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// was not reported to the shared set-asides, and the feature logs it as made outside the home.
     /// </summary>
     internal bool StallOutsideHome { get; private set; }
+
+    /// <summary>
+    /// The quest whose walk home the bot last gave up for a stall (<see cref="GiveUpStalledGoal"/>), or zero. It is captured at the give-up,
+    /// before the quest is suspended: the same think then re-evaluates the quest return and rewrites <see cref="PlayerbotQuestGoals.ReturnQuest"/>,
+    /// and the feature builds the QA context only after the think (<see cref="QaReportContext"/>).
+    /// </summary>
+    internal uint StallReturnQuest { get; private set; }
     // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
@@ -239,7 +246,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             death ? [.. _recentDeathSources.Where(d => d.Map == _lastQaDeathMap
                 && System.Numerics.Vector3.Distance(d.Position, _lastQaDeathPosition) <= PlayerbotStallWatch.DeathLoopYards)
                 .Select(d => d.Source)] : null);
-        return observation.ToLogSuffix();
+        // A stall of the walk home to a completed quest's ender, as captured at its give-up (StallReturnQuest): the report names the quest
+        // that was being returned. A stall on the way to take a quest from an NPC that also ends it is not marked
+        // (PlayerbotQaSignalParser.ReturnTripToken).
+        bool returnTrip = !death && StallReturnQuest != 0 && report.StartsWith("stalled ", StringComparison.Ordinal)
+            && GoalFromReport(report) == nameof(PlayerbotGoalKind.Quest) && QuestFromReport(report) == StallReturnQuest;
+        return (returnTrip ? ArcaneCore.World.Playerbots.Qa.PlayerbotQaSignalParser.ReturnTripToken : string.Empty) + observation.ToLogSuffix();
     }
 
     private static string? GoalFromReport(string report)
@@ -521,6 +533,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
         uint completedReturn = _quests.CompletedReturnQuest(player);
+        // Entering the walk to a completed quest's ender drops the target of whatever came before (a mob the bot was fighting, a quest NPC
+        // it had been serving): until the destinations name the ender, the stall watch and GiveUpStalledGoal would report and set aside that.
+        if (_quests.ReturnQuest != completedReturn)
+        {
+            _quests.ReturnQuest = completedReturn;
+            if (completedReturn != 0) TargetEntry = 0;
+        }
         if (completedReturn != 0)
         {
             _goal = PlayerbotGoalKind.Quest;
@@ -910,6 +929,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
                 new System.Numerics.Vector3(player.X, player.Y, player.Z)) is { } everyone)

@@ -58,6 +58,17 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <summary>Whether a quest exchange is under way (the brain does not pull the bot away from it to walk home).</summary>
     internal bool Busy => _stage != Stage.None;
 
+    /// <summary>
+    /// The completed quest the bot is walking home to finish (zero when it is on no such trip). While it is set and no exchange is under way,
+    /// the bot deals with a quest NPC other than that quest's ender (a giver, or the ender of another completed quest) only when it is
+    /// already within reach: it does not detour to a visible quest NPC that is not on the way (GitHub w27: the Flame Crest NPCs starved
+    /// quest 5601's trip home). The brain sets it every think that reaches the quest-return check, so it can be stale across the early
+    /// returns before that check (death, recovery, escape): harmless, because nothing calls <see cref="Update"/> then and the next think
+    /// that reaches the check rewrites it. It is also overwritten in the very think that gives a stall up (the give-up suspends the quest,
+    /// then the same think re-evaluates the return): the stall's own view of the trip is <see cref="PlayerbotBrain.StallReturnQuest"/>.
+    /// </summary>
+    internal uint ReturnQuest { get; set; }
+
     internal bool HasCandidate(Player player) => FindCandidate(player) is not null;
 
     internal uint CompletedReturnQuest(Player player)
@@ -187,12 +198,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (target.Npc.Guid != _stageNpc || target.Quest.Id != _stageQuest)
             _route = null;
 
-        float dx = target.Npc.X - player.X, dy = target.Npc.Y - player.Y, dz = target.Npc.Z - player.Z;
-        float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
-        // Match the server's creature reach: vmangos WorldObject::IsWithinDist (Object.cpp:1738) adds both
-        // bounding radii and compares strict 3D distance. The last walkable point can already be in reach.
-        float reach = QuestNpcServices.InteractionDistance + target.Npc.BoundingRadius + player.BoundingRadius;
-        if (!float.IsFinite(distanceSquared) || !float.IsFinite(reach) || reach <= 0 || distanceSquared >= reach * reach)
+        if (!WithinReach(player, target.Npc))
         {
             if (_route is null && !PlayerbotNavigation.TryPlan(player,
                     new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, out _route))
@@ -260,6 +266,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     {
         ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        bool returning = ReturnQuest != 0 && _stage == Stage.None;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -275,6 +282,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (!services.IsRewardable(id) || IsRefused(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
+                if (returning && id != ReturnQuest && !WithinReach(player, npc))
+                    continue;
                 if (services.Quests.Get(id) is not { } quest || state.Quests.Get(id) is not { } status)
                     continue;
                 if (status.Status == QuestStatus.Complete && !status.Rewarded)
@@ -288,6 +297,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     return new QuestTarget(npc, quest, action);
                 }
             }
+
+            if (returning && !WithinReach(player, npc))
+                continue;
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
             {
@@ -309,6 +321,18 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The server's creature reach: vmangos <c>WorldObject::IsWithinDist</c> (Object.cpp:1738) adds both bounding radii and compares strict
+    /// 3D distance. The last walkable point can already be in reach. <see cref="Update"/> and the return-trip filter share it.
+    /// </summary>
+    private static bool WithinReach(Player player, NpcInfo npc)
+    {
+        float dx = npc.X - player.X, dy = npc.Y - player.Y, dz = npc.Z - player.Z;
+        float reach = QuestNpcServices.InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
+        float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
+        return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
     }
 
     /// <summary>

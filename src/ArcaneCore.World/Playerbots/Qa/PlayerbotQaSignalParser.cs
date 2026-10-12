@@ -17,6 +17,12 @@ internal static partial class PlayerbotQaSignalParser
     /// <summary>The end of a stall line of a bot that stood outside its home (ManagedPlayerbotFeature.LogStall).</summary>
     internal const string OutsideHomeSuffix = "; it gives up that goal outside its home";
 
+    /// <summary>
+    /// Written before the <c>qa[...]</c> context of a stall of the walk home to a completed quest's ender (PlayerbotBrain.QaReportContext):
+    /// the target is then the ender the bot was going to turn in at. A stall on the way to take a quest from an NPC that also ends it lacks it.
+    /// </summary>
+    internal const string ReturnTripToken = " return-trip";
+
     private const string Xyz = @"(?<x>-?\d{1,9}(?:\.\d{1,3})?),(?<y>-?\d{1,9}(?:\.\d{1,3})?),(?<z>-?\d{1,9}(?:\.\d{1,3})?)";
 
     [GeneratedRegex(@"^Playerbot (?<bot>\S+) \((?<name>[^)]*)\) stalled (?<s>\d{1,9})s: goal=(?<goal>\w{1,32}) target=(?<t>\d{1,10}) quest=(?<q>\d{1,10}) at " + Xyz + @" map (?<m>\d{1,10})",
@@ -84,12 +90,14 @@ internal static partial class PlayerbotQaSignalParser
         {
             if (!Position(m, out float x, out float y, out float z) || !U(m, "t", out uint target) || !U(m, "q", out uint quest)
                 || !U(m, "m", out uint map) || !I(m, "s", out int seconds)) return false;
+            int qa = message.IndexOf(" qa[", StringComparison.Ordinal); // the anchor QaBotObservation.FromLog uses
             signal = new QaSignal
             {
                 Kind = QaSignalKind.Stall, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
                 HasPosition = true, Map = map, X = x, Y = y, Z = z, Seconds = seconds, Message = Clean(message, m),
                 Bot = QaBotObservation.FromLog(message),
                 OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
+                ReturnTrip = qa >= 0 && message.AsSpan(0, qa).EndsWith(ReturnTripToken, StringComparison.Ordinal),
             };
             return true;
         }

@@ -21,6 +21,9 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
     /// <summary>A real goal=Quest stall from a live log (bot-groups run).</summary>
     private const string QuestLine = "stalled 123s: goal=Quest target=963 quest=11 at -9928.2,47.6,32.6 map 0";
 
+    /// <summary>The same stall as a bot walking home to turn quest 11 in logs it: the brain marks it before the qa context.</summary>
+    private const string ReturnTripLine = QuestLine + " return-trip qa[level=10,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=11,graveyard=0,distance=unknown,source=None,attackerFacts=none]";
+
     private static readonly byte[] Salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
     private readonly string _directory = QaData.NewTempDirectory();
@@ -61,6 +64,138 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.DoesNotContain(".lookup quest", draft.Body, StringComparison.Ordinal);
         Assert.Contains("no missing content found for goal Explore", draft.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("found for quest", draft.Body, StringComparison.Ordinal);
+    }
+
+    private static FakeFacts GryanTrip(params QaEnderFact[] spawns)
+    {
+        FakeFacts facts = Gryan();
+        facts.Titles[11] = "Report to Gryan";
+        facts.Spawns[(0, 963)] = 1;
+        facts.Templates[963] = new QaTemplateFacts(0, 1, 1, string.Empty);
+        facts.Enders[11] = [.. spawns];
+        return facts;
+    }
+
+    [Fact]
+    public void EnderTripStall_NamesTheEnderItsDistanceAndMap()
+    {
+        // The ender stands 100 yd east of the stall (-9928.2,47.6): 3-4-5 scaled by 20.
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 0, -9928.2f + 60f, 47.6f + 80f, 30f));
+        QaFindingView f = IngestOne(ReturnTripLine, facts);
+
+        Assert.Contains("the bot was walking to its ender 963 (Gryan Stoutmantle)", f.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("nearest spawn 100 yd from the bot on map 0", f.CauseDetail, StringComparison.Ordinal);
+        Assert.StartsWith("no missing content found for quest 11 (Report to Gryan)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnderTripStall_WithTheEnderOnAnotherMap_SaysSo()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 1, 1634f, -4439f, 30f));
+        facts.Spawns.Remove((0, 963)); // the ender spawns on map 1 only: the facts must agree with the spawn it is reported at
+        facts.Spawns[(1, 963)] = 1;
+        QaFindingView f = IngestOne(ReturnTripLine, facts);
+
+        Assert.Contains("ender 963 (Gryan Stoutmantle), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>The line the real no-route stall of the walk home logs (PlayerbotQuestReturnStallMarkTests): the plan failed, so target=0.</summary>
+    private const string NoRouteTripLine = "stalled 10s: goal=Quest target=0 quest=900001 at -8949.0,-132.0,83.5 map 0 return-trip qa[level=10,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=900001,graveyard=0,distance=unknown,source=None,attackerFacts=none]";
+
+    private static FakeFacts FixtureTrip(params QaEnderFact[] enders)
+    {
+        var facts = new FakeFacts();
+        facts.Titles[900001] = "Synthetic quest";
+        facts.Enders[900001] = [.. enders];
+        return facts;
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithOneEnder_NamesThatEnder()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Contains("the bot was walking to its ender 900010 (Synthetic questgiver)", f.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("nearest spawn 149 yd from the bot on map 0", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithTheOnlyEnderOnAnotherMap_SaysSo()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 1, 1634f, -4439f, 30f));
+        facts.Spawns[(1, 900010)] = 1;
+        facts.Templates[900010] = new QaTemplateFacts(0, 1, 1, string.Empty);
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Contains("ender 900010 (Synthetic questgiver), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>The quest is complete, so a kill objective without a spawn says nothing about the walk home.</summary>
+    [Fact]
+    public void NoRouteTripStall_IgnoresTheObjectivesOfTheCompletedQuest()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        facts.Objectives[900001] = [90]; // no spawn of entry 90 anywhere
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Equal(QaCause.Unknown, f.Cause);
+        Assert.Contains("the bot was walking to its ender 900010", f.CauseDetail, StringComparison.Ordinal);
+
+        // Before the quest is complete the same facts are missing data.
+        QaFindingView unmarked = IngestOne(NoRouteTripLine.Replace(" return-trip", string.Empty, StringComparison.Ordinal), facts);
+        Assert.Equal(QaCause.MissingData, unmarked.Cause);
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithTwoEnders_KeepsTheGenericVerdict()
+    {
+        // Which of two enders the bot was going to is unknown: nothing is claimed.
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "First", 0, -8799f, -132f, 83f), new QaEnderFact(900011, "Second", 0, -8700f, -132f, 83f));
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.DoesNotContain("ender", f.CauseDetail, StringComparison.Ordinal);
+        Assert.StartsWith("no missing content found for quest 900001", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoRouteStall_WithoutTheReturnTripMark_IsUnchanged()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        string unmarked = NoRouteTripLine.Replace(" return-trip", string.Empty, StringComparison.Ordinal);
+        QaFindingView f = IngestOne(unmarked, facts);
+
+        Assert.Equal("no missing content found for quest 900001 (Synthetic quest)", f.CauseDetail);
+    }
+
+    [Fact]
+    public void QuestStall_OnANonEnderTarget_KeepsTheGenericVerdict()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(964, "Someone Else", 0, 0f, 0f, 0f));
+        QaFindingView f = IngestOne(ReturnTripLine, facts);
+
+        Assert.Equal("no missing content found for quest 11 (Report to Gryan), target 963", f.CauseDetail);
+    }
+
+    /// <summary>
+    /// In vanilla one NPC often gives and ends a quest. A bot that stalls on the way to take quest 11 from NPC 963 (who also ends it) was not
+    /// going to its ender: without the brain's return-trip mark the finding must not say so.
+    /// </summary>
+    [Fact]
+    public void QuestStall_OnTheWayToTakeTheQuestFromItsEnder_DoesNotClaimAnEnderTrip()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 0, -9928.2f + 60f, 47.6f + 80f, 30f));
+        QaFindingView f = IngestOne(QuestLine, facts);
+
+        Assert.Equal("no missing content found for quest 11 (Report to Gryan), target 963", f.CauseDetail);
+        Assert.DoesNotContain("ender", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheReturnTripMark_IsParsedOnlyBeforeTheQaContext()
+    {
+        Assert.True(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", ReturnTripLine)).ReturnTrip);
+        Assert.False(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", QuestLine)).ReturnTrip);
     }
 
     [Fact]
