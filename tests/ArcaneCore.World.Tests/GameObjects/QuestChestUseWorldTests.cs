@@ -182,4 +182,110 @@ public sealed class QuestChestUseWorldTests
         });
         Assert.Equal(GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle, flags);
     }
+
+    /// <summary>Whether an update packet carries a block (create or values) of the chest whose payload holds the u32 9 (Activate|Sparkle).</summary>
+    private static bool CarriesActivate(byte[] body, ulong guid)
+    {
+        var packed = new List<byte>();
+        byte mask = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            byte b = (byte)(guid >> (8 * i));
+            if (b != 0)
+            {
+                mask |= (byte)(1 << i);
+                packed.Add(b);
+            }
+        }
+
+        packed.Insert(0, mask);
+        byte[] needle = [.. packed];
+        for (int at = 0; at + needle.Length < body.Length; at++)
+        {
+            if (!body.AsSpan(at, needle.Length).SequenceEqual(needle))
+            {
+                continue;
+            }
+
+            ReadOnlySpan<byte> rest = body.AsSpan(at + needle.Length, Math.Min(160, body.Length - at - needle.Length));
+            for (int j = 0; j + 4 <= rest.Length; j++)
+            {
+                if (rest[j] == 9 && rest[j + 1] == 0 && rest[j + 2] == 0 && rest[j + 3] == 0)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> SawActivateAsync(WorldTestClient client, ulong chest, bool untilCreate)
+    {
+        bool sawCreate = false;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        while (!timeout.IsCancellationRequested)
+        {
+            Task<(WorldOpcode Op, byte[] Payload)> read = client.ReadAsync();
+            if (await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(6), timeout.Token)) != read)
+            {
+                break;
+            }
+
+            (WorldOpcode op, byte[] payload) = await read;
+            byte[]? body = op switch
+            {
+                WorldOpcode.SmsgUpdateObject => payload,
+                WorldOpcode.SmsgCompressedUpdateObject => WorldTestClient.Inflate(payload),
+                _ => null,
+            };
+            if (body is null)
+            {
+                continue;
+            }
+
+            if (CarriesActivate(body, chest))
+            {
+                return true;
+            }
+
+            sawCreate |= untilCreate;
+        }
+
+        return false;
+    }
+
+    [Fact]
+    public async Task ACactusAppleSeenBeforeTheQuest_GetsAnActivateUpdate_WhenTheQuestIsAccepted()
+    {
+        QuestJournalFixture quests = Quests();
+        await using WorldTestHost host = Start(quests, out _);
+        await using WorldTestClient client = await host.ConnectAsync();
+        byte[] key = await host.AddAccountAsync("LATEQ");
+        await client.AuthenticateAsync("LATEQ", key);
+        await client.CreateCharacterAsync("Lateq");
+        await client.LoginAsync((ulong)(await host.Characters.GetByAccountAsync((await host.Accounts.FindByUsernameAsync("LATEQ"))!.Id)).Single().Id);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lateq") is { } p
+            && ((WorldSession)p.Session).Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(p) is { Loaded: true }, "the quest journal to load");
+        ulong chest = ChestGuid();
+        await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, chest);
+
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Lateq")!;
+            var services = ((WorldSession)p.Session).Services.GetRequiredService<QuestNpcFeature>().Services;
+            services.GmAddQuest(p, services.Quests.Get(QuestId)!);
+        });
+
+        Assert.True(await SawActivateAsync(client, chest, untilCreate: false), "no dynamic flags update with Activate|Sparkle reached the client");
+    }
+
+    [Fact]
+    public async Task ACactusAppleCreatedForAPlayerWithTheQuest_CarriesActivateInItsCreateBlock()
+    {
+        QuestJournalFixture quests = Quests();
+        await using WorldTestHost host = Start(quests, out _);
+        await using WorldTestClient client = await EnterWithQuestAsync(host, quests);
+        Assert.True(await SawActivateAsync(client, ChestGuid(), untilCreate: true), "the create block carried no Activate|Sparkle");
+    }
 }

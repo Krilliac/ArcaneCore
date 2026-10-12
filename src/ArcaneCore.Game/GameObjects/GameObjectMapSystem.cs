@@ -1407,7 +1407,22 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     uint IViewerFieldFilter.Filter(WorldObject obj, int index, uint value, Player viewer)
-        => index == UpdateFields.GameobjectDynFlags && obj is GameObject go ? value | (uint)QuestFlagsFor(go, viewer) : value;
+    {
+        if (index != UpdateFields.GameobjectDynFlags || obj is not GameObject go)
+        {
+            return value;
+        }
+
+        // This answer is what the viewer's create block or values update carries, so it is the baseline RefreshQuestFlags compares against.
+        uint quest = (uint)QuestFlagsFor(go, viewer);
+        if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
+        {
+            _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
+        }
+
+        sent[viewer] = quest;
+        return value | quest;
+    }
 
     /// <summary>Re-send GAMEOBJECT_DYN_FLAGS for quest objects whose answer changed for one of their viewers.</summary>
     private void RefreshQuestFlags()
@@ -1427,8 +1442,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             bool changed = false;
             foreach (Player viewer in Map.ObserversOf(go))
             {
+                // A viewer never sent this field (not built yet) has seen none of it: any quest flag is news to it.
                 uint now = (uint)QuestFlagsFor(go, viewer);
-                if (sent.TryGetValue(viewer, out uint before) && before != now)
+                if (sent.GetValueOrDefault(viewer) != now)
                 {
                     changed = true;
                 }
