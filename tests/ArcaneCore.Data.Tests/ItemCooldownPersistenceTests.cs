@@ -18,11 +18,7 @@ public sealed class ItemCooldownPersistenceTests : IAsyncLifetime
         await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
         {
             SchemaDefinition current = CharacterDbContext.Schema;
-            var legacy = new SchemaDefinition
-            {
-                Component = current.Component, CurrentVersion = ItemCooldownOwnerDataModule.Version - 1, Version1Tables = current.Version1Tables,
-                Steps = current.Steps.Where(step => step.Version < ItemCooldownOwnerDataModule.Version).ToArray(),
-            };
+            SchemaDefinition legacy = SchemaProbe.ThroughVersion(current, ItemCooldownOwnerDataModule.Version - 1);
             await SchemaBootstrapper.EnsureAsync(db, legacy);
             db.Set<CharacterSpellCooldownRow>().Add(new CharacterSpellCooldownRow
             {

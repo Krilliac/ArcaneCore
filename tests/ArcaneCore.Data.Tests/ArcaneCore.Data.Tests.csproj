@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
     <ProjectReference Include="..\..\tools\ArcaneCore.AccountTool\ArcaneCore.AccountTool.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Data.ProcessRunner\ArcaneCore.Data.ProcessRunner.csproj" />
   </ItemGroup>
 
 </Project>

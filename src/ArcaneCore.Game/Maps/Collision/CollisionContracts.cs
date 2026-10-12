@@ -170,6 +170,9 @@ public sealed record PathOptions
     /// <summary>Shared default instance.</summary>
     public static PathOptions Default { get; } = new();
 
+    /// <summary>Cooperatively stops a private navigation query; the default leaves existing callers uncancelled.</summary>
+    public CancellationToken CancellationToken { get; init; } = System.Threading.CancellationToken.None;
+
     /// <summary>
     /// The unit the path is for. When set, the include flags come from its capabilities
     /// (<see cref="PathMover.IncludeFlags"/>, vmangos <c>createFilter</c>) and <see cref="IncludeFlags"/> is ignored.

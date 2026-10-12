@@ -372,7 +372,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
-        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons) { Home = home };
+        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
+        {
+            Home = home,
+            CharacterOwnership = session.World.CharacterOwnership,
+        };
 
         // Per-character data owned by features (vmangos Player::LoadFromDB: inventory, spells,
         // quest status …). The player is not yet visible to the world thread. Fail closed.

@@ -1167,7 +1167,7 @@ public sealed class QuestRewardAsyncRecoveryTests
             => inner.LoadAsync(characterId, cancellationToken);
 
         public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             if (Volatile.Read(ref control.FailQuestWrites) == 1)
             {
@@ -1176,11 +1176,12 @@ public sealed class QuestRewardAsyncRecoveryTests
                 throw new IOException("Synthetic ordered quest write and barrier recovery failed before reward transaction.");
             }
 
-            await inner.SaveQuestsAsync(characterId, upserts, cancellationToken);
+            await inner.SaveQuestsAsync(characterId, upserts, cancellationToken, ownership);
         }
 
-        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default)
-            => inner.SaveTaxiMaskAsync(characterId, mask, cancellationToken);
+        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
+            => inner.SaveTaxiMaskAsync(characterId, mask, cancellationToken, ownership);
     }
 
     /// <summary>Delegates to the real spell store, except that reads and writes fail while the control says so.</summary>

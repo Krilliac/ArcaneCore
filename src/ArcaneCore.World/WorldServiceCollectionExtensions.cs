@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;
@@ -43,6 +44,7 @@ public static class WorldServiceCollectionExtensions
     public static IServiceCollection AddWorldDaemon(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
+        services.Configure<CharacterFencingOptions>(configuration.GetSection(CharacterFencingOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));

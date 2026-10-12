@@ -34,6 +34,7 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
+#   CLUSTER                     4 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
@@ -1631,6 +1632,62 @@ ClientData.DbcDirectory = ""
 #        Docs: docs/reference/configuration.md#clientdata
 #
 ClientData.Strict = false
+
+###############################################################################
+# CLUSTER
+###############################################################################
+
+#----------------------------------------------------------------------------
+# Cluster:Fencing
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Fencing.Enabled
+#        Description: Enable durable character ownership fencing at world startup; disabled by
+#                     default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+Cluster.Fencing.Enabled = false
+
+#
+#    Cluster.Fencing.OwnerNode
+#        Description: The durable owner identity; defaults to the current machine name and must be
+#                     stable while the world owns the database.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.OwnerNode =
+
+#
+#    Cluster.Fencing.TakeoverEpoch
+#        Description: The positive ownership epoch to compare and swap during an explicit takeover;
+#                     pair with TakeoverIncarnation.
+#        Type: long?
+#        Default: (not set)
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.TakeoverEpoch =
+
+#
+#    Cluster.Fencing.TakeoverIncarnation
+#        Description: The non-empty ownership incarnation to compare and swap during an explicit
+#                     takeover; pair with TakeoverEpoch.
+#        Type: Guid?
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.TakeoverIncarnation =
 
 ###############################################################################
 # COMBAT
@@ -9760,6 +9817,19 @@ World.Playerbots.AllowLocalLlm = false
 # substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
 # World.Playerbots.AllowedMaps.0 = 0
 # World.Playerbots.AllowedMaps.1 = 1
+
+#
+#    World.Playerbots.AsyncNavigationEnabled
+#        Description: Run far playerbot navigation queries on the bounded private worker (off by
+#                     default during rollout). Restart required: the worker is created when the
+#                     feature attaches.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.AsyncNavigationEnabled = false
 
 #
 #    World.Playerbots.Battlegrounds.Enabled

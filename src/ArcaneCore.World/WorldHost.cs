@@ -1,11 +1,13 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World;
 
@@ -19,10 +21,21 @@ public sealed class WorldHost(
     CharacterSaveQueue saveQueue,
     CharacterDirectory directory,
     IServiceScopeFactory scopes,
-    ILogger<WorldHost> logger) : IHostedService
+    ILogger<WorldHost> logger,
+    IOptions<CharacterFencingOptions>? fencingOptions = null,
+    IHostApplicationLifetime? applicationLifetime = null) : IHostedService
 {
+    private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
+    private readonly IHostApplicationLifetime? _applicationLifetime = applicationLifetime;
+    private readonly Guid _incarnation = Guid.NewGuid();
+    private CharacterOwnershipToken? _ownership;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _fencing.Validate();
+        await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+        saveQueue.FatalFailure += OnFatalSaveFailure;
+
         await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
         {
             IReadOnlyList<CharacterIdentity> identities = await scope.ServiceProvider
@@ -60,11 +73,68 @@ public sealed class WorldHost(
             await scope.ServiceProvider.StopWorldFeaturesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) { failures.Add(ex); }
-        finally
+        bool queueStopped = false;
+        try
         {
             await saveQueue.StopAsync().ConfigureAwait(false);
+            queueStopped = true;
         }
-        logger.LogInformation("World saved and stopped");
+        catch (Exception ex) { failures.Add(ex); }
+
+        if (failures.Count == 0 && queueStopped)
+        {
+            await ReleaseOwnershipAsync(cancellationToken, failures).ConfigureAwait(false);
+        }
+
+        if (failures.Count == 0) logger.LogInformation("World saved and stopped");
+        else logger.LogError("World stop did not complete; durable ownership was retained");
         if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
+    }
+
+    private async Task AcquireOwnershipAsync(CancellationToken cancellationToken)
+    {
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        ICharacterOwnershipStore? store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>();
+        if (store is null)
+        {
+            if (_fencing.Enabled)
+                throw new InvalidOperationException("character fencing is enabled but no ownership store is registered");
+            return;
+        }
+
+        if (!_fencing.Enabled)
+        {
+            if (await store.IsOwnedAsync("world", cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("the characters database is already owned; disabled fencing cannot start a duplicate world writer");
+            return;
+        }
+
+        _ownership = _fencing.HasTakeover
+            ? await store.TryTakeoverAsync(new CharacterOwnershipToken("world", _fencing.TakeoverEpoch!.Value,
+                _fencing.TakeoverIncarnation!.Value), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false)
+            : await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+        if (_ownership is null)
+            throw new InvalidOperationException("the characters database is already owned by another world authority");
+        world.CharacterOwnership = _ownership;
+    }
+
+    private async Task ReleaseOwnershipAsync(CancellationToken cancellationToken, List<Exception> failures)
+    {
+        if (!_fencing.Enabled || _ownership is null) return;
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>()
+                .ReleaseAsync(_ownership, cancellationToken).ConfigureAwait(false);
+            _ownership = null;
+            world.CharacterOwnership = null;
+        }
+        catch (Exception ex) { failures.Add(ex); }
+    }
+
+    private void OnFatalSaveFailure(Exception error)
+    {
+        logger.LogCritical(error, "Character save queue entered terminal failure; requesting world shutdown");
+        _applicationLifetime?.StopApplication();
     }
 }

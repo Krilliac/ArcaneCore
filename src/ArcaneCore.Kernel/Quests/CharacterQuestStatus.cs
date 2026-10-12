@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Characters;
+
 namespace ArcaneCore.Kernel.Quests;
 
 /// <summary>
@@ -37,8 +39,10 @@ public interface ICharacterQuestStore
 {
     Task<CharacterQuestData> LoadAsync(int characterId, CancellationToken cancellationToken = default);
 
-    Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts, CancellationToken cancellationToken = default);
+    Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts, CancellationToken cancellationToken = default,
+        CharacterOwnershipToken? ownership = null);
 
     /// <summary>Replace the known taxi node mask (8 words, vmangos PlayerTaxi::m_taximask).</summary>
-    Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default);
+    Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default,
+        CharacterOwnershipToken? ownership = null);
 }

@@ -18,6 +18,8 @@ using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Playerbots;
@@ -98,6 +100,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private int _savedSharedSetAsideVersion;
     private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
+    private PlayerbotNavigationExecutor? _navigationExecutor;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
@@ -115,6 +118,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
         if (_options.Enabled) _chat.LogConfiguration();
         _world = world;
+        if (_options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
+        {
+            ILogger ownerLogger = logger;
+            _navigationExecutor = new PlayerbotNavigationExecutor(
+                dataset => NavMeshPathfinder.CreateIndependent(dataset, ownerLogger));
+        }
         world.Updated += Update;
     }
 
@@ -932,6 +941,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
+        if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
         _chatClient = null;
@@ -942,7 +952,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
-        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides, _navigationExecutor) { Home = AreaOf(botId) };
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
@@ -1254,6 +1264,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
+        if (driver != "brain") active.Brain.CancelNavigationPlanning();
         return driver;
     }
 

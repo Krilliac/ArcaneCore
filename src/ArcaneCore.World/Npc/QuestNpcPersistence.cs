@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,11 +24,16 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     });
     private Task? _worker;
     private bool _stopped;
+    private Exception? _terminalFailure;
+
+    /// <summary>Raised once when a durable ownership fence rejects a quest or taxi write.</summary>
+    public event Action<Exception>? FatalFailure;
 
     public void Start()
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             _worker ??= Task.Run(WriteLoopAsync);
         }
@@ -41,6 +47,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             if (!_characters.TryGetValue(characterId, out CharacterState? state))
             {
@@ -60,11 +67,13 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     /// Replace the offline cache only if it has not changed since the storage read began.
     /// Pending/failed saves and completed newer writes all refuse stale login snapshots.
     /// </summary>
-    public void LoadCharacter(int characterId, CharacterQuestData data, long expectedRevision)
+    public void LoadCharacter(int characterId, CharacterQuestData data, long expectedRevision,
+        CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             _characters.TryGetValue(characterId, out CharacterState? previous);
             long revision = previous?.Revision ?? 0;
@@ -79,14 +88,20 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 throw new InvalidOperationException($"quest saves for character {characterId} have not reached storage");
             }
 
-            _characters[characterId] = new CharacterState(data, checked(revision + 1));
+            _characters[characterId] = new CharacterState(data, checked(revision + 1), ownership);
         }
     }
 
     /// <summary>Copy a world-thread delta before returning; callers may reuse their lists.</summary>
-    public void SaveQuests(int characterId, IReadOnlyList<CharacterQuestStatus> rows)
+    public void SaveQuests(int characterId, IReadOnlyList<CharacterQuestStatus> rows,
+        CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        lock (_gate)
+        {
+            ThrowIfTerminalLocked();
+        }
+
         if (rows.Count == 0)
         {
             return;
@@ -95,12 +110,14 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         CharacterQuestStatus[] copied = rows.Select(r => r with { CharacterId = characterId }).ToArray();
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             if (_quarantined.Contains(characterId))
             {
                 return;
             }
 
             CharacterState state = WritableCharacter(characterId);
+            EnsureOwnership(characterId, state, ownership);
             state.Revision = checked(state.Revision + 1);
             foreach (CharacterQuestStatus row in copied)
             {
@@ -108,26 +125,28 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
             }
 
             state.Pending++;
-            Enqueue(new PendingWrite(characterId, copied, null, null, null));
+            Enqueue(new PendingWrite(characterId, copied, null, null, state.Ownership, null));
         }
     }
 
-    public void SaveTaxiMask(int characterId, IReadOnlyList<uint> mask)
+    public void SaveTaxiMask(int characterId, IReadOnlyList<uint> mask, CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(mask);
         uint[] copied = mask.ToArray();
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             if (_quarantined.Contains(characterId))
             {
                 return;
             }
 
             CharacterState state = WritableCharacter(characterId);
+            EnsureOwnership(characterId, state, ownership);
             state.Revision = checked(state.Revision + 1);
             state.TaxiMask = copied;
             state.Pending++;
-            Enqueue(new PendingWrite(characterId, null, copied, null, null));
+            Enqueue(new PendingWrite(characterId, null, copied, null, state.Ownership, null));
         }
     }
 
@@ -136,6 +155,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             _quarantined.Add(characterId);
         }
     }
@@ -145,6 +165,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             _quarantined.Remove(characterId);
         }
     }
@@ -168,6 +189,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
 
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             CharacterState state = WritableCharacter(row.CharacterId);
             if (state.Pending != 0 || state.Failure is not null)
             {
@@ -188,12 +210,13 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             _worker ??= Task.Run(WriteLoopAsync);
             CharacterQuestData? snapshot = _characters.TryGetValue(characterId, out CharacterState? state)
                 ? state.Snapshot()
                 : null;
-            Enqueue(new PendingWrite(characterId, null, null, snapshot, done));
+            Enqueue(new PendingWrite(characterId, null, null, snapshot, state?.Ownership, done));
         }
 
         return done.Task;
@@ -208,6 +231,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             if (_characters.TryGetValue(characterId, out CharacterState? state) && state.Pending != 0)
             {
                 throw new InvalidOperationException($"quest saves for deleted character {characterId} are still queued");
@@ -229,9 +253,9 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 // Shutdown snapshots follow every queued delta, including writes not yet attempted.
                 foreach ((int characterId, CharacterState state) in _characters)
                 {
-                    if (!_quarantined.Contains(characterId))
+                    if (_terminalFailure is null && !_quarantined.Contains(characterId))
                     {
-                        Enqueue(new PendingWrite(characterId, null, null, state.Snapshot(), null));
+                        Enqueue(new PendingWrite(characterId, null, null, state.Snapshot(), state.Ownership, null));
                     }
                 }
 
@@ -245,6 +269,10 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         await worker.ConfigureAwait(false);
         lock (_gate)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw new InvalidOperationException("quest save queue has a terminal ownership failure", terminal);
+            }
             int[] failed = _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key))
                 .Select(c => c.Key).ToArray();
             if (failed.Length > 0)
@@ -257,14 +285,26 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
 
     private CharacterState WritableCharacter(int characterId)
     {
+        ThrowIfTerminalLocked();
         ObjectDisposedException.ThrowIf(_stopped, this);
         _worker ??= Task.Run(WriteLoopAsync);
         if (!_characters.TryGetValue(characterId, out CharacterState? state))
         {
-            _characters[characterId] = state = new CharacterState(CharacterQuestData.Empty, 0);
+            _characters[characterId] = state = new CharacterState(CharacterQuestData.Empty, 0, null);
         }
 
         return state;
+    }
+
+    private void EnsureOwnership(int characterId, CharacterState state, CharacterOwnershipToken? ownership)
+    {
+        if (!Equals(state.Ownership, ownership))
+        {
+            CharacterOwnershipToken? observed = ownership ?? state.Ownership;
+            var failure = new CharacterOwnershipRejectedException(observed?.Scope ?? "world", observed?.Epoch ?? 0);
+            EnterTerminalFailure(characterId, failure);
+            throw failure;
+        }
     }
 
     private void Enqueue(PendingWrite pending)
@@ -283,6 +323,17 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
             {
                 lock (_gate)
                 {
+                    if (_terminalFailure is { } terminal)
+                    {
+                        if (_characters.TryGetValue(pending.CharacterId, out CharacterState? terminalState))
+                        {
+                            terminalState.Failure = terminal;
+                        }
+
+                        pending.Done?.TrySetException(terminal);
+                        continue;
+                    }
+
                     if (_quarantined.Contains(pending.CharacterId))
                     {
                         pending.Done?.TrySetResult();
@@ -296,19 +347,25 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                     ICharacterQuestStore store = GetStore(scope.ServiceProvider);
                     if (pending.Rows is { } rows)
                     {
-                        await store.SaveQuestsAsync(pending.CharacterId, rows).ConfigureAwait(false);
+                        await store.SaveQuestsAsync(pending.CharacterId, rows, ownership: pending.Ownership).ConfigureAwait(false);
                     }
                     else
                     {
-                        await store.SaveTaxiMaskAsync(pending.CharacterId, pending.TaxiMask!).ConfigureAwait(false);
+                        await store.SaveTaxiMaskAsync(pending.CharacterId, pending.TaxiMask!, ownership: pending.Ownership).ConfigureAwait(false);
                     }
                 }
                 else
                 {
-                    await RecoverAsync(pending.CharacterId, pending.Snapshot).ConfigureAwait(false);
+                    await RecoverAsync(pending.CharacterId, pending.Snapshot, pending.Ownership).ConfigureAwait(false);
                 }
 
                 pending.Done?.TrySetResult();
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                EnterTerminalFailure(pending.CharacterId, ex);
+                pending.Done?.TrySetException(ex);
+                logger.LogError(ex, "quest/taxi save rejected by the ownership fence; queue is terminal");
             }
             catch (Exception ex)
             {
@@ -329,14 +386,17 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 {
                     lock (_gate)
                     {
-                        _characters[pending.CharacterId].Pending--;
+                        if (_characters.TryGetValue(pending.CharacterId, out CharacterState? state))
+                        {
+                            state.Pending = Math.Max(0, state.Pending - 1);
+                        }
                     }
                 }
             }
         }
     }
 
-    private async Task RecoverAsync(int characterId, CharacterQuestData? snapshot)
+    private async Task RecoverAsync(int characterId, CharacterQuestData? snapshot, CharacterOwnershipToken? ownership)
     {
         lock (_gate)
         {
@@ -356,10 +416,10 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         ICharacterQuestStore store = GetStore(scope.ServiceProvider);
         if (snapshot.Quests.Count > 0)
         {
-            await store.SaveQuestsAsync(characterId, snapshot.Quests).ConfigureAwait(false);
+            await store.SaveQuestsAsync(characterId, snapshot.Quests, ownership: ownership).ConfigureAwait(false);
         }
 
-        await store.SaveTaxiMaskAsync(characterId, snapshot.TaxiMask).ConfigureAwait(false);
+        await store.SaveTaxiMaskAsync(characterId, snapshot.TaxiMask, ownership: ownership).ConfigureAwait(false);
         lock (_gate)
         {
             _characters[characterId].Failure = null;
@@ -369,16 +429,51 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     private static ICharacterQuestStore GetStore(IServiceProvider services) => services.GetService<ICharacterQuestStore>()
         ?? throw new InvalidOperationException("no character quest store is registered for a queued save");
 
-    private sealed class CharacterState(CharacterQuestData data, long revision)
+    private void ThrowIfTerminalLocked()
+    {
+        if (_terminalFailure is { } failure)
+        {
+            throw new InvalidOperationException("quest save queue has a terminal ownership failure", failure);
+        }
+    }
+
+    private void EnterTerminalFailure(int characterId, Exception failure)
+    {
+        bool publish;
+        lock (_gate)
+        {
+            publish = _terminalFailure is null;
+            _terminalFailure ??= failure;
+            foreach (CharacterState state in _characters.Values)
+            {
+                state.Failure = _terminalFailure;
+            }
+
+            if (_characters.TryGetValue(characterId, out CharacterState? current))
+            {
+                current.Failure = _terminalFailure;
+            }
+        }
+
+        if (publish)
+        {
+            try { FatalFailure?.Invoke(failure); }
+            catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
+            { logger.LogError(callbackError, "quest save queue fatal-failure callback failed"); }
+        }
+    }
+
+    private sealed class CharacterState(CharacterQuestData data, long revision, CharacterOwnershipToken? ownership)
     {
         public Dictionary<uint, CharacterQuestStatus> Quests { get; } = data.Quests.ToDictionary(q => q.Quest);
         public uint[] TaxiMask { get; set; } = data.TaxiMask.ToArray();
         public long Revision { get; set; } = revision;
+        public CharacterOwnershipToken? Ownership { get; } = ownership;
         public int Pending { get; set; }
         public Exception? Failure { get; set; }
         public CharacterQuestData Snapshot() => new(Quests.Values.OrderBy(q => q.Quest).ToArray(), TaxiMask.ToArray());
     }
 
     private sealed record PendingWrite(int CharacterId, CharacterQuestStatus[]? Rows, uint[]? TaxiMask,
-        CharacterQuestData? Snapshot, TaskCompletionSource? Done);
+        CharacterQuestData? Snapshot, CharacterOwnershipToken? Ownership, TaskCompletionSource? Done);
 }

@@ -5,6 +5,7 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -223,9 +224,19 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
                 {
                     IRelationalModel model = db.GetService<IDesignTimeModel>().Model.GetRelationalModel();
                     IReadOnlyList<MigrationOperation> operations = db.GetService<IMigrationsModelDiffer>().GetDifferences(null, model);
+                    SchemaDefinition schema = db switch
+                    {
+                        AuthDbContext => AuthDbContext.Schema,
+                        CharacterDbContext => CharacterDbContext.Schema,
+                        WorldDbContext => WorldDbContext.Schema,
+                        _ => throw new InvalidOperationException($"unrecognized schema context {db.GetType().Name}"),
+                    };
+                    // ReadModel performs the production allow-list check, including exact validation of declared model seeds.
+                    _ = SchemaChangeDecider.ReadModel(db, schema);
                     Assert.NotEmpty(operations);
-                    // Pomelo adds the database's default character set; only a fresh create applies it.
-                    Assert.All(operations, o => Assert.True(o is CreateTableOperation or CreateIndexOperation or AlterDatabaseOperation,
+                    // Pomelo adds the database's default character set; model HasData emits declared InsertData operations,
+                    // which bootstrap handles through the corresponding EnsureRowChange rather than replaying raw inserts.
+                    Assert.All(operations, o => Assert.True(o is CreateTableOperation or CreateIndexOperation or AlterDatabaseOperation or InsertDataOperation,
                         $"{name} {db.GetType().Name}: unexpected {o.GetType().Name}"));
                     Assert.Contains(operations, o => o is CreateTableOperation);
 
@@ -234,7 +245,12 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
                         IReadOnlyList<MigrationCommand> commands = db.GetService<IMigrationsSqlGenerator>()
                             .Generate([operation], db.GetService<IDesignTimeModel>().Model);
                         Assert.NotEmpty(commands);
-                        string expectedStart = operation is AlterDatabaseOperation ? "ALTER DATABASE" : "CREATE ";
+                        string expectedStart = operation switch
+                        {
+                            AlterDatabaseOperation => "ALTER DATABASE",
+                            InsertDataOperation => "INSERT ",
+                            _ => "CREATE ",
+                        };
                         Assert.All(commands, c => Assert.StartsWith(expectedStart, c.CommandText.TrimStart(), StringComparison.OrdinalIgnoreCase));
                     }
                 }

@@ -22,6 +22,7 @@ using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Npc;
@@ -53,6 +54,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         _logger = logger;
         _clock = timeProvider ?? TimeProvider.System;
         Persistence = new QuestNpcPersistence(scopes, logger);
+        Persistence.FatalFailure += OnPersistenceFatalFailure;
         Services = BuildServices(QuestStore.Empty, NpcStore.Empty);
     }
 
@@ -179,7 +181,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             : CharacterQuestData.Empty;
         // Own the lists across the session/world handoff even if a custom store reuses buffers.
         var data = new CharacterQuestData(loaded.Quests.ToArray(), loaded.TaxiMask.ToArray());
-        Persistence.LoadCharacter(character.Id, data, revision);
+        Persistence.LoadCharacter(character.Id, data, revision, player.CharacterOwnership);
         new PlayerQuestLog(player).Load(data.Quests, Services.Quests);
         _staged.Remove(player);
         _staged.Add(player, data);
@@ -187,6 +189,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
 
     public async ValueTask DisposeAsync()
     {
+        Persistence.FatalFailure -= OnPersistenceFatalFailure;
         _objectives?.Dispose();
         _dbScripts?.Dispose();
         foreach ((Player player, Action<uint, int> listener) in _itemListeners)
@@ -232,6 +235,12 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null,
             Party: progression ? new WorldQuestParty(_services, () => _world) : null), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
+
+    private void OnPersistenceFatalFailure(Exception failure)
+    {
+        _logger.LogCritical(failure, "quest/taxi persistence stopped after a terminal ownership failure");
+        _services.GetService<IHostApplicationLifetime>()?.StopApplication();
+    }
 
     private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)
         => _services.GetService<NpcServicesFeature>() is { } npcServices ? npcServices.Extend(dependencies, npcs) : dependencies;
@@ -352,10 +361,10 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     private sealed class PersistenceSink(QuestNpcFeature feature) : IQuestNpcSink
     {
         public void QuestsChanged(Player player, IReadOnlyList<CharacterQuestStatus> rows) =>
-            feature.Persistence.SaveQuests((int)player.Guid.Low, rows);
+            feature.Persistence.SaveQuests((int)player.Guid.Low, rows, player.CharacterOwnership);
 
         public void TaxiMaskChanged(Player player, IReadOnlyList<uint> mask) =>
-            feature.Persistence.SaveTaxiMask((int)player.Guid.Low, mask);
+            feature.Persistence.SaveTaxiMask((int)player.Guid.Low, mask, player.CharacterOwnership);
 
         public void CharacterChanged(Player player) => feature._world?.SavePlayer(player);
     }

@@ -1,3 +1,4 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -45,6 +46,9 @@ public sealed record AddColumnChange(string Table, string Column) : SchemaChange
 /// </summary>
 public sealed record EnsureIndexesChange(string Table) : SchemaChange;
 
+/// <summary>Insert one immutable-key row if it is absent, using provider-quoted identifiers and parameters.</summary>
+public sealed record EnsureRowChange(string Table, string KeyColumn, object KeyValue, IReadOnlyDictionary<string, object?> Values) : SchemaChange;
+
 /// <summary>The changes that move a schema from <c>Version - 1</c> to <see cref="Version"/>.</summary>
 public sealed record SchemaStep(int Version, IReadOnlyList<SchemaChange> Changes);
 
@@ -65,6 +69,12 @@ public sealed class SchemaDefinition
 
     /// <summary>Upgrade steps for versions 2..CurrentVersion, in order.</summary>
     public IReadOnlyList<SchemaStep> Steps { get; init; } = [];
+
+    /// <summary>
+    /// Model seed rows that are valid for model-differ validation but are outside a truncated step prefix.
+    /// These declarations are metadata only: bootstrap executes seeds only when they occur in <see cref="Steps"/>.
+    /// </summary>
+    public IReadOnlyList<EnsureRowChange> ModelSeedDeclarations { get; init; } = [];
 
     /// <summary>
     /// Other development lines whose databases this build migrates to its own numbering once (the Codex line before
@@ -497,7 +507,7 @@ public static class SchemaBootstrapper
         if (present == definition.Version1Tables.Count)
         {
             // Pre-M5 database (EnsureCreated, no version table): its layout is version 1.
-            await ExecuteAsync(db, [new CreateTableChange(definition.VersionTable)], new HashSet<(string, string)>(), ct).ConfigureAwait(false);
+            await ExecuteAsync(db, definition, [new CreateTableChange(definition.VersionTable)], new HashSet<(string, string)>(), ct).ConfigureAwait(false);
             await WriteVersionAsync(db, 1, ct).ConfigureAwait(false);
             logger?.LogInformation("Adopted existing {Component} tables as schema version 1", definition.Component);
             return 1;
@@ -522,17 +532,19 @@ public static class SchemaBootstrapper
         }
 
         var noLaterColumns = new HashSet<(string, string)>();
-        await ExecuteAsync(db, [new CreateTableChange(definition.VersionTable)], noLaterColumns, ct).ConfigureAwait(false);
+        await ExecuteAsync(db, definition, [new CreateTableChange(definition.VersionTable)], noLaterColumns, ct).ConfigureAwait(false);
         await WriteVersionAsync(db, CreatingVersion, ct).ConfigureAwait(false);
         SchemaChange[] tables = [.. ModelTables(db, definition).Select(t => new CreateTableChange(t))];
-        await ExecuteAsync(db, tables, noLaterColumns, ct).ConfigureAwait(false);
+        await ExecuteAsync(db, definition, tables, noLaterColumns, ct).ConfigureAwait(false);
+        SchemaChange[] seeds = [.. definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()];
+        await ExecuteAsync(db, definition, seeds, noLaterColumns, ct).ConfigureAwait(false);
         await WriteVersionAsync(db, definition.CurrentVersion, ct).ConfigureAwait(false);
         logger?.LogInformation("Created {Component} schema version {Version}", definition.Component, definition.CurrentVersion);
         return definition.CurrentVersion;
     }
 
     private static Task ApplyStepAsync(DbContext db, SchemaDefinition definition, SchemaStep step, CancellationToken ct)
-        => ExecuteAsync(db, step.Changes, SchemaChangeDecider.AddedLater(definition, step), ct);
+        => ExecuteAsync(db, definition, step.Changes, SchemaChangeDecider.AddedLater(definition, step), ct);
 
     /// <summary>The tables of the current model other than the component's version table, in creation order.</summary>
     private static string[] ModelTables(DbContext db, SchemaDefinition definition)
@@ -544,9 +556,10 @@ public static class SchemaBootstrapper
     /// interruption, or by a second process) converges instead of failing.
     /// </summary>
     private static async Task ExecuteAsync(
-        DbContext db, IReadOnlyList<SchemaChange> changes, IReadOnlySet<(string Table, string Column)> addedLater, CancellationToken ct)
+        DbContext db, SchemaDefinition definition, IReadOnlyList<SchemaChange> changes,
+        IReadOnlySet<(string Table, string Column)> addedLater, CancellationToken ct)
     {
-        SchemaChangeDecider.ModelOperations ops = SchemaChangeDecider.ReadModel(db);
+        SchemaChangeDecider.ModelOperations ops = SchemaChangeDecider.ReadModel(db, definition);
         IReadOnlyDictionary<string, CreateTableOperation> createTables = ops.Tables;
         ILookup<string, CreateIndexOperation> indexesByTable = ops.IndexesByTable;
 
@@ -610,6 +623,10 @@ public static class SchemaBootstrapper
 
                     break;
 
+                case EnsureRowChange seed:
+                    await EnsureRowAsync(db, createTables, seed, ct).ConfigureAwait(false);
+                    break;
+
                 default:
                     throw new InvalidOperationException($"unsupported schema change {change}");
             }
@@ -646,6 +663,49 @@ public static class SchemaBootstrapper
             default:
                 throw new SchemaMismatchException(decision.Message);
         }
+    }
+
+    private static async Task EnsureRowAsync(DbContext db, IReadOnlyDictionary<string, CreateTableOperation> tables, EnsureRowChange seed, CancellationToken ct)
+    {
+        CreateTableOperation table = tables.GetValueOrDefault(seed.Table)
+            ?? throw new InvalidOperationException($"table {seed.Table} is not in the model");
+        if (!await SchemaCatalog.TableExistsAsync(db, seed.Table, ct).ConfigureAwait(false))
+            throw new SchemaMismatchException($"cannot seed {seed.Table}: the table does not exist in the database.");
+
+        Dictionary<string, object?> values = new(StringComparer.Ordinal) { [seed.KeyColumn] = seed.KeyValue };
+        foreach ((string column, object? value) in seed.Values)
+        {
+            if (!values.TryAdd(column, value))
+                throw new InvalidOperationException($"seed {seed.Table} specifies key column {column} twice");
+        }
+
+        HashSet<string> columns = [.. table.Columns.Select(c => c.Name)];
+        if (values.Keys.Any(c => !columns.Contains(c)))
+            throw new InvalidOperationException($"seed {seed.Table} contains a column absent from the model");
+        if (!columns.Contains(seed.KeyColumn))
+            throw new InvalidOperationException($"seed {seed.Table} key column {seed.KeyColumn} is absent from the model");
+
+        Microsoft.EntityFrameworkCore.Storage.ISqlGenerationHelper sql = db.GetService<Microsoft.EntityFrameworkCore.Storage.ISqlGenerationHelper>();
+        string[] names = [.. values.Keys];
+        string tableName = sql.DelimitIdentifier(table.Name);
+        string columnList = string.Join(", ", names.Select(sql.DelimitIdentifier));
+        string parameters = string.Join(", ", names.Select((_, i) => "@p" + i));
+        string keyParameter = "@p0"; // the key is inserted first above
+        // MariaDB/MySQL accept a WHERE on a FROM-less SELECT only with FROM DUAL; SQLite and PostgreSQL take it without.
+        string from = db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql" ? " FROM DUAL" : "";
+        string commandText = $"INSERT INTO {tableName} ({columnList}) SELECT {parameters}{from} WHERE NOT EXISTS (SELECT 1 FROM {tableName} WHERE {sql.DelimitIdentifier(seed.KeyColumn)} = {keyParameter})";
+
+        await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
+        command.CommandText = commandText;
+        foreach ((string _, object? value) in values.Select((p, i) => (p.Key, p.Value)))
+        {
+            DbParameter parameter = command.CreateParameter();
+            parameter.ParameterName = "@p" + command.Parameters.Count;
+            parameter.Value = value ?? DBNull.Value;
+            command.Parameters.Add(parameter);
+        }
+
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
     private static async Task RunAsync(DbContext db, MigrationOperation operation, CancellationToken ct)
     {
