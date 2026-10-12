@@ -317,6 +317,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
         _destinations.SetQuestAside ??= _quests.SetAside;
+        _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
@@ -995,6 +996,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
                 else _exploreRefusals = 3;
+                if (_home is null && IsUnderLevelledForArea(player))
+                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false);
                 break;
             default:
                 _exploreRefusals = 3;
@@ -1009,6 +1012,44 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
         EscapeIsland(player, out _);
+    }
+
+    /// <summary>The rings of explore-atlas cells (160 yards each) around an unhomed bot that must hold a creature of its level before it is not stranded (about 480 yards).</summary>
+    internal const int StrandedExploreRings = 3;
+
+    /// <summary>How many levels above the bot a creature in those rings must be for the bot to count as under-levelled for the area.</summary>
+    internal const int StrandedLevelMargin = 2;
+
+    /// <summary>A bot this near its bind point (yards) is taken to be at it: the stranded teleport would change nothing.</summary>
+    internal const float BindArrivedYards = 100f;
+
+    /// <summary>
+    /// Whether the bot is under-levelled for the ground it stands on and a teleport to its bind point would help: the explore atlas
+    /// lists no creature for its level within <see cref="StrandedExploreRings"/> rings on its map, yet creatures more than
+    /// <see cref="StrandedLevelMargin"/> levels above it stand there (live 2026-10-12, bot QA #286 and others: level 7 to 8 bots in
+    /// Silverpine and Dun Morogh among level 10 to 14 creatures, the nearest fit over 1000 yards away). An over-levelled bot in a low zone or
+    /// a city has nothing to fight either, but nothing here is too strong for it, so it is left to wander. Not when the bot is already
+    /// at its bind point, or the bind point is stranded for the bot's level too (the teleport would only move it to the same trouble).
+    /// </summary>
+    private bool IsUnderLevelledForArea(Player player)
+    {
+        var atlas = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.ExploreAtlas;
+        if (atlas is null || !atlas.HasIndexedMap(player.MapId)) return false;
+        var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (atlas.HasCellNear(player.MapId, player.Level, here, StrandedExploreRings)
+            || !atlas.HasStrongerNear(player.MapId, player.Level, here, StrandedExploreRings, StrandedLevelMargin))
+            return false;
+        HomeBind bind = player.Home;
+        if (bind == default) return true; // the teleport itself refuses with "no bind point"
+        if (bind.MapId == player.MapId)
+        {
+            float dx = bind.X - player.X, dy = bind.Y - player.Y;
+            if (dx * dx + dy * dy <= BindArrivedYards * BindArrivedYards) return false;
+        }
+
+        return !atlas.HasIndexedMap(bind.MapId)
+            || atlas.HasCellNear(bind.MapId, player.Level, new(bind.X, bind.Y, bind.Z), StrandedExploreRings)
+            || !atlas.HasStrongerNear(bind.MapId, player.Level, new(bind.X, bind.Y, bind.Z), StrandedExploreRings, StrandedLevelMargin);
     }
 
     /// <summary>
@@ -1641,6 +1682,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private uint _bindTeleportAt;
     private bool _bindTeleported;
 
+    /// <summary>Whether the brain has sent the bot to its bind point (tests).</summary>
+    internal bool BindTeleported => _bindTeleported;
+
     /// <summary>
     /// Why the bot may not teleport to its bind point now, or null: the rules of the return teleport home (PlayerbotHomeReturn.RefusalOf
     /// and TryTeleport; vmangos PartyBotAI.cpp:808) for a teleport the brain makes of its own accord. <c>TeleportService.TeleportToHomebind</c>
@@ -1669,6 +1713,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return "teleported to its bind point less than 5 minutes ago";
         return null;
     }
+
+    /// <summary>The non-urgent bind-point teleport a completed quest's unreachable ender asks for (<see cref="PlayerbotWorldDestinations.TeleportToBind"/>; tests).</summary>
+    internal bool TeleportToBindPointForQuest(Player player, string why) => TryTeleportToBindPoint(player, why, urgent: false);
 
     /// <summary>
     /// Teleport the bot to its bind point (where its hearthstone leads; vmangos <c>Player::TeleportToHomebind</c>) when

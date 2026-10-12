@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -794,7 +795,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// and 45% of their worn items broken: each healer revival weakened the bot, the weakened bot died again, and took the healer again.
     /// </para>
     /// </summary>
-    private bool KeepBodyOverSickness(Player player, Corpse corpse, PlayerbotUnsafeBody reason)
+    internal bool KeepBodyOverSickness(Player player, Corpse corpse, PlayerbotUnsafeBody reason)
     {
         if (!PlayerbotSickness.HealerSickens(session, player)) return false;
         if (reason == PlayerbotUnsafeBody.DiedHere
@@ -1013,7 +1014,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     /// <summary>
     /// <see cref="Threats(Player)"/> into <paramref name="found"/> (cleared first), without a new list or an enumerator allocation: the
-    /// hazard scan of every bot every 2 seconds (<see cref="PlayerbotRisk.ScanHazards"/>).
+    /// hazard scan of every bot every 2 seconds (<see cref="PlayerbotRisk.ScanHazards"/>). Adds the stealthed creatures of the map
+    /// within <see cref="StealthedHazardYards"/> that the bot does not see; only this overload does (the hazard scan, not the target choice).
     /// </summary>
     internal static void Threats(Player player, List<PlayerbotThreat> found)
     {
@@ -1022,7 +1024,29 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         foreach (ObjectGuid guid in player.VisibleObjects)
             if (map.FindObject(guid) is Creature creature) AddThreat(player, map, system, creature, found);
+
+        // The stealth visibility rule keeps undetected stealthed creatures out of the visible objects, yet they aggro whoever walks into
+        // their reach: the ones of this map within StealthedHazardYards count as threats too. Hazards only: the target choice and every
+        // other reader use Threats(Player) / the visible objects, so the bot never attacks what it cannot see.
+        if (StealthServices.Find(map) is not { Registry.Count: > 0 } stealth) return;
+        float radiusSq = StealthedHazardYards * StealthedHazardYards;
+        HashSet<Unit>.Enumerator hidden = stealth.Registry.EnumerateStealthed();
+        while (hidden.MoveNext())
+        {
+            if (hidden.Current is not Creature creature || !ReferenceEquals(creature.Map, map)) continue;
+            float dx = creature.X - player.X, dy = creature.Y - player.Y;
+            if (((dx * dx) + (dy * dy)) <= radiusSq && !player.VisibleObjects.Contains(creature.Guid))
+                AddThreat(player, map, system, creature, found);
+        }
     }
+
+    /// <summary>
+    /// How far round the bot (2D) the hazard scan looks for stealthed creatures (<see cref="Threats(Player, List{PlayerbotThreat})"/>):
+    /// the stealth visibility rule hides them from the bot's visible objects, yet they attack whoever walks into their reach (Wildthorn
+    /// Lurker 3821 Hide 6920, Ridge Stalker 2731 Sneak 22766). 50 yards covers the aggro reach of any ordinary creature (the 18-yard
+    /// detection range plus the level difference) with the room a route needs to turn.
+    /// </summary>
+    internal const float StealthedHazardYards = 50f;
 
     private static void AddThreat(Player player, Map map, CreatureMapSystem? system, Creature creature, List<PlayerbotThreat> found)
     {
