@@ -390,6 +390,20 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void ATaxiSplineStep_EndsAStateEmote()
+    {
+        using var rig = new TaxiRig();
+        rig.Player.Money = 1000;
+        rig.Kit.Services.ActivateTaxi(rig.Player, rig.Kit.Npc.Guid, 1, 2);
+        Assert.True(rig.Flights.IsFlying(rig.Player));
+        rig.Player.SetUInt32(UpdateFields.UnitNpcEmotestate, 14); // /dance, set after boarding
+
+        rig.Flights.Update(rig.Map, 100); // a spline step moves the player (vmangos Unit.cpp:10672 -> Player::SetPosition)
+
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitNpcEmotestate));
+    }
+
+    [Fact]
     public void Flight_IsAbortedByATeleportOrLeavingTheMap_AndLandNowPutsThePlayerDown()
     {
         using (var drift = new TaxiRig())
