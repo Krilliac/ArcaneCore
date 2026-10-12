@@ -19,10 +19,18 @@ internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, 
 /// Bots are counted by a salted SHA-256 of their id (the salt is persisted, so counts survive a restart), at most
 /// <see cref="QaFinding.MaxTrackedBots"/> per finding: beyond that the count saturates. At the finding cap the lowest-severity, then
 /// oldest unpublished finding is evicted; a published or known-closed finding is never evicted (a new finding is refused when nothing can be).
+/// The fingerprint puts a location in a 50-yard cell, but bots drift much further within one problem area, so a stall or death loop with no
+/// finding of its own cell folds into an existing finding of the same kind, map and non-location identity whose anchor (the first sample's position,
+/// persisted; it never moves, so the radius does not chain) lies within <see cref="AnchorYards"/>. A death loop's identity is its attackers
+/// (overlapping non-zero entries) or, with none on either side, its death source; a signal whose own cell has a finding of other attackers gets a
+/// variant key (<c>|attackers=..</c>) and so its own finding. The v1 keys of existing findings are untouched.
 /// Thread-safe.
 /// </summary>
 internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byte[]? salt = null) : IQaPublicationState
 {
+    /// <summary>How far from a finding's anchor (its first sample, in yards, measured on the ground plane) a signal still folds into it.</summary>
+    internal const float AnchorYards = 160f;
+
     private readonly object _gate = new();
     private readonly Dictionary<string, QaFinding> _byId = new(StringComparer.Ordinal);
     private readonly byte[] _salt = salt is { Length: > 0 } ? salt : RandomNumberGenerator.GetBytes(16);
@@ -51,7 +59,24 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         ulong? bot = signal.BotKey is { } guid ? BotHash(guid) : null;
         lock (_gate)
         {
-            if (!_byId.TryGetValue(id, out QaFinding? finding))
+            _byId.TryGetValue(id, out QaFinding? finding);
+            if (finding is null)
+            {
+                finding = Nearby(signal);
+            }
+            else if (!SameProblem(finding, signal))
+            {
+                // The cell's finding is another death loop (other attackers): fold into a nearby one that is this loop, else give this loop its own key.
+                finding = Nearby(signal);
+                if (finding is null)
+                {
+                    key = VariantKey(key, signal);
+                    id = PlayerbotQaFingerprint.Hash(key);
+                    _byId.TryGetValue(id, out finding);
+                }
+            }
+
+            if (finding is null)
             {
                 if (_byId.Count >= maxFindings && !EvictOne(signal.FromCoverage))
                 {
@@ -83,6 +108,17 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 if (signal.BotClass is > 0 and < 32) finding.ClassMask |= 1u << signal.BotClass;
+                if (finding.Anchor is null && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
+                if (signal.Kind == QaSignalKind.DeathLoop)
+                {
+                    foreach (uint attacker in signal.Attackers)
+                    {
+                        if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxAttackers) finding.Attackers.Add(attacker);
+                    }
+
+                    if (finding.DeathSource.Length == 0) finding.DeathSource = SourceOf(signal);
+                }
+
                 finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message)
                     { Bot = signal.Bot });
                 while (finding.Samples.Count > maxSamples) finding.Samples.RemoveAt(0);
@@ -96,11 +132,67 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             finding.Cause = cause.Cause;
             finding.CauseDetail = cause.Detail;
             finding.Goal = signal.Goal;
-            finding.Subject = Subject(signal, finding.QuestTitle);
+            if (finding.Subject.Length == 0 || string.Equals(finding.Key, key, StringComparison.Ordinal)) finding.Subject = Subject(signal, finding.QuestTitle);
             finding.Severity = PlayerbotQaClassifier.Severity(finding.Kind, finding.Count, finding.DistinctBots, finding.LastSeenUtc, now);
             _snapshot = null;
-            return id;
+            return finding.Id;
         }
+    }
+
+    /// <summary>
+    /// The finding this signal belongs to by place rather than by key: same kind and map, the same non-location identity, and an anchor within
+    /// <see cref="AnchorYards"/> (the nearest wins); null when there is none. Call under the lock.
+    /// </summary>
+    private QaFinding? Nearby(QaSignal signal)
+    {
+        if (signal.FromCoverage || !signal.HasPosition || signal.Kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop)) return null;
+        string? identity = null;
+        QaFinding? best = null;
+        double bestDistance = double.MaxValue;
+        foreach (QaFinding f in _byId.Values)
+        {
+            if (f.Kind != signal.Kind || f.Anchor is not { } anchor || anchor.Map != signal.Map) continue;
+            double dx = (double)anchor.X - signal.X, dy = (double)anchor.Y - signal.Y;
+            double distance = dx * dx + dy * dy;
+            if (!(distance <= (double)AnchorYards * AnchorYards) || distance >= bestDistance) continue;
+            if (signal.Kind == QaSignalKind.DeathLoop
+                ? !SameProblem(f, signal)
+                : !string.Equals(PlayerbotQaFingerprint.LocationFreeKey(f.Key), identity ??= PlayerbotQaFingerprint.LocationFreeKey(PlayerbotQaFingerprint.Key(signal)), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            best = f;
+            bestDistance = distance;
+        }
+
+        return best;
+    }
+
+    /// <summary>Whether a finding of the signal's own key is the signal's problem: always, except a death loop, which needs its attackers (or death source).</summary>
+    private static bool SameProblem(QaFinding finding, QaSignal signal)
+    {
+        if (signal.Kind != QaSignalKind.DeathLoop) return true;
+        bool any = false;
+        foreach (uint attacker in signal.Attackers)
+        {
+            if (attacker == 0) continue;
+            any = true;
+            if (finding.Attackers.Contains(attacker)) return true;
+        }
+
+        return !any && finding.Attackers.Count == 0 && string.Equals(finding.DeathSource, SourceOf(signal), StringComparison.Ordinal);
+    }
+
+    private static string SourceOf(QaSignal signal) => signal.Bot?.Source is { Length: > 0 } source ? source : "Unobserved";
+
+    /// <summary>The key of a death loop beside another loop in the same cell: the v1 key plus its attackers (sorted, distinct), or its death source.</summary>
+    private static string VariantKey(string key, QaSignal signal)
+    {
+        uint[] attackers = [.. signal.Attackers.Where(a => a != 0).Distinct().Order().Take(QaFinding.MaxAttackers)];
+        return attackers.Length > 0
+            ? key + "|attackers=" + string.Join('/', attackers)
+            : key + "|source=" + SourceOf(signal).Replace('|', '/');
     }
 
     /// <summary>Immutable views of every finding (unordered; <see cref="PlayerbotQaReport.Rank"/> orders them).</summary>
@@ -197,7 +289,11 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     SpellRank = view.SpellRank ?? string.Empty, EffectIndex = view.EffectIndex, EffectName = view.EffectName ?? string.Empty,
                     EffectValue = view.EffectValue, Aura = view.Aura, Reason = view.Reason ?? string.Empty, ReasonDetail = view.ReasonDetail ?? string.Empty,
                     Item = view.Item, Npc = view.Npc, GameObject = view.GameObject, ClassMask = view.ClassMask, Coverage = view.Coverage,
+                    // Files before 2026-10-12 have no anchor: the first saved sample with a position, else the centre of the key's cell.
+                    Anchor = view.Anchor ?? (view.Samples ?? []).Where(sm => sm.HasPosition).Select(sm => new QaAnchor(sm.Map, sm.X, sm.Y)).FirstOrDefault()
+                        ?? PlayerbotQaFingerprint.CellCentreOfKey(view.Key),
                 };
+                if (view.Kind == QaSignalKind.DeathLoop) RestoreLoop(finding, view);
                 if (state.Bots.TryGetValue(view.Id, out ulong[]? bots)) finding.Bots.UnionWith(bots.Take(QaFinding.MaxTrackedBots));
                 if (finding.Bots.Count < view.DistinctBots) finding.AnonymousBots = view.DistinctBots;
                 foreach (QaSample sample in (view.Samples ?? []).TakeLast(maxSamples)) finding.Samples.Add(sample);
@@ -208,6 +304,27 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         }
 
         return dropped;
+    }
+
+    /// <summary>
+    /// A death loop's attackers and death source: as saved, else the saved samples', else (attackers only) the subject's <c>attackers 1/2</c>.
+    /// </summary>
+    private static void RestoreLoop(QaFinding finding, QaFindingView view)
+    {
+        IEnumerable<uint> attackers = view.Attackers ?? [];
+        if (!attackers.Any()) attackers = (view.Samples ?? []).SelectMany(sm => sm.Attackers ?? []);
+        if (!attackers.Any() && view.Subject is { } subject && subject.LastIndexOf("attackers ", StringComparison.Ordinal) is var at and >= 0)
+        {
+            attackers = subject[(at + "attackers ".Length)..].Split('/').Select(t => uint.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out uint a) ? a : 0u);
+        }
+
+        foreach (uint attacker in attackers)
+        {
+            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxAttackers) finding.Attackers.Add(attacker);
+        }
+
+        finding.DeathSource = !string.IsNullOrEmpty(view.DeathSource) ? view.DeathSource
+            : (view.Samples ?? []).Select(sm => sm.Bot?.Source).FirstOrDefault(src => !string.IsNullOrEmpty(src)) ?? "Unobserved";
     }
 
     /// <summary>The optional ids of a direct signal; a field the signal leaves empty keeps what the finding had.</summary>

@@ -57,6 +57,24 @@ internal static partial class PlayerbotQaFingerprint
         return string.Equals(Key(signal), key, StringComparison.Ordinal) ? signal : null;
     }
 
+    [GeneratedRegex(@"\|map=(?<m>\d{1,10})\|cell=(?<cx>-?\d{1,9}),(?<cy>-?\d{1,9})", RegexOptions.CultureInvariant)]
+    private static partial Regex LocationPattern();
+
+    /// <summary>
+    /// The key without its <c>|map=..|cell=..</c> part: what a stall or death loop is, wherever it happened (goal, quest, target, outside flag).
+    /// </summary>
+    internal static string LocationFreeKey(string key) => LocationPattern().Replace(key, string.Empty, 1);
+
+    /// <summary>The centre of the location cell in a key (the anchor of a finding saved without one), or null when the key has no location.</summary>
+    internal static QaAnchor? CellCentreOfKey(string key)
+    {
+        if (LocationPattern().Match(key) is not { Success: true } m
+            || !uint.TryParse(m.Groups["m"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out uint map)
+            || !int.TryParse(m.Groups["cx"].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int cx)
+            || !int.TryParse(m.Groups["cy"].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int cy)) return null;
+        return new QaAnchor(map, (cx + 0.5f) * CellYards, (cy + 0.5f) * CellYards);
+    }
+
     /// <summary>The cell index of a coordinate.</summary>
     internal static int Cell(float coordinate) => (int)Math.Floor(coordinate / CellYards);
 
