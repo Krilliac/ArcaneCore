@@ -175,12 +175,19 @@ public sealed class PlayerbotEconomyWorldTests
 
     // --- the visit collects ------------------------------------------------------------------------------------------
 
-    [Fact]
-    public async Task Visit_CollectsSoldAndExpiredLetters_AndLeavesCodAndPlayerLettersExactlyAsTheyAre()
+    /// <summary>
+    /// The same visit under both client fidelities, with the scenario tap taken off the bot so its ring is the only transport: the mail
+    /// replies the economy reads (MSG_QUERY_NEXT_MAIL_TIME, SMSG_MAIL_LIST_RESULT, SMSG_SEND_MAIL_RESULT) must reach it in Lean as in Full.
+    /// </summary>
+    [Theory]
+    [InlineData(PlayerbotClientFidelity.Lean)]
+    [InlineData(PlayerbotClientFidelity.Full)]
+    public async Task Visit_CollectsSoldAndExpiredLetters_AndLeavesCodAndPlayerLettersExactlyAsTheyAre(PlayerbotClientFidelity fidelity)
     {
         await using ScenarioTestWorld world = await StartAsync();
-        await RunAsync(world, "economy-mail", async c =>
+        await RunAsync(world, "economy-mail-" + fidelity, async c =>
         {
+            c.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<PlayerbotOptions>>().Value.ClientFidelity = fidelity;
             EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
             ScenarioBot bot = await c.LoginAsync("Econmail");
             ScenarioBot other = await c.LoginAsync("Econother");
@@ -197,6 +204,8 @@ public sealed class PlayerbotEconomyWorldTests
             uint moneyBefore = await bot.ReadAsync(p => p.Money);
 
             Driver driver = await AttachAsync(c, bot, Options(listChance: 0, maxListings: 5, budget: 0f));
+            await c.ReadAsync(() => bot.Session!.ManagedPacketObserver = null);
+            ScenarioContext.ExpectEqual(fidelity == PlayerbotClientFidelity.Full, bot.Session!.WantsUpdateObjects, "update blocks are built for the bot only in Full");
             await StartVisitAsync(c, driver);
             await FinishAsync(c, driver, 1);
 

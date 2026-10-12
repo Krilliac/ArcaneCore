@@ -47,7 +47,7 @@ public sealed class PlayerbotMovementControlTests
     [Fact]
     public async Task SelectivePacketDrain_PreservesOtherFamiliesAndMovementStopUsesNormalHandler()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = BotFidelity.Start(PlayerbotClientFidelity.Full);
         WorldSession session = await EnterAsync(host);
         try
         {

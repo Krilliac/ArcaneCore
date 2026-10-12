@@ -51,6 +51,11 @@ internal sealed record ServerInfoDiagnosticsValues(
     public (double Commands, double Maps, double Features)? PhaseAllocations { get; init; }
     public IReadOnlyList<(string Name, double MeanBytes)> TopAllocatingFeatures { get; init; } = [];
 
+    /// <summary>Lean playerbot mode (<c>World:Playerbots:ClientFidelity</c>): update-object blocks not built for bots, and received packets and bytes not copied into bot rings.</summary>
+    public long LeanUpdateBlocksSkipped { get; init; }
+    public long LeanRingPacketsSkipped { get; init; }
+    public long LeanRingBytesSkipped { get; init; }
+
     /// <summary>The garbage collector: server or workstation, concurrent, collections per generation, total pause.</summary>
     public string? Gc { get; init; }
 }
@@ -95,6 +100,9 @@ internal static class ServerInfoDiagnostics
             PhaseAllocations = stats.Samples > 0 ? (stats.CommandsMeanBytes, stats.MapsMeanBytes, stats.FeaturesMeanBytes) : null,
             TopAllocatingFeatures = stats.FeatureAllocations.Take(3).ToArray(),
             Gc = GcLine(),
+            LeanUpdateBlocksSkipped = ArcaneCore.Game.Updates.BotLeanStats.UpdateBlocks,
+            LeanRingPacketsSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingPackets,
+            LeanRingBytesSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingBytes,
         };
     }
 
@@ -129,7 +137,10 @@ internal static class ServerInfoDiagnostics
             $"Tick frames: samples={value.FrameSamples.ToString(CultureInfo.InvariantCulture)} mean={Millis(value.MeanFrameIntervalMicros)} p50={Millis(value.FrameP50Micros)} p90={Millis(value.FrameP90Micros)} frameOverruns={Count(value.FrameOverruns)}",
             $"Tick work: mean={Millis(value.MeanTickMicros)} p50={Millis(value.P50TickMicros)} p95={Millis(value.P95TickMicros)} p99={Millis(value.P99TickMicros)} max={Millis(value.MaxTickMicros)} workOverruns={Count(value.WorkOverruns)}",
             $"Commands: pending={value.PendingCommands.ToString(CultureInfo.InvariantCulture)}; process: workingSet={Bytes(value.WorkingSetBytes)} managedHeap={Bytes(value.ManagedHeapBytes)} allocatedPerTick={Allocated(value.AllocatedBytesPerTick)}",
-            $"Managed bots: {Active(value.ActiveBots)}",
+            $"Managed bots: {Active(value.ActiveBots)}"
+                + (value.LeanUpdateBlocksSkipped + value.LeanRingPacketsSkipped == 0 ? string.Empty
+                    : string.Create(CultureInfo.InvariantCulture,
+                        $"; lean packets skipped: update blocks={value.LeanUpdateBlocksSkipped} ring packets={value.LeanRingPacketsSkipped} ring bytes={Bytes(value.LeanRingBytesSkipped)}")),
             $"Tick schedule: late={value.LateTicks.ToString(CultureInfo.InvariantCulture)} (>{value.LateToleranceMs.ToString(CultureInfo.InvariantCulture)} ms) skipped={value.SkippedTicks.ToString(CultureInfo.InvariantCulture)} (drift-compensated; a stall skips missed starts instead of bursting)",
             $"Tick phases mean/max: commands={Phase(value.Commands)} maps={Phase(value.Maps)} features={Phase(value.Features)}",
             "Slowest features: " + (value.SlowestFeatures.Count == 0 ? "unavailable"
