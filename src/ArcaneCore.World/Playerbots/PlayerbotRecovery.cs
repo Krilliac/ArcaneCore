@@ -1088,8 +1088,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     /// <summary>
     /// A place to reclaim a camped body from, free of world state: candidates on rings round the body, within
-    /// <see cref="ReviveSpotMaxYards"/> of it (the server revives within <see cref="CombatConstants.CorpseReclaimRadius"/>) and at
-    /// out of every threat's reach with <see cref="CampMarginYards"/> and <see cref="ReviveSpotSlackYards"/>, nearest to the ghost first. <paramref name="reach"/> maps a
+    /// <see cref="ReviveSpotMaxYards"/> of it (the server revives within <see cref="CombatConstants.CorpseReclaimRadius"/>), out of
+    /// every threat's reach plus <see cref="ReviveSpotMarginYards"/> and <see cref="ReviveSpotSlackYards"/>, and passing
+    /// <paramref name="safe"/> when given (dry ground), nearest to the ghost first. <paramref name="reach"/> maps a
     /// candidate to the point the ghost can actually walk to (the navigation mesh's, null when it cannot); the first reachable
     /// point that is still a revive spot is taken. At most <see cref="ReviveSpotMaxQueries"/> candidates are asked.
     /// </summary>
