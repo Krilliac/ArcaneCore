@@ -246,7 +246,7 @@ public sealed class WiringAuditTests
     }
 
     [Fact]
-    public void Audit_StaticCategoriesAreComputedOnce_UnhandledCountsStayLive()
+    public void Audit_UnhandledCountsStayLive_AcrossRuns()
     {
         var tracker = new UnhandledOpcodeTracker();
         var services = new ServiceCollection();
@@ -258,6 +258,30 @@ public sealed class WiringAuditTests
         WiringReport second = audit.Run();
         Assert.Contains(second.Findings, f => f.Category == WiringAudit.UnhandledOpcode);
         Assert.Contains(second.Findings, f => f.Category == WiringAudit.OptionsUnbound); // still reported from the cached scan
+    }
+
+    /// <summary>Hot modules and <c>.hotcode refresh</c> swap the handler table at run time, so the handler audit is never served from the cache.</summary>
+    [Fact]
+    public void Audit_SeesAHandlerTableSwappedAfterTheFirstRun()
+    {
+        var table = new ArcaneCore.World.Handlers.OpcodeTable();
+        table.OnSession(WorldOpcode.CmsgPing, SessionStates.Authenticated, (_, _) => Task.CompletedTask);
+        var services = new ServiceCollection();
+        services.AddSingleton(new UnhandledOpcodeTracker());
+        services.AddSingleton(table);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        var audit = new WiringAudit(provider, [typeof(WiringAuditTests).Assembly], FixtureCatalog());
+        WiringReport first = audit.Run();
+        Assert.DoesNotContain(first.Findings, f => f.Category == WiringAudit.ServerOpcodeHandler);
+
+        var swapped = new ArcaneCore.World.Handlers.OpcodeTable();
+        swapped.OnSession(WorldOpcode.CmsgPing, SessionStates.Authenticated, (_, _) => Task.CompletedTask);
+        swapped.OnSession(WorldOpcode.SmsgPong, SessionStates.Authenticated, (_, _) => Task.CompletedTask);
+        table.Replace(swapped);
+
+        WiringReport second = audit.Run();
+        Assert.Contains(second.Findings, f => f is { Category: WiringAudit.ServerOpcodeHandler, Subject: "SMSG_PONG" });
+        Assert.Equal(first.OpcodeHandlers + 1, second.OpcodeHandlers);
     }
 
     [Fact]
