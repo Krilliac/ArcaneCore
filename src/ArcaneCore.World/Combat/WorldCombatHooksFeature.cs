@@ -21,12 +21,16 @@ namespace ArcaneCore.World.Combat;
 /// </summary>
 public sealed class WorldCombatHooksFeature(IServiceProvider services, ILogger<WorldCombatHooksFeature> logger) : IWorldFeature
 {
+    /// <summary>The catalog this world's combat hooks loaded; read by other world-thread features after startup.</summary>
+    public FactionTemplateCatalog Catalog { get; private set; } = FactionTemplateCatalog.Empty;
+
     public void Attach(WorldRuntime world)
     {
         var options = new CreatureOptions();
         services.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(options);
         FactionTemplateCatalog? catalog = services.GetService<FactionTemplateCatalog>()
             ?? (string.IsNullOrWhiteSpace(options.FactionTemplateDbcPath) ? null : FactionTemplateDbcReader.Load(options.FactionTemplateDbcPath));
+        Catalog = catalog ?? FactionTemplateCatalog.Empty;
         if (catalog is null || catalog.Count == 0)
         {
             logger.LogWarning("No faction templates loaded: combat keeps the permissive default hooks (players can attack any non-player unit)");

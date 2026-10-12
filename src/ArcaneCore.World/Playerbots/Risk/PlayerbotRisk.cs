@@ -559,6 +559,24 @@ internal sealed class PlayerbotRisk
         float? mana = player.PowerType == PowerType.Mana && maxMana > 0 ? CombatConstants.CorpseReclaimRestorePercent * 100f : null;
         uint maxHealth = unsickened ? PlayerbotSickness.UnsickenedMaxHealth(_session, player) : player.MaxHealth;
         uint health = Math.Max(1u, (uint)(maxHealth * CombatConstants.CorpseReclaimRestorePercent));
+        // A landing or corpse spot can aggro several unrelated creatures at once. The pull estimate counts all creatures at
+        // its fight spot; judging each one alone here let ordinary packs camp graveyards and repeatedly kill revived bots.
+        List<RiskEnemy> reaching = _reachingEnemies;
+        reaching.Clear();
+        foreach (PlayerbotThreat threat in threats)
+            if (threat.Source is { } creature && threat.Reaches(body, PlayerbotRecovery.CampMarginYards))
+                reaching.Add(Enemy(creature, RiskJoin.FightSpot, player));
+        if (reaching.Count > 1)
+        {
+            var pack = new PlayerbotEngagementFacts
+            {
+                BotLevel = player.Level, BotHealth = health, BotMaxHealth = maxHealth, BotManaPct = mana,
+                ManaDependence = ManaDependence(player.Class),
+                BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level), Enemies = reaching,
+            };
+            PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(pack, _options.Risk);
+            if (FatalOrBeyondStrength(verdict, pack, radius)) return verdict;
+        }
         foreach (PlayerbotThreat threat in threats)
         {
             if (threat.Source is not { } creature
@@ -581,11 +599,21 @@ internal sealed class PlayerbotRisk
                 Enemies = enemies,
             };
             PlayerbotEngagement verdict = PlayerbotRiskModel.Assess(facts, _options.Risk);
-            if (verdict.Decision == PlayerbotEngageDecision.Avoid && PlayerbotRiskModel.BeyondStrength(facts, _options.Risk)) return verdict;
+            if (FatalOrBeyondStrength(verdict, facts, radius)) return verdict;
         }
 
         return null;
     }
+
+    /// <summary>
+    /// Whether a verdict makes the place unsafe. Always when the fight is beyond the bot's strength at full health; at an exact
+    /// landing (<paramref name="radius"/> 0: the spirit healer's, no clear spot elsewhere in a reclaim disc) also when the fight is
+    /// predicted to take all of the health the resurrection gives back (<c>facts.BotHealth</c>, half of the current maximum, which
+    /// resurrection sickness already lowers), even if the bot could win it after resting.
+    /// </summary>
+    private bool FatalOrBeyondStrength(PlayerbotEngagement verdict, PlayerbotEngagementFacts facts, float radius)
+        => (radius == 0f && verdict.Risk >= 1f)
+            || (verdict.Decision == PlayerbotEngageDecision.Avoid && PlayerbotRiskModel.BeyondStrength(facts, _options.Risk));
 
     // --- hazards on the way -------------------------------------------------------------------------------------
 
@@ -614,6 +642,7 @@ internal sealed class PlayerbotRisk
         if (!Enabled || !player.IsInWorld) return;
         uint now = _session.World.NowMs;
         if (unchecked((int)(_nextScanMs - now)) > 0) return;
+        PackExposureEvaluations = 0;
         uint phase = _scanned ? 0u : (uint)((player.Guid.Low * 2654435761UL) % HazardScanMs);
         _scanned = true;
         _nextScanMs = unchecked(now + HazardScanMs + phase);
@@ -623,15 +652,18 @@ internal sealed class PlayerbotRisk
         float botDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level);
         if (strong) Hazards.BeginStrongScan();
         PlayerbotRecovery.Threats(player, _threats);
-        foreach (PlayerbotThreat threat in _threats)
+        if (strong) PreparePackExposures(player, botDps);
+        for (int index = 0; index < _threats.Count; index++)
         {
+            PlayerbotThreat threat = _threats[index];
             if (threat.Source is not { } creature) continue;
             CreatureSpellThreat spells = PlayerbotCreatureSpells.Of(creature, store);
             if (spells.IsLethalTo(player.MaxHealth))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
             else if (Memory.IsRemembered(creature.Guid, now))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
-            else if (strong && BeyondStrength(player, creature, spells, botDps))
+            else if (strong && (BeyondStrength(player, creature, spells, botDps)
+                || BeyondStrengthWithNearby(index)))
                 Hazards.SetStrong(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, StrongHazardLifeMs, creature.Guid);
         }
 
@@ -640,6 +672,10 @@ internal sealed class PlayerbotRisk
     }
 
     private readonly List<PlayerbotThreat> _threats = [];
+    private readonly List<RiskEnemy> _reachingEnemies = []; // world-thread-only scratch for resurrection checks
+    private float[] _packExposures = [];
+    /// <summary>Number of melee exposure calculations in the last hazard scan (cost regression seam).</summary>
+    internal int PackExposureEvaluations { get; private set; }
     private bool _scanned;
 
     /// <summary>
@@ -655,6 +691,48 @@ internal sealed class PlayerbotRisk
     {
         RiskEnemy enemy = Enemy(creature, RiskJoin.Target, player.MaxHealth, spells);
         return PlayerbotRiskModel.BeyondStrengthAlone(player.Level, player.MaxHealth, botDps, enemy, _options.Risk);
+    }
+
+    /// <summary>
+    /// Lower bound on the risk of the pack at this creature's position. Every neighboring threat that reaches the position
+    /// would aggro there even without an assistance call (vmangos BasicAI::MoveInLineOfSight). The sum of each creature's
+    /// solo damage while being killed is no greater than the real sequential fight, so crossing the maximum pull threshold
+    /// is enough to mark the overlapping reaches without sorting or allocating in the frequent hazard scan.
+    /// </summary>
+    private void PreparePackExposures(Player player, float botDps)
+    {
+        if (_packExposures.Length < _threats.Count)
+            Array.Resize(ref _packExposures, Math.Max(_threats.Count, _packExposures.Length * 2));
+        float denominator = MathF.Max(0.1f, botDps) * Math.Max(1u, player.MaxHealth);
+        for (int index = 0; index < _threats.Count; index++)
+        {
+            if (_threats[index].Source is not { } creature)
+            {
+                _packExposures[index] = 0;
+                continue;
+            }
+
+            CreatureTemplate template = creature.Template;
+            PackExposureEvaluations++;
+            float melee = PlayerbotRiskModel.CreatureDps(template.MinMeleeDamage, template.MaxMeleeDamage,
+                template.MeleeBaseAttackTime, creature.Level, template.Rank is 1 or 2 or 3);
+            _packExposures[index] = melee * creature.Health / denominator;
+        }
+    }
+
+    private bool BeyondStrengthWithNearby(int atIndex)
+    {
+        PlayerbotThreat at = _threats[atIndex];
+        float exposure = 0;
+        int count = 0;
+        for (int index = 0; index < _threats.Count; index++)
+        {
+            if (_packExposures[index] <= 0 || (index != atIndex && !_threats[index].Overlaps(at))) continue;
+            exposure += _packExposures[index];
+            count++;
+        }
+
+        return count > 1 && exposure > PlayerbotRiskModel.Acceptable(float.PositiveInfinity, _options.Risk.Tolerance);
     }
 
     /// <summary>

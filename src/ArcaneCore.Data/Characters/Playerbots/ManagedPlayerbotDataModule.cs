@@ -130,6 +130,11 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
         return changed == 1;
     }
 
+    public async Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
+        => await db.Set<ManagedPlayerbotRow>()
+            .Where(row => row.BotId == botId && row.AccountId == accountId && row.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false) == 1;
+
     private static ManagedPlayerbot ToRecord(ManagedPlayerbotRow row)
         => new(row.BotId, row.AccountId, row.CharacterId, row.AccountName, row.DesiredEnabled, row.State,
             row.Goal, row.TargetEntry, row.QuestId, row.Revision, row.CreatedUnix, row.UpdatedUnix, row.ErrorCode);

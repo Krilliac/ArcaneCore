@@ -70,6 +70,41 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         Assert.True(micros < 2_000, $"{micros:F1} us per scan");
     }
 
+    [Fact]
+    public async Task OneHundredOrdinaryHostiles_ComputeEachMeleeExposureOncePerScan()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        CreatureTemplate wolf = RiskTestWorld.Template(991295, level: 5, health: 102, minDamage: 7, maxDamage: 10);
+        Creature[] ring = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            player.Level = 20;
+            player.MaxHealth = player.Health = 800;
+            return Enumerable.Range(0, 100).Select(i =>
+            {
+                float angle = i * MathF.Tau / 100;
+                return world.Spawn(wolf, MathF.Cos(angle) * 50f, MathF.Sin(angle) * 50f);
+            }).ToArray();
+        });
+        await world.SeeAsync(ring);
+        FieldInfo next = typeof(PlayerbotRisk).GetField("_nextScanMs", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        (int evaluations, double micros) = await world.OnWorldAsync(() =>
+        {
+            PlayerbotRisk risk = world.Brain.Risk;
+            Player player = world.Player;
+            for (int i = 0; i < 50; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); }
+            int evaluated = risk.PackExposureEvaluations;
+            var clock = Stopwatch.StartNew();
+            for (int i = 0; i < 300; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); }
+            clock.Stop();
+            return (evaluated, clock.Elapsed.TotalMicroseconds / 300);
+        });
+        output.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us");
+        Console.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us");
+        Assert.Equal(100, evaluations);
+        Assert.True(micros < 5_000, $"{micros:F1} us per scan");
+    }
+
     /// <summary>
     /// The escape fan (<see cref="PlayerbotHazards.TryFindGap"/>, one line, and <see cref="PlayerbotHazards.FindGaps"/>, the best
     /// <see cref="PlayerbotRisk.MaxEscapePlans"/> lines as one escape attempt asks) at its worst: 64 strong hazards closing a ring round the bot (no line

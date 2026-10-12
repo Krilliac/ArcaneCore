@@ -261,6 +261,31 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     [Fact]
+    public async Task Delete_RemovesCharacterAndRegistryRow_RefusesWhileRunning()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxRegisteredBots = 1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Deleteone", 1, 1)).BotId!.Value;
+        Assert.Equal("playerbot-registry-full", (await feature.CreateAsync("Deletetwo", 1, 1)).Code);
+        Assert.True((await feature.StartAsync(id.ToString())).Success);
+
+        Assert.Equal("bot-running", (await feature.DeleteAsync(id.ToString())).Code);
+        Assert.Single(await owners.LoadAllAsync());
+
+        Assert.True((await feature.StopAsync(id.ToString())).Success);
+        PlayerbotOperationResult deleted = await feature.DeleteAsync(id.ToString());
+        Assert.True(deleted.Success, deleted.Code);
+        Assert.Empty(await owners.LoadAllAsync());
+        Assert.DoesNotContain(feature.Snapshot(), b => b.BotId == id);
+        Assert.Equal("bot-not-found", (await feature.DeleteAsync(id.ToString())).Code);
+        Assert.True((await feature.CreateAsync("Deletetwo", 1, 1)).Success, "the freed registry slot is usable again");
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
     public async Task MaxBots_ReadAtEachStart_ARaiseAdmitsMore_ALoweringStopsNobodyAndRefusesNewStarts()
     {
         // .reload config writes the running PlayerbotOptions (WorldConfigKeys: World:Playerbots:MaxBots is live).
@@ -938,6 +963,11 @@ public sealed class ManagedPlayerbotLifecycleTests
             _nextUpdateHeld = null;
             _release.TrySetResult();
         }
+
+        public Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_items.TryGetValue(botId, out ManagedPlayerbot? current) && current.AccountId == accountId
+                && current.CharacterId == characterId
+                && _items.TryRemove(new KeyValuePair<Guid, ManagedPlayerbot>(botId, current)));
 
         public async Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {

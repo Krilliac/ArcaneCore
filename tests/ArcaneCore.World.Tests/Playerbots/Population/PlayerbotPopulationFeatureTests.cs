@@ -1,9 +1,19 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
@@ -14,6 +24,285 @@ namespace ArcaneCore.World.Tests.Playerbots.Population;
 /// </summary>
 public sealed class PlayerbotPopulationFeatureTests
 {
+    private const uint SafeStarterZone = 9001;
+
+    [Fact]
+    public async Task UnsafeLeastAssignedZone_IsSkippedForAnotherZoneInTheSamePass()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2,
+            configureServices: UnsafeStarterServices);
+        await AddSafeStarterZoneAsync(world);
+
+        // One operator bot assigned to the safe zone makes the unsafe Elwynn zone strictly least assigned.
+        PlayerbotOperationResult operatorResult = await world.Bots.CreateAsync("Safeseed", 1, 1);
+        Guid operatorId = Assert.IsType<Guid>(operatorResult.BotId);
+        Assert.True((await world.Bots.StartAsync(operatorId.ToString())).Success);
+        await world.Host.World.InvokeAsync(() =>
+        {
+            world.Bots.FindSession(operatorId)!.Player!.ZoneId = SafeStarterZone;
+            return true;
+        });
+        world.Ticks.Set(200, 10);
+
+        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
+        PopulationStatus status = await world.PassAsync();
+        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+        {
+            await Task.Delay(20);
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+        }
+
+        Assert.Contains("created 1", status.Reason);
+        Assert.Single(world.Members.Snapshot);
+        Assert.Equal(SafeStarterZone, world.Members.Snapshot[0].ZoneId);
+        Assert.Equal(2, world.RunningCount);
+        Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count); // no throwaway bot in a starting area
+    }
+
+    [Fact]
+    public async Task AllUnsafeZones_CreateNoCharacterAndLeaveNoStoppedBandMember()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: UnsafeStarterServices);
+        world.Ticks.Set(200, 10);
+
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("created 0", status.Reason);
+        Assert.Empty(world.Members.Snapshot);
+        Assert.Empty(await world.Owners.LoadAllAsync());
+    }
+
+    [Fact]
+    public async Task PlacementRefusedAfterCreation_LeavesNoPopulationMember_AndRecordsTheRefusal()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        // Safe when the plan is made; unsafe once the new member row exists (a content reload between plan and teleport).
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Count == 0 ? 0 : 60;
+        world.Ticks.Set(200, 10);
+
+        PopulationStatus status = await world.PassAsync();
+        Assert.Contains("placement-unsafe", world.Feature.Status.LastError ?? string.Empty);
+        Assert.Empty(world.Members.Snapshot);
+        Assert.Equal(0, world.RunningCount);
+        Assert.True(status.Reason.Contains("created 1"), status.Reason + " / " + status.LastError);
+        // The unplaced level-1 bot is deleted, not parked: no registry row (so no MaxRegisteredBots slot) and no status entry.
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Bots.Snapshot());
+    }
+
+    [Fact]
+    public async Task PlacementRefusedRepeatedly_PausesCreation_AndNextPassPlansAgain()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.TargetOnline = 1;
+            o.Population.MaxCreatePerMinute = 60;
+        });
+        bool placeable = false;
+        world.Feature.Provisioner.AreaLevelSource = _ => placeable || world.Members.Snapshot.Count == 0 ? 0 : 60;
+
+        for (int pass = 1; pass <= 3; pass++)
+        {
+            PopulationStatus refused = await PassWithTicksAsync(world);
+            Assert.Contains("created 1", refused.Reason);
+            Assert.Empty(await world.Owners.LoadAllAsync());
+        }
+
+        for (int pass = 4; pass <= 13; pass++)
+        {
+            PopulationStatus paused = await PassWithTicksAsync(world);
+            Assert.Contains("creation paused", paused.Reason);
+            Assert.Contains("created 0", paused.Reason);
+            Assert.Empty(await world.Owners.LoadAllAsync());
+        }
+
+        // Ten paused passes later the pause lifts by itself and the next pass plans (and is refused) again.
+        PopulationStatus resumed = await PassWithTicksAsync(world);
+        Assert.Contains("created 1", resumed.Reason);
+        Assert.DoesNotContain("creation paused", resumed.Reason);
+
+        // The pause lifts on its own after a number of passes, and the next plan places the bot.
+        placeable = true;
+        for (int pass = 0; pass < 12 && world.Members.Snapshot.Count == 0; pass++) await PassWithTicksAsync(world);
+        Assert.Single(world.Members.Snapshot);
+        Assert.Single(await world.Owners.LoadAllAsync());
+    }
+
+    [Fact]
+    public async Task PlacementRefused_AndBotDeleteRefused_KeepsThePendingMember_AndALaterPassDeletesIt()
+    {
+        var hook = new SwitchableDeleteHook { Refuse = true };
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<ICharacterDeleteHook>(hook));
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Any(m => m.Band != PlayerbotPopulationFeature.PendingDeleteBand) ? 60 : 0;
+
+        PopulationStatus first = await PassWithTicksAsync(world);
+        Assert.Contains("created 1", first.Reason);
+        // The character delete was refused: the registry row stays and so does the member, marked pending; nothing restarts it.
+        Assert.Single(await world.Owners.LoadAllAsync());
+        PlayerbotPopulationMember pending = Assert.Single(world.Members.Snapshot);
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, pending.Band);
+        Assert.Equal(0, world.RunningCount);
+
+        hook.Refuse = false;
+        await PassWithTicksAsync(world);
+        // The pending bot is deleted at the start of the next pass; that pass's own new bot is refused and deleted too.
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Members.Snapshot);
+    }
+
+    [Fact]
+    public async Task PlacementRefused_AndCancelledDuringTheDelete_KeepsThePendingMember_AndALaterPassDeletesIt()
+    {
+        System.Reflection.FieldInfo stop = typeof(PlayerbotPopulationFeature).GetField("_stop",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        PlayerbotPopulationFeature? feature = null;
+        var shutdown = new CancelOnRefusalLogger(() => ((CancellationTokenSource)stop.GetValue(feature)!).Cancel());
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(shutdown));
+        feature = world.Feature;
+        world.Feature.Provisioner.AreaLevelSource = _ => world.Members.Snapshot.Any(m => m.Band != PlayerbotPopulationFeature.PendingDeleteBand) ? 60 : 0;
+
+        await PassWithTicksAsync(world);
+        // The shutdown arrived right after the refusal, before the bot could be stopped and deleted.
+        Assert.True(shutdown.Fired);
+        Assert.Single(await world.Owners.LoadAllAsync());
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, Assert.Single(world.Members.Snapshot).Band);
+
+        shutdown.Armed = false;
+        stop.SetValue(world.Feature, new CancellationTokenSource());
+        // A failed deletion is retried on a growing interval: the first retry is within a pass or two.
+        for (int pass = 0; pass < 3 && world.Members.Snapshot.Count > 0; pass++) await PassWithTicksAsync(world);
+        Assert.Empty(await world.Owners.LoadAllAsync());
+        Assert.Empty(world.Members.Snapshot);
+    }
+
+    private sealed class CancelOnRefusalLogger(Action cancel) : Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>
+    {
+        public bool Armed { get; set; } = true;
+        public bool Fired { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (!Armed || !formatter(state, exception).Contains("placement of", StringComparison.Ordinal)) return;
+            Fired = true;
+            cancel();
+        }
+    }
+
+    [Fact]
+    public async Task APendingMember_WhoseBotWasRestoredRunning_IsStoppedAndDeleted_WithoutCountingInABand()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        // The state after a crash between the mark and the stop: marked pending, but the bot is desired and running again.
+        PlayerbotOperationResult made = await world.Bots.CreateAsync("Restoredone", 1, 1);
+        Guid id = Assert.IsType<Guid>(made.BotId);
+        Assert.True((await world.Bots.StartAsync(id.ToString())).Success);
+        // The pass counts only bots whose player is in the world; without this the count is 0 whatever the code does.
+        await world.Host.WaitForWorldAsync(() => world.Host.World.FindOnlinePlayer("Restoredone") is { IsInWorld: true }, "the restored bot in the world");
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        world.Members.Seed(new PlayerbotPopulationMember(id, (await world.Owners.LoadAllAsync()).Single().CharacterId, 0,
+            PlayerbotPopulationFeature.PendingDeleteBand, now, now));
+        world.Feature.Provisioner.AreaLevelSource = _ => 60; // nothing else can be placed in this pass
+
+        PopulationStatus status = await PassWithTicksAsync(world);
+        Assert.Equal(0, status.Bands.Sum(b => b.Have)); // never counted towards a band, not even for the pass it was running in
+        Assert.Equal(0, status.OwnedRunning);
+        Assert.DoesNotContain(await world.Owners.LoadAllAsync(), b => b.BotId == id);
+        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == id);
+    }
+
+    [Fact]
+    public async Task ARefusedPendingDelete_IsRetriedWithGrowingGaps_CappedAtEight()
+    {
+        var hook = new SwitchableDeleteHook { Refuse = true };
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: services => services.AddSingleton<ICharacterDeleteHook>(hook));
+        bool firstPass = true;
+        // The first pass places and is refused; afterwards nothing is safe, so only the one pending bot is ever retried.
+        world.Feature.Provisioner.AreaLevelSource = _ => firstPass && world.Members.Snapshot.Count == 0 ? 0 : 60;
+
+        var attemptPasses = new List<int>();
+        int calls = 0;
+        for (int pass = 1; pass <= 46; pass++)
+        {
+            await PassWithTicksAsync(world);
+            firstPass = false;
+            if (hook.Calls != calls) { attemptPasses.Add(pass); calls = hook.Calls; }
+        }
+
+        Assert.Single(await world.Owners.LoadAllAsync());
+        Assert.Equal(PlayerbotPopulationFeature.PendingDeleteBand, Assert.Single(world.Members.Snapshot).Band);
+        int[] gaps = [.. attemptPasses.Zip(attemptPasses.Skip(1), (a, b) => b - a)];
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 8], gaps);
+    }
+
+    private sealed class SwitchableDeleteHook : ICharacterDeleteHook
+    {
+        public volatile bool Refuse;
+
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task<bool> CanDeleteCharacterAsync(WorldSession session, CharacterRecord character)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(!Refuse);
+        }
+    }
+
+    private static Task<PopulationStatus> PassWithTicksAsync(PopulationTestHost world)
+    {
+        world.Ticks.Set(200, 10); // a pass needs a fresh tick window
+        return world.PassAsync();
+    }
+
+    private static void UnsafeStarterServices(IServiceCollection services)
+    {
+        services.AddSingleton(new FactionTemplateCatalog([
+            new FactionTemplateRecord(1, 1, 72, 3, 2, 12),
+            new FactionTemplateRecord(14, 14, 0, 8, 0, 1),
+        ]));
+        services.AddSingleton<ICreatureDataStore>(new FixedCreatureStore());
+    }
+
+    private static Task AddSafeStarterZoneAsync(PopulationTestHost world) => world.Host.World.InvokeAsync(() =>
+    {
+        WorldMaps maps = WorldMaps.Of(world.Host.World);
+        maps.Terrain.Areas = new AreaTable([
+            .. maps.Areas.All,
+            new AreaTemplate(SafeStarterZone, 0, 0, SafeStarterZone, 0, 0, "Safe Woods", AreaTeams.Ally, 0),
+            new AreaTemplate(9002, 0, SafeStarterZone, 9002, 0, 5, "Safe Meadow", 0, 0),
+            new AreaTemplate(9003, 0, SafeStarterZone, 9003, 0, 10, "Safe Grove", 0, 0),
+        ], maps.Registry);
+        WorldGraveyards.Of(world.Host.World).Load(new GraveyardContent(
+        [
+            new WorldSafeLoc(1, 0, -8913.23f, -133f, 81f, 0f, "Elwynn"),
+            new WorldSafeLoc(9901, 0, -8200f, -700f, 90f, 0f, "Safe Woods"),
+        ], [new GraveyardLink(1, PopulationTestHost.Elwynn, 0), new GraveyardLink(9901, SafeStarterZone, 0)]), null);
+        return true;
+    });
+
+    private sealed class FixedCreatureStore : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CreatureContent(
+            [new CreatureTemplate
+            {
+                Entry = 990001, Name = "test hostile", Faction = 14, MinLevel = 20, MaxLevel = 20,
+                MinLevelHealth = 300, MaxLevelHealth = 300, DisplayIds = [49],
+            }],
+            [new CreatureSpawn { Guid = 990001, Entry = 990001, MapId = 0, X = -8880f, Y = -133f, Z = 81f }],
+            [], [], []));
+    }
+
     [Fact]
     public async Task APassCanceledBecauseTheWorldStopped_IsInformational()
     {
@@ -110,7 +399,16 @@ public sealed class PlayerbotPopulationFeatureTests
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
 
         world.Ticks.Set(200, 10);
+        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
+        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+        {
+            await Task.Delay(20);
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+        }
+
         Assert.Contains("created 1", status.Reason);
         Assert.Null(status.LastError);
         // The scoped store was created for the pass and ended with its scope (a store taken from the root provider would live on).
@@ -122,7 +420,7 @@ public sealed class PlayerbotPopulationFeatureTests
         world.Population.TargetOnline = 2;
         world.Ticks.Set(200, 10);
         status = await world.PassAsync();
-        Assert.Contains("created 1", status.Reason);
+        Assert.True(status.Reason.Contains("created 1"), status.Reason + " / " + status.LastError);
         Assert.Single(world.CacheBuilders);
 
         // A different class list is a different key: the pairs are asked for again, in a new scope.
@@ -205,7 +503,16 @@ public sealed class PlayerbotPopulationFeatureTests
         });
 
         world.Ticks.Set(200, 10);
+        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
+        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+        {
+            await Task.Delay(20);
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+        }
+
         Assert.Contains("created 1", status.Reason);
         Assert.Contains("the bot registry is full (MaxRegisteredBots)", status.Reason);
         Assert.Single(world.Members.Snapshot);
@@ -232,7 +539,7 @@ public sealed class PlayerbotPopulationFeatureTests
         PopulationStatus status = await world.PassAsync();
         Assert.Equal(3, status.Target);
         Assert.Equal(1, status.EffectiveTarget);
-        Assert.Contains("created 1", status.Reason);
+        Assert.True(status.Reason.Contains("created 1"), status.Reason + " / " + status.LastError);
         await world.WaitForSettledAsync(1);
 
         world.Ticks.Set(200, 10);
@@ -552,7 +859,7 @@ public sealed class PlayerbotPopulationFeatureTests
 
             world.Ticks.Set(200, 10);
             PopulationStatus status = await world.PassAsync();
-            Assert.Contains("created 1", status.Reason);
+            Assert.True(status.Reason.Contains("created 1"), status.Reason + " / " + status.LastError);
             Assert.Single(world.Members.Snapshot);
         }
         finally
@@ -621,7 +928,16 @@ public sealed class PlayerbotPopulationFeatureTests
     private static async Task<Guid> StartOneBotInElwynnAsync(PopulationTestHost world)
     {
         world.Ticks.Set(200, 10);
+        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
+        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+        {
+            await Task.Delay(20);
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+        }
+
         Assert.Contains("created 1", status.Reason);
         await world.WaitForSettledAsync(1);
         PlayerbotPopulationMember member = Assert.Single(world.Members.Snapshot);
@@ -792,7 +1108,7 @@ public sealed class PlayerbotPopulationFeatureTests
         // The operator bots take 2 of the 4 from the total; the population's own 2 are split by weight, 1 per band. Band 1-10 has none
         // of its own yet, so it gets one (band 11-20 needs the boost, which the host does not have).
         Assert.Equal("under-budget", status.State);
-        Assert.Contains("created 1", status.Reason);
+        Assert.True(status.Reason.Contains("created 1"), status.Reason + " / " + status.LastError);
         Assert.Equal((1, 1), (status.Bands[0].Want, status.Bands[0].Have));
         Assert.Equal((1, 0), (status.Bands[1].Want, status.Bands[1].Have));
         Assert.Single(world.Members.Snapshot);

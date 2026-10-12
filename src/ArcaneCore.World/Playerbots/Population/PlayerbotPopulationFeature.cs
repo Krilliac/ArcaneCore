@@ -81,6 +81,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly Random _random = new();
     private readonly PopulationNames _names = PopulationNames.Create();
     private readonly CancellationTokenSource _stop = new();
+
+    /// <summary>The provisioner the passes use (tests replace its area-level source).</summary>
+    internal PopulationProvisioner Provisioner => _provisioner;
     private readonly Queue<long> _createTimes = new();
     private readonly Dictionary<Guid, long> _startedAt = [];
     private readonly Dictionary<Guid, long> _parkedAt = [];
@@ -90,6 +93,19 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private long _clockMs;
     private long _sinceMs;
     private long _passes;
+    // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
+    private int _placementRefusals;
+    private long _pausedAtPass;
+    private readonly Dictionary<Guid, int> _pendingFailures = [];
+    private readonly Dictionary<Guid, long> _pendingRetryAt = [];
+    // A member row whose Band is this value is pending deletion: its bot was created and could not be placed. The row is written
+    // before the bot is stopped and deleted and removed after, so a failed or interrupted deletion is retried by a later pass (on a
+    // growing interval). The pass takes the member out of every count and never restarts it. Until the stop completes the bot is
+    // still desired-enabled: a restart in that window restores it, and the first pass then stops and deletes it without counting
+    // it in any band (a real band index is below the configured band count).
+    internal const byte PendingDeleteBand = byte.MaxValue;
+    private const int MaxPlacementRefusals = 3;
+    private const int PauseLiftsAfterPasses = 10;
     private bool _stopping;
     private Task _pass = Task.CompletedTask;
     private PopulationStatus _status = PopulationStatus.Idle(false, "disabled", "the population manager is off");
@@ -237,7 +253,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         string BoostMissing,
         long ClockMs,
         ManagedPlayerbotFeature Managed,
-        string? TerrainHold);
+        string? TerrainHold,
+        bool TeleportAvailable);
 
     private PassInput? Capture()
     {
@@ -282,7 +299,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed, terrainHold);
+            ClockMs, managed, terrainHold, teleports is not null);
     }
 
     /// <summary>
@@ -497,7 +514,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         CancellationToken ct = _stop.Token;
         PlayerbotPopulationOptions pop = input.Pop;
         int effectiveTarget = PopulationBudgetController.EffectiveTarget(pop, _options.MaxBots);
-        // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts).
+        // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts), which leaves out
+        // the pending-deletion members.
         int[] desired = new int[input.Bands.Length];
         int[] have = new int[input.Bands.Length];
         int operatorRunning = 0, ownedTarget = 0;
@@ -521,6 +539,22 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
                 else await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
             }
+
+            // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
+            // PopulationCounts, so not in any band either, even when a restart restored the bot and it is running for a moment).
+            var pendingIds = new HashSet<Guid>();
+            foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
+            {
+                members.Remove(pending.BotId);
+                pendingIds.Add(pending.BotId);
+                // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
+                if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
+                await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
+            }
+
+            // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
+            foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
+            foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
 
             // A member that is gone no longer needs its start and park times.
             foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
@@ -724,19 +758,24 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         int created = 0;
         if (ctx.Input.TerrainHold is { } hold) return (0, quietWhenNothingFits ? null : hold, false);
+        if (!ctx.Input.TeleportAvailable) return (0, "the teleport service is not available", false);
+        if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass > PauseLiftsAfterPasses)
+            _placementRefusals = 0; // the pause lifts on its own: content may have been reloaded
         while (created < count)
         {
             if (pop.MaxCreatePerMinute == 0) return (created, null, false);
+            if (_placementRefusals >= MaxPlacementRefusals) return (created, $"creation paused: {MaxPlacementRefusals} placements refused in a row", false);
             while (_createTimes.Count > 0 && ctx.Input.ClockMs - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
             if (_createTimes.Count >= pop.MaxCreatePerMinute) return (created, $"creation is limited to {pop.MaxCreatePerMinute} per minute", false);
             if (ctx.Known.Count + ctx.Created >= _options.MaxRegisteredBots) return (created, "the bot registry is full (MaxRegisteredBots)", false);
             if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
-            PopulationPlan? plan = PopulationBandPlanner.Plan(pop, ctx.Desired, planned, ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned,
-                ctx.Input.BoostAvailable, _random);
+            PopulationPlan? plan = await _world!.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
+                ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
+                (location, level, faction) => _provisioner.IsSafe(_world!, location, level, faction)), ct).ConfigureAwait(false);
             if (plan is null)
-                return (created, quietWhenNothingFits ? null : "no band has a zone and a race and class to place a new bot (see the zone counts and boost line)", false);
+                return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
 
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
@@ -770,12 +809,28 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
-                // The bot stays owned and stopped; the next pass restarts it where it stands (its race's starting area).
+                // The plan was safe when it was made (a content reload can change that before the teleport). A level-1 bot that
+                // cannot be placed is deleted rather than left in its race's starting area, where it would hold a registry slot and
+                // count towards a band; the next pass plans again.
                 Fail($"placement of {made.Name} refused: {refusal}");
-                await managed.StopAsync(botId.ToString(), ct).ConfigureAwait(false);
+                string? paused = null;
+                if (++_placementRefusals >= MaxPlacementRefusals)
+                {
+                    _pausedAtPass = Volatile.Read(ref _passes);
+                    paused = $"creation paused: {MaxPlacementRefusals} placements refused in a row";
+                }
+
                 ctx.RunningNow.Remove(botId);
-                return (created, null, true);
+                ctx.Members.Remove(botId);
+                _startedAt.Remove(botId);
+                planned[plan.Band]--;
+                // Mark first (not cancellable: a shutdown must not lose the mark), then delete the bot, then the row.
+                await ctx.Store.UpsertAsync(member with { Band = PendingDeleteBand, UpdatedUnix = NowUnix() }, CancellationToken.None).ConfigureAwait(false);
+                await TryDeletePendingAsync(managed, ctx.Store, botId, made.Name, ct).ConfigureAwait(false);
+                return (created, paused, true);
             }
+
+            _placementRefusals = 0;
 
             member = member with { ZoneId = plan.Placement.Zone.ZoneId, UpdatedUnix = NowUnix() };
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
@@ -786,6 +841,45 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         return (created, null, false);
+    }
+
+    /// <summary>
+    /// Delete the bot of a pending-deletion member (character, then registry row) and only then the member row. Any failure, a
+    /// cancellation included, leaves the marked row for the next pass. True when the member is gone.
+    /// </summary>
+    private async Task<bool> TryDeletePendingAsync(ManagedPlayerbotFeature managed, IPlayerbotPopulationStore store, Guid botId, string? name, CancellationToken ct)
+    {
+        try
+        {
+            // Not cancellable: a stop that a shutdown interrupts would leave a desired-enabled bot for the next start to restore.
+            await managed.StopAsync(botId.ToString(), CancellationToken.None).ConfigureAwait(false);
+            PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
+            // "bot-not-found" means the registry row is already gone (a deletion that finished before a crash).
+            if (!deleted.Success && deleted.Code != "bot-not-found")
+            {
+                Backoff(botId);
+                Fail($"delete of unplaced bot {name ?? botId.ToString()} refused: {deleted.Code}; retried later");
+                return false;
+            }
+
+            await store.DeleteAsync(botId, CancellationToken.None).ConfigureAwait(false);
+            _pendingFailures.Remove(botId);
+            _pendingRetryAt.Remove(botId);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Backoff(botId);
+            Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
+            return false;
+        }
+    }
+
+    private void Backoff(Guid botId)
+    {
+        int failures = Math.Min(8, _pendingFailures.GetValueOrDefault(botId) + 1);
+        _pendingFailures[botId] = failures;
+        _pendingRetryAt[botId] = Volatile.Read(ref _passes) + failures;
     }
 
     private static bool IsStartable(PassContext ctx, PlayerbotPopulationMember member)
@@ -834,6 +928,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
         PopulationLevelRule rule = PopulationLevelRule.From(pop);
         int moved = 0;
+        bool loggedNoSafe = false;
         // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
         // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
         // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
@@ -858,8 +953,20 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 continue;
             }
 
-            PopulationPlacement? placement = atlas.Pick(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random);
-            if (placement is null) continue;
+            PopulationSafeSelection? selected = await _world!.InvokeAsync(() =>
+            {
+                Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
+                return player is null ? null : atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
+                    (location, level) => _provisioner.IsSafe(_world!, location, checked((byte)level), player.FactionTemplate));
+            }, ct).ConfigureAwait(false);
+            if (selected is null)
+            {
+                if (!loggedNoSafe) logger.LogInformation("Playerbot population: no safe zone for out-levelled bot {BotId} (level {Level}); it stays where it is", bot.BotId, bot.Level);
+                loggedNoSafe = true;
+                continue;
+            }
+
+            PopulationPlacement placement = selected.Placement;
             string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
