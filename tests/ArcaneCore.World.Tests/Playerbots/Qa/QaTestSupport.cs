@@ -91,7 +91,7 @@ internal sealed class ManualTime(DateTime startUtc) : TimeProvider
 }
 
 /// <summary>Scripted content facts.</summary>
-internal sealed class FakeFacts : IQaContentFacts
+internal class FakeFacts : IQaContentFacts
 {
     public bool Available { get; set; } = true;
 
@@ -111,6 +111,9 @@ internal sealed class FakeFacts : IQaContentFacts
 
     public HashSet<string> Scripts { get; } = [];
 
+    /// <summary>Entries whose ScriptName is implemented only on one map (a per-map script).</summary>
+    public HashSet<(uint Map, uint Entry)> MapScripts { get; } = [];
+
     public string? QuestTitle(uint quest) => Titles.GetValueOrDefault(quest);
 
     public int? QuestLevel(uint quest) => Levels.TryGetValue(quest, out int level) ? level : null;
@@ -129,7 +132,9 @@ internal sealed class FakeFacts : IQaContentFacts
 
     public bool HasWaypointPath(uint entry, uint pathId) => Paths.Contains((entry, pathId));
 
-    public bool HasScript(uint entry, string scriptName) => Scripts.Contains(scriptName);
+    public virtual bool HasScript(uint entry, uint map)
+        => !Templates.TryGetValue(entry, out QaTemplateFacts t) || t.ScriptName.Length == 0
+            || Scripts.Contains(t.ScriptName) || MapScripts.Contains((map, entry));
 }
 
 /// <summary>An <see cref="ILogger"/> that records every call.</summary>

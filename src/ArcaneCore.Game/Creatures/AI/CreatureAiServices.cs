@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
@@ -217,46 +218,51 @@ public sealed class CreatureAiFactory
     /// script name first (AI/CreatureAISelector.cpp:37-50). Built in: <see cref="Scripts.RuulSnowhoofAI"/> and the data-driven escorts of
     /// <see cref="Scripts.Escorts.EscortSpecCatalog"/>.
     /// </summary>
-    private readonly Dictionary<uint, Func<Creature, CreatureAI>> _entryScripts = new()
+    private readonly Dictionary<uint, EntryScript> _entryScripts = new()
     {
-        [Scripts.RuulSnowhoofAI.Entry] = static c => new Scripts.RuulSnowhoofAI(c),
-        [Scripts.AMe01AI.Entry] = static c => new Scripts.AMe01AI(c),
-        [Scripts.RinjiAI.Entry] = static c => new Scripts.RinjiAI(c),
-        [Scripts.MuglashAI.Entry] = static c => new Scripts.MuglashAI(c),
-        [Scripts.VolcorAI.Entry] = static c => new Scripts.VolcorAI(c),
-        [Scripts.BartlebyAI.Entry] = static c => new Scripts.BartlebyAI(c),
-        [Scripts.DashelStonefistAI.Entry] = static c => new Scripts.DashelStonefistAI(c),
-        [Scripts.SquireRoweAI.Entry] = static c => new Scripts.SquireRoweAI(c),
-        [Scripts.MelizzaBrimbuzzleAI.Entry] = static c => new Scripts.MelizzaBrimbuzzleAI(c),
-        [Scripts.ErisHavenfireAI.Entry] = static c => new Scripts.ErisHavenfireAI(c),
-        [Scripts.RanshallaAI.Entry] = static c => new Scripts.RanshallaAI(c),
-        [Scripts.ReginaldWindsorAI.Entry] = static c => new Scripts.ReginaldWindsorAI(c),
-        [Scripts.TaelanFordringAI.Entry] = static c => new Scripts.TaelanFordringAI(c),
-        [Scripts.IsillienAI.Entry] = static c => new Scripts.IsillienAI(c),
-        [Scripts.TirionFordringAI.Entry] = static c => new Scripts.TirionFordringAI(c),
-        [Scripts.KeeperRemulosAI.Entry] = static c => new Scripts.KeeperRemulosAI(c),
-        [Scripts.EranikusAI.Entry] = static c => new Scripts.EranikusAI(c),
-        [Scripts.KerlonianAI.Entry] = static c => new Scripts.KerlonianAI(c),
-        [Scripts.MistAI.Entry] = static c => new Scripts.MistAI(c),
-        [Scripts.DaphneStilwellAI.Entry] = static c => new Scripts.DaphneStilwellAI(c),
-        [Scripts.GrarkLorkrubAI.Entry] = static c => new Scripts.GrarkLorkrubAI(c),
-        [Scripts.TapokeSlimJahnAI.Entry] = static c => new Scripts.TapokeSlimJahnAI(c),
-        [Scripts.MikhailAI.Entry] = static c => new Scripts.MikhailAI(c),
-        [Scripts.PrivateHendelAI.Entry] = static c => new Scripts.PrivateHendelAI(c),
-        [Scripts.StinkyIgnatzAI.Entry] = static c => new Scripts.StinkyIgnatzAI(c),
-        [Scripts.MagramiSpectreAI.Entry] = static c => new Scripts.MagramiSpectreAI(c),
-        [Scripts.PluckyJohnsonAI.Entry] = static c => new Scripts.PluckyJohnsonAI(c),
-        [Scripts.TriageDoctorAI.DoctorAlliance] = static c => new Scripts.TriageDoctorAI(c),
-        [Scripts.TriageDoctorAI.DoctorHorde] = static c => new Scripts.TriageDoctorAI(c),
-        [12923] = static c => new Scripts.InjuredPatientAI(c),
-        [12924] = static c => new Scripts.InjuredPatientAI(c),
-        [12925] = static c => new Scripts.InjuredPatientAI(c),
-        [12936] = static c => new Scripts.InjuredPatientAI(c),
-        [12937] = static c => new Scripts.InjuredPatientAI(c),
-        [12938] = static c => new Scripts.InjuredPatientAI(c),
-        [Scripts.ShayLeafrunnerAI.Entry] = static c => new Scripts.ShayLeafrunnerAI(c),
-        [Scripts.ThreshwackonatorAI.Entry] = static c => new Scripts.ThreshwackonatorAI(c),
+        [Scripts.RuulSnowhoofAI.Entry] = E(static c => new Scripts.RuulSnowhoofAI(c)),
+        [Scripts.AMe01AI.Entry] = E(static c => new Scripts.AMe01AI(c)),
+        [Scripts.RinjiAI.Entry] = E(static c => new Scripts.RinjiAI(c)),
+        [Scripts.MuglashAI.Entry] = E(static c => new Scripts.MuglashAI(c)),
+        [Scripts.VolcorAI.Entry] = E(static c => new Scripts.VolcorAI(c)),
+        [Scripts.BartlebyAI.Entry] = E(static c => new Scripts.BartlebyAI(c)),
+        [Scripts.DashelStonefistAI.Entry] = E(static c => new Scripts.DashelStonefistAI(c)),
+        [Scripts.SquireRoweAI.Entry] = E(static c => new Scripts.SquireRoweAI(c)),
+        [Scripts.MelizzaBrimbuzzleAI.Entry] = E(static c => new Scripts.MelizzaBrimbuzzleAI(c)),
+        [Scripts.ErisHavenfireAI.Entry] = E(static c => new Scripts.ErisHavenfireAI(c)),
+        [Scripts.RanshallaAI.Entry] = E(static c => new Scripts.RanshallaAI(c)),
+        [Scripts.ReginaldWindsorAI.Entry] = E(static c => new Scripts.ReginaldWindsorAI(c)),
+        [Scripts.TaelanFordringAI.Entry] = E(static c => new Scripts.TaelanFordringAI(c)),
+        [Scripts.IsillienAI.Entry] = E(static c => new Scripts.IsillienAI(c)),
+        [Scripts.TirionFordringAI.Entry] = E(static c => new Scripts.TirionFordringAI(c)),
+        [Scripts.KeeperRemulosAI.Entry] = E(static c => new Scripts.KeeperRemulosAI(c)),
+        [Scripts.EranikusAI.Entry] = E(static c => new Scripts.EranikusAI(c)),
+        [Scripts.KerlonianAI.Entry] = E(static c => new Scripts.KerlonianAI(c)),
+        [Scripts.MistAI.Entry] = E(static c => new Scripts.MistAI(c)),
+        [Scripts.DaphneStilwellAI.Entry] = E(static c => new Scripts.DaphneStilwellAI(c)),
+        [Scripts.GrarkLorkrubAI.Entry] = E(static c => new Scripts.GrarkLorkrubAI(c)),
+        [Scripts.TapokeSlimJahnAI.Entry] = E(static c => new Scripts.TapokeSlimJahnAI(c)),
+        [Scripts.MikhailAI.Entry] = E(static c => new Scripts.MikhailAI(c)),
+        [Scripts.PrivateHendelAI.Entry] = E(static c => new Scripts.PrivateHendelAI(c)),
+        [Scripts.StinkyIgnatzAI.Entry] = E(static c => new Scripts.StinkyIgnatzAI(c)),
+        [Scripts.MagramiSpectreAI.Entry] = E(static c => new Scripts.MagramiSpectreAI(c)),
+        [Scripts.PluckyJohnsonAI.Entry] = E(static c => new Scripts.PluckyJohnsonAI(c)),
+        [Scripts.TriageDoctorAI.DoctorAlliance] = E(static c => new Scripts.TriageDoctorAI(c)),
+        [Scripts.TriageDoctorAI.DoctorHorde] = E(static c => new Scripts.TriageDoctorAI(c)),
+        [12923] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [12924] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [12925] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [12936] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [12937] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [12938] = E(static c => new Scripts.InjuredPatientAI(c)),
+        [Scripts.ShayLeafrunnerAI.Entry] = E(static c => new Scripts.ShayLeafrunnerAI(c)),
+        [Scripts.ThreshwackonatorAI.Entry] = E(static c => new Scripts.ThreshwackonatorAI(c)),
     };
+
+    /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
+    private readonly record struct EntryScript(Func<Creature, CreatureAI> Create, string Name);
+
+    private static EntryScript E<T>(Func<Creature, T> factory) where T : CreatureAI => new(c => factory(c), typeof(T).Name);
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
     private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul, Scripts.AMe01AI.QuestChasingAMe, Scripts.RinjiAI.QuestRinjiTrapped, Scripts.MuglashAI.QuestVorsha,
@@ -283,16 +289,23 @@ public sealed class CreatureAiFactory
     {
         foreach (Scripts.Escorts.EscortSpec spec in Scripts.Escorts.EscortSpecCatalog.All)
         {
-            RegisterEntryScript(spec.Entry, c => new Scripts.Escorts.DataDrivenEscortAI(c, spec), spec.QuestId);
+            RegisterEntryScript(spec.Entry, E(c => new Scripts.Escorts.DataDrivenEscortAI(c, spec)), spec.QuestId);
         }
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
 
+    /// <summary>Whether <paramref name="name"/> is a registered named AI (a ScriptName or AIName <see cref="Create(Creature, CreatureContent, out bool)"/> would pick).</summary>
+    internal bool IsNamedAi(string name) => !string.IsNullOrEmpty(name) && _factories.ContainsKey(name);
+
+    /// <summary>The implementing type name of the world-wide entry script of <paramref name="entry"/>, or null when it has none.</summary>
+    internal string? EntryScriptName(uint entry) => _entryScripts.TryGetValue(entry, out EntryScript script) ? script.Name : null;
+
     /// <summary>
-    /// Whether the host can run the script a template names: a registered named AI for <paramref name="scriptName"/>, or an entry script for
-    /// <paramref name="entry"/> (the two lookups <see cref="Create(Creature, CreatureContent, out bool)"/> makes first). Read-only; the registries
-    /// are filled at start-up and read afterwards.
+    /// Whether the host can run the script a template names through the WORLD-WIDE registries only: a registered named AI for
+    /// <paramref name="scriptName"/>, or an entry script for <paramref name="entry"/>. It is blind to per-map scripts (the map's
+    /// <c>RegisterEntryAi</c> and <c>DungeonBossAis</c>), so it must not be used to call a script missing: ask <see cref="ScriptCatalog"/>
+    /// with the map. Read-only; the registries are filled at start-up and read afterwards.
     /// </summary>
     public bool HasScript(uint entry, string scriptName)
         => (!string.IsNullOrEmpty(scriptName) && _factories.ContainsKey(scriptName)) || _entryScripts.ContainsKey(entry);
@@ -307,8 +320,13 @@ public sealed class CreatureAiFactory
     public void RegisterEntryScript(uint entry, Func<Creature, CreatureAI> factory, params uint[] eventQuests)
     {
         ArgumentNullException.ThrowIfNull(factory);
+        RegisterEntryScript(entry, new EntryScript(factory, "(registered at start-up)"), eventQuests);
+    }
+
+    private void RegisterEntryScript(uint entry, EntryScript script, params uint[] eventQuests)
+    {
         ArgumentNullException.ThrowIfNull(eventQuests);
-        if (!_entryScripts.TryAdd(entry, factory))
+        if (!_entryScripts.TryAdd(entry, script))
         {
             throw new InvalidOperationException($"creature entry {entry} already has a script AI");
         }
@@ -316,14 +334,76 @@ public sealed class CreatureAiFactory
         _entryScriptQuests.UnionWith(eventQuests);
     }
 
+    /// <summary>
+    /// Register a ScriptName AI that hosts the EventAI rows of its creature: <paramref name="factory"/> builds a type derived from
+    /// <see cref="CreatureEventAI"/> from the creature and the loaded AI content, so the entry's <c>creature_ai_scripts</c> rows keep firing under the
+    /// ScriptName (the ScriptName otherwise replaces EventAI, see <see cref="Create(Creature, CreatureContent, out bool, bool)"/>). A duplicate throws.
+    /// </summary>
+    public void RegisterEventAiScript(string name, Func<Creature, CreatureAiContent, CreatureEventAI> factory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        if (_npcScripts.ContainsKey(name) || !_factories.TryAdd(name, (c, content) =>
+        {
+            CreatureEventAI ai = factory(c, content.Ai);
+            // The plain EventAI entry applies the guard rules of a GUARD-flagged template (vmangos GuardEventAI::Permissible); a hosted script keeps them.
+            ai.UsesGuardSightRules |= (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0;
+            return ai;
+        }))
+        {
+            throw new InvalidOperationException($"script '{name}' is already registered");
+        }
+    }
+
+    private readonly Dictionary<string, NpcScript> _npcScripts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Register a gossip and/or quest script that has no AI of its own, bound by the template's ScriptName (ScriptDev2 <c>pGossipHello</c>,
+    /// <c>pQuestAcceptNPC</c>, <c>pQuestRewardedNPC</c>): <paramref name="gossip"/> answers the gossip hello and selection of every creature
+    /// with that ScriptName (<see cref="QuestNpcServices.GossipByScriptName"/>, bound by <see cref="CreatureQuestScripts.Attach"/>) and
+    /// <paramref name="quest"/> is invoked when a quest is taken from or rewarded by such a creature. <see cref="ScriptCatalog"/> counts the
+    /// ScriptName as implemented only because a handler is registered here. The creature still runs the AI of its AIName. At least one
+    /// handler is required; a duplicate, or an AI already registered under the name, throws (fail closed).
+    /// </summary>
+    public void RegisterNpcScript(string scriptName, string implementation, INpcGossipScript? gossip = null, INpcQuestScript? quest = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scriptName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(implementation);
+        if (gossip is null && quest is null)
+        {
+            throw new ArgumentException("a gossip or quest handler is required", nameof(gossip));
+        }
+
+        if (_factories.ContainsKey(scriptName) || !_npcScripts.TryAdd(scriptName, new NpcScript(implementation, gossip, quest)))
+        {
+            throw new InvalidOperationException($"script '{scriptName}' is already registered");
+        }
+    }
+
+    /// <summary>The gossip/quest-only script registered under <paramref name="scriptName"/>, or null.</summary>
+    internal (ScriptKind Kind, string Implementation)? NpcScriptOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script)
+            ? (script.Gossip is not null ? ScriptKind.GossipScript : ScriptKind.QuestScript, script.Implementation)
+            : null;
+
+    /// <summary>The gossip handler registered for <paramref name="scriptName"/> (a creature's template ScriptName), or null.</summary>
+    internal INpcGossipScript? NpcGossipOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script) ? script.Gossip : null;
+
+    /// <summary>The quest handler registered for <paramref name="scriptName"/>, or null.</summary>
+    internal INpcQuestScript? NpcQuestOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script) ? script.Quest : null;
+
+    private sealed record NpcScript(string Implementation, INpcGossipScript? Gossip, INpcQuestScript? Quest);
+
     /// <summary>Register a C# AI under <paramref name="name"/> (a duplicate throws: fail closed).</summary>
     public void Register(string name, Func<Creature, CreatureAI> factory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(factory);
-        if (!_factories.TryAdd(name, (c, _) => factory(c)))
+        if (_npcScripts.ContainsKey(name) || !_factories.TryAdd(name, (c, _) => factory(c)))
         {
-            throw new InvalidOperationException($"creature AI '{name}' is already registered");
+            throw new InvalidOperationException($"script '{name}' is already registered");
         }
     }
 
@@ -381,7 +461,7 @@ public sealed class CreatureAiFactory
 
         foreach ((uint entry, Func<Creature, CreatureAI> factory) in addEntries)
         {
-            _entryScripts[entry] = factory;
+            _entryScripts[entry] = new EntryScript(factory, "(hot-loaded)");
         }
 
         foreach ((string name, Func<Creature, CreatureAI> factory) in addNames)
@@ -417,9 +497,9 @@ public sealed class CreatureAiFactory
         }
         // The script name first (selectAI, AI/CreatureAISelector.cpp:39-46): not for a pet nor a charmed creature.
         if (_entryScripts.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
-            && _entryScripts.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? script))
+            && _entryScripts.TryGetValue(creature.Template.Entry, out EntryScript script))
         {
-            return script(creature);
+            return script.Create(creature);
         }
 
         string name = creature.Template.AIName;
