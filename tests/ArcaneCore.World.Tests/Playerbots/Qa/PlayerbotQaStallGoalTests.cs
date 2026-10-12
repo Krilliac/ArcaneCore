@@ -97,6 +97,48 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.Contains("ender 963 (Gryan Stoutmantle), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
     }
 
+    /// <summary>The line the real no-route stall of the walk home logs (PlayerbotQuestReturnStallMarkTests): the plan failed, so target=0.</summary>
+    private const string NoRouteTripLine = "stalled 10s: goal=Quest target=0 quest=900001 at -8949.0,-132.0,83.5 map 0 return-trip qa[level=10,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=900001,graveyard=0,distance=unknown,source=None,attackerFacts=none]";
+
+    private static FakeFacts FixtureTrip(params QaEnderFact[] enders)
+    {
+        var facts = new FakeFacts();
+        facts.Titles[900001] = "Synthetic quest";
+        facts.Enders[900001] = [.. enders];
+        return facts;
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithOneEnder_NamesThatEnder()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Contains("the bot was walking to its ender 900010 (Synthetic questgiver)", f.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("nearest spawn 149 yd from the bot on map 0", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithTwoEnders_KeepsTheGenericVerdict()
+    {
+        // Which of two enders the bot was going to is unknown: nothing is claimed.
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "First", 0, -8799f, -132f, 83f), new QaEnderFact(900011, "Second", 0, -8700f, -132f, 83f));
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.DoesNotContain("ender", f.CauseDetail, StringComparison.Ordinal);
+        Assert.StartsWith("no missing content found for quest 900001", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoRouteStall_WithoutTheReturnTripMark_IsUnchanged()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        string unmarked = NoRouteTripLine.Replace(" return-trip", string.Empty, StringComparison.Ordinal);
+        QaFindingView f = IngestOne(unmarked, facts);
+
+        Assert.Equal("no missing content found for quest 900001 (Synthetic quest)", f.CauseDetail);
+    }
+
     [Fact]
     public void QuestStall_OnANonEnderTarget_KeepsTheGenericVerdict()
     {

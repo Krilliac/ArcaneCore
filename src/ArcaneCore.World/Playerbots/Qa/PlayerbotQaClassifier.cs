@@ -145,7 +145,12 @@ internal static class PlayerbotQaClassifier
             }
         }
 
-        if (questGoal && s.ReturnTrip && s.Quest != 0 && target != 0 && EnderTrip(s, facts, target, title) is { } trip) return trip;
+        // A walk home whose plan failed logs target=0 (the destinations set the target only for a plan that succeeded). The ender is then the
+        // quest's only ender creature; with none (a game object ends it, or the content is unknown) or several (which one the bot was going
+        // to is not known) nothing is claimed and the generic verdict below stands.
+        uint tripTarget = target;
+        if (questGoal && s.ReturnTrip && s.Quest != 0 && target == 0 && facts.QuestEnderEntries(s.Quest) is [var only]) tripTarget = only;
+        if (questGoal && s.ReturnTrip && s.Quest != 0 && tripTarget != 0 && EnderTrip(s, facts, tripTarget, title) is { } trip) return trip;
 
         string subject = questGoal && s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
         return new QaClassification(QaCause.Unknown, "no missing content found for " + subject
