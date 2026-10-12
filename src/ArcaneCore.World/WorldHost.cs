@@ -42,43 +42,56 @@ public sealed class WorldHost(
         _fencing.Validate();
         await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         saveQueue.FatalFailure += OnFatalSaveFailure;
-        await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
-        {
-            IReadOnlyList<CharacterIdentity> identities = await scope.ServiceProvider
-                .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
-            directory.Load(identities);
 
-            // Features are singletons, so the scope hands out the same instances.
-            scope.ServiceProvider.AttachWorldFeatures(world);
-        }
-
-        logger.LogInformation("Loaded {Count} character names", directory.Count);
-        saveQueue.Start();
-        world.Start();
-        await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
-        {
-            if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
-                await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        // Last, so a start that throws can never leave the watch running (the host does not call StopAsync after a failed start).
+        // Started right after the startup claim check, so a claim that lands while the world is still starting (registry deletes, bot restore)
+        // is seen within one interval. If the rest of start throws, the host never calls StopAsync, so the watch is stopped here.
         if (!_fencing.Enabled && _watchClaims)
         {
             _claimWatchStop = new CancellationTokenSource();
             _claimWatch = Task.Run(() => WatchForClaimAsync(_claimWatchStop.Token));
         }
+
+        try
+        {
+            await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+            {
+                IReadOnlyList<CharacterIdentity> identities = await scope.ServiceProvider
+                    .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
+                directory.Load(identities);
+
+                // Features are singletons, so the scope hands out the same instances.
+                scope.ServiceProvider.AttachWorldFeatures(world);
+            }
+
+            logger.LogInformation("Loaded {Count} character names", directory.Count);
+            saveQueue.Start();
+            world.Start();
+            await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+            {
+                if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
+                    await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            await StopClaimWatchAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task StopClaimWatchAsync()
+    {
+        if (_claimWatchStop is not { } watchStop) return;
+        await watchStop.CancelAsync().ConfigureAwait(false);
+        await _claimWatch.ConfigureAwait(false);
+        watchStop.Dispose();
+        _claimWatchStop = null;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         List<Exception> failures = [];
-        if (_claimWatchStop is { } watchStop)
-        {
-            await watchStop.CancelAsync().ConfigureAwait(false);
-            await _claimWatch.ConfigureAwait(false);
-            watchStop.Dispose();
-            _claimWatchStop = null;
-        }
+        await StopClaimWatchAsync().ConfigureAwait(false);
 
         try
         {
@@ -169,7 +182,6 @@ public sealed class WorldHost(
         {
             while (!stop.IsCancellationRequested)
             {
-                await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromSeconds(_fencing.ClaimWatchIntervalSeconds), stop).ConfigureAwait(false);
                 try
                 {
                     await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -185,6 +197,9 @@ public sealed class WorldHost(
                 {
                     logger.LogWarning(ex, "Could not read the characters ownership row; will retry next interval");
                 }
+
+                // Read first, then wait: a failed read also waits a full interval before the retry.
+                await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromSeconds(_fencing.ClaimWatchIntervalSeconds), stop).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }

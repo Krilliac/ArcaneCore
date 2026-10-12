@@ -512,7 +512,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
                     "a read ran inside the transaction (it would hold the write lock through the reads): " + string.Join("\n", statements));
         }
 
-        // The exact shape, statement kinds in order (the Train 16 list): SaveState reads then writes; quests with no upserts only read;
+        // The same statement kinds, in order (the Train 16 list): SaveState reads then writes; quests with no upserts only read;
         // the taxi mask reads then writes.
         static string Kinds(IReadOnlyList<string> s) => string.Join(",", s.Select(t => t == "<begin transaction>" ? "BEGIN" : t.TrimStart().Split(' ')[0].ToUpperInvariant()));
         Assert.Equal(ExpectedStateKinds, Kinds(state));

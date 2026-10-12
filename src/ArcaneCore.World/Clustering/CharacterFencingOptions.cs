@@ -17,10 +17,10 @@ public sealed class CharacterFencingOptions
     /// <summary>The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with <see cref="TakeoverEpoch"/>.</summary>
     public Guid? TakeoverIncarnation { get; set; }
 
+    public const int DefaultClaimWatchIntervalSeconds = 10;
+
     /// <summary>With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim.</summary>
     public int ClaimWatchIntervalSeconds { get; set; } = DefaultClaimWatchIntervalSeconds;
-
-    public const int DefaultClaimWatchIntervalSeconds = 10;
 
     public bool HasTakeover => TakeoverEpoch is not null || TakeoverIncarnation is not null;
 

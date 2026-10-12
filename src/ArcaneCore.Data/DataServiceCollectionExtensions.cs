@@ -78,7 +78,7 @@ public static class DataServiceCollectionExtensions
 
     /// <summary>
     /// Registers the process-wide ownership holder and, when <see cref="FencingEnabledKey"/> is true, attaches the write fence to every
-    /// characters context. Off (the default) adds nothing to the context options, and the stores add no transaction and no ownership statement for an untokened save, so the SQL is exactly what train 16 issued (a CharacterWriteFenceTests case captures it); the world host watches the ownership row every Cluster:Fencing:ClaimWatchIntervalSeconds (default 10 s, independent of autosave) instead, so an unfenced world can keep writing for up to that interval after a fenced world claims the database.
+    /// characters context. Off (the default) adds nothing to the context options, and the stores add no transaction and no ownership statement for an untokened save, so the statement kinds are the same as train 16 issued (a CharacterWriteFenceTests case captures them); the world host watches the ownership row every Cluster:Fencing:ClaimWatchIntervalSeconds (default 10 s, independent of autosave) instead, so an unfenced world can keep writing for up to that interval after a fenced world claims the database.
     /// </summary>
     private static void AddCharacterWriteFence(IServiceCollection services, IConfiguration configuration)
     {

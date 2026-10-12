@@ -98,7 +98,8 @@ public sealed class WorldHostCharacterFencingTests
     {
         await using TestKit slow = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromHours(1));
         await slow.Host.StartAsync(CancellationToken.None);
-        int atStart = slow.Ownership.IsOwnedCalls; // the startup refusal check
+        await WaitUntil(() => slow.Ownership.IsOwnedCalls >= 2); // the startup refusal check, then the watch's immediate first read
+        int atStart = slow.Ownership.IsOwnedCalls;
         for (int i = 1; i <= 20; i++)
         {
             slow.SaveQueue.Enqueue(new CharacterState(i, 0, 12, 0, 0, 83.5f, 0, 1, 0));
@@ -141,9 +142,9 @@ public sealed class WorldHostCharacterFencingTests
         Assert.Contains("claimed by a fenced world", error.Message);
     }
 
-    private static async Task WaitUntil(Func<bool> condition)
+    private static async Task WaitUntil(Func<bool> condition, double seconds = 5)
     {
-        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, "condition not reached in time");
@@ -163,6 +164,50 @@ public sealed class WorldHostCharacterFencingTests
         await Task.Delay(150);
 
         Assert.Equal(afterFailedStart, kit.Ownership.IsOwnedCalls);
+    }
+
+    [Fact]
+    public async Task UnfencedWorld_SeesAClaimThatLandsDuringStartup_WithoutWaitingForStartToFinish()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(50));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        bool sawClaimDuringStartup = false;
+        kit.Feature.OnAttach = () =>
+        {
+            kit.Ownership.Owned = true; // a fenced world claims the database while this one is still starting
+            sawClaimDuringStartup = fatal.Task.Wait(TimeSpan.FromSeconds(5)); // startup stalls here; only a running watch can end the stall
+        };
+
+        try { await kit.Host.StartAsync(CancellationToken.None); }
+        catch (InvalidOperationException) { } // the terminal queue may refuse the rest of start
+
+        Assert.True(sawClaimDuringStartup, "the watch was not running while the world was starting");
+        Assert.Contains("claimed by a fenced world", (await fatal.Task).Message);
+    }
+
+    [Fact]
+    public async Task UnfencedWorld_UsesTheConfiguredIntervalWhenNoSeamIsSet()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchSeconds: 1);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        // Startup check = 1, the watch's first read = 2, the next one a second later = 3. Autosave is off here, so an autosave-derived interval would never get there.
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 3, seconds: 2.5);
+    }
+
+    [Fact]
+    public async Task UnfencedWorld_WaitsAnIntervalAfterAFailedRead_InsteadOfRetryingInATightLoop()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(200));
+        await kit.Host.StartAsync(CancellationToken.None);
+        int baseline = kit.Ownership.IsOwnedCalls;
+        kit.Ownership.IsOwnedBehavior = () => throw new InvalidOperationException("database down");
+
+        await Task.Delay(1000);
+
+        int polls = kit.Ownership.IsOwnedCalls - baseline;
+        Assert.InRange(polls, 1, 12); // ~5 at 200 ms; a busy loop would be thousands
     }
 
     [Fact]
@@ -203,7 +248,7 @@ public sealed class WorldHostCharacterFencingTests
         public InMemoryCharacterStore Store { get; }
         public CharacterOwnershipContext Context { get; }
 
-        public static TestKit Create(bool enabled, TimeSpan? claimWatchInterval = null)
+        public static TestKit Create(bool enabled, TimeSpan? claimWatchInterval = null, int? claimWatchSeconds = null)
         {
             var store = new InMemoryCharacterStore();
             var ownership = new RecordingOwnership();
@@ -218,7 +263,7 @@ public sealed class WorldHostCharacterFencingTests
             var saveQueue = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
             var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saveQueue,
                 NullLogger<WorldRuntime>.Instance);
-            var options = Options.Create(new CharacterFencingOptions { Enabled = enabled, OwnerNode = "test" });
+            var options = Options.Create(new CharacterFencingOptions { Enabled = enabled, OwnerNode = "test", ClaimWatchIntervalSeconds = claimWatchSeconds ?? CharacterFencingOptions.DefaultClaimWatchIntervalSeconds });
             var host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes,
                 NullLogger<WorldHost>.Instance, options, ownershipContext: context) { ClaimWatchInterval = claimWatchInterval };
             return new TestKit(provider, world, saveQueue, host, ownership, feature, store, context);
@@ -236,11 +281,13 @@ public sealed class WorldHostCharacterFencingTests
     private sealed class RecordingFeature(CharacterOwnershipContext context) : IWorldFeature
     {
         public bool ThrowOnAttach { get; set; }
+        public Action? OnAttach { get; set; }
         public bool AttachedWithToken { get; private set; }
         public CharacterOwnershipToken? TokenAtAttach { get; private set; }
 
         public void Attach(WorldRuntime world)
         {
+            OnAttach?.Invoke();
             if (ThrowOnAttach) throw new InvalidOperationException("attach failed");
             AttachedWithToken = world.CharacterOwnership is not null;
             TokenAtAttach = context.Current;
