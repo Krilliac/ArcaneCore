@@ -74,14 +74,19 @@ internal sealed class DungeonNpcRig : IDisposable
     private readonly InstanceFixture _fixture = new();
 
     public DungeonNpcRig(Func<Map, InstanceData> script, IEnumerable<CreatureTemplate> templates, IEnumerable<CreatureSpawn> spawns,
-        CreatureAiContent? ai = null, ScriptSpellCaster? spells = null, bool alwaysHostile = true, IEnumerable<CreatureAiText>? texts = null)
+        CreatureAiContent? ai = null, ScriptSpellCaster? spells = null, bool alwaysHostile = true, IEnumerable<CreatureAiText>? texts = null,
+        ICreatureHostility? hostility = null)
     {
         Spells = spells ?? new ScriptSpellCaster();
         _fixture.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, script);
         CreatureAiContent content = ai ?? new CreatureAiContent([], texts ?? []);
         var creatures = new CreatureContent([.. templates], [.. spawns], [], [], [], content);
         var services = new CreatureAiServices { Spells = Spells, Factory = Factory };
-        if (alwaysHostile)
+        if (hostility is not null)
+        {
+            services = new CreatureAiServices { Spells = Spells, Factory = Factory, Hostility = hostility };
+        }
+        else if (alwaysHostile)
         {
             services = new CreatureAiServices { Spells = Spells, Factory = Factory, Hostility = new CreatureAi.AlwaysHostile() };
         }

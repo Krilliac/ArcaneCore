@@ -37,7 +37,6 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
         (230, 9500, "npc_mistress_nagmara"), (230, 9503, "npc_rocknot"), (230, 9679, "npc_tobias_seecher"), (230, 16079, "npc_theldren_trigger"),
         // Doom'rel has his gossip (DoomrelGossip, an INpcGossipScript registered by DungeonEventFeature) but no AI; the catalogue answers for AIs.
         (230, 9039, "boss_doomrel"),
-        (329, 10917, "npc_aurius"),
     ];
 
     [WorldFixtureFact]

@@ -296,6 +296,7 @@ public sealed class CreatureAiFactory
         Instances.Scripts.Uldaman.ArchaerasAddAI.Register(this);
         Instances.Scripts.Naxxramas.GothikAnchorAI.Register(this);
         Instances.Scripts.Naxxramas.InvisibleManAI.Register(this);
+        Instances.Scripts.Stratholme.AuriusScript.Register(this);
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
