@@ -97,17 +97,19 @@ internal struct TileWait
 
     private uint _since;
     private uint _lastHold;
+    private bool _started;
     private bool _spent;
 
     /// <summary>Whether a wait is under way (not yet spent).</summary>
-    internal readonly bool Active => _since != 0 && !_spent;
+    internal readonly bool Active => _started && !_spent;
 
     /// <summary>Whether to keep waiting at <paramref name="now"/> (clock in ms, wrapping); false once the wait passed <see cref="MaxMs"/>.</summary>
     internal bool Hold(uint now)
     {
-        if (_since == 0 || unchecked(now - _lastHold) > GapMs)
+        if (!_started || unchecked(now - _lastHold) > GapMs)
         {
-            _since = now == 0 ? 1 : now;
+            _started = true;
+            _since = now;
             _spent = false;
         }
 
@@ -121,7 +123,7 @@ internal struct TileWait
     /// <summary>A plan succeeded or the goal changed: the next pending answer starts a new wait.</summary>
     internal void Reset()
     {
-        _since = 0;
+        _started = false;
         _spent = false;
     }
 }

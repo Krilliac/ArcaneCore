@@ -22,6 +22,8 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private int _reads;
     private int _running;
     private int _peak;
+    private int _lastReadThread;
+    private Func<string, bool> _gated = _ => true;
 
     public void Dispose()
     {
@@ -30,7 +32,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         _fixture.Dispose();
     }
 
-    private NavMeshPathfinder Gated(int tiles = 1, ILogger? logger = null, bool failing = false)
+    private NavMeshPathfinder Gated(int tiles = 1, ILogger? logger = null, bool failing = false, int concurrency = NavMeshPathfinder.DefaultConcurrentTileReads)
     {
         _fixture.WriteParams(0);
         for (int x = 0; x < tiles; x++)
@@ -38,7 +40,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
             _fixture.WriteTile(0, x == 0 && tiles == 1 ? 31 : x, x == 0 && tiles == 1 ? 31 : TileRow, new CellTile(x, 0, 0, 0, 10, 10));
         }
 
-        var nav = new NavMeshPathfinder(_fixture.Directory, logger)
+        var nav = new NavMeshPathfinder(_fixture.Directory, logger, concurrency)
         {
             FileReader = path =>
             {
@@ -48,6 +50,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
                 }
 
                 Interlocked.Increment(ref _reads);
+                Volatile.Write(ref _lastReadThread, Environment.CurrentManagedThreadId);
                 int now = Interlocked.Increment(ref _running);
                 int seen;
                 while ((seen = Volatile.Read(ref _peak)) < now && Interlocked.CompareExchange(ref _peak, now, seen) != seen)
@@ -56,7 +59,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
 
                 try
                 {
-                    _gate.Wait();
+                    if (_gated(path)) _gate.Wait();
                     return failing ? throw new IOException("disk gone") : File.ReadAllBytes(path);
                 }
                 finally
@@ -81,7 +84,12 @@ public sealed class NavTileNonBlockingTests : IDisposable
     {
         NavMeshPathfinder nav = Gated();
 
-        PathResult pending = await Prompt(() => nav.FindPath(0, From, To, NonBlocking));
+        int callThread = 0;
+        PathResult pending = await Prompt(() =>
+        {
+            callThread = Environment.CurrentManagedThreadId;
+            return nav.FindPath(0, From, To, NonBlocking);
+        });
         Assert.Equal(PathType.TilesPending, pending.Type);
         Assert.False(pending.HasPath);
         Assert.False(nav.GetNavMesh(0)!.IsTerrainTileLoaded(31, 31));
@@ -97,6 +105,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.Equal(1, _reads);
         Assert.Equal(1, nav.TileReadsStarted);
         Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
+        Assert.NotEqual(callThread, Volatile.Read(ref _lastReadThread)); // read on the pool, not here
     }
 
     [Fact]
@@ -176,6 +185,62 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.Equal(PathType.Normal, path.Type);
         Assert.Equal(0, nav.TileReadsStarted);
         Assert.Equal(1, _reads);
+        Assert.Equal(Environment.CurrentManagedThreadId, Volatile.Read(ref _lastReadThread)); // the read ran on the calling thread
+    }
+
+    [Fact]
+    public void ReadConcurrency_IsConfigurable_DefaultsToTwo_AndStaysInRange()
+    {
+        Assert.Equal(2, NavMeshPathfinder.DefaultConcurrentTileReads);
+        Assert.Equal(2, new NavMeshPathfinder(_fixture.Directory).MaxConcurrentTileReads);
+        Assert.Equal(1, new NavMeshPathfinder(_fixture.Directory, null, 0).MaxConcurrentTileReads);
+        Assert.Equal(5, new NavMeshPathfinder(_fixture.Directory, null, 5).FreeTileReadSlots);
+        Assert.Equal(16, new NavMeshPathfinder(_fixture.Directory, null, 500).MaxConcurrentTileReads);
+        Assert.Equal(2, new CollisionOptions().NavTileReadConcurrency);
+    }
+
+    [Fact]
+    public async Task HeldReads_AreBounded_AndARequestOverTheBoundIsPendingWithoutStartingARead()
+    {
+        NavMeshPathfinder nav = Gated(0);
+        int total = NavMeshPathfinder.MaxPendingTileReads + 4;
+        for (int x = 0; x < total; x++)
+        {
+            Vector3 at = new((32f - x - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+            Assert.Equal(PathType.TilesPending, (await Prompt(() => nav.FindPath(0, at, at, NonBlocking))).Type);
+        }
+
+        Assert.Equal(NavMeshPathfinder.MaxPendingTileReads, nav.TileReadsStarted);
+    }
+
+    [Fact]
+    public async Task ACompletePathFoundWithoutThePendingTile_IsAccepted_ButAPartialOrMissingOneIsPending()
+    {
+        // One resident tile with every side linked to a neighbour that is still being read. The start sits on the border cells, so the
+        // search wants the neighbour at once: it is pending. A whole path found inside the tile stands; no path (a wall) might only
+        // be for want of the neighbour's way round it.
+        _gated = path => !path.EndsWith(NavMeshFormat.TileFileName(0, 31, 31), StringComparison.Ordinal);
+        _fixture.WriteParams(0);
+        _fixture.WriteTile(0, 31, 31, new CellTile(0, 0, 0, 0, 10, 10) { LinkedSides = [0, 2, 4, 6] });
+        var open = Resident();
+        long before = PathSearchCounters.TilesPending;
+        Vector3 a = new(1, 1, 0), b = new(19, 1, 0);
+        PathResult whole = open.FindPath(0, a, b, NonBlocking);
+        Assert.Equal(PathType.Normal, whole.Type);
+        Assert.True(PathSearchCounters.TilesPending > before, "the search did ask for the neighbouring tile");
+
+        _fixture.WriteTile(0, 31, 31, new CellTile(0, 0, 0, 0, 10, 10) { LinkedSides = [0, 2, 4, 6], Walkable = (i, _) => i != 5 });
+        var walled = Resident();
+        PathResult none = walled.FindPath(0, a, b, NonBlocking);
+        Assert.Equal(PathType.TilesPending, none.Type);
+        Assert.False(none.HasPath);
+
+        NavMeshPathfinder Resident()
+        {
+            NavMeshPathfinder nav = Gated(0);
+            Assert.True(nav.LoadTile(0, 31, 31));
+            return nav;
+        }
     }
 
     private sealed class CountingLogger : ILogger
