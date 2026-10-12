@@ -103,6 +103,8 @@ milliseconds, instead of reporting busy at once and leaving the wait to `Microso
 |---|---|---|
 | `Database:SqliteBusyTimeoutMs` | `5000` | 0 to 60000 ms. 0 leaves SQLite's "fail at once" behaviour. |
 | `Database:<Component>:SqliteBusyTimeoutMs` | unset | Per component (Auth, Characters, World); unset inherits the shared value. |
+| `Database:SqliteSynchronous` | `Full` | `Full` or `Normal` (any case; anything else is a start-up validation error). Applied as `PRAGMA synchronous` by the same interceptor on every connection. See "Decision" below for the durability trade-off. |
+| `Database:<Component>:SqliteSynchronous` | unset | Per component (Auth, Characters, World); unset inherits the shared value. |
 
 The timeout never exceeds the connection's own `Default Timeout`, and when the database guard is on (`Resilience:Database:Enabled`, `QueryTimeoutMs` above 0) it is **clamped, silently, to `Resilience:Database:QueryTimeoutMs`** (the effective value is `min(configured, QueryTimeoutMs)`; a configured value above it is not an error). Reason: the guard abandons a call past its deadline, but the abandoned call keeps waiting in SQLite's busy handler and disposing its scope blocks until it returns, so a longer busy timeout lengthened every refused logon (measured 7.0-7.6 s against a 2 s deadline before the clamp). `DatabaseGuard`'s pessimistic-timeout contract (the outer bound on
 a whole operation) is unchanged. MariaDB, MySQL and PostgreSQL ignore the key. Out-of-range values are a `check-config` error and the
@@ -123,7 +125,7 @@ connection's 30 s `Default Timeout` and was retried inline three times, while ev
 - **`CharacterSaveQueue`.** A busy/locked failure (SQLite 5/6, also inside `DbUpdateException`) is not retried inline. The snapshot is retained, the whole queue pauses (1 s, 2 s, then 5 s while it keeps happening; reset by the next successful write) and the consumer moves on. Retained snapshots are retried when the queue is idle and at least every 16th pick, by a barrier (`FlushCharacterAsync`, which waits until the snapshot is written or its token fires), or by a newer snapshot of the character (merged over it). Shutdown ignores the pause and retries inline, then names the characters it could not write.
 - **Other queues.** Creature respawn and keyed (GM audit, groups, last address) queues no longer repeat a lock wait inline: the write stays retained and their retained-retry timers (30 s) land it. The honor, reputation, taxi, rested-state, explored-zones and social queues keep three inline attempts per write (about 5 s each under the characters write bound) and share `RetainedRetryTimer`: every 30 s while the queue holds a retained write, one sweep marker is posted into the queue's single consumer (never stacked), which makes one attempt per retained character or key and stops at the first locked database, so a lock outlasting the inline attempts costs about one 5 s wait per 30 s and the write lands once the lock clears, with no new trigger and no one online. The sweep runs on the consumer, ordered with every other item, and never replaces a newer value. Shutdown still drains and names whatever is not durable. A taxi save with an abandon fallback keeps the route (it is not abandoned) when the failure is a locked database. The instance write queue keeps its inline retries only (it has no retention).
 
-### Decision: keep `BEGIN IMMEDIATE`, WAL and `synchronous=FULL`
+### Decision: keep `BEGIN IMMEDIATE`, WAL and `synchronous=FULL` by default (`NORMAL` is opt-in)
 
 The obvious ways to make a write-heavy SQLite file faster were considered and **rejected**; two tests pin the current behaviour so a later
 change has to be deliberate.
@@ -134,6 +136,13 @@ change has to be deliberate.
   committed transactions on power loss or an OS crash. The charter rule is "never lose a save", and the save queue reports a snapshot as
   written once the store call returns, so a commit that can silently vanish would break the retained-failure logic that depends on it.
   It is also not where the time goes: a full snapshot measured about 0.7 ms on disk (`SaveQueueLoadBenchmarkTests`, below).
+  **Opt-in `NORMAL`.** On a disk where the WAL fsync stalls for seconds (`SlowTransactionInterceptor` reports it as "N ms inside the end call"
+  and the stall makes other writers fail as "database is locked"), `Database:Characters:SqliteSynchronous = NORMAL` (or the shared
+  `Database:SqliteSynchronous`) removes the fsync at commit. In WAL mode the database stays consistent and an application crash loses
+  nothing (the WAL is in the OS cache); a power loss or OS crash can lose the most recent commits, which the save queue had already reported as
+  written. That is an accepted operator decision for that deployment, not the default. Set it only on the databases that need it, e.g.
+  `--set Database:Characters:SqliteSynchronous=NORMAL`. `WalAndSynchronousFullArePinned` still asserts the default; `SynchronousIsNormalOnlyWhereConfigured_AndFullByDefault`
+  asserts the override. The slow-transaction warning names the setting in effect for the context.
 - **`BEGIN IMMEDIATE`**: kept. EF's `BeginTransaction` on `Microsoft.Data.Sqlite` takes the write lock at `BEGIN`, before any statement
   runs. A writer therefore queues at the lock (now waiting inside SQLite under `busy_timeout`) instead of failing later when a read
   transaction tries to upgrade to a write and gets `SQLITE_BUSY` that no timeout can resolve. `EfTransactionsOnSqliteBeginImmediate`

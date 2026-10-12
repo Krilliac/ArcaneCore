@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 namespace ArcaneCore.Data.Resilience;
 
 /// <summary>
-/// Sets SQLite's <c>busy_timeout</c> on every connection EF opens (SQLite only; <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
+/// Sets SQLite's <c>busy_timeout</c> and <c>synchronous</c> on every connection EF opens (SQLite only; <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
 /// adds it to the Sqlite case alone). Without it SQLite reports "busy" at once and Microsoft.Data.Sqlite's own retry loop sleeps a fixed
 /// 150 ms per attempt, so with a dozen background writers on one file a writer is admitted up to 150 ms after the lock frees and the
 /// writers starve each other. With it SQLite's own busy handler waits inside the call and retries within a few milliseconds.
@@ -25,13 +25,17 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>The largest accepted <c>Database:SqliteBusyTimeoutMs</c>.</summary>
     public const int MaxBusyTimeoutMs = 60000;
 
-    private static readonly ConcurrentDictionary<(int Busy, int Write), SqliteConnectionPragmaInterceptor> Instances = new();
+    private static readonly ConcurrentDictionary<(int Busy, int Write, SqliteSynchronousMode Synchronous), SqliteConnectionPragmaInterceptor> Instances = new();
 
-    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs)
+    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs, SqliteSynchronousMode synchronous)
     {
+        Synchronous = synchronous;
         BusyTimeoutMs = busyTimeoutMs;
         WriteTimeoutMs = writeTimeoutMs;
     }
+
+    /// <summary>The <c>PRAGMA synchronous</c> applied to every connection this interceptor opens (<c>Database:SqliteSynchronous</c>).</summary>
+    public SqliteSynchronousMode Synchronous { get; }
 
     /// <summary>The configured busy timeout in milliseconds; 0 leaves SQLite's own "fail at once" behaviour.</summary>
     public int BusyTimeoutMs { get; }
@@ -50,7 +54,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// The shared interceptor for a timeout. One instance per value keeps EF's internal service provider cache keyed on the same
     /// interceptor object across the many option builds a host makes.
     /// </summary>
-    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0)
+    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0, SqliteSynchronousMode synchronous = SqliteSynchronousMode.Full)
     {
         if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
         {
@@ -64,7 +68,12 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
                 $"Database:SqliteWriteTimeoutMs must be between 0 and {MaxBusyTimeoutMs}, not {writeTimeoutMs}.");
         }
 
-        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write));
+        if (!Enum.IsDefined(synchronous))
+        {
+            throw new InvalidOperationException($"Database:SqliteSynchronous must be Full or Normal, not {synchronous}.");
+        }
+
+        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs, synchronous), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write, key.Synchronous));
     }
 
     /// <summary>
@@ -108,7 +117,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
         int milliseconds = (int)Math.Min(BusyTimeoutMs, connection.DefaultTimeout * 1000L);
         SqliteCommand command = connection.CreateCommand();
-        command.CommandText = FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds};");
+        command.CommandText = FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds}; PRAGMA synchronous = {(Synchronous == SqliteSynchronousMode.Normal ? "NORMAL" : "FULL")};");
         return command;
     }
 }

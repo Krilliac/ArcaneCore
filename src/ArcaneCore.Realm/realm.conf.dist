@@ -27,7 +27,7 @@
 # SECTIONS
 #
 #   AUTH                        15 keys
-#   DATABASE                    11 keys
+#   DATABASE                    13 keys
 #   DIAGNOSTICS                 8 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
@@ -289,6 +289,20 @@ Database.Auth.Provider = MariaDb
 # Database.Auth.SqliteBusyTimeoutMs =
 
 #
+#    Database.Auth.SqliteSynchronous
+#        Description: SQLite only: this component's PRAGMA synchronous (Full or Normal), overriding
+#                     Database:SqliteSynchronous. Unset inherits it. Normal in WAL mode avoids the
+#                     fsync stall at every commit but can lose the most recent commits on power loss
+#                     or an OS crash. Other engines ignore it. Values: Full, Normal.
+#        Type: SqliteSynchronousMode?
+#        Default: (not set)
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.SqliteSynchronous =
+
+#
 #    Database.ConnectionString
 #        Description: The connection string for any component that has no Database:<Component>
 #                     sub-section of its own. The shipped Realm file uses this single-database form.
@@ -364,6 +378,25 @@ Database.SlowTransactionWarnMs = 2000
 #        Docs: docs/reference/configuration.md#database
 #
 Database.SqliteBusyTimeoutMs = 5000
+
+#
+#    Database.SqliteSynchronous
+#        Description: SQLite only: the PRAGMA synchronous set on every connection, Full (default) or
+#                     Normal. Full fsyncs the WAL at every commit, so a committed save survives
+#                     power loss. Normal (WAL mode) skips that fsync, which removes multi-second
+#                     commit stalls on a slow disk (and the "database is locked" failures they cause
+#                     in other writers); the database stays consistent, but the most recent commits
+#                     can be lost on power loss or an OS crash, never on an application crash. Each
+#                     component may override it with Database:&lt;Component&gt;:SqliteSynchronous.
+#                     MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). Values:
+#                     Full, Normal.
+#        Type: SqliteSynchronousMode
+#        Default: Full
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SqliteSynchronous = Full
 
 #
 #    Database.SqliteWriteTimeoutMs

@@ -103,6 +103,7 @@ public static class DataServiceCollectionExtensions
             return new DatabaseConnectionOptions
             {
                 Provider = resolved.Provider, ConnectionString = resolved.ConnectionString, SqliteBusyTimeoutMs = guard.QueryTimeoutMs,
+                SqliteSynchronous = resolved.SqliteSynchronous,
             };
         }
 
@@ -167,7 +168,7 @@ public static class DataServiceCollectionExtensions
 
             case DatabaseProvider.Sqlite:
                 builder.UseSqlite(WithWriteBound(options.ConnectionString, sqliteWriteTimeoutMs))
-                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs));
+                    .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs, options.SqliteSynchronous ?? SqliteSynchronousMode.Full));
                 break;
 
             default:

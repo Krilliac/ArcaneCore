@@ -135,6 +135,73 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     }
 
     [Fact]
+    public async Task SynchronousIsNormalOnlyWhereConfigured_AndFullByDefault()
+    {
+        string auth = Connection("auth.db");
+        string characters = Connection("characters.db");
+        string world = Connection("world.db");
+
+        // Unset: FULL (2) everywhere, today's behaviour.
+        await using (ServiceProvider provider = Build(("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // Only the characters database is NORMAL (1).
+        await using (ServiceProvider provider = Build(("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters), ("Database:Characters:SqliteSynchronous", "NORMAL"),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // The shared key is inherited by every component without its own; a component's own key overrides it.
+        await using (ServiceProvider provider = Build(("Database:SqliteSynchronous", "Normal"),
+            ("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters), ("Database:Characters:SqliteSynchronous", "Full"),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // Single-database layout, with the busy-timeout clamp object rebuilt by the guard: the setting survives it.
+        await using (ServiceProvider provider = Build(true, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", auth), ("Database:SqliteSynchronous", "NORMAL"),
+            ("Database:SqliteBusyTimeoutMs", "5000"), ("Resilience:Database:QueryTimeoutMs", "2000")]))
+        {
+            Assert.Equal(2000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+        }
+    }
+
+    [Fact]
+    public async Task TheInterceptor_AppliesTheSynchronousModeItWasBuiltWith()
+    {
+        foreach ((SqliteSynchronousMode mode, long expected) in new[] { (SqliteSynchronousMode.Normal, 1L), (SqliteSynchronousMode.Full, 2L) })
+        {
+            var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(Connection($"sync-{mode}.db")).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, mode));
+            await using var db = new DbContext(builder.Options);
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal(expected, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+        }
+    }
+
+    [Fact]
+    public void AnUnknownSynchronousModeIsRefused()
+    {
+        Assert.Throws<InvalidOperationException>(() => SqliteConnectionPragmaInterceptor.For(5000, 0, (SqliteSynchronousMode)7));
+        Assert.Same(SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal), SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal));
+        Assert.NotSame(SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal), SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Full));
+    }
+
+    [Fact]
     public async Task EfTransactionsOnSqliteBeginImmediate()
     {
         // EF's BeginTransaction on Microsoft.Data.Sqlite takes the write lock at BEGIN, before any statement runs: a writer therefore
@@ -276,6 +343,22 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         {
             await db.Database.OpenConnectionAsync();
             return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA busy_timeout"))!;
+        }
+    }
+
+    private static async Task<long> SynchronousAsync(ServiceProvider provider, DatabaseComponent component)
+    {
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        DbContext db = component switch
+        {
+            DatabaseComponent.Auth => scope.ServiceProvider.GetRequiredService<AuthDbContext>(),
+            DatabaseComponent.Characters => scope.ServiceProvider.GetRequiredService<CharacterDbContext>(),
+            _ => await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(),
+        };
+        await using (db)
+        {
+            await db.Database.OpenConnectionAsync();
+            return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"))!;
         }
     }
 
