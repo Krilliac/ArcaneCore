@@ -157,11 +157,15 @@ public abstract class EscortAI : CreatureAI
 
         CurrentWaypointIndex = index;
         _nextPointChosen = _inWaypointCallback;
+        _redirectPending = !_inWaypointCallback;
         return true;
     }
 
     private bool _inWaypointCallback;
     private bool _nextPointChosen;
+
+    /// <summary>The next point was chosen outside the callback, while the escort is still walking to the old destination: its arrival must re-arm the walk to the chosen point.</summary>
+    private bool _redirectPending;
 
     /// <summary>
     /// vmangos npc_escortAI::Start (ScriptedEscortAI.cpp:452-506): refused in combat, while escorting, or without points. The points are
@@ -560,8 +564,18 @@ public abstract class EscortAI : CreatureAI
 
         if (point.Point != pointId)
         {
-            return; // "Waypoint out of order"
+            if (_redirectPending)
+            {
+                // A script chose another next point (SetNextWaypointByPointId) while the escort walked to the old one, and the new point is close:
+                // the arrival at the old destination is not "out of order", so walk to the chosen point instead of stalling.
+                _redirectPending = false;
+                _waypointWaitMs = 1;
+            }
+
+            return; // otherwise "Waypoint out of order"
         }
+
+        _redirectPending = false;
 
         if (point.ScriptId != 0)
         {

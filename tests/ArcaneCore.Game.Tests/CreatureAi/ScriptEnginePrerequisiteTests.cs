@@ -233,14 +233,50 @@ public sealed class ScriptEnginePrerequisiteTests
         Assert.Equal(UnitFlags.None, rig.Wolf.UnitFlags & (UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc));
     }
 
+    [Fact]
+    public void ARespawnWhileDormant_ReEntersDormancyOnTheReinitializedCreature()
+    {
+        using var rig = new Rig();
+        rig.Ai.OnUpdate(100);
+        Assert.True(rig.Ai.IsDormant);
+
+        // What a respawn does to the creature before the AI hears of it: flags and immobilization back to the template's, the auras gone.
+        rig.Wolf.UnitFlags &= ~StonedDormancy.DormantFlags;
+        rig.System.SetAiImmobilized(rig.Wolf, false, combatOnly: false);
+        rig.Spells.Auras.Clear();
+
+        rig.Ai.OnRespawn(); // the SPAWNED row casts Stoned again
+
+        // Without Forget() the helper still believes it is dormant, never re-applies the flags, and the creature stands there attackable.
+        Assert.True(rig.Ai.IsDormant);
+        Assert.Equal(StonedDormancy.DormantFlags, rig.Wolf.UnitFlags & StonedDormancy.DormantFlags);
+        Assert.True(rig.Wolf.AiImmobilized);
+
+        rig.Spells.RemoveAuras(rig.Wolf, Stoned);
+        Assert.False(rig.Ai.IsDormant);
+        Assert.Equal(UnitFlags.None, rig.Wolf.UnitFlags & StonedDormancy.DormantFlags);
+        Assert.False(rig.Wolf.AiImmobilized);
+    }
+
     // --- script catalogue: gossip and quest scripts ---------------------------------------------------------
 
     private static CreatureTemplate T(uint entry, string script) => new() { Entry = entry, Name = "T" + entry, ScriptName = script, AIName = "EventAI" };
 
+    private sealed class StubGossip : ArcaneCore.Game.Npc.INpcGossipScript
+    {
+        public ArcaneCore.Game.Npc.ScriptedGossipMenu? Hello(Player player, ArcaneCore.Game.Npc.NpcInfo npc) => null;
+
+        public uint Select(Player player, ArcaneCore.Game.Npc.NpcInfo npc, uint sender, uint action) => 0;
+    }
+
+    private sealed class StubQuest : INpcQuestScript
+    {
+    }
+
     [Theory]
     [InlineData(ScriptKind.GossipScript)]
     [InlineData(ScriptKind.QuestScript)]
-    public void AGossipOrQuestOnlyScript_CountsAsImplemented(ScriptKind kind)
+    public void AGossipOrQuestOnlyScript_CountsAsImplemented_OnlyBecauseAHandlerIsRegistered(ScriptKind kind)
     {
         var factory = new CreatureAiFactory();
         CreatureTemplate template = T(9999, "npc_test_only");
@@ -248,7 +284,15 @@ public sealed class ScriptEnginePrerequisiteTests
 
         Assert.True(catalog.Resolve(template, 70).ScriptNameMissing); // unknown to every layer
 
-        factory.RegisterNpcScript("npc_test_only", kind, "TestImplementation");
+        if (kind == ScriptKind.GossipScript)
+        {
+            factory.RegisterNpcScript("npc_test_only", "TestImplementation", gossip: new StubGossip());
+        }
+        else
+        {
+            factory.RegisterNpcScript("npc_test_only", "TestImplementation", quest: new StubQuest());
+        }
+
         ScriptResolution resolved = catalog.Resolve(template, 70);
         Assert.Equal(kind, resolved.Kind);
         Assert.Equal("TestImplementation", resolved.Implementation);
@@ -259,13 +303,40 @@ public sealed class ScriptEnginePrerequisiteTests
     }
 
     [Fact]
-    public void ANpcScriptName_ClashesFailClosed()
+    public void ANpcScriptName_ClashesFailClosed_InEveryDirection()
     {
         var factory = new CreatureAiFactory();
         factory.Register("npc_has_ai", c => new AggressorAI(c));
-        Assert.Throws<InvalidOperationException>(() => factory.RegisterNpcScript("npc_has_ai", ScriptKind.GossipScript, "X"));
-        factory.RegisterNpcScript("npc_once", ScriptKind.GossipScript, "X");
-        Assert.Throws<InvalidOperationException>(() => factory.RegisterNpcScript("npc_once", ScriptKind.QuestScript, "Y"));
-        Assert.Throws<ArgumentOutOfRangeException>(() => factory.RegisterNpcScript("npc_ai_kind", ScriptKind.EventAI, "Z"));
+        factory.RegisterEventAiScript("npc_has_event_ai", (c, ai) => new CreatureEventAI(c, ai));
+        Assert.Throws<InvalidOperationException>(() => factory.RegisterNpcScript("npc_has_ai", "X", gossip: new StubGossip()));
+        Assert.Throws<InvalidOperationException>(() => factory.RegisterNpcScript("npc_has_event_ai", "X", gossip: new StubGossip()));
+        factory.RegisterNpcScript("npc_once", "X", gossip: new StubGossip());
+        Assert.Throws<InvalidOperationException>(() => factory.RegisterNpcScript("npc_once", "Y", quest: new StubQuest()));
+        Assert.Throws<ArgumentException>(() => factory.RegisterNpcScript("npc_no_handler", "Z")); // a string alone is no implementation
+
+        // an AI registered under a name an npc script already owns
+        Assert.Throws<InvalidOperationException>(() => factory.Register("npc_once", c => new AggressorAI(c)));
+        Assert.Throws<InvalidOperationException>(() => factory.RegisterEventAiScript("NPC_ONCE", (c, ai) => new CreatureEventAI(c, ai)));
+    }
+
+    [Fact]
+    public void AnEventAiScript_KeepsTheGuardSightRulesOfAGuardTemplate()
+    {
+        CreatureContent Content(uint extraFlags) => new(
+            [Template(configure: t => t.AIName = CreatureAiFactory.EventAIName) with { ScriptName = ScriptName, ExtraFlags = extraFlags }],
+            [Spawn(1, WolfEntry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+
+        foreach ((uint extraFlags, bool guardRules) in new[] { (0x400u, true), (0u, false) }) // 0x400: the GUARD extra flag
+        {
+            var factory = new CreatureAiFactory();
+            factory.RegisterEventAiScript(ScriptName, (c, ai) => new StonedEventAI(c, ai));
+            (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(Content(extraFlags), new CreatureAiServices { Factory = factory });
+            using (world)
+            {
+                AddPlayer(world, 1, 60, 0); // brings the spawn in range
+                var ai = Assert.IsAssignableFrom<CreatureEventAI>(Assert.Single(system.Creatures).AI);
+                Assert.Equal(guardRules, ai.UsesGuardSightRules); // as the plain EventAI entry sets it (vmangos GuardEventAI::Permissible)
+            }
+        }
     }
 }

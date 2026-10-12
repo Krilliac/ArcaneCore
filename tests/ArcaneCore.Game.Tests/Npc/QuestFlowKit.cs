@@ -22,7 +22,7 @@ internal sealed class QuestFlowKit : IDisposable
     public QuestFlowKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
         IReadOnlyList<uint>? starters = null, IReadOnlyList<uint>? enders = null, IReadOnlyList<uint>? rewardable = null,
         Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null,
-        IPlayerReputation? reputation = null, IQuestSpellCaster? spellCaster = null, uint npcFlags = 2)
+        IPlayerReputation? reputation = null, IQuestSpellCaster? spellCaster = null, uint npcFlags = 2, string scriptName = "")
     {
         Player = TestWorld.CreatePlayer(1, 0, 0, Session, race: race);
         Player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)cls);
@@ -31,7 +31,7 @@ internal sealed class QuestFlowKit : IDisposable
         Player.Inventory.Load([]);
         Player.Money = 50;
         World.AddPlayer(Player);
-        var template = new CreatureTemplate { Entry = CreatureEntry, Name = "Flow questgiver", Faction = 2, NpcFlags = npcFlags };
+        var template = new CreatureTemplate { Entry = CreatureEntry, Name = "Flow questgiver", Faction = 2, NpcFlags = npcFlags, ScriptName = scriptName };
         Creature = new Creature(910020, template,
             new CreatureSpawn { Guid = 910020, Entry = CreatureEntry, MapId = 0, X = 0, Y = 0, Z = Player.Z }, CreatureContent.Empty, new Random(1));
         Player.Map!.AddObject(Creature);
@@ -85,12 +85,12 @@ internal sealed class QuestFlowKit : IDisposable
 
     public static QuestTemplate Task(uint id, byte minLevel = 1, uint races = 0, uint classes = 0, int previous = 0, uint limitTime = 0,
         byte special = 0, int exclusiveGroup = 0, uint nextInChain = 0, uint srcItem = 0, byte srcCount = 0, uint reqItem = 0,
-        uint reqItemCount = 0, byte maxLevel = 0, byte method = 2, uint reqSource = 0, byte reqSourceCount = 0, uint type = 0, uint flags = 0) => new()
+        uint reqItemCount = 0, byte maxLevel = 0, byte method = 2, uint reqSource = 0, byte reqSourceCount = 0, uint type = 0, uint flags = 0, uint completeScript = 0) => new()
     {
         Entry = id, Method = method, MinLevel = minLevel, MaxLevel = maxLevel, QuestLevel = 1, Title = $"Quest {id}",
         RequiredRaces = races, RequiredClasses = classes, PrevQuestId = previous, LimitTime = limitTime, SpecialFlags = special,
         ExclusiveGroup = exclusiveGroup, NextQuestInChain = nextInChain, SrcItemId = srcItem, SrcItemCount = srcCount,
-        ReqItemId1 = reqItem, ReqItemCount1 = reqItemCount, ReqSourceId1 = reqSource, ReqSourceCount1 = reqSourceCount, Type = type, QuestFlags = flags,
+        ReqItemId1 = reqItem, ReqItemCount1 = reqItemCount, ReqSourceId1 = reqSource, ReqSourceCount1 = reqSourceCount, Type = type, QuestFlags = flags, CompleteScript = completeScript,
         ReqCreatureOrGOId1 = reqItem == 0 ? 90 : 0, ReqCreatureOrGOCount1 = reqItem == 0 ? 2u : 0,
         RequestItemsText = "Bring it.", Details = "Do it.", Objectives = "Done?",
     };

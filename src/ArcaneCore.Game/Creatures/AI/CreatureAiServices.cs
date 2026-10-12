@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
@@ -342,30 +343,38 @@ public sealed class CreatureAiFactory
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(factory);
-        if (!_factories.TryAdd(name, (c, content) => factory(c, content.Ai)))
+        if (_npcScripts.ContainsKey(name) || !_factories.TryAdd(name, (c, content) =>
         {
-            throw new InvalidOperationException($"creature AI '{name}' is already registered");
+            CreatureEventAI ai = factory(c, content.Ai);
+            // The plain EventAI entry applies the guard rules of a GUARD-flagged template (vmangos GuardEventAI::Permissible); a hosted script keeps them.
+            ai.UsesGuardSightRules |= (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0;
+            return ai;
+        }))
+        {
+            throw new InvalidOperationException($"script '{name}' is already registered");
         }
     }
 
-    private readonly Dictionary<string, (ScriptKind Kind, string Implementation)> _npcScripts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, NpcScript> _npcScripts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Declare that <paramref name="scriptName"/> is implemented as a gossip script (<see cref="ScriptKind.GossipScript"/>) or a quest script
-    /// (<see cref="ScriptKind.QuestScript"/>, a <see cref="IQuestScriptAI"/> or an <c>OnQuestRewarded</c> hook) named <paramref name="implementation"/>, with
-    /// no AI of its own: <see cref="ScriptCatalog"/> then counts the ScriptName as implemented. A duplicate, or an AI already registered
-    /// under the name, throws (fail closed).
+    /// Register a gossip and/or quest script that has no AI of its own, bound by the template's ScriptName (ScriptDev2 <c>pGossipHello</c>,
+    /// <c>pQuestAcceptNPC</c>, <c>pQuestRewardedNPC</c>): <paramref name="gossip"/> answers the gossip hello and selection of every creature
+    /// with that ScriptName (<see cref="QuestNpcServices.GossipByScriptName"/>, bound by <see cref="CreatureQuestScripts.Attach"/>) and
+    /// <paramref name="quest"/> is invoked when a quest is taken from or rewarded by such a creature. <see cref="ScriptCatalog"/> counts the
+    /// ScriptName as implemented only because a handler is registered here. The creature still runs the AI of its AIName. At least one
+    /// handler is required; a duplicate, or an AI already registered under the name, throws (fail closed).
     /// </summary>
-    public void RegisterNpcScript(string scriptName, ScriptKind kind, string implementation)
+    public void RegisterNpcScript(string scriptName, string implementation, INpcGossipScript? gossip = null, INpcQuestScript? quest = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptName);
         ArgumentException.ThrowIfNullOrWhiteSpace(implementation);
-        if (kind is not (ScriptKind.GossipScript or ScriptKind.QuestScript))
+        if (gossip is null && quest is null)
         {
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "only a gossip or quest script is a non-AI script");
+            throw new ArgumentException("a gossip or quest handler is required", nameof(gossip));
         }
 
-        if (_factories.ContainsKey(scriptName) || !_npcScripts.TryAdd(scriptName, (kind, implementation)))
+        if (_factories.ContainsKey(scriptName) || !_npcScripts.TryAdd(scriptName, new NpcScript(implementation, gossip, quest)))
         {
             throw new InvalidOperationException($"script '{scriptName}' is already registered");
         }
@@ -373,16 +382,28 @@ public sealed class CreatureAiFactory
 
     /// <summary>The gossip/quest-only script registered under <paramref name="scriptName"/>, or null.</summary>
     internal (ScriptKind Kind, string Implementation)? NpcScriptOf(string scriptName)
-        => _npcScripts.TryGetValue(scriptName, out (ScriptKind Kind, string Implementation) script) ? script : null;
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script)
+            ? (script.Gossip is not null ? ScriptKind.GossipScript : ScriptKind.QuestScript, script.Implementation)
+            : null;
+
+    /// <summary>The gossip handler registered for <paramref name="scriptName"/> (a creature's template ScriptName), or null.</summary>
+    internal INpcGossipScript? NpcGossipOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script) ? script.Gossip : null;
+
+    /// <summary>The quest handler registered for <paramref name="scriptName"/>, or null.</summary>
+    internal INpcQuestScript? NpcQuestOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out NpcScript? script) ? script.Quest : null;
+
+    private sealed record NpcScript(string Implementation, INpcGossipScript? Gossip, INpcQuestScript? Quest);
 
     /// <summary>Register a C# AI under <paramref name="name"/> (a duplicate throws: fail closed).</summary>
     public void Register(string name, Func<Creature, CreatureAI> factory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(factory);
-        if (!_factories.TryAdd(name, (c, _) => factory(c)))
+        if (_npcScripts.ContainsKey(name) || !_factories.TryAdd(name, (c, _) => factory(c)))
         {
-            throw new InvalidOperationException($"creature AI '{name}' is already registered");
+            throw new InvalidOperationException($"script '{name}' is already registered");
         }
     }
 

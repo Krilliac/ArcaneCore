@@ -115,6 +115,11 @@ public abstract class CreatureAI
     /// A player was rewarded <paramref name="questId"/> by this creature as the quest giver (ScriptDev2 <c>pQuestRewardedNPC</c>, called by
     /// vmangos Player::RewardQuest). Raised by <see cref="CreatureQuestScripts"/> after the reward is committed and before the quest's DB
     /// CompleteScript runs. Nothing by default.
+    /// <para>
+    /// The quest is already committed when this runs, so an exception thrown here is contained: <see cref="CreatureQuestScripts"/> logs it,
+    /// records it in the <c>FaultLedger</c> (script name, quest id, creature entry) and carries on, and the CompleteScript, the other
+    /// <c>QuestRewarded</c> subscribers and the next-quest offer still run. It never quarantines the character or kicks the session.
+    /// </para>
     /// </summary>
     public virtual void OnQuestRewarded(Player player, uint questId)
     {

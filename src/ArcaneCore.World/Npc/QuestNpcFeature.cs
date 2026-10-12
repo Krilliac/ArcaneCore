@@ -136,7 +136,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         _dbScripts = Game.Creatures.CreatureQuestScripts.Attach(Services,
             map => _services.GetService<Creatures.CreatureWorldFeature>()?.FindSystem(map),
             () => _services.GetService<Creatures.CreatureWorldFeature>()?.Content,
-            () => _services.GetService<Creatures.CreatureWorldFeature>()?.AiServices.Factory);
+            () => _services.GetService<Creatures.CreatureWorldFeature>()?.AiServices.Factory,
+            _logger);
         Persistence.Start();
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;

@@ -11,9 +11,17 @@ namespace ArcaneCore.Game.Creatures;
 /// <para>
 /// Dormant means: not selectable and immune to players and NPCs (so nothing attacks it, <c>CombatHooks.CanAttack</c> refuses it, and
 /// <see cref="CreatureMapSystem.CanInitiateAttack"/> refuses to let it aggro), and immobilized (<see cref="CreatureMapSystem.SetAiImmobilized"/>: no
-/// movement, no swing). Only the flag bits this helper itself added are removed on waking, so flags the template carries are never lost.
+/// movement, no swing).
 /// </para>
-/// Ownership: one instance per creature AI, world thread only. <see cref="Sync"/> costs one aura lookup.
+/// <para>
+/// Flag ownership: entering dormancy remembers which of <see cref="DormantFlags"/> the creature did not carry yet; waking removes exactly
+/// those bits, so flags the template (or a script) had set before are never lost. The rule is by bit, not by setter: a bit this helper added
+/// is removed on waking even when another system set it as well during the dormancy.
+/// </para>
+/// <para>
+/// Ownership: one instance per creature AI, world thread only. <see cref="Sync"/> walks the creature's aura holders once without allocating
+/// (<see cref="SpellSystem.HasAura"/>), so it is cheap enough for every tick.
+/// </para>
 /// </summary>
 public sealed class StonedDormancy(Creature creature)
 {

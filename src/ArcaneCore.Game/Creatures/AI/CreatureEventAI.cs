@@ -64,7 +64,7 @@ public class CreatureEventAI : AggressorAI
     /// 'EventAI', CreatureAISelector.cpp:66-69): the script runs as any EventAI script, but whom it attacks on sight is the guard rule
     /// (<see cref="CreatureMapSystem.CanGuardAggroOnSight"/>).
     /// </summary>
-    public bool UsesGuardSightRules { get; init; }
+    public bool UsesGuardSightRules { get; set; }
 
     /// <summary>vmangos CreatureEventAI::MoveInLineOfSight has no guard call (only BasicAI does; combat entry still calls).</summary>
     protected override bool CallsGuardsOnSight => false;

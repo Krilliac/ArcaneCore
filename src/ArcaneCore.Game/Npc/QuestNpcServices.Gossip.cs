@@ -13,7 +13,19 @@ public sealed partial class QuestNpcServices
 
     // ScriptDev creature gossip takes precedence over the world fallback.
     private INpcGossipScript? ScriptFor(Player player, NpcInfo npc)
-        => (player.Map?.FindObject(npc.Guid) as Creatures.Creature)?.AI as INpcGossipScript ?? GossipScriptFor(npc.Entry);
+    {
+        var creature = player.Map?.FindObject(npc.Guid) as Creatures.Creature;
+        return creature?.AI as INpcGossipScript ?? ScriptNameGossip(creature) ?? GossipScriptFor(npc.Entry);
+    }
+
+    /// <summary>
+    /// The gossip handler registered for the ScriptName of creature templates (<c>CreatureAiFactory.RegisterNpcScript</c>), read at each
+    /// hello and selection; bound by <c>CreatureQuestScripts.Attach</c>. Asked after the creature's own AI and before the entry registrations.
+    /// </summary>
+    public Func<string, INpcGossipScript?>? GossipByScriptName { get; set; }
+
+    private INpcGossipScript? ScriptNameGossip(Creatures.Creature? creature)
+        => creature is not null && !string.IsNullOrEmpty(creature.Template.ScriptName) ? GossipByScriptName?.Invoke(creature.Template.ScriptName) : null;
 
     /// <summary>
     /// A gossip option owned by another area was selected (auctioneer, petitioner, tabard

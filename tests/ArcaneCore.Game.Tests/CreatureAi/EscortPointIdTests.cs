@@ -9,8 +9,8 @@ using static ArcaneCore.Game.Tests.CreatureTestSupport;
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
 /// <summary>
-/// <see cref="EscortAI"/>'s waypoint callback reports the 1-based DB point id; <see cref="EscortAI.SetCurrentWaypoint"/> takes a 0-based index. The
-/// point-id API keeps scripts from confusing the two ("jump so that point 10 is next" means index 9).
+/// <see cref="EscortAI"/>'s waypoint callback reports the DB point id; <see cref="EscortAI.SetCurrentWaypoint"/> takes a 0-based index. The
+/// point-id API keeps scripts from confusing the two. The path here uses the ids 10, 20 ... 60, so an id is never an index plus one.
 /// </summary>
 public sealed class EscortPointIdTests
 {
@@ -28,6 +28,10 @@ public sealed class EscortPointIdTests
     {
         public List<uint> Reached { get; } = [];
 
+        public List<uint> Started { get; } = [];
+
+        protected override void WaypointStart(uint pointId) => Started.Add(pointId);
+
         public Action<JumpEscort, uint>? OnReached { get; set; }
 
         protected override void WaypointReached(uint pointId)
@@ -43,7 +47,7 @@ public sealed class EscortPointIdTests
 
     private static (WorldRuntime World, JumpEscort Ai) Setup()
     {
-        CreatureWaypoint[] path = [.. Enumerable.Range(1, 6).Select(i => new CreatureWaypoint((uint)i, 10 + (i * 3), 0, Z, 0, 0))];
+        CreatureWaypoint[] path = [.. Enumerable.Range(1, 6).Select(i => new CreatureWaypoint((uint)(i * 10), 10 + (i * 3), 0, Z, 0, 0))];
         var content = new CreatureContent([Template(Entry)], [Spawn(1, Entry, 5, 0, Z)], [], [], [],
             entryWaypoints: path.Select(p => (Entry, EscortAI.EscortPathId, p)));
         (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new NeverHostile() });
@@ -59,10 +63,13 @@ public sealed class EscortPointIdTests
         using WorldRuntime _ = world;
         Assert.True(ai.Start());
 
-        Assert.Equal(0, ai.IndexOfPointId(1));
-        Assert.Equal(5, ai.IndexOfPointId(6));
+        Assert.Equal(0, ai.IndexOfPointId(10));
+        Assert.Equal(2, ai.IndexOfPointId(30));
+        Assert.Equal(5, ai.IndexOfPointId(60));
         Assert.Equal(-1, ai.IndexOfPointId(0));
-        Assert.Equal(-1, ai.IndexOfPointId(7));
+        Assert.Equal(-1, ai.IndexOfPointId(1)); // an index-plus-one is no id here
+        Assert.Equal(-1, ai.IndexOfPointId(6));
+        Assert.Equal(-1, ai.IndexOfPointId(70));
     }
 
     [Fact]
@@ -72,13 +79,14 @@ public sealed class EscortPointIdTests
         using WorldRuntime _ = world;
         Assert.True(ai.Start());
 
-        Assert.True(ai.SetNextWaypointByPointId(4));
-        Assert.Equal(3, ai.CurrentWaypointIndex); // point 4 is index 3
-        Assert.False(ai.SetNextWaypointByPointId(99)); // refused, nothing changes
+        Assert.True(ai.SetNextWaypointByPointId(40));
+        Assert.Equal(3, ai.CurrentWaypointIndex); // point 40 is index 3
+        Assert.False(ai.SetNextWaypointByPointId(4)); // the index-plus-one is no id: refused, nothing changes
+        Assert.False(ai.SetNextWaypointByPointId(99));
         Assert.Equal(3, ai.CurrentWaypointIndex);
 
         RunUntil(world, () => ai.Reached.Count > 0);
-        Assert.Equal(4u, ai.Reached[0]);
+        Assert.Equal(40u, ai.Reached[0]);
     }
 
     [Fact]
@@ -89,28 +97,28 @@ public sealed class EscortPointIdTests
         bool jumped = false;
         ai.OnReached = (escort, point) =>
         {
-            if (point == 1 && !jumped)
+            if (point == 10 && !jumped)
             {
                 jumped = true;
-                Assert.True(escort.SetNextWaypointByPointId(5)); // "after point 1, point 5 is next"
+                Assert.True(escort.SetNextWaypointByPointId(50)); // "after point 10, point 50 is next"
             }
         };
         Assert.True(ai.Start());
 
         RunUntil(world, () => ai.Reached.Count >= 2);
-        Assert.Equal([1u, 5u], ai.Reached);
+        Assert.Equal([10u, 50u], ai.Reached);
     }
 
     [Fact]
     public void TheZeroBasedSetter_StaysAnIndex_AndLandsOnePointLateInsideTheCallback()
     {
-        // The trap this API exists for: index 4 set inside the callback of point 1 is followed by the usual advance, so point 6 is next.
+        // The trap this API exists for: index 4 set inside the callback of point 10 is followed by the usual advance, so index 5 (point 60) is next.
         (WorldRuntime world, JumpEscort ai) = Setup();
         using WorldRuntime _ = world;
         bool jumped = false;
         ai.OnReached = (escort, point) =>
         {
-            if (point == 1 && !jumped)
+            if (point == 10 && !jumped)
             {
                 jumped = true;
                 escort.SetCurrentWaypoint(4);
@@ -119,7 +127,27 @@ public sealed class EscortPointIdTests
         Assert.True(ai.Start());
 
         RunUntil(world, () => ai.Reached.Count >= 2);
-        Assert.Equal([1u, 6u], ai.Reached);
+        Assert.Equal([10u, 60u], ai.Reached);
+    }
+
+    [Fact]
+    public void SetNextWaypointByPointId_OutsideTheCallback_ToANearbyPoint_DoesNotStallTheEscort()
+    {
+        // Points are 3 yd apart. The escort is walking to point 10 when a script makes point 20 (3 yd from point 10, so inside the 10 yd arrival
+        // tolerance but with another id) the next one: the arrival at point 10 must send it on to point 20 instead of leaving it standing.
+        (WorldRuntime world, JumpEscort ai) = Setup();
+        using WorldRuntime _ = world;
+        Assert.True(ai.Start());
+        RunUntil(world, () => ai.Started.Count > 0);
+        Assert.Equal(10u, ai.Started[0]);
+        Assert.Empty(ai.Reached);
+
+        Assert.True(ai.SetNextWaypointByPointId(20));
+
+        RunUntil(world, () => ai.Reached.Count > 0);
+        Assert.Equal(20u, ai.Reached[0]);
+        RunUntil(world, () => ai.Reached.Count >= 3); // and it carries on along the path
+        Assert.Equal([20u, 30u, 40u], ai.Reached.Take(3));
     }
 
     private static void RunUntil(WorldRuntime world, Func<bool> done)
