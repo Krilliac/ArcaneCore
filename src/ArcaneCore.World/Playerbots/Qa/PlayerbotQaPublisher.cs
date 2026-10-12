@@ -154,7 +154,7 @@ internal sealed class PlayerbotQaPublisher
         if (!git.Enabled) return;
         QaFindingView[] eligible = [.. findings.Where(Eligible)
             .OrderBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
-        if (eligible.Length == 0) return;
+        if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0) return;
         if (!git.Publish)
         {
             DryRun(eligible);
@@ -190,6 +190,7 @@ internal sealed class PlayerbotQaPublisher
         var pass = new Pass(transport, redactor);
         try
         {
+            if (!await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false)) return;
             foreach (QaFindingView finding in eligible)
             {
                 if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) break;
@@ -266,6 +267,7 @@ internal sealed class PlayerbotQaPublisher
         SemaphoreSlim gate = _gates.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         QaFindingView? current = null;
+        _state.Pin(id); // not aged out, evicted or lost to a merge while this call awaits GitHub; a merge still leaves the outcome a place to go
         try
         {
             current = _state.Get(id);
@@ -387,8 +389,64 @@ internal sealed class PlayerbotQaPublisher
         }
         finally
         {
+            _state.Unpin(id);
             gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Close the issues of findings that were merged into another one: comment with a link to the surviving issue, then close as not planned. One
+    /// failure is logged and retried next pass; false when the pass should stop (a transient failure). Does nothing with <c>CloseAbsorbedDuplicates</c> off.
+    /// </summary>
+    private async Task<bool> CloseDuplicatesAsync(Pass pass, CancellationToken cancellationToken)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (!git.CloseAbsorbedDuplicates) return true;
+        foreach (QaAbsorbed duplicate in _state.PendingDuplicates())
+        {
+            QaFindingView? survivor = _state.Get(duplicate.Survivor);
+            if (survivor is null || !survivor.Publication.Pinned || survivor.Publication.Issue <= 0) continue;
+            if (survivor.Publication.Issue == duplicate.Issue)
+            {
+                _state.MarkDuplicateHandled(duplicate.Id);
+                continue;
+            }
+
+            try
+            {
+                QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
+                QaIssueRef? issue = index.ByNumber(duplicate.Issue);
+                if (issue is { Open: false })
+                {
+                    _state.MarkDuplicateHandled(duplicate.Id); // already closed by a person: nothing to say
+                    continue;
+                }
+
+                DateTime now = _time.GetUtcNow().UtcDateTime;
+                if (!Ledger.CanComment(now, git.MaxCommentsPerHour))
+                {
+                    _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the duplicate issue #{Number} is closed on a later pass", git.MaxCommentsPerHour, duplicate.Issue);
+                    return true;
+                }
+
+                await pass.Transport.CommentAsync(duplicate.Issue, PlayerbotQaIssueComposer.DuplicateComment(survivor.Publication.Issue), cancellationToken).ConfigureAwait(false);
+                Ledger.RecordComment(now);
+                await pass.Transport.CloseAsDuplicateAsync(duplicate.Issue, cancellationToken).ConfigureAwait(false);
+                _state.MarkDuplicateHandled(duplicate.Id);
+                _logger.LogInformation("Bot QA: closed issue #{Number} as a duplicate of #{Survivor}", duplicate.Issue, survivor.Publication.Issue);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (PlayerbotQaPublishException ex)
+            {
+                _logger.LogWarning("Bot QA could not close duplicate issue #{Number}: {Reason}", duplicate.Issue, pass.Redactor.Redact(ex.Message));
+                if (ex.Transient) return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

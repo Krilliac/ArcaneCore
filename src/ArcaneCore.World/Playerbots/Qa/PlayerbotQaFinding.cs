@@ -232,6 +232,15 @@ internal sealed class QaFinding
 
     internal const int MaxAttackers = 32;
 
+    /// <summary>
+    /// The most attacker entries a death-loop finding collects from its signals. A real loop has one to three; a finding that reaches this many is an
+    /// area-wide death spot, and a bound keeps one common entry from letting it swallow every loop of a zone cell through a long chain of unions.
+    /// </summary>
+    internal const int MaxLoopAttackers = 8;
+
+    /// <summary>The key of the aggregator's loop index this finding sits under (its anchor's map, or none); set and read by the aggregator under its lock.</summary>
+    public uint IndexedMap { get; set; }
+
     public required string Id { get; init; }
 
     public required string Key { get; init; }

@@ -35,6 +35,8 @@ internal sealed class StuckTransport : IQaIssueTransport
 
     public Task ReopenAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
 
+    public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
+
     public void Dispose()
     {
     }
@@ -65,16 +67,17 @@ public sealed class PlayerbotQaFeaturePublishTests : IDisposable
         {
             EnvironmentReader = _ => QaData.FakeToken,
             TransportFactory = _ => transport,
+            Time = new ManualTime(QaData.T0),
         };
         feature.Attach(null!);
-        Assert.True(bus.TryWrite(QaData.Relay(7, DateTime.UtcNow)));
+        Assert.True(bus.TryWrite(QaData.Relay(7)));
         Assert.Equal(1, feature.Drain());
 
         feature.RunPass(CancellationToken.None);
         await transport.Entered.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.False(feature.Publishing.IsCompleted); // the publisher is stuck inside the list call
-        Assert.True(bus.TryWrite(QaData.Relay(8, DateTime.UtcNow)));
+        Assert.True(bus.TryWrite(QaData.Relay(8)));
         Assert.Equal(1, feature.Drain()); // draining is not blocked
         feature.RunPass(CancellationToken.None); // a second pass while publishing is stuck returns at once and schedules nothing
         Assert.Equal(1, transport.Lists);

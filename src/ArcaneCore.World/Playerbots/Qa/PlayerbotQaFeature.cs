@@ -52,6 +52,11 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     /// <summary>Test seam: the fault ledger the server-fault signals are read from (default: the container's, else the process-wide one).</summary>
     internal FaultLedger? FaultSource { get; init; }
 
+    /// <summary>Test seam: the clock of the passes, the age-out and the publisher (default: the system clock).</summary>
+    internal TimeProvider Time { get; init; } = TimeProvider.System;
+
+    private DateTime Now => Time.GetUtcNow().UtcDateTime;
+
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
 
     /// <summary>The spell watcher of the bots' casts (registered on the world's spell system while QA runs; null otherwise).</summary>
@@ -96,15 +101,15 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             }
         }
 
-        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null);
+        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log);
         _facts = new PlayerbotQaContentFacts(services);
-        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory);
+        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time);
         if (saved is not null)
         {
-            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots));
+            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed), Now);
             _publisher.Ledger.Restore(saved.Ledger);
-            _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another)",
-                aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged);
+            _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another, {Issues} issues of merged findings to close as duplicates)",
+                aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
         }
 
         Aggregator = aggregator;
@@ -171,7 +176,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         {
             batch.Clear();
             moved = _bus.Drain(batch, 4096);
-            DateTime now = DateTime.UtcNow;
+            DateTime now = Now;
             foreach (QaSignal signal in batch)
             {
                 try
@@ -198,7 +203,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     {
         if (Aggregator is null || _faultFeed is null) return 0;
         IReadOnlyList<QaSignal> signals = _faultFeed.Pull();
-        DateTime now = DateTime.UtcNow;
+        DateTime now = Now;
         foreach (QaSignal signal in signals)
         {
             try
@@ -232,7 +237,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             Redactor.SetNames(bots.Snapshot().Select(bot => bot.Name));
         }
 
-        Aggregator.AgeOut(DateTime.UtcNow);
+        Aggregator.AgeOut(Now);
         Persist();
         Export();
         // The pass runs every ExportIntervalSeconds (5 minutes by default): the retreat counters ride on it as the periodic summary line.
@@ -276,7 +281,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         try
         {
             IEnumerable<uint> talents = services.GetService<Talents.TalentFeature>()?.Catalog?.Talents.SelectMany(t => t.RankSpells) ?? [];
-            Func<QaSpellCoverageReport> build = () => PlayerbotQaSpellCoverage.Build(spells.System, rows, talents, DateTime.UtcNow);
+            Func<QaSpellCoverageReport> build = () => PlayerbotQaSpellCoverage.Build(spells.System, rows, talents, Now);
             QaSpellCoverageReport report = _world is { } world && !world.IsWorldThread
                 ? world.InvokeAsync(build).WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult()
                 : build();
@@ -302,15 +307,15 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        DateTime next = DateTime.UtcNow.AddSeconds(_options.ExportIntervalSeconds);
+        DateTime next = Now.AddSeconds(_options.ExportIntervalSeconds);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
                 Drain();
-                if (DateTime.UtcNow < next) continue;
-                next = DateTime.UtcNow.AddSeconds(_options.ExportIntervalSeconds);
+                if (Now < next) continue;
+                next = Now.AddSeconds(_options.ExportIntervalSeconds);
                 RunPass(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -332,7 +337,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             QaAggregatorState state = Aggregator.Export();
             _store.Save(new QaStoreFile
             {
-                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Ledger = _publisher.Ledger.Export(),
+                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Ledger = _publisher.Ledger.Export(),
             });
         }
     }
@@ -341,7 +346,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     {
         if (Aggregator is null) return;
         IReadOnlyList<QaFindingView> findings = Aggregator.Snapshot();
-        DateTime now = DateTime.UtcNow;
+        DateTime now = Now;
         string build = PlayerbotQaIssueComposer.BuildVersion();
         try
         {

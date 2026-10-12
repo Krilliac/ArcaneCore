@@ -63,4 +63,7 @@ internal interface IQaIssueTransport : IDisposable
     Task CommentAsync(int number, string body, CancellationToken cancellationToken);
 
     Task ReopenAsync(int number, CancellationToken cancellationToken);
+
+    /// <summary>Close an issue as not planned (a duplicate of another issue the caller has just linked in a comment).</summary>
+    Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken);
 }

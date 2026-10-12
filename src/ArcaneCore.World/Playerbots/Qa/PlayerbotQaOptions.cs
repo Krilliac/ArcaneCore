@@ -136,6 +136,12 @@ public sealed class PlayerbotQaGitHubOptions
     /// <summary>Reopen a finding's issue when it was closed and the finding keeps happening (off by default: a closed issue is recorded as known and left alone).</summary>
     public bool ReopenClosed { get; set; }
 
+    /// <summary>
+    /// When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and
+    /// close it as not planned (a duplicate). Off keeps the absorbed issue open and untouched; the merge is recorded in the store either way.
+    /// </summary>
+    public bool CloseAbsorbedDuplicates { get; set; } = true;
+
     /// <summary>The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default).</summary>
     public string[] Labels { get; set; } = ["bot-qa"];
 
