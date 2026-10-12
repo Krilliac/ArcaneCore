@@ -606,6 +606,7 @@ public sealed class Map
     internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
         diagnostics?.Begin();
+        diagnostics?.BeginTiles();
         GridLifecycleCounters gridsBefore = diagnostics is not null ? _grid.Counters : default;
         // (1) in-world packets, over a snapshot (a handler may add or remove players); the snapshot list is reused
         List<Player> snapshot = _updatePlayers;
@@ -684,6 +685,7 @@ public sealed class Map
         {
             _grid.MarkActiveCells();
         }
+        diagnostics?.EndActiveCells();
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)

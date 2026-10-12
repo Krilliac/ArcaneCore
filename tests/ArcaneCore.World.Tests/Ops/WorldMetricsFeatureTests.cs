@@ -64,6 +64,8 @@ public sealed class WorldMetricsFeatureTests
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.ticks" && m.Series.Any(s => s.Value >= 20));
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.sessions");
         Assert.Contains(metrics, m => m.Name == "arcanecore.db.save_queue_depth");
+        Assert.Contains(metrics, m => m.Name == "arcanecore.nav.tile_installs");
+        Assert.Contains(metrics, m => m.Name == "arcanecore.nav.tile_install_time" && m.Unit == "ms");
         Assert.Contains(metrics, m => m.Name == "arcanecore.db.save_queue_oldest_age" && m.Unit == "ms");
         Assert.Contains(metrics, m => m.Name == "arcanecore.map.creatures" && m.Series.Any(s => s.Tags.Any(t => t.Key == "map")));
     }

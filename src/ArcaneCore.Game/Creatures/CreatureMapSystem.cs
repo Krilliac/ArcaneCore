@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
@@ -29,7 +30,7 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
+public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown, ICreatureMover
 {
     /// <summary>vmangos MAX_NUMBER_OF_GRIDS.</summary>
     public const int MaxNumberOfGrids = 64;
@@ -166,14 +167,65 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         _clockMs += diffMs;
         _pathSearchesThisTick = 0;
         _pathNodesThisTick = 0;
+        _timing = default;
+        long t = Stopwatch.GetTimestamp();
         SendCatchUpMoves();
+        t = Lap(t, out _timing.CatchUp);
         UpdateLinkedFollowers();
+        t = Lap(t, out _timing.Linked);
         UpdateCreatures(diffMs);
+        t = Lap(t, out _timing.Creatures);
         UpdateSpawnGroups();
+        t = Lap(t, out _timing.SpawnGroups);
         UpdatePendingAi();
+        t = Lap(t, out _timing.PendingAi);
         UpdateRelayScripts();
+        t = Lap(t, out _timing.Relay);
         UpdateForcedDespawns();
+        t = Lap(t, out _timing.Despawns);
         Map.RunAfterUpdate(_captureNewObservers ??= CaptureNewObservers);
+        Lap(t, out _timing.AfterUpdate);
+    }
+
+    /// <summary>One stage's duration in <see cref="Stopwatch"/> ticks, and the timestamp the next stage starts from.</summary>
+    private static long Lap(long since, out long ticks)
+    {
+        long now = Stopwatch.GetTimestamp();
+        ticks = now - since;
+        return now;
+    }
+
+    /// <summary>Where the last <see cref="Update"/> spent its time (ticks of <see cref="Stopwatch"/>); filled on every update, read only to log a slow one.</summary>
+    private struct UpdateTiming
+    {
+        public long CatchUp, Linked, Creatures, SpawnGroups, PendingAi, Relay, Despawns, AfterUpdate;
+
+        /// <summary>Inside <see cref="Creatures"/>: AI updates, motion generator updates, and (inside either) path searches.</summary>
+        public long Ai, Motion, Path;
+
+        public int Walked, Updated, Searches;
+        public long SlowestCreatureTicks;
+        public uint SlowestEntry;
+        public Type? SlowestGenerator;
+    }
+
+    private UpdateTiming _timing;
+
+    private static string TickMs(long ticks) => (ticks * 1000.0 / Stopwatch.Frequency).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The last update's stages for the slow-map-update line (<see cref="IMapUpdateBreakdown"/>). World thread; allocates.</summary>
+    string IMapUpdateBreakdown.DescribeLastUpdate()
+    {
+        UpdateTiming t = _timing;
+        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
+            + $"catch-up moves {TickMs(t.CatchUp)}, linked followers {TickMs(t.Linked)}, spawn groups {TickMs(t.SpawnGroups)}, pending ai {TickMs(t.PendingAi)}, "
+            + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}";
+        if (t.SlowestCreatureTicks > 0)
+        {
+            text += $"; slowest creature entry {t.SlowestEntry} {TickMs(t.SlowestCreatureTicks)} ms, top generator {t.SlowestGenerator?.Name ?? "none"}";
+        }
+
+        return text;
     }
 
     public void OnPlayerRemoved(Map map, Player player)
@@ -316,8 +368,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     private PathResult SearchPath(Vector3 start, Vector3 destination)
     {
         PathSearchTotals before = PathSearchCounters.Current;
+        long started = Stopwatch.GetTimestamp();
         PathResult path = Map.Collision.FindPath(start, destination);
+        _timing.Path += Stopwatch.GetTimestamp() - started;
         PathSearchTotals spent = PathSearchCounters.Current - before;
+        _timing.Searches += (int)spent.Searches;
 
         // Only searches that ran A* count: without navigation data the "search" is a straight line and costs nothing.
         _pathSearchesThisTick += (int)spent.Searches;
@@ -442,6 +497,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         for (int walked = 0; walked < count; walked++)
         {
             Creature creature = _scratchCreatures[(start + walked) % count];
+            _timing.Walked++;
             // vmangos Map::UpdateActiveCellsSynch: only the cells around players and active objects are visited.
             if (activeCellsOnly && !Map.Grids.IsInActiveCell(creature) && !IsAlwaysUpdated(creature))
             {
@@ -453,6 +509,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                 continue;
             }
 
+            _timing.Updated++;
+            long creatureStart = Stopwatch.GetTimestamp();
             // WorldObject::UpdateHelper::UpdateRealTime: the update after a pause gets the time since the last one (update_diff),
             // which the corpse timers count down (Creature::Update CORPSE, Creature.cpp:901-914); motion and AI get the tick.
             uint sinceLast = creature.LastUpdateClockMs < 0 ? diffMs : (uint)Math.Min(_clockMs - creature.LastUpdateClockMs, uint.MaxValue);
@@ -472,7 +530,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     // UNIT_STATE_CAN_NOT_MOVE) and the client gets the control back when it ends (UpdateControl).
                     if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
                     {
-                        UpdateAi(creature, diffMs);
+                        TimedUpdateAi(creature, diffMs);
                         if (creature.DeathState == CreatureDeathState.Alive && _creatures.ContainsKey(creature.Guid))
                         {
                             UpdatePossessedCrowdControl(creature, diffMs);
@@ -485,7 +543,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     // that has not reached its victim for 3 s does not run its AI.
                     if (!CheckHardLeash(creature, diffMs) && !UpdateUnreachableTarget(creature, diffMs))
                     {
-                        UpdateAi(creature, diffMs);
+                        TimedUpdateAi(creature, diffMs);
                     }
 
                     if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
@@ -499,7 +557,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     // chase, flee, home and point generators on top of it always do.
                     if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
                     {
+                        long motionStart = Stopwatch.GetTimestamp();
                         creature.Motion.Update(diffMs);
+                        _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
                     }
 
                     CheckNoMeleePanicEnded(creature);
@@ -530,7 +590,23 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
                     break;
             }
+
+            long creatureTicks = Stopwatch.GetTimestamp() - creatureStart;
+            if (creatureTicks > _timing.SlowestCreatureTicks)
+            {
+                _timing.SlowestCreatureTicks = creatureTicks;
+                _timing.SlowestEntry = creature.Entry;
+                _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+            }
         }
+    }
+
+    /// <summary><see cref="UpdateAi"/>, its time added to the update's AI stage.</summary>
+    private void TimedUpdateAi(Creature creature, uint diffMs)
+    {
+        long started = Stopwatch.GetTimestamp();
+        UpdateAi(creature, diffMs);
+        _timing.Ai += Stopwatch.GetTimestamp() - started;
     }
 
     /// <summary>
