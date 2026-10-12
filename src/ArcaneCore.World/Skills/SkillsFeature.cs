@@ -81,7 +81,8 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         _services.GetService<IConfiguration>()?.GetSection(SkillsFeatureOptions.SectionName).Bind(Options);
         if (Options.Mode == SkillsMode.Legacy)
         {
-            _logger.LogWarning("Skills: Mode=Legacy, players have no skills (every skill reads 300, nobody can dual wield)");
+            _logger.LogWarning("Skills: Mode=Legacy, players have no skills (every skill reads 300, nobody can dual wield) and no spell opens a lock "
+                + "(gathering, keys, the Opening of quest objects such as the Cactus Apple: the open-lock effect belongs to the skills feature)");
             return;
         }
 
@@ -91,7 +92,8 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         {
             _logger.LogError(
                 "Skills: no skill DBC files are configured (Skills:SkillLineDbcPath, SkillRaceClassInfoDbcPath, SkillTiersDbcPath, SkillLineAbilityDbcPath); "
-                + "running with the legacy stand-ins: every skill reads 300, trainers see no skill, nobody can dual wield");
+                + "running with the legacy stand-ins: every skill reads 300, trainers see no skill, nobody can dual wield, no spell opens a lock "
+                + "(gathering, keys, the Opening of quest objects)");
             return;
         }
 

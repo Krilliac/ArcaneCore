@@ -38,7 +38,7 @@ public sealed class QuestChestUseWorldTests
 
     private static ulong ChestGuid() => ObjectGuid.WithEntry(HighGuid.GameObject, ChestEntry, ChestSpawn).Value;
 
-    private static WorldTestHost Start(QuestJournalFixture quests, out GameObjectTestContext context)
+    private static WorldTestHost Start(QuestJournalFixture quests, out GameObjectTestContext context, Characters.Creation.LogCapture? logs = null)
     {
         uint[] data = new uint[GameObjectTemplate.DataCount];
         data[0] = LockId;
@@ -60,7 +60,11 @@ public sealed class QuestChestUseWorldTests
         {
             using (items.Use())
             {
-                return WorldTestHost.Start(configureServices: Configure);
+                return WorldTestHost.Start(configureServices: services =>
+                {
+                    Configure(services);
+                    logs?.Register(services);
+                });
             }
         }
         finally
@@ -190,6 +194,41 @@ public sealed class QuestChestUseWorldTests
         await host.WaitForWorldAsync(
             () => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(chest)) is { IsSpawned: false },
             "the used-up apple despawns");
+    }
+
+    /// <summary>
+    /// An Opening that went through its own range check (5 yd plus 1.25 yd leeway, centre to centre) but lands 5.3 yd from the apple, past the
+    /// 5 yd the object takes an open from: the cast completes and nothing opens. The client is told nothing (no loot window, no error), so the
+    /// realm log must say which object refused the open and why.
+    /// </summary>
+    [Fact]
+    public async Task AnOpeningRefusedByTheObject_AfterTheCastWentThrough_OpensNothing_AndLogsWhy()
+    {
+        var logs = new Characters.Creation.LogCapture();
+        QuestJournalFixture quests = Quests();
+        await using WorldTestHost host = Start(quests, out GameObjectTestContext context, logs);
+        await using WorldTestClient client = await EnterWithQuestAsync(host, quests);
+        ulong chest = ChestGuid();
+        await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, chest);
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Appler")!;
+            GameObject go = context.Feature!.FindSystem(0)!.Find(new ObjectGuid(chest))!;
+            p.Relocate(go.X + 5.3f, go.Y, go.Z, p.Orientation, host.World.NowMs);
+        });
+
+        var cast = new PacketWriter(16);
+        cast.WriteUInt32(OpeningKneeling);
+        new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = new ObjectGuid(chest) }.Write(cast);
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, cast.ToArray());
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellStart);
+        List<(WorldOpcode Opcode, byte[] Payload)> after = await client.CollectFromAsync(WorldOpcode.SmsgSpellGo);
+        Assert.DoesNotContain(after, p => p.Opcode == WorldOpcode.SmsgLootResponse);
+
+        string line = Assert.Single(logs.Lines, l => l.Contains("refused the open", StringComparison.Ordinal));
+        Assert.Contains("Spell 6478 (Opening) by Appler", line, StringComparison.Ordinal);
+        Assert.Contains("'Cactus Apple' (type Chest, lock 43, lock type 13", line, StringComparison.Ordinal);
+        Assert.EndsWith(": TooFar", line, StringComparison.Ordinal);
     }
 
     [Fact]
