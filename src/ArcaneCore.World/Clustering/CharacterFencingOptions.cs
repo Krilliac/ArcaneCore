@@ -17,6 +17,11 @@ public sealed class CharacterFencingOptions
     /// <summary>The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with <see cref="TakeoverEpoch"/>.</summary>
     public Guid? TakeoverIncarnation { get; set; }
 
+    /// <summary>With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim.</summary>
+    public int ClaimWatchIntervalSeconds { get; set; } = DefaultClaimWatchIntervalSeconds;
+
+    public const int DefaultClaimWatchIntervalSeconds = 10;
+
     public bool HasTakeover => TakeoverEpoch is not null || TakeoverIncarnation is not null;
 
     public void Validate()
@@ -25,6 +30,8 @@ public sealed class CharacterFencingOptions
             throw new InvalidOperationException("Cluster:Fencing:OwnerNode must not be empty");
         if (OwnerNode.Length > 128)
             throw new InvalidOperationException("Cluster:Fencing:OwnerNode must be at most 128 characters");
+        if (ClaimWatchIntervalSeconds is < 1 or > 300)
+            throw new InvalidOperationException("Cluster:Fencing:ClaimWatchIntervalSeconds must be between 1 and 300");
         if (!Enabled && HasTakeover)
             throw new InvalidOperationException("Cluster:Fencing takeover cannot be configured while fencing is disabled");
         if (HasTakeover && (TakeoverEpoch is not > 0 || TakeoverIncarnation is null || TakeoverIncarnation == Guid.Empty))

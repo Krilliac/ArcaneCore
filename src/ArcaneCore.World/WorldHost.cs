@@ -34,7 +34,7 @@ public sealed class WorldHost(
     private CancellationTokenSource? _claimWatchStop;
     private Task _claimWatch = Task.CompletedTask;
 
-    /// <summary>How often a world running with fencing off looks for a claim (test seam); null follows the autosave interval.</summary>
+    /// <summary>How often a world running with fencing off looks for a claim (test seam); null uses <see cref="CharacterFencingOptions.ClaimWatchIntervalSeconds"/>.</summary>
     internal TimeSpan? ClaimWatchInterval { get; init; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -42,12 +42,6 @@ public sealed class WorldHost(
         _fencing.Validate();
         await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         saveQueue.FatalFailure += OnFatalSaveFailure;
-        if (!_fencing.Enabled && _watchClaims)
-        {
-            _claimWatchStop = new CancellationTokenSource();
-            _claimWatch = Task.Run(() => WatchForClaimAsync(_claimWatchStop.Token));
-        }
-
         await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
         {
             IReadOnlyList<CharacterIdentity> identities = await scope.ServiceProvider
@@ -65,6 +59,13 @@ public sealed class WorldHost(
         {
             if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
                 await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Last, so a start that throws can never leave the watch running (the host does not call StopAsync after a failed start).
+        if (!_fencing.Enabled && _watchClaims)
+        {
+            _claimWatchStop = new CancellationTokenSource();
+            _claimWatch = Task.Run(() => WatchForClaimAsync(_claimWatchStop.Token));
         }
     }
 
@@ -159,7 +160,7 @@ public sealed class WorldHost(
 
     /// <summary>
     /// A world with fencing off writes untokened and does not verify ownership per save (that keeps the save path exactly as it was). Instead it
-    /// reads the ownership row once per autosave interval, on the thread pool, and stops for good (the save queue's terminal path, which
+    /// reads the ownership row once per <see cref="CharacterFencingOptions.ClaimWatchIntervalSeconds"/> (default 10 s, independent of autosave), on the thread pool, and stops for good (the save queue's terminal path, which
     /// requests shutdown) if a fenced world has claimed the database meanwhile.
     /// </summary>
     private async Task WatchForClaimAsync(CancellationToken stop)
@@ -168,8 +169,7 @@ public sealed class WorldHost(
         {
             while (!stop.IsCancellationRequested)
             {
-                int autosaveMs = world.Options.AutosaveIntervalMs;
-                await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromMilliseconds(autosaveMs > 0 ? autosaveMs : 60_000), stop).ConfigureAwait(false);
+                await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromSeconds(_fencing.ClaimWatchIntervalSeconds), stop).ConfigureAwait(false);
                 try
                 {
                     await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -181,13 +181,13 @@ public sealed class WorldHost(
                         return;
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && stop.IsCancellationRequested))
                 {
                     logger.LogWarning(ex, "Could not read the characters ownership row; will retry next interval");
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
     }
 
     private void OnFatalSaveFailure(Exception error)

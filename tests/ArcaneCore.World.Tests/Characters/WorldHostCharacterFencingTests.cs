@@ -112,6 +112,59 @@ public sealed class WorldHostCharacterFencingTests
         await Task.Delay(100);
         Assert.Equal(0, fenced.Ownership.IsOwnedCalls);
     }
+
+    [Fact]
+    public async Task UnfencedWorld_KeepsPolling_WhenReadingTheOwnershipRowThrows_IncludingAnUnrelatedCancellation()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(20));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        int throwCount = 0;
+        kit.Ownership.IsOwnedBehavior = () =>
+        {
+            int n = Interlocked.Increment(ref throwCount);
+            if (n == 1) throw new InvalidOperationException("transient database error");
+            if (n == 2) throw new OperationCanceledException("unrelated cancellation");
+            return false;
+        };
+
+        // Both failures are survived: the watch keeps reading and nothing is reported as fatal.
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 6);
+        Assert.False(fatal.Task.IsCompleted);
+
+        // Still alive: a later claim is still detected.
+        kit.Ownership.IsOwnedBehavior = null;
+        kit.Ownership.Owned = true;
+        Exception error = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("claimed by a fenced world", error.Message);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "condition not reached in time");
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task UnfencedWorld_DoesNotLeaveTheWatchRunning_WhenStartFailsAfterTheClaimCheck()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(10));
+        kit.Feature.ThrowOnAttach = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Host.StartAsync(CancellationToken.None));
+        await Task.Delay(100); // let any wrongly started loop finish a pending delay
+        int afterFailedStart = kit.Ownership.IsOwnedCalls;
+        await Task.Delay(150);
+
+        Assert.Equal(afterFailedStart, kit.Ownership.IsOwnedCalls);
+    }
+
     [Fact]
     public async Task FailedTerminalDrainRetainsOwnership()
     {
@@ -182,11 +235,13 @@ public sealed class WorldHostCharacterFencingTests
 
     private sealed class RecordingFeature(CharacterOwnershipContext context) : IWorldFeature
     {
+        public bool ThrowOnAttach { get; set; }
         public bool AttachedWithToken { get; private set; }
         public CharacterOwnershipToken? TokenAtAttach { get; private set; }
 
         public void Attach(WorldRuntime world)
         {
+            if (ThrowOnAttach) throw new InvalidOperationException("attach failed");
             AttachedWithToken = world.CharacterOwnership is not null;
             TokenAtAttach = context.Current;
         }
@@ -195,6 +250,7 @@ public sealed class WorldHostCharacterFencingTests
     private sealed class RecordingOwnership : ICharacterOwnershipStore
     {
         public bool Owned { get; set; }
+        public Func<bool>? IsOwnedBehavior { get; set; }
         public int AcquireCalls { get; private set; }
         public int ReleaseCalls { get; private set; }
         private int _isOwnedCalls;
@@ -203,6 +259,7 @@ public sealed class WorldHostCharacterFencingTests
         public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _isOwnedCalls);
+            if (IsOwnedBehavior is { } behavior) return Task.FromResult(behavior());
             return Task.FromResult(Owned);
         }
 

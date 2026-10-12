@@ -11,6 +11,7 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.Social;
 using Microsoft.EntityFrameworkCore;
@@ -490,10 +491,16 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [], ownership: null);
         IReadOnlyList<string> quests = log.Texts;
         log.Clear();
+        await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [Quest(id, 4001, 1)], ownership: null);
+        IReadOnlyList<string> questInsert = log.Texts;
+        log.Clear();
+        await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [Quest(id, 4001, 2)], ownership: null);
+        IReadOnlyList<string> questUpdate = log.Texts;
+        log.Clear();
         await new EfCharacterQuestStore(db).SaveTaxiMaskAsync(id, [1u], ownership: null);
         IReadOnlyList<string> taxi = log.Texts;
 
-        foreach (IReadOnlyList<string> statements in new[] { state, quests, taxi })
+        foreach (IReadOnlyList<string> statements in new[] { state, quests, questInsert, questUpdate, taxi })
         {
             Assert.DoesNotContain(statements, t => t.Contains(CharacterOwnershipDataModule.Table, StringComparison.Ordinal));
             // The only transaction is SaveChanges' own, begun after the last read: nothing precedes the reads.
@@ -510,11 +517,18 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         static string Kinds(IReadOnlyList<string> s) => string.Join(",", s.Select(t => t == "<begin transaction>" ? "BEGIN" : t.TrimStart().Split(' ')[0].ToUpperInvariant()));
         Assert.Equal(ExpectedStateKinds, Kinds(state));
         Assert.Equal(ExpectedQuestKinds, Kinds(quests));
+        Assert.Equal(ExpectedQuestInsertKinds, Kinds(questInsert));
+        Assert.Equal(ExpectedQuestUpdateKinds, Kinds(questUpdate));
         Assert.Equal(ExpectedTaxiKinds, Kinds(taxi));
     }
 
     private const string ExpectedStateKinds = "SELECT,UPDATE";
     private const string ExpectedQuestKinds = "SELECT,SELECT";
+    private const string ExpectedQuestInsertKinds = "SELECT,SELECT,INSERT";
+    private const string ExpectedQuestUpdateKinds = "SELECT,SELECT,UPDATE";
+
+    private static CharacterQuestStatus Quest(int characterId, uint quest, byte status)
+        => new(characterId, quest, status, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     private const string ExpectedTaxiKinds = "SELECT,SELECT,INSERT";
 
     [Theory]

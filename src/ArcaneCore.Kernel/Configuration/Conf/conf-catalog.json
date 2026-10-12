@@ -2166,6 +2166,22 @@
       "isCollection": false
     },
     {
+      "path": "Cluster:Fencing:ClaimWatchIntervalSeconds",
+      "section": "Cluster:Fencing",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#clusterfencing",
+      "isCollection": false
+    },
+    {
       "path": "Cluster:Fencing:Enabled",
       "section": "Cluster:Fencing",
       "type": "bool",

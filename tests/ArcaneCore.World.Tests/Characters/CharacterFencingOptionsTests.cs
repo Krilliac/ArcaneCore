@@ -31,4 +31,16 @@ public sealed class CharacterFencingOptionsTests
             OwnerNode = new string('x', 129),
         }.Validate());
     }
+
+    [Fact]
+    public void ClaimWatchIntervalDefaultsToTenSeconds_AndIsBounded()
+    {
+        var options = new CharacterFencingOptions();
+        Assert.Equal(10, options.ClaimWatchIntervalSeconds);
+        options.Validate();
+        foreach (int ok in new[] { 1, 300 })
+            new CharacterFencingOptions { ClaimWatchIntervalSeconds = ok }.Validate();
+        foreach (int bad in new[] { 0, -1, 301 })
+            Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { ClaimWatchIntervalSeconds = bad }.Validate());
+    }
 }

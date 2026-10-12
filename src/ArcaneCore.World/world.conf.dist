@@ -34,7 +34,7 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
-#   CLUSTER                     4 keys
+#   CLUSTER                     5 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
@@ -1640,6 +1640,20 @@ ClientData.Strict = false
 #----------------------------------------------------------------------------
 # Cluster:Fencing
 #----------------------------------------------------------------------------
+
+#
+#    Cluster.Fencing.ClaimWatchIntervalSeconds
+#        Description: With fencing disabled, how often the world reads the characters ownership row
+#                     to notice that a fenced world has claimed the database, in seconds (1 to 300).
+#                     Independent of autosave; an unfenced world can keep writing for up to this
+#                     long after a claim.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 
 #
 #    Cluster.Fencing.Enabled
