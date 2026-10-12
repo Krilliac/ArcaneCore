@@ -495,6 +495,35 @@ every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerO
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
 
+### Contention
+
+Hundreds of bots with the same quests used to hunt the same mob: the target sort was "quest creature, then nearest" with no tie-break, so
+every bot picked one creature. `World:Playerbots:Contention` (all keys live, `.reload config`) spreads them out and lets a bot decide
+whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, `PlayerbotBrain.DropIfSomeoneElses`,
+`PlayerbotBrain.CollectTargets`, `PlayerbotQuestGoals.RefreshObjectiveEntry`.
+
+* **Soft claims on untagged mobs.** A bot claims the mob it walks to in one world-wide table (`PlayerbotClaims`: mob guid to first claimant,
+  claimant count and an 8-second expiry, refreshed at each think, ended when the bot tags the mob, drops it or dies; one dictionary sized
+  once, expired claims dropped lazily). Choosing a target is one pass keeping the lowest weight: distance, plus `ClaimPenaltyYards` (25) per
+  other bot claiming the mob, plus a stable per-(bot, mob) hash offset of up to 10 yards. The bot's own claim costs nothing and a tagged mob
+  carries no claim penalty. No LINQ and no allocation on this path.
+* **Someone else's mob.** The held target is re-checked every think: when another player tagged it (or fights it) and the bot is not on its
+  threat list, the bot drops it, leaves it alone for `SomeoneElsesMemorySeconds` (15) and chooses again in the same think. It never waits on it.
+* **Helping instead.** At most once per mob per memory window the bot may help, when the tagger is within 30 yards and losing (under 40% health
+  or two enemies on them), the bot is above 60% health with no turn-in walk or retreat pending, and a roll passes: `HelpChance` (0.35) times the
+  bot's sociability (a stable 0..1 from its guid), times 2 for a real player, times 1.5 when both are on the same kill quest. A helper attacks the
+  mob (a priest, paladin, druid or shaman with a direct heal tops the tagger up first), skips the loot, and stops when the mob dies or the tagger
+  leaves combat.
+* **Group request.** When both are ungrouped and share the kill quest, the bot raises a group signal with source `contention`
+  (`PlayerbotRisk.GroupSignal`); the coordinator matches by objective and, with `World:Playerbots:Groups:InvitePlayers`, invites a nearby real player.
+* **Stolen kills.** A corpse that is not the bot's to loot (another player's tap, or no credit) gets no loot request and no 10-second wait; the
+  spawn is left alone for the memory window.
+* **No credit.** A quest creature that gained no credit (kill or quest item) in three minutes of *contested hunting* is set aside for the bot for
+  `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among
+  its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
+  objective is hunted at the creatures that drop the item (read once from the loot tables; items with more than 24 droppers, elites and
+  creatures that do not spawn on the bot's map are left out).
+
 ### Home area
 
 A managed bot can be anchored to an area. Without one it follows its own goals anywhere on the map (its starting-zone quest log, trainers,

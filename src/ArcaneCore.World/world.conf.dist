@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WORLD                       366 keys
 #
 ###############################################################################
 
@@ -10206,6 +10206,62 @@ World.Playerbots.Chat.TimeoutSeconds = 10
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ClientFidelity = Lean
+
+#
+#    World.Playerbots.Contention.ClaimPenaltyYards
+#        Description: Yards a mob counts as farther away for each other bot already walking to it
+#                     (0..200), when a bot picks among untagged mobs. 0 turns the soft claims off,
+#                     so every bot goes for the nearest mob again.
+#        Type: float
+#        Default: 25
+#        Allowed: a number from 0 to 200 ('.' is the decimal point); 0 turns the soft claims off
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.ClaimPenaltyYards = 25
+
+#
+#    World.Playerbots.Contention.ContentionSuspendMinutes
+#        Description: Minutes a bot leaves a quest creature alone after three minutes of contested
+#                     hunting without credit (1..120; see PlayerbotContention.ObserveObjective): it
+#                     hunts its next unfinished objective or quest meanwhile, and asks for a group
+#                     when none is left.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number from 1 to 120 (minutes)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.ContentionSuspendMinutes = 5
+
+#
+#    World.Playerbots.Contention.HelpChance
+#        Description: Base chance (0..1) that a bot walking to a mob another player has tagged
+#                     decides to help that player instead of leaving the mob alone. It is scaled by
+#                     the bot's own sociability (a stable 0..1 from its guid), doubled for a real
+#                     player's tag and raised by half when both share the kill quest, and only asked
+#                     when the tagger is within 30 yards and losing and the bot is healthy. 0 never
+#                     helps.
+#        Type: float
+#        Default: 0.35
+#        Allowed: a number from 0 to 1 ('.' is the decimal point); 0 never helps, 1 helps whenever
+#                 the other conditions hold
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.HelpChance = 0.35
+
+#
+#    World.Playerbots.Contention.SomeoneElsesMemorySeconds
+#        Description: Seconds a bot leaves a mob alone after it found it to be someone else's
+#                     (1..600), and the least between two decisions about the same mob.
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number from 1 to 600 (seconds)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
 #    World.Playerbots.Economy.BuyUpgradeBudgetFraction

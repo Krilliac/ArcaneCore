@@ -224,6 +224,24 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         return unit is not null && view.CanCast(spell, unit);
     }
 
+    /// <summary>
+    /// The first of <paramref name="spells"/> the bot can cast at <paramref name="target"/> now (not refused lately, in range, affordable),
+    /// judged on one combat view built for the whole list; null when none can be cast or the target is not in the view.
+    /// </summary>
+    internal SpellInfo? FirstCastable(Player player, IReadOnlyList<SpellInfo> spells, Unit target, Func<SpellInfo, bool>? accept = null)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(spells);
+        ArgumentNullException.ThrowIfNull(target);
+        if (spells.Count == 0 || session.Services.GetService<SpellFeature>() is not { } feature) return null;
+        RotationState view = View(player, feature, ReferenceEquals(target, player) ? null : target);
+        RotationUnit? unit = ReferenceEquals(target, player) ? view.Self : view.Victim;
+        if (unit is null) return null;
+        for (int index = 0; index < spells.Count; index++)
+            if ((accept is null || accept(spells[index])) && !IsRefused(spells[index]) && view.CanCast(spells[index], unit)) return spells[index];
+        return null;
+    }
+
     /// <summary>Submit <paramref name="spell"/> at <paramref name="target"/> through CMSG_CAST_SPELL; true when the server took it.</summary>
     internal bool CastAt(Player player, SpellInfo spell, Unit target)
     {

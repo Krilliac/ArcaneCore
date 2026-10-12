@@ -445,19 +445,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     private LootContent? _dropIndexOf;
-    private Dictionary<uint, uint[]> _dropIndex = [];
 
     /// <summary>The creatures that drop <paramref name="item"/> (<see cref="PlayerbotGroupContent.DropIndex"/>, rebuilt when the loot tables are reloaded).</summary>
     internal IReadOnlyList<uint> DroppersOf(uint item)
     {
         if (services.GetService<GameObjects.GameObjectLootFeature>()?.LootContent is not { } loot) return [];
-        if (!ReferenceEquals(loot, _dropIndexOf))
-        {
-            _dropIndex = PlayerbotGroupContent.DropIndex(loot);
-            _dropIndexOf = loot;
-        }
 
-        return _dropIndex.GetValueOrDefault(item) ?? [];
+        _dropIndexOf = loot; // InstanceOnlyItem's cache follows the loot content
+        return PlayerbotDropIndex.DroppersOf(loot, item); // the one cache every dropper lookup shares
     }
 
     private LootContent? _instanceOnlyLoot;
@@ -544,9 +539,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         // The risk estimate passed over a quest objective as too strong alone but feasible for a few.
         if (bot.Brain.Risk.GroupSignal is { } signal && signal.MapId == player.MapId && unchecked(Now - signal.AtMs) < 60_000)
         {
-            uint questId = QuestFor(player, signal.Entry);
+            uint questId = signal.QuestId != 0 ? signal.QuestId : QuestFor(player, signal.Entry);
             var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, questId, signal.Entry, player.MapId, player.MapId,
-                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotGroupContent.PartySize), player.Level, "risk");
+                signal.At, 0, signal.At, Math.Clamp(signal.Size, 2, PlayerbotGroupContent.PartySize), player.Level, signal.Source);
             if (!IsSetAside(bot.BotId, goal.Key)) return goal;
         }
 

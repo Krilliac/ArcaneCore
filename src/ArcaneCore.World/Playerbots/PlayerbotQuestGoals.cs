@@ -366,11 +366,60 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return float.IsFinite(distanceSquared) && float.IsFinite(reach) && reach > 0 && distanceSquared < reach * reach;
     }
 
+    /// <summary>
+    /// How this bot's contention state (<see cref="PlayerbotContention"/>: the quest creatures it set aside for gaining no credit) and
+    /// the fleet's claims reach the quest goals; null in tests that build the goals alone.
+    /// </summary>
+    internal PlayerbotContention? Contention { get; set; }
+
+    /// <summary>Called with the creature entry and its quest when the bot set its last objective aside for gaining no credit and no other is left.</summary>
+    internal Action<uint, uint>? OnContentionExhausted { get; set; }
+
+    /// <summary>A quest item with more droppers than this is a good everyone drops (cloth, ore): not hunted on purpose.</summary>
+    internal const int MaxItemDroppers = 24;
+
+    private struct Objective
+    {
+        public uint Entry;
+        public uint Quest;
+        public uint Progress;
+        public ulong Key;
+    }
+
+    /// <summary>
+    /// The creature the bot hunts for its quests (<see cref="PreferredCreatureEntry"/>), 0 for none. Among the unfinished objectives the
+    /// bot takes the one a stable hash of its own guid ranks first, so bots with the same quests spread over the objectives instead of all
+    /// hunting the first. A kill objective is hunted by its creature; an item objective by a creature that drops the item
+    /// (<see cref="PlayerbotDropIndex"/>, from the loot tables, cached once). An objective that gained no credit for
+    /// <see cref="PlayerbotContention.NoCreditMs"/> is set aside for the bot (<see cref="PlayerbotContention.ObserveObjective"/>) and the
+    /// next one is taken; none left is reported through <see cref="OnContentionExhausted"/>.
+    /// </summary>
     private void RefreshObjectiveEntry(Player player, QuestNpcServices services, PlayerNpcState state)
     {
-        PreferredCreatureEntry = 0;
-        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content = Home is null ? null
-            : _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        uint now = _session.World.NowMs;
+        Objective chosen = Pick(player, services, state, now);
+        if (Contention is { } contention)
+        {
+            if (chosen.Entry == 0) contention.ClearObjective();
+            else if (contention.ObserveObjective(chosen.Entry, chosen.Progress, now))
+            {
+                (uint stalled, uint stalledQuest) = (chosen.Entry, chosen.Quest);
+                chosen = Pick(player, services, state, now); // the stalled entry is set aside now
+                if (chosen.Entry == 0) OnContentionExhausted?.Invoke(stalled, stalledQuest);
+            }
+        }
+
+        PreferredCreatureEntry = chosen.Entry;
+    }
+
+    private Objective Pick(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
+    {
+        var feature = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content = feature?.Content;
+        ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = null;
+        bool lootLoaded = false;
+        Objective best = default;
+        ulong bot = player.Guid.Value;
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
         {
             // vmangos Quest::IsActive: a quest of a game event that is not running (game_event_quest, the server's event state) is
@@ -378,23 +427,80 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             // bot from walking to its ender). One in the log is kept for when the event comes back, but its objectives are not hunted.
             if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { IsActive: true } quest)
                 continue;
-            if (Suspensions?.IsQuestSuspended(questId, _session.World.NowMs) == true)
+            if (Suspensions?.IsQuestSuspended(questId, now) == true)
                 continue;
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
             {
                 int entry = quest.ReqCreatureOrGOId[index];
                 uint required = quest.ReqCreatureOrGOCount[index];
-                if (entry > 0 && status.CreatureOrGOCount[index] < required
-                    && HeldForGroup?.Invoke(questId, (uint)entry) != true
-                    && Suspensions?.IsEntrySuspended((uint)entry, _session.World.NowMs) != true
-                    && IsKillObjective(player, services, (uint)entry)
-                    && (Home is not { } home || content is not null && home.HasSpawnInside(content, (uint)entry)))
+                if (entry > 0 && status.CreatureOrGOCount[index] < required && Huntable(player, services, content, questId, (uint)entry, now))
+                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index]);
+            }
+
+            // An item objective is hunted at the creatures that drop the item.
+            for (int index = 0; index < quest.ReqItemId.Count; index++)
+            {
+                uint item = quest.ReqItemId[index];
+                uint needed = quest.ReqItemCount[index];
+                if (item == 0 || needed == 0 || content is null) continue;
+                uint have = player.Inventory.GetItemCount(item);
+                if (have >= needed) continue;
+                if (!lootLoaded)
                 {
-                    PreferredCreatureEntry = (uint)entry;
-                    return;
+                    loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
+                    lootLoaded = true;
+                }
+
+                if (loot is null) continue;
+                IReadOnlyList<uint> droppers = PlayerbotDropIndex.DroppersOf(loot, item);
+                if (droppers.Count == 0 || droppers.Count > MaxItemDroppers) continue;
+                for (int d = 0; d < droppers.Count; d++)
+                {
+                    uint dropper = droppers[d];
+                    if (content.GetSpawns(player.MapId, dropper).Count == 0 || content.FindTemplate(dropper) is not { } template
+                        || template.Rank != 0 || template.MinLevel > player.Level + 2) continue;
+                    if (Huntable(player, services, content, questId, dropper, now)) Consider(ref best, bot, questId, dropper, have);
                 }
             }
         }
+
+        return best;
+    }
+
+    private bool Huntable(Player player, QuestNpcServices services, ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content,
+        uint questId, uint entry, uint now)
+        => HeldForGroup?.Invoke(questId, entry) != true
+            && Suspensions?.IsEntrySuspended(entry, now) != true
+            && Contention?.IsEntrySuspended(entry, now) != true
+            && IsKillObjective(player, services, entry)
+            && (Home is not { } home || content is not null && home.HasSpawnInside(content, entry));
+
+    private static void Consider(ref Objective best, ulong bot, uint questId, uint entry, uint progress)
+    {
+        ulong key = PlayerbotContention.Mix(bot, ((ulong)questId << 32) | entry);
+        if (best.Entry != 0 && key >= best.Key) return;
+        best = new Objective { Entry = entry, Quest = questId, Progress = progress, Key = key };
+    }
+
+    /// <summary>
+    /// Whether <paramref name="player"/> and <paramref name="other"/> both have an unfinished kill objective on creature
+    /// <paramref name="entry"/> in the same quest: what makes a mob another player tagged a shared errand (a group would serve both).
+    /// </summary>
+    internal bool SharesKillQuest(Player player, Player other, uint entry)
+    {
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        if (services is null || services.StateOf(player) is not { Loaded: true } mine || services.StateOf(other) is not { Loaded: true } theirs)
+            return false;
+        foreach ((uint questId, QuestStatusData status) in mine.Quests.Statuses)
+        {
+            if (status.Status != QuestStatus.Incomplete || theirs.Quests.Get(questId) is not { Status: QuestStatus.Incomplete } their
+                || services.Quests.Get(questId) is not { } quest) continue;
+            for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
+                if (quest.ReqCreatureOrGOId[index] == (int)entry && status.CreatureOrGOCount[index] < quest.ReqCreatureOrGOCount[index]
+                    && their.CreatureOrGOCount[index] < quest.ReqCreatureOrGOCount[index]) return true;
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -942,7 +942,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
-        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides, _claims) { Home = AreaOf(botId) };
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
@@ -967,6 +967,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
+
+    // The soft claims of the fleet on untagged mobs (PlayerbotClaims): one table for every bot, touched on the world thread only.
+    private readonly PlayerbotClaims _claims = new();
 
     /// <summary>The goals set aside for every bot (inspection and tests).</summary>
     internal PlayerbotSharedSetAsides SharedSetAsides => _sharedSetAsides;
