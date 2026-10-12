@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
@@ -171,6 +172,37 @@ public sealed partial class PlayerbotQuestReturnTests
             });
         }
         finally { await StopAsync(fixture, brain); }
+    }
+
+    [Theory]
+    [InlineData((byte)6, true)]   // same-level pack: the quest goal plans the visible ender under the completed-return rule
+    [InlineData((byte)10, false)] // over the level cap: still refused
+    public async Task QuestGoal_WalkingToAVisibleCompletedEnder_PlansThroughAManageablePackOnly(byte mobLevel, bool walks)
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
+        await fixture.AcceptAndCompleteAsync();
+        await AddPocketAsync(fixture, mobLevel);
+        var brain = new PlayerbotBrain(fixture.Session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await fixture.Host.World.InvokeAsync(() =>
+            {
+                var player = fixture.Session.Player!;
+                player.SetPosition(player.X + 40, player.Y, player.Z, 0); // from +55 to +95: outside the 25-yard hazards of the pack at +128, ender at +150 in view
+                brain.Risk.ScanHazards(player);
+                PlayerbotNavigation.Guard(player, brain.Risk);
+                fixture.Session.ManagedBudget = new ManagedActionBudget(4);
+                bool acted = brain.QuestGoals.Update(player, 500);
+                Assert.Equal(walks, acted);
+                if (walks) Assert.Equal(PlayerbotGoalKind.Quest, brain.QuestGoals.Goal);
+                return true;
+            });
+        }
+        finally
+        {
+            await fixture.Host.World.InvokeAsync(() => { PlayerbotNavigation.Guard(fixture.Session.Player!, null); return true; });
+            await StopAsync(fixture, brain);
+        }
     }
 
     private static async Task AddPocketAsync(ReturnFixture fixture, byte mobLevel)
