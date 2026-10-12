@@ -312,6 +312,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         uint now = Now;
         foreach (((Guid, (PlayerbotGroupGoalKind, uint)) key, uint until) in _setAside.ToArray())
             if (unchecked((int)(until - now)) <= 0) _setAside.Remove(key);
+        foreach (var (streakKey, streak) in _failStreaks.ToArray())
+            if (unchecked(now - streak.LastMs) >= FailStreakMemoryMs) _failStreaks.Remove(streakKey);
         foreach ((ObjectGuid key, uint until) in _declinedPlayers.ToArray())
             if (unchecked((int)(until - now)) <= 0) _declinedPlayers.Remove(key);
 
@@ -367,6 +369,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 bot.Brain.GroupHeld.Add((goal.QuestId, goal.ObjectiveEntry));
                 bot.Brain.Risk.ClearGroupSignal();
                 Note($"{player.Name} needs a group: {goal}");
+                if (goal.ObjectiveItem != 0)
+                    logger.LogInformation("Playerbot instance item goal: dungeon map {Map} quest {Quest} item {Item} from creature {Dropper}: none of its {Count} droppers spawns outside an instance",
+                        goal.MapId, goal.QuestId, goal.ObjectiveItem, goal.ObjectiveEntry, DroppersOf(goal.ObjectiveItem).Count);
             }
         }
 
@@ -455,6 +460,30 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return _dropIndex.GetValueOrDefault(item) ?? [];
     }
 
+    private LootContent? _instanceOnlyLoot;
+    private CreatureContent? _instanceOnlyCreatures;
+    private MapRegistry? _instanceOnlyMaps;
+    private readonly Dictionary<uint, bool> _instanceOnly = [];
+
+    /// <summary>
+    /// Whether every dropper of <paramref name="item"/> that spawns anywhere spawns on an instance map
+    /// (<see cref="PlayerbotGroupContent.DroppedOnlyInInstances"/>); cached per item until the loot, creature or map content is replaced.
+    /// </summary>
+    internal bool InstanceOnlyItem(uint item, CreatureContent creatures, WorldMaps maps)
+    {
+        IReadOnlyList<uint> droppers = DroppersOf(item); // refreshes the drop index when the loot tables were reloaded
+        if (!ReferenceEquals(_instanceOnlyLoot, _dropIndexOf) || !ReferenceEquals(_instanceOnlyCreatures, creatures) || !ReferenceEquals(_instanceOnlyMaps, maps.Registry))
+        {
+            _instanceOnly.Clear();
+            _instanceOnlyLoot = _dropIndexOf;
+            _instanceOnlyCreatures = creatures;
+            _instanceOnlyMaps = maps.Registry;
+        }
+
+        if (_instanceOnly.TryGetValue(item, out bool known)) return known;
+        return _instanceOnly[item] = PlayerbotGroupContent.DroppedOnlyInInstances(droppers, creatures, map => maps.Registry.Find(map) is { IsDungeon: true });
+    }
+
     private PlayerNpcState? QuestState(Player player)
         => services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } state ? state : null;
 
@@ -496,16 +525,16 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
             }
 
-            // A quest item dropped only inside an instance (a dungeon quest that asks for a boss's head and nothing else): the goal is the
-            // creature that drops it, in that instance, like a creature objective. A drop from creatures on the bot's own map is the brain's
-            // solo work, as before.
+            // A quest item dropped only inside instances (a dungeon quest that asks for a boss's head and nothing else): the goal is the
+            // creature that drops it, in that instance, like a creature objective. An item with even one dropper outside the instances
+            // (on a continent) is the brain's solo work, as before: it is no goal at all (InstanceOnlyItem).
             for (int index = 0; index < quest.ReqItemId.Count; index++)
             {
                 uint item = quest.ReqItemId[index];
                 if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
+                if (!InstanceOnlyItem(item, creatures, maps)) continue;
                 foreach (uint dropper in DroppersOf(item))
                 {
-                    if (creatures.GetSpawns(player.MapId, dropper).Count > 0) continue;
                     if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
                         return goal with { ObjectiveItem = item };
                 }
@@ -587,15 +616,38 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             .FirstOrDefault(t => maps.FindAreaTriggerTeleport(t.Id) is { } teleport && teleport.TargetMap != mapId);
     }
 
+    /// <summary>
+    /// Group slots quest, instance-item and risk groups leave to dungeon runs. Without them <see cref="Match"/> (which runs before
+    /// <see cref="StartRuns"/> in every scan) refilled every slot the moment one freed, and a run, which starts on a chance roll, never found
+    /// one: in w29 four quest groups held the slots 97.6% of the time and no run ever formed. A fixed reserve is used rather than running
+    /// <c>StartRuns</c> first: the roll then can only claim a slot when one is free. Runs are capped only by their own per-kind caps, so when those add up
+    /// to <c>MaxGroups</c> or more, runs can still hold every slot and quest groups wait for a run to end (with the defaults one quest slot
+    /// always stays free).
+    /// </summary>
+    internal const int ReservedRunSlots = 1;
+
+    /// <summary>The most groups that are not runs at once: <c>MaxGroups</c> less <see cref="ReservedRunSlots"/> while runs can start and there is room to keep one.</summary>
+    internal int QuestGroupLimit
+    {
+        get
+        {
+            PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+            bool runsPossible = runs.Enabled && runs.StartChancePerMinute > 0d && (runs.MaxConcurrentRuns > 0 || runs.Raids.Enabled && runs.Raids.MaxConcurrentRaids > 0);
+            return runsPossible && _options.Groups.MaxGroups > ReservedRunSlots ? _options.Groups.MaxGroups - ReservedRunSlots : _options.Groups.MaxGroups;
+        }
+    }
+
+    private bool QuestGroupSlotFree() => _groups.Count < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null) < QuestGroupLimit;
+
     private void Match()
     {
-        if (_groups.Count >= _options.Groups.MaxGroups || GroupManagerOrNull() is not { } groupManager) return;
+        if (!QuestGroupSlotFree() || GroupManagerOrNull() is not { } groupManager) return;
         foreach (var wanting in _waiting
                      .Select(w => (BotId: w.Key, Waiting: w.Value))
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
                      .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
         {
-            if (_groups.Count >= _options.Groups.MaxGroups) return;
+            if (!QuestGroupSlotFree()) return;
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
             int size = wanting.Max(w => w.Waiting.Goal.Size);
             var candidates = new List<PlayerbotGroupCandidate>();
@@ -762,7 +814,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Gathering:
                 if (Gathered(group, leader)) Enter(group, PlayerbotGroupState.Travelling);
-                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "gather-timeout");
+                else if (group.StepTimedOut(now, stepLimit))
+                {
+                    ReportTimeout(group, leader, "gather-timeout");
+                    Finish(group, success: false, "gather-timeout");
+                }
                 break;
             case PlayerbotGroupState.Travelling:
                 if (CheckWipe(group, leader)) break;
@@ -771,7 +827,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     group.Run?.Apply(PlayerbotRunSignal.Arrived);
                     Enter(group, group.Goal.InInstance ? PlayerbotGroupState.Entering : PlayerbotGroupState.Engaging);
                 }
-                else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "travel-timeout");
+                else if (group.StepTimedOut(now, stepLimit))
+                {
+                    ReportTimeout(group, leader, "travel-timeout");
+                    Finish(group, success: false, "travel-timeout");
+                }
                 break;
             case PlayerbotGroupState.Entering:
                 if (CheckWipe(group, leader)) break;
@@ -1116,6 +1176,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         group.State = state;
         group.StateSinceMs = Now;
+        group.StepBudgetMs = 0;
+        if (state is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling) BudgetTravel(group, state);
         if (state == PlayerbotGroupState.Gathering) group.ObjectiveKilled = false;
         if (state == PlayerbotGroupState.Wiped && group.Run is not null) group.ClearObjective();
         if (state == PlayerbotGroupState.Travelling) TeleportToEntranceIfConfigured(group);
@@ -1128,7 +1190,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             foreach (Member member in group.Members.Where(m => !m.Real))
             {
                 if (group.Run is { } run) SetRunAside(member.BotId, run, reason);
-                else SetAside(member.BotId, group.Goal, suspendInBrain: true);
+                else SetAside(member.BotId, group.Goal, suspendInBrain: true, failed: true);
             }
 
         if (!success) group.Run?.Apply(PlayerbotRunSignal.Abort(reason));
@@ -1152,6 +1214,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             Totals = (Totals.Formed, Totals.Completed + 1, Totals.Failed);
         }
 
+        // A goal that was done starts afresh: its earlier failures no longer lengthen a later set-aside.
+        if (group.Succeeded && group.Run is null)
+            foreach (Member member in group.Members.Where(m => !m.Real)) _failStreaks.Remove((member.BotId, group.Goal.Key));
         ResetCompletedRun(group);
         foreach (Member member in group.Members.Where(m => !m.Real).ToArray()) Release(group, member);
         _groups.Remove(group);
@@ -1185,9 +1250,39 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (member.BotId == group.LeaderBotId && !member.Real) Finish(group, success: false, "leader-" + reason);
     }
 
-    private void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain)
+    /// <summary>The longest a repeatedly failed goal is set aside (<see cref="EscalatedSetAsideMs"/>).</summary>
+    internal const uint MaxSetAsideMs = 7_200_000;
+
+    /// <summary>
+    /// How long a goal is set aside after its <paramref name="failures"/>th failure in a row for one bot: <see cref="SetAsideMs"/> for the
+    /// first, doubled for each further one, at most <see cref="MaxSetAsideMs"/> (10, 20, 40, 80, 120 minutes). Before, every failure
+    /// set it aside for the same ten minutes and one leader tried one quest twelve times.
+    /// </summary>
+    internal static uint EscalatedSetAsideMs(int failures)
+        => failures <= 1 ? SetAsideMs : (uint)Math.Min((ulong)MaxSetAsideMs, (ulong)SetAsideMs << Math.Min(failures - 1, 16));
+
+    /// <summary>Failures in a row per bot and goal key, and when the last one was (pruned in <see cref="Scan"/> once the streak is stale).</summary>
+    private readonly Dictionary<(Guid Bot, (PlayerbotGroupGoalKind, uint) Key), (int Failures, uint LastMs)> _failStreaks = [];
+
+    /// <summary>A failure streak older than this is forgotten: the goal got a fresh start (twice the longest set-aside).</summary>
+    private const uint FailStreakMemoryMs = MaxSetAsideMs * 2;
+
+    /// <summary>How long (ms) <paramref name="botId"/> still sets the goal with <paramref name="key"/> aside (0: not set aside; tests and status).</summary>
+    internal uint SetAsideLeftMs(Guid botId, (PlayerbotGroupGoalKind, uint) key)
+        => _setAside.TryGetValue((botId, key), out uint until) && unchecked((int)(until - Now)) > 0 ? unchecked(until - Now) : 0;
+
+    private void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain, bool failed = false)
     {
-        _setAside[(botId, goal.Key)] = unchecked(Now + SetAsideMs);
+        uint ms = SetAsideMs;
+        if (failed)
+        {
+            var streakKey = (botId, goal.Key);
+            int failures = _failStreaks.TryGetValue(streakKey, out var streak) && unchecked(Now - streak.LastMs) < FailStreakMemoryMs ? streak.Failures + 1 : 1;
+            _failStreaks[streakKey] = (failures, Now);
+            ms = EscalatedSetAsideMs(failures);
+        }
+
+        _setAside[(botId, goal.Key)] = unchecked(Now + ms);
         if (!suspendInBrain || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
         if (goal.QuestId != 0) bot.Brain.Suspensions.SuspendQuest(goal.QuestId, Now);
         bot.Brain.Suspensions.SuspendEntry(goal.ObjectiveEntry, Now);
@@ -1320,6 +1415,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public List<Member> Members { get; } = [];
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
         public uint StateSinceMs { get; set; } = formedMs;
+
+        /// <summary>The distance-scaled limit of the current gathering or travelling step of an instance group (0: the plain step limit; <see cref="BudgetTravel"/>).</summary>
+        public uint StepBudgetMs { get; set; }
+
+        /// <summary>Time granted to travel steps beyond <see cref="StepTimeoutMs"/>; the group's overall bound grows by it.</summary>
+        public uint ExtraTimeMs { get; set; }
         public int Failures { get; set; }
         public bool Raid { get; set; }
         public bool Solo { get; init; }
