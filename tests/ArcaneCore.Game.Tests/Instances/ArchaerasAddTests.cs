@@ -178,6 +178,60 @@ public sealed class ArchaerasAddTests
         Assert.False(UldamanInstance.IsHallwayWarder(room));
     }
 
+    [Theory]
+    [InlineData(true, 7000322u)]
+    [InlineData(true, 7000323u)]
+    [InlineData(false, 7000322u)]
+    [InlineData(false, 7000323u)]
+    public void ACastWithAHallwayPickAndARoomPick_WakesBothRoomWarders_AndNeverTheHallwayWarder(bool hallwayFirst, uint roomPickGuid)
+    {
+        // Spec 70-mob_archaeras_add 11.4 / check 11. 10258 picks two of the four warders; the per-target script runs once per pick. The hallway
+        // pick's substitute must not swallow the room pick (it used to: the nearest warder was woken twice and the other one slept on).
+        using DungeonNpcRig rig = Rig((7000320, Warder, -30), (7000322, Warder, 5), (7000323, Warder, -5));
+        StartArchaedasFight(rig);
+        Creature hallway = rig.BySpawn(7000320), nearRoom = rig.BySpawn(7000322), farRoom = rig.BySpawn(7000323);
+        var ai = (ArchaedasAi)rig.Creature(Archaedas).AI!;
+        Creature roomPick = rig.BySpawn(roomPickGuid);
+        object cast = new();
+        Assert.Contains((nearRoom, Stoned), rig.Spells.Auras);
+        Assert.Contains((farRoom, Stoned), rig.Spells.Auras);
+
+        if (hallwayFirst)
+        {
+            ai.Awaken(hallway, cast);
+            ai.Awaken(roomPick, cast);
+        }
+        else
+        {
+            ai.Awaken(roomPick, cast);
+            ai.Awaken(hallway, cast);
+        }
+
+        rig.Run(100);
+        Assert.Same(rig.Player, nearRoom.Combat.Victim);
+        Assert.Same(rig.Player, farRoom.Combat.Victim);
+        Assert.DoesNotContain((nearRoom, Stoned), rig.Spells.Auras);
+        Assert.DoesNotContain((farRoom, Stoned), rig.Spells.Auras);
+        Assert.Null(hallway.Combat.Victim);
+        Assert.Contains((hallway, Stoned), rig.Spells.Auras);
+    }
+
+    [Fact]
+    public void TwoHallwayPicksInOneCast_WakeTheTwoRoomWarders_NotTheSameOneTwice()
+    {
+        using DungeonNpcRig rig = Rig((7000320, Warder, -30), (7000321, Warder, -31), (7000322, Warder, 5), (7000323, Warder, -5));
+        StartArchaedasFight(rig);
+        var ai = (ArchaedasAi)rig.Creature(Archaedas).AI!;
+        object cast = new();
+        ai.Awaken(rig.BySpawn(7000320), cast);
+        ai.Awaken(rig.BySpawn(7000321), cast);
+        rig.Run(100);
+        Assert.Same(rig.Player, rig.BySpawn(7000322).Combat.Victim);
+        Assert.Same(rig.Player, rig.BySpawn(7000323).Combat.Victim);
+        Assert.Null(rig.BySpawn(7000320).Combat.Victim);
+        Assert.Null(rig.BySpawn(7000321).Combat.Victim);
+    }
+
     [Fact]
     public void AnAwakeGuardianCastsWhirlwindBetween5And9Seconds_ThenEvery7To14()
     {
@@ -211,6 +265,16 @@ public sealed class ArchaerasAddTests
         Assert.InRange(at[1] - at[0], 12900, 22600);
     }
 
+    /// <summary>Runs <paramref name="ms"/> with Archaedas pinned at <paramref name="health"/>: the 5 s out-of-combat regeneration would otherwise heal him past the threshold mid-run.</summary>
+    private static void HoldHealth(DungeonNpcRig rig, Creature archaedas, uint health, uint ms)
+    {
+        for (uint done = 0; done < ms; done += 50)
+        {
+            archaedas.Health = health;
+            rig.Tick();
+        }
+    }
+
     [Fact]
     public void TheCustodianReconstructsArchaedasEveryTenSeconds_OnlyBelowHalfHealth()
     {
@@ -220,13 +284,11 @@ public sealed class ArchaerasAddTests
         rig.Run(200);
         rig.Spells.RemoveAuras(c, Stoned);
         Assert.True(c.AI!.AttackStart(rig.Player));
-        archaedas.Health = archaedas.MaxHealth / 2; // exactly 50 %: not below
-        rig.Run(25_000);
+        HoldHealth(rig, archaedas, archaedas.MaxHealth / 2, 25_000); // exactly 50 %: not below
         Assert.Empty(rig.Spells.Of(c, Reconstruct));
 
-        archaedas.Health = archaedas.MaxHealth * 49 / 100;
         long start = rig.Spells.NowMs;
-        rig.Run(21_000);
+        HoldHealth(rig, archaedas, archaedas.MaxHealth * 49 / 100, 21_000);
         long[] at = [.. rig.Spells.Of(c, Reconstruct).Select(x => x.AtMs - start)];
         Assert.Equal(2, at.Length);
         Assert.InRange(at[1] - at[0], 9900, 10100);
@@ -264,6 +326,29 @@ public sealed class ArchaerasAddTests
         Assert.Null(m.Combat.Victim);
         Assert.Contains((m, Stoned), rig.Spells.Auras);
         Assert.Equal(StonedDormancy.DormantFlags, m.UnitFlags & StonedDormancy.DormantFlags);
+    }
+
+    [Fact]
+    public void AfterAWipe_AnAwakeMinionThatReachesHomeIsStonedAndDormantAgain()
+    {
+        // Spec 70-mob_archaeras_add check 9: the encounter resets, the awake minion is sent home and the REACHED_HOME row casts Stoned again.
+        using DungeonNpcRig rig = Rig((1, Guardian, 3));
+        Creature g = rig.Creature(Guardian);
+        rig.Run(200);
+        rig.Spells.RemoveAuras(g, Stoned);
+        Assert.True(g.AI!.AttackStart(rig.Player));
+        rig.Run(200);
+        Assert.DoesNotContain((g, Stoned), rig.Spells.Auras);
+        Assert.Equal(UnitFlags.None, g.UnitFlags & StonedDormancy.DormantFlags);
+
+        rig.Creatures.NearTeleport(g, g.X + 8f, g.Y, g.Z, g.Orientation); // pulled away from its post
+        rig.Creatures.EnterEvadeMode(g);
+        rig.Run(15_000);
+        Assert.Null(g.Combat.Victim);
+        Assert.Contains((g, Stoned), rig.Spells.Auras);
+        Assert.Equal(StonedDormancy.DormantFlags, g.UnitFlags & StonedDormancy.DormantFlags);
+        Assert.True(g.AiImmobilized);
+        Assert.False(rig.Map.Combat.Hooks.CanAttack(rig.Player, g));
     }
 
     [WorldFixtureFact]

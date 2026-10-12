@@ -240,6 +240,23 @@ public sealed class NaxxramasPartTwoTests
     }
 
     [Fact]
+    public void Gothik_LiveSideDeathStillCreatesTheSpectralAdd_WhenTheTriggerRunsTheSpellAnchorScript()
+    {
+        // Spec 533-spell_anchor check 3: the inert GothikAnchorAI on 16137 must not disturb the PartTwo trigger lookup.
+        using var raid = new Raid(16060).Initialize();
+        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(181170, GameObjectType.Door)], [], [], [], []));
+        raid.Map.AddUpdater(objects);
+        objects.Summon(181170, 0, 0, 270, 0);
+        Creature trigger = raid.Creatures.SpawnTemporary(Template(16137) with { ScriptName = GothikAnchorAI.ScriptName }, 0, 10, 270, 0);
+        Assert.IsType<GothikAnchorAI>(trigger.AI);
+        Creature live = raid.Creatures.SpawnTemporary(Template(16124), 0, -10, 270, 0);
+        raid.Map.Combat.Kill(raid.Tank, live);
+        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 16127 && c.Y == 10);
+        Assert.Null(trigger.Combat.Victim);
+    }
+
+    [Fact]
     public void Gothik_CombatGateOpensForGroundPhase_AndExitOpensOnDeath()
     {
         using var raid = new Raid(16060).Initialize();

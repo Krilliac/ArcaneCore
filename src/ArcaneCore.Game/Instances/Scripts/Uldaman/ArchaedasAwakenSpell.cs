@@ -12,6 +12,6 @@ public sealed class ArchaedasAwakenSpell : ISpellScript
     {
         if (context.Caster is Creature { AI: ArchaedasAi archaedas }
             && context.Target is Creature target)
-            archaedas.Awaken(target);
+            archaedas.Awaken(target, context.Cast);
     }
 }
