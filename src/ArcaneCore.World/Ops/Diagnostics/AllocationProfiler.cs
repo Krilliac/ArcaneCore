@@ -68,8 +68,15 @@ internal sealed class AllocationTickListener : EventListener
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
     {
-        if (_disposed || !IsAllocationTick(eventData))
+        if (_disposed)
         {
+            return;
+        }
+
+        if (!IsAllocationTick(eventData))
+        {
+            // The GC keyword cannot be narrowed to event 10: the runtime also sends the other GC events at Verbose. Count and drop them.
+            _sink.AddOther();
             return;
         }
 
@@ -191,6 +198,7 @@ public sealed class AllocationProfiler : IDisposable
         public TimeSpan Planned { get; } = planned;
         public long StartTimestamp { get; } = Stopwatch.GetTimestamp();
         public Timer? Timer { get; set; }
+        public TimeSpan Elapsed { get; set; }
     }
 
     private readonly object _gate = new();
@@ -198,6 +206,7 @@ public sealed class AllocationProfiler : IDisposable
     private readonly ILogger? _logger;
     private readonly int _maxTypes;
     private Session? _active;
+    private Session? _stopping;
     private AllocationReportData? _last;
     private bool _disposed;
 
@@ -272,19 +281,30 @@ public sealed class AllocationProfiler : IDisposable
         }
     }
 
-    /// <summary>Stop the running session. False (nothing to stop) when none runs.</summary>
-    public bool Stop()
+    /// <summary>
+    /// Stop the running session. False (nothing to stop) when none runs. The session is swapped out under the lock and its listener is
+    /// disposed outside it, because <c>DisableEvents</c> may wait for the runtime's event dispatcher to drain; with
+    /// <paramref name="detachOffThread"/> the disposal also runs on the thread pool, so a command on the world thread never waits for it
+    /// (the session still reports as stopped at once, and <see cref="Report"/> shows its totals until the detach is done).
+    /// </summary>
+    public bool Stop(bool detachOffThread = false)
     {
-        lock (_gate)
+        Session? session = Swap(null);
+        if (session is null)
         {
-            if (_active is null)
-            {
-                return false;
-            }
-
-            Finish(_active);
-            return true;
+            return false;
         }
+
+        if (detachOffThread)
+        {
+            _ = Task.Run(() => Complete(session));
+        }
+        else
+        {
+            Complete(session);
+        }
+
+        return true;
     }
 
     /// <summary>The running session's current totals, else the last finished one; null when none has run.</summary>
@@ -297,29 +317,64 @@ public sealed class AllocationProfiler : IDisposable
                 return new AllocationReportData(running.Aggregator.Snapshot(), Stopwatch.GetElapsedTime(running.StartTimestamp), true, running.Planned);
             }
 
+            if (_stopping is { } stopping)
+            {
+                return new AllocationReportData(stopping.Aggregator.Snapshot(), stopping.Elapsed, false, stopping.Planned);
+            }
+
             return _last;
         }
     }
 
-    // Caller holds _gate.
-    private void Finish(Session session)
+    // Under the lock only: take the active session out (when it is the expected one) and fix its end time. Nothing here can block.
+    private Session? Swap(Guid? expectedId)
     {
-        _active = null;
+        lock (_gate)
+        {
+            if (_active is not { } session || (expectedId is { } id && session.Id != id))
+            {
+                return null;
+            }
+
+            _active = null;
+            session.Elapsed = Stopwatch.GetElapsedTime(session.StartTimestamp);
+            _stopping = session;
+            return session;
+        }
+    }
+
+    // Outside the lock: detach the listener (may wait for the dispatcher), then publish the final totals.
+    private void Complete(Session session)
+    {
         session.Timer?.Dispose();
-        session.Listener.Dispose();
-        TimeSpan elapsed = Stopwatch.GetElapsedTime(session.StartTimestamp);
-        _last = new AllocationReportData(session.Aggregator.Snapshot(), elapsed, false, session.Planned);
-        _logger?.LogInformation("allocation sampling stopped after {Seconds:F1} s: {Events} events, {Rows} rows", elapsed.TotalSeconds, _last.Snapshot.TotalEvents, _last.Snapshot.DistinctTypes);
+        try
+        {
+            session.Listener.Dispose();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger?.LogError(ex, "allocation sampling listener could not be detached cleanly");
+        }
+
+        AllocationReportData final = new(session.Aggregator.Snapshot(), session.Elapsed, false, session.Planned);
+        lock (_gate)
+        {
+            _last = final;
+            if (ReferenceEquals(_stopping, session))
+            {
+                _stopping = null;
+            }
+        }
+
+        _logger?.LogInformation("allocation sampling stopped after {Seconds:F1} s: {Events} events, {Other} other GC events discarded, {Rows} rows",
+            session.Elapsed.TotalSeconds, final.Snapshot.TotalEvents, final.Snapshot.OtherGcEvents, final.Snapshot.DistinctTypes);
     }
 
     internal void StopIfCurrent(Guid sessionId)
     {
-        lock (_gate)
+        if (Swap(sessionId) is { } session)
         {
-            if (_active is { } session && session.Id == sessionId)
-            {
-                Finish(session);
-            }
+            Complete(session);
         }
     }
 
@@ -328,10 +383,8 @@ public sealed class AllocationProfiler : IDisposable
         lock (_gate)
         {
             _disposed = true;
-            if (_active is { } session)
-            {
-                Finish(session);
-            }
         }
+
+        Stop();
     }
 }

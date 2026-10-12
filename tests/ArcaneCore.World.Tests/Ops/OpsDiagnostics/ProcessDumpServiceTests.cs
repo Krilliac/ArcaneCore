@@ -84,7 +84,7 @@ public sealed class ProcessDumpServiceTests : IDisposable
         }
     }
 
-    private ProcessDumpService Create(FakeWriter writer, bool enabled = true, int minInterval = 600, long? free = 100 * Gib, long workingSet = 7 * Gib, ILogger? logger = null)
+    private ProcessDumpService Create(IProcessDumpWriter writer, bool enabled = true, int minInterval = 600, long? free = 100 * Gib, long workingSet = 7 * Gib, ILogger? logger = null)
         => new(new DumpDiagnosticsOptions { Enabled = enabled, MinIntervalSeconds = minInterval }, _dir, logger ?? NullLogger.Instance, writer, _time, _ => free, () => workingSet);
 
     [Fact]
@@ -143,6 +143,37 @@ public sealed class ProcessDumpServiceTests : IDisposable
         Assert.True(retry.Started);
         Assert.True((await retry.Completion!.WaitAsync(TimeSpan.FromSeconds(20))).Success);
     }
+
+    [Fact]
+    public async Task AFailedDump_DeletesThePartialFile()
+    {
+        var writer = new PartialWriter();
+        DumpRequestResult result = Create(writer).Request(DumpKind.Full);
+        DumpOutcome outcome = await result.Completion!.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.False(outcome.Success);
+        Assert.True(writer.Wrote);
+        Assert.False(File.Exists(result.Path));
+    }
+
+    private sealed class PartialWriter : IProcessDumpWriter
+    {
+        public bool Wrote { get; private set; }
+
+        public void Write(DumpKind kind, string path)
+        {
+            File.WriteAllBytes(path, new byte[1024]);
+            Wrote = File.Exists(path);
+            throw new IOException("disk full");
+        }
+    }
+
+    [Theory]
+    [InlineData("/mnt/data", "/mnt/data/dumps", true)]
+    [InlineData("/mnt/data", "/mnt/database/dumps", false)]
+    [InlineData("/mnt/data", "/mnt/data", true)]
+    [InlineData("/", "/mnt/data", true)]
+    public void IsUnder_MatchesWholePathSegments(string root, string path, bool expected)
+        => Assert.Equal(expected, ProcessDumpService.IsUnder(path.Replace('/', Path.DirectorySeparatorChar), root.Replace('/', Path.DirectorySeparatorChar), StringComparison.Ordinal));
 
     [Fact]
     public async Task TheMinimumInterval_IsEnforcedBetweenSuccessfulDumps()

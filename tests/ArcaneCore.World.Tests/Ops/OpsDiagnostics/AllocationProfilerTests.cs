@@ -171,6 +171,55 @@ public sealed class AllocationProfilerTests(ITestOutputHelper output)
         Assert.All(lines, l => Assert.InRange(l.Length, 1, 240));
     }
 
+    [Fact]
+    public void OtherGcEvents_AreCountedAndShownAsDiscarded()
+    {
+        var aggregator = new AllocationAggregator();
+        aggregator.Add("Foo", 0, 10);
+        aggregator.AddOther();
+        aggregator.AddOther();
+        AllocationSnapshot snapshot = aggregator.Snapshot();
+        Assert.Equal(2, snapshot.OtherGcEvents);
+        Assert.Equal(1, snapshot.TotalEvents); // not mixed into the allocation totals
+        Assert.Contains("2 other GC events (discarded)", AllocationReportFormat.Format(snapshot, TimeSpan.FromSeconds(1), false, 5));
+    }
+
+    private sealed class SlowListener(ManualResetEventSlim release) : IDisposable
+    {
+        public volatile bool Disposed;
+
+        public void Dispose()
+        {
+            release.Wait(TimeSpan.FromSeconds(20));
+            Disposed = true;
+        }
+    }
+
+    [Fact]
+    public async Task Stop_DoesNotHoldTheLockWhileTheListenerDetaches_AndCanDetachOffTheCallingThread()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var listener = new SlowListener(release);
+        using var profiler = new AllocationProfiler(_ => listener);
+        Assert.True(profiler.TryStart(60, out _));
+
+        Assert.True(profiler.Stop(detachOffThread: true)); // returns while the detach is still blocked
+        Assert.False(listener.Disposed);
+        Assert.False(profiler.IsRunning);
+        AllocationReportData? during = profiler.Report(); // must not wait for the detach either
+        Assert.NotNull(during);
+        Assert.False(during.Running);
+
+        release.Set();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!listener.Disposed && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.True(listener.Disposed);
+    }
+
     private sealed class FakeListener : IDisposable
     {
         public bool Disposed { get; private set; }

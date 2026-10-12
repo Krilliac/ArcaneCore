@@ -113,7 +113,7 @@ public sealed class DiagnosticsCommands : ICommandExtension
             return true;
         }
 
-        context.Reply(profiler.Stop() ? "Allocation sampling stopped. Use .debug alloc report." : "No allocation sample is running.");
+        context.Reply(profiler.Stop(detachOffThread: true) ? "Allocation sampling stopped. Use .debug alloc report." : "No allocation sample is running.");
         return true;
     }
 

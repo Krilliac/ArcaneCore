@@ -202,6 +202,7 @@ public sealed class ProcessDumpService
         {
             TimeSpan duration = Stopwatch.GetElapsedTime(start);
             _logger.LogError(ex, "process dump {Path} failed after {Seconds:F1} s", path, duration.TotalSeconds);
+            DeletePartial(path);
             lock (_gate)
             {
                 _hasStarted = false; // a failed attempt does not block a retry with another type (heap dumps can fail where full ones work)
@@ -215,12 +216,41 @@ public sealed class ProcessDumpService
         }
     }
 
+    // A partial dump holds the same secrets as a complete one and is of no use: remove it.
+    private void DeletePartial(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                _logger.LogWarning("removed the partial dump {Path}", path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "the partial dump {Path} could not be removed; delete it by hand (it holds process memory)", path);
+        }
+    }
+
     private static DumpRequestResult Refused(string message) => new(false, message, null, null);
 
     /// <summary>The text a command prints when the dump finished.</summary>
     public static string DescribeOutcome(DumpOutcome outcome) => outcome.Success
         ? string.Create(CultureInfo.InvariantCulture, $"Dump written: {outcome.Path}, {outcome.Bytes / (1024d * 1024):F0} MiB in {outcome.Duration.TotalSeconds:F1} s.")
         : string.Create(CultureInfo.InvariantCulture, $"Dump failed after {outcome.Duration.TotalSeconds:F1} s: {outcome.Error}. If a heap dump was asked for, try full.");
+
+    /// <summary>Whether <paramref name="path"/> is <paramref name="root"/> or inside it, matching whole path segments (/mnt/data is not a root of /mnt/database).</summary>
+    internal static bool IsUnder(string path, string root, StringComparison comparison)
+    {
+        if (!path.StartsWith(root, comparison))
+        {
+            return false;
+        }
+
+        return root.EndsWith(Path.DirectorySeparatorChar) || root.EndsWith(Path.AltDirectorySeparatorChar)
+            || path.Length == root.Length || path[root.Length] == Path.DirectorySeparatorChar || path[root.Length] == Path.AltDirectorySeparatorChar;
+    }
 
     /// <summary>Free bytes on the volume that holds <paramref name="path"/>: the ready drive whose root is the longest prefix of the path.</summary>
     internal static long? FreeBytesOnVolumeOf(string path)
@@ -232,7 +262,7 @@ public sealed class ProcessDumpService
             DriveInfo? best = null;
             foreach (DriveInfo drive in DriveInfo.GetDrives())
             {
-                if (drive.IsReady && full.StartsWith(drive.RootDirectory.FullName, comparison)
+                if (drive.IsReady && IsUnder(full, drive.RootDirectory.FullName, comparison)
                     && (best is null || drive.RootDirectory.FullName.Length > best.RootDirectory.FullName.Length))
                 {
                     best = drive;

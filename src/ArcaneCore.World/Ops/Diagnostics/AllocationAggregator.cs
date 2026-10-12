@@ -22,7 +22,11 @@ public sealed record AllocationSnapshot(
     IReadOnlyList<long> OtherEvents,
     int DistinctTypes,
     long TotalEvents,
-    long MalformedEvents);
+    long MalformedEvents)
+{
+    /// <summary>Other GC-keyword events the runtime delivered (the keyword cannot be narrowed to the allocation tick); counted and discarded.</summary>
+    public long OtherGcEvents { get; init; }
+}
 
 /// <summary>
 /// Sums sampled allocation bytes per (type, heap), bounded to <see cref="MaxTypes"/> distinct rows: a row that would be the
@@ -56,6 +60,7 @@ public sealed class AllocationAggregator(int maxTypes = AllocationAggregator.Def
     private readonly long[] _otherEvents = new long[3];
     private long _totalEvents;
     private long _malformed;
+    private long _other;
 
     /// <summary>The cap on distinct rows (at least 1).</summary>
     public int MaxTypes { get; } = Math.Max(1, maxTypes);
@@ -107,6 +112,9 @@ public sealed class AllocationAggregator(int maxTypes = AllocationAggregator.Def
         }
     }
 
+    /// <summary>A GC event that is not an allocation tick: counted so the report can say how many were discarded.</summary>
+    public void AddOther() => Interlocked.Increment(ref _other);
+
     /// <summary>An event whose payload could not be read (a field the runtime did not send).</summary>
     public void AddMalformed()
     {
@@ -127,7 +135,7 @@ public sealed class AllocationAggregator(int maxTypes = AllocationAggregator.Def
                 rows.Add(new AllocationRow(key.Type, (AllocationHeap)key.Heap, counts.Bytes, counts.Events));
             }
 
-            return new AllocationSnapshot(rows, (long[])_otherBytes.Clone(), (long[])_otherEvents.Clone(), _rows.Count, _totalEvents, _malformed);
+            return new AllocationSnapshot(rows, (long[])_otherBytes.Clone(), (long[])_otherEvents.Clone(), _rows.Count, _totalEvents, _malformed) { OtherGcEvents = Interlocked.Read(ref _other) };
         }
     }
 }
@@ -155,6 +163,8 @@ public static class AllocationReportFormat
             string.Create(CultureInfo.InvariantCulture,
                 $"Allocation sample ({(running ? "running" : "stopped")}): {elapsed.TotalSeconds:F1} s, {snapshot.TotalEvents} events, {snapshot.DistinctTypes} distinct (type, heap) rows{(snapshot.MalformedEvents > 0 ? $", {snapshot.MalformedEvents} unreadable events" : string.Empty)}"),
             "Numbers are " + SamplingNote + ".",
+            snapshot.OtherGcEvents.ToString(CultureInfo.InvariantCulture) + " other GC events (discarded)",
+
         };
 
         foreach (AllocationHeap heap in new[] { AllocationHeap.Soh, AllocationHeap.Loh, AllocationHeap.Poh })

@@ -53,8 +53,14 @@ allocated** and charges it with that amount, so every number is a sampled estima
   second and the share of that heap, plus the number of events and rows. Types beyond the 2,000-row cap are summed in `(other types, beyond the row cap)`.
 - `stop`: ends the sample now; `report` still shows it.
 
+**Extra events, and why the sample should be short.** `GCAllocationTick` (event 10) is a Verbose event of the runtime's GC keyword (0x1), and the
+keyword cannot be narrowed to it: enabling it also delivers every other event of that keyword at Verbose, for example `FinalizeObject` (29), `PinObjectAtGCTime`
+(33, raised once per pinned handle **inside the GC pause**), `GCJoin_V2` (203), `GCFitBucketInfo` (209) and the memory-pressure events. They are counted
+and thrown away (`N other GC events (discarded)` in the report), but the runtime still produces them, so a sample lengthens GC pauses somewhat on a
+heap with many pinned objects or many GCs. The cost on the live server was not measured: use **10-30 s** samples there (`start 30`), not the 600 s maximum.
+
 Aggregation takes one short lock per event (events arrive on a runtime thread, a few thousand a second at most). Disposing the listener disables the
-event source first, so nothing is delivered after `stop`; a test allocates after disposal and checks the count does not move.
+event source first, so nothing is delivered after `stop`; the detach runs outside the profiler lock and, for the command, off the world thread (`DisableEvents` may wait for the runtime to drain its event queue), and `report` shows the totals meanwhile; a test allocates after disposal and checks the count does not move.
 
 **Overhead.** Measured by `AllocationProfilerTests.ListenerOverhead_IsMeasured` on the development box (Ryzen 9 9900X3D, workstation test host): a
 loop of 40 M small objects plus 4,000 LOH arrays took 508 ms without the listener and 468 ms with it (72,193 events), i.e. no measurable
@@ -76,7 +82,7 @@ A dump contains everything in memory: session keys, password material in flight,
 - the dump directory cannot be created, or its volume has less than **2x the process working set** free (or the free space cannot be determined).
 
 The write runs on the thread pool, never on the world thread. The command replies `Dump started: <kind> -> <path>` with the warning that **a full
-dump suspends the whole process for roughly 1 minute at about 7 GB**; the path, size and duration (or the error) are logged when it ends, and are
+dump suspends the whole process for roughly 1 minute at about 7 GB**; the path, size and duration (or the error) are logged when it ends (a failed dump's partial file is deleted, since it holds the same secrets), and are
 replied to the invoker when he is still online. Expect a `TickHang` line afterwards, and note that with `Ops:Watchdog:TickMonitor:GatesHeartbeat`
 (default true) the heartbeat is withheld while the world is suspended, so a supervisor whose watchdog timeout is shorter than the dump will restart the
 server: lengthen it (or dump from a drained server) first. Files are named `arcanecore-world-<kind>-<utc timestamp>-pid<pid>.dmp`; keep the directory

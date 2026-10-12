@@ -2,6 +2,7 @@ using System.Text;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.Diagnostics;
@@ -204,6 +205,31 @@ public sealed class DiagnosticsCommandTests
         Assert.Equal(12, twelve);
         Assert.True(DiagnosticsArgs.TryOption("  ", "seconds", 30, out int dflt));
         Assert.Equal(30, dflt);
+    }
+
+    // The behavioural check behind the permission table: a real GameMaster session is refused the administrator commands, while .debug gc works.
+    [Fact]
+    public async Task AGameMasterSession_IsRefusedDumpAndAllocStart_ButMayRunGc()
+    {
+        var writer = new Writer();
+        var dumps = new ProcessDumpService(new DumpDiagnosticsOptions { Enabled = true }, Path.Combine(Path.GetTempPath(), "arcane-gm-dump-" + Guid.NewGuid().ToString("N")), NullLogger.Instance, writer, freeSpace: _ => 1L << 50);
+        using var profiler = new AllocationProfiler(_ => throw new InvalidOperationException("must not subscribe"));
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            s.AddSingleton(dumps);
+            s.AddSingleton(profiler);
+        });
+        await using WorldTestClient gm = await host.EnterWorldAsync("DIAGGM", "Diaggm", AccountSecurity.GameMaster);
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".debug dump");
+        Assert.Equal(ArcaneCore.World.Gm.Core.GmStrings.CommandUnavailable, (await gm.ReadChatAsync()).Text);
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".debug alloc start 5");
+        Assert.Equal(ArcaneCore.World.Gm.Core.GmStrings.CommandUnavailable, (await gm.ReadChatAsync()).Text);
+        Assert.Empty(writer.Kinds);
+        Assert.False(profiler.IsRunning);
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".debug gc");
+        Assert.StartsWith("GC mode:", (await gm.ReadChatAsync()).Text);
     }
 
     [Fact]
