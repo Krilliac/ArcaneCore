@@ -49,6 +49,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
+    /// <summary>Whether the route being walked was planned under the completed-return rule (test seam).</summary>
+    internal bool RouteIsRelaxed => _route?.CompletedQuestReturn == true;
+
     /// <summary>
     /// The bot's home area, or null. With one, the givers and enders of the quests worth a trip and the spawns of an objective to hunt
     /// are only those inside it; the way to a completed quest's ender is never restricted.

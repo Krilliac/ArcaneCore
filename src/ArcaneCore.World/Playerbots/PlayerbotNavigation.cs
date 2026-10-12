@@ -96,8 +96,9 @@ internal static class PlayerbotNavigation
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route, bool trial = false)
-        => Plan(player, destination, destination, options, partial: false, trial, out route, out _);
+        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false)
+        => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
+            completedQuestReturn: completedQuestReturn);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
