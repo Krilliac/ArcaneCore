@@ -109,8 +109,8 @@ public sealed class WiringAudit
     /// <summary>
     /// Run the audit. The unhandled-opcode counts and the opcode handler table are read live on every call (hot modules and
     /// <c>.hotcode refresh</c> swap the table at run time; the check is a cheap pass over its keys). The config checks and the options
-    /// consumers come from reflection over assemblies and the container's registrations, which do not change while the daemon runs, so
-    /// they are computed on the first call and reused (<c>.server wiring</c> runs on the world thread).
+    /// consumers come from reflection over assemblies and the container's registrations, which are fixed for the process (except types a
+    /// development hot-reload edit adds, seen after a restart), so they are computed on the first call and reused (<c>.server wiring</c> runs on the world thread).
     /// </summary>
     public WiringReport Run()
     {
