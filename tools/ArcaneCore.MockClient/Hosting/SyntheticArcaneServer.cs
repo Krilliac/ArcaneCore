@@ -70,6 +70,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     private Task _realmAcceptLoop = Task.CompletedTask;
     private Task _worldAcceptLoop = Task.CompletedTask;
     private Task? _disposeTask;
+    private Task? _worldStop;
 
     private SyntheticArcaneServer(
         OwnedFixtureDirectory directory, TcpListener realmListener, TcpListener worldListener, ServiceProvider services)
@@ -96,6 +97,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
 
     public WorldRuntime World { get; }
 
+    /// <summary>The SQLite characters database file this fixture's own directory would hold; the file a second world shares.</summary>
+    public string CharactersDatabasePath => Path.Combine(_directory.Path, "characters.db");
+
     /// <summary>The unique fixture directory, removed after sessions and saves drain.</summary>
     public string DataDirectory => _directory.Path;
 
@@ -115,15 +119,21 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         => StartAsync(configureServices: null, cancellationToken);
 
     /// <summary>Configure additional synthetic collaborators before the real world starts.</summary>
-    public static async Task<SyntheticArcaneServer> StartAsync(
+    public static Task<SyntheticArcaneServer> StartAsync(
         Action<IServiceCollection>? configureServices, CancellationToken cancellationToken = default)
+        => StartAsync(new SyntheticServerOptions(), configureServices, cancellationToken);
+
+    /// <summary>Start with explicit fixture options (fencing, shared characters database) and optional extra collaborators.</summary>
+    public static async Task<SyntheticArcaneServer> StartAsync(
+        SyntheticServerOptions options, Action<IServiceCollection>? configureServices, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         startup.CancelAfter(StartupTimeout);
         CancellationToken startupToken = startup.Token;
         Task<SyntheticArcaneServer> starting = Task.Run(
-            () => CreateAndInitializeAsync(configureServices, startupToken), CancellationToken.None);
+            () => CreateAndInitializeAsync(options, configureServices, startupToken), CancellationToken.None);
         try
         {
             return await starting.WaitAsync(startupToken).ConfigureAwait(false);
@@ -143,7 +153,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     }
 
     private static async Task<SyntheticArcaneServer> CreateAndInitializeAsync(
-        Action<IServiceCollection>? configureServices, CancellationToken cancellationToken)
+        SyntheticServerOptions options, Action<IServiceCollection>? configureServices, CancellationToken cancellationToken)
     {
         OwnedFixtureDirectory directory = OwnedFixtureDirectory.Create();
         var realmListener = new TcpListener(IPAddress.Loopback, 0);
@@ -164,7 +174,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             });
             cancellationToken.ThrowIfCancellationRequested();
             services = CreateServices(directory.Path,
-                (IPEndPoint)realmListener.LocalEndpoint, (IPEndPoint)worldListener.LocalEndpoint, configureServices);
+                (IPEndPoint)realmListener.LocalEndpoint, (IPEndPoint)worldListener.LocalEndpoint, options, configureServices);
             cancellationToken.ThrowIfCancellationRequested();
             server = new SyntheticArcaneServer(directory, realmListener, worldListener, services);
             server._startupTask = server.InitializeAsync(cancellationToken);
@@ -266,6 +276,21 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         return account.Id;
     }
 
+    /// <summary>
+    /// Stop the real world host once (features, save-queue drain, ownership release) while the stores stay usable, so a test can
+    /// observe the released claim. Disposal reuses the same stop and never runs it twice.
+    /// </summary>
+    public Task StopWorldAsync(CancellationToken cancellationToken = default)
+    {
+        Task stop;
+        lock (_gate)
+        {
+            stop = _worldStop ??= _worldHost.StopAsync(CancellationToken.None);
+        }
+
+        return stop.WaitAsync(cancellationToken);
+    }
+
     public ValueTask DisposeAsync()
     {
         Task cleanup;
@@ -290,7 +315,8 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     }
 
     private static ServiceProvider CreateServices(
-        string directory, IPEndPoint realmEndpoint, IPEndPoint worldEndpoint, Action<IServiceCollection>? configureServices)
+        string directory, IPEndPoint realmEndpoint, IPEndPoint worldEndpoint, SyntheticServerOptions options,
+        Action<IServiceCollection>? configureServices)
     {
         var values = new Dictionary<string, string?>
         {
@@ -311,12 +337,19 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             values[$"Database:{component}:Provider"] = nameof(DatabaseProvider.Sqlite);
             values[$"Database:{component}:ConnectionString"] = new SqliteConnectionStringBuilder
             {
-                DataSource = Path.Combine(directory, component.ToLowerInvariant() + ".db"),
+                DataSource = component == "Characters" && options.CharactersDatabasePath is { } shared
+                    ? shared
+                    : Path.Combine(directory, component.ToLowerInvariant() + ".db"),
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Cache = SqliteCacheMode.Private,
                 Pooling = false,
                 DefaultTimeout = 1,
             }.ToString();
+        }
+
+        if (options.EnableFencing)
+        {
+            values["Cluster:Fencing:Enabled"] = "true";
         }
 
         IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
@@ -506,7 +539,13 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         {
             // WorldHost stops the simulation, calls feature shutdown, and drains the
             // character save queue, including disconnect work already posted to the world.
-            await _worldHost.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            Task stop;
+            lock (_gate)
+            {
+                stop = _worldStop ??= _worldHost.StopAsync(CancellationToken.None);
+            }
+
+            await stop.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -537,4 +576,17 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             throw new AggregateException("Synthetic server cleanup failed.", failures);
         }
     }
+}
+
+/// <summary>Fixture switches for <see cref="SyntheticArcaneServer"/>; the defaults match the combined single-process World.</summary>
+public sealed class SyntheticServerOptions
+{
+    /// <summary>Set <c>Cluster:Fencing:Enabled</c>: the world acquires durable characters-database ownership at start and releases it at stop.</summary>
+    public bool EnableFencing { get; init; }
+
+    /// <summary>
+    /// An existing SQLite characters database file to use instead of this fixture's own, so a second world can be started on the
+    /// same file. The file belongs to the other fixture; this server never deletes it.
+    /// </summary>
+    public string? CharactersDatabasePath { get; init; }
 }
