@@ -25,7 +25,7 @@ Options that a feature reads straight from `IConfiguration` are not options cons
 
 ## Unhandled opcodes
 
-`WorldSession` counts each unhandled opcode in `UnhandledOpcodeTracker` (one atomic increment, no allocation; bounded by the opcode space, values without a reference
+`WorldSession` counts each unhandled opcode in `UnhandledOpcodeTracker` (the tracker itself is one atomic increment and allocates nothing, though the existing Debug log line for the packet still does; bounded by the opcode space, values without a reference
 name share the `unknown` bucket). The first time an opcode is seen in the process it logs one Warning:
 `client sent <OPCODE> (0x...) which has no handler; further occurrences are counted`. The metric is `arcanecore.net.opcode.unhandled` (Prometheus `arcanecore_net_opcode_unhandled_total`),
 tagged `protocol=world` and `opcode=<name>` (docs/ops/metrics.md).

@@ -105,6 +105,9 @@ public sealed class PlayerbotQaGitHubOptions
     /// <summary>For <c>GhCli</c> only: hand the token from <see cref="TokenEnvironmentVariable"/> to <c>gh</c> as <c>GH_TOKEN</c> (off by default: <c>GITHUB_TOKEN</c> and <c>GH_TOKEN</c> are removed from the child so <c>gh</c> uses its own login).</summary>
     public bool GhPassToken { get; set; }
 
+    /// <summary>True when publishing reads the token variable: the REST transport always, <c>gh</c> only with <see cref="GhPassToken"/> (it otherwise uses its own login). The publisher and the start-up check share this rule.</summary>
+    internal bool RequiresToken() => Transport != PlayerbotQaGitHubTransport.GhCli || GhPassToken;
+
     /// <summary>The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged).</summary>
     public string TokenEnvironmentVariable { get; set; } = "ARCANECORE_GITHUB_TOKEN";
 

@@ -101,17 +101,19 @@ public sealed class WiringAudit
         return list;
     }
 
+    private readonly Lock _staticGate = new();
+    private StaticResult? _static;
+
+    private sealed record StaticResult(IReadOnlyList<WiringFinding> Findings, int Handlers, int Checks, int Consumers);
+
+    /// <summary>
+    /// Run the audit. The unhandled-opcode counts are read live on every call; the other categories come from reflection over assemblies and
+    /// the container's registrations, which do not change while the daemon runs, so they are computed on the first call and reused
+    /// (<c>.server wiring</c> runs on the world thread).
+    /// </summary>
     public WiringReport Run()
     {
         var findings = new List<WiringFinding>();
-        int handlers = AuditOpcodes(findings);
-        int checks = AuditConfigChecks(findings);
-        int consumers = AuditOptions(findings);
-        return new WiringReport(findings, handlers, checks, consumers);
-    }
-
-    private int AuditOpcodes(List<WiringFinding> findings)
-    {
         UnhandledOpcodeTracker tracker = _services.GetService<UnhandledOpcodeTracker>() ?? UnhandledOpcodeTracker.Shared;
         foreach (UnhandledOpcodeCount entry in tracker.Snapshot())
         {
@@ -119,6 +121,27 @@ public sealed class WiringAudit
                 string.Create(CultureInfo.InvariantCulture, $"{entry.Count} client packet(s) arrived with no handler and were dropped")));
         }
 
+        StaticResult computed;
+        lock (_staticGate)
+        {
+            computed = _static ??= ComputeStatic();
+        }
+
+        findings.AddRange(computed.Findings);
+        return new WiringReport(findings, computed.Handlers, computed.Checks, computed.Consumers);
+    }
+
+    private StaticResult ComputeStatic()
+    {
+        var findings = new List<WiringFinding>();
+        int handlers = AuditHandlers(findings);
+        int checks = AuditConfigChecks(findings);
+        int consumers = AuditOptions(findings);
+        return new StaticResult(findings, handlers, checks, consumers);
+    }
+
+    private int AuditHandlers(List<WiringFinding> findings)
+    {
         if (_services.GetService<Handlers.OpcodeTable>() is not { } table)
         {
             return 0;
@@ -255,7 +278,8 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        lifetime.ApplicationStarted.Register(Report);
+        // Reflection over every referenced assembly: keep it off the thread that signals ApplicationStarted. Report never throws.
+        lifetime.ApplicationStarted.Register(() => _ = Task.Run(Report));
         return Task.CompletedTask;
     }
 

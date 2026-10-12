@@ -224,6 +224,42 @@ public sealed class WiringAuditTests
         Assert.False(withQa.IsInvalid, string.Join("; ", withQa.Issues.Select(i => i.ToString())));
     }
 
+    [Theory]
+    [InlineData("GhCli", "false", false)] // gh uses its own login: no token needed, no warning
+    [InlineData("GhCli", "true", true)]   // the token is handed to gh: it must exist
+    [InlineData("Rest", "false", true)]
+    public void QaTokenWarning_AppliesOnlyWhenThePublisherNeedsTheToken(string transport, string passToken, bool warns)
+    {
+        const string variable = "ARCANECORE_TEST_QA_TOKEN_NOT_SET";
+        IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:Playerbots:Qa:GitHub:Enabled"] = "true",
+            ["World:Playerbots:Qa:GitHub:Publish"] = "true",
+            ["World:Playerbots:Qa:GitHub:Repository"] = "owner/repo",
+            ["World:Playerbots:Qa:GitHub:Transport"] = transport,
+            ["World:Playerbots:Qa:GitHub:GhPassToken"] = passToken,
+            ["World:Playerbots:Qa:GitHub:TokenEnvironmentVariable"] = variable,
+        }).Build();
+        ConfigIssue[] issues = [.. new PlayerbotQaConfigChecks().Check(config).Where(i => i.Key.EndsWith("TokenEnvironmentVariable", StringComparison.Ordinal))];
+        Assert.Equal(warns, issues.Length == 1);
+        Assert.All(issues, i => Assert.Equal(ConfigSeverity.Warning, i.Severity));
+    }
+
+    [Fact]
+    public void Audit_StaticCategoriesAreComputedOnce_UnhandledCountsStayLive()
+    {
+        var tracker = new UnhandledOpcodeTracker();
+        var services = new ServiceCollection();
+        services.AddSingleton(tracker);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        var audit = new WiringAudit(provider, [typeof(WiringAuditTests).Assembly], FixtureCatalog());
+        Assert.DoesNotContain(audit.Run().Findings, f => f.Category == WiringAudit.UnhandledOpcode);
+        tracker.Record(WorldOpcode.CmsgBootme);
+        WiringReport second = audit.Run();
+        Assert.Contains(second.Findings, f => f.Category == WiringAudit.UnhandledOpcode);
+        Assert.Contains(second.Findings, f => f.Category == WiringAudit.OptionsUnbound); // still reported from the cached scan
+    }
+
     [Fact]
     public void UnhandledOpcodeTracker_CountsPerOpcode_BoundsUnnamedValues_AndIsThreadSafe()
     {

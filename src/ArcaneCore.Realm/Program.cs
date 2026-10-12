@@ -1,17 +1,13 @@
-using ArcaneCore.Realm;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Ops;
-using ArcaneCore.Kernel.Ops.ServerConsole;
-using ArcaneCore.Realm.Net;
+using ArcaneCore.Realm;
 using ArcaneCore.Realm.Ops.Cli;
-using ArcaneCore.Realm.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 // The command line is read before anything is built: --help, a mistyped command and a mistyped option are answered here (exit 64) instead of
