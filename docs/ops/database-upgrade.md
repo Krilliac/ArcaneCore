@@ -203,3 +203,5 @@ do: they refuse to start on a database that lacks migrations and make the operat
 A refused start prints one line (`database schema refused: ...`, passwords removed) and exits 4 (7 for a lock timeout)
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
 plus `arcane-db upgrade` is the retail-like pair. Everything else on a start (seeding, for example) is unchanged.
+
+Characters schema v60 (`character_ownership`) is forward-only: roll back by restoring the pre-upgrade backup. How to clear a stuck ownership row is in `docs/CHARACTER_FENCING_ACCEPTANCE.md` (Operations).

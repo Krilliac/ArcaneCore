@@ -691,7 +691,9 @@ public static class SchemaBootstrapper
         string columnList = string.Join(", ", names.Select(sql.DelimitIdentifier));
         string parameters = string.Join(", ", names.Select((_, i) => "@p" + i));
         string keyParameter = "@p0"; // the key is inserted first above
-        string commandText = $"INSERT INTO {tableName} ({columnList}) SELECT {parameters} WHERE NOT EXISTS (SELECT 1 FROM {tableName} WHERE {sql.DelimitIdentifier(seed.KeyColumn)} = {keyParameter})";
+        // MariaDB/MySQL accept a WHERE on a FROM-less SELECT only with FROM DUAL; SQLite and PostgreSQL take it without.
+        string from = db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql" ? " FROM DUAL" : "";
+        string commandText = $"INSERT INTO {tableName} ({columnList}) SELECT {parameters}{from} WHERE NOT EXISTS (SELECT 1 FROM {tableName} WHERE {sql.DelimitIdentifier(seed.KeyColumn)} = {keyParameter})";
 
         await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
         command.CommandText = commandText;

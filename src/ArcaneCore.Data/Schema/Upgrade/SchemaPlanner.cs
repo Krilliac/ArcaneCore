@@ -491,7 +491,8 @@ public static class SchemaPlanner
             string literals = string.Join(", ", values.Values.Select(Literal));
             string key = sql.DelimitIdentifier(seed.KeyColumn);
             string keyLiteral = Literal(seed.KeyValue);
-            return [$"INSERT INTO {table} ({list}) SELECT {literals} WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {key} = {keyLiteral});"];
+            string from = _db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql" ? " FROM DUAL" : ""; // MariaDB/MySQL need it before a WHERE
+            return [$"INSERT INTO {table} ({list}) SELECT {literals}{from} WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {key} = {keyLiteral});"];
         }
 
         private string? InsertStatement(int version)

@@ -100,12 +100,15 @@ public sealed class CharacterOwnershipProcessTests
         private readonly Process _process;
         private readonly StreamWriter _input;
         private readonly StreamReader _output;
+        // Drained from the start so a chatty child can never block on a full stderr pipe while we wait on stdout.
+        private readonly Task<string> _error;
 
         private ChildProcess(Process process)
         {
             _process = process;
             _input = process.StandardInput;
             _output = process.StandardOutput;
+            _error = process.StandardError.ReadToEndAsync();
         }
 
         public static ChildProcess Start(string database)
@@ -132,7 +135,7 @@ public sealed class CharacterOwnershipProcessTests
             string? line = await _output.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
             if (line is null)
             {
-                string error = await _process.StandardError.ReadToEndAsync();
+                string error = await _error.WaitAsync(TimeSpan.FromSeconds(15));
                 throw new InvalidOperationException($"ownership process exited before replying: {error}");
             }
 
@@ -149,6 +152,7 @@ public sealed class CharacterOwnershipProcessTests
             }
 
             await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await _error.WaitAsync(TimeSpan.FromSeconds(15));
             _process.Dispose();
         }
 

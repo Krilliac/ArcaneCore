@@ -92,7 +92,7 @@ public sealed class QuestOwnershipFencingTests : IAsyncLifetime
             await SchemaBootstrapper.EnsureAsync(setup, CharacterDbContext.Schema);
             characterId = (await new EfCharacterStore(setup).CreateAsync(new CharacterRecord
             {
-                AccountId = 2, Name = "QuestRollback", Race = 1, Class = 1, Level = 10,
+                AccountId = 2, Name = "QuestRollbk", Race = 1, Class = 1, Level = 10,
             })).Id;
         }
 
