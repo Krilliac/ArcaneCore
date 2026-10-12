@@ -523,6 +523,29 @@ public sealed class GameObjectTests
     }
 
     [Fact]
+    public void QuestChest_LeanViewerThatNeedsItsLoot_CausesNoForcedUpdateToARealViewer()
+    {
+        Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
+        (Player lean, FakeSession leanSession) = Player(1);
+        (Player real, FakeSession realSession) = Player(2, 1, 0);
+        leanSession.WantsUpdateObjects = false;
+        rig.World.AddPlayer(lean);
+        rig.World.AddPlayer(real);
+        rig.World.RunTick(50);
+        GameObject chest = rig.Single(QuestChestEntry);
+        rig.World.RunTick(1000); // a refresh has seen both viewers with no need
+        DrainBlocks(realSession);
+        Assert.Empty(Packets(leanSession, WorldOpcode.SmsgUpdateObject));
+
+        rig.Quests.Needs.Add((lean.Guid, QuestItem)); // only the viewer that reads no update blocks needs the chest
+        rig.World.RunTick(1000);
+        rig.World.RunTick(1000);
+
+        Assert.DoesNotContain(DrainBlocks(realSession), b => b.Type == ObjectUpdateType.Values && b.Guids.Contains(chest.Guid.Value));
+        Assert.Empty(Packets(leanSession, WorldOpcode.SmsgUpdateObject));
+    }
+
+    [Fact]
     public void QuestChest_WithQuestItemOnlyForOthers_ShowsNothingToANonNeedingOpener()
     {
         Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);

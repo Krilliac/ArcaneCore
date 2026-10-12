@@ -1445,6 +1445,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             bool changed = false;
             foreach (Player viewer in Map.ObserversOf(go))
             {
+                // A Lean bot builds no values block, so nothing it is "sent" can go stale; counting it would force an update to every real viewer.
+                if (!viewer.Session.WantsUpdateObjects)
+                {
+                    continue;
+                }
+
                 // A viewer never sent this field (not built yet) has seen none of it: any quest flag is news to it.
                 uint now = (uint)QuestFlagsFor(go, viewer);
                 if (sent.GetValueOrDefault(viewer) != now)
