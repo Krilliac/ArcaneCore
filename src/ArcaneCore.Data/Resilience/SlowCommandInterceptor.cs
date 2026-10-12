@@ -14,15 +14,20 @@ namespace ArcaneCore.Data.Resilience;
 /// type, the duration, whether it ran inside a transaction or autocommitted, whether it was a write or a read, the first
 /// <see cref="SqlPrefixLength"/> characters of the SQL and a caller hint (<see cref="SlowTransactionInterceptor.CallerHint"/>).
 /// <para>
-/// The duration is EF's own measurement of the execute call (<see cref="CommandEndEventData.Duration"/>), so nothing is stamped per command and the hot path
-/// costs one comparison; only an over-threshold command formats a message and captures a stack trace. For a reader that is the time until
+/// The duration is EF's own measurement of the execute call (<see cref="CommandEndEventData.Duration"/>), so this type stamps nothing per command and its own
+/// check is one comparison; only an over-threshold command formats a message and captures a stack trace. Registering any command interceptor is not free
+/// for EF itself, though: it no longer skips building command event data (its logging-suppression cache is off while an <c>IDbCommandInterceptor</c> is
+/// present), so EF allocates that data for every command on every database, whatever the threshold. For a reader that is the time until
 /// <c>ExecuteReader</c> returns (SQLite steps the first row there, so a lock wait is inside it), not the time spent reading rows. A failed command is
 /// reported too (a busy-timeout failure is exactly the case wanted). Parameter values are never read: only <see cref="DbCommand.CommandText"/> is
-/// logged, and since a caller could still have concatenated a value into it, quoted strings and numeric literals in the printed prefix are replaced by <c>?</c>.
+/// logged, and since a caller could still have concatenated a value into it, the printed prefix masks single- and double-quoted text (a backslash escapes the next
+/// character inside quotes, which over-masks standard-SQL strings rather than leak a MariaDB or <c>E'..'</c> one) and numeric literals as <c>?</c>, and drops
+/// comments. A double-quoted name is kept only straight after FROM, INTO, UPDATE, JOIN or TABLE, where it can only be a table name (EF quotes those with
+/// double quotes on SQLite and PostgreSQL); every other double-quoted name, e.g. a column, prints as <c>"?"</c>.
 /// </para>
 /// <para>
 /// Identical warnings (same caller and same SQL prefix) are limited to one per <see cref="WindowSeconds"/> seconds; the next one that is let through
-/// states how many were suppressed, so a lock storm cannot flood the log. The limiter is a small lock-protected table, touched only on the over-threshold path,
+/// states how many were suppressed since the previous warning for that caller and SQL, so a lock storm cannot flood the log. The limiter is a small lock-protected table, touched only on the over-threshold path,
 /// pruned when it grows. Immutable threshold and logger plus that table; thread-safe; one instance per host (a singleton, like the transaction interceptor).
 /// Applies to every provider.
 /// </para>
@@ -118,9 +123,9 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
         }
 
         _logger.LogWarning(
-            "slow database command on {Context}: {DurationMs} ms ({Outcome}; {Mode}; {Kind}; warns at {ThresholdMs} ms): {Sql}. The wait is inside the database (a held write lock or slow I/O), so other writers may have failed as locked. Called from {Caller}. {Suppressed} identical warnings suppressed in the last {WindowSeconds} s",
+            "slow database command on {Context}: {DurationMs} ms ({Outcome}; {Mode}; {Kind}; warns at {ThresholdMs} ms): {Sql}. The wait is inside the database (a held write lock or slow I/O), so other writers may have failed as locked. Called from {Caller}. {Suppressed} identical warnings suppressed since the previous warning for this caller",
             eventData.Context?.GetType().Name ?? "(unknown context)", (long)eventData.Duration.TotalMilliseconds, failed ? "failed" : "completed",
-            command.Transaction is null ? "autocommit, no transaction" : "inside a transaction", kind, ThresholdMs, prefix, caller, suppressed, WindowSeconds);
+            command.Transaction is null ? "autocommit, no transaction" : "inside a transaction", kind, ThresholdMs, prefix, caller, suppressed);
     }
 
     /// <summary>-1 when an identical warning was logged within the window (this one is counted and dropped); otherwise how many were dropped since the last one.</summary>
@@ -177,8 +182,9 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
     }
 
     /// <summary>
-    /// The first <see cref="SqlPrefixLength"/> characters of the SQL with leading comments skipped, whitespace collapsed and quoted strings and numeric literals masked
-    /// as <c>?</c>; <paramref name="kind"/> is "write" (INSERT, UPDATE, DELETE, REPLACE), "read" (SELECT) or "other".
+    /// The first <see cref="SqlPrefixLength"/> characters of the SQL with comments dropped, whitespace collapsed, quoted text and numeric literals masked as <c>?</c>
+    /// (see the class remarks for the quoting rules); <paramref name="kind"/> is "write" (INSERT, UPDATE, DELETE, REPLACE, also behind a WITH clause), "read" (SELECT,
+    /// also behind a WITH clause) or "other".
     /// </summary>
     internal static string SqlPrefix(string sql, out string kind)
     {
@@ -207,6 +213,7 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
 
         kind = Classify(sql, i);
         var text = new StringBuilder(SqlPrefixLength + 8);
+        string lastWord = string.Empty;
         bool pendingSpace = false;
         bool truncated = false;
         for (; i < sql.Length; i++)
@@ -224,6 +231,22 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
                 continue;
             }
 
+            if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                int newline = sql.IndexOf('\n', i);
+                i = newline < 0 ? sql.Length : newline;
+                pendingSpace = text.Length > 0;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            {
+                int close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = close < 0 ? sql.Length : close + 1;
+                pendingSpace = text.Length > 0;
+                continue;
+            }
+
             if (pendingSpace)
             {
                 text.Append(' ');
@@ -232,15 +255,26 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
 
             if (c == '\'')
             {
-                i++;
-                while (i < sql.Length && !(sql[i] == '\'' && !(i + 1 < sql.Length && sql[i + 1] == '\'')))
+                i = SkipQuoted(sql, i);
+                text.Append("'?'");
+                lastWord = string.Empty;
+            }
+            else if (c == '"')
+            {
+                int end = SkipQuoted(sql, i);
+                if (IsTablePosition(lastWord) && IsPlainName(sql, i + 1, end))
                 {
-                    i += sql[i] == '\'' ? 2 : 1;
+                    text.Append(sql, i, end - i + 1);
+                }
+                else
+                {
+                    text.Append("\"?\"");
                 }
 
-                text.Append("'?'");
+                i = end;
+                lastWord = string.Empty;
             }
-            else if (char.IsAsciiDigit(c) && (i == 0 || !IsIdentifierPart(sql[i - 1])))
+            else if (IsNumberStart(sql, i))
             {
                 while (i + 1 < sql.Length && (char.IsAsciiLetterOrDigit(sql[i + 1]) || sql[i + 1] == '.'))
                 {
@@ -248,10 +282,25 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
                 }
 
                 text.Append('?');
+                lastWord = string.Empty;
+            }
+            else if (char.IsLetter(c) || c == '_')
+            {
+                int start = i;
+                while (i + 1 < sql.Length && (char.IsLetterOrDigit(sql[i + 1]) || sql[i + 1] == '_'))
+                {
+                    i++;
+                }
+
+                int take = Math.Min(i - start + 1, Math.Max(0, SqlPrefixLength - text.Length));
+                text.Append(sql, start, take);
+                truncated |= take < i - start + 1;
+                lastWord = sql.Substring(start, i - start + 1).ToUpperInvariant();
             }
             else
             {
                 text.Append(c);
+                lastWord = string.Empty;
             }
         }
 
@@ -261,6 +310,74 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// The index of the closing quote of the quoted text that opens at <paramref name="open"/> (the quote character), or the last index when unterminated.
+    /// A doubled quote is one character of text; a backslash escapes the next character (MariaDB, PostgreSQL <c>E'..'</c>), so a standard-SQL string ending in a
+    /// backslash over-masks what follows instead of leaking.
+    /// </summary>
+    private static int SkipQuoted(string sql, int open)
+    {
+        char quote = sql[open];
+        int i = open + 1;
+        while (i < sql.Length)
+        {
+            if (sql[i] == '\\')
+            {
+                i += 2;
+            }
+            else if (sql[i] == quote)
+            {
+                if (i + 1 < sql.Length && sql[i + 1] == quote)
+                {
+                    i += 2;
+                }
+                else
+                {
+                    return i;
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return sql.Length - 1;
+    }
+
+    private static bool IsTablePosition(string lastWord) => lastWord is "FROM" or "INTO" or "UPDATE" or "JOIN" or "TABLE";
+
+    /// <summary>Whether sql[from..closingQuote) is a plain name (letters, digits, underscore) and the quote really closes.</summary>
+    private static bool IsPlainName(string sql, int from, int closingQuote)
+    {
+        if (closingQuote <= from || closingQuote >= sql.Length || sql[closingQuote] != '"')
+        {
+            return false;
+        }
+
+        for (int k = from; k < closingQuote; k++)
+        {
+            if (!(char.IsAsciiLetterOrDigit(sql[k]) || sql[k] == '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A digit that does not continue a name, or a '.' followed by a digit that does not continue one (".5").</summary>
+    private static bool IsNumberStart(string sql, int i)
+    {
+        char c = sql[i];
+        if (char.IsAsciiDigit(c))
+        {
+            return i == 0 || !IsIdentifierPart(sql[i - 1]);
+        }
+
+        return c == '.' && i + 1 < sql.Length && char.IsAsciiDigit(sql[i + 1]) && (i == 0 || !(IsIdentifierPart(sql[i - 1]) && sql[i - 1] != '.'));
     }
 
     /// <summary>Only the classification of <see cref="SqlPrefix"/>.</summary>
@@ -275,6 +392,16 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
     private static string Classify(string sql, int start)
     {
         ReadOnlySpan<char> rest = sql.AsSpan(start);
+        if (StartsWithWord(rest, "WITH"))
+        {
+            return ClassifyAfterWith(sql, start);
+        }
+
+        return KindOf(rest);
+    }
+
+    private static string KindOf(ReadOnlySpan<char> rest)
+    {
         if (StartsWithWord(rest, "SELECT"))
         {
             return "read";
@@ -285,8 +412,53 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
             : "other";
     }
 
+    /// <summary>
+    /// For <c>WITH name AS (...), ... main-statement</c>: the kind of the first statement keyword outside every parenthesis and quote (the CTE bodies are skipped), or
+    /// "other" when none is found.
+    /// </summary>
+    private static string ClassifyAfterWith(string sql, int start)
+    {
+        int depth = 0;
+        for (int i = start; i < sql.Length; i++)
+        {
+            char c = sql[i];
+            if (c is '\'' or '"' or '`')
+            {
+                i = SkipQuoted(sql, i);
+            }
+            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                int newline = sql.IndexOf('\n', i);
+                i = newline < 0 ? sql.Length : newline;
+            }
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            {
+                int close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = close < 0 ? sql.Length : close + 1;
+            }
+            else if (c == '(')
+            {
+                depth++;
+            }
+            else if (c == ')')
+            {
+                depth--;
+            }
+            else if (depth == 0 && char.IsLetter(c) && (i == 0 || !(char.IsLetterOrDigit(sql[i - 1]) || sql[i - 1] == '_')))
+            {
+                string kind = KindOf(sql.AsSpan(i));
+                if (kind != "other")
+                {
+                    return kind;
+                }
+            }
+        }
+
+        return "other";
+    }
+
     private static bool StartsWithWord(ReadOnlySpan<char> text, string word)
-        => text.StartsWith(word, StringComparison.OrdinalIgnoreCase) && (text.Length == word.Length || !char.IsLetterOrDigit(text[word.Length]));
+        => text.StartsWith(word, StringComparison.OrdinalIgnoreCase) && (text.Length == word.Length || !(char.IsLetterOrDigit(text[word.Length]) || text[word.Length] == '_'));
 
     private sealed class Limit
     {

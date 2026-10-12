@@ -152,6 +152,35 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    public void TheSqlPrefix_MasksDoubleQuotedText_KeepsOnlyTableNames_HandlesBackslashEscapes_LeadingDotNumbers_AndDropsComments()
+    {
+        // An EF-generated SQLite statement stays attributable: the table survives, columns and aliases do not.
+        Assert.Equal("UPDATE \"characters\" SET \"?\" = @p0 WHERE \"?\" = @p1 RETURNING ?;",
+            SlowCommandInterceptor.SqlPrefix("UPDATE \"characters\" SET \"Name\" = @p0\nWHERE \"Id\" = @p1\nRETURNING 1;", out _));
+        Assert.Equal("SELECT \"?\".\"?\" FROM \"characters\" AS \"?\"", SlowCommandInterceptor.SqlPrefix("SELECT \"c\".\"Id\" FROM \"characters\" AS \"c\"", out _));
+        Assert.Equal("SELECT * FROM \"?\" WHERE a = \"?\"", SlowCommandInterceptor.SqlPrefix("SELECT * FROM \"two words\" WHERE a = \"hunter2\"", out _));
+
+        Assert.Equal("WHERE n = '?' AND m = ?", SlowCommandInterceptor.SqlPrefix("WHERE n = 'it\\'s secret' AND m = 1", out _));
+        Assert.Equal("WHERE n = E'?' AND m = ?", SlowCommandInterceptor.SqlPrefix("WHERE n = E'a\\'b secret' AND m = 1", out _));
+        Assert.Equal("WHERE n = '?'", SlowCommandInterceptor.SqlPrefix("WHERE n = 'o''brien secret'", out _));
+
+        Assert.Equal("WHERE x > ? AND y = ? AND z = t.c", SlowCommandInterceptor.SqlPrefix("WHERE x > .5 AND y = 1.5e3 AND z = t.c", out _));
+
+        Assert.Equal("SELECT ? FROM t WHERE a = ?", SlowCommandInterceptor.SqlPrefix("SELECT 1 /* secret1 */ FROM t -- secret2 42\n WHERE a = 2", out _));
+    }
+
+    [Fact]
+    public void AWithStatement_IsClassifiedByItsMainStatement()
+    {
+        Assert.Equal("write", SlowCommandInterceptor.SqlPrefixKind("WITH c AS (SELECT 1) UPDATE t SET a = 1"));
+        Assert.Equal("write", SlowCommandInterceptor.SqlPrefixKind("WITH r AS (SELECT 1), s AS (SELECT 2) INSERT INTO t SELECT * FROM r"));
+        Assert.Equal("write", SlowCommandInterceptor.SqlPrefixKind("-- tag\nWITH r AS (SELECT 'delete') DELETE FROM t"));
+        Assert.Equal("read", SlowCommandInterceptor.SqlPrefixKind("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 3) SELECT x FROM c"));
+        Assert.Equal("read", SlowCommandInterceptor.SqlPrefixKind("WITH update_x AS (SELECT 1) SELECT 1 FROM update_x"));
+        Assert.Equal("other", SlowCommandInterceptor.SqlPrefixKind("WITH c AS (SELECT 1)"));
+    }
+
+    [Fact]
     public async Task AFastCommand_AndAZeroThreshold_AreNotLogged()
     {
         var fast = new CaptureProvider();
