@@ -358,12 +358,16 @@ public sealed class SqliteCheckpointTests : IDisposable
         Task<TimeSpan> writes = Task.Run(() =>
         {
             TimeSpan worst = TimeSpan.Zero;
-            for (int i = 0; Volatile.Read(ref stop) == 0 || i < 5; i++)
+            long loopStart = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            // The writer never pauses and auto-checkpoint is off, so only the PASSIVE checkpoints under test can let SQLite restart the WAL from the top. It rewrites a bounded set of rows (REPLACE, not INSERT) so the database
+            // and the log stay small even when the runner's disk is slow and the checkpoints are starved; the wall-clock deadline is a backstop that ends the loop if the checkpoint side never signals stop.
+            for (int i = 0; (Volatile.Read(ref stop) == 0 && System.Diagnostics.Stopwatch.GetElapsedTime(loopStart) < TimeSpan.FromSeconds(30)) || i < 5; i++)
             {
                 long begin = System.Diagnostics.Stopwatch.GetTimestamp();
                 using SqliteCommand command = writer.CreateCommand();
-                command.CommandText = "INSERT INTO t VALUES ($id, zeroblob(3000))";
-                command.Parameters.AddWithValue("$id", 100_000 + i);
+                command.CommandText = "INSERT OR REPLACE INTO t VALUES ($id, zeroblob(3000))";
+                command.Parameters.AddWithValue("$id", 100_000 + (i % 256));
                 command.ExecuteNonQuery();
                 TimeSpan took = System.Diagnostics.Stopwatch.GetElapsedTime(begin);
                 worst = took > worst ? took : worst;
