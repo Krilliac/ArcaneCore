@@ -113,9 +113,11 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             return false;
         }
 
-        if (player.Movement.HasFlag(MovementFlags.MaskMoving))
+        // The bot stops (an unbudgeted report, as a client's own) and casts in this same think: a stop that waited for the next think
+        // cost a gap of seconds with a thousand bots. Only a stop the server did not take leaves the cast to the next think.
+        if (player.Movement.HasFlag(MovementFlags.MaskMoving)
+            && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
         {
-            PlayerbotMovementControl.Stop(session, player);
             return true;
         }
 

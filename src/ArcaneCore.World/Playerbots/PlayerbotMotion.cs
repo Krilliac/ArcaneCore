@@ -65,6 +65,10 @@ internal static class PlayerbotMotion
         internal PlayerbotOptions? Options;
         internal uint LeaseMs;
         internal uint RenewedMs;
+        /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
+        internal uint Renewals;
+        /// <summary>The bot's think gap in ms, smoothed (<see cref="NoteThinkGap"/>); 0 until the first measured gap.</summary>
+        internal uint GapMs;
         internal readonly PlayerbotLoopDetector Loops = new();
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
@@ -157,7 +161,8 @@ internal static class PlayerbotMotion
     /// MSG_MOVE_START_FORWARD, switches to a different route with a heartbeat carrying the new orientation, and renews
     /// the lease on the current route. False when the bot cannot move along it (the caller drops the route).
     /// </summary>
-    internal static bool Follow(WorldSession session, Player player, PlayerbotRoute route, PlayerbotOptions options, uint now)
+    internal static bool Follow(WorldSession session, Player player, PlayerbotRoute route, PlayerbotOptions options, uint now,
+        bool keepMotion = false)
     {
         MotionState state = Of(player);
         state.World = session.World;
@@ -166,27 +171,31 @@ internal static class PlayerbotMotion
         if (route.Complete || route.Points.Count < 2) return false;
         if (IsBlacklisted(player, route.Points[^1]))
         {
-            Stop(session, player);
+            if (!keepMotion) Stop(session, player);
             return false;
         }
 
         if (state.Active && ReferenceEquals(state.Route, route))
         {
             state.RenewedMs = now;
-            state.LeaseMs = Lease(options);
+            state.LeaseMs = Lease(options, state);
+            state.Renewals++;
             Pump(session, player, now);
             return state.Active || route.Complete;
         }
 
         if ((player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0)
         {
-            Stop(session, player);
+            if (!keepMotion) Stop(session, player);
             return false;
         }
 
+        // A stun, fear or confusion pauses the walk: nothing starts (no packet), and the caller keeps its route (TryAdvance answers true).
+        if (ControlLost(player)) return false;
+
         if (!Speed(player, options.MoveSpeed, out float speed, out bool walk))
         {
-            Stop(session, player);
+            if (!keepMotion) Stop(session, player);
             return false;
         }
 
@@ -208,7 +217,7 @@ internal static class PlayerbotMotion
             HeadingTo(current, route.Points[route.NextPoint]), out int probed, out _, out _, out _);
         if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, route, route.NextPoint, probed, current, probe) is null)
         {
-            Stop(session, player);
+            if (!keepMotion) Stop(session, player);
             return false;
         }
 
@@ -230,9 +239,11 @@ internal static class PlayerbotMotion
         state.Walk = walk;
         state.MoveSpeedCap = options.MoveSpeed;
         state.RenewedMs = now;
-        state.LeaseMs = Lease(options);
+        state.LeaseMs = Lease(options, state);
+        state.Renewals++;
         PlayerbotAreaTriggers.Begin(session, player, map, current, options);
-        if (state.Loops.OnRoute(route.Points[^1], now) is { } loop)
+        // A chase follows a moving target: its destinations are not a back-and-forth (kiting a mob must not blacklist the spot).
+        if (!route.Chase && state.Loops.OnRoute(route.Points[^1], now) is { } loop)
         {
             GiveUp(session, player, state, loop, now);
             return false;
@@ -264,6 +275,7 @@ internal static class PlayerbotMotion
         uint age = Age(now, state.AnchorMs);
         if (age == 0) return;
         if ((player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0
+            || ControlLost(player)
             || player.StandState != StandState.Stand || Age(now, state.RenewedMs) > state.LeaseMs)
         {
             StopMotion(session, player, state, now);
@@ -646,10 +658,99 @@ internal static class PlayerbotMotion
     private static bool ValidHeight(float height)
         => float.IsFinite(height) && height != TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;
 
+    /// <summary>A stun, fear or confusion: the bot does not walk its own routes (<see cref="Pump"/> stops it, nothing starts it) until it ends.</summary>
+    internal static bool ControlLost(Player player)
+        => (player.UnitFlags & (UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing)) != 0;
+
     /// <summary>Alive, or a ghost running back to its corpse; a corpse lying on the ground does not move.</summary>
     internal static bool CanMove(Player player) => player.IsAlive || (player.Flags & PlayerFlags.Ghost) != 0;
 
-    private static uint Lease(PlayerbotOptions options) => (uint)Math.Max(2000, options.ThinkIntervalMs * 4);
+    /// <summary>The longest lease a measured think gap can ask for (<see cref="Lease"/>).</summary>
+    internal const uint MaxGapLeaseMs = 15_000;
+
+    /// <summary>
+    /// How long a route stays walked after the think that last followed it: <c>max(2000, 4 × ThinkIntervalMs, 2 × smoothed think gap)</c>,
+    /// the gap term held to <see cref="MaxGapLeaseMs"/>. Only a think that follows the route again renews it, and with a thousand bots the
+    /// rotation (<see cref="PlayerbotThinkRotation"/>) thinks for a bot every few seconds, not every <c>ThinkIntervalMs</c>: a fixed
+    /// lease of 2 s stopped every bot well before its next think and it stood until then (live 2026-10-12: walk 5 s, stop, wait, walk).
+    /// A route the brain gives up is stopped by the brain (see <see cref="PlayerbotBrain.TakeRouteAbandoned"/>), not left to the lease.
+    /// </summary>
+    private static uint Lease(PlayerbotOptions options, MotionState state)
+    {
+        uint floor = (uint)Math.Max(2000, options.ThinkIntervalMs * 4);
+        uint gap = Math.Min(state.GapMs, MaxGapLeaseMs / 2) * 2;
+        return Math.Max(floor, gap);
+    }
+
+    /// <summary>
+    /// A think of this bot ran <paramref name="sinceLast"/> ms after its previous one: fold it into the smoothed gap (an exponentially
+    /// weighted average, weight 1/4). A gap of 0 (two thinks in one clock reading) is no measure; the first measured gap is taken as is.
+    /// </summary>
+    internal static void NoteThinkGap(Player player, uint sinceLast)
+    {
+        if (sinceLast == 0 || sinceLast > int.MaxValue) return;
+        MotionState state = Of(player);
+        uint sample = Math.Min(sinceLast, MaxGapLeaseMs);
+        state.GapMs = state.GapMs == 0 ? sample : (uint)((state.GapMs * 3L + sample + 2) / 4);
+    }
+
+    /// <summary>
+    /// After a think: when it gave up its route or changed its goal (<paramref name="gaveUp"/>) and neither kept nor started a route
+    /// (<paramref name="renewalsBefore"/> is <see cref="RenewalsOf"/> before the think), the bot is stopped: the lease would let it walk
+    /// the stale route for seconds. A tile wait is judged per route, not here: a think that keeps the route it has while a plan waits
+    /// renews it (the chase), and an unrelated wait in the same think does not keep a route the brain gave up. True when it stopped the bot.
+    /// A think with <paramref name="sinceLast"/> 0 (a second think in one clock reading, which the rotation never makes in play) decided
+    /// nothing a gap could stale, and its caller is a test that steps by hand: it is skipped.
+    /// </summary>
+    internal static bool SettleAfterThink(WorldSession session, Player player, bool gaveUp, uint renewalsBefore, uint sinceLast)
+    {
+        if (!gaveUp || sinceLast == 0 || !IsActive(player)) return false;
+        if (RenewalsOf(player) != renewalsBefore) return false;
+        Stop(session, player);
+        return true;
+    }
+
+    /// <summary>The bot's smoothed think gap in ms (<see cref="NoteThinkGap"/>), or 0 when none was measured.</summary>
+    internal static uint ThinkGapMs(Player player) => States.TryGetValue(player, out MotionState? state) ? state.GapMs : 0;
+
+    /// <summary>The lease the bot's route has now, in ms (0 when it follows none).</summary>
+    internal static uint LeaseMsOf(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active ? state.LeaseMs : 0;
+
+    /// <summary>How many times a think started or kept the bot's route; compare before and after a think to learn whether it did.</summary>
+    internal static uint RenewalsOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.Renewals : 0;
+
+    /// <summary>
+    /// How long the bot needs to walk the rest of <paramref name="route"/> (the one it is moving along now), from its position now.
+    /// False when it does not move along that route.
+    /// </summary>
+    internal static bool TryTimeToEnd(Player player, PlayerbotRoute route, out uint remainingMs)
+    {
+        remainingMs = 0;
+        if (!TryYardsToEnd(player, route, out float yards) || !States.TryGetValue(player, out MotionState? state)) return false;
+        remainingMs = (uint)Math.Min(uint.MaxValue / 2f, yards / state.Speed * 1000f);
+        return true;
+    }
+
+    /// <summary>How many flat yards of <paramref name="route"/> the bot has left to walk, from its position now. False when it does not move along that route.</summary>
+    internal static bool TryYardsToEnd(Player player, PlayerbotRoute route, out float yards)
+    {
+        yards = 0;
+        if (!States.TryGetValue(player, out MotionState? state) || !ReferenceEquals(state.Route, route) || state.World is not { } world
+            || !ReferenceEquals(player.Map, state.Map) || !(state.Speed > 0)) return false;
+        Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(world.NowMs, state.AnchorMs) / 1000f, state.Heading,
+            out int nextPoint, out _, out bool arrived, out _);
+        if (!arrived)
+        {
+            Vector3 at = position;
+            for (int point = Math.Max(1, nextPoint); point < route.Points.Count; point++)
+            {
+                yards += Vector2.Distance(Flat(at), Flat(route.Points[point]));
+                at = route.Points[point];
+            }
+        }
+
+        return float.IsFinite(yards);
+    }
 
     private static uint Age(uint now, uint then)
     {

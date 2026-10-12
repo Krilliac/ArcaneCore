@@ -32,6 +32,26 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private PlayerbotRoute? _route;
+    private bool _routeAbandoned;
+
+    /// <summary>
+    /// The brain gives up its route. The motion keeps walking a route for its lease (<see cref="PlayerbotMotion"/>: seconds, as long as
+    /// the bot's think gap), so a route given up and not replaced is told to the host (<see cref="TakeRouteAbandoned"/>), which stops
+    /// the bot when no think followed another route.
+    /// </summary>
+    private void AbandonRoute()
+    {
+        if (_route is not null) _routeAbandoned = true;
+        _route = null;
+    }
+
+    /// <summary>True once after a think gave up a route (<see cref="AbandonRoute"/>).</summary>
+    internal bool TakeRouteAbandoned()
+    {
+        bool abandoned = _routeAbandoned;
+        _routeAbandoned = false;
+        return abandoned;
+    }
     private PlayerbotRoute? _waterRoute;
     private uint _waterRetryAt;
     private uint _dryMs;
@@ -457,7 +477,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 _stall.Reset();
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
                 return;
             }
@@ -477,7 +497,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 _stall.Reset();
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
                 return;
             }
@@ -501,7 +521,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             // goals choose again; the looped destinations are refused by PlayerbotNavigation.TryPlan meanwhile.
             if (_target is { } looped) MarkUnreachable(looped);
             _target = null;
-            _route = null;
+            AbandonRoute();
             _attacking = false;
             TargetEntry = 0;
             _goal = PlayerbotGoalKind.Explore;
@@ -562,7 +582,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _lootOpened = false;
                 _lootResponseReceived = false;
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
                 Rest(player);
             }
@@ -595,13 +615,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_attacking || player.Combat.Victim is not null)
             {
                 if (_session.TryManagedAction(WorldOpcode.CmsgAttackstop, []))
-                { _attacking = false; _target = null; _route = null; }
+                { _attacking = false; _target = null; AbandonRoute(); }
                 return;
             }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
             { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             _target = null;
-            _route = null;
+            AbandonRoute();
             PlayerbotThinkProbe.Phase("quest destinations");
             // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
             // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
@@ -626,7 +646,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _target = outgoingVictim;
             if (changed)
             {
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
             }
             _lootOpened = false;
@@ -643,7 +663,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _target = defensiveAttacker;
             if (changed)
             {
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
             }
             _lootOpened = false;
@@ -661,7 +681,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             // Combat linger after an ordinary attack stop must not reopen an optional
             // grind target. Let the authoritative combat timer/handler clear the state.
             _target = null;
-            _route = null;
+            AbandonRoute();
             _attacking = false;
             _lootOpened = false;
             TargetEntry = 0;
@@ -708,7 +728,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_equipment.Update(player))
             {
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 _attacking = false;
                 TargetEntry = 0;
                 _goal = PlayerbotGoalKind.Explore;
@@ -749,12 +769,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_attacking || player.Combat.Victim is not null)
                 {
                     if (_session.TryManagedAction(WorldOpcode.CmsgAttackstop, []))
-                    { _attacking = false; _target = null; _route = null; }
+                    { _attacking = false; _target = null; AbandonRoute(); }
                     _goal = PlayerbotGoalKind.Train;
                     return;
                 }
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 if (_trainers.Update(player, interval))
                 { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
             }
@@ -771,7 +791,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_destinations.Update(player, 0, interval))
                 {
                     _target = null;
-                    _route = null;
+                    AbandonRoute();
                     _attacking = false;
                     _goal = PlayerbotGoalKind.Quest;
                     TargetEntry = _destinations.TargetEntry;
@@ -794,7 +814,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _rangedIdleMs = 0;
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
-            if (_target is not null || previousTarget is not null) _route = null;
+            if (_target is not null || previousTarget is not null) AbandonRoute();
             _attacking = false;
             _lootOpened = false;
             if (_target is null)
@@ -802,7 +822,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 PlayerbotThinkProbe.Phase("grind destinations");
                 if (_destinations.Update(player, _quests.PreferredCreatureEntry, interval))
                 {
-                    _route = null;
+                    AbandonRoute();
                     _goal = _quests.PreferredCreatureEntry != 0 ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
                     TargetEntry = _destinations.TargetEntry;
                     if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
@@ -849,7 +869,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 // In range: stand and let the rotation cast (or wand) at the next decision.
                 _rangedIdleMs = fightingBot ? 0 : _rangedIdleMs + interval;
-                _route = null;
+                AbandonRoute();
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 _goal = PlayerbotGoalKind.Combat;
                 return;
@@ -858,22 +878,48 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
                 PlayerbotThinkProbe.Phase("chase");
-                PlanOutcome chase = PlanOutcome.Route;
-                if (_route is null)
-                    chase = PlayerbotNavigation.PlanExact(player, new System.Numerics.Vector3(target.X, target.Y, target.Z), _options,
-                        ref _tileWait, _session.World.NowMs, out _route);
-                if (chase == PlanOutcome.Pending) return; // keep the target, ask again next think
-                if (chase == PlanOutcome.Refused)
+                var chaseGoal = new System.Numerics.Vector3(target.X, target.Y, target.Z);
+                // A route walked to its end, or whose end the target has left by more than ChaseReplanYards, is planned again in
+                // this think (it was dropped here at the next think, and planned at the one after: two think gaps per re-chase).
+                if (_route is null || ChaseRouteStale(player, _route, chaseGoal))
                 {
-                    MarkUnreachable(target);
-                    _target = null;
-                    PlayerbotMovementControl.Stop(_session, player);
-                    return;
+                    PlanOutcome chase = PlayerbotNavigation.PlanExact(player, chaseGoal, _options, ref _tileWait,
+                        _session.World.NowMs, out PlayerbotRoute? fresh);
+                    if (chase == PlanOutcome.Pending)
+                    {
+                        // A tile of the way is being read: keep the target, ask again next think, and keep walking the route still in
+                        // hand (its lease renewed) rather than standing for the wait.
+                        if (_route is { Complete: false } held
+                            && !PlayerbotNavigation.TryAdvance(_session, held, _options, interval, _session.World.NowMs))
+                            AbandonRoute();
+                        return;
+                    }
+
+                    if (chase == PlanOutcome.Refused)
+                    {
+                        MarkUnreachable(target);
+                        _target = null;
+                        AbandonRoute();
+                        PlayerbotMovementControl.Stop(_session, player);
+                        return;
+                    }
+
+                    if (_route is not null && !ReferenceEquals(_route, fresh)) AbandonRoute(); // the old route is replaced, not kept
+                    _route = fresh;
+                    if (fresh is not null)
+                    {
+                        // The loop watch ignores a chase (PlayerbotMotion.Follow); the goal it was planned to is what "the target moved" is
+                        // measured from, and a route cut short of it (MaxRouteYards, MaxPathPoints) is re-planned only once mostly walked.
+                        fresh.Chase = true;
+                        _chaseGoal = chaseGoal;
+                        System.Numerics.Vector3 end = fresh.Points[^1];
+                        _chaseTruncated = System.Numerics.Vector2.Distance(new(end.X, end.Y), new(chaseGoal.X, chaseGoal.Y)) > _options.ChaseReplanYards;
+                    }
                 }
 
                 _goal = PlayerbotGoalKind.Grind;
-                if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, interval, _session.World.NowMs))
-                    _route = null;
+                if (_route is null || !PlayerbotNavigation.TryAdvance(_session, _route, _options, interval, _session.World.NowMs))
+                    AbandonRoute();
                 return;
             }
 
@@ -883,14 +929,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0 && !PlayerbotMovementControl.Stop(_session, player)) return;
                 _goal = PlayerbotGoalKind.Combat;
-                PlayerbotMotion.Face(_session, player, MathF.Atan2(target.Y - player.Y, target.X - player.X));
-                return;
+                // Turned in this think, the swing follows in it (it waited for the next think, a gap of seconds, before).
+                if (!PlayerbotMotion.Face(_session, player, MathF.Atan2(target.Y - player.Y, target.X - player.X))) return;
             }
 
             if (!_attacking || player.Combat.Victim is null)
             {
-                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
-                { PlayerbotMovementControl.Stop(_session, player); return; }
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0 && !PlayerbotMovementControl.Stop(_session, player)) return;
                 _goal = PlayerbotGoalKind.Combat;
                 _attacking = _session.TryManagedAction(WorldOpcode.CmsgAttackswing,
                     PlayerbotNavigation.GuidPayload(target.Guid.Value));
@@ -1011,7 +1056,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         _target = null;
-        _route = null;
+        AbandonRoute();
         _attacking = false;
         _lootOpened = false;
         PlayerbotMovementControl.Stop(_session, player);
@@ -1156,7 +1201,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // intent; the recovery helper still owns the ordinary release/reclaim flow.
         _target = null;
         TargetEntry = 0;
-        _route = null;
+        AbandonRoute();
         _exploreCandidate = null;
         _exploreHasPosition = false;
         _attacking = false;
@@ -1176,7 +1221,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Service/quest controllers own separate routes. Do not later resume a
         // previous grind path from a different position after their work finishes.
         _target = null;
-        _route = null;
+        AbandonRoute();
         _exploreCandidate = null;
         _exploreHasPosition = false;
         _attacking = false;
@@ -1185,7 +1230,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void DropIntent()
     {
         _target = null;
-        _route = null;
+        AbandonRoute();
         _exploreCandidate = null;
         _exploreHasPosition = false;
         _attacking = false;
@@ -1338,6 +1383,29 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .OrderBy(creature => preferredEntry != 0 && creature.Entry == preferredEntry ? 0 : 1)
             .ThenBy(creature => Distance(player, creature));
     }
+
+    /// <summary>
+    /// Whether a chase route no longer leads to the target: walked to its end, or ending more than
+    /// <see cref="PlayerbotOptions.ChaseReplanYards"/> (flat) from where the target stands now.
+    /// </summary>
+    private bool ChaseRouteStale(Player player, PlayerbotRoute route, System.Numerics.Vector3 goal)
+    {
+        if (route.Complete || route.Points.Count == 0) return true;
+        if (!route.Chase)
+        {
+            // A route this chase did not plan (a hazard detour): ends at the target or is replaced.
+            System.Numerics.Vector3 end = route.Points[^1];
+            return System.Numerics.Vector2.Distance(new(end.X, end.Y), new(goal.X, goal.Y)) > _options.ChaseReplanYards;
+        }
+
+        if (System.Numerics.Vector2.Distance(new(_chaseGoal.X, _chaseGoal.Y), new(goal.X, goal.Y)) <= _options.ChaseReplanYards) return false;
+        if (!_chaseTruncated) return true;
+        // The route stops short of where the target was planned to (cut at the route bound): its rest is walked before another plan.
+        return !PlayerbotMotion.TryYardsToEnd(player, route, out float left) || left <= route.Distance * 0.25f;
+    }
+
+    private System.Numerics.Vector3 _chaseGoal;
+    private bool _chaseTruncated;
 
     /// <summary>Whether <paramref name="target"/> is inside the arc the server swings in (<see cref="CombatConstants.AutoAttackArc"/>).</summary>
     private static bool FacesTarget(Player player, Creature target)
@@ -1763,7 +1831,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             // A teleport, hearth or outside controller moved the bot away from the site and its old route.
             _exploreCandidate = null;
-            _route = null;
+            AbandonRoute();
         }
         _exploreLastPosition = new(player.X, player.Y, player.Z);
         _exploreLastMap = player.MapId;
@@ -1775,8 +1843,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, _session.World.NowMs))
             {
                 if (!_route.Complete && _exploreCandidate is { } refused) BlockExploreCell(refused);
-                _route = null;
+                AbandonRoute();
             }
+            else ChainWanderLeg(player, elapsedMs);
             return;
         }
 
@@ -1787,26 +1856,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
-        int attempt = _roamDirection++;
-        float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
-        float angle = _exploreRefusals >= 3
-            ? (attempt + player.Guid.Low) * 2.39996323f
-            : player.Orientation + (spread * MathF.PI * 2f / 3f);
-        // Beyond 0.8 of the home radius the next leg heads back in instead of wandering further out; so does a leg that would end
-        // out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle). Back in is the centre first,
-        // then, while legs are refused, a fan around it (InwardLeg).
-        var destination = new System.Numerics.Vector3(
-            player.X + (MathF.Cos(angle) * 48f),
-            player.Y + (MathF.Sin(angle) * 48f),
-            player.Z);
-        if (_home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId
-            && (area.DistanceTo(player.X, player.Y) > area.ExploreRadius
-                || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
-            destination = InwardLeg(area, player, _exploreRefusals);
+        System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         PlayerbotThinkProbe.Phase("explore wander plan");
         if (PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
         {
-            _route = null;
+            AbandonRoute();
             _roamDirection--; // the same leg again once the tile is in
             return;
         }
@@ -1815,12 +1869,83 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreRefusals = 0;
             PlayerbotThinkProbe.Phase("explore advance");
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
-                _route = null;
+                AbandonRoute();
+            else
+            {
+                _wanderLeg = _route;
+                ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
+            }
         }
         else
         {
             _exploreRefusals++;
             PlayerbotMovementControl.Stop(_session, player);
+        }
+    }
+
+    /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>
+    private PlayerbotRoute? _wanderLeg;
+
+    /// <summary>
+    /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
+    /// +-60 degrees, golden-ratio spread so successive legs differ). Only after repeated refusals turn anywhere. The old
+    /// golden-angle-from-zero choice sent each leg ~137 degrees from the last one, so a bot that lost its route every few thinks ran in
+    /// circles. Beyond 0.8 of the home radius the next leg heads back in instead of wandering further out; so does a leg that would end
+    /// out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle). Back in is the centre first,
+    /// then, while legs are refused, a fan around it (InwardLeg). Takes the next direction of the rotation (<c>_roamDirection</c>).
+    /// </summary>
+    private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation)
+    {
+        int attempt = _roamDirection++;
+        float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
+        float angle = _exploreRefusals >= 3
+            ? (attempt + player.Guid.Low) * 2.39996323f
+            : orientation + (spread * MathF.PI * 2f / 3f);
+        var destination = new System.Numerics.Vector3(
+            from.X + (MathF.Cos(angle) * ExploreLegYards),
+            from.Y + (MathF.Sin(angle) * ExploreLegYards),
+            from.Z);
+        if (_home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId
+            && (area.DistanceTo(from.X, from.Y) > area.ExploreRadius
+                || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
+            destination = InwardLeg(area, from, _exploreRefusals);
+        return destination;
+    }
+
+    /// <summary>
+    /// A wandering bot that will reach the end of its leg before its next think (the time to walk the rest is under its smoothed think
+    /// gap, with a quarter of it spare) is handed the next leg now, planned from the end of this one and joined to what is left of it
+    /// (<see cref="PlayerbotNavigation.TryChain"/>): the motion switches routes without a stop. Before, the bot stood at the end of every
+    /// leg until its next think, seconds with a thousand bots. The query is the one the next think would make from the end of the leg
+    /// (that think then finds a long route in hand and plans nothing), so the path cost per yard walked is unchanged. A leg that cannot be
+    /// chained (no usable route, a tile still being read, a hazard) is left to the next think as before.
+    /// </summary>
+    private void ChainWanderLeg(Player player, uint elapsedMs)
+    {
+        if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
+            || route.Points.Count < 2) return;
+        if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
+        uint gap = PlayerbotMotion.ThinkGapMs(player);
+        if (gap == 0) gap = (uint)_options.ThinkIntervalMs;
+        if (remainingMs >= gap + gap / 4) return;
+        System.Numerics.Vector3 end = route.Points[^1], before = route.Points[^2];
+        float orientation = PlayerbotMotion.Normalize(MathF.Atan2(end.Y - before.Y, end.X - before.X));
+        int roam = _roamDirection;
+        PlayerbotThinkProbe.Phase("explore chain plan");
+        if (!PlayerbotNavigation.TryChain(player, route, WanderLegEnd(player, end, orientation), _options, out PlayerbotRoute? chained)
+            || chained is null)
+        {
+            _roamDirection = roam; // the same leg again at the next think
+            return;
+        }
+
+        _route = chained;
+        _wanderLeg = chained;
+        // The switch is refused (the motion keeps what it has: keepMotion): walk the leg in hand, plan the next one at the next think.
+        if (!PlayerbotNavigation.TryAdvance(_session, chained, _options, elapsedMs, _session.World.NowMs, keepMotion: true))
+        {
+            _route = route;
+            _wanderLeg = route;
         }
     }
 
@@ -1874,7 +1999,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private bool ExploreMovementPaused(Player player, uint elapsedMs)
         => elapsedMs == 0 || _session.ManagedBudget is { Remaining: <= 0 }
-            || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0;
+            || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0
+            || PlayerbotMotion.ControlLost(player); // a pause: no refusal, no abandoned route, no blocked cell
 
     private bool TryExploreSpawns(Player player, uint elapsedMs)
     {
@@ -1956,7 +2082,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
         {
             if (!_route!.Complete) BlockExploreCell(chosen);
-            _route = null;
+            AbandonRoute();
         }
         return true;
     }
@@ -2017,23 +2143,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// towards the centre.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, Player player, int refusals)
+        => InwardLeg(home, new System.Numerics.Vector3(player.X, player.Y, player.Z), refusals);
+
+    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained leg).</summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
     {
-        float distance = home.DistanceTo(player.X, player.Y);
-        float inward = MathF.Atan2(home.Centre.Y - player.Y, home.Centre.X - player.X);
+        float distance = home.DistanceTo(from.X, from.Y);
+        float inward = MathF.Atan2(home.Centre.Y - from.Y, home.Centre.X - from.X);
         for (int turn = 0; turn < InwardFanDegrees.Length; turn++)
         {
             float degrees = InwardFanDegrees[(int)((uint)(refusals + turn) % (uint)InwardFanDegrees.Length)];
             float length = MathF.Min(ExploreLegYards, distance * MathF.Cos(degrees * MathF.PI / 180f));
             if (length < 1f) continue;
             float angle = inward + (degrees * MathF.PI / 180f);
-            var end = new System.Numerics.Vector3(player.X + (MathF.Cos(angle) * length), player.Y + (MathF.Sin(angle) * length), player.Z);
+            var end = new System.Numerics.Vector3(from.X + (MathF.Cos(angle) * length), from.Y + (MathF.Sin(angle) * length), from.Z);
             if (home.DistanceTo(end.X, end.Y) >= distance) continue;
             if (home.ZoneClipped && !home.InZone(end.X, end.Y, end.Z)) continue;
             return end;
         }
 
         float straight = MathF.Min(ExploreLegYards, distance);
-        return new System.Numerics.Vector3(player.X + (MathF.Cos(inward) * straight), player.Y + (MathF.Sin(inward) * straight), player.Z);
+        return new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
     }
 
     private static float Distance(WorldObject a, WorldObject b)
