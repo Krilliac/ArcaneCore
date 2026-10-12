@@ -169,7 +169,8 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     public float SpellDamageRate => _statRates?.SpellDamage(Template.Rank) ?? 1.0f;
 
-    public bool RegeneratesHealth => true;
+    /// <summary>Whether the 5 s regeneration heals this creature; a script turns it off for a fake-dead creature held at 1 health. Reset to true by the template (re)load, so a respawn heals again.</summary>
+    public bool RegeneratesHealth { get; set; } = true;
 
     public uint NpcFlags
     {
@@ -438,6 +439,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetUInt32(UpdateFields.UnitFieldRangedattacktime, t.RangedBaseAttackTime);
 
         FactionTemplate = t.Faction;
+        RegeneratesHealth = true;
         NpcFlags = t.NpcFlags;
 
         // cmangos-classic takes UnitFlags/DynamicFlags from the template; vmangos adds PLUS_MOB

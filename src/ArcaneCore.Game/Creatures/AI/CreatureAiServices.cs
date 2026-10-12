@@ -298,6 +298,11 @@ public sealed class CreatureAiFactory
             gossip: new Instances.Scripts.BlackrockDepths.DughalStormwingGossip());
         RegisterNpcScript(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip.ScriptName, nameof(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip),
             gossip: new Instances.Scripts.BlackrockDepths.TobiasSeecherGossip());
+        // Dungeon and raid ScriptNames that bind by name (an EventAI host, a gossip/quest script, an inert trigger AI).
+        Instances.Scripts.Uldaman.ArchaerasAddAI.Register(this);
+        Instances.Scripts.Naxxramas.GothikAnchorAI.Register(this);
+        Instances.Scripts.Naxxramas.InvisibleManAI.Register(this);
+        Instances.Scripts.Stratholme.AuriusScript.Register(this);
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
