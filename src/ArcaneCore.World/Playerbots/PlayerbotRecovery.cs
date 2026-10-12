@@ -541,6 +541,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _healerGraveyard = default;
         _corpseRunResumedFor = default;
         _detourTriedFor = default;
+        _detourWait.Reset();
         _detourGoal = null;
         _deathBody = default;
         UnsafeReason = PlayerbotUnsafeBody.None;
@@ -569,6 +570,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _closingMs = now;
         _thinksSinceClosing = 0;
     }
+
+    /// <summary>The wait for tiles of the walk's plan, and of the spirit-healer detour's (<see cref="PlanOutcome.Pending"/>).</summary>
+    private TileWait _walkWait, _detourWait;
 
     private bool SpiritHealer(Player player, uint elapsedMs, long now)
     {
@@ -602,9 +606,18 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (step == PlayerbotSpiritHealerStep.DetourToHealer)
         {
             PlayerbotThinkProbe.Phase("recovery healer detour");
-            _detourTriedFor = healer!.Guid;
-            if (PlayerbotNavigation.TryPlanFar(player, new Vector3(healer.X, healer.Y, healer.Z), options, PlayerbotNavigation.MaxSearchNodes,
-                    out PlayerbotRoute? detour) && detour is { Points.Count: > 1 }
+            PlanOutcome detourPlan = PlayerbotNavigation.PlanFar(player, new Vector3(healer!.X, healer.Y, healer.Z), options,
+                PlayerbotNavigation.MaxSearchNodes, ref _detourWait, session.World.NowMs, out PlayerbotRoute? detour);
+            if (detourPlan == PlanOutcome.Pending)
+            {
+                // A tile of the long way is still being read: the once-per-death detour is not spent, and is asked for again next think
+                // (for TileWait.MaxMs; then the refusal stands and the detour counts as tried).
+                LastSpiritHealerStep = PlayerbotSpiritHealerStep.DetourToHealer;
+                return false;
+            }
+
+            _detourTriedFor = healer.Guid;
+            if (detourPlan == PlanOutcome.Route && detour is { Points.Count: > 1 }
                 && Vector3.Distance(detour.Points[^1], new Vector3(healer.X, healer.Y, healer.Z)) <= SpiritHealerReachYards + 2f)
             {
                 ClearWalk();
@@ -853,9 +866,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (_route is null || _route.Complete)
         {
             PlayerbotThinkProbe.Phase("recovery walk plan");
-            if (!PlayerbotNavigation.TryPlanToward(player, goal, options, out _route))
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, goal, options, ref _walkWait, session.World.NowMs, out _route);
+            if (planned != PlanOutcome.Route)
             {
                 _route = null;
+                // A tile of the way is still being read: the walk is waiting, not stuck (the stuck clock is paused for the wait's bound).
+                if (planned == PlanOutcome.Pending) MarkClosing(now);
                 return false;
             }
 
@@ -901,6 +917,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     private void ClearWalk()
     {
+        _walkWait.Reset();
         _detourRoute = false;
         _route = null;
         _goal = null;
@@ -1083,7 +1100,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
         {
             // The mesh finds the floor: a candidate is a place on the ring at the body's height, and the route ends on the
-            // nearest walkable point (a candidate off the mesh ends short of it, which IsReviveSpot then re-checks).
+            // nearest walkable point (a candidate off the mesh ends short of it, which IsReviveSpot then re-checks). A candidate whose
+            // tiles are still being read answers no point, as a refusal does: no spot is known yet (WaitForHostiles, not progress), the
+            // search is made again next think, and nothing is set aside here that a tile arriving would not reopen.
             if (!PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) || route is null
                 || route.Distance > ReviveSpotMaxWalkYards)
                 return null;

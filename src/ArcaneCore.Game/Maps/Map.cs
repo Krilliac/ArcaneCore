@@ -606,6 +606,7 @@ public sealed class Map
     internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
         diagnostics?.Begin();
+        diagnostics?.BeginTiles();
         GridLifecycleCounters gridsBefore = diagnostics is not null ? _grid.Counters : default;
         // (1) in-world packets, over a snapshot (a handler may add or remove players); the snapshot list is reused
         List<Player> snapshot = _updatePlayers;
@@ -674,9 +675,24 @@ public sealed class Map
             _heartbeatSnapshotDirty = false;
         }
         foreach (Unit unit in _heartbeatUnits)
+        {
             if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
                 && unit is not Player { IsQuestSettlementPending: true })
-                unit.UpdateHeartbeat(diffMs);
+            {
+                // Players (and so bots) are timed one by one for the slow-map top-3; creatures, the bulk, are the remainder of the phase.
+                if (diagnostics is not null && unit is Player)
+                {
+                    long beatStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    unit.UpdateHeartbeat(diffMs);
+                    diagnostics.AddPlayerHeartbeat(System.Diagnostics.Stopwatch.GetTimestamp() - beatStart);
+                }
+                else
+                {
+                    unit.UpdateHeartbeat(diffMs);
+                }
+            }
+        }
+
         diagnostics?.EndHeartbeat();
 
         // vmangos Map::UpdateCells marks the cells around players and active objects after the sessions (UpdateActiveCellsSynch).
@@ -684,6 +700,7 @@ public sealed class Map
         {
             _grid.MarkActiveCells();
         }
+        diagnostics?.EndActiveCells();
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)

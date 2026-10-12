@@ -179,6 +179,7 @@ internal sealed class ScenarioRouteWalker(PlayerbotOptions options, Vector3 dest
 {
     private const uint ThinkMs = 500;
     private PlayerbotRoute? _route;
+    private TileWait _tileWait;
     private uint _accumulated;
     private uint? _startMap;
 
@@ -212,10 +213,11 @@ internal sealed class ScenarioRouteWalker(PlayerbotOptions options, Vector3 dest
 
         if (_route is null || _route.Complete)
         {
-            if (!PlayerbotNavigation.TryPlan(player, destination, options, out _route))
+            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, destination, options, ref _tileWait, context.World.NowMs, out _route);
+            if (planned != PlanOutcome.Route)
             {
                 _route = null;
-                PlanFailures++;
+                if (planned == PlanOutcome.Refused) PlanFailures++; // a tile still being read is no failure: planned again next tick
                 return;
             }
         }

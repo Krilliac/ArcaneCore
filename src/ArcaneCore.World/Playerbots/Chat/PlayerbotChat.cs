@@ -749,7 +749,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         _stop.Cancel();
         _queue?.Writer.TryComplete();
         try { await Task.WhenAll(_workers).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
-        catch (Exception error) when (error is TimeoutException or OperationCanceledException) { }
+        catch (Exception error) when (error is TimeoutException or OperationCanceledException) { } // dispose: workers that outlive the 5 s grace period are abandoned by design
     }
 
     private sealed class ProviderState

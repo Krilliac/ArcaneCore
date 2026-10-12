@@ -150,6 +150,64 @@ public sealed class NavRegionGraphTests : IDisposable
         Assert.Null(nav.RegionGraph(MapId + 1, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes));
     }
 
+    private sealed class LineLog : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (Lines)
+            {
+                Lines.Add((logLevel, formatter(state, exception)));
+            }
+        }
+    }
+
+    private static long SkippedTileFaults()
+        => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(f => f.Site == "mmaps.regiongraph").Sum(f => f.Count);
+
+    [Fact]
+    public void ACorruptTile_IsListedAsSkipped_WithItsCoordinatesAndFile_AndTheRestStillBuild()
+    {
+        WriteLayout();
+        string corrupt = _fixture.PathOf("0001213.mmtile");
+        File.WriteAllBytes(corrupt, [1, 2, 3, 4, 5]);
+
+        NavRegionGraph graph = Graph(_fixture.Directory);
+
+        Assert.Equal(4, graph.TileCount);
+        SkippedNavTile skipped = Assert.Single(graph.SkippedTiles);
+        Assert.Equal(12, skipped.TileX);
+        Assert.Equal(13, skipped.TileY);
+        Assert.Equal(corrupt, skipped.File);
+        Assert.NotNull(skipped.Error);
+    }
+
+    [Fact]
+    public async Task ThePathfinder_LogsEachSkippedTileOnce_AsAWarning_AndCountsItInTheFaultLedger()
+    {
+        var log = new LineLog();
+        _fixture.WriteParams(MapId);
+        _fixture.WriteTile(MapId, 10, 10, A);
+        File.WriteAllBytes(_fixture.PathOf("0001213.mmtile"), [9, 9, 9]);
+        var nav = new NavMeshPathfinder(_fixture.Directory, log);
+        Assert.True(nav.LoadTile(MapId, 10, 10));
+        long before = SkippedTileFaults();
+
+        NavRegionGraph? graph = await nav.RegionGraphTask(MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+
+        Assert.NotNull(graph);
+        var warnings = log.Lines.Where(l => l.Level == Microsoft.Extensions.Logging.LogLevel.Warning).ToList();
+        (_, string message) = Assert.Single(warnings);
+        Assert.Contains("(12, 13)", message);
+        Assert.Contains("0001213.mmtile", message);
+        Assert.True(SkippedTileFaults() >= before + 1);
+    }
+
     private static void Near(Vector3 expected, Vector3 actual, float tolerance = 0.01f)
         => Assert.True(Vector3.Distance(expected, actual) <= tolerance, $"expected {expected}, got {actual}");
 }

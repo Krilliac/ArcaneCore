@@ -147,10 +147,13 @@ public sealed class PlayerbotFleetSelectionTests
         string[] after = root.SubCommands.Select(c => c.Name).ToArray();
 
         Assert.Equal(before, after.Take(before.Length));
-        Assert.Equal(["summon", "send", "follow", "stay", "dismiss", "near", "revive"], after.Skip(before.Length));
-        foreach (string admin in new[] { "summon", "send", "follow", "stay", "dismiss", "revive", "start", "stop" })
+        Assert.Equal(["summon", "send", "follow", "stay", "dismiss", "near", "revive", "fleet"], after.Skip(before.Length));
+        foreach (string admin in new[] { "summon", "send", "follow", "stay", "dismiss", "revive", "fleet", "start", "stop" })
             Assert.Equal(AccountSecurity.Administrator, root.SubCommands.Single(c => c.Name == admin).Security);
         Assert.Equal(AccountSecurity.GameMaster, root.SubCommands.Single(c => c.Name == "near").Security);
+        // The fleet reset deletes every bot character: its rank is Administrator at the group and at the child.
+        ChatCommand fleet = root.SubCommands.Single(c => c.Name == "fleet");
+        Assert.Equal(AccountSecurity.Administrator, fleet.SubCommands.Single(c => c.Name == "reset").Security);
         Assert.Contains("summon|send|follow|stay|dismiss|near|revive", root.Help, StringComparison.Ordinal);
     }
 }

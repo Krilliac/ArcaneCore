@@ -35,6 +35,8 @@ internal sealed class StuckTransport : IQaIssueTransport
 
     public Task ReopenAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
 
+    public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
+
     public void Dispose()
     {
     }
@@ -65,6 +67,7 @@ public sealed class PlayerbotQaFeaturePublishTests : IDisposable
         {
             EnvironmentReader = _ => QaData.FakeToken,
             TransportFactory = _ => transport,
+            Time = new ManualTime(QaData.T0),
         };
         feature.Attach(null!);
         Assert.True(bus.TryWrite(QaData.Relay(7)));

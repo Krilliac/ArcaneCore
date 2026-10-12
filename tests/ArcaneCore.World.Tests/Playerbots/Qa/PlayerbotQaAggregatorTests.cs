@@ -293,15 +293,16 @@ public sealed class PlayerbotQaAggregatorTests
         };
 
     [Fact]
-    public void DeathLoops_DriftingWithinTheAnchorRadius_AreOneFinding_AndFarOrOtherAttackersAreNew()
+    public void DeathLoops_DriftingWithinTheAreaAreOneFinding_AndAnotherZoneOrOtherAttackersAreNew()
     {
         PlayerbotQaAggregator aggregator = New();
         string first = Ingest(aggregator, Loop(2036f, -3378f, 1, 3821));
-        string drifted = Ingest(aggregator, Loop(2155f, -3386f, 1, 3821)); // 119 yd from the anchor, another 50-yd cell
+        string drifted = Ingest(aggregator, Loop(2155f, -3386f, 1, 3821)); // 119 yd from the anchor, another 50-yd cell, the same zone cell
         Assert.Equal(first, drifted);
         Assert.Equal(2, Assert.Single(aggregator.Snapshot()).Count);
 
-        string far = Ingest(aggregator, Loop(2275f, -3010f, 1, 3782, 3821)); // 440 yd from the anchor
+        Assert.Equal(first, Ingest(aggregator, Loop(2275f, -3010f, 1, 3782, 3821))); // 440 yd from the anchor, still the same 500-yd zone cell and the same attacker
+        string far = Ingest(aggregator, Loop(4275f, -3010f, 1, 3782, 3821)); // two zone cells away
         Assert.NotEqual(first, far);
         Assert.Equal(2, aggregator.Snapshot().Count);
 
@@ -351,9 +352,9 @@ public sealed class PlayerbotQaAggregatorTests
     public void TheAnchor_DoesNotChain()
     {
         PlayerbotQaAggregator aggregator = New();
-        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0));
-        Assert.Equal(a, Ingest(aggregator, QaData.Stall(QaData.Bot1, 150, 0)));
-        string c = Ingest(aggregator, QaData.Stall(QaData.Bot1, 300, 0)); // 150 yd from B, 300 from the anchor
+        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 450, 0, goal: "Explore"));
+        Assert.Equal(a, Ingest(aggregator, QaData.Stall(QaData.Bot1, 590, 0, goal: "Explore"))); // the next zone cell, but 140 yd from the anchor
+        string c = Ingest(aggregator, QaData.Stall(QaData.Bot1, 740, 0, goal: "Explore")); // 150 yd from the one before, 290 from the anchor
         Assert.NotEqual(a, c);
         Assert.Equal(2, aggregator.Snapshot().Count);
     }
@@ -362,8 +363,8 @@ public sealed class PlayerbotQaAggregatorTests
     public void DifferentMaps_NeverMerge()
     {
         PlayerbotQaAggregator aggregator = New();
-        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, map: 0));
-        string b = Ingest(aggregator, QaData.Stall(QaData.Bot1, 60, 0, map: 1));
+        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, map: 0, goal: "Explore"));
+        string b = Ingest(aggregator, QaData.Stall(QaData.Bot1, 60, 0, map: 1, goal: "Explore"));
         Assert.NotEqual(a, b);
         string c = Ingest(aggregator, Loop(0, 0, 0, 5));
         string d = Ingest(aggregator, Loop(60, 0, 1, 5));
@@ -398,22 +399,22 @@ public sealed class PlayerbotQaAggregatorTests
     public void OldPersistedState_WithoutAnAnchor_LoadsAndMatches()
     {
         PlayerbotQaAggregator source = New();
-        string id = Ingest(source, QaData.Stall(QaData.Bot1, -5608.8f, -439.4f));
+        string id = Ingest(source, QaData.Stall(QaData.Bot1, -5608.8f, -439.4f, goal: "Explore"));
         QaAggregatorState old = source.Export();
 
         // A file written before the anchor existed: no Anchor, no Attackers, the sample still there -> the first sample is the anchor.
         QaAggregatorState withSample = old with { Findings = [.. old.Findings.Select(f => f with { Anchor = null })] };
         PlayerbotQaAggregator a = New();
         Assert.Equal(0, a.Restore(withSample));
-        Assert.Equal(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 150f, -439.4f)));
-        Assert.NotEqual(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 170f, -439.4f)));
+        Assert.Equal(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 150f, -439.4f, goal: "Explore")));
+        Assert.NotEqual(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 170f, -439.4f, goal: "Explore")));
 
         // No anchor and no sample -> the centre of the key's 50-yard cell (-113,-9): (-5625,-425).
         QaAggregatorState bare = old with { Findings = [.. old.Findings.Select(f => f with { Anchor = null, Samples = [] })] };
         PlayerbotQaAggregator b = New();
         Assert.Equal(0, b.Restore(bare));
-        Assert.Equal(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 159f, -425f)));
-        Assert.NotEqual(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 161f, -425f)));
+        Assert.Equal(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 159f, -425f, goal: "Explore")));
+        Assert.NotEqual(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 161f, -425f, goal: "Explore")));
 
         // Through JSON, as a real old findings.json: the new properties are simply absent.
         string json = JsonSerializer.Serialize(new { Findings = old.Findings.Select(f => new { f.Id, f.Key, Kind = f.Kind.ToString(), f.Count, f.Map }) });
@@ -424,8 +425,8 @@ public sealed class PlayerbotQaAggregatorTests
         QaFindingView restored = Assert.Single(c.Snapshot());
         Assert.Equal(new QaAnchor(0, -5625f, -425f), c.Export().Findings[0].Anchor); // the centre of cell (-113,-9)
         Assert.Equal(id, restored.Id);
-        Assert.Equal(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 100f, -425f)));
-        Assert.NotEqual(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 200f, -425f)));
+        Assert.Equal(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 100f, -425f, goal: "Explore")));
+        Assert.NotEqual(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 200f, -425f, goal: "Explore")));
     }
 
     private static QaFindingView OldLoop(QaFindingView v, IReadOnlyList<QaSample>? samples = null, string? subject = null)
@@ -527,15 +528,16 @@ public sealed class PlayerbotQaAggregatorTests
     }
 
     [Fact]
-    public void DeathLoopIdentity_IsTheFirstSignalsAttackers_AndDoesNotChain()
+    public void DeathLoopIdentity_IsTheUnionOfItsSignalsAttackers()
     {
         PlayerbotQaAggregator aggregator = New();
         string a = Ingest(aggregator, Loop(0, 0, 1, 1));
-        Assert.Equal(a, Ingest(aggregator, Loop(10, 0, 1, 1, 2))); // overlaps {1}: folds, but the identity stays {1}
-        string c = Ingest(aggregator, Loop(20, 0, 1, 2, 3)); // overlaps {1,2} but not {1}
-        Assert.NotEqual(a, c);
+        Assert.Equal(a, Ingest(aggregator, Loop(10, 0, 1, 1, 2))); // overlaps {1}: folds, and the finding's attackers are now {1,2}
+        Assert.Equal(a, Ingest(aggregator, Loop(20, 0, 1, 2, 3))); // overlaps {1,2}: the same loop, however the attacker sets drift
+        string other = Ingest(aggregator, Loop(20, 0, 1, 9)); // nobody in common
+        Assert.NotEqual(a, other);
         Assert.Equal(2, aggregator.Snapshot().Count);
-        Assert.Equal(new uint[] { 1 }, aggregator.Snapshot().Single(f => f.Id == a).Attackers);
+        Assert.Equal(new uint[] { 1, 2, 3 }, aggregator.Snapshot().Single(f => f.Id == a).Attackers);
     }
 
     [Fact]

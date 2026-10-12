@@ -84,6 +84,12 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// </summary>
     public Func<bool, string>? HangDetail { get; set; }
 
+    /// <summary>
+    /// Set by the host of the simulation to the host-load sampler, so a hang or overrun line says whether the machine, the garbage
+    /// collector or the code was to blame (docs/ops/observability.md). Null: the lines carry no host-load text.
+    /// </summary>
+    public HostLoadSampler? HostLoad { get; set; }
+
     /// <summary>The frame ring (for diagnostics and tests).</summary>
     public TickRing Ring => _ring;
 
@@ -176,8 +182,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
             if (_hangLimiter.TryAcquire(nowMicros, out _))
             {
-                _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}",
-                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), DetailText(inProgress: true));
+                _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}{Host}",
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), DetailText(inProgress: true), HostText(nowMicros - last));
             }
         }
 
@@ -186,8 +192,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (hangs > _hangsReported)
         {
             RingStats stats = Stats(out long[] buffer);
-            _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}",
-                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, DetailText(inProgress: false));
+            _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}{Host}",
+                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, DetailText(inProgress: false), HostText(stats.Max));
             ArrayPool<long>.Shared.Return(buffer);
             _hangCounter.Add(hangs - _hangsReported);
             _hangsReported = hangs;
@@ -199,9 +205,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         {
             RingStats stats = Stats(out long[] buffer);
             long sinceMs = _lastOverrunReportMicros == NoTick ? 0 : Micros.ToMillis(nowMicros - _lastOverrunReportMicros);
-            _logger.LogWarning(WatchdogEvents.TickOverrun, "world tick overran its {BudgetMs} ms budget {New} time(s){Window}: frame p50 {P50Ms} ms, p99 {P99Ms} ms, slowest {MaxMs} ms over {Samples} frames{Body}{Detail}",
+            _logger.LogWarning(WatchdogEvents.TickOverrun, "world tick overran its {BudgetMs} ms budget {New} time(s){Window}: frame p50 {P50Ms} ms, p99 {P99Ms} ms, slowest {MaxMs} ms over {Samples} frames{Body}{Detail}{Host}",
                 Micros.ToMillis(_budgetMicros), overruns - _overrunsReported, sinceMs > 0 ? $" in the last {sinceMs / 1000} s" : string.Empty,
-                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText(), DetailText(inProgress: false));
+                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText(), DetailText(inProgress: false), HostText(stats.Max));
             ArrayPool<long>.Shared.Return(buffer);
             _overrunCounter.Add(overruns - _overrunsReported);
             _overrunsReported = overruns;
@@ -282,6 +288,25 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         catch (Exception ex)
         {
             return $"; hang detail unavailable ({ex.GetType().Name})";
+        }
+    }
+
+    /// <summary>"; host: ..." for the window of a slow tick (watchdog thread, only when a line is about to be logged), or empty.</summary>
+    private string HostText(long windowMicros)
+    {
+        if (HostLoad is not { } sampler)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string text = sampler.Describe(windowMicros);
+            return string.IsNullOrEmpty(text) ? string.Empty : "; " + text;
+        }
+        catch (Exception ex)
+        {
+            return $"; host load unavailable ({ex.GetType().Name})";
         }
     }
 

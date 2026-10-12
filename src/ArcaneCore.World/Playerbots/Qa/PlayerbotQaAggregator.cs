@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
@@ -9,33 +10,81 @@ internal interface IQaPublicationState
     QaFindingView? Get(string id);
 
     void Apply(string id, QaPublicationUpdate update);
+
+    /// <summary>The publisher is working on <paramref name="id"/> (it read the finding and will <see cref="Apply"/> an outcome): the finding is not aged out or evicted until <see cref="Unpin"/>.</summary>
+    void Pin(string id)
+    {
+    }
+
+    void Unpin(string id)
+    {
+    }
+
+    /// <summary>Findings merged into another whose issue is still open and not yet closed as a duplicate of the survivor's.</summary>
+    IReadOnlyList<QaAbsorbed> PendingDuplicates() => [];
+
+    /// <summary>The absorbed finding's issue got its duplicate comment and was closed (or needs neither).</summary>
+    void MarkDuplicateHandled(string id)
+    {
+    }
+
+    /// <summary>The absorbed finding's issue got its duplicate comment (a close that fails afterwards is retried without commenting again).</summary>
+    void MarkDuplicateCommented(string id)
+    {
+    }
 }
 
-/// <summary>The aggregator's persisted state: the findings and, per finding, the salted hashes of the bots that met it.</summary>
-internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots);
+/// <summary>
+/// A finding that was merged into another (<see cref="Survivor"/>). Its id stays recorded so it is never reused for a different problem and an
+/// outcome the publisher still reports for it reaches the survivor. <see cref="Issue"/> is its GitHub issue when it had one that the survivor's
+/// does not replace (0 otherwise); <see cref="Handled"/> says the issue was closed as a duplicate of the survivor's (or needs no closing).
+/// </summary>
+internal sealed record QaAbsorbed(string Id, string Survivor, int Issue = 0, bool Handled = true, bool Commented = false);
+
+/// <summary>The aggregator's persisted state: the findings, per finding the salted hashes of the bots that met it, and the merged-away ids.</summary>
+internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots, IReadOnlyList<QaAbsorbed>? Absorbed = null);
 
 /// <summary>
-/// Folds signals into findings by fingerprint. One lock guards everything (microseconds per signal); every read returns immutable views.
+/// Folds signals into findings. One lock guards everything (microseconds per signal); every read returns immutable views.
 /// Bots are counted by a salted SHA-256 of their id (the salt is persisted, so counts survive a restart), at most
-/// <see cref="QaFinding.MaxTrackedBots"/> per finding: beyond that the count saturates. At the finding cap the lowest-severity, then
-/// oldest unpublished finding is evicted; a published or known-closed finding is never evicted (a new finding is refused when nothing can be).
-/// The fingerprint puts a location in a 50-yard cell, but bots drift much further within one problem area, so a stall or death loop with no
-/// finding of its own cell folds into an existing finding of the same kind, map and non-location identity whose anchor (the first sample's position,
-/// persisted; it never moves, so the radius does not chain) lies within <see cref="AnchorYards"/>. A death loop's identity is its attackers
-/// (overlapping non-zero entries) or, with none on either side, its death source; a signal whose own cell has a finding of other attackers gets a
-/// variant key (<c>|attackers=..</c>) and so its own finding. The v1 keys of existing findings are untouched.
+/// <see cref="QaFinding.MaxTrackedBots"/> per finding: beyond that the count saturates.
+/// A finding's id is the hash of the v1 key of its FIRST signal and never changes (it is the marker of its GitHub issue); which finding a
+/// stall or death loop belongs to is decided by a coarser identity, so one real problem is one finding wherever in its area it was met:
+/// a Quest-goal stall is its quest and target, a Combat-goal stall its target, any other stall its goal in a <see cref="PlayerbotQaFingerprint.ZoneYards"/>
+/// zone cell (a stall just across a cell border still folds in when it lies within <see cref="AnchorYards"/> of the finding's anchor, the first
+/// sample's position, which never moves); a death loop is a map and zone cell (or anchor radius) plus its attackers: a loop that shares an attacker entry
+/// with a finding of the area is that finding, a loop that bridges several findings merges them, and with no attacker on either side the death source decides.
+/// At the finding cap the lowest-value unpublished finding is evicted (a Count 1 finding of one bot first, then lowest severity, then oldest);
+/// a published or known-closed finding is never evicted (a new finding is refused when nothing can be). A finding not seen for
+/// <c>staleAfter</c> and not published is dropped by <see cref="AgeOut"/> and on load. Loading an older store merges the findings that are one
+/// problem now, keeping the published one's id and publication state.
 /// Thread-safe.
 /// </summary>
-internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byte[]? salt = null) : IQaPublicationState
+internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byte[]? salt = null, TimeSpan? staleAfter = null, ILogger? log = null) : IQaPublicationState
 {
-    /// <summary>How far from a finding's anchor (its first sample, in yards, measured on the ground plane) a signal still folds into it.</summary>
+    /// <summary>How far from a finding's anchor (its first sample, in yards, measured on the ground plane) a signal still folds into it across a zone cell border.</summary>
     internal const float AnchorYards = 160f;
+
+    private const uint NoMap = uint.MaxValue;
 
     private readonly object _gate = new();
     private readonly Dictionary<string, QaFinding> _byId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, QaAbsorbed> _absorbed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _inFlight = new(StringComparer.Ordinal);
+
+    // Lookup indexes over _byId (kept by Add/Remove): a signal looks at its group, its group base or the loops of its map, never at every finding.
+    private readonly Dictionary<string, QaFinding> _stallByGroup = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<QaFinding>> _stallByBase = new(StringComparer.Ordinal);
+    private readonly Dictionary<uint, List<QaFinding>> _loopsByMap = [];
     private readonly byte[] _salt = salt is { Length: > 0 } ? salt : RandomNumberGenerator.GetBytes(16);
     private IReadOnlyList<QaFindingView>? _snapshot;
     private long _rejected;
+
+    /// <summary>Findings the last <see cref="Restore"/> or <see cref="AgeOut"/> dropped for not being seen within the age limit (running total).</summary>
+    internal long AgedOut { get; private set; }
+
+    /// <summary>Findings folded into another one by <see cref="Restore"/> or a bridging signal (running total).</summary>
+    internal long Merged { get; private set; }
 
     /// <summary>The salt for the persisted bot hashes.</summary>
     internal byte[] Salt => _salt;
@@ -57,27 +106,39 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         string id = PlayerbotQaFingerprint.Hash(key);
         QaClassification cause = PlayerbotQaClassifier.Classify(signal, facts); // content reads stay outside the lock
         ulong? bot = signal.BotKey is { } guid ? BotHash(guid) : null;
+        Probe? probe = signal.FromCoverage ? null : ProbeOf(signal);
         lock (_gate)
         {
-            _byId.TryGetValue(id, out QaFinding? finding);
-            if (finding is null)
+            QaFinding? finding;
+            if (probe is { } wanted)
             {
-                finding = Nearby(signal);
-            }
-            else if (!SameProblem(finding, signal))
-            {
-                // The cell's finding is another death loop (other attackers): fold into a nearby one that is this loop, else give this loop its own key.
-                finding = Nearby(signal);
-                if (finding is null)
+                finding = Resolve(wanted);
+                // A stall that belongs to a merged-away finding (its v1 id is recorded) is the survivor's.
+                if (finding is null && wanted.Kind == QaSignalKind.Stall && _absorbed.TryGetValue(id, out QaAbsorbed? alias)
+                    && _byId.TryGetValue(alias.Survivor, out QaFinding? survivor) && survivor.Kind == QaSignalKind.Stall)
                 {
-                    key = VariantKey(key, signal);
-                    id = PlayerbotQaFingerprint.Hash(key);
-                    _byId.TryGetValue(id, out finding);
+                    finding = survivor;
                 }
+            }
+            else
+            {
+                _byId.TryGetValue(id, out finding);
             }
 
             if (finding is null)
             {
+                if (_byId.ContainsKey(id) || _absorbed.ContainsKey(id))
+                {
+                    // The v1 key of this signal names a finding that is another death loop (other attackers): this loop gets a variant key of its own.
+                    key = VariantKey(key, signal);
+                    id = PlayerbotQaFingerprint.Hash(key);
+                    for (int n = 2; _byId.ContainsKey(id) || _absorbed.ContainsKey(id); n++)
+                    {
+                        key = VariantKey(PlayerbotQaFingerprint.Key(signal), signal) + "|n=" + n.ToString(CultureInfo.InvariantCulture);
+                        id = PlayerbotQaFingerprint.Hash(key);
+                    }
+                }
+
                 if (_byId.Count >= maxFindings && !EvictOne(signal.FromCoverage))
                 {
                     Interlocked.Increment(ref _rejected);
@@ -85,7 +146,14 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 finding = new QaFinding { Id = id, Key = key, Kind = signal.Kind, FirstSeenUtc = signal.AtUtc, LastSeenUtc = signal.AtUtc };
-                _byId[id] = finding;
+                if (probe is { Kind: QaSignalKind.Stall } stall)
+                {
+                    finding.Group = stall.Group;
+                    finding.GroupBase = stall.Base;
+                }
+
+                if (!signal.FromCoverage && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
+                Add(finding);
             }
 
             if (signal.FromCoverage)
@@ -108,20 +176,22 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 if (signal.BotClass is > 0 and < 32) finding.ClassMask |= 1u << signal.BotClass;
-                if (finding.Anchor is null && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
+                if (finding.Anchor is null && signal.HasPosition)
+                {
+                    Remove(finding);
+                    finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
+                    Add(finding);
+                }
+
                 if (signal.Kind == QaSignalKind.DeathLoop)
                 {
-                    // The loop's identity is its FIRST signal's attackers and death source, set once: later signals never widen it, so
-                    // {A} -> {A,B} -> {B,C} cannot drift into one finding.
-                    if (finding.DeathSource.Length == 0)
+                    // The loop's attackers are the union of its signals' (a later signal that shares one is this loop).
+                    foreach (uint attacker in signal.Attackers)
                     {
-                        foreach (uint attacker in signal.Attackers)
-                        {
-                            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxAttackers) finding.Attackers.Add(attacker);
-                        }
-
-                        finding.DeathSource = SourceOf(signal);
+                        if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxLoopAttackers) finding.Attackers.Add(attacker);
                     }
+
+                    if (finding.DeathSource.Length == 0) finding.DeathSource = SourceOf(signal);
                 }
 
                 finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message)
@@ -134,14 +204,16 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             bool own = string.Equals(finding.Key, key, StringComparison.Ordinal);
             if (own ? signal.Quest != 0 || signal.Kind == QaSignalKind.DeathLoop : finding.Quest == 0) finding.Quest = signal.Quest;
             if (signal.Target != 0 && (own || finding.Target == 0)) finding.Target = signal.Target;
-            if (signal.HasPosition) finding.Map = signal.Map;
+            // The map follows the anchor: a finding keeps the map it began on.
+            if (signal.HasPosition && (finding.Anchor is null || finding.Anchor.Map == signal.Map)) finding.Map = signal.Map;
             if (own)
             {
                 finding.QuestTitle = signal.Kind == QaSignalKind.DeathLoop ? cause.QuestTitle : cause.QuestTitle ?? finding.QuestTitle;
                 finding.Cause = cause.Cause;
                 finding.CauseDetail = cause.Detail;
                 finding.Goal = signal.Goal;
-                finding.Subject = Subject(signal, finding.QuestTitle);
+                // A death loop keeps the subject of its first signal: its attackers vary from one signal to the next.
+                if (signal.Kind != QaSignalKind.DeathLoop || finding.Subject.Length == 0) finding.Subject = Subject(signal, finding.QuestTitle);
             }
             else
             {
@@ -162,49 +234,251 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         }
     }
 
-    /// <summary>
-    /// The finding this signal belongs to by place rather than by key: same kind and map, the same non-location identity, and an anchor within
-    /// <see cref="AnchorYards"/> (the nearest wins); null when there is none. Call under the lock.
-    /// </summary>
-    private QaFinding? Nearby(QaSignal signal)
+    /// <summary>What decides which finding a stall or death loop is: a signal's, or a finding's own (kept for it).</summary>
+    private readonly record struct Probe(QaSignalKind Kind, string Group, string? Base, bool HasPosition, uint Map, float X, float Y, uint[] Attackers, string Source);
+
+    /// <summary>The probe of a signal; null for a kind that is identified by its key alone.</summary>
+    private static Probe? ProbeOf(QaSignal signal)
     {
-        if (signal.FromCoverage || !signal.HasPosition || signal.Kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop)) return null;
-        string? identity = null;
-        QaFinding? best = null;
-        double bestDistance = double.MaxValue;
-        foreach (QaFinding f in _byId.Values)
+        switch (signal.Kind)
         {
-            if (f.Kind != signal.Kind || f.Anchor is not { } anchor || anchor.Map != signal.Map) continue;
-            double dx = (double)anchor.X - signal.X, dy = (double)anchor.Y - signal.Y;
-            double distance = dx * dx + dy * dy;
-            if (!(distance <= (double)AnchorYards * AnchorYards) || distance >= bestDistance) continue;
-            if (signal.Kind == QaSignalKind.DeathLoop
-                ? !SameProblem(f, signal)
-                : !string.Equals(f.Identity, identity ??= PlayerbotQaFingerprint.LocationFreeKey(PlayerbotQaFingerprint.Key(signal)), StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            best = f;
-            bestDistance = distance;
+            case QaSignalKind.Stall:
+                (string group, string? baseKey) = PlayerbotQaFingerprint.StallGroup(signal);
+                return new Probe(QaSignalKind.Stall, group, baseKey, signal.HasPosition, signal.Map, signal.X, signal.Y, [], string.Empty);
+            case QaSignalKind.DeathLoop:
+                return new Probe(QaSignalKind.DeathLoop, string.Empty, null, signal.HasPosition, signal.Map, signal.X, signal.Y,
+                    [.. signal.Attackers.Where(a => a != 0).Distinct()], SourceOf(signal));
+            default:
+                return null;
         }
-
-        return best;
     }
 
-    /// <summary>Whether a finding of the signal's own key is the signal's problem: always, except a death loop, which needs its attackers (or death source).</summary>
-    private static bool SameProblem(QaFinding finding, QaSignal signal)
+    /// <summary>The probe of a finding already held (its anchor is where it began).</summary>
+    private static Probe? ProbeOf(QaFinding f)
     {
-        if (signal.Kind != QaSignalKind.DeathLoop) return true;
-        bool any = false;
-        foreach (uint attacker in signal.Attackers)
+        QaAnchor? anchor = f.Anchor;
+        bool has = anchor is not null;
+        return f.Kind switch
         {
-            if (attacker == 0) continue;
-            any = true;
-            if (finding.Attackers.Contains(attacker)) return true;
+            QaSignalKind.Stall when f.Group.Length > 0 => new Probe(QaSignalKind.Stall, f.Group, f.GroupBase, has, anchor?.Map ?? 0, anchor?.X ?? 0, anchor?.Y ?? 0, [], string.Empty),
+            QaSignalKind.DeathLoop => new Probe(QaSignalKind.DeathLoop, string.Empty, null, has, anchor?.Map ?? 0, anchor?.X ?? 0, anchor?.Y ?? 0, [.. f.Attackers], f.DeathSource),
+            _ => null,
+        };
+    }
+
+    /// <summary>The finding a probe belongs to: the one finding, a merge of the several it bridges, or null. Call under the lock.</summary>
+    private QaFinding? Resolve(Probe probe)
+    {
+        List<QaFinding> matches = Matches(probe);
+        if (matches.Count == 0) return null;
+        if (matches.Count == 1) return matches[0];
+        return MergeAll(matches);
+    }
+
+    /// <summary>
+    /// The findings a probe is the same problem as. A stall: the finding of its group, else the nearest of its group base whose anchor lies within
+    /// <see cref="AnchorYards"/> (one finding at most). A death loop: every loop finding of its area (same zone cell, or anchor within
+    /// <see cref="AnchorYards"/>) that shares an attacker entry, or - with no attacker on either side - the same death source.
+    /// </summary>
+    private List<QaFinding> Matches(Probe probe)
+    {
+        if (probe.Kind == QaSignalKind.Stall)
+        {
+            if (_stallByGroup.TryGetValue(probe.Group, out QaFinding? exact)) return [exact];
+            if (probe.Base is null || !probe.HasPosition || !_stallByBase.TryGetValue(probe.Base, out List<QaFinding>? sameBase)) return [];
+            QaFinding? nearest = null;
+            double nearestDistance = double.MaxValue;
+            foreach (QaFinding f in sameBase)
+            {
+                if (f.Anchor is not { } a || a.Map != probe.Map) continue;
+                double d = Distance2(a.X, a.Y, probe.X, probe.Y);
+                if (d > (double)AnchorYards * AnchorYards) continue;
+                // The nearest wins; equal distances go to the lower id, so the choice never depends on insertion order.
+                if (d < nearestDistance || (d == nearestDistance && string.CompareOrdinal(f.Id, nearest!.Id) < 0))
+                {
+                    nearest = f;
+                    nearestDistance = d;
+                }
+            }
+
+            return nearest is null ? [] : [nearest];
         }
 
-        return !any && finding.Attackers.Count == 0 && string.Equals(finding.DeathSource, SourceOf(signal), StringComparison.Ordinal);
+        var matches = new List<QaFinding>();
+        if (_loopsByMap.TryGetValue(probe.HasPosition ? probe.Map : NoMap, out List<QaFinding>? loops))
+        {
+            foreach (QaFinding f in loops)
+            {
+                if (SameArea(f.Anchor, probe) && SameLoop(f.Attackers, f.DeathSource, probe)) matches.Add(f);
+            }
+        }
+
+        return matches;
+    }
+
+    /// <summary>Put a finding in the id map and the lookup indexes. Call under the lock.</summary>
+    private void Add(QaFinding f)
+    {
+        _byId[f.Id] = f;
+        if (f.Kind == QaSignalKind.Stall && f.Group.Length > 0)
+        {
+            _stallByGroup[f.Group] = f;
+            if (f.GroupBase is { } baseKey)
+            {
+                if (!_stallByBase.TryGetValue(baseKey, out List<QaFinding>? list)) _stallByBase[baseKey] = list = [];
+                list.Add(f);
+            }
+        }
+        else if (f.Kind == QaSignalKind.DeathLoop)
+        {
+            f.IndexedMap = f.Anchor?.Map ?? NoMap;
+            if (!_loopsByMap.TryGetValue(f.IndexedMap, out List<QaFinding>? list)) _loopsByMap[f.IndexedMap] = list = [];
+            list.Add(f);
+        }
+    }
+
+    /// <summary>Take a finding out of the id map and the indexes; false when it was not the one held under its id. Call under the lock.</summary>
+    private bool Remove(QaFinding f)
+    {
+        if (!_byId.TryGetValue(f.Id, out QaFinding? held) || !ReferenceEquals(held, f)) return false;
+        _byId.Remove(f.Id);
+        if (f.Kind == QaSignalKind.Stall && f.Group.Length > 0)
+        {
+            if (_stallByGroup.TryGetValue(f.Group, out QaFinding? byGroup) && ReferenceEquals(byGroup, f)) _stallByGroup.Remove(f.Group);
+            if (f.GroupBase is { } baseKey && _stallByBase.TryGetValue(baseKey, out List<QaFinding>? list))
+            {
+                list.Remove(f);
+                if (list.Count == 0) _stallByBase.Remove(baseKey);
+            }
+        }
+        else if (f.Kind == QaSignalKind.DeathLoop && _loopsByMap.TryGetValue(f.IndexedMap, out List<QaFinding>? loops))
+        {
+            loops.Remove(f);
+            if (loops.Count == 0) _loopsByMap.Remove(f.IndexedMap);
+        }
+
+        return true;
+    }
+
+    private void ClearFindings()
+    {
+        _byId.Clear();
+        _stallByGroup.Clear();
+        _stallByBase.Clear();
+        _loopsByMap.Clear();
+    }
+
+    private static double Distance2(float ax, float ay, float bx, float by)
+    {
+        double dx = (double)ax - bx, dy = (double)ay - by;
+        return dx * dx + dy * dy;
+    }
+
+    /// <summary>Whether a finding's anchor is in the probe's area: the same map and zone cell, or within <see cref="AnchorYards"/>; no place matches no place.</summary>
+    private static bool SameArea(QaAnchor? anchor, Probe probe)
+    {
+        if (anchor is not { } a || !probe.HasPosition) return anchor is null && !probe.HasPosition;
+        if (a.Map != probe.Map) return false;
+        return (PlayerbotQaFingerprint.ZoneCell(a.X) == PlayerbotQaFingerprint.ZoneCell(probe.X) && PlayerbotQaFingerprint.ZoneCell(a.Y) == PlayerbotQaFingerprint.ZoneCell(probe.Y))
+            || Distance2(a.X, a.Y, probe.X, probe.Y) <= (double)AnchorYards * AnchorYards;
+    }
+
+    /// <summary>A loop is the finding's when they share an attacker entry; with none on either side, when they share the death source.</summary>
+    private static bool SameLoop(IReadOnlyCollection<uint> attackers, string source, Probe probe)
+    {
+        if (probe.Attackers.Length == 0) return attackers.Count == 0 && string.Equals(source, probe.Source, StringComparison.Ordinal);
+        foreach (uint attacker in probe.Attackers)
+        {
+            foreach (uint own in attackers)
+            {
+                if (own == attacker) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int PublicationRank(QaPublication p) => p.State switch
+    {
+        QaPublicationState.Published => 0,
+        QaPublicationState.KnownClosed => 1,
+        _ when p.HoldsIssue => 2, // Failed: the issue exists, only the last call failed
+        _ => 3,
+    };
+
+    /// <summary>
+    /// Fold several findings that turned out to be one problem into the best of them: one with an OPEN issue before one whose issue a person
+    /// closed, the lowest issue number first, else the busiest. The survivor keeps its id, key and publication state. Every other id is recorded
+    /// as absorbed (<see cref="QaAbsorbed"/>): never reused, and the issue of an absorbed published finding is left for the publisher to close as
+    /// a duplicate of the survivor's. Call under the lock.
+    /// </summary>
+    private QaFinding MergeAll(List<QaFinding> findings)
+    {
+        QaFinding survivor = findings
+            .OrderBy(static f => PublicationRank(f.Publication))
+            .ThenBy(static f => f.Publication.Issue)
+            .ThenByDescending(static f => f.Count)
+            .ThenBy(static f => f.Id, StringComparer.Ordinal)
+            .First();
+        Remove(survivor);
+        foreach (QaFinding other in findings)
+        {
+            if (ReferenceEquals(other, survivor)) continue;
+            Absorb(survivor, other);
+            Remove(other);
+            Merged++;
+            bool issue = other.Publication.HoldsIssue; // any state: a Failed publication keeps the number of an issue that exists
+            _absorbed[other.Id] = new QaAbsorbed(other.Id, survivor.Id, issue ? other.Publication.Issue : 0, !issue || other.Publication.State == QaPublicationState.KnownClosed);
+            foreach (string earlier in _absorbed.Where(p => p.Value.Survivor == other.Id).Select(p => p.Key).ToList()) _absorbed[earlier] = _absorbed[earlier] with { Survivor = survivor.Id, Commented = false }; // the comment named the old survivor
+            if (issue)
+            {
+                log?.LogInformation("Bot QA: issue #{Absorbed} (finding {AbsorbedId}) absorbed into #{Survivor} (finding {SurvivorId}); one problem, one issue",
+                    other.Publication.Issue, PlayerbotQaFingerprint.ShortId(other.Id), survivor.Publication.Issue, PlayerbotQaFingerprint.ShortId(survivor.Id));
+            }
+        }
+
+        Add(survivor);
+        _snapshot = null;
+        return survivor;
+    }
+
+    private void Absorb(QaFinding into, QaFinding from)
+    {
+        into.Count += from.Count;
+        if (from.FirstSeenUtc < into.FirstSeenUtc) into.FirstSeenUtc = from.FirstSeenUtc;
+        if (from.LastSeenUtc > into.LastSeenUtc) into.LastSeenUtc = from.LastSeenUtc;
+        foreach (ulong hash in from.Bots)
+        {
+            if (into.Bots.Count < QaFinding.MaxTrackedBots) into.Bots.Add(hash);
+        }
+
+        into.AnonymousBots = Math.Max(into.AnonymousBots, from.AnonymousBots);
+        into.ClassMask |= from.ClassMask;
+        into.Coverage |= from.Coverage;
+        foreach (uint attacker in from.Attackers)
+        {
+            if (into.Attackers.Count < QaFinding.MaxLoopAttackers) into.Attackers.Add(attacker);
+        }
+
+        if (into.DeathSource.Length == 0) into.DeathSource = from.DeathSource;
+        into.Anchor ??= from.Anchor;
+        if (into.Quest == 0) into.Quest = from.Quest;
+        if (into.Target == 0) into.Target = from.Target;
+        into.QuestTitle ??= from.QuestTitle;
+        if (into.Cause == QaCause.Unknown && into.CauseDetail.Length == 0)
+        {
+            into.Cause = from.Cause;
+            into.CauseDetail = from.CauseDetail;
+        }
+
+        if (!into.Publication.HoldsIssue) into.OccurrencesReported = Math.Max(into.OccurrencesReported, from.OccurrencesReported);
+        if (from.LastCommentUtc is { } commented && (into.LastCommentUtc is null || commented > into.LastCommentUtc)) into.LastCommentUtc = commented;
+        if (into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) into.Publication = from.Publication;
+        List<QaSample> samples = [.. into.Samples, .. from.Samples];
+        samples.Sort(static (x, y) => x.AtUtc.CompareTo(y.AtUtc));
+        into.Samples.Clear();
+        into.Samples.AddRange(samples.Skip(Math.Max(0, samples.Count - maxSamples)));
+        into.Severity = Math.Max(into.Severity, from.Severity);
     }
 
     private static string SourceOf(QaSignal signal) => signal.Bot?.Source is { Length: > 0 } source ? source : "Unobserved";
@@ -237,7 +511,14 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         ArgumentNullException.ThrowIfNull(update);
         lock (_gate)
         {
-            if (!_byId.TryGetValue(id, out QaFinding? finding)) return;
+            if (!_byId.TryGetValue(id, out QaFinding? finding))
+            {
+                // The finding was merged into another while the publisher worked on it: its outcome is the survivor's (or, when the survivor has an
+                // issue of its own, the absorbed issue is recorded to be closed as a duplicate), never lost.
+                if (_absorbed.TryGetValue(id, out QaAbsorbed? gone) && update.Publication.HoldsIssue) ApplyToAbsorbed(gone, update);
+                return;
+            }
+
             finding.Publication = update.Publication;
             if (update.LastCommentUtc is { } at) finding.LastCommentUtc = at;
             if (update.OccurrencesReported is { } reported) finding.OccurrencesReported = reported;
@@ -254,11 +535,11 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             if (id is null)
             {
                 removed = _byId.Count;
-                _byId.Clear();
+                ClearFindings();
             }
             else
             {
-                removed = _byId.Remove(id) ? 1 : 0;
+                removed = _byId.TryGetValue(id, out QaFinding? held) && Remove(held) ? 1 : 0;
             }
 
             if (removed > 0) _snapshot = null;
@@ -272,28 +553,111 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         lock (_gate)
         {
             return new QaAggregatorState([.. _byId.Values.Select(f => f.ToView())],
-                _byId.Values.Where(f => f.Bots.Count > 0).ToDictionary(f => f.Id, f => f.Bots.Order().ToArray(), StringComparer.Ordinal));
+                _byId.Values.Where(f => f.Bots.Count > 0).ToDictionary(f => f.Id, f => f.Bots.Order().ToArray(), StringComparer.Ordinal),
+                [.. _absorbed.Values.OrderBy(a => a.Id, StringComparer.Ordinal)]);
+        }
+    }
+
+    public void Pin(string id)
+    {
+        lock (_gate) _inFlight[id] = _inFlight.GetValueOrDefault(id) + 1;
+    }
+
+    public void Unpin(string id)
+    {
+        lock (_gate)
+        {
+            if (!_inFlight.TryGetValue(id, out int n)) return;
+            if (n <= 1) _inFlight.Remove(id);
+            else _inFlight[id] = n - 1;
+        }
+    }
+
+    public IReadOnlyList<QaAbsorbed> PendingDuplicates()
+    {
+        lock (_gate) return [.. _absorbed.Values.Where(a => a.Issue > 0 && !a.Handled).OrderBy(a => a.Id, StringComparer.Ordinal)];
+    }
+
+    public void MarkDuplicateHandled(string id)
+    {
+        lock (_gate)
+        {
+            if (_absorbed.TryGetValue(id, out QaAbsorbed? a)) _absorbed[id] = a with { Handled = true };
+        }
+    }
+
+    public void MarkDuplicateCommented(string id)
+    {
+        lock (_gate)
+        {
+            if (_absorbed.TryGetValue(id, out QaAbsorbed? a)) _absorbed[id] = a with { Commented = true };
+        }
+    }
+
+    private void ApplyToAbsorbed(QaAbsorbed gone, QaPublicationUpdate update)
+    {
+        if (!_byId.TryGetValue(gone.Survivor, out QaFinding? survivor))
+        {
+            // The survivor is gone as well: the alias protects nothing now, and the issue is left as it is (open, with its marker, as before any merge).
+            _absorbed.Remove(gone.Id);
+            log?.LogWarning("Bot QA: issue #{Issue} was opened for finding {Id}, which was merged into a finding that no longer exists; it is left open", update.Publication.Issue, PlayerbotQaFingerprint.ShortId(gone.Id));
+            return;
+        }
+
+        if (!survivor.Publication.HoldsIssue)
+        {
+            survivor.Publication = update.Publication;
+            if (update.LastCommentUtc is { } at) survivor.LastCommentUtc = at;
+            if (update.OccurrencesReported is { } reported) survivor.OccurrencesReported = Math.Min(reported, survivor.Count);
+            _absorbed[gone.Id] = gone with { Issue = 0, Handled = true };
+            _snapshot = null;
+            return;
+        }
+
+        bool closed = update.Publication.State == QaPublicationState.KnownClosed;
+        _absorbed[gone.Id] = gone with { Issue = update.Publication.Issue, Handled = closed };
+        if (survivor.Publication.Issue is > 0 and int survivorIssue && update.Publication.Issue > 0)
+        {
+            log?.LogInformation("Bot QA: issue #{Absorbed} (finding {AbsorbedId}) absorbed into #{Survivor} (finding {SurvivorId}); one problem, one issue",
+                update.Publication.Issue, PlayerbotQaFingerprint.ShortId(gone.Id), survivorIssue, PlayerbotQaFingerprint.ShortId(gone.Survivor));
         }
     }
 
     /// <summary>
     /// Load persisted findings (start-up, before signals flow). A finding whose id is not the hash of its key is dropped (a damaged or edited file
-    /// must not plant a marker); the highest-severity ones are kept when the file holds more than the cap. The number dropped.
+    /// must not plant a marker); a finding not seen within the age limit and not published or known-closed is dropped (<see cref="AgedOut"/>);
+    /// findings that are one problem under the current identity are merged into one (<see cref="Merged"/>: the published one survives with its
+    /// id and publication state); the published ones, then the highest-severity ones, are kept when the file holds more than the cap. The number dropped as invalid or over the cap.
     /// </summary>
-    internal int Restore(QaAggregatorState state)
+    internal int Restore(QaAggregatorState state, DateTime? now = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         int dropped = 0;
+        DateTime at = now ?? DateTime.UtcNow;
         lock (_gate)
         {
-            _byId.Clear();
-            foreach (QaFindingView view in state.Findings.OrderByDescending(v => v.Severity).ThenBy(v => v.Id, StringComparer.Ordinal))
+            ClearFindings();
+            _absorbed.Clear();
+            foreach (QaAbsorbed a in state.Absorbed ?? [])
+            {
+                if (a.Id is { Length: PlayerbotQaFingerprint.FullChars } && a.Survivor is { Length: PlayerbotQaFingerprint.FullChars } && a.Id != a.Survivor) _absorbed[a.Id] = a with { Issue = Math.Max(0, a.Issue) };
+            }
+
+            foreach (QaFindingView view in state.Findings
+                .OrderBy(v => PublicationRank(v.Publication ?? QaPublication.Pending))
+                .ThenByDescending(v => v.Severity).ThenBy(v => v.Id, StringComparer.Ordinal))
             {
                 if (view.Id is not { Length: PlayerbotQaFingerprint.FullChars } || view.Key is null
                     || !string.Equals(PlayerbotQaFingerprint.Hash(view.Key), view.Id, StringComparison.Ordinal)
-                    || !Enum.IsDefined(view.Kind) || _byId.Count >= maxFindings || _byId.ContainsKey(view.Id))
+                    || !Enum.IsDefined(view.Kind) || _byId.ContainsKey(view.Id) || _absorbed.ContainsKey(view.Id))
                 {
                     dropped++;
+                    continue;
+                }
+
+                if (IsStale(view.Publication ?? QaPublication.Pending, view.Coverage, view.LastSeenUtc, at))
+                {
+                    AgedOut++;
                     continue;
                 }
 
@@ -320,8 +684,35 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 if (state.Bots.TryGetValue(view.Id, out ulong[]? bots)) finding.Bots.UnionWith(bots.Take(QaFinding.MaxTrackedBots));
                 if (finding.Bots.Count < view.DistinctBots) finding.AnonymousBots = view.DistinctBots;
                 foreach (QaSample sample in (view.Samples ?? []).TakeLast(maxSamples)) finding.Samples.Add(sample);
-                _byId[finding.Id] = finding;
+                if (stall is not null)
+                {
+                    // The group is computed where the finding began (its anchor), exactly as the signal that opened it would have.
+                    QaSignal placed = finding.Anchor is { } anchor ? stall with { HasPosition = true, Map = anchor.Map, X = anchor.X, Y = anchor.Y } : stall;
+                    (finding.Group, finding.GroupBase) = PlayerbotQaFingerprint.StallGroup(placed);
+                }
+
+                if (ProbeOf(finding) is { } probe)
+                {
+                    List<QaFinding> same = Matches(probe);
+                    if (same.Count > 0)
+                    {
+                        same.Add(finding);
+                        MergeAll(same);
+                        continue;
+                    }
+                }
+
+                // The cap never drops a published or known-closed finding: its issue number is the only local memory of the issue.
+                if (_byId.Count >= maxFindings && !finding.Publication.HoldsIssue)
+                {
+                    dropped++;
+                    continue;
+                }
+
+                Add(finding);
             }
+
+            PruneAbsorbed();
 
             _snapshot = null;
         }
@@ -347,7 +738,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         foreach (uint attacker in attackers)
         {
-            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxAttackers) finding.Attackers.Add(attacker);
+            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxLoopAttackers) finding.Attackers.Add(attacker);
         }
 
         finding.DeathSource = !string.IsNullOrEmpty(view.DeathSource) ? view.DeathSource
@@ -383,19 +774,82 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     {
         QaFinding? victim = Victim(static f => f.Count == 0);
         if (victim is null && !coverageOnly) victim = Victim(static _ => true);
-        return victim is not null && _byId.Remove(victim.Id);
+        return victim is not null && Remove(victim);
     }
 
+    /// <summary>
+    /// The cheapest finding to lose among the eligible unpublished ones: one that is a single occurrence of a single bot first (noise), then the
+    /// lowest severity, then the one not seen for longest. A published or known-closed finding is never a victim.
+    /// </summary>
     private QaFinding? Victim(Func<QaFinding, bool> eligible)
     {
         QaFinding? victim = null;
         foreach (QaFinding f in _byId.Values)
         {
-            if (f.Publication.Pinned || !eligible(f)) continue;
-            if (victim is null || f.Severity < victim.Severity || (f.Severity == victim.Severity && f.LastSeenUtc < victim.LastSeenUtc)) victim = f;
+            if (f.Publication.HoldsIssue || IsProtected(f.Id) || !eligible(f)) continue;
+            if (victim is null || Cheaper(f, victim)) victim = f;
         }
 
         return victim;
+    }
+
+    /// <summary>A finding the publisher is working on, or the survivor of one it is working on that was merged away meanwhile (its outcome lands on the survivor).</summary>
+    private bool IsProtected(string id)
+    {
+        if (_inFlight.Count == 0) return false;
+        if (_inFlight.ContainsKey(id)) return true;
+        foreach (string working in _inFlight.Keys)
+        {
+            if (_absorbed.TryGetValue(working, out QaAbsorbed? a) && string.Equals(a.Survivor, id, StringComparison.Ordinal)) return true;
+        }
+
+        return false;
+    }
+
+    private static bool OneOff(QaFinding f) => f.Count <= 1 && f.DistinctBots <= 1;
+
+    private static bool Cheaper(QaFinding f, QaFinding than)
+    {
+        if (OneOff(f) != OneOff(than)) return OneOff(f);
+        if (f.Severity != than.Severity) return f.Severity < than.Severity;
+        return f.LastSeenUtc < than.LastSeenUtc;
+    }
+
+    private bool IsStale(QaPublication publication, bool coverage, DateTime lastSeenUtc, DateTime now)
+        => staleAfter is { } limit && !publication.HoldsIssue && !coverage && now - lastSeenUtc > limit;
+
+    /// <summary>
+    /// Drop every finding not seen within the age limit that is not published or known-closed (and not a start-up coverage finding, which a
+    /// running server lists only once); how many went. Does nothing without an age limit.
+    /// </summary>
+    internal int AgeOut(DateTime now)
+    {
+        lock (_gate)
+        {
+            // A finding the publisher is working on stays until it is done with it, or its issue number would have nowhere to go.
+            QaFinding[] stale = [.. _byId.Values.Where(f => !IsProtected(f.Id) && IsStale(f.Publication, f.Coverage, f.LastSeenUtc, now))];
+            foreach (QaFinding f in stale) Remove(f);
+            if (stale.Length > 0)
+            {
+                AgedOut += stale.Length;
+                _snapshot = null;
+            }
+
+            PruneAbsorbed();
+            return stale.Length;
+        }
+    }
+
+    /// <summary>
+    /// Forget the merged-away ids whose survivor is gone (reset by hand, or dropped): the alias protects nothing, and an issue it was to close is left open as it was
+    /// before the merge. The rest are bounded by twice the finding cap, those without an issue first. Call under the lock.
+    /// </summary>
+    private void PruneAbsorbed()
+    {
+        foreach (string id in _absorbed.Where(p => !_byId.ContainsKey(p.Value.Survivor) && !IsProtected(p.Key)).Select(p => p.Key).ToList()) _absorbed.Remove(id);
+        int excess = _absorbed.Count - maxFindings * 2;
+        if (excess <= 0) return;
+        foreach (string id in _absorbed.Where(p => p.Value.Issue == 0).Select(p => p.Key).Order(StringComparer.Ordinal).Take(excess).ToList()) _absorbed.Remove(id);
     }
 
     private ulong BotHash(Guid bot)

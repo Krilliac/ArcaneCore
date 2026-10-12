@@ -82,7 +82,12 @@ public sealed partial class WorldSession
             PacketCapture? capture = _packetCapture;
             if (capture is null) return;
             try { capture.Write(fromClient, (ushort)opcode, payload); }
-            catch (IOException) { capture.Dispose(); _packetCapture = null; }
+            catch (IOException ex)
+            {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("net.packet-capture", ex); // capture stops here; the connection must not
+                capture.Dispose();
+                _packetCapture = null;
+            }
         }
     }
 }

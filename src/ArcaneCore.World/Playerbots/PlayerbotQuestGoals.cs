@@ -24,6 +24,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     internal int TripEvaluations => _trip.Evaluations;
     private PlayerbotRoute? _route;
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this controller's plans.</summary>
+    private TileWait _tileWait;
     private ObjectGuid _stageNpc;
     private uint _stageQuest;
     private uint _stageDeadline;
@@ -212,10 +215,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         if (!WithinReach(player, target.Npc))
         {
-            if (_route is null && !PlayerbotNavigation.TryPlan(player,
-                    new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, out _route,
+            PlanOutcome planned = PlanOutcome.Route;
+            if (_route is null)
+                planned = PlayerbotNavigation.PlanExact(player,
+                    new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, ref _tileWait, now, out _route,
                     completedQuestReturn: target.Action >= QuestAction.Complete
-                        && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false }))
+                        && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false });
+            if (planned == PlanOutcome.Pending)
+            {
+                // A tile of the way is still being read: no backoff, the same giver is planned to again next think.
+                Goal = PlayerbotGoalKind.Quest;
+                return true;
+            }
+            if (planned == PlanOutcome.Refused)
             {
                 Backoff(now);
                 return false;

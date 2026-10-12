@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Resilience;
@@ -17,7 +18,7 @@ namespace ArcaneCore.Data.Resilience;
 /// <para>
 /// The open time is measured here, from <c>TransactionStarted</c> to the end event; EF's own <see cref="TransactionEndEventData.Duration"/> is only the
 /// commit (or rollback) call, so the warning reports the two parts separately: the time the application held the transaction before ending it, and the time
-/// spent inside the end call (the WAL fsync of a commit under <c>synchronous=FULL</c>, i.e. disk I/O rather than application code). A transaction costs one
+/// spent inside the end call (on SQLite the WAL fsync of a commit under <c>synchronous=FULL</c>, or only the WAL write under <c>synchronous=NORMAL</c>, which the message reports as the setting in effect for the context; either way disk I/O rather than application code). A transaction costs one
 /// small allocation and a weak-table entry while the threshold is on; only an over-threshold one captures a stack
 /// trace. The hint is the first frame outside the framework and this type, which is the method that committed or rolled the transaction back when the
 /// provider completes synchronously (SQLite always does), and may be "(no application frame)" on a provider that resumes on another thread. A transaction
@@ -121,8 +122,47 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
         long openMs = (long)open.TotalMilliseconds;
         long endMs = Math.Clamp((long)endCall.TotalMilliseconds, 0, openMs);
         _logger.LogWarning(
-            "database transaction on {Context} was open {DurationMs} ms ({Outcome}; warns at {ThresholdMs} ms): {HeldMs} ms held by the application before the end call and {EndMs} ms inside the end call (commit: the WAL fsync, i.e. disk I/O), so other writers may have failed as locked. Closed by {Caller}",
-            context?.GetType().Name ?? "(unknown context)", openMs, outcome, ThresholdMs, openMs - endMs, endMs, CallerHint());
+            "database transaction on {Context} was open {DurationMs} ms ({Outcome}; warns at {ThresholdMs} ms): {HeldMs} ms held by the application before the end call and {EndMs} ms inside the end call ({EndCallKind}), so other writers may have failed as locked. Closed by {Caller}",
+            context?.GetType().Name ?? "(unknown context)", openMs, outcome, ThresholdMs, openMs - endMs, endMs, EndCallKind(context), CallerHint());
+    }
+
+    /// <summary>
+    /// What the end call spends its time on, for the message: on SQLite it names the <c>synchronous</c> setting actually in effect for the context (read from the
+    /// <see cref="SqliteConnectionPragmaInterceptor"/> its options carry), because under NORMAL a commit does not fsync the WAL. Slow path only.
+    /// </summary>
+    private static string? DataSourceOf(DbContext? context)
+    {
+        try
+        {
+            return context?.Database.GetDbConnection().DataSource;
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    private static string EndCallKind(DbContext? context)
+    {
+        SqliteConnectionPragmaInterceptor? pragma = null;
+        if (context is not null)
+        {
+            foreach (object interceptor in context.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()?.Interceptors ?? [])
+            {
+                if (interceptor is SqliteConnectionPragmaInterceptor found)
+                {
+                    pragma = found;
+                    break;
+                }
+            }
+        }
+
+        return pragma?.EffectiveFor(DataSourceOf(context)) switch
+        {
+            SqliteSynchronousMode.Full => "commit: the WAL fsync under synchronous=FULL, i.e. disk I/O",
+            SqliteSynchronousMode.Normal => "commit: no WAL fsync under synchronous=NORMAL, so disk I/O contention or a WAL checkpoint",
+            _ => "commit or rollback: disk or network I/O",
+        };
     }
 
     /// <summary>EF logged <c>TransactionDisposed</c> for <paramref name="transaction"/>: if this interceptor still holds its stamp, it was never committed, rolled back or failed.</summary>

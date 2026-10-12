@@ -65,6 +65,6 @@ public static class CollisionServices
         }
 
         logger.LogInformation("Collision: navmeshes from {Directory}", directory);
-        return new NavMeshPathfinder(directory, logger);
+        return new NavMeshPathfinder(directory, logger, options.NavTileReadConcurrency);
     }
 }

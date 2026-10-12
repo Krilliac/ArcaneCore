@@ -32,6 +32,8 @@ internal sealed class RecordingTransport : IQaIssueTransport
 
     public Task ReopenAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public void Dispose()
     {
     }

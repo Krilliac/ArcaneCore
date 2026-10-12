@@ -18,6 +18,9 @@ internal sealed record QaStoreFile
 
     public IReadOnlyDictionary<string, ulong[]> Bots { get; init; } = new Dictionary<string, ulong[]>();
 
+    /// <summary>The ids of findings merged into another (and the issue of each that had one): never reused, and the absorbed issue is closed as a duplicate.</summary>
+    public IReadOnlyList<QaAbsorbed> Absorbed { get; init; } = [];
+
     public QaLedgerState Ledger { get; init; } = new([], []);
 }
 

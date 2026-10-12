@@ -49,13 +49,13 @@ public sealed class NameCatalog
     public NameCatalogResult Check(string name)
     {
         try { if (_profane.IsMatch(name)) return NameCatalogResult.Profane; }
-        catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; }
+        catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; } // regex timeout: fails closed (the name is refused); the catalog has no logger
         foreach (Regex pattern in _filterProfane)
             try { if (pattern.IsMatch(name)) return NameCatalogResult.Profane; }
-            catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; }
+            catch (RegexMatchTimeoutException) { return NameCatalogResult.Profane; } // regex timeout: fails closed (the name is refused); the catalog has no logger
         if (_reservedExact.Contains(name.ToLowerInvariant())) return NameCatalogResult.Reserved;
         try { if (_reserved.IsMatch(name)) return NameCatalogResult.Reserved; }
-        catch (RegexMatchTimeoutException) { return NameCatalogResult.Reserved; }
+        catch (RegexMatchTimeoutException) { return NameCatalogResult.Reserved; } // regex timeout: fails closed (the name is refused); the catalog has no logger
         return NameCatalogResult.Allowed;
     }
 
@@ -67,7 +67,11 @@ public sealed class NameCatalog
     {
         if (!IsReservedExact(name)) return false;
         try { return !_reserved.IsMatch(name); }
-        catch (RegexMatchTimeoutException) { return false; }
+        catch (RegexMatchTimeoutException ex)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("names.reserved-regex-timeout", ex); // regex timeout: fails closed (the name is refused); the catalog has no logger, so it is counted
+            return false;
+        }
     }
 }
 

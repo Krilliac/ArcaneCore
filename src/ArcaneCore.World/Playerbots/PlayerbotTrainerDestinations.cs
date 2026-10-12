@@ -24,6 +24,9 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly List<Destination> _destinations = [];
     private readonly HashSet<uint> _blockedSpawns = [];
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this controller's plans.</summary>
+    private TileWait _tileWait;
     private PlayerbotRoute? _route;
     private uint _routeSpawn;
     private Destination? _routeDestination;
@@ -131,7 +134,14 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         {
             if (!HasAffordableSpell(player, services, destination)) continue;
             Vector3 target = new(destination.Spawn.X, destination.Spawn.Y, destination.Spawn.Z);
-            if (!PlayerbotNavigation.TryPlanToward(player, target, _options, out PlayerbotRoute? route))
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, _options, ref _tileWait, now, out PlayerbotRoute? route);
+            if (planned == PlanOutcome.Pending)
+            {
+                // A tile of the way is still being read: not a verdict on this trainer. Keep it unblocked, plan again next think.
+                TargetEntry = destination.Entry;
+                return true;
+            }
+            if (planned == PlanOutcome.Refused)
             {
                 _blockedSpawns.Add(destination.Spawn.Guid);
                 return false;

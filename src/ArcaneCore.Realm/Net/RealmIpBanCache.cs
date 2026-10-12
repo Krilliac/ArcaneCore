@@ -77,8 +77,9 @@ public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock =
         {
             snapshot = await CurrentAsync(store, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("realm.ipban-reload", ex); // counted (the cache has no logger); the row-read fallback below is counted too
             snapshot = null; // the reload failed: answer this challenge the vmangos way
         }
 

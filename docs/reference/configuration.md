@@ -46,6 +46,7 @@ How to read the tables:
 - [`NpcServices`](#npcservices)
 - [`Ops:Diagnostics`](#opsdiagnostics)
 - [`Ops:Metrics`](#opsmetrics)
+- [`Ops:Observability`](#opsobservability)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
@@ -382,20 +383,24 @@ How to read the tables:
 | `Database:Auth:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
 | `Database:Auth:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine of this component's database (`Database:Auth`, `Database:Characters` or `Database:World`). Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
 | `Database:Auth:SqliteBusyTimeoutMs` | `int?` | `null` | - | SQLite only: this component's busy timeout in milliseconds (0..60000), overriding `Database:SqliteBusyTimeoutMs`. Unset inherits it. Other engines ignore it. |
+| `Database:Auth:SqliteSynchronous` | `SqliteSynchronousMode?` | `null` | - | SQLite only: this component's `PRAGMA synchronous` (Full or Normal), overriding `Database:SqliteSynchronous`. Unset inherits it. Normal avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash; it is applied only when the database is in WAL mode, otherwise the database stays on Full and an error is logged. Other engines ignore it. Values: `Full`, `Normal`. |
 | `Database:Characters:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
 | `Database:Characters:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine of this component's database (`Database:Auth`, `Database:Characters` or `Database:World`). Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
 | `Database:Characters:SqliteBusyTimeoutMs` | `int?` | `null` | - | SQLite only: this component's busy timeout in milliseconds (0..60000), overriding `Database:SqliteBusyTimeoutMs`. Unset inherits it. Other engines ignore it. |
+| `Database:Characters:SqliteSynchronous` | `SqliteSynchronousMode?` | `null` | - | SQLite only: this component's `PRAGMA synchronous` (Full or Normal), overriding `Database:SqliteSynchronous`. Unset inherits it. Normal avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash; it is applied only when the database is in WAL mode, otherwise the database stays on Full and an error is logged. Other engines ignore it. Values: `Full`, `Normal`. |
 | `Database:ConnectionString` | `string` | `""` | - | The connection string for any component that has no `Database:<Component>` sub-section of its own. The shipped Realm file uses this single-database form. |
 | `Database:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine for any component that has no `Database:<Component>` sub-section of its own (the single-database layout). MariaDB is the primary engine; MySql, PostgreSql and Sqlite are also supported. Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
 | `Database:SlowCommandWarnMs` | `int` | `2000` | - | How long (milliseconds, default 2000; 0 disables) a single database command may take to execute before it is logged at WARN with the DbContext, whether it ran inside a transaction or autocommitted, whether it was a write, the first 80 characters of its SQL (parameter values are never logged) and the code that issued it, on every provider. It sees what the transaction warning cannot: writes that autocommit and wait in "database is locked". Identical warnings are limited to one per 10 s (docs/areas/persistence.md). |
 | `Database:SlowTransactionWarnMs` | `int` | `2000` | - | How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the code that closed it, on every provider. A transaction that holds the write lock this long is what makes other writers fail with "database is locked", so the next holder names itself in the log (docs/areas/persistence.md). |
 | `Database:SqliteBusyTimeoutMs` | `int` | `5000` | - | SQLite only: how long (0..60000 ms, default 5000) a connection waits inside SQLite for another connection's write lock before reporting "database is locked", set as `PRAGMA busy_timeout` on every connection (never more than the connection string's Default Timeout, and clamped to `Resilience:Database:QueryTimeoutMs` when the database guard is on, so a refused call never outlives its deadline in SQLite's busy handler). Without it a waiting writer retries only every 150 ms, so the many background writers on one SQLite file starve each other. 0 disables the pragma. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). |
+| `Database:SqliteSynchronous` | `SqliteSynchronousMode` | `Full` | - | SQLite only: the `PRAGMA synchronous` set on every connection, Full (default) or Normal. Full fsyncs the WAL at every commit, so a committed save survives power loss. Normal skips that fsync, which removes multi-second commit stalls on a slow disk (and the "database is locked" failures they cause in other writers); the database stays consistent, but the most recent commits can be lost on power loss or an OS crash, never on an application crash. Normal is applied only to a database that is in WAL mode (the schema bootstrap switches file databases to WAL, best effort): a database that is not in WAL mode (the switch failed or was refused) stays on Full and an error is logged, because Normal outside WAL can corrupt the database on power loss. Each component may override it with a Database:Auth, Database:Characters or Database:World SqliteSynchronous key. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). Values: `Full`, `Normal`. |
 | `Database:SqliteWriteTimeoutMs` | `int` | `5000` | - | SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection waits for another connection's write lock before it fails as "database is locked". It is written into the connection string's Default Timeout (30 s) when smaller, and replaces 0 (unlimited), so it bounds every command including EF's first one and its `BEGIN IMMEDIATE`, and through the busy-timeout clamp SQLite's own wait. Without it a writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). |
 | `Database:Upgrade:LockTimeoutSeconds` | `int` | `60` | - | How long a start waits for another process's schema work, in seconds; must be 1..86400 or the start is refused as a configuration error. |
 | `Database:Upgrade:Policy` | `SchemaPolicy` | `Always` | - | What a start may do to the schema. `Always` (default) creates and upgrades; `CreateOnly` creates an empty database but refuses to upgrade an existing one (the retail-like setting for production, where `arcane-db upgrade` applies updates); `Never` only verifies. See docs/ops/database-upgrade.md. Values: `Always`, `CreateOnly`, `Never`. |
 | `Database:World:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
 | `Database:World:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine of this component's database (`Database:Auth`, `Database:Characters` or `Database:World`). Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
 | `Database:World:SqliteBusyTimeoutMs` | `int?` | `null` | - | SQLite only: this component's busy timeout in milliseconds (0..60000), overriding `Database:SqliteBusyTimeoutMs`. Unset inherits it. Other engines ignore it. |
+| `Database:World:SqliteSynchronous` | `SqliteSynchronousMode?` | `null` | - | SQLite only: this component's `PRAGMA synchronous` (Full or Normal), overriding `Database:SqliteSynchronous`. Unset inherits it. Normal avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash; it is applied only when the database is in WAL mode, otherwise the database stays on Full and an error is logged. Other engines ignore it. Values: `Full`, `Normal`. |
 
 ## `Diagnostics`
 
@@ -641,6 +646,22 @@ How to read the tables:
 | `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
 | `Ops:Metrics:RealmPrometheusPrefix` | `string` | `"http://localhost:9465/metrics/"` | - | The Realm daemon's Prometheus scrape listener prefix, so a Realm and a World started from one shared appsettings.json do not both bind the same port. It never falls back to `PrometheusPrefix`; setting both to the same prefix makes the second daemon to start log an error and serve no metrics. Default `http://localhost:9465/metrics/`. |
 
+## `Ops:Observability`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Observability:ClientRejections:BurstPerSession` | `int` | `20` | - | Lines a session may log in a burst before the refill rate applies. 1-1000. Default 20. |
+| `Ops:Observability:ClientRejections:Enabled` | `bool` | `true` | - | `false`: no refusal is decoded or logged and the send path does no extra work. Default true. |
+| `Ops:Observability:ClientRejections:LogSilentDrops` | `bool` | `true` | - | `true`: handlers that return without answering the client log the reason (at Debug for a bot, Information for a player). Default true. |
+| `Ops:Observability:ClientRejections:RefillPerMinute` | `int` | `60` | - | Lines a session earns back per minute once its burst is spent; a refusal over the limit is counted and summarised in the next line that is written. 1-6000. Default 60. |
+| `Ops:Observability:DuplicatePackets:CaptureStacks` | `bool` | `true` | - | `true`: the warning carries a compact call stack of the second send, and of the first as well once the opcode has duplicated before in this process. Default true. |
+| `Ops:Observability:DuplicatePackets:Enabled` | `bool` | `true` | - | `false`: nothing is hashed and the send path does no extra work. Default true. |
+| `Ops:Observability:DuplicatePackets:IncludeBots` | `bool` | `false` | - | `true`: playerbot sessions are checked as well. Default false (bots are excluded). |
+| `Ops:Observability:DuplicatePackets:RingSize` | `int` | `16` | - | Recent packets remembered per session; older ones are overwritten. 4-256. Default 16. |
+| `Ops:Observability:DuplicatePackets:WarnBurstPerSession` | `int` | `3` | - | Warnings a session may log in a burst. 1-100. Default 3. |
+| `Ops:Observability:DuplicatePackets:WarnPerMinute` | `int` | `6` | - | Warnings a session earns back per minute after its burst. 1-600. Default 6. |
+| `Ops:Observability:DuplicatePackets:WindowMs` | `int` | `100` | - | Two identical packets closer together than this many milliseconds are a duplicate (a world tick is 50 ms). 1-5000. Default 100. |
+
 ## `Ops:Watchdog`
 
 | Key | Type | Default | Reload | Meaning |
@@ -653,6 +674,8 @@ How to read the tables:
 | `Ops:Watchdog:Heartbeat:IntervalSeconds` | `int` | `0` | - | Seconds between beats. 0 = half of systemd's `WATCHDOG_USEC` when it is set, otherwise 10. Default 0. |
 | `Ops:Watchdog:Heartbeat:Mode` | `HeartbeatMode` | `Auto` | - | Where the heartbeat goes. Default Auto. Values: `Auto`, `None`, `Systemd`, `File`, `Stdout`. |
 | `Ops:Watchdog:Heartbeat:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two "heartbeat withheld" warnings. Default 30. |
+| `Ops:Watchdog:HostLoad:Enabled` | `bool` | `true` | - | `false`: nothing is sampled and the hang, overrun and slow-map lines carry no host-load text. Default true. |
+| `Ops:Watchdog:HostLoad:HistorySeconds` | `int` | `120` | - | How many seconds of samples (one per watchdog check) are kept to difference against; a slow window longer than this is measured from the oldest sample. 10-3600. Default 120. |
 | `Ops:Watchdog:Memory:Action` | `MemoryPressureAction` | `None` | - | What happens when the managed heap reaches `ActionHeapBytes`. Default None (log only; `Collect` pauses the world thread for a blocking compacting gen2 collection, `Stop` ends the process with exit code 1). Values: `None`, `Log`, `Collect`, `Stop`. |
 | `Ops:Watchdog:Memory:ActionCooldownSeconds` | `int` | `300` | - | Least seconds between two actions (a Stop fires once). Default 300. |
 | `Ops:Watchdog:Memory:ActionHeapBytes` | `long` | `0` | - | The heap size in bytes at which `Action` fires. 0 disables the action whatever `Action` says. Default 0. |
@@ -1009,6 +1032,7 @@ How to read the tables:
 | `World:Collision:EnableLineOfSight` | `bool` | `true` | - | Use vmaps for line of sight (vmangos `vmap.enableLOS`, default on). |
 | `World:Collision:EnablePathfinding` | `bool` | `true` | - | Use navmeshes for paths (vmangos `mmap.enabled`, default on). |
 | `World:Collision:MMapDirectory` | `string` | `""` | - | Directory of the generated navmeshes (`NNN.mmap`, `NNNXXYY.mmtile`). Empty: `mmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/mmaps`). |
+| `World:Collision:NavTileReadConcurrency` | `int` | `2` | - | The most navigation tile files (`NNNXXYY.mmtile`) read at the same time by bots' path searches, in the background. Reads share the data disk with the map, so a low number keeps a cold start from starving it; a tile a search waits for is then ready a little later. At least 1. |
 | `World:Collision:VMapDirectory` | `string` | `""` | - | Directory of the extracted vmaps (`NNN.vmtree`, `NNN_YY_XX.vmtile`, `*.vmo`). Empty: `vmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/vmaps`). |
 
 ## `World:Console`
@@ -1279,6 +1303,7 @@ How to read the tables:
 | `World:Playerbots:Population:Enabled` | `bool` | `false` | live | Run the population manager (off by default). Off: no bot is created, started, parked or moved by it. |
 | `World:Playerbots:Population:ExcludedZones` | `uint[]` | `[]` | live | Area table zone ids bots are never placed in (at most 256, no duplicates). Capitals and cities are never used. |
 | `World:Playerbots:Population:Factions` | `PopulationFactions` | `Both` | live | The factions bots are created for (Both by default). Values: `Both`, `Alliance`, `Horde`. |
+| `World:Playerbots:Population:FreshLaunch` | `bool` | `false` | live | Fresh-launch mode (off by default; live): new bots the population creates stay level 1 with their default starting kit at their race's native start location (no boost, no teleport), the race and class mix stays balanced across both factions, and the level bands, the zone atlas and relocation are bypassed (the target is one pool; bots level up on their own). |
 | `World:Playerbots:Population:IntervalSeconds` | `int` | `10` | live | Seconds of world time between two passes of the control loop (2..600). |
 | `World:Playerbots:Population:MaxCreatePerMinute` | `int` | `4` | live | The most new bot characters created per minute of world time (0..60; 0 creates none and only restarts parked bots). |
 | `World:Playerbots:Population:MaxParksPerInterval` | `int` | `2` | live | The most bots parked in one pass (1..100). |
@@ -1289,6 +1314,9 @@ How to read the tables:
 | `World:Playerbots:Population:ParkWhenOverBudget` | `bool` | `true` | live | Park (stop) the least useful bots the population owns while the tick p95 is over the budget (on by default). Off: only stop adding. |
 | `World:Playerbots:Population:Relocation` | `PopulationRelocation` | `Teleport` | live | What happens to a bot that out-levelled its zone or is below it (Teleport by default). Values: `Off`, `Teleport`. |
 | `World:Playerbots:Population:ResumeBelowPct` | `int` | `80` | live | Adding bots resumes only while the tick p95 is below this percentage of TickP95BudgetMs (10..99). Between it and the budget the population holds, which keeps it from adding and parking in turns. |
+| `World:Playerbots:Population:RushBrakeP95Ms` | `int` | `0` | live | The safety brake of `.playerbot population rush`: the rush pauses while the world tick p95 is above this many milliseconds in RushBrakeWindows consecutive windows of RushBrakeWindowSeconds seconds (50..10000). 0 (the default) means 1.5 times TickP95BudgetMs, so the brake follows the budget the population itself keeps. |
+| `World:Playerbots:Population:RushBrakeWindowSeconds` | `int` | `5` | live | The length of one brake window in real seconds (1..60). The default 5 s with 3 windows pauses a rush after about 15 s over the ceiling. |
+| `World:Playerbots:Population:RushBrakeWindows` | `int` | `3` | live | The consecutive windows over the RushBrakeP95Ms ceiling that pause a rush, and under the resume line that lift the pause (1..20). |
 | `World:Playerbots:Population:TargetOnline` | `int` | `0` | live | The number of managed bots to keep running (0..1000). The effective target is the lower of this and `World:Playerbots:MaxBots`. Bots an operator created count towards it but are never stopped by the population: the running ones are taken off the top, and what is left (the population's own share) is what the bands split by weight. An operator's bot never counts in a band, so a band full of operator bots still gets its share of population bots. Above the target only the bots the population owns are parked. 0 parks every bot the population owns. |
 | `World:Playerbots:Population:TickP95BudgetMs` | `int` | `60` | live | The world tick time budget in milliseconds (5..1000): the 95th percentile of the tick body duration over the last WindowTicks ticks. Above it the population stops adding bots and, with ParkWhenOverBudget, parks some. |
 | `World:Playerbots:Population:WindowTicks` | `int` | `200` | live | The ticks measured after every start, creation, park or relocation before the next decision (20..4096). A pass that finds fewer fresh ticks holds, so a decision never reacts to ticks from before the last change. |
@@ -1325,6 +1353,7 @@ How to read the tables:
 | `World:Playerbots:Qa:Directory` | `string` | `"qa"` | - | The folder of the findings file, the exports (`report.md`, `report.json`) and the dry-run issues (`pending-issues/`): relative to the profile folder, or absolute. |
 | `World:Playerbots:Qa:Enabled` | `bool` | `true` | - | Aggregate the bot stall, death-loop, fault and missing-data warnings into findings (on by default; it is cheap and never touches the world thread). |
 | `World:Playerbots:Qa:ExportIntervalSeconds` | `int` | `300` | - | Seconds between two passes that save the findings, write the exports and publish (10..86400). |
+| `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` | `bool` | `false` | - | When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close, each with the surviving issue) keeps the absorbed issue open and untouched; the merge is recorded in the store either way. |
 | `World:Playerbots:Qa:GitHub:CommentIntervalHours` | `int` | `24` | - | At most one comment per finding in this many hours (1..720). |
 | `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
 | `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
@@ -1344,9 +1373,10 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
 | `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |
 | `World:Playerbots:Qa:GitHub:Transport` | `PlayerbotQaGitHubTransport` | `Rest` | - | How issues are read and written: `Rest` (default; the GitHub REST API with the token from `TokenEnvironmentVariable`) or `GhCli` (runs the `gh` tool with an argument list and no shell, using the login of the user the server runs as; the token variable is not needed). Values: `Rest`, `GhCli`. |
-| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped. |
+| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it an unpublished finding is dropped, a one-off of a single bot first, then the lowest severity, then the oldest. A published or known-closed finding is never dropped. |
 | `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
+| `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 
 ## `World:Social`
 

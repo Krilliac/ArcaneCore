@@ -89,6 +89,9 @@ internal sealed class PlayerbotPartyAI
     private bool _comeRequested;
     private ObjectGuid _ordered;
     private PlayerbotRoute? _route;
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
+    private TileWait _tileWait;
     private Vector3 _routeGoal;
     private float _followAngle;
     private float _followDistance = 3f;
@@ -365,6 +368,7 @@ internal sealed class PlayerbotPartyAI
         }
         catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.party-zone-names", error);
             return (null, null); // a minimal host without map data
         }
     }
@@ -905,11 +909,13 @@ internal sealed class PlayerbotPartyAI
     {
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
         {
-            if (!PlayerbotNavigation.TryPlan(player, goal, _options, out _route))
+            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route);
+            if (planned != PlanOutcome.Route)
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
-                return false;
+                // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
+                return planned == PlanOutcome.Pending;
             }
 
             _routeGoal = goal;

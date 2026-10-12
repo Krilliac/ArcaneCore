@@ -192,6 +192,7 @@ public static class NamesDbcReader
         }
         catch (Exception error) when (error is ArgumentException or NotSupportedException)
         {
+            // an uncompilable combined pattern falls back to compiling each row on its own just below
         }
 
         if (combined is not null)
@@ -229,6 +230,7 @@ public static class NamesDbcReader
             }
             catch (RegexMatchTimeoutException)
             {
+                // a timeout while warming up only means the machine was busy; the next attempt continues the work
             }
         }
     }

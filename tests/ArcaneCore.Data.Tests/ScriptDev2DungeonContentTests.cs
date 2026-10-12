@@ -56,6 +56,21 @@ public sealed class ScriptDev2DungeonContentTests
         Assert.Equal("Vael two", Assert.Single(importer.AiSnapshot().Texts, t => t.Entry == -3469004).Content);
     }
 
+    [Fact]
+    public void Importer_CarriesTheBlackrockDepthsGossipOptions_AndNoNeighbouringGossipText()
+    {
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `gossip_texts` (`entry`,`content_default`,`content_loc1`,`comment`) VALUES
+            (-3229999,'Before',NULL,'other'),(-3230000,'Dughal option',NULL,'GOSSIP_ITEM_DUGHAL'),
+            (-3230001,'Tobias option',NULL,'GOSSIP_ITEM_TOBIAS'),(-3230002,'Doomrel option',NULL,'GOSSIP_ITEM_CHALLENGE'),
+            (-3230003,'Fourth option',NULL,'other'),(-3230004,'After',NULL,'other');
+            """));
+
+        Assert.Equal([-3230003, -3230002, -3230001, -3230000], importer.AiSnapshot().Texts.Select(t => t.Entry).Order());
+        Assert.Equal("Dughal option", Assert.Single(importer.AiSnapshot().Texts, t => t.Entry == -3230000).Content);
+    }
+
     [ClassicDbDumpFact]
     public void RealClassicDb_DungeonScriptRowsArePresentWhenTheDumpIsProvided()
     {

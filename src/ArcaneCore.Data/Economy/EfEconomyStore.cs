@@ -276,7 +276,8 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             }
             catch (Exception rollbackError) when (rollbackError is not OutOfMemoryException)
             {
-                // The original failure propagates; the dedicated context is discarded by its scope.
+                // The original failure propagates; the dedicated context is discarded by its scope. The failed rollback is counted (the store has no logger).
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("economy.auction-snapshot-rollback", rollbackError);
             }
 
             throw;

@@ -111,7 +111,11 @@ public abstract class EscortAI : CreatureAI
 
     protected void RemoveEscortState(EscortState state) => State &= ~state;
 
-    /// <summary>vmangos setCurrentWP: an index past the path is refused (logged in vmangos).</summary>
+    /// <summary>
+    /// vmangos setCurrentWP: an index past the path is refused (logged in vmangos). <paramref name="index"/> is a 0-BASED POSITION in the
+    /// loaded path, NOT the 1-based DB point id that <see cref="WaypointReached"/> reports: a script that has a point id (a ScriptDev2
+    /// "jump to point 10") must call <see cref="SetNextWaypointByPointId"/>.
+    /// </summary>
     public void SetCurrentWaypoint(int index)
     {
         if (index >= 0 && index < _waypoints.Count)
@@ -119,6 +123,49 @@ public abstract class EscortAI : CreatureAI
             CurrentWaypointIndex = index;
         }
     }
+
+    /// <summary>
+    /// The 0-based position in the loaded path of the point whose DB point id is <paramref name="pointId"/> (the id
+    /// <see cref="WaypointReached"/> reports; ids start at 1), or -1 when the path has no such point or no path is loaded.
+    /// </summary>
+    public int IndexOfPointId(uint pointId)
+    {
+        for (int i = 0; i < _waypoints.Count; i++)
+        {
+            if (_waypoints[i].Point == pointId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Make the point with DB point id <paramref name="pointId"/> (the id <see cref="WaypointReached"/> reports; 1-based) the NEXT point the escort
+    /// walks to: the call for "jump so that point 10 is next" and "go back to point 9". It does the right thing from inside
+    /// <see cref="WaypointReached"/> too (the escort does not advance past the chosen point when the callback returns) and outside it (the
+    /// escort heads for that point). False, and nothing changes, when the path has no such point.
+    /// </summary>
+    public bool SetNextWaypointByPointId(uint pointId)
+    {
+        int index = IndexOfPointId(pointId);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        CurrentWaypointIndex = index;
+        _nextPointChosen = _inWaypointCallback;
+        _redirectPending = !_inWaypointCallback;
+        return true;
+    }
+
+    private bool _inWaypointCallback;
+    private bool _nextPointChosen;
+
+    /// <summary>The next point was chosen outside the callback, while the escort is still walking to the old destination: its arrival must re-arm the walk to the chosen point.</summary>
+    private bool _redirectPending;
 
     /// <summary>
     /// vmangos npc_escortAI::Start (ScriptedEscortAI.cpp:452-506): refused in combat, while escorting, or without points. The points are
@@ -167,6 +214,7 @@ public abstract class EscortAI : CreatureAI
 
         Me.NpcFlags = 0;
         CurrentWaypointIndex = 0;
+        _redirectPending = false; // a redirect chosen in an earlier escort is not this one's
         System?.SetScriptRun(Me, _running);
         AddEscortState(EscortState.Escorting);
         JustStartedEscort();
@@ -210,7 +258,7 @@ public abstract class EscortAI : CreatureAI
         _running = run;
     }
 
-    /// <summary>A point of the path was reached (its point id).</summary>
+    /// <summary>A point of the path was reached: <paramref name="pointId"/> is its 1-BASED DB point id, not its 0-based index (see <see cref="SetNextWaypointByPointId"/>).</summary>
     protected abstract void WaypointReached(uint pointId);
 
     /// <summary>The escort set off towards a point.</summary>
@@ -243,6 +291,7 @@ public abstract class EscortAI : CreatureAI
         _escortQuestId = 0;
         _playerCheckMs = 1000;
         CombatMovement = true;
+        _redirectPending = false;
         _waypointWaitMs = DelayBeforeFirstWaypointMs;
         if (Me.FactionTemplate != Me.Template.Faction)
         {
@@ -517,8 +566,18 @@ public abstract class EscortAI : CreatureAI
 
         if (point.Point != pointId)
         {
-            return; // "Waypoint out of order"
+            if (_redirectPending)
+            {
+                // A script chose another next point (SetNextWaypointByPointId) while the escort walked to the old one, and the new point is close:
+                // the arrival at the old destination is not "out of order", so walk to the chosen point instead of stalling.
+                _redirectPending = false;
+                _waypointWaitMs = 1;
+            }
+
+            return; // otherwise "Waypoint out of order"
         }
+
+        _redirectPending = false;
 
         if (point.ScriptId != 0)
         {
@@ -526,8 +585,23 @@ public abstract class EscortAI : CreatureAI
             System?.StartDbScript(DbScriptKind.CreatureMovement, point.ScriptId, Me, GetPlayerForEscort() ?? (WorldObject)Me);
         }
         if (!Me.IsInWorld || !Me.IsAlive) return;
-        WaypointReached(point.Point);
+        _inWaypointCallback = true;
+        _nextPointChosen = false;
+        try
+        {
+            WaypointReached(point.Point);
+        }
+        finally
+        {
+            _inWaypointCallback = false;
+        }
+
         _waypointWaitMs = point.WaitTimeMs + 1;
-        CurrentWaypointIndex++;
+        if (!_nextPointChosen)
+        {
+            CurrentWaypointIndex++;
+        }
+
+        _nextPointChosen = false;
     }
 }

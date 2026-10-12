@@ -1,0 +1,119 @@
+# Observability: client rejections, duplicate packets, slow-tick attribution
+
+Added on branch `claude/w33-observability`. Three log features for the failures that used to leave no trace: a refusal the
+server sent a client (or a request it dropped without answering), an identical packet sent twice, and a slow world tick the
+logs could not attribute. Logs are private, so lines may carry names. The refusal and silent-drop lines carry GUID low, map
+id, entry and spell ids only; the duplicate-packet line also carries the **account id** and a few call-stack frames
+(type and method names). None of them carries a key, a password or an SRP value, so a line pasted into a bot-QA issue is safe.
+
+## Categories and keys
+
+| Logger category | Level | What |
+|---|---|---|
+| `ArcaneCore.ClientRejections` | Information (player), Debug (bot) | One structured line per refusal sent to a client, and per handler that dropped a request without answering. |
+| `ArcaneCore.DuplicatePackets` | Warning | An identical (opcode, payload) sent twice to one real player within the window. |
+| `ArcaneCore.Game.Maps.WorldRuntime` (existing) | Warning, event `Perf` | "Slow map update" now ends with `top:`, `gc ...` and `host: ...`. |
+| `ArcaneCore.Kernel.Ops.Watchdog.TickMonitor` (existing) | Critical / Warning | Hang and overrun lines now end with `host: ...`. |
+
+Filter with the standard `Logging:LogLevel:ArcaneCore.ClientRejections` (turn it to `Debug` to see bot refusals too).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Ops:Observability:ClientRejections:Enabled` | `true` | Decode and log refusals; off means the send path does no extra work. |
+| `Ops:Observability:ClientRejections:BurstPerSession` | `20` | Per-session token bucket: lines in a burst. |
+| `Ops:Observability:ClientRejections:RefillPerMinute` | `60` | Lines a session earns back per minute; refused lines are counted and reported as `suppressed` on the next line. |
+| `Ops:Observability:ClientRejections:LogSilentDrops` | `true` | Handlers that return without a reply log the reason. |
+| `Ops:Observability:DuplicatePackets:Enabled` | `true` | Hash every checked outbound packet. |
+| `Ops:Observability:DuplicatePackets:IncludeBots` | `false` | Bots are excluded by default. |
+| `Ops:Observability:DuplicatePackets:WindowMs` | `100` | Two identical packets closer than this are a duplicate (a tick is 50 ms). |
+| `Ops:Observability:DuplicatePackets:RingSize` | `16` | Recent sends remembered per session. |
+| `Ops:Observability:DuplicatePackets:WarnBurstPerSession` / `WarnPerMinute` | `3` / `6` | Warning bucket per session. |
+| `Ops:Observability:DuplicatePackets:CaptureStacks` | `true` | Include compact call stacks (see below). |
+| `Ops:Watchdog:HostLoad:Enabled` | `true` | Sample the host once per watchdog check. |
+| `Ops:Watchdog:HostLoad:HistorySeconds` | `120` | Samples kept to difference against. |
+
+All of `Ops:Observability` is restart-only. Out-of-range values are clamped.
+
+## Client rejections
+
+`WorldSession.Send` asks `ClientRejectionDecoder` (Game, `Maps/ClientRejection.cs`) whether the opcode can be a refusal (one
+table load) and, for those that can, reads the reason out of the payload. Hooking `Send` covers every call site without
+editing them. Decoded: `SMSG_CAST_RESULT` / `SMSG_PET_CAST_FAILED` (failure status), `SMSG_INVENTORY_CHANGE_FAILURE`, the
+error form of `SMSG_LOOT_RESPONSE`, `SMSG_BUY_FAILED`, `SMSG_SELL_ITEM`, `SMSG_QUESTGIVER_QUEST_INVALID` / `_FAILED`,
+`SMSG_QUESTUPDATE_FAILED(TIMER)`, failure statuses of `SMSG_TRADE_STATUS`, `SMSG_TRAINER_BUY_FAILED`, non-OK
+`SMSG_PARTY_COMMAND_RESULT`, `SMSG_AUCTION_COMMAND_RESULT`, `SMSG_SEND_MAIL_RESULT`, `SMSG_PET_TAME_FAILURE`,
+`SMSG_READ_ITEM_FAILED`. A line:
+
+```text
+client rejected: CastResult BadTargets (opcode SMSG_CAST_RESULT) character 1234 map 1 target 0 entry 6478 arg 0 (suppressed 0)
+```
+
+`entry` is the spell, item or quest id; `target` the vendor, loot source or item GUID; `arg` an extra number (second item
+low, trade or party operation).
+
+**Silent drops.** A handler that returns without answering is a different problem: nothing is sent, so `Send` sees nothing.
+`WorldSession.LogSilentDrop(opcode, reason, target, entry, arg)` logs `request dropped without a reply: <reason>`; handlers
+compare `ClientRejectionsSent` before and after the call so a refusal that *was* sent is not logged twice. Instrumented:
+`CMSG_CAST_SPELL` (unknown spell, not known, any non-OK result with no reply), `CMSG_GAMEOBJ_USE` (short payload, no map or
+gameobject system, any non-OK use result with no reply), `CMSG_LOOT` / `CMSG_AUTOSTORE_LOOT_ITEM` / `CMSG_LOOT_RELEASE`
+(short payload, no loot service for the map, refused open).
+
+Cost: disabled, one null check. Enabled and not a candidate opcode, one table load. A candidate opcode costs a few integer
+reads; formatting happens only after the logger level check and a token from the session bucket.
+
+## Duplicate outbound packets
+
+Per session a ring of `(opcode, hash, length, time)`; each checked send costs one `HashCode` pass over the payload and a scan
+of the ring under a per-session lock, with no allocation. Opcodes that legitimately repeat are never checked: all `MSG_*`,
+`SMSG_MONSTER_MOVE`, `SMSG_MOVE_*`, `SMSG_FORCE_*`, `SMSG_SPLINE_*`, `*_QUERY_RESPONSE`, `SMSG_UPDATE_OBJECT` (plain and
+compressed), `SMSG_DESTROY_OBJECT`, `SMSG_PONG`, time and clock packets, chat and emotes, combat and spell logs, cooldowns,
+sounds, world states, gossip and list windows (see `DuplicatePacketDetector.BuildAllowList`). Bots are excluded unless
+`IncludeBots`.
+
+The first send of a pair has no stack: capturing one per send would cost far more than the hash. The second send's compact
+stack is captured when the duplicate is found, and the opcode is then *armed*: later sends of it keep their stack in the ring
+(at most 50 captures per second process-wide), so the next report of that opcode carries **both** stacks. The first report of
+an opcode says `first send: (not captured: ...)`.
+
+A duplicate is a hint, not proof: two identical stack pushes in one tick can be legitimate. The line is rate limited per session.
+
+## Slow-tick attribution
+
+`HostLoadSampler` (Kernel, a watchdog monitor) stores one cumulative reading per watchdog check: process CPU
+(`Environment.CpuUsage`), machine CPU (`GetSystemTimes` on Windows, `/proc/stat` on Linux; unknown elsewhere), GC collection
+counts and total pause (`GC.GetTotalPauseDuration`), thread-pool thread count and pending items. A hang, overrun or slow-map
+line differences a fresh reading against the newest stored one at least as old as the slow window:
+
+```text
+host: process cpu 4% / machine cpu 100% (other processes 96%) over 3.1 s on 24 cpus; gc +0/+0/+0 (gen0/1/2) pause 0 ms; threadpool 24 threads, 0 pending; verdict host-starved (other processes are using the machine)
+```
+
+Verdicts: `gc-pauses` (pauses cover 30% or more of the window), `host-starved` (machine at 85% or more with other processes at
+40% or more), `process-busy` (this process uses 50% or more of the machine), `host-quiet` (neither: the code was slow by
+itself), `unknown` (window under 100 ms or no machine reading). The printed window is the real span between the two readings
+(up to one check interval longer than the slow window).
+
+The "Slow map update" line gains `top: <three largest sub-phases>` and `gc <pause> (gen0 +n, ...)` for that map's update alone.
+Sub-phases come from the existing `MapUpdateDiagnostics` seams: session packets (bot packets included), player heartbeats
+(timed per player with a `Stopwatch` pair, only while the slow-map warning is on), creature AI and unit heartbeats (AI timers,
+auras and regeneration run in a unit's heartbeat; the remainder of the heartbeat phase), each map updater by subsystem
+(creature AI, movement, collision and pathing, combat, pets, ...), visibility and relocation, values, flush, grid lifecycle,
+terrain cleanup, deferred work. Playerbot *brains* are world features, not map work: they appear in the hang line's
+`top features` list, not here.
+
+## Silent catches
+
+Catch blocks that swallowed an exception without a log now carry a one-line reason (cancellation and shutdown, fail-closed
+regex timeouts in the name catalog, best-effort fallbacks). The ones that cannot log (the logging subsystem itself, static
+helpers with no logger) say so.
+
+Swallowed catches that carry no logger (static helpers, stores, the ban cache, the planner and gear-score seams, the packet
+capture, the hot-code audit write, the word filter, the name catalog) now count the exception in `FaultLedger.Shared` under a
+site name (`bans.effective-read`, `realm.ipban-reload`, `net.packet-capture`, ...). Control flow is unchanged.
+
+## Skipped navmesh tiles
+
+`NavRegionGraph.Build` lists every `.mmtile` it could not read in `SkippedTiles`. The pathfinder writes one Warning per
+tile (tile coordinates and file, at most 20 lines then a summary) and counts each in the fault ledger under
+`mmaps.regiongraph`. The live mesh load only reports a tile when a path query loads it lazily, so this is the first report
+of a corrupt tile no query has needed yet.

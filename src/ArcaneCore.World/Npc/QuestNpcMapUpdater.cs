@@ -9,6 +9,8 @@ namespace ArcaneCore.World.Npc;
 public sealed class QuestNpcMapUpdater(QuestNpcServices services) : IInstanceQuestRewards
 {
     public bool? IsRewarded(Player player, uint questId) => services.IsRewarded(player, questId);
+
+    public bool? IsIncomplete(Player player, uint questId) => services.IsCurrent(player, questId, 1);
     public void Update(Map map, uint diffMs)
     {
         foreach (Player player in map.Players)

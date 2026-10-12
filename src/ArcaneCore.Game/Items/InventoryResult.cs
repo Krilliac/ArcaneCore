@@ -3,7 +3,9 @@ namespace ArcaneCore.Game.Items;
 /// <summary>
 /// SMSG_INVENTORY_CHANGE_FAILURE result codes for build 5875 (vmangos ItemDefines.h
 /// InventoryResult with every <c>SUPPORTED_CLIENT_BUILD</c> branch for 1.12.1 included;
-/// identical numbering in gtker/wow_messages inventory_result.wowm 1.12).
+/// identical numbering in gtker/wow_messages inventory_result.wowm 1.12). The numbering was checked against the 1.12.1
+/// client binary (its result-to-error switch has 67 arms, 0x00-0x42; anything else shows ERR_BAG_FULL), see
+/// docs/areas/client-errors.md. Result 0 shows nothing.
 /// </summary>
 public enum InventoryResult : byte
 {
@@ -46,7 +48,9 @@ public enum InventoryResult : byte
     ItemLocked = 36,
     YouAreStunned = 37,
     YouAreDead = 38,
+    /// <summary>The client shows ERR_CLIENT_LOCKED_OUT "You can't do that right now." (binary).</summary>
     CantDoRightNow = 39,
+    /// <summary>ERR_INTERNAL_BAG_ERROR "Internal Bag Error": the only inventory code for a server-side failure (ClientError.ItemMove).</summary>
     IntBagError = 40,
     CanEquipOnly1Bolt = 41,
     CanEquipOnly1AmmoPouch = 42,
@@ -66,6 +70,7 @@ public enum InventoryResult : byte
     BagFull4 = 56,
     ItemSoldOut = 57,
     ObjectIsBusy = 58,
+    /// <summary>Not a "no error" code: the 1.12.1 client shows ERR_CANT_BE_DISENCHANTED, a key with no GlobalStrings text (binary).</summary>
     None = 59,
     NotInCombat = 60,
     NotWhileDisarmed = 61,

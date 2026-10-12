@@ -38,7 +38,7 @@
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
-#   DATABASE                    17 keys
+#   DATABASE                    21 keys
 #   DIAGNOSTICS                 11 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -55,7 +55,7 @@
 #   NAMES                       2 keys
 #   NET                         16 keys
 #   NPCSERVICES                 8 keys
-#   OPS                         42 keys
+#   OPS                         55 keys
 #   PAGETEXT                    1 keys
 #   PERFORMANCELOG              4 keys
 #   PETS                        7 keys
@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       355 keys
+#   WORLD                       362 keys
 #
 ###############################################################################
 
@@ -2737,6 +2737,22 @@ Database.Auth.Provider = MariaDb
 # Database.Auth.SqliteBusyTimeoutMs =
 
 #
+#    Database.Auth.SqliteSynchronous
+#        Description: SQLite only: this component's PRAGMA synchronous (Full or Normal), overriding
+#                     Database:SqliteSynchronous. Unset inherits it. Normal avoids the fsync stall
+#                     at every commit but can lose the most recent commits on power loss or an OS
+#                     crash; it is applied only when the database is in WAL mode, otherwise the
+#                     database stays on Full and an error is logged. Other engines ignore it.
+#                     Values: Full, Normal.
+#        Type: SqliteSynchronousMode?
+#        Default: (not set)
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.SqliteSynchronous =
+
+#
 #    Database.Characters.ConnectionString
 #        Description: The connection string of this component's database. The shipped files carry
 #                     the development placeholder user arcane; change it for any real deployment.
@@ -2773,6 +2789,22 @@ Database.Characters.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#database
 #
 # Database.Characters.SqliteBusyTimeoutMs =
+
+#
+#    Database.Characters.SqliteSynchronous
+#        Description: SQLite only: this component's PRAGMA synchronous (Full or Normal), overriding
+#                     Database:SqliteSynchronous. Unset inherits it. Normal avoids the fsync stall
+#                     at every commit but can lose the most recent commits on power loss or an OS
+#                     crash; it is applied only when the database is in WAL mode, otherwise the
+#                     database stays on Full and an error is logged. Other engines ignore it.
+#                     Values: Full, Normal.
+#        Type: SqliteSynchronousMode?
+#        Default: (not set)
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.SqliteSynchronous =
 
 #
 #    Database.ConnectionString
@@ -2850,6 +2882,29 @@ Database.SlowTransactionWarnMs = 2000
 #        Docs: docs/reference/configuration.md#database
 #
 Database.SqliteBusyTimeoutMs = 5000
+
+#
+#    Database.SqliteSynchronous
+#        Description: SQLite only: the PRAGMA synchronous set on every connection, Full (default) or
+#                     Normal. Full fsyncs the WAL at every commit, so a committed save survives
+#                     power loss. Normal skips that fsync, which removes multi-second commit stalls
+#                     on a slow disk (and the "database is locked" failures they cause in other
+#                     writers); the database stays consistent, but the most recent commits can be
+#                     lost on power loss or an OS crash, never on an application crash. Normal is
+#                     applied only to a database that is in WAL mode (the schema bootstrap switches
+#                     file databases to WAL, best effort): a database that is not in WAL mode (the
+#                     switch failed or was refused) stays on Full and an error is logged, because
+#                     Normal outside WAL can corrupt the database on power loss. Each component may
+#                     override it with a Database:Auth, Database:Characters or Database:World
+#                     SqliteSynchronous key. MariaDB, MySQL and PostgreSQL ignore it
+#                     (docs/areas/persistence.md). Values: Full, Normal.
+#        Type: SqliteSynchronousMode
+#        Default: Full
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SqliteSynchronous = Full
 
 #
 #    Database.SqliteWriteTimeoutMs
@@ -2935,6 +2990,22 @@ Database.World.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#database
 #
 # Database.World.SqliteBusyTimeoutMs =
+
+#
+#    Database.World.SqliteSynchronous
+#        Description: SQLite only: this component's PRAGMA synchronous (Full or Normal), overriding
+#                     Database:SqliteSynchronous. Unset inherits it. Normal avoids the fsync stall
+#                     at every commit but can lose the most recent commits on power loss or an OS
+#                     crash; it is applied only when the database is in WAL mode, otherwise the
+#                     database stays on Full and an error is logged. Other engines ignore it.
+#                     Values: Full, Normal.
+#        Type: SqliteSynchronousMode?
+#        Default: (not set)
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.World.SqliteSynchronous =
 
 ###############################################################################
 # DIAGNOSTICS
@@ -5125,6 +5196,141 @@ Ops.Metrics.Realm = ""
 Ops.Metrics.RealmPrometheusPrefix = "http://localhost:9465/metrics/"
 
 #----------------------------------------------------------------------------
+# Ops:Observability
+#----------------------------------------------------------------------------
+
+#
+#    Ops.Observability.ClientRejections.BurstPerSession
+#        Description: Lines a session may log in a burst before the refill rate applies. 1-1000.
+#                     Default 20.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.BurstPerSession = 20
+
+#
+#    Ops.Observability.ClientRejections.Enabled
+#        Description: false: no refusal is decoded or logged and the send path does no extra work.
+#                     Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.Enabled = true
+
+#
+#    Ops.Observability.ClientRejections.LogSilentDrops
+#        Description: true: handlers that return without answering the client log the reason (at
+#                     Debug for a bot, Information for a player). Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.LogSilentDrops = true
+
+#
+#    Ops.Observability.ClientRejections.RefillPerMinute
+#        Description: Lines a session earns back per minute once its burst is spent; a refusal over
+#                     the limit is counted and summarised in the next line that is written. 1-6000.
+#                     Default 60.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.ClientRejections.RefillPerMinute = 60
+
+#
+#    Ops.Observability.DuplicatePackets.CaptureStacks
+#        Description: true: the warning carries a compact call stack of the second send, and of the
+#                     first as well once the opcode has duplicated before in this process. Default
+#                     true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.CaptureStacks = true
+
+#
+#    Ops.Observability.DuplicatePackets.Enabled
+#        Description: false: nothing is hashed and the send path does no extra work. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.Enabled = true
+
+#
+#    Ops.Observability.DuplicatePackets.IncludeBots
+#        Description: true: playerbot sessions are checked as well. Default false (bots are
+#                     excluded).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.IncludeBots = false
+
+#
+#    Ops.Observability.DuplicatePackets.RingSize
+#        Description: Recent packets remembered per session; older ones are overwritten. 4-256.
+#                     Default 16.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.RingSize = 16
+
+#
+#    Ops.Observability.DuplicatePackets.WarnBurstPerSession
+#        Description: Warnings a session may log in a burst. 1-100. Default 3.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WarnBurstPerSession = 3
+
+#
+#    Ops.Observability.DuplicatePackets.WarnPerMinute
+#        Description: Warnings a session earns back per minute after its burst. 1-600. Default 6.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WarnPerMinute = 6
+
+#
+#    Ops.Observability.DuplicatePackets.WindowMs
+#        Description: Two identical packets closer together than this many milliseconds are a
+#                     duplicate (a world tick is 50 ms). 1-5000. Default 100.
+#        Type: int
+#        Default: 100
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsobservability
+#
+Ops.Observability.DuplicatePackets.WindowMs = 100
+
+#----------------------------------------------------------------------------
 # Ops:Watchdog
 #----------------------------------------------------------------------------
 
@@ -5222,6 +5428,31 @@ Ops.Watchdog.Heartbeat.Mode = Auto
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.Heartbeat.WarnIntervalSeconds = 30
+
+#
+#    Ops.Watchdog.HostLoad.Enabled
+#        Description: false: nothing is sampled and the hang, overrun and slow-map lines carry no
+#                     host-load text. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.Enabled = true
+
+#
+#    Ops.Watchdog.HostLoad.HistorySeconds
+#        Description: How many seconds of samples (one per watchdog check) are kept to difference
+#                     against; a slow window longer than this is measured from the oldest sample.
+#                     10-3600. Default 120.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.HistorySeconds = 120
 
 #
 #    Ops.Watchdog.Memory.Action
@@ -8267,6 +8498,20 @@ World.Collision.EnablePathfinding = true
 World.Collision.MMapDirectory = ""
 
 #
+#    World.Collision.NavTileReadConcurrency
+#        Description: The most navigation tile files (NNNXXYY.mmtile) read at the same time by bots'
+#                     path searches, in the background. Reads share the data disk with the map, so a
+#                     low number keeps a cold start from starving it; a tile a search waits for is
+#                     then ready a little later. At least 1.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcollision
+#
+World.Collision.NavTileReadConcurrency = 2
+
+#
 #    World.Collision.VMapDirectory
 #        Description: Directory of the extracted vmaps (NNN.vmtree, NNN_YY_XX.vmtile, *.vmo). Empty:
 #                     vmaps/ under World:Maps:DataDirectory (vmangos DataDir/vmaps).
@@ -10939,6 +11184,21 @@ World.Playerbots.Population.Enabled = false
 World.Playerbots.Population.Factions = Both
 
 #
+#    World.Playerbots.Population.FreshLaunch
+#        Description: Fresh-launch mode (off by default; live): new bots the population creates stay
+#                     level 1 with their default starting kit at their race's native start location
+#                     (no boost, no teleport), the race and class mix stays balanced across both
+#                     factions, and the level bands, the zone atlas and relocation are bypassed (the
+#                     target is one pool; bots level up on their own).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshLaunch = false
+
+#
 #    World.Playerbots.Population.IntervalSeconds
 #        Description: Seconds of world time between two passes of the control loop (2..600).
 #        Type: int
@@ -11055,6 +11315,45 @@ World.Playerbots.Population.Relocation = Teleport
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.ResumeBelowPct = 80
+
+#
+#    World.Playerbots.Population.RushBrakeP95Ms
+#        Description: The safety brake of .playerbot population rush: the rush pauses while the
+#                     world tick p95 is above this many milliseconds in RushBrakeWindows consecutive
+#                     windows of RushBrakeWindowSeconds seconds (50..10000). 0 (the default) means
+#                     1.5 times TickP95BudgetMs, so the brake follows the budget the population
+#                     itself keeps.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.RushBrakeP95Ms = 0
+
+#
+#    World.Playerbots.Population.RushBrakeWindowSeconds
+#        Description: The length of one brake window in real seconds (1..60). The default 5 s with 3
+#                     windows pauses a rush after about 15 s over the ceiling.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.RushBrakeWindowSeconds = 5
+
+#
+#    World.Playerbots.Population.RushBrakeWindows
+#        Description: The consecutive windows over the RushBrakeP95Ms ceiling that pause a rush, and
+#                     under the resume line that lift the pause (1..20).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.RushBrakeWindows = 3
 
 #
 #    World.Playerbots.Population.TargetOnline
@@ -11465,6 +11764,22 @@ World.Playerbots.Qa.Enabled = true
 World.Playerbots.Qa.ExportIntervalSeconds = 300
 
 #
+#    World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates
+#        Description: When findings are merged into one (the same problem met in several places) and
+#                     each had its own issue, comment on the absorbed issue with a link to the
+#                     surviving one and close it as not planned (a duplicate). Off (the default, so
+#                     the first start after an upgrade can be checked: the start-up log lists every
+#                     issue it would close, each with the surviving issue) keeps the absorbed issue
+#                     open and untouched; the merge is recorded in the store either way.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = false
+
+#
 #    World.Playerbots.Qa.GitHub.CommentIntervalHours
 #        Description: At most one comment per finding in this many hours (1..720).
 #        Type: int
@@ -11696,8 +12011,9 @@ World.Playerbots.Qa.GitHub.Transport = Rest
 
 #
 #    World.Playerbots.Qa.MaxFindings
-#        Description: The most findings kept (10..100000); beyond it the lowest-severity unpublished
-#                     finding is dropped.
+#        Description: The most findings kept (10..100000); beyond it an unpublished finding is
+#                     dropped, a one-off of a single bot first, then the lowest severity, then the
+#                     oldest. A published or known-closed finding is never dropped.
 #        Type: int
 #        Default: 2000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -11728,6 +12044,18 @@ World.Playerbots.Qa.MaxSamples = 5
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.SignalQueueCapacity = 4096
+
+#
+#    World.Playerbots.Qa.StaleHours
+#        Description: Hours after which a finding not seen again and not published or known-closed
+#                     is dropped, on load and on every pass (0..8760; 0 keeps them for ever).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.StaleHours = 24
 
 #----------------------------------------------------------------------------
 # World:Social

@@ -349,7 +349,20 @@ public sealed partial class SpellSystem
         return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) ? state.AuraHolders : [];
     }
 
-    public bool HasAura(Unit unit, uint spellId) => GetAuras(unit).Any(h => h.Spell.Id == spellId);
+    /// <summary>Whether <paramref name="unit"/> carries an aura holder of <paramref name="spellId"/> (world thread; allocation-free, hot-path safe).</summary>
+    public bool HasAura(Unit unit, uint spellId)
+    {
+        IReadOnlyList<SpellAuraHolder> holders = GetAuras(unit);
+        for (int i = 0; i < holders.Count; i++)
+        {
+            if (holders[i].Spell.Id == spellId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Durations and periodic ticks (vmangos SpellAuraHolder::UpdateHolder → Aura::UpdateAura):

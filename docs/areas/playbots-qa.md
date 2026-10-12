@@ -81,8 +81,37 @@ issue, so the key format is versioned (`v1`): changing it would orphan existing 
 
 Per finding the aggregator keeps the count, first and last time, up to `MaxSamples` newest evidence samples, and the number of
 distinct bots. Bots are counted by a salted SHA-256 of the id (the salt is saved, so counts survive a restart; at most 512 are tracked
-per finding, then the count saturates). Nothing keeps a bot name or id. At `MaxFindings` the lowest-severity unpublished finding is
-evicted; a finding that has an issue is never evicted (its issue number is the only local memory of it).
+per finding, then the count saturates). Nothing keeps a bot name or id.
+
+**Which finding a stall or death loop belongs to is coarser than its key.** The key (and so the id and the issue marker) is that of the
+finding's *first* signal and never changes; there is no key version bump and no migration of published findings. What decides whether a
+later signal is the same problem is the group, computed in memory (and recomputed on load) from the same content ids plus a 500-yard zone cell:
+
+* Stall, Quest goal: the quest and target on the map, wherever on it they stood. Combat goal: the target entry on the map (a city guard stalling in two capitals is two findings).
+  Any other goal (Explore, Retreat, Loot...): the goal in a zone cell; a stall just across a cell border still folds into the finding whose anchor (its first sample,
+  which never moves) lies within 160 yards, the nearest first, the lower id on a tie. The outside-home flag keeps its own group.
+* Death loop: the map and zone cell (or an anchor within 160 yards) and its attackers. A loop that shares an attacker entry with a finding of the area is that
+  finding; a loop that shares entries with several merges them; with no attacker on either side the death source decides. A finding collects at most 8 attacker
+  entries from its signals (a real loop has one to three): a bound, so one entry that is common to a whole zone cannot chain every loop of it into one finding.
+
+Signals find their finding through indexes (by group, by group base, by map), not by scanning every finding.
+
+The position stays in the samples and the subject of the first signal. **Store hygiene:** a finding not seen for `StaleHours` (24) that has no issue is dropped on load
+and on every pass, except one the publisher is working on at that moment; at `MaxFindings` the lowest-value unpublished finding is evicted (a single occurrence of a single bot
+first, then lowest severity, then the oldest), and a finding that has an issue is never evicted or dropped by the cap (its issue number is the only local memory of it).
+
+**Merging never loses an issue.** The survivor of a merge is the finding with an open issue (then one a person closed), the lowest issue number first, else the busiest; it keeps its id and
+publication state. Every absorbed id is recorded in the store (`Absorbed`: the id, its survivor, and its issue number if it had one that the survivor's does not replace) and is never reused
+for another problem. A publish that was in flight when its finding was absorbed reports its outcome to the survivor (it becomes the survivor's issue when the survivor had none; otherwise it is
+recorded as another absorbed issue). The issue of an absorbed published finding can then be closed as a duplicate: a comment ("Duplicate of #N", numbers only, no name or id of any bot), then the close as not planned.
+This is `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates`, **off by default** so the first start after an upgrade can be checked: the start-up log lists every pending close as
+`issue #a -> duplicate of #b` (numbers only) and says whether it will happen. Turned on, an issue is only touched when it is in the labelled issue list and open, and the
+surviving issue is in the list and open too (an open issue is never closed in favour of a closed or unknown one; otherwise the entry stays pending and is logged). The comment is recorded
+before the close is tried, so a close that fails is retried without commenting again; a comment that itself fails is retried. The closes run after the normal publishing of the pass and
+share the hourly comment budget (`MaxCommentsPerHour`) with it, so the comments of findings that are still happening come first and a long list of closes spreads over several hours.
+An issue handed over to the survivor (the publish was in flight when the merge happened) is found by its number, not only by marker, so it is commented and never opened again.
+The survivor of such an in-flight publish is protected from age-out and eviction like the finding itself; an entry whose survivor no longer exists is dropped (the issue stays open as it was).
+Each merge of two issues is logged as `issue #a ... absorbed into #b`; the start-up line counts the merges and the issues left to close.
 
 ## Classifier: why it probably happens
 

@@ -16,6 +16,7 @@ unfinished parts documented as limits).
 | [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, rolling text file, JSON lines, what reloads live, and the fail-closed checks. |
+| [Observability](ops/observability.md) | The client-rejection log, the duplicate outbound packet detector and slow-tick host/GC/subsystem attribution, with their `Ops:Observability` and `Ops:Watchdog:HostLoad` keys. |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Invariants and crash handling](ops/invariants.md) | The `Diagnostics` section: invariant policy and counters, what ends the process on an unhandled exception (exit 70 or abort), the crash report, and every invariant the code asserts. |
 | [Resilience](ops/resilience.md) | Circuit breakers, retries, bulkheads and timeouts: what the daemons do when a database is slow or gone, the `Resilience` options, exit code 6, and how a write queue adopts the primitives. |
@@ -27,6 +28,7 @@ unfinished parts documented as limits).
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
+| [Client error codes](areas/client-errors.md) | Which packet and code makes the 1.12.1 client show "Internal error" (and the other generic failures), verified against the client binary, and the `ClientError` API that sends them. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
 | [Server console](areas/server-console.md) | Typed commands at the World and Realm console windows and the `World:Console:Enabled` and `Realm:Console:Enabled` options. |
 | [Live reload](areas/hot-reload.md) | The `.reload` command tree and which configuration is applied live. |

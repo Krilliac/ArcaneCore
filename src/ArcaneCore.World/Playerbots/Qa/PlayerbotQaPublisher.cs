@@ -154,7 +154,7 @@ internal sealed class PlayerbotQaPublisher
         if (!git.Enabled) return;
         QaFindingView[] eligible = [.. findings.Where(Eligible)
             .OrderBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
-        if (eligible.Length == 0) return;
+        if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0) return;
         if (!git.Publish)
         {
             DryRun(eligible);
@@ -192,8 +192,11 @@ internal sealed class PlayerbotQaPublisher
         {
             foreach (QaFindingView finding in eligible)
             {
-                if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) break;
+                if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) return;
             }
+
+            // Closing duplicates comes last: the comments of findings that are still happening have first call on the hourly comment budget, which the closes share.
+            await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -266,6 +269,7 @@ internal sealed class PlayerbotQaPublisher
         SemaphoreSlim gate = _gates.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         QaFindingView? current = null;
+        _state.Pin(id); // not aged out, evicted or lost to a merge while this call awaits GitHub; a merge still leaves the outcome a place to go
         try
         {
             current = _state.Get(id);
@@ -295,12 +299,15 @@ internal sealed class PlayerbotQaPublisher
 
             QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
             QaIssueRef? found = index.ByMarker(id);
-            string marker = PlayerbotQaIssueComposer.MarkerOf(id);
+            // A finding that holds issue #N (any state: a failed attempt keeps the number) and finds #N in the list has its issue, whatever marker its body carries
+            // (an issue handed over by a merged finding has that finding's). The same for Published and Failed; a marker a person edited away does not free the number.
+            if (found is null && current.Publication.HoldsIssue) found = index.ByNumber(current.Publication.Issue);
             if (found is null && current.Publication.Issue > 0 && index.ByNumber(current.Publication.Issue) is null)
             {
                 if (!await TakeLookupAsync(pass, cancellationToken).ConfigureAwait(false)) return true;
                 var known = await client.GetIssueAsync(current.Publication.Issue, cancellationToken).ConfigureAwait(false);
-                if (known is { } k && k.Body.Contains(marker, StringComparison.Ordinal)) found = k.Issue;
+                // Beyond a cut-short list the body is all there is to go on: any bot marker, this finding's or the one of a merged finding whose issue was handed over.
+                if (known is { } k && QaIssueIndex.HasAnyMarker(k.Body)) found = k.Issue;
             }
 
             if (found is null && client.SupportsSearch)
@@ -387,8 +394,83 @@ internal sealed class PlayerbotQaPublisher
         }
         finally
         {
+            _state.Unpin(id);
             gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Close the issues of findings that were merged into another one: comment with a link to the surviving issue, then close as not planned. One
+    /// failure is logged and retried next pass; false when the pass should stop (a transient failure). Does nothing with <c>CloseAbsorbedDuplicates</c> off.
+    /// </summary>
+    private async Task<bool> CloseDuplicatesAsync(Pass pass, CancellationToken cancellationToken)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (!git.CloseAbsorbedDuplicates) return true;
+        foreach (QaAbsorbed duplicate in _state.PendingDuplicates())
+        {
+            QaFindingView? survivor = _state.Get(duplicate.Survivor);
+            if (survivor is null || !survivor.Publication.HoldsIssue) continue;
+            if (survivor.Publication.Issue == duplicate.Issue)
+            {
+                _state.MarkDuplicateHandled(duplicate.Id);
+                continue;
+            }
+
+            try
+            {
+                QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
+                QaIssueRef? issue = index.ByNumber(duplicate.Issue);
+                if (issue is null)
+                {
+                    // Not in the list (deleted, unlabelled, or beyond a cut-short list): unknown, so left alone and kept pending.
+                    _logger.LogInformation("Bot QA: duplicate issue #{Number} is not in the issue list; left alone", duplicate.Issue);
+                    continue;
+                }
+
+                if (!issue.Open)
+                {
+                    _state.MarkDuplicateHandled(duplicate.Id); // already closed by a person: nothing to say
+                    continue;
+                }
+
+                // Never close an open issue in favour of one that is closed or unknown.
+                if (index.ByNumber(survivor.Publication.Issue) is not { Open: true })
+                {
+                    _logger.LogInformation("Bot QA: issue #{Number} is a duplicate of #{Survivor}, which is not open; left open", duplicate.Issue, survivor.Publication.Issue);
+                    continue;
+                }
+
+                DateTime now = _time.GetUtcNow().UtcDateTime;
+                if (!duplicate.Commented)
+                {
+                    if (!Ledger.CanComment(now, git.MaxCommentsPerHour))
+                    {
+                        _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the duplicate issue #{Number} is closed on a later pass", git.MaxCommentsPerHour, duplicate.Issue);
+                        return true;
+                    }
+
+                    await pass.Transport.CommentAsync(duplicate.Issue, PlayerbotQaIssueComposer.DuplicateComment(survivor.Publication.Issue), cancellationToken).ConfigureAwait(false);
+                    Ledger.RecordComment(now);
+                    _state.MarkDuplicateCommented(duplicate.Id); // a failed close below retries the close only, never the comment
+                }
+
+                await pass.Transport.CloseAsDuplicateAsync(duplicate.Issue, cancellationToken).ConfigureAwait(false);
+                _state.MarkDuplicateHandled(duplicate.Id);
+                _logger.LogInformation("Bot QA: closed issue #{Number} as a duplicate of #{Survivor}", duplicate.Issue, survivor.Publication.Issue);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (PlayerbotQaPublishException ex)
+            {
+                _logger.LogWarning("Bot QA could not close duplicate issue #{Number}: {Reason}", duplicate.Issue, pass.Redactor.Redact(ex.Message));
+                if (ex.Transient) return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -437,7 +519,7 @@ internal sealed class PlayerbotQaPublisher
         DateTime now = _time.GetUtcNow().UtcDateTime;
         foreach (QaFindingView f in eligible)
         {
-            if (f.Publication.Pinned) continue;
+            if (f.Publication.HoldsIssue) continue;
             if (f.Publication.State == QaPublicationState.DryRun && f.OccurrencesReported == f.Count) continue;
             QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, LabelsFor(f), _build, _redactor);
             try

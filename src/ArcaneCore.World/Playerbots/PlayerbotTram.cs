@@ -184,6 +184,9 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
     public uint PlatformSinceMs { get; set; }
     public string? Failure { get; set; }
     public PlayerbotRoute? Route { get; set; }
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) when the platform spot beside a car is planned.</summary>
+    public TileWait Tiles;
     public float Best { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;
     public GameObject? Car { get; set; }
@@ -433,8 +436,13 @@ internal static class PlayerbotTram
         {
             // Pick (again): the car that stops here soonest at a time the bot can be beside it.
             PlayerbotThinkProbe.Phase("tram choose car");
-            if (!ChooseCar(player, map, system, trip, here, options, now, out string? why))
+            if (!ChooseCar(player, map, system, trip, here, options, now, out string? why, out bool waitingForTiles))
+            {
+                // A tile beside the car is still being read: no verdict on the way, so the trip goes on and the car is chosen again.
+                if (waitingForTiles) return TramStep.Traveling;
                 return LeaveAfterFailure(trip, here, now, why ?? $"tram: no car stops at the {here.Name} platform");
+            }
+
             PlayerbotThinkProbe.Phase("tram platform");
         }
 
@@ -480,9 +488,10 @@ internal static class PlayerbotTram
     private const uint InsideMarginMs = 1_000;
 
     private static bool ChooseCar(Player player, Map map, GameObjectMapSystem system, TramTrip trip, TramPlatform here, PlayerbotOptions options,
-        uint now, out string? failure)
+        uint now, out string? failure, out bool waitingForTiles)
     {
         failure = null;
+        waitingForTiles = false;
         trip.Car = null;
         trip.Route = null;
         Vector3 bot = new(player.X, player.Y, player.Z);
@@ -509,7 +518,12 @@ internal static class PlayerbotTram
 
         foreach ((GameObject car, TramDock dock, _) in candidates.OrderBy(c => c.Ready).ThenBy(c => c.Car.Guid.Value))
         {
-            if (Beside(player, map, car, dock.Position, here, options, out PlayerbotRoute? route) is not { } spot) continue;
+            if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending) is not { } spot)
+            {
+                waitingForTiles |= pending;
+                continue;
+            }
+
             trip.Car = car;
             trip.Dock = dock;
             trip.DockChosenMs = now;
@@ -518,6 +532,8 @@ internal static class PlayerbotTram
             return true;
         }
 
+        // A spot whose tiles are still being read is no refusal: the choice is made again next think (TileWait.MaxMs, then it is one).
+        if (waitingForTiles) return false;
         failure = string.Create(CultureInfo.InvariantCulture,
             $"tram: no way from {bot.X:F1},{bot.Y:F1},{bot.Z:F1} to the side of a car at the {here.Name} platform");
         return false;
@@ -528,14 +544,17 @@ internal static class PlayerbotTram
     /// its centre line, where a floor level with the landing is), with the route to it (null when the bot stands there already).
     /// </summary>
     private static Vector3? Beside(Player player, Map map, GameObject car, Vector3 dock, TramPlatform here, PlayerbotOptions options,
-        out PlayerbotRoute? route)
+        ref TileWait tiles, uint now, out PlayerbotRoute? route, out bool pending)
     {
         route = null;
+        pending = false;
         Vector3 bot = new(player.X, player.Y, player.Z);
         foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(bot))))
         {
             if (Vector2.Distance(TramNetwork.Flat(spot), TramNetwork.Flat(bot)) <= 1.5f) return spot;
-            if (PlayerbotNavigation.TryPlan(player, spot, options, out PlayerbotRoute? planned) && planned is not null
+            PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, spot, options, ref tiles, now, out PlayerbotRoute? planned);
+            pending |= outcome == PlanOutcome.Pending;
+            if (outcome == PlanOutcome.Route && planned is not null
                 && Vector2.Distance(TramNetwork.Flat(planned.Points[^1]), TramNetwork.Flat(spot)) <= 2f)
             {
                 route = planned;
@@ -669,7 +688,8 @@ internal static class PlayerbotTram
 
         if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
         trip.Route = null;
-        // One path query per PlanRetryMs while none is found (the mesh tiles ahead may still be loading); the progress bound above ends it.
+        // One path query per PlanRetryMs while none is found (the mesh tiles ahead may still be loading, or being read in the
+        // background: a pending plan is retried like a refused one, nothing is set aside); the progress bound above ends it.
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
         PlayerbotThinkProbe.Phase("tram plan");
         bool planned = toward ? PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next)

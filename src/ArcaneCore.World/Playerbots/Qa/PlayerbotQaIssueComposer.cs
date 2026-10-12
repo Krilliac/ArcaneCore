@@ -186,6 +186,11 @@ internal static class PlayerbotQaIssueComposer
         return redactor.Body(text, string.Empty);
     }
 
+    /// <summary>The comment on an issue whose finding was merged into another: the surviving issue's number, nothing of any bot.</summary>
+    internal static string DuplicateComment(int survivorIssue)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"Duplicate of #{survivorIssue}: bot QA found these reports are one problem and now tracks them there. Closing this issue as a duplicate.\n\n_{Footer}_");
+
     private static void Row(StringBuilder sb, string name, string value) => sb.Append("| ").Append(name).Append(" | ").Append(Cell(value)).Append(" |\n");
 
     private static string Cell(string text) => text.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);

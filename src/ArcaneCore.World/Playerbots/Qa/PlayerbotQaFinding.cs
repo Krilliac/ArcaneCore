@@ -58,6 +58,10 @@ internal sealed record QaPublication(QaPublicationState State, int Issue = 0, st
     [JsonIgnore]
     public bool Pinned => State is QaPublicationState.Published or QaPublicationState.KnownClosed;
 
+    /// <summary>The finding has a GitHub issue, in any state: a failed attempt keeps the number of the issue it was working on, and that issue exists.</summary>
+    [JsonIgnore]
+    public bool HoldsIssue => Issue > 0;
+
     public override string ToString() => State switch
     {
         QaPublicationState.Published => string.Create(CultureInfo.InvariantCulture, $"Published#{Issue}"),
@@ -232,6 +236,15 @@ internal sealed class QaFinding
 
     internal const int MaxAttackers = 32;
 
+    /// <summary>
+    /// The most attacker entries a death-loop finding collects from its signals. A real loop has one to three; a finding that reaches this many is an
+    /// area-wide death spot, and a bound keeps one common entry from letting it swallow every loop of a zone cell through a long chain of unions.
+    /// </summary>
+    internal const int MaxLoopAttackers = 8;
+
+    /// <summary>The key of the aggregator's loop index this finding sits under (its anchor's map, or none); set and read by the aggregator under its lock.</summary>
+    public uint IndexedMap { get; set; }
+
     public required string Id { get; init; }
 
     public required string Key { get; init; }
@@ -306,13 +319,14 @@ internal sealed class QaFinding
     /// <summary>Where the first sample was; never changes once set.</summary>
     public QaAnchor? Anchor { get; set; }
 
-    /// <summary>A death loop's identity: the attackers (non-zero) of its first signal; never widened afterwards.</summary>
+    /// <summary>A death loop's attackers: the non-zero entries of every signal folded in (at most <see cref="MaxAttackers"/>); a loop that shares one of them is this loop.</summary>
     public SortedSet<uint> Attackers { get; } = [];
 
-    private string? _identity;
+    /// <summary>A stall's coarse identity (<see cref="PlayerbotQaFingerprint.StallGroup"/>); empty for other kinds. In memory only: recomputed on load.</summary>
+    public string Group { get; set; } = string.Empty;
 
-    /// <summary>The key without its location (cached; <see cref="Key"/> never changes).</summary>
-    public string Identity => _identity ??= PlayerbotQaFingerprint.LocationFreeKey(Key);
+    /// <summary>The group without its zone cell, or null (<see cref="PlayerbotQaFingerprint.StallGroup"/>).</summary>
+    public string? GroupBase { get; set; }
 
     public string DeathSource { get; set; } = string.Empty;
 

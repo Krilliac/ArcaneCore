@@ -96,31 +96,31 @@ public sealed class SpawnGroupStateTests
         group.Remove(real, host);
         Assert.Single(group.Spawn(host, random)); // warm the scratch collections
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
         int returned = 0;
-        for (int i = 0; i < 1000; i++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            returned += group.Spawn(host, random).Count; // full (counted, not asserted per call: Assert.Empty boxes an enumerator)
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 1000; i++)
+            {
+                returned += group.Spawn(host, random).Count; // full (counted, not asserted per call: Assert.Empty boxes an enumerator)
+            }
+        }, 0, "1000 full-group spawns");
         Assert.Equal(0, returned);
 
         group.Remove(real, host);
         host.Pending.Add(real); // waiting for its respawn time
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            returned += group.Spawn(host, random).Count;
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 1000; i++)
+            {
+                returned += group.Spawn(host, random).Count;
+            }
+        }, 0, "1000 pending-respawn spawns");
         Assert.Equal(0, returned);
 
         host.Pending.Clear();
-        before = GC.GetAllocatedBytesForCurrentThread();
+        long beforeRespawn = GC.GetAllocatedBytesForCurrentThread();
         IReadOnlyList<(uint Guid, uint Entry)> back = group.Spawn(host, random);
-        long respawn = GC.GetAllocatedBytesForCurrentThread() - before;
+        long respawn = GC.GetAllocatedBytesForCurrentThread() - beforeRespawn;
         Assert.Equal((real, RealTome), Assert.Single(back));
         Assert.True(respawn <= 128, $"a respawn allocates only the list it returns ({respawn} B)");
     }

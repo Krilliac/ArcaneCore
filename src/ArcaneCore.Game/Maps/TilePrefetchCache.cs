@@ -72,6 +72,10 @@ internal sealed class TilePrefetchCache<T>
         return false;
     }
 
+    /// <summary>Whether a prefetch of the tile is still being read (not finished, not taken).</summary>
+    internal bool IsRunning(uint mapId, int tileX, int tileY)
+        => _entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs) entry) && !entry.Load.IsCompleted;
+
     /// <summary>Forget a tile's prefetch (it was loaded some other way).</summary>
     internal void Forget(uint mapId, int tileX, int tileY) => _entries.Remove((mapId, tileX, tileY));
 

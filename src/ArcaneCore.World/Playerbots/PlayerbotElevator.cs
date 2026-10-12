@@ -439,6 +439,9 @@ internal static class PlayerbotElevator
 
     private static readonly ConditionalWeakTable<Player, ElevatorTrip> Trips = [];
     private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
+
+    /// <summary>Each bot's wait for the navigation tiles of the direct walk <see cref="TryBegin"/> weighs against the lift.</summary>
+    private static readonly ConditionalWeakTable<Player, StrongBox<TileWait>> TileWaits = [];
     private static readonly ConditionalWeakTable<WorldRuntime, Func<Map, ElevatorSurvey>> Surveys = [];
     private static readonly ConditionalWeakTable<Map, ElevatorSurvey> MapSurveys = [];
 
@@ -494,8 +497,18 @@ internal static class PlayerbotElevator
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
         // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
         // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
-        if (Vector3.Distance(bot, goal) <= options.MaxRouteYards && PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? direct)
-            && direct is { Points.Count: > 0 } && Vector2.Distance(ElevatorNetwork.Flat(direct.Points[^1]), ElevatorNetwork.Flat(goal)) <= ReachedYards
+        PlanOutcome directPlan = PlanOutcome.Refused;
+        PlayerbotRoute? direct = null;
+        if (Vector3.Distance(bot, goal) <= options.MaxRouteYards)
+        {
+            StrongBox<TileWait> tiles = TileWaits.GetValue(player, static _ => new StrongBox<TileWait>());
+            directPlan = PlayerbotNavigation.PlanExact(player, goal, options, ref tiles.Value, now, out direct);
+            // A tile of the direct way is still being read: no verdict yet on whether the mesh joins the goal, so no lift either. The
+            // caller plans its own walk, which meets the same tile and waits (for TileWait.MaxMs; then both stand as refused).
+            if (directPlan == PlanOutcome.Pending) return false;
+        }
+
+        if (directPlan == PlanOutcome.Route && direct is { Points.Count: > 0 } && Vector2.Distance(ElevatorNetwork.Flat(direct.Points[^1]), ElevatorNetwork.Flat(goal)) <= ReachedYards
             && MathF.Abs(direct.Points[^1].Z - goal.Z) <= PlayerbotNavigation.ProjectedEndYards)
         {
             walk = direct;
@@ -1103,6 +1116,8 @@ internal static class PlayerbotElevator
         if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
         trip.Route = null;
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
+        // A plan refused for want of a tile still being read is retried like any other refusal (a query per PlanRetryMs, no give-up
+        // inside NoProgressMs, which is longer than the tile wait): this walk sets nothing aside, so the plain answer is enough.
         if (!PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next) || next is null)
         {
             trip.NextPlanMs = unchecked(now + PlanRetryMs);

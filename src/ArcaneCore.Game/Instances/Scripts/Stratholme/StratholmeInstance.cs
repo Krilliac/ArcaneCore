@@ -27,7 +27,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         NpcRamstein = 10439, NpcBaron = 10440, NpcAcolyte = 10399,
         NpcCrystal = 10415, NpcBileAbom = 10416, NpcVenomAbom = 10417,
         NpcMindless = 11030, NpcBlackGuard = 10394, NpcYsida = 16031,
-        NpcBarthilas = 10435;
+        NpcBarthilas = 10435, NpcAurius = 10917;
     public const uint SpellBaronUltimatum = 27861, SpellYsidaFreed = 27773;
 
     // stratholme.h stratholmeLocation[0] (Barthilas door run) and [1] (Barthilas teleport).
@@ -42,6 +42,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     private readonly HashSet<ObjectGuid> _abominations = [];
     private readonly HashSet<ObjectGuid> _mindless = [];
     private readonly HashSet<ObjectGuid> _guards = [];
+    private uint _auriusTimer;
     private uint _baronRunTimer;
     private uint _mindlessTimer;
     private uint _guardsTimer;
@@ -72,6 +73,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         _abominations.Clear();
         _mindless.Clear();
         _guards.Clear();
+        _auriusTimer = 0;
         _baronRunTimer = _mindlessTimer = _guardsTimer = _slaughterDoorTimer = _slaughterSquareTimer = _mindlessCount = _barthilasRunTimer = 0;
         _baronWarnings = 0;
         _slaughterDoorOpen = _ramsteinSummoned = _announcerChosen = false;
@@ -178,6 +180,11 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     /// <summary>instance_stratholme::OnCreatureRespawn (stratholme.cpp:761-768): once the run has begun, Barthilas comes back in the slaughterhouse.</summary>
     public override void OnCreatureRespawn(Creature creature)
     {
+        if (creature.Template.Entry == NpcAurius)
+        {
+            PrepareAurius(creature); // the respawn restored the template faction and flags; he kneels again (spec 329-npc_aurius 5.1)
+        }
+
         if (creature.Template.Entry == NpcBarthilas && Encounters[TypeBarthilasRun] != EncounterState.NotStarted)
         {
             creature.System?.NearTeleport(creature, BarthilasTeleportX, BarthilasTeleportY, BarthilasTeleportZ, BarthilasTeleportO);
@@ -219,6 +226,10 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         {
             case NpcBaron or NpcYsida or NpcBarthilas:
                 StoreCreature(creature);
+                break;
+            case NpcAurius:
+                StoreCreature(creature);
+                PrepareAurius(creature);
                 break;
             case NpcAcolyte:
                 _unassignedAcolytes.Add(creature.Guid);
@@ -333,7 +344,26 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 }
 
                 break;
+            case TypeAurius:
+                // Spec 329-npc_aurius 5.2: no second player can turn in this instance. The value is stored and saved below.
+                if (data == EncounterState.Done && GetSingleCreatureFromStorage(NpcAurius) is { } aurius)
+                {
+                    aurius.NpcFlags &= ~(uint)ArcaneCore.Game.Npc.NpcFlags.QuestGiver;
+                }
+
+                break;
             case TypeBaron:
+                if (data == EncounterState.InProgress && Encounters[TypeAurius] == EncounterState.Done)
+                {
+                    _auriusTimer = AuriusAssistDelayMs; // spec 5.3
+                }
+
+                if (data == EncounterState.Done && Encounters[TypeAurius] == EncounterState.Done)
+                {
+                    Encounters[type] = data; // the fake death reads the Baron as Done for the gossip text
+                    FakeAuriusDeath();
+                }
+
                 if (data == EncounterState.InProgress)
                 {
                     SetDoor(GoBaronDoor, false);
@@ -469,6 +499,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
             case NpcPallid: SetData(TypePallid, EncounterState.Done); break;
             case NpcRamstein: SetData(TypeRamstein, EncounterState.Done); break;
             case NpcBaron: SetData(TypeBaron, EncounterState.Done); break;
+            case NpcAurius: creature.System?.SayText(creature, SayAuriusDeath); break; // spec 5.6
             case NpcAcolyte: AcolyteDied(creature); break;
             case NpcBileAbom or NpcVenomAbom:
                 _abominations.Remove(creature.Guid);
@@ -491,8 +522,85 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         }
     }
 
+    /// <summary>Spec 329-npc_aurius 5.3: the Baron fight starts, 5 s later Aurius joins it.</summary>
+    public const uint AuriusAssistDelayMs = 5000;
+
+    /// <summary>Aurius' yell on joining the fight and his line on dying (spec section 6).</summary>
+    public const int SayAuriusJoin = -1329021, SayAuriusDeath = -1329022;
+
+    /// <summary>
+    /// The faction Aurius takes for the fight (spec 8.2). FactionTemplate.dbc 5875: template 42 is faction 36, own mask 1, friendly mask 1, hostile
+    /// mask 0, so it is friendly to players and NOT hostile to the Baron's template 21 (faction 20, own mask 8, hostile mask 1). The reaction is
+    /// one-directional: 21 is hostile to 42, 42 is not hostile to 21. Attack validity (<c>CombatHooks.CanAttack</c>) holds either way for creature
+    /// pairs, but <c>ICreatureHostility.IsHostile(Aurius, Baron)</c> is false, so Aurius would never pick the Baron by sight; the script therefore
+    /// attacks him explicitly (<c>AttackStart</c>, which puts him on the threat list) and the fight does not depend on sight acquisition.
+    /// </summary>
+    public const uint FactionAuriusVictim = 42;
+
+    private void PrepareAurius(Creature aurius)
+    {
+        aurius.StandState = StandState.Kneel;
+        if (Encounters[TypeAurius] == EncounterState.Done)
+        {
+            aurius.NpcFlags &= ~(uint)ArcaneCore.Game.Npc.NpcFlags.QuestGiver;
+        }
+    }
+
+    /// <summary>Spec 5.4: Aurius, alive and idle, stands up beside the Baron and attacks him.</summary>
+    private void SendAuriusToTheBaron()
+    {
+        if (GetSingleCreatureFromStorage(NpcAurius) is not { IsAlive: true } aurius || aurius.Combat.IsInCombat
+            || GetSingleCreatureFromStorage(NpcBaron) is not { } baron || aurius.System is not { } system)
+        {
+            return;
+        }
+
+        float angle = system.RandomInt(0, 35_999) * (MathF.PI / 18_000f);
+        float distance = 4f * MathF.Sqrt(system.RandomInt(0, 10_000) / 10_000f);
+        float x = baron.X + (distance * MathF.Cos(angle)), y = baron.Y + (distance * MathF.Sin(angle));
+        aurius.StandState = StandState.Stand;
+        system.NearTeleport(aurius, x, y, baron.Z, aurius.Orientation);
+        system.SetHomePosition(aurius, x, y, baron.Z, aurius.Orientation);
+        system.SayText(aurius, SayAuriusJoin);
+        aurius.FactionTemplate = FactionAuriusVictim; // restored by his respawn (the template faction is read again)
+        aurius.NpcFlags &= ~(uint)(ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Gossip);
+        aurius.AI?.AttackStart(baron);
+    }
+
+    /// <summary>Spec 5.5: the Baron died with Aurius alive; he falls to 1 health "dead" so players can finish the follow-up at his body.</summary>
+    private void FakeAuriusDeath()
+    {
+        if (GetSingleCreatureFromStorage(NpcAurius) is not { IsAlive: true } aurius || aurius.System is not { } system)
+        {
+            return;
+        }
+
+        system.SayText(aurius, SayAuriusDeath);
+        system.StopCombatInPlace(aurius);
+        system.InterruptCast(aurius);
+        aurius.NpcFlags |= (uint)(ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Gossip);
+        aurius.Health = 1;
+        aurius.RegeneratesHealth = false; // else the 5 s regeneration heals the "corpse" (restored by his respawn)
+        system.MoveIdle(aurius);
+        system.RemoveAllAuras(aurius);
+        aurius.StandState = StandState.Dead;
+    }
+
     public override void Update(uint diffMs)
     {
+        if (_auriusTimer != 0)
+        {
+            if (diffMs >= _auriusTimer)
+            {
+                _auriusTimer = 0;
+                SendAuriusToTheBaron();
+            }
+            else
+            {
+                _auriusTimer -= diffMs;
+            }
+        }
+
         if (_baronRunTimer > 0 && Encounters[TypeBaron] != EncounterState.InProgress)
         {
             if (_baronWarnings == 0 && _baronRunTimer <= 10 * 60_000)

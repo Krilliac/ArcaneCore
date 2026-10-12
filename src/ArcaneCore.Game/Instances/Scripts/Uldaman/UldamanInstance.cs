@@ -18,6 +18,7 @@ public sealed class UldamanInstance(Map map) : ScriptedInstance(map, 2)
     public const uint AltarKeeperEvent = 2228, AltarArchaedasEvent = 2268;
     private readonly List<ObjectGuid> _wardens = [];
     private readonly List<ObjectGuid> _keepers = [];
+    private readonly List<ObjectGuid> _vaultWarders = [];
     private ObjectGuid _starter;
     private uint _keeperCooldown;
     private uint _keepersFallen;
@@ -85,6 +86,7 @@ public sealed class UldamanInstance(Map map) : ScriptedInstance(map, 2)
         {
             case Hallshaper or Custodian: _wardens.Add(creature.Guid); break;
             case StoneKeeper: _keepers.Add(creature.Guid); break;
+            case VaultWarder: _vaultWarders.Add(creature.Guid); break;
             case Archaedas:
                 StoreCreature(creature);
                 if (!_archaedasRegistered && creature.System is { } system)
@@ -178,6 +180,34 @@ public sealed class UldamanInstance(Map map) : ScriptedInstance(map, 2)
             keeper.AI?.AttackStart(player);
             break;
         }
+    }
+
+    /// <summary>
+    /// The two hallway "furniture" Vault Warders (spec 70-mob_archaeras_add 4.3, fixture spawn guids 7000320 and 7000321, about 59 yd from the
+    /// room at (104, 272)): Archaedas' Awaken Vault Warder never reaches them. The other two (7000322, 7000323) stand in the room.
+    /// </summary>
+    public static readonly uint[] HallwayWarderSpawnGuids = [7000320, 7000321];
+
+    /// <summary>Whether <paramref name="creature"/> is one of the hallway Vault Warders (<see cref="HallwayWarderSpawnGuids"/>).</summary>
+    public static bool IsHallwayWarder(Creature creature)
+        => creature.Template.Entry == VaultWarder && creature.Spawn is { } spawn && Array.IndexOf(HallwayWarderSpawnGuids, spawn.Guid) >= 0;
+
+    /// <summary>Archaedas, if the map still has him.</summary>
+    public Creature? ArchaedasCreature => GetSingleCreatureFromStorage(Archaedas);
+
+    /// <summary>
+    /// A Vault Warder of the room that still sleeps (alive, Stoned, not fighting), the one closest to Archaedas: what a pick of Awaken Vault Warder
+    /// (10258, at most two random targets in 100 yd) that lands on a hallway warder wakes instead (spec 70-mob_archaeras_add 11.4).
+    /// </summary>
+    public Creature? NextDormantRoomWarder()
+    {
+        CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
+        Creature? archaedas = ArchaedasCreature;
+        return creatures is null
+            ? null
+            : _vaultWarders.Select(g => creatures.FindCreature(g))
+                .Where(c => c is { IsAlive: true } && !IsHallwayWarder(c) && c.Combat.Victim is null && creatures.HasAura(c, SpellStoned))
+                .OrderBy(c => archaedas is null ? 0f : DistanceSq(c!, archaedas)).FirstOrDefault();
     }
 
     public Creature? ClosestDwarfNotInCombat(Creature searcher)

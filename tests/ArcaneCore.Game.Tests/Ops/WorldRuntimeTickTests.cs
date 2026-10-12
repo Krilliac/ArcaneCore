@@ -199,6 +199,25 @@ public sealed class WorldRuntimeTickTests
     }
 
     [Fact]
+    public void SlowMapUpdate_NamesTheTopContributorsAndTheHostLoad()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o => o.Perf.SlowMapUpdate = 1);
+        world.HostLoad = new ArcaneCore.Kernel.Ops.Watchdog.HostLoadSampler(new ArcaneCore.Kernel.Configuration.HostLoadOptions(), 1000,
+            ArcaneCore.Kernel.Ops.Watchdog.WatchdogClock.System);
+        world.HostLoad.Check(ArcaneCore.Kernel.Ops.Watchdog.WatchdogClock.System.NowMicros);
+        Map map = world.GetMap(1, 9);
+        map.AddUpdater(new SleepingUpdater(30));
+
+        world.RunTick(50);
+
+        CapturingLogger.Entry entry = Assert.Single(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+        Assert.Matches(@"top: SleepingUpdater \d+\.\d ms", entry.Message);
+        Assert.Matches(@"gc \d+\.\d ms \(gen0 \+\d+, gen1 \+\d+, gen2 \+\d+\)", entry.Message);
+        Assert.Contains("host: process cpu", entry.Message);
+    }
+
+    [Fact]
     public void SlowMapUpdate_DisabledDoesNotEmitDiagnostics()
     {
         var log = new CapturingLogger();
@@ -360,18 +379,18 @@ public sealed class WorldRuntimeTickTests
         Func<GcSnapshot> source = world.GcSource;
         GcSnapshot warm = source();
         _ = source().Since(warm); // JIT both paths first
-        long before = GC.GetAllocatedBytesForCurrentThread();
         long pause = 0;
-        for (int i = 0; i < 10_000; i++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            GcSnapshot a = source();
-            GcSnapshot b = source();
-            pause += b.Since(a).PauseTicks;
-        }
+            for (int i = 0; i < 10_000; i++)
+            {
+                GcSnapshot a = source();
+                GcSnapshot b = source();
+                pause += b.Since(a).PauseTicks;
+            }
+        }, 0, "10000 GC counter reads");
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(pause >= 0);
-        Assert.Equal(0, allocated);
     }
 
     private sealed class SleepingUpdater(int ms) : IMapUpdater

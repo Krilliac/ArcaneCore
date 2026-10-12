@@ -19,11 +19,14 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// </summary>
 internal sealed class SyntheticNavWorld : IAsyncDisposable
 {
-    private SyntheticNavWorld(WorldTestHost host, WorldSession session)
+    private SyntheticNavWorld(WorldTestHost host, WorldSession session, NavMeshPathfinder nav)
     {
         Host = host;
         Session = session;
+        Nav = nav;
     }
+
+    public NavMeshPathfinder Nav { get; }
 
     public WorldTestHost Host { get; }
 
@@ -32,12 +35,25 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
     public Player Player => Session.Player!;
 
     /// <summary>Write <paramref name="tiles"/> (file coordinates and tile) for map 0 and start the world on them.</summary>
-    public static async Task<SyntheticNavWorld> StartAsync(NavMeshFixture fixture, (int X, int Y, CellTile Tile)[] tiles, ILineOfSight? lineOfSight = null)
+    public static async Task<SyntheticNavWorld> StartAsync(NavMeshFixture fixture, (int X, int Y, CellTile Tile)[] tiles, ILineOfSight? lineOfSight = null,
+        (int X, int Y, CellTile Tile)[]? unloadedTiles = null, Action<NavMeshPathfinder>? configure = null)
     {
         fixture.WriteParams(0);
         foreach ((int x, int y, CellTile tile) in tiles)
             fixture.WriteTile(0, x, y, tile);
+        foreach ((int x, int y, CellTile tile) in unloadedTiles ?? [])
+            fixture.WriteTile(0, x, y, tile); // on disk only: a query's non-blocking read brings it in
         var nav = new NavMeshPathfinder(fixture.Directory);
+        configure?.Invoke(nav);
+        if (unloadedTiles is null)
+        {
+            // The terrain tile these meshes sit on has no file of its own (the tiles are loaded under other indices): settle its one
+            // background read now, so a bot's first plan is not answered "pending" while the pool finds that out.
+            Vector3 probe = new(5, 5, 0);
+            var nonBlocking = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
+            while (nav.FindPath(0, probe, probe, nonBlocking).Type == PathType.TilesPending)
+                await nav.PendingTileRead(0, 31, 31)!;
+        }
         foreach ((int x, int y, _) in tiles)
             Assert.True(nav.LoadTile(0, x, y));
         Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
@@ -45,7 +61,7 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
         WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
         await host.OnWorldAsync(() => WorldCollision.Of(host.World).Install(lineOfSight: lineOfSight, pathfinder: nav));
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
-        return new SyntheticNavWorld(host, session);
+        return new SyntheticNavWorld(host, session, nav);
     }
 
     public async Task PlaceAsync(Vector3 at)

@@ -99,8 +99,35 @@ public sealed class ArchaedasAi(Creature creature, UldamanInstance instance) : S
             _tremorMs = (uint)Random.Shared.Next(8000, 17001);
     }
 
-    internal void Awaken(Creature dwarf)
+    // The cast the substitutes below belong to, and the room warders it already woke in place of a hallway pick (world thread only).
+    private object? _warderCast;
+    private readonly List<Creature> _substitutes = [];
+
+    /// <summary>
+    /// Wakes <paramref name="dwarf"/>: removes Stoned and orders an attack on Archaedas' victim. Spec 70-mob_archaeras_add 11.4 (recommended): a
+    /// hallway Vault Warder is never woken; its pick wakes a sleeping room warder instead, so the cast of Awaken Vault Warder (two random
+    /// targets in 100 yd, picked among all four warders) still wakes the two room warders. <paramref name="cast"/> identifies the spell cast the
+    /// pick belongs to: a room warder that an earlier hallway pick of the SAME cast already woke as its substitute does not count its own pick
+    /// as done, it wakes another sleeping room warder, so neither warder is woken twice while the other sleeps. Null: no grouping.
+    /// </summary>
+    internal void Awaken(Creature dwarf, object? cast = null)
     {
+        if (dwarf.Template.Entry == UldamanInstance.VaultWarder)
+        {
+            if (!ReferenceEquals(cast, _warderCast))
+            {
+                _warderCast = cast;
+                _substitutes.Clear();
+            }
+
+            if (UldamanInstance.IsHallwayWarder(dwarf) || (cast is not null && _substitutes.Remove(dwarf)))
+            {
+                if (instance.NextDormantRoomWarder() is not { } substitute) return;
+                if (cast is not null) _substitutes.Add(substitute);
+                dwarf = substitute;
+            }
+        }
+
         System?.RemoveAuras(dwarf, UldamanInstance.SpellStoned);
         if (Victim is { } victim) dwarf.AI?.AttackStart(victim);
     }

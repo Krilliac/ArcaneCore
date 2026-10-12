@@ -92,11 +92,13 @@ public sealed class WorldConfigChecks : IConfigCheck
         {
             Range(issues, configuration, "Database:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
             Range(issues, configuration, "Database:SqliteWriteTimeoutMs", 5000, 0, 60000, "0 to keep the connection string timeout, or 1-60000 milliseconds (default 5000)");
+            Synchronous(issues, configuration, "Database:SqliteSynchronous");
         }
 
         if (own)
         {
             Range(issues, configuration, $"{section}:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
+            Synchronous(issues, configuration, $"{section}:SqliteSynchronous");
         }
 
         string prefix = own ? section : "Database";
@@ -169,6 +171,17 @@ public sealed class WorldConfigChecks : IConfigCheck
 
         issues.Add(Error(key, $"'{text}' is not a whole number.", "use a whole number"));
         return null;
+    }
+
+    /// <summary>A SQLite <c>synchronous</c> key must be unset, FULL or NORMAL (any case); numeric enum values are not accepted.</summary>
+    private static void Synchronous(List<ConfigIssue> issues, IConfiguration configuration, string key)
+    {
+        string? text = configuration[key];
+        if (!string.IsNullOrWhiteSpace(text) && !text.Trim().Equals(nameof(SqliteSynchronousMode.Full), StringComparison.OrdinalIgnoreCase)
+            && !text.Trim().Equals(nameof(SqliteSynchronousMode.Normal), StringComparison.OrdinalIgnoreCase))
+        {
+            issues.Add(Error(key, $"'{text}' is not a SQLite synchronous mode.", "use FULL (default) or NORMAL"));
+        }
     }
 
     private static void Range(List<ConfigIssue> issues, IConfiguration configuration, string key, int fallback, int min, int max, string expected)

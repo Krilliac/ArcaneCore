@@ -70,6 +70,64 @@ internal sealed class PlayerbotRoute
     internal bool Complete => NextPoint >= Points.Count;
 }
 
+/// <summary>The answer of a planning call that may wait for navigation tiles read in the background (<see cref="PlayerbotNavigation.PlanToward"/>).</summary>
+internal enum PlanOutcome : byte
+{
+    /// <summary>A route was planned.</summary>
+    Route,
+    /// <summary>No verdict yet: a tile on the way is being read. Keep the goal, set nothing aside, plan again on a later think.</summary>
+    Pending,
+    /// <summary>The destination was judged unreachable (or the wait for tiles passed <see cref="TileWait.MaxMs"/>): handle as a refusal.</summary>
+    Refused,
+}
+
+/// <summary>
+/// One goal's wait for navigation tiles (<see cref="PlanOutcome.Pending"/>): held by the caller, passed by reference to the planning call.
+/// A wait is a run of holds, each within <see cref="GapMs"/> of the last. Past <see cref="MaxMs"/> it is spent: the refusal stands, for
+/// every further pending answer of the run, until a plan succeeds (<see cref="Reset"/>) or the run breaks off. Owned and touched by the
+/// world thread only.
+/// </summary>
+internal struct TileWait
+{
+    /// <summary>How long a bot waits for the tiles of one plan before the refusal counts as any other.</summary>
+    internal const uint MaxMs = 15_000;
+
+    /// <summary>Holds further apart than this are separate waits.</summary>
+    internal const uint GapMs = 5_000;
+
+    private uint _since;
+    private uint _lastHold;
+    private bool _started;
+    private bool _spent;
+
+    /// <summary>Whether a wait is under way (not yet spent).</summary>
+    internal readonly bool Active => _started && !_spent;
+
+    /// <summary>Whether to keep waiting at <paramref name="now"/> (clock in ms, wrapping); false once the wait passed <see cref="MaxMs"/>.</summary>
+    internal bool Hold(uint now)
+    {
+        if (!_started || unchecked(now - _lastHold) > GapMs)
+        {
+            _started = true;
+            _since = now;
+            _spent = false;
+        }
+
+        _lastHold = now;
+        if (_spent) return false;
+        if (unchecked(now - _since) <= MaxMs) return true;
+        _spent = true;
+        return false;
+    }
+
+    /// <summary>A plan succeeded or the goal changed: the next pending answer starts a new wait.</summary>
+    internal void Reset()
+    {
+        _started = false;
+        _spent = false;
+    }
+}
+
 internal static class PlayerbotNavigation
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
@@ -92,6 +150,56 @@ internal static class PlayerbotNavigation
             && path.Points.Count <= maxPoints
             && path.Points.All(Finite) && float.IsFinite(path.Length)
             && path.Length <= maxDistance;
+
+    /// <summary>
+    /// The count of searches so far (this thread) that had to wait for a navigation tile still being read in the background
+    /// (<see cref="PathOptions.NonBlockingTiles"/>). Take it before planning and ask <see cref="PendingSince"/> after a refusal: a refusal
+    /// for want of a tile is no verdict on the destination, and the caller asks again on a later think instead of setting the goal aside.
+    /// </summary>
+    internal static long PendingMark => PathSearchCounters.TilesPending;
+
+    /// <summary>Whether a search since <paramref name="mark"/> (<see cref="PendingMark"/>) waited for a navigation tile.</summary>
+    internal static bool PendingSince(long mark) => PathSearchCounters.TilesPending != mark;
+
+    /// <summary>
+    /// Plans like <see cref="TryPlan"/>, but tells a refusal for want of a navigation tile still being read in the background
+    /// (<see cref="PlanOutcome.Pending"/>) from a verdict on the destination (<see cref="PlanOutcome.Refused"/>). The wait is bounded by
+    /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
+    /// </summary>
+    internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, bool completedQuestReturn = false)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn), mark, ref wait, now, ref route);
+    }
+
+    /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
+    internal static PlanOutcome PlanFar(Player player, Vector3 destination, PlayerbotOptions options, int searchNodes, ref TileWait wait,
+        uint now, out PlayerbotRoute? route)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlanFar(player, destination, options, searchNodes, out route), mark, ref wait, now, ref route);
+    }
+
+    /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
+    internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, bool completedQuestReturn = false)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn), mark, ref wait, now, ref route);
+    }
+
+    private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
+    {
+        if (planned && route is not null)
+        {
+            wait.Reset();
+            return PlanOutcome.Route;
+        }
+
+        route = null;
+        return PendingSince(mark) && wait.Hold(now) ? PlanOutcome.Pending : PlanOutcome.Refused;
+    }
 
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
@@ -139,6 +247,7 @@ internal static class PlayerbotNavigation
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
+        long pending = PendingMark;
         // The way to the goal itself first: the search reads the navigation tiles it crosses (PathOptions.LoadTiles), so a road
         // that leaves the loaded tiles is followed. The straight-line steps below are a greedy fallback that stops wherever the
         // mesh ends nearest a point on the line: on the edge of the Red Cloud Mesa above Bloodhoof Village (live stress test
@@ -149,13 +258,15 @@ internal static class PlayerbotNavigation
         // of that way (RegionLeg). Only when the graph does not decide (none, still being built, both ends in one region) do the
         // goal-first query and the straight-line steps below plan.
         if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn) is { } planned) return planned;
+        // A tile the plan needs is still being read: nothing below could decide either (each would meet the same tile).
+        if (PendingSince(pending)) return false;
         // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
         // the refusal: one plan attempt costs one query, as before. Only an unloaded tile or no mesh (a refused straight line) goes on.
         if (distance > chunk && distance <= options.MaxRouteYards)
         {
             if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused,
                 completedQuestReturn: completedQuestReturn)) return true;
-            if (!goalStraightRefused) return false;
+            if (!goalStraightRefused || PendingSince(pending)) return false;
         }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
         // the mesh then answers a straight line (vmangos PathFinder's HaveTiles shortcut), which the terrain stepper refuses across
@@ -167,7 +278,7 @@ internal static class PlayerbotNavigation
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
             if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused,
                 completedQuestReturn: completedQuestReturn)) return true;
-            if (!straightRefused || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
+            if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
 
@@ -208,7 +319,7 @@ internal static class PlayerbotNavigation
             || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
             return null;
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
-        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true };
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
         NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
@@ -227,8 +338,10 @@ internal static class PlayerbotNavigation
         // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
         // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
         // straight-line steps still get their turn.
+        long pending = PendingMark;
         if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _,
             completedQuestReturn: completedQuestReturn)) return true;
+        if (PendingSince(pending)) { route = null; return null; }
         if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _,
             completedQuestReturn: completedQuestReturn)) return true;
         route = null;
@@ -258,6 +371,7 @@ internal static class PlayerbotNavigation
 
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
+        long detourMark = PendingMark;
         // Other ways after the direct one was refused: held to the think's search budget (PlayerbotThinkProbe.Fallback).
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         foreach (float extra in HazardDetourYards)
@@ -285,6 +399,8 @@ internal static class PlayerbotNavigation
                 return true;
             }
 
+        // A detour leg that waited for a tile still being read is no evidence of a ring: the caller asks again once it is in.
+        if (PendingSince(detourMark)) return false;
         // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
         if (!trial) risk.Refused(player, hazard);
         return false;
@@ -294,7 +410,7 @@ internal static class PlayerbotNavigation
     private static PlayerbotRoute? Leg(Map map, Vector3 from, Vector3 to, PlayerbotOptions options)
     {
         PathResult path = PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
-            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true });
+            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
         if ((path.Type & PathType.NotUsingPath) != 0)
             return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
                 (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain : null;
@@ -326,6 +442,8 @@ internal static class PlayerbotNavigation
         // one (SearchNodes). The old 512 polygons ran out on the real Dun Morogh mesh well inside the route bound: 200 yards from
         // Coldridge Valley to the Rockjaw Raiders (quest 179) answered no path with 512 and an 18-corner path with 2048.
         PathResult path = Query(map, start, destination, options, partial, steep: false, out bool capped, searchNodes);
+        // A tile on the way is still being read in the background: neither a route nor a refusal. No fallback query could decide either.
+        if ((path.Type & PathType.TilesPending) != 0) return false;
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
@@ -407,7 +525,7 @@ internal static class PlayerbotNavigation
     private static PathResult QueryOnce(Map map, Vector3 from, Vector3 to, PlayerbotOptions options, bool partial, bool steep, int? searchNodes)
         => PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
             ExcludeFlags = steep ? NavTerrain.Empty : NavTerrain.SteepSlopes, AllowPartial = partial,
-            MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true });
+            MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true, NonBlockingTiles = true });
 
     /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
     private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
@@ -547,7 +665,7 @@ internal static class PlayerbotNavigation
             int cutBefore = PlayerbotThinkProbe.Active?.Clamped ?? 0;
             PathResult path = PlayerbotThinkProbe.Find(map.Collision, start, probe, new PathOptions { MaxPoints = IslandPathPoints,
                 Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = IslandSearchNodes,
-                LoadTiles = true });
+                LoadTiles = true, NonBlockingTiles = true });
             // A search the think's node budget cut short ends early on ground that may go on: no proof of an island.
             if ((PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore) return false;
             // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
@@ -579,6 +697,7 @@ internal static class PlayerbotNavigation
                 Vector3 beside = new(x, y, floor + 0.05f);
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
+                if ((path.Type & PathType.TilesPending) != 0) return null;
                 // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
                 bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
@@ -700,6 +819,7 @@ internal static class PlayerbotNavigation
             if (Vector3.Distance(point, destination) > 1f)
             {
                 PathResult onward = Query(map, point, destination, options, partial, steep: false, out bool capped);
+                if ((onward.Type & PathType.TilesPending) != 0) return false;
                 if (!Usable(player, onward, point, destination, goal, partial, options, out _))
                 {
                     // Ran out of nodes short of the destination: the next corner, a few yards on, searches the same ground (see FromBeside).

@@ -143,9 +143,7 @@ public sealed class ScriptHookRegistryTests
         var addonMessage = new ScriptAddonMessage(1, "PFX", "body", null);
         for (int warm = 0; warm < 2; warm++) Run();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run();
-        Assert.Equal(before, GC.GetAllocatedBytesForCurrentThread());
+        AllocationProbe.AssertEveryCleanWindowAtMost(Run, 0, "1000 hook dispatch rounds");
 
         void Run()
         {
