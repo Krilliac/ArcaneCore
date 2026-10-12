@@ -573,7 +573,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid holder = Assert.IsType<Guid>((await feature.CreateAsync("Holdlock", 1, 1)).BotId);
-        Assert.True((await feature.StartAsync(holder.ToString())).Success);
+        Assert.True((await feature.StartScriptedAsync(holder.ToString(), new IdleController())).Success);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Stoprace", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
 
@@ -583,6 +583,8 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.DoesNotContain(log.Entries, e => e.Message.Contains($"{id} quarantine retry starting"));
 
         // The next checkpoint (5 s of game time on, the retry due): hold it inside the operation lock at the running bot's update.
+        // The checkpoint writes only a bot whose goal changed, so the running bot's goal changes to give it an update to hold at.
+        await host.World.InvokeAsync(() => { feature.FindBrain(holder)!.HoldGoalForTests(PlayerbotGoalKind.Quest, 4242, 1); return true; });
         TaskCompletionSource held = owners.HoldUpdatesOf(holder);
         await StepUntilAsync(host, feature, () => held.Task.IsCompleted, held.Task, "the checkpoint with the retry due");
 
@@ -891,6 +893,19 @@ public sealed class ManagedPlayerbotLifecycleTests
         public bool FailNextCreate { get; set; }
         public bool FailNextUpdate { get; set; }
 
+        private int _rowsWritten;
+
+        /// <summary>Rows written by update (single or batched) since the store was made.</summary>
+        public int RowsWritten => Volatile.Read(ref _rowsWritten);
+
+        public async Task<IReadOnlyList<bool>> UpdateManyAsync(IReadOnlyList<ManagedPlayerbotUpdate> updates, CancellationToken cancellationToken = default)
+        {
+            var results = new bool[updates.Count];
+            for (int i = 0; i < updates.Count; i++)
+                results[i] = await UpdateAsync(updates[i].Bot, updates[i].ExpectedRevision, cancellationToken);
+            return results;
+        }
+
         private TaskCompletionSource? _loadHeld;
         private TaskCompletionSource _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -991,7 +1006,7 @@ public sealed class ManagedPlayerbotLifecycleTests
                 if (current.Revision != expectedRevision || current.AccountId != bot.AccountId
                     || current.CharacterId != bot.CharacterId || current.AccountName != bot.AccountName)
                     return false;
-                if (_items.TryUpdate(bot.BotId, bot, current)) return true;
+                if (_items.TryUpdate(bot.BotId, bot, current)) { Interlocked.Increment(ref _rowsWritten); return true; }
             }
 
             return false;

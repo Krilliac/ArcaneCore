@@ -1316,6 +1316,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             ActiveBot[] bots = _active.Values.ToArray();
             // One world-thread hop for every bot's goal (the coordinators' collections are world-thread owned).
             (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[] goals = await GoalsOnWorldThreadAsync(bots).ConfigureAwait(false);
+            // Only a bot whose persisted goal fields changed is written (UpdatedUnix alone is never a reason), and all of them
+            // together: one transaction per chunk instead of one autocommit (one fsync) per bot per checkpoint.
+            var live = new List<(ActiveBot Active, ManagedPlayerbot Next)>(bots.Length);
             for (int i = 0; i < bots.Length; i++)
             {
                 ActiveBot active = bots[i];
@@ -1330,10 +1333,45 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                     else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
                     continue;
                 }
-                active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
-                { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }, CancellationToken.None).ConfigureAwait(false);
-                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+                live.Add((active, active.Record with { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }));
             }
+
+            var conflicted = new HashSet<ActiveBot>();
+            var changed = live.Where(item => GoalFieldsDiffer(item.Active.Record, item.Next)).ToList();
+            if (changed.Count > 0)
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
+                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                for (int start = 0; start < changed.Count; start += ManagedPlayerbotUpdate.MaxBatch)
+                {
+                    int count = Math.Min(ManagedPlayerbotUpdate.MaxBatch, changed.Count - start);
+                    var updates = new ManagedPlayerbotUpdate[count];
+                    for (int j = 0; j < count; j++)
+                    {
+                        ManagedPlayerbot next = changed[start + j].Next;
+                        updates[j] = new ManagedPlayerbotUpdate(next with { Revision = next.Revision + 1, UpdatedUnix = now }, next.Revision);
+                    }
+
+                    IReadOnlyList<bool> applied = await store.UpdateManyAsync(updates, CancellationToken.None).ConfigureAwait(false);
+                    for (int j = 0; j < count; j++)
+                    {
+                        ActiveBot active = changed[start + j].Active;
+                        if (applied[j]) active.Record = updates[j].Bot;
+                        else
+                        {
+                            // The same refusal a single PersistAsync reports, but it faults only this bot.
+                            conflicted.Add(active);
+                            logger.LogWarning("Playerbot {BotId} checkpoint refused: managed-revision-conflict", active.Record.BotId);
+                            Interlocked.CompareExchange(ref active.FaultCode, "checkpoint: managed-revision-conflict", null);
+                            active.Session.Kick();
+                        }
+                    }
+                }
+            }
+
+            foreach ((ActiveBot active, _) in live)
+                if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1341,6 +1379,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
     }
+
+    /// <summary>Whether the checkpoint's persisted fields (the goal, its target and its quest) differ between two records.</summary>
+    private static bool GoalFieldsDiffer(ManagedPlayerbot stored, ManagedPlayerbot next)
+        => stored.Goal != next.Goal || stored.TargetEntry != next.TargetEntry || stored.QuestId != next.QuestId;
 
     /// <summary>A running bot's status line: the one it had when nothing in it changed (no allocation), otherwise a new one.</summary>
     private PlayerbotStatus StatusOf(ActiveBot b)
