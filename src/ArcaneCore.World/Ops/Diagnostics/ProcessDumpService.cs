@@ -273,6 +273,7 @@ public sealed class ProcessDumpService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("dump.free-space", ex); // static helper without a logger; the caller treats an unknown size as "cannot check"
             return null;
         }
     }

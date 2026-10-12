@@ -114,7 +114,8 @@ public static class HotCodeGuard
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The refusal itself is what matters; an unwritable audit file must not mask it.
+                // The refusal itself is what matters; an unwritable audit file must not mask it, but it is counted.
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("hotcode.audit-write", ex);
             }
 
             throw new HotCodeRefusedException(message);

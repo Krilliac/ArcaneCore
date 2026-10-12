@@ -365,6 +365,7 @@ internal sealed class PlayerbotPartyAI
         }
         catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.party-zone-names", error);
             return (null, null); // a minimal host without map data
         }
     }

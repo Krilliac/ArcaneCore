@@ -67,7 +67,11 @@ public sealed class NameCatalog
     {
         if (!IsReservedExact(name)) return false;
         try { return !_reserved.IsMatch(name); }
-        catch (RegexMatchTimeoutException) { return false; } // regex timeout: fails closed (the name is refused); the catalog has no logger
+        catch (RegexMatchTimeoutException ex)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("names.reserved-regex-timeout", ex); // regex timeout: fails closed (the name is refused); the catalog has no logger, so it is counted
+            return false;
+        }
     }
 }
 

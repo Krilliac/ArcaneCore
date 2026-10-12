@@ -44,9 +44,10 @@ public sealed class AccountStatusEvents
                 {
                     SubscriberFaulted?.Invoke(ex);
                 }
-                catch (Exception)
+                catch (Exception faulted)
                 {
-                    // diagnostics must never throw back into the mutation
+                    // diagnostics must never throw back into the mutation; the ledger swallows its own failures
+                    Diagnostics.FaultLedger.Shared.Record("accounts.subscriber-fault-handler", faulted);
                 }
             }
         }

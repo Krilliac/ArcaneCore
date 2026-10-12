@@ -2,8 +2,9 @@
 
 Added on branch `claude/w33-observability`. Three log features for the failures that used to leave no trace: a refusal the
 server sent a client (or a request it dropped without answering), an identical packet sent twice, and a slow world tick the
-logs could not attribute. Logs are private, so lines may carry names; these lines carry **GUID low, map id, entry and spell
-ids only** (nothing from a key, a password or an SRP value), so a line pasted into a bot-QA issue is safe.
+logs could not attribute. Logs are private, so lines may carry names. The refusal and silent-drop lines carry GUID low, map
+id, entry and spell ids only; the duplicate-packet line also carries the **account id** and a few call-stack frames
+(type and method names). None of them carries a key, a password or an SRP value, so a line pasted into a bot-QA issue is safe.
 
 ## Categories and keys
 
@@ -105,3 +106,14 @@ terrain cleanup, deferred work. Playerbot *brains* are world features, not map w
 Catch blocks that swallowed an exception without a log now carry a one-line reason (cancellation and shutdown, fail-closed
 regex timeouts in the name catalog, best-effort fallbacks). The ones that cannot log (the logging subsystem itself, static
 helpers with no logger) say so.
+
+Swallowed catches that carry no logger (static helpers, stores, the ban cache, the planner and gear-score seams, the packet
+capture, the hot-code audit write, the word filter, the name catalog) now count the exception in `FaultLedger.Shared` under a
+site name (`bans.effective-read`, `realm.ipban-reload`, `net.packet-capture`, ...). Control flow is unchanged.
+
+## Skipped navmesh tiles
+
+`NavRegionGraph.Build` lists every `.mmtile` it could not read in `SkippedTiles`. The pathfinder writes one Warning per
+tile (tile coordinates and file, at most 20 lines then a summary) and counts each in the fault ledger under
+`mmaps.regiongraph`. The live mesh load only reports a tile when a path query loads it lazily, so this is the first report
+of a corrupt tile no query has needed yet.

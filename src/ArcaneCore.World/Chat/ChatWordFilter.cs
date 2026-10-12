@@ -84,8 +84,9 @@ public sealed class ChatWordFilter
                     text = regex.Replace(text, static m => new string('*', m.Length));
                 }
             }
-            catch (RegexMatchTimeoutException)
+            catch (RegexMatchTimeoutException ex)
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("chat.word-filter-timeout", ex); // a rule that times out is a bad pattern: counted, the message is rejected
                 return null;
             }
         }
