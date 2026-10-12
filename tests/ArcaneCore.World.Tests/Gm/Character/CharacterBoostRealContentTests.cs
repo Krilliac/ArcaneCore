@@ -42,6 +42,7 @@ internal sealed class BoostRealContentFactAttribute : FactAttribute
         {
             Skip = $"{Variable} (an imported SQLite world.db), {DbcVariable} (build-5875 DBCs) and {DumpVariable} (the classic-db dump) are required; the real-content boost kit checks did NOT run.";
         }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 

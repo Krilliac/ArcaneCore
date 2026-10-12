@@ -36,6 +36,7 @@ internal sealed class RealTransportContentFactAttribute : FactAttribute
         {
             Skip = $"{WorldVariable} (a refreshed world.db) and {DbcVariable} (a directory with TaxiPathNode.dbc) are not both set: the real-ship check did NOT run.";
         }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 
