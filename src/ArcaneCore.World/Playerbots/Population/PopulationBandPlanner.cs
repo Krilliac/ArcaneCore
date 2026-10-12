@@ -57,6 +57,9 @@ internal sealed class PopulationRaceClassCache
 /// <summary>A planned bot: the band it fills, its team, race, class, and the level range it may have.</summary>
 internal sealed record PopulationPlan(int Band, Team Team, byte Race, byte Class, PopulationPlacement Placement, int Level);
 
+/// <summary>A fresh-launch bot: only its team, race and class (it stays level 1 where its race starts).</summary>
+internal sealed record PopulationFreshPlan(Team Team, byte Race, byte Class);
+
 /// <summary>
 /// Pure planning of the bots the population creates: how many each band should hold, which band is furthest below its share, which
 /// faction, race and class the next bot gets, and a level that fits both the band and the zone it is placed in.
@@ -148,6 +151,17 @@ internal static class PopulationBandPlanner
         for (int i = 0; i < bands.Count; i++)
             if (bands[i].Contains(level)) return i;
         return -1;
+    }
+
+    /// <summary>
+    /// Fresh launch: the faction furthest below its share (<see cref="ChooseTeam"/>), then a class and one of its races of that team
+    /// (<see cref="ChooseRaceClass"/>). No band, zone or level: the bot is level 1 at its race start. Null when no race and class fits.
+    /// </summary>
+    public static PopulationFreshPlan? PlanFresh(PlayerbotPopulationOptions options, int alliance, int horde, PopulationRaceClassCache cache, Random random)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Team team = ChooseTeam(options, alliance, horde);
+        return ChooseRaceClass(cache, team, options.Classes, random) is { } pair ? new PopulationFreshPlan(team, pair.Race, pair.Class) : null;
     }
 
     /// <summary>

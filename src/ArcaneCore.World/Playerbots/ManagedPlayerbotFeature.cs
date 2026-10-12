@@ -33,7 +33,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IWorldFeature, IPlayerbotService
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IWorldFeature, IPlayerbotService
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -196,30 +196,42 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (ResetInProgress) return new(false, "fleet-reset-running");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Account? spare = null;
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
+            if (ResetInProgress) return new(false, "fleet-reset-running");
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
+            IReadOnlyList<ManagedPlayerbot> registered = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
             // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
             // stopped bot never takes a running slot (the live stress test of 2026-10-08 found 5 stopped bots blocking creation).
-            if ((await store.LoadAllAsync(cancellationToken).ConfigureAwait(false)).Count >= _options.MaxRegisteredBots)
+            if (registered.Count >= _options.MaxRegisteredBots)
                 return new(false, "playerbot-registry-full");
             ICharacterStore characters = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
             if (await characters.IsNameTakenAsync(name, cancellationToken).ConfigureAwait(false)) return new(false, "name-in-use");
-            // Credentials are random and discarded; only salt/verifier persist. These accounts cannot be adopted by name.
-            string username = "PB" + Guid.NewGuid().ToString("N")[..12].ToUpperInvariant();
-            byte[] salt = RandomNumberGenerator.GetBytes(32);
-            string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
             Guid botId = Guid.NewGuid();
-            Account owner = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotProvisionStore>().CreateAsync(botId, new Account
+            // The empty account of a bot a fleet reset deleted is reused (the provisioning journal is for NEW accounts only).
+            spare = await ClaimSpareAccountAsync(scope.ServiceProvider, registered, cancellationToken).ConfigureAwait(false);
+            Account owner;
+            if (spare is not null) owner = spare;
+            else
             {
-                Username = username, Salt = salt,
-                Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, username, password), 32),
-                Security = AccountSecurity.Player,
-            }, cancellationToken).ConfigureAwait(false);
+                // Credentials are random and discarded; only salt/verifier persist. These accounts cannot be adopted by name.
+                string username = "PB" + Guid.NewGuid().ToString("N")[..12].ToUpperInvariant();
+                byte[] salt = RandomNumberGenerator.GetBytes(32);
+                string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
+                owner = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotProvisionStore>().CreateAsync(botId, new Account
+                {
+                    Username = username, Salt = salt,
+                    Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, username, password), 32),
+                    Security = AccountSecurity.Player,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+
             WorldSession session = await NewSessionAsync(owner, null, scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             try
             {
@@ -240,9 +252,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 var bot = new ManagedPlayerbot(botId, owner.Id, character.Id, owner.Username, false,
                     ManagedPlayerbotState.Stopped, PlayerbotGoalKind.Explore, 0, 0, 0, now, now);
                 await store.CreateAsync(bot, cancellationToken).ConfigureAwait(false);
-                if (!await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotProvisionStore>()
+                if (spare is null && !await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotProvisionStore>()
                     .CompleteAsync(botId, owner.Id, cancellationToken).ConfigureAwait(false))
                     throw new InvalidOperationException("provision-completion-refused");
+                spare = null; // in use now
                 PublishStopped(bot, character.Name, character.MapId);
                 logger.LogInformation("Created managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
                 return new(true, "created", bot.BotId, character.Name);
@@ -259,6 +272,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
             string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
             logger.LogWarning("Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
+            // A reused account has no provisioning journal, so what this attempt put on it is removed here (cancellation included).
+            if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -267,6 +282,76 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
         finally { _operations.Release(); }
+    }
+
+    /// <summary>
+    /// A creation on a reused account failed. The account was empty when it was claimed, so any character on it came from this attempt
+    /// and no registry row names it (unless one was stored after all, then nothing is touched): delete it like a player's delete
+    /// would, then make the account spare again. If a character cannot be deleted the account is retired (not offered again) and the
+    /// character is logged. Runs with no cancellation token on purpose: a shutdown mid-creation is exactly when this matters.
+    /// </summary>
+    private async Task RetireOrRequeueSpareAsync(Account spare)
+    {
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IServiceProvider provider = scope.ServiceProvider;
+            IReadOnlyList<CharacterRecord> held = await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false);
+            if (held.Count != 0)
+            {
+                IReadOnlyList<ManagedPlayerbot> registered = await provider.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(CancellationToken.None).ConfigureAwait(false);
+                Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(spare.Username, CancellationToken.None).ConfigureAwait(false);
+                if (registered.Any(b => b.AccountId == spare.Id) || owner is null || owner.Id != spare.Id
+                    || owner.Status != AccountStatus.Active || owner.Security != AccountSecurity.Player || owner.SessionKey is not null) return; // in use, or not ours: leave it alone
+                WorldSession session = await NewSessionAsync(owner, null, provider, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    foreach (CharacterRecord character in held)
+                        if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
+                            logger.LogError("Playerbot creation on reused account '{Account}' failed and character {CharacterId} could not be deleted", spare.Username, character.Id);
+                }
+                finally
+                {
+                    session.Kick();
+                    try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
+                    catch (TimeoutException) { logger.LogWarning("Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
+                }
+
+                if ((await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false)).Count != 0)
+                {
+                    logger.LogError("Playerbot cleanup of reused account '{Account}' left a character behind; the account is retired", spare.Username);
+                    return;
+                }
+            }
+
+            _spareAccounts.Enqueue(new SpareAccount(spare.Id, spare.Username));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogError(ex, "Playerbot cleanup of reused account '{Account}' failed; the account is retired ({Type}: {Message})", spare.Username, ex.GetType().Name, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The next account a fleet reset left empty that is still safe to reuse, or null. Every candidate is read again: the account must
+    /// be the same plain, active player account without a login key, hold no character, and be named by no registry row. Operation lock held.
+    /// </summary>
+    private async Task<Account?> ClaimSpareAccountAsync(IServiceProvider provider, IReadOnlyList<ManagedPlayerbot> registered, CancellationToken cancellationToken)
+    {
+        if (_spareAccounts.IsEmpty) return null;
+        IAccountStore accounts = provider.GetRequiredService<IAccountStore>();
+        ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
+        while (_spareAccounts.TryDequeue(out SpareAccount? candidate))
+        {
+            Account? account = await accounts.FindByUsernameAsync(candidate.Name, cancellationToken).ConfigureAwait(false);
+            if (account is null || account.Id != candidate.AccountId || account.Status != AccountStatus.Active
+                || account.Security != AccountSecurity.Player || account.SessionKey is not null) continue;
+            if (registered.Any(b => b.AccountId == account.Id)) continue;
+            if ((await characters.GetByAccountAsync(account.Id, cancellationToken).ConfigureAwait(false)).Count != 0) continue;
+            return account;
+        }
+
+        return null;
     }
 
     /// <summary>The character handler refused the bot's character; <see cref="Reason"/> says why.</summary>
@@ -642,6 +727,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     {
         bool quarantineRetry = kind != StartKind.Operator;
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (ResetInProgress) return new(false, "fleet-reset-running");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
         WorldSession? session = null;
@@ -650,6 +736,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
+            if (ResetInProgress) return new(false, "fleet-reset-running");
             bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
             if (kind == StartKind.Operator) _quarantine.TryRemove(bot.BotId, out _);

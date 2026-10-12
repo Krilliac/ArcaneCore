@@ -73,6 +73,14 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
         new ChatCommand("revive", AccountSecurity.Administrator,
             "Syntax: .playerbot revive $name|$prefix*|all\nRevive the dead bots among the selection, as .revive does.",
             Revive),
+        new ChatCommand("fleet", AccountSecurity.Administrator,
+            "Syntax: .playerbot fleet reset [confirm $code]\nDestructive fleet operations.",
+            Children:
+            [
+                new ChatCommand("reset", AccountSecurity.Administrator,
+                    "Syntax: .playerbot fleet reset\n.playerbot fleet reset confirm $code\nSimulate a fresh server launch: stop every managed bot and delete every character on a playerbot account (the bot accounts stay). The first form only prints what would happen and a confirm code valid for 60 seconds; the second one does it. Real players' characters are never touched.",
+                    FleetReset),
+            ]),
     ];
 
     // --- shared ---------------------------------------------------------------------------------------------------
@@ -463,6 +471,102 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
     }
 
     private static string ClassName(Class value) => Enum.IsDefined(value) ? value.ToString() : $"class={(byte)value}";
+
+    // --- fleet reset -----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>.playerbot fleet reset</c> prints the census and a confirm code; <c>... confirm $code</c> runs it
+    /// (<see cref="ManagedPlayerbotFeature.ResetFleetAsync"/>). Administrator or the server console; the work runs on a worker and
+    /// reports back line by line.
+    /// </summary>
+    private static bool FleetReset(CommandContext context, string text)
+    {
+        string[] words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        bool confirm = words.Length == 2 && words[0].Equals("confirm", StringComparison.OrdinalIgnoreCase);
+        if (words.Length != 0 && !confirm) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        string invoker = context.InvokerName;
+        if (confirm) _ = Task.Run(() => FleetResetConfirmAsync(context, feature, invoker, words[1]));
+        else _ = Task.Run(() => FleetResetPreviewAsync(context, feature, invoker));
+        return true;
+    }
+
+    private static async Task FleetResetPreviewAsync(CommandContext context, ManagedPlayerbotFeature feature, string invoker)
+    {
+        try
+        {
+            if (feature.ResetInProgress) { Say(context, "Playerbot fleet reset: one is already running."); return; }
+            FleetResetCensus census = await feature.TakeFleetCensusAsync().ConfigureAwait(false);
+            if (census.Refusal is { } refusal)
+            {
+                context.Session.Logger.LogWarning("Playerbot fleet reset preview by {Invoker} REFUSED: {Reason}", invoker, refusal);
+                Say(context, "Playerbot fleet reset refused: " + refusal + ". Nothing was changed.");
+                return;
+            }
+
+            if (census.Accounts == 0) { Say(context, "Playerbot fleet reset: there are no playerbot accounts."); return; }
+            string code = feature.ResetConfirmation.Issue(invoker, new FleetResetPromise(census.Characters, census.Accounts, census.CharacterIds));
+            context.Session.Logger.LogInformation(
+                "Playerbot fleet reset previewed by {Invoker}: {Characters} characters on {Accounts} bot accounts, {Running} running; confirm code issued",
+                invoker, census.Characters, census.Accounts, census.Running);
+            Say(context, string.Create(CultureInfo.InvariantCulture,
+                $"Playerbot fleet reset would stop {census.Running} running bots and delete {census.Characters} bot characters on {census.Accounts} bot accounts. The emptied bot accounts are kept and reused for new bots; real players' characters are not touched."));
+            if (feature.RefillWarning is { } warning) Say(context, warning);
+            if (census.GroupedWithPlayers != 0 || census.TradingWithPlayers != 0)
+                Say(context, string.Create(CultureInfo.InvariantCulture,
+                    $"{census.GroupedWithPlayers} bots are grouped with real players (they leave their groups as their characters are deleted) and {census.TradingWithPlayers} are in a trade (cancelled)."));
+            Say(context, string.Create(CultureInfo.InvariantCulture,
+                $"To proceed within {(int)FleetResetConfirmation.Lifetime.TotalSeconds} seconds: .playerbot fleet reset confirm {code}"));
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            context.Session.Logger.LogWarning(error, "Playerbot fleet reset preview failed ({Type}: {Message})", error.GetType().Name, error.Message);
+            Say(context, $"Playerbot fleet reset preview failed: {error.GetType().Name}.");
+        }
+    }
+
+    private static async Task FleetResetConfirmAsync(CommandContext context, ManagedPlayerbotFeature feature, string invoker, string code)
+    {
+        try
+        {
+            FleetResetCodeResult verdict = feature.ResetConfirmation.TryRedeem(invoker, code, out FleetResetPromise? promise);
+            if (verdict != FleetResetCodeResult.Accepted || promise is null)
+            {
+                context.Session.Logger.LogWarning("Playerbot fleet reset confirm by {Invoker} refused: {Verdict}", invoker, verdict);
+                Say(context, verdict switch
+                {
+                    FleetResetCodeResult.Expired => "Playerbot fleet reset: the confirm code has expired. Run .playerbot fleet reset again.",
+                    FleetResetCodeResult.WrongCode => "Playerbot fleet reset: wrong confirm code.",
+                    FleetResetCodeResult.OtherInvoker => "Playerbot fleet reset: the pending preview belongs to someone else.",
+                    FleetResetCodeResult.TooManyAttempts => "Playerbot fleet reset: too many wrong codes. Run .playerbot fleet reset again.",
+                    _ => "Playerbot fleet reset: nothing to confirm. Run .playerbot fleet reset first.",
+                });
+                return;
+            }
+
+            context.Session.Logger.LogInformation(
+                "Playerbot fleet reset CONFIRMED by {Invoker}: {Characters} characters on {Accounts} bot accounts", invoker, promise.Characters, promise.Accounts);
+            FleetResetResult result = await feature.ResetFleetAsync(promise, line => Say(context, line)).ConfigureAwait(false);
+            Say(context, result.Success ? "Playerbot fleet reset done: " + result.Message
+                : $"Playerbot fleet reset {(result.Code == "reset-incomplete" ? "incomplete" : "refused")} ({result.Code}): {result.Message}");
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            context.Session.Logger.LogError(error, "Playerbot fleet reset failed ({Type}: {Message})", error.GetType().Name, error.Message);
+            Say(context, $"Playerbot fleet reset failed: {error.GetType().Name}: {error.Message}");
+        }
+    }
+
+    // A reply from a worker thread: the console always has a sink, a player only while still in the world.
+    private static void Say(CommandContext context, string line)
+    {
+        if (context.CanReplyLater) context.Reply(line);
+    }
 
     // --- start / stop many -----------------------------------------------------------------------------------------
 

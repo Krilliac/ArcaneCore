@@ -900,6 +900,9 @@ public sealed class ManagedPlayerbotLifecycleTests
             => _items.AddOrUpdate(botId, _ => throw new InvalidOperationException("unknown-bot"),
                 (_, current) => change(current) with { Revision = current.Revision + 1 });
 
+        /// <summary>Store a row behind the feature's back.</summary>
+        public void AddOutOfBand(ManagedPlayerbot bot) => _items[bot.BotId] = bot;
+
         /// <summary>Remove a stored row behind the feature's back.</summary>
         public void DropOutOfBand(Guid botId) => _items.TryRemove(botId, out _);
 
@@ -947,11 +950,24 @@ public sealed class ManagedPlayerbotLifecycleTests
         public Task<ManagedPlayerbot?> FindAsync(Guid botId, CancellationToken cancellationToken = default)
             => Task.FromResult(_items.GetValueOrDefault(botId));
 
-        public Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
+        /// <summary>Runs after each stored registration with the number of rows now stored (a test holds a creation pass here).</summary>
+        public Func<int, Task>? AfterCreate { get; set; }
+
+        private Exception? _nextCreateException;
+
+        /// <summary>The next registration throws this (a cancellation, for one) before storing anything.</summary>
+        public Exception? NextCreateException { set => Volatile.Write(ref _nextCreateException, value); }
+
+        /// <summary>Runs first in the next registrations (a test changes the world mid-creation here).</summary>
+        public Action<ManagedPlayerbot>? OnCreate { get; set; }
+
+        public async Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
         {
+            OnCreate?.Invoke(bot);
             if (FailNextCreate) { FailNextCreate = false; throw new InvalidOperationException("fixture-create-failure"); }
+            if (Interlocked.Exchange(ref _nextCreateException, null) is { } next) throw next;
             if (!_items.TryAdd(bot.BotId, bot)) throw new InvalidOperationException("duplicate-owner");
-            return Task.CompletedTask;
+            if (AfterCreate is { } after) await after(_items.Count).ConfigureAwait(false);
         }
 
         private Guid? _failBot;

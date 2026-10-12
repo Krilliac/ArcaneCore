@@ -175,7 +175,7 @@ internal sealed class PopulationTestHost : IAsyncDisposable
     /// (the test empties <c>ExcludedZones</c> to open it). <paramref name="configureServices"/> adds services (a placement veto).
     /// </summary>
     public static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, bool manualClock = false,
-        bool withRelocation = false, Action<IServiceCollection>? configureServices = null)
+        bool withRelocation = false, Action<IServiceCollection>? configureServices = null, Func<IWorldDataStore>? dataStore = null)
     {
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
         var members = new MemoryPopulationStore();
@@ -212,7 +212,8 @@ internal sealed class PopulationTestHost : IAsyncDisposable
             services.AddSingleton<IManagedPlayerbotProvisionStore>(sp =>
                 new ManagedPlayerbotLifecycleTests.MemoryProvisionStore((InMemoryAccountStore)sp.GetRequiredService<IAccountStore>()));
             // Scoped, as in production (EfWorldDataStore over a DbContext): resolving it from the root provider would capture it for good.
-            services.AddScoped<IWorldDataStore>(_ =>
+            if (dataStore is not null) services.AddScoped(_ => dataStore());
+            else services.AddScoped<IWorldDataStore>(_ =>
             {
                 var store = new ScopedWorldDataStore();
                 lock (dataStores) dataStores.Add(store);

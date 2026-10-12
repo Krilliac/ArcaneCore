@@ -692,6 +692,23 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal(PopulationTestHost.Westfall, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Theory]
+    [InlineData(10)]  // under the resume line: the ordinary pass would relocate
+    [InlineData(50)]  // between the resume line (48) and the budget: hysteresis
+    public async Task AShedOnlyPass_NeverRelocatesABot(double p95)
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
+        Guid bot = await StartOneBotInElwynnAsync(world);
+
+        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, p95);
+        await world.Feature.RunPassNowAsync(shedOnly: true);
+
+        Assert.DoesNotContain("moved", world.Feature.Status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
     [Fact]
     public async Task ABotWithinTheLevelsOfItsZone_StaysWhereItIs()
     {

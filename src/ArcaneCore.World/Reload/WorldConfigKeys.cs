@@ -279,6 +279,10 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:OutlevelMargin", o => o.Population.OutlevelMargin, (o, v) => o.Population.OutlevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
         LivePlayerbotsValue("Population:Relocation", o => o.Population.Relocation, (o, v) => o.Population.Relocation = v, Playerbots.Population.PlayerbotPopulationOptions.CheckDefined),
         LivePlayerbotsValue("Population:MaxRelocationsPerInterval", o => o.Population.MaxRelocationsPerInterval, (o, v) => o.Population.MaxRelocationsPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 50)),
+        LivePlayerbots("Population:FreshLaunch", o => o.Population.FreshLaunch, (o, v) => o.Population.FreshLaunch = v),
+        LivePlayerbotsValue("Population:RushBrakeP95Ms", o => o.Population.RushBrakeP95Ms, (o, v) => o.Population.RushBrakeP95Ms = v, Playerbots.Population.PlayerbotPopulationOptions.CheckRushCeiling),
+        LivePlayerbotsValue("Population:RushBrakeWindows", o => o.Population.RushBrakeWindows, (o, v) => o.Population.RushBrakeWindows = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 20)),
+        LivePlayerbotsValue("Population:RushBrakeWindowSeconds", o => o.Population.RushBrakeWindowSeconds, (o, v) => o.Population.RushBrakeWindowSeconds = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 60)),
         LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
             (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),
 
