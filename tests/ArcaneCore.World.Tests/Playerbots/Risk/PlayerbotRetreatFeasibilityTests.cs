@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -53,24 +54,52 @@ public sealed class PlayerbotRetreatFeasibilityTests
         Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(snared), Options).Reason);
     }
 
+    /// <summary>A synthetic spell for the model tests: the figures are inputs here (the derivation from real spell data is <see cref="PlayerbotEscapeSpellDataTests"/>).</summary>
+    private static (EscapeAction Action, SpellInfo? Spell) Ready(string name, EscapeTarget target, int durationMs = 0, AuraType aura = default, int percent = 0)
+        => (new EscapeAction(name, target), new SpellInfo
+        {
+            Id = 1, Name = name, Duration = new SpellDuration(durationMs, 0, durationMs),
+            Effects = aura == default ? [] : [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = aura, BasePoints = percent - 1, BaseDice = 1 }],
+        });
+
     [Theory]
-    [InlineData(PlayerbotEscapes.FrostNova)]
+    [InlineData(PlayerbotEscapes.FrostNova, 8_000)]
+    [InlineData(PlayerbotEscapes.PsychicScream, 8_000)]
+    [InlineData(PlayerbotEscapes.EntanglingRoots, 12_000)]
+    public void AHoldingEscape_MakesTheRetreatWorthIt_WhenItsDurationCoversTheRun(string escape, int durationMs)
+    {
+        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit([Ready(escape, EscapeTarget.Self, durationMs)]);
+        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, kit)), Options).Retreat, escape);
+        // The same spell with a duration far short of the run buys nothing.
+        PlayerbotEscapeKit brief = PlayerbotEscapes.Kit([Ready(escape, EscapeTarget.Self, 1_000)]);
+        Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, brief)), Options).Reason);
+    }
+
+    [Theory]
     [InlineData(PlayerbotEscapes.Vanish)]
     [InlineData(PlayerbotEscapes.FeignDeath)]
-    [InlineData(PlayerbotEscapes.PsychicScream)]
-    [InlineData(PlayerbotEscapes.Sprint)]
-    [InlineData(PlayerbotEscapes.EntanglingRoots)]
-    public void AReadyEscape_MakesTheRetreatWorthIt(string escape)
+    public void AnEscapeThatBreaksContact_MakesTheRetreatWorthIt(string escape)
     {
-        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit([new EscapeAction(escape, EscapeTarget.Self)]);
-        PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, kit)), Options);
-        Assert.True(verdict.Retreat, $"{escape}: {verdict}");
+        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit([Ready(escape, EscapeTarget.Self)]);
+        Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Fast, kit)), Options).Retreat, escape);
+    }
+
+    [Fact]
+    public void AnEscapeWhoseSpellDoesNotResolveOrLacksItsData_BuysNothing()
+    {
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([(new EscapeAction(PlayerbotEscapes.FrostNova, EscapeTarget.Self), null)]));
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.FrostNova, EscapeTarget.Self, durationMs: 0)]));
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Sprint, EscapeTarget.Self)]));
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Hamstring, EscapeTarget.Victim, 5_000)]));
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Fade, EscapeTarget.Self, 10_000)]));
+        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([]));
     }
 
     [Fact]
     public void ASnareOnTheNearestCreature_LetsTheBotOutrunIt_ButNotASecondOne()
     {
-        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit([new EscapeAction(PlayerbotEscapes.Hamstring, EscapeTarget.Victim)]);
+        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Hamstring, EscapeTarget.Victim, 5_000, AuraType.ModDecreaseSpeed, -50)]);
+        Assert.Equal(0.5f, kit.VictimSpeed);
         var one = new PlayerbotPursuit(55f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 60f)], kit);
         Assert.True(PlayerbotRiskModel.Judge(Losing(one), Options).Retreat);
         var two = new PlayerbotPursuit(55f, Unit.BaseRunSpeed, [new RiskPursuer(Fast, 10f), new RiskPursuer(Fast, 50f)], kit);
@@ -80,8 +109,9 @@ public sealed class PlayerbotRetreatFeasibilityTests
     [Fact]
     public void ASpeedEscape_OnlyHelpsAgainstCreaturesItOutpaces()
     {
-        // Sprint (+50%) runs 10.5 yards a second: it outpaces a speed_run 1.43 creature (10.0) but not a 1.6 one (11.2).
-        PlayerbotEscapeKit sprint = PlayerbotEscapes.Kit([new EscapeAction(PlayerbotEscapes.Sprint, EscapeTarget.Self)]);
+        PlayerbotEscapeKit sprint = PlayerbotEscapes.Kit([Ready(PlayerbotEscapes.Sprint, EscapeTarget.Self, 15_000, AuraType.ModIncreaseSpeed, 50)]);
+        Assert.Equal(1.5f, sprint.SelfSpeed);
+        // 10.5 yards a second outpaces a speed_run 1.43 creature (10.0) but not a 1.6 one (11.2).
         Assert.True(PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.43f, sprint)), Options).Retreat);
         Assert.Equal("cornered-no-escape", PlayerbotRiskModel.Judge(Losing(Pursuit(Unit.BaseRunSpeed * 1.6f, sprint)), Options).Reason);
     }
@@ -105,25 +135,24 @@ public sealed class PlayerbotRetreatFeasibilityTests
     {
         PlayerbotEscapeKit kit = PlayerbotEscapes.Kit(
         [
-            new EscapeAction(PlayerbotEscapes.FrostNova, EscapeTarget.Self), new EscapeAction(PlayerbotEscapes.Sprint, EscapeTarget.Self),
-            new EscapeAction(PlayerbotEscapes.Gouge, EscapeTarget.Victim), new EscapeAction(PlayerbotEscapes.WingClip, EscapeTarget.Victim),
+            Ready(PlayerbotEscapes.FrostNova, EscapeTarget.Self, 6_000), Ready(PlayerbotEscapes.PsychicScream, EscapeTarget.Self, 3_000),
+            Ready(PlayerbotEscapes.Sprint, EscapeTarget.Self, 15_000, AuraType.ModIncreaseSpeed, 40),
+            Ready(PlayerbotEscapes.Dash, EscapeTarget.Self, 15_000, AuraType.ModIncreaseSpeed, 70),
+            Ready(PlayerbotEscapes.Gouge, EscapeTarget.Victim, 4_000),
+            Ready(PlayerbotEscapes.WingClip, EscapeTarget.Victim, 5_000, AuraType.ModDecreaseSpeed, -30),
+            Ready(PlayerbotEscapes.Hamstring, EscapeTarget.Victim, 5_000, AuraType.ModDecreaseSpeed, -60),
         ]);
-        Assert.Equal(8f, kit.AllFreeSeconds);
+        Assert.Equal(9f, kit.AllFreeSeconds);
         Assert.Equal(4f, kit.VictimFreeSeconds);
-        Assert.Equal(1.5f, kit.SelfSpeed);
-        Assert.Equal(0.5f, kit.VictimSpeed);
-        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([]));
-        Assert.Equal(PlayerbotEscapeKit.None, PlayerbotEscapes.Kit([new EscapeAction(PlayerbotEscapes.Fade, EscapeTarget.Self)]));
+        Assert.Equal(1.7f, kit.SelfSpeed, 0.001f);
+        Assert.Equal(0.4f, kit.VictimSpeed, 0.001f);
     }
 
     [Fact]
-    public void EveryEscape_HasAnEffect_OrBuysNothingOnPurpose()
+    public void EveryEscapeName_HasAKind()
     {
-        foreach (string name in PlayerbotEscapes.All)
-        {
-            PlayerbotEscapes.EscapeEffect effect = PlayerbotEscapes.EffectOf(name);
-            Assert.True(effect.FreeSeconds >= 0f && effect.SelfSpeed >= 1f && effect.VictimSpeed is > 0f and <= 1f, name);
-        }
+        Assert.All(PlayerbotEscapes.All, name => Assert.True(Enum.IsDefined(PlayerbotEscapes.KindOf(name)), name));
+        Assert.Equal(PlayerbotEscapes.EscapeKind.None, PlayerbotEscapes.KindOf("Fireball"));
     }
 
     [Fact]

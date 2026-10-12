@@ -1,5 +1,5 @@
 using ArcaneCore.Game;
-using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -109,49 +109,103 @@ internal static class PlayerbotEscapes
         }
     }
 
-    /// <summary>
-    /// What an escape buys a retreat, in the terms the feasibility estimate uses (<see cref="PlayerbotRiskModel.RetreatSucceeds"/>):
-    /// seconds the pursuers it reaches cannot hit the bot (root, stun, fear, vanish, a blink's head start), the bot's speed multiplier,
-    /// the speed multiplier it puts on its victim (a snare). Rounded 1.12 rank 1 figures; an escape that does not move the bot out of
-    /// reach (Power Word: Shield, Fade, Cat Form) buys nothing here.
-    /// </summary>
-    /// <param name="FreeSeconds">Seconds without blows from the pursuers reached (infinity: contact is lost for good).</param>
-    /// <param name="AllPursuers">Reaches every pursuer (an area or a stealth) rather than the nearest only.</param>
-    /// <param name="SelfSpeed">The bot's run speed multiplier.</param>
-    /// <param name="VictimSpeed">The nearest pursuer's run speed multiplier.</param>
-    internal readonly record struct EscapeEffect(float FreeSeconds, bool AllPursuers, float SelfSpeed = 1f, float VictimSpeed = 1f);
-
-    /// <summary>The effect of an escape by spell name (none for a name that is not an escape or buys nothing).</summary>
-    internal static EscapeEffect EffectOf(string spell) => spell switch
+    /// <summary>What kind of help an escape is. Only the kind is fixed here; every number comes from the spell the bot knows.</summary>
+    internal enum EscapeKind : byte
     {
-        FrostNova => new(8f, true),
-        PsychicScream => new(8f, true),
-        HowlOfTerror => new(8f, true),
-        IntimidatingShout => new(8f, true),
-        Vanish => new(float.PositiveInfinity, true),
-        FeignDeath => new(float.PositiveInfinity, true),
-        DivineShield => new(12f, true),
-        Blink => new(20f / Unit.BaseRunSpeed, true),
-        Sprint => new(0f, true, SelfSpeed: 1.5f),
-        AspectOfTheCheetah => new(0f, true, SelfSpeed: 1.3f),
-        TravelForm => new(0f, true, SelfSpeed: 1.4f),
-        Dash => new(0f, true, SelfSpeed: 1.6f),
-        EntanglingRoots => new(12f, false),
-        Fear => new(10f, false),
-        Gouge => new(4f, false),
-        HammerOfJustice => new(3f, false),
-        DeathCoil => new(3f, false),
-        Hamstring or WingClip or ConcussiveShot or FrostShock => new(0f, false, VictimSpeed: 0.5f),
-        _ => new(0f, false),
+        /// <summary>Buys nothing for a retreat (a shield, a threat drop, a shapeshift that is not itself a speed-up).</summary>
+        None,
+
+        /// <summary>Keeps every pursuer it reaches off the bot for the spell's duration (a root, stun, fear or immunity around the caster).</summary>
+        HoldsAll,
+
+        /// <summary>Keeps its one target off the bot for the spell's duration.</summary>
+        HoldsVictim,
+
+        /// <summary>Contact is lost for good (stealth, a feigned death).</summary>
+        BreaksContact,
+
+        /// <summary>Speeds the bot up by the spell's speed aura.</summary>
+        SelfSpeed,
+
+        /// <summary>Slows its target by the spell's speed-reducing aura.</summary>
+        VictimSnare,
+    }
+
+    /// <summary>The kind of each escape by spell name (a name that is not an escape is <see cref="EscapeKind.None"/>).</summary>
+    internal static EscapeKind KindOf(string spell) => spell switch
+    {
+        FrostNova or PsychicScream or HowlOfTerror or IntimidatingShout or DivineShield => EscapeKind.HoldsAll,
+        EntanglingRoots or Fear or Gouge or HammerOfJustice or DeathCoil => EscapeKind.HoldsVictim,
+        Vanish or FeignDeath => EscapeKind.BreaksContact,
+        Sprint or AspectOfTheCheetah or TravelForm or Dash => EscapeKind.SelfSpeed,
+        Hamstring or WingClip or ConcussiveShot or FrostShock => EscapeKind.VictimSnare,
+        _ => EscapeKind.None,
     };
 
+    /// <summary>
+    /// What an escape buys a retreat, in the terms of <see cref="PlayerbotRiskModel.RetreatSucceeds"/>, read from the spell data of the
+    /// rank the bot knows: seconds the pursuers it reaches cannot hit the bot (the spell's duration, <see cref="SpellDuration.Base"/>;
+    /// infinity for <see cref="EscapeKind.BreaksContact"/>), the bot's speed multiplier (the largest positive speed aura of the
+    /// spell, <see cref="SpellInfo.SimpleValue"/> percent), the nearest pursuer's (the speed-reducing aura). A spell that did not
+    /// resolve, or lacks the data its kind needs (no duration, no speed aura), buys nothing: no number is ever assumed.
+    /// </summary>
+    internal readonly record struct EscapeEffect(float FreeSeconds, bool AllPursuers, float SelfSpeed = 1f, float VictimSpeed = 1f)
+    {
+        /// <summary>Buys nothing.</summary>
+        internal static EscapeEffect None { get; } = new(0f, false);
+    }
+
+    /// <summary>The effect of <paramref name="spell"/> as the escape named <paramref name="name"/> (<see cref="EscapeEffect.None"/> when it cannot be derived).</summary>
+    internal static EscapeEffect EffectOf(string name, SpellInfo? spell)
+    {
+        if (spell is null) return EscapeEffect.None;
+        switch (KindOf(name))
+        {
+            case EscapeKind.BreaksContact:
+                return new(float.PositiveInfinity, true);
+            case EscapeKind.HoldsAll or EscapeKind.HoldsVictim:
+                return spell.Duration.Base > 0
+                    ? new(spell.Duration.Base / 1000f, KindOf(name) == EscapeKind.HoldsAll)
+                    : EscapeEffect.None;
+            case EscapeKind.SelfSpeed:
+            {
+                int percent = SpeedPercent(spell, AuraType.ModIncreaseSpeed, AuraType.ModSpeedAlways, AuraType.ModSpeedNotStack);
+                return percent > 0 ? new(0f, true, SelfSpeed: 1f + (percent / 100f)) : EscapeEffect.None;
+            }
+
+            case EscapeKind.VictimSnare:
+            {
+                int percent = -SpeedPercent(spell, AuraType.ModDecreaseSpeed);
+                return percent is > 0 and < 100 ? new(0f, false, VictimSpeed: 1f - (percent / 100f)) : EscapeEffect.None;
+            }
+
+            default:
+                return EscapeEffect.None;
+        }
+    }
+
+    /// <summary>The speed aura of the given types with the largest magnitude, as a signed percent (0: none).</summary>
+    private static int SpeedPercent(SpellInfo spell, params AuraType[] types)
+    {
+        int best = 0;
+        for (int index = 0; index < spell.Effects.Count; index++)
+        {
+            SpellEffectInfo effect = spell.Effects[index];
+            if (effect.Effect != SpellEffectName.ApplyAura || Array.IndexOf(types, effect.AuraType) < 0) continue;
+            int value = effect.BasePoints + effect.BaseDice;
+            if (Math.Abs(value) > Math.Abs(best)) best = value;
+        }
+
+        return best;
+    }
+
     /// <summary>The escapes of a retreat together: free seconds add up per reach, the fastest self speed and the strongest snare stand.</summary>
-    internal static PlayerbotEscapeKit Kit(IEnumerable<EscapeAction> ready)
+    internal static PlayerbotEscapeKit Kit(IEnumerable<(EscapeAction Action, SpellInfo? Spell)> ready)
     {
         float all = 0f, victim = 0f, self = 1f, snare = 1f;
-        foreach (EscapeAction action in ready)
+        foreach ((EscapeAction action, SpellInfo? spell) in ready)
         {
-            EscapeEffect effect = EffectOf(action.Spell);
+            EscapeEffect effect = EffectOf(action.Spell, spell);
             if (effect.AllPursuers) all += effect.FreeSeconds;
             else victim += effect.FreeSeconds;
             self = MathF.Max(self, effect.SelfSpeed);

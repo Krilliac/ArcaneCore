@@ -99,12 +99,29 @@ public sealed class PlayerbotRetreatFeasibilityWorldTests
         }
     }
 
+    /// <summary>The order in which a bot's death reaches the risk: the brain's think, or the two calls directly, either first.</summary>
+    public enum DeathOrder
+    {
+        /// <summary>The brain thinks as the dead bot (its death record calls OnDeath).</summary>
+        Brain,
+
+        /// <summary>OnDeath, then the brain's think (which calls it again and updates the retreat).</summary>
+        OnDeathFirst,
+
+        /// <summary>The retreat's update sees the dead bot first, then OnDeath.</summary>
+        UpdateFirst,
+    }
+
     /// <summary>
     /// (d) A retreat that ends with the bot dead still leaves the place where the fight turned in its danger memory and hazards
-    /// (before, only a retreat that ended alive did, and the death recorded only the spot of the death).
+    /// (before, only a retreat that ended alive did, and the death recorded only the spot of the death), once, whichever of the
+    /// retreat's update and the death record sees the death first.
     /// </summary>
-    [Fact]
-    public async Task ARetreatThatEndsInDeath_StillMarksThePullSite()
+    [Theory]
+    [InlineData(DeathOrder.Brain)]
+    [InlineData(DeathOrder.OnDeathFirst)]
+    [InlineData(DeathOrder.UpdateFirst)]
+    public async Task ARetreatThatEndsInDeath_MarksThePullSiteOnce(DeathOrder order)
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(FastEntry + 3, health: 400, minDamage: 5, maxDamage: 8), 2, 0));
@@ -119,9 +136,18 @@ public sealed class PlayerbotRetreatFeasibilityWorldTests
             world.Player.Relocate(site.X, site.Y - 60f, site.Z, world.Player.Orientation, world.Host.World.NowMs);
             world.Player.Map!.Combat.DealDamage(mob, world.Player, world.Player.Health, direct: false);
             Assert.False(world.Player.IsAlive);
+            PlayerbotRisk risk = world.Brain.Risk;
+            if (order == DeathOrder.OnDeathFirst) risk.OnDeath(world.Player, [(mob.Guid, mob.Entry)]);
+            if (order == DeathOrder.UpdateFirst)
+            {
+                Assert.False(risk.UpdateRetreat(world.Player, 100));
+                risk.OnDeath(world.Player, [(mob.Guid, mob.Entry)]);
+            }
+
             return site;
         });
 
+        await world.ThinkAsync();
         await world.ThinkAsync();
 
         await world.OnWorldAsync(() =>
@@ -129,9 +155,35 @@ public sealed class PlayerbotRetreatFeasibilityWorldTests
             PlayerbotRisk risk = world.Brain.Risk;
             uint now = world.Host.World.NowMs;
             Assert.Equal("died", risk.Retreat.Outcome);
-            Assert.Contains(risk.Hazards.Active(world.Player.MapId, now), h => h.Kind == "retreat" && Vector3.Distance(h.At, pullSite) < 1f);
+            Assert.Single(risk.Hazards.Active(world.Player.MapId, now), h => h.Kind == "retreat" && Vector3.Distance(h.At, pullSite) < 1f);
+            Assert.Single(risk.Hazards.Active(world.Player.MapId, now), h => h.Kind == "retreat");
             Assert.True(risk.Memory.Hits(world.Player.MapId, pullSite, 0, now) > 0, "the pull site is not in the danger memory");
             Assert.Equal((1L, 1L), (risk.RetreatStats.Died, risk.RetreatStats.Ended));
+            return true;
+        });
+    }
+
+    /// <summary>With the risk estimate off a retreat's end is neither remembered nor counted, on either path.</summary>
+    [Theory]
+    [InlineData(DeathOrder.OnDeathFirst)]
+    [InlineData(DeathOrder.UpdateFirst)]
+    public async Task WithTheRiskOff_ARetreatThatEndsInDeath_IsNeitherRememberedNorCounted(DeathOrder order)
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(FastEntry + 4, health: 400, minDamage: 5, maxDamage: 8), 2, 0));
+        await world.SeeAsync(mob);
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotRisk risk = world.Brain.Risk;
+            risk.RetreatStats = new PlayerbotRetreatStats();
+            world.Engage(mob);
+            risk.StartRetreat(world.Player, [mob], "test");
+            world.Player.Map!.Combat.DealDamage(mob, world.Player, world.Player.Health, direct: false);
+            if (order == DeathOrder.UpdateFirst) risk.UpdateRetreat(world.Player, 100);
+            risk.OnDeath(world.Player, [(mob.Guid, mob.Entry)]);
+            Assert.Equal(0, risk.RetreatStats.Ended);
+            Assert.Empty(risk.Hazards.Active(world.Player.MapId, world.Host.World.NowMs));
+            Assert.Equal(0, risk.Memory.Count);
             return true;
         });
     }

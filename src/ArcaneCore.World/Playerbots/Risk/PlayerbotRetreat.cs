@@ -351,14 +351,14 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             && spells.CanCastNow(player, spell, candidate.Target == EscapeTarget.Self ? player : victim!);
 
     /// <summary>Every escape of the bot's class that is ready now, in the order the retreat would cast them.</summary>
-    private List<EscapeAction> ReadyEscapes(Player player, IReadOnlyList<Creature> enemyList, bool ignoreUsed)
+    private List<(EscapeAction Action, SpellInfo? Spell)> ReadyEscapes(Player player, IReadOnlyList<Creature> enemyList, bool ignoreUsed)
     {
-        var ready = new List<EscapeAction>();
+        var ready = new List<(EscapeAction Action, SpellInfo? Spell)>();
         PlayerbotAbilities known = spells.Escapes(player);
         if (known.Count == 0) return ready;
         EscapeSituation situation = SituationOf(player, enemyList, out Creature? victim);
         foreach (EscapeAction candidate in PlayerbotEscapes.Candidates(situation))
-            if (IsReady(player, known, candidate, victim, ignoreUsed)) ready.Add(candidate);
+            if (IsReady(player, known, candidate, victim, ignoreUsed)) ready.Add((candidate, known[candidate.Spell]));
         return ready;
     }
 

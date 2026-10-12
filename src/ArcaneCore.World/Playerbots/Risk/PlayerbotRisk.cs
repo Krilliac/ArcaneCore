@@ -222,11 +222,7 @@ internal sealed class PlayerbotRisk
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");
         // A death on the way out of a retreat is the retreat's end: the place where the fight turned is remembered as for any other.
-        if (Enabled && Retreat.Active)
-        {
-            RememberFlight();
-            RetreatStats.Record("died");
-        }
+        if (Retreat.Active) NoteRetreatEnd("died");
 
         Retreat.Stop("died");
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
@@ -939,6 +935,14 @@ internal sealed class PlayerbotRisk
     /// <summary>The refusal of a retreat is counted once per fight (<see cref="Track"/> clears it out of combat).</summary>
     private bool _refusalCounted;
 
+    /// <summary>A retreat ended (by <see cref="UpdateRetreat"/> or by the bot's death in <see cref="OnDeath"/>): remember the flight and count the outcome. Gated on <see cref="Enabled"/> in one place.</summary>
+    private void NoteRetreatEnd(string? outcome)
+    {
+        if (!Enabled) return;
+        RememberFlight();
+        RetreatStats.Record(outcome);
+    }
+
     /// <summary>
     /// Remember where the fight turned and the creatures fled from: the danger memory and the hazard at <c>_fledAt</c>. A retreat
     /// that ends in the bot's death does so too (it is the most common ending, live w29), whichever of the retreat's update and
@@ -972,8 +976,7 @@ internal sealed class PlayerbotRisk
     {
         if (!Retreat.Active) return false;
         if (Retreat.Update(player, interval)) return true;
-        RememberFlight();
-        RetreatStats.Record(Retreat.Outcome);
+        NoteRetreatEnd(Retreat.Outcome);
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         if (Retreat.Outcome == "safe") BeginWait(player);
         else if (Retreat.Outcome == "cornered") _cornered = true;
