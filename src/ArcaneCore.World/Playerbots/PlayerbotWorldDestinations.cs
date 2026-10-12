@@ -617,7 +617,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             LoadTiles = true };
         NavRegionGraph? graph = nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
         var request = new PlayerbotNavigationRequest(map.MapId, PlayerbotMotion.CurrentPosition(player), destination, pathOptions,
-            graph, _options.MaxRouteYards, _options.MaxPathPoints);
+            graph, _options.MaxRouteYards, _options.MaxPathPoints, nav.Dataset);
         TargetEntry = entry.Entry;
         QuestId = questId;
         if (!_executor.TryAcquirePlan(out IDisposable lease))
@@ -626,7 +626,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return true;
         }
         _planLease = lease;
-        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start);
+        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset);
         _awaitingRequest = request;
         _pendingIdentity = new(player, map, nav, _content, _contentVersion, _quests, Home, player.Level,
             preferredEntry, returnQuestId, questId, request.Start, graph, _options.MaxRouteYards, _options.MaxPathPoints);

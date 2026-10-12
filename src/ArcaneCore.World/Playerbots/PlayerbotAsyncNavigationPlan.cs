@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -12,11 +13,17 @@ internal sealed class PlayerbotAsyncNavigationPlan
 
     private readonly uint _mapId;
     private readonly Vector3 _start;
+    private readonly NavMeshDatasetDescriptor? _dataset;
     private readonly Dictionary<QueryKey, PlayerbotNavigationResult> _answers = [];
     private PlayerbotNavigationRequest? _next;
     private int _bytes;
 
-    internal PlayerbotAsyncNavigationPlan(uint mapId, Vector3 start) { _mapId = mapId; _start = start; }
+    internal PlayerbotAsyncNavigationPlan(uint mapId, Vector3 start, NavMeshDatasetDescriptor? dataset = null)
+    {
+        _mapId = mapId;
+        _start = start;
+        _dataset = dataset;
+    }
     internal static PlayerbotAsyncNavigationPlan? Current => t_current;
     internal Vector3 Start => _start;
     internal PlayerbotNavigationRequest? NextRequest => _next;
@@ -62,7 +69,7 @@ internal sealed class PlayerbotAsyncNavigationPlan
         if (_answers.TryGetValue(Key(from, to, options), out result!)) return true;
         if (_next is null && !Exhausted && from.IsFinite() && to.IsFinite())
             _next = new PlayerbotNavigationRequest(_mapId, from, to, options with { CancellationToken = default, LoadTiles = options.LoadTiles },
-                MaxRouteYards: 0, MaxPathPoints: options.MaxPoints);
+                MaxRouteYards: 0, MaxPathPoints: options.MaxPoints, Dataset: _dataset);
         Deferred = true;
         result = null!;
         return false;

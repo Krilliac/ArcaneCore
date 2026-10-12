@@ -117,8 +117,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
         if (_options.Enabled) _chat.LogConfiguration();
         _world = world;
-        if (_options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder nav)
-            _navigationExecutor = new PlayerbotNavigationExecutor(nav.CreateIndependent);
+        if (_options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
+        {
+            ILogger ownerLogger = logger;
+            _navigationExecutor = new PlayerbotNavigationExecutor(
+                dataset => NavMeshPathfinder.CreateIndependent(dataset, ownerLogger));
+        }
         world.Updated += Update;
     }
 

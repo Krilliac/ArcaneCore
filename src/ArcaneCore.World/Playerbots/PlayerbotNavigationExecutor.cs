@@ -17,7 +17,8 @@ internal sealed record PlayerbotNavigationRequest(
     PathOptions Options,
     NavRegionGraph? RegionGraph = null,
     float MaxRouteYards = 0,
-    int MaxPathPoints = PathOptions.DefaultMaxPoints);
+    int MaxPathPoints = PathOptions.DefaultMaxPoints,
+    NavMeshDatasetDescriptor? Dataset = null);
 
 internal enum PlayerbotNavigationResultStatus
 {
@@ -113,7 +114,7 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
     private const float RegionLegYards = 1000f;
     private const int RegionSearchNodes = 20_000;
 
-    private readonly Func<IPathfinder> _pathfinderFactory;
+    private readonly Func<NavMeshDatasetDescriptor?, IPathfinder> _pathfinderFactory;
     private readonly BlockingCollection<WorkItem> _queue;
     private readonly SemaphoreSlim _capacity;
     private readonly object _gate = new();
@@ -124,10 +125,25 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
     private IPathfinder? _pathfinder;
     private uint _pathfinderMap;
     private bool _hasPathfinderMap;
+    private NavMeshDatasetDescriptor? _pathfinderDataset;
 
     internal PlayerbotNavigationExecutor(Func<IPathfinder> pathfinderFactory, int capacity = DefaultCapacity)
     {
-        _pathfinderFactory = pathfinderFactory ?? throw new ArgumentNullException(nameof(pathfinderFactory));
+        ArgumentNullException.ThrowIfNull(pathfinderFactory);
+        _pathfinderFactory = _ => pathfinderFactory();
+        if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
+        _queue = new BlockingCollection<WorkItem>(capacity);
+        _capacity = new SemaphoreSlim(capacity, capacity);
+        _worker = Task.Run(WorkerLoopAsync);
+    }
+
+    internal PlayerbotNavigationExecutor(Func<NavMeshDatasetDescriptor, IPathfinder> pathfinderFactory,
+        int capacity = DefaultCapacity)
+    {
+        ArgumentNullException.ThrowIfNull(pathfinderFactory);
+        _pathfinderFactory = dataset => dataset is { } value
+            ? pathfinderFactory(value)
+            : throw new InvalidOperationException("a detached navigation dataset is required");
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         _queue = new BlockingCollection<WorkItem>(capacity);
         _capacity = new SemaphoreSlim(capacity, capacity);
@@ -220,12 +236,13 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
         try
         {
             item.Cancel.Token.ThrowIfCancellationRequested();
-            if (!_hasPathfinderMap || _pathfinderMap != request.MapId)
+            if (!_hasPathfinderMap || _pathfinderMap != request.MapId || _pathfinderDataset != request.Dataset)
             {
                 DisposePathfinder();
-                _pathfinder = _pathfinderFactory() ?? throw new InvalidOperationException("navigation factory returned null");
+                _pathfinder = _pathfinderFactory(request.Dataset) ?? throw new InvalidOperationException("navigation factory returned null");
                 _pathfinderMap = request.MapId;
                 _hasPathfinderMap = true;
+                _pathfinderDataset = request.Dataset;
             }
 
             IPathfinder pathfinder = _pathfinder
@@ -322,6 +339,7 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
             disposable.Dispose();
         _pathfinder = null;
         _hasPathfinderMap = false;
+        _pathfinderDataset = null;
     }
 
     public void Dispose()
