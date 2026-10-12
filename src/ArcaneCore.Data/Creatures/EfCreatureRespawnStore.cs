@@ -59,28 +59,65 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
             latest.Remove((checked((int)key.InstanceId), key.SpawnGuid));
         }
 
+        // All in-memory grouping happens before the transaction opens, so the write lock is held only for the statements themselves.
+        Dictionary<int, List<uint>> deleteGuids = [];
+        foreach (CreatureRespawnKey key in deletes)
+        {
+            int instance = checked((int)key.InstanceId);
+            if (!deleteGuids.TryGetValue(instance, out List<uint>? guids))
+            {
+                deleteGuids[instance] = guids = [];
+            }
+
+            guids.Add(key.SpawnGuid);
+        }
+
+        Dictionary<int, List<CreatureRespawnRecord>> upsertsByInstance = [];
+        foreach (((int instance, _), CreatureRespawnRecord record) in latest)
+        {
+            if (!upsertsByInstance.TryGetValue(instance, out List<CreatureRespawnRecord>? list))
+            {
+                upsertsByInstance[instance] = list = [];
+            }
+
+            list.Add(record);
+        }
+
+        // One transaction for the whole batch, as the interface promises (the queue retains and retries a failed write whole). It is kept
+        // short by round trips: a few set-based statements per instance and chunk instead of one per key.
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            foreach (CreatureRespawnKey key in deletes)
+            foreach ((int instance, List<uint> guids) in deleteGuids)
             {
-                int instance = checked((int)key.InstanceId);
-                await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == instance && r.SpawnGuid == key.SpawnGuid)
-                    .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                foreach (uint[] part in guids.Distinct().Chunk(ChunkSize))
+                {
+                    List<uint> chunk = [.. part]; // a List: C# 14 would bind an array's Contains to the span overload, which EF Core 9 cannot translate (EF 10 can)
+                    await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == instance && chunk.Contains(r.SpawnGuid))
+                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
 
-            foreach (((int instance, uint guid), CreatureRespawnRecord record) in latest)
+            foreach ((int instance, List<CreatureRespawnRecord> records) in upsertsByInstance)
             {
-                CreatureRespawnRow? row = await db.Set<CreatureRespawnRow>()
-                    .FirstOrDefaultAsync(r => r.InstanceId == instance && r.SpawnGuid == guid, cancellationToken).ConfigureAwait(false);
-                if (row is null)
+                foreach (CreatureRespawnRecord[] chunk in records.Chunk(ChunkSize))
                 {
-                    db.Set<CreatureRespawnRow>().Add(new CreatureRespawnRow { InstanceId = instance, SpawnGuid = guid, MapId = record.MapId, RespawnTime = record.RespawnTime });
-                }
-                else
-                {
-                    row.MapId = record.MapId;
-                    row.RespawnTime = record.RespawnTime;
+                    List<uint> guids = [.. chunk.Select(c => c.SpawnGuid)];
+                    Dictionary<uint, CreatureRespawnRow> existing = (await db.Set<CreatureRespawnRow>()
+                        .Where(r => r.InstanceId == instance && guids.Contains(r.SpawnGuid))
+                        .ToListAsync(cancellationToken).ConfigureAwait(false)).ToDictionary(r => r.SpawnGuid);
+                    foreach (CreatureRespawnRecord record in chunk)
+                    {
+                        if (existing.TryGetValue(record.SpawnGuid, out CreatureRespawnRow? row))
+                        {
+                            row.MapId = record.MapId;
+                            row.RespawnTime = record.RespawnTime;
+                        }
+                        else
+                        {
+                            db.Set<CreatureRespawnRow>().Add(new CreatureRespawnRow { InstanceId = instance, SpawnGuid = record.SpawnGuid, MapId = record.MapId, RespawnTime = record.RespawnTime });
+                        }
+                    }
                 }
             }
 
@@ -92,6 +129,9 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
             db.ChangeTracker.Clear();
         }
     }
+
+    /// <summary>Keys per set-based statement: bounds statement size and per-statement work (SQLite and PostgreSQL pass the list as one parameter; 500 also stays far under every per-key parameter limit).</summary>
+    private const int ChunkSize = 500;
 
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
     {

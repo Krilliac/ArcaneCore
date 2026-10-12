@@ -215,6 +215,81 @@ public sealed class CreatureRespawnStoreTests : IAsyncLifetime
         Assert.Equal([10u, 11u], (await LoadAsync(cs)).Select(r => r.SpawnGuid).Order());
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AMixedBatch_MatchesAKeyByKeyModel_AcrossInstancesDuplicatesAndDeletes(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await FreshAsync(provider);
+        await AddInstancesAsync(cs, 1, 2, 3);
+        CreatureRespawnRecord[] seed = [.. Enumerable.Range(1, 1300).SelectMany(g => new[] { 0u, 1u, 2u }.Select(i => new CreatureRespawnRecord(i == 0 ? 0u : 409u, i, (uint)g, Now + 100 + g)))];
+        await SaveAsync(cs, seed);
+
+        var upserts = new List<CreatureRespawnRecord>();
+        for (uint g = 1; g <= 1300; g += 2) // existing rows (updates) in instances 0 and 1, plus a duplicate whose later record must win
+        {
+            upserts.Add(new CreatureRespawnRecord(0, 0, g, Now + 5000));
+            upserts.Add(new CreatureRespawnRecord(409, 1, g, Now + 6000));
+            upserts.Add(new CreatureRespawnRecord(409, 1, g, Now + 7000));
+        }
+
+        for (uint g = 2000; g < 2700; g++) // new rows, in an instance that had none and in one that had some
+        {
+            upserts.Add(new CreatureRespawnRecord(409, 3, g, Now + 8000));
+            upserts.Add(new CreatureRespawnRecord(409, 2, g, Now + 9000));
+        }
+
+        CreatureRespawnKey[] deletes =
+        [
+            .. Enumerable.Range(1, 1300).Where(g => g % 3 == 0).Select(g => new CreatureRespawnKey(2, (uint)g)),
+            .. Enumerable.Range(1, 600).Where(g => g % 2 == 1).Select(g => new CreatureRespawnKey(1, (uint)g)), // also upserted: delete wins
+            new CreatureRespawnKey(3, 99_999), // never existed
+            new CreatureRespawnKey(2, 3), // twice
+        ];
+
+        var model = seed.ToDictionary(r => (r.InstanceId, r.SpawnGuid));
+        foreach (CreatureRespawnRecord r in upserts)
+        {
+            model[(r.InstanceId, r.SpawnGuid)] = r;
+        }
+
+        foreach (CreatureRespawnKey k in deletes)
+        {
+            model.Remove((k.InstanceId, k.SpawnGuid));
+        }
+
+        await SaveAsync(cs, [.. upserts], deletes);
+
+        IReadOnlyList<CreatureRespawnRecord> rows = await LoadAsync(cs);
+        Assert.Equal(model.Count, rows.Count);
+        Assert.Equal(
+            model.Values.OrderBy(r => r.InstanceId).ThenBy(r => r.SpawnGuid),
+            rows.OrderBy(r => r.InstanceId).ThenBy(r => r.SpawnGuid));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ALargeBatch_RunsOnAChunkedNumberOfStatements_NotOnePerKey(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await FreshAsync(provider);
+        await SaveAsync(cs, [.. Enumerable.Range(1, 2500).Select(g => new CreatureRespawnRecord(0, 0, (uint)g, Now + 100))]); // half the upserts update, 2,000 deletes hit
+
+        CreatureRespawnRecord[] upserts = [.. Enumerable.Range(2001, 5000).Select(g => new CreatureRespawnRecord(0, 0, (uint)g, Now + 500))];
+        CreatureRespawnKey[] deletes = [.. Enumerable.Range(1, 2000).Select(g => new CreatureRespawnKey(0, (uint)g))];
+        var tap = new CommandTap();
+        await using (CharacterDbContext db = SchemaProbe.CreateWith<CharacterDbContext>(cs, tap))
+        {
+            await new EfCreatureRespawnStore(db).SaveAsync(upserts, deletes);
+        }
+
+        // Reads and deletes are set-based: 4 delete chunks + 10 load chunks (one per key before). The row writes themselves stay one per row on
+        // SQLite (EF does not batch there; MariaDB and PostgreSQL batch them), so the total is bounded by the 5,000 changed rows plus the chunks.
+        IReadOnlyList<string> commands = tap.Commands;
+        int setBased = commands.Count(c => c.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || c.TrimStart().StartsWith("DELETE", StringComparison.OrdinalIgnoreCase));
+        Assert.True(setBased <= 30, $"{setBased} selects and deletes for 5,000 upserts and 2,000 deletes");
+        Assert.True(commands.Count <= 5000 + 50, $"{commands.Count} statements for 5,000 upserts and 2,000 deletes");
+        Assert.Equal(5000, (await LoadAsync(cs)).Count);
+    }
+
     [Fact]
     public async Task ABatchWithANullRecord_IsRefusedBeforeAnythingIsWritten()
     {
