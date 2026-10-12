@@ -20,8 +20,11 @@ public sealed class PlayerbotQaOptions
     /// <summary>Seconds between two passes that save the findings, write the exports and publish (10..86400).</summary>
     public int ExportIntervalSeconds { get; set; } = 300;
 
-    /// <summary>The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped.</summary>
+    /// <summary>The most findings kept (10..100000); beyond it an unpublished finding is dropped, a one-off of a single bot first, then the lowest severity, then the oldest. A published or known-closed finding is never dropped.</summary>
     public int MaxFindings { get; set; } = 2000;
+
+    /// <summary>Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever).</summary>
+    public int StaleHours { get; set; } = 24;
 
     /// <summary>The newest evidence samples kept per finding (1..20).</summary>
     public int MaxSamples { get; set; } = 5;
@@ -62,6 +65,7 @@ public sealed class PlayerbotQaOptions
 
         if (ExportIntervalSeconds is < 10 or > 86_400) problems.Add("ExportIntervalSeconds must be 10..86400");
         if (MaxFindings is < 10 or > 100_000) problems.Add("MaxFindings must be 10..100000");
+        if (StaleHours is < 0 or > 8760) problems.Add("StaleHours must be 0..8760");
         if (MaxSamples is < 1 or > 20) problems.Add("MaxSamples must be 1..20");
         if (SignalQueueCapacity is < 64 or > 1_000_000) problems.Add("SignalQueueCapacity must be 64..1000000");
         if (GitHub is null) problems.Add("GitHub is missing");

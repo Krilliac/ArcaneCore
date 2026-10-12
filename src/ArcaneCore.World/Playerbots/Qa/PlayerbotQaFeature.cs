@@ -96,14 +96,15 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             }
         }
 
-        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt);
+        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null);
         _facts = new PlayerbotQaContentFacts(services);
         _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory);
         if (saved is not null)
         {
             int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots));
             _publisher.Ledger.Restore(saved.Ledger);
-            _log.LogInformation("Bot QA restored {Count} findings from {Path}{Dropped}", aggregator.Count, _store.FilePath, dropped > 0 ? $" ({dropped} invalid entries dropped)" : string.Empty);
+            _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another)",
+                aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged);
         }
 
         Aggregator = aggregator;
@@ -231,6 +232,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             Redactor.SetNames(bots.Snapshot().Select(bot => bot.Name));
         }
 
+        Aggregator.AgeOut(DateTime.UtcNow);
         Persist();
         Export();
         // The pass runs every ExportIntervalSeconds (5 minutes by default): the retreat counters ride on it as the periodic summary line.

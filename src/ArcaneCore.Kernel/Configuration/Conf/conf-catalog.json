@@ -14583,7 +14583,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped.",
+      "meaning": "The most findings kept (10..100000); beyond it an unpublished finding is dropped, a one-off of a single bot first, then the lowest severity, then the oldest. A published or known-closed finding is never dropped.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
       "isCollection": false
@@ -14616,6 +14616,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Qa:StaleHours",
+      "section": "World:Playerbots:Qa",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "24",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
       "isCollection": false

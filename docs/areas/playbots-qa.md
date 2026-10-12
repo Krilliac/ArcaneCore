@@ -81,8 +81,22 @@ issue, so the key format is versioned (`v1`): changing it would orphan existing 
 
 Per finding the aggregator keeps the count, first and last time, up to `MaxSamples` newest evidence samples, and the number of
 distinct bots. Bots are counted by a salted SHA-256 of the id (the salt is saved, so counts survive a restart; at most 512 are tracked
-per finding, then the count saturates). Nothing keeps a bot name or id. At `MaxFindings` the lowest-severity unpublished finding is
-evicted; a finding that has an issue is never evicted (its issue number is the only local memory of it).
+per finding, then the count saturates). Nothing keeps a bot name or id.
+
+**Which finding a stall or death loop belongs to is coarser than its key.** The key (and so the id and the issue marker) is that of the
+finding's *first* signal and never changes; there is no key version bump and no migration of published findings. What decides whether a
+later signal is the same problem is the group, computed in memory (and recomputed on load) from the same content ids plus a 500-yard zone cell:
+
+* Stall, Quest goal: the quest and target, wherever it stood. Combat goal: the target entry. Any other goal (Explore, Retreat, Loot...): the goal in a zone cell;
+  a stall just across a cell border still folds into the finding whose anchor (its first sample, which never moves) lies within 160 yards. The outside-home flag keeps its own group.
+* Death loop: the map and zone cell (or an anchor within 160 yards) and its attackers. A loop that shares an attacker entry with a finding of the area is that
+  finding; a loop that shares entries with several merges them (the published one survives, then the busiest); with no attacker on either side the death source decides.
+  A finding's attackers are the union over its signals.
+
+The position stays in the samples and the subject of the first signal. **Store hygiene:** a finding not seen for `StaleHours` (24) that has no issue is dropped on load
+and on every pass; at `MaxFindings` the lowest-value unpublished finding is evicted (a single occurrence of a single bot first, then lowest severity, then the oldest),
+and a finding that has an issue is never evicted (its issue number is the only local memory of it). Loading an older store merges the fragments that are one problem now,
+keeping the id and publication state of the published one, so the issues already filed are neither orphaned nor filed again.
 
 ## Classifier: why it probably happens
 

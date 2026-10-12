@@ -1344,9 +1344,10 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
 | `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |
 | `World:Playerbots:Qa:GitHub:Transport` | `PlayerbotQaGitHubTransport` | `Rest` | - | How issues are read and written: `Rest` (default; the GitHub REST API with the token from `TokenEnvironmentVariable`) or `GhCli` (runs the `gh` tool with an argument list and no shell, using the login of the user the server runs as; the token variable is not needed). Values: `Rest`, `GhCli`. |
-| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped. |
+| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it an unpublished finding is dropped, a one-off of a single bot first, then the lowest severity, then the oldest. A published or known-closed finding is never dropped. |
 | `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
+| `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 
 ## `World:Social`
 

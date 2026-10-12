@@ -306,13 +306,14 @@ internal sealed class QaFinding
     /// <summary>Where the first sample was; never changes once set.</summary>
     public QaAnchor? Anchor { get; set; }
 
-    /// <summary>A death loop's identity: the attackers (non-zero) of its first signal; never widened afterwards.</summary>
+    /// <summary>A death loop's attackers: the non-zero entries of every signal folded in (at most <see cref="MaxAttackers"/>); a loop that shares one of them is this loop.</summary>
     public SortedSet<uint> Attackers { get; } = [];
 
-    private string? _identity;
+    /// <summary>A stall's coarse identity (<see cref="PlayerbotQaFingerprint.StallGroup"/>); empty for other kinds. In memory only: recomputed on load.</summary>
+    public string Group { get; set; } = string.Empty;
 
-    /// <summary>The key without its location (cached; <see cref="Key"/> never changes).</summary>
-    public string Identity => _identity ??= PlayerbotQaFingerprint.LocationFreeKey(Key);
+    /// <summary>The group without its zone cell, or null (<see cref="PlayerbotQaFingerprint.StallGroup"/>).</summary>
+    public string? GroupBase { get; set; }
 
     public string DeathSource { get; set; } = string.Empty;
 
