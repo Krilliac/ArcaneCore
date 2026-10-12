@@ -6,6 +6,8 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
@@ -55,17 +57,28 @@ public sealed class QuestOwnershipFencingTests : IAsyncLifetime
 
         CharacterQuestStatus changed = original with { Status = 1, Rewarded = true };
         uint[] changedTaxi = [99, 98];
-        await using (CharacterDbContext stale = TestContexts.Create<CharacterDbContext>(connection))
+        // The scenario is a takeover, so the writer's context has the write fence on (Cluster:Fencing:Enabled): only then does an untokened save
+        // check ownership at all. With the fence off an untokened save is deliberately unchecked (CharacterWriteFenceTests covers that).
+        var settings = new Dictionary<string, string?>
         {
+            ["Database:Provider"] = connection.Provider.ToString(),
+            ["Database:ConnectionString"] = connection.ConnectionString,
+            ["Cluster:Fencing:Enabled"] = "true",
+        };
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCharacterDatabase(configuration);
+        await using (ServiceProvider fenced = services.BuildServiceProvider())
+        await using (AsyncServiceScope scope = fenced.CreateAsyncScope())
+        {
+            CharacterDbContext stale = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            Assert.True(CharacterOwnershipGuard.IsFenceActive(stale));
             var store = new EfCharacterQuestStore(stale);
-            await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() =>
-                store.SaveQuestsAsync(characterId, [changed], ownership: first));
-            await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() =>
-                store.SaveTaxiMaskAsync(characterId, changedTaxi, ownership: first));
-            await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() =>
-                store.SaveQuestsAsync(characterId, [changed]));
-            await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() =>
-                store.SaveTaxiMaskAsync(characterId, changedTaxi));
+            await AssertRejectedAsync(() => store.SaveQuestsAsync(characterId, [changed], ownership: first));
+            await AssertRejectedAsync(() => store.SaveTaxiMaskAsync(characterId, changedTaxi, ownership: first));
+            await AssertRejectedAsync(() => store.SaveQuestsAsync(characterId, [changed]));
+            await AssertRejectedAsync(() => store.SaveTaxiMaskAsync(characterId, changedTaxi));
         }
 
         await using (CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(connection))
@@ -115,6 +128,20 @@ public sealed class QuestOwnershipFencingTests : IAsyncLifetime
         CharacterQuestData saved = await new EfCharacterQuestStore(verify).LoadAsync(characterId);
         Assert.Empty(saved.Quests);
         Assert.Empty(saved.TaxiMask);
+    }
+
+    /// <summary>The ownership rejection, found at any depth of the thrown exception (EF may wrap what an interceptor throws).</summary>
+    private static async Task AssertRejectedAsync(Func<Task> write)
+    {
+        Exception? thrown = await Record.ExceptionAsync(write);
+        Assert.NotNull(thrown);
+        for (Exception? e = thrown; e is not null; e = e.InnerException)
+        {
+            if (e is CharacterOwnershipRejectedException)
+                return;
+        }
+
+        Assert.Fail("expected a CharacterOwnershipRejectedException but got " + thrown);
     }
 
     private static CharacterQuestStatus Row(int characterId, uint quest, byte status)

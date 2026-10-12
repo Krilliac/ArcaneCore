@@ -514,7 +514,16 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
 
         // The same statement kinds, in order (the Train 16 list): SaveState reads then writes; quests with no upserts only read;
         // the taxi mask reads then writes.
-        static string Kinds(IReadOnlyList<string> s) => string.Join(",", s.Select(t => t == "<begin transaction>" ? "BEGIN" : t.TrimStart().Split(' ')[0].ToUpperInvariant()));
+        // MariaDB prefixes a write batch with session-variable statements (a leading "SET ...;"); they are not statements the stores issue, so the
+        // kind is that of the first statement of the command that is not a SET. A command that is only SET keeps the kind SET and fails the comparison.
+        static string Kind(string text)
+        {
+            string[] statements = text.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            string first = statements.FirstOrDefault(s => !s.StartsWith("SET ", StringComparison.OrdinalIgnoreCase)) ?? text.TrimStart();
+            return first.Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)[0].ToUpperInvariant();
+        }
+
+        static string Kinds(IReadOnlyList<string> s) => string.Join(",", s.Select(t => t == "<begin transaction>" ? "BEGIN" : Kind(t)));
         Assert.Equal(ExpectedStateKinds, Kinds(state));
         Assert.Equal(ExpectedQuestKinds, Kinds(quests));
         Assert.Equal(ExpectedQuestInsertKinds, Kinds(questInsert));
