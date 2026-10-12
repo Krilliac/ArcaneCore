@@ -129,6 +129,7 @@ public static class EnvironmentalDamage
         uint dealt = map.Combat.DealDamage(player, player, damage, direct: false, meleeDamage: false, durabilityLoss: false);
         if (!player.IsAlive)
         {
+            player.LastMissingCasterPeriodicDeath = false; // this death has one source
             player.LastEnvironmentalDeath = type;
             player.Inventory.DurabilityLossAll(0.10, inventory: false);
             player.Session.Send(WorldOpcode.SmsgDurabilityDamageDeath, []);

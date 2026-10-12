@@ -1062,12 +1062,13 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             active.Brain.Update(sinceLast);
             string? report = active.Brain.StallReport;
+            bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
+                && !driven.RepopDestinationResolved;
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
-                report is not null && active.Brain.StallCount != active.StallsLogged
+                report is not null && !awaitRelease && active.Brain.StallCount != active.StallsLogged
                     ? active.Brain.QaReportContext(driven, report) : null,
-                report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
-                    && !driven.RepopDestinationResolved);
+                awaitRelease);
             if (sharedLogged) active.Brain.SharedSetAside = null;
             return "brain";
         }

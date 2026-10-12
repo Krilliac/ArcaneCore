@@ -1321,7 +1321,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void CaptureAttacker(Player player, Creature creature)
     {
-        if (_attackerFacts.Count >= 16 && !_attackerFacts.ContainsKey(creature.Entry)) return;
+        if (_attackerFacts.TryGetValue(creature.Entry, out QaAttackerFact? known))
+        {
+            if (known.Level == creature.Level) return; // already captured this combat: no per-update allocation or hostility query
+        }
+        else if (_attackerFacts.Count >= 16) return;
         var template = creature.Template;
         bool guard = (template.Behaviour & CreatureBehaviourFlags.Guard) != 0;
         bool hostile = player.Map?.Combat.Hooks.IsHostileTo(creature, player) ?? false;

@@ -435,6 +435,8 @@ public sealed partial class MapCombat
 
         player.Combat.DeathTimer = 0;
         player.NeedsVisibilityUpdate = true;
+        player.LastEnvironmentalDeath = null; // observation-only: a death source no brain recorded must not label the next death
+        player.LastMissingCasterPeriodicDeath = false;
         Hooks.OnResurrected(player, applySickness);
     }
 

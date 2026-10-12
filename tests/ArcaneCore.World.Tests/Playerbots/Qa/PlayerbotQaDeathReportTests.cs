@@ -65,6 +65,41 @@ public sealed class PlayerbotQaDeathReportTests
         Assert.Contains("hostile guard", body, StringComparison.Ordinal);
     }
 
+    private static QaClassification ClassifyGuard(string facts) => PlayerbotQaClassifier.Classify(QaData.Parse(QaData.BotLine(QaData.Bot1, "Testbot",
+        "death loop: died 3 times in 90s within 60 yd of 1.0,2.0,3.0 map 0 attackers=7865"
+        + " qa[level=30,race=Human,team=Alliance,class=Warrior,goal=Explore,quest=0,graveyard=0,distance=unknown,source=Creature,attackerFacts=" + facts + "]")),
+        new FakeFacts());
+
+    [Theory]
+    [InlineData("7865:30:30:30:0:1:1")] // at the bot's level
+    [InlineData("7865:20:20:20:0:1:1")] // below it
+    public void HostileGuardAtOrBelowTheBotsLevel_IsContentDifficulty_OnTheGuardAlone(string facts)
+    {
+        QaClassification classification = ClassifyGuard(facts);
+        Assert.Equal(QaCause.ContentDifficulty, classification.Cause);
+        Assert.Contains("7865 is a hostile guard", classification.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonHostileGuard_IsNotFlaggedAsAGuardDeath()
+    {
+        QaClassification classification = ClassifyGuard("7865:30:30:30:0:1:0");
+        Assert.Equal(QaCause.Unknown, classification.Cause);
+        Assert.DoesNotContain("is a hostile guard", classification.Detail, StringComparison.Ordinal);
+        Assert.Contains("guard yes, hostile no", classification.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StallBody_ShowsTheQuestIdRow()
+    {
+        var aggregator = new PlayerbotQaAggregator(10, 3, new byte[16]);
+        aggregator.Ingest(QaData.Stall(QaData.Bot1, 1f, 2f, quest: 1656), new FakeFacts(), QaData.T0);
+        QaFindingView finding = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaSignalKind.Stall, finding.Kind);
+        string body = PlayerbotQaIssueComposer.Compose(finding, ["bot-qa"], "test", new PlayerbotQaRedactor()).Body;
+        Assert.Contains("| Quest | 1656", body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FallDeathFinding_IdentifiesFallRatherThanInventingAnAttacker()
     {

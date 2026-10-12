@@ -775,7 +775,10 @@ public sealed partial class SpellSystem
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
             reflected: holder.IsReflected && ReferenceEquals(caster, target));
         if (dealt > 0 && !target.IsAlive && resolvedCaster is null && target is Player player)
+        {
+            player.LastEnvironmentalDeath = null; // this death has one source
             player.LastMissingCasterPeriodicDeath = true;
+        }
         OnDamageTaken(target, caster, dealt, periodic: true, absorbed, holder.Spell.Id);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);

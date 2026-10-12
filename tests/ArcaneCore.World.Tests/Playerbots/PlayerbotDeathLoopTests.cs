@@ -91,6 +91,54 @@ public sealed class PlayerbotDeathLoopTests
         }
     }
 
+    /// <summary>
+    /// A fall while the brain is not running (party AI, a scripted controller) is never recorded; the flag it left must not label
+    /// the bot's next brain-recorded death once it has been resurrected.
+    /// </summary>
+    [Fact]
+    public async Task UnrecordedFall_ThenResurrection_DoesNotLabelTheNextCreatureDeathAsFall()
+    {
+        const uint Entry = 993904;
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            Creature killer = await SpawnAsync(host, session, Entry, 501);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500); // register the kill observer
+                player.Health = 1;
+                EnvironmentalDamage.Apply(host.World, player, EnvironmentalDamageType.Fall, 1); // no brain update: nobody records it
+                Assert.False(player.IsAlive);
+                Assert.Equal(EnvironmentalDamageType.Fall, player.LastEnvironmentalDeath);
+                player.Map!.Combat.ResurrectPlayer(player, 1f, applySickness: false);
+                Assert.True(player.IsAlive);
+                Assert.Null(player.LastEnvironmentalDeath);
+
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                player.Health = 1;
+                player.Map!.Combat.DealDamage(killer, player, 2);
+                Assert.False(player.IsAlive);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                string context = brain.QaReportContext(player, $"death loop: attackers={Entry}");
+                Assert.Contains("source=Creature", context, StringComparison.Ordinal);
+                Assert.DoesNotContain("Fall", context, StringComparison.Ordinal);
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     /// <summary>A lethal creature hit between bot updates still has a known killer after combat clears attackers.</summary>
     [Fact]
     public async Task CreatureKillsBetweenBrainUpdates_AreAttributedToThatCreature()
