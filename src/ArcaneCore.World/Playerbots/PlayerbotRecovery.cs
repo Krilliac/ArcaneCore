@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
@@ -80,6 +81,9 @@ internal enum PlayerbotUnsafeBody
 
     /// <summary>A creature round the body is too strong for the bot even at full health (the risk estimate avoids it).</summary>
     TooStrong,
+
+    /// <summary>The body is below the liquid surface by more than the bot's collision height.</summary>
+    Hazard,
 
     /// <summary>The body lies outside the bot's home, and the spirit healer leaves it nearer home than the body would.</summary>
     OutsideHome,
@@ -199,14 +203,17 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <summary>
     /// Whether a body is unsafe to reclaim, free of world state: the bot already died near it inside the death watch's window
     /// (<paramref name="diedHereBefore"/>, <see cref="PlayerbotStallWatch.DeathsNear"/>); a creature round it is too strong for the
-    /// bot even at full health (<paramref name="hostilesTooStrong"/>, <see cref="PlayerbotRisk.TooStrongNear"/>); or it lies outside
+    /// bot even at full health (<paramref name="hostilesTooStrong"/>, <see cref="PlayerbotRisk.TooStrongNear"/>); it is submerged
+    /// below the liquid surface (<paramref name="bodySubmerged"/>); or it lies outside
     /// the bot's home (<paramref name="bodyOutsideHome"/>, <see cref="PlayerbotHomeArea.Contains(uint, float, float, float)"/>) while
     /// the spirit healer leaves the bot nearer home (<paramref name="healerNearerHome"/>). A body in a safe spot inside the home, at
     /// the first death there, is reclaimed as always: the spirit healer costs resurrection sickness and a quarter of the durability
     /// (vmangos WorldSession::SendSpiritResurrect, NPCHandler.cpp:430-471).
     /// </summary>
-    internal static PlayerbotUnsafeBody JudgeBody(bool diedHereBefore, bool hostilesTooStrong, bool bodyOutsideHome, bool healerNearerHome)
+    internal static PlayerbotUnsafeBody JudgeBody(bool diedHereBefore, bool hostilesTooStrong, bool bodyOutsideHome,
+        bool healerNearerHome, bool bodySubmerged = false)
     {
+        if (bodySubmerged) return PlayerbotUnsafeBody.Hazard;
         if (diedHereBefore) return PlayerbotUnsafeBody.DiedHere;
         if (hostilesTooStrong) return PlayerbotUnsafeBody.TooStrong;
         return bodyOutsideHome && healerNearerHome ? PlayerbotUnsafeBody.OutsideHome : PlayerbotUnsafeBody.None;
@@ -444,9 +451,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // Nor, mostly, for a bot the healer would sicken (KeepBodyOverSickness): the corpse run is its way back but for a death loop.
         if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
             && _corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
-            && !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason))
+            && (verdict.Reason == PlayerbotUnsafeBody.Hazard
+                || !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason)))
         {
-            // The body is not worth it (a repeat death there, a camp too strong, or outside the home with the healer nearer it):
+            // The body is not worth it (submerged, a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
             _preferSpiritHealer = true;
             UnsafeReason = verdict.Reason;
@@ -747,7 +755,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         {
             var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
             List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
-            keep = FindReviveSpot(body, body, hostiles, candidate => candidate) is not null;
+            keep = FindReviveSpot(body, body, hostiles, candidate => candidate,
+                candidate => !PlayerbotWater.Submerged(player.Map!, candidate, player.Locomotion.CollisionHeight)) is not null;
             landingAt = landing;
         }
 
@@ -812,7 +821,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
         List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
-        return FindReviveSpot(body, body, hostiles, candidate => candidate) is not null;
+        return FindReviveSpot(body, body, hostiles, candidate => candidate,
+            candidate => !PlayerbotWater.Submerged(player.Map!, candidate, player.Locomotion.CollisionHeight)) is not null;
     }
 
     /// <summary>
@@ -1043,7 +1053,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (player.Map is null) return null;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
         List<PlayerbotThreat> hostiles = [.. Threats(player), .. Hazards?.Invoke(player) ?? []];
-        if (_spot is { } kept && IsReviveSpot(kept, body, hostiles)) return kept;
+        bool Dry(Vector3 candidate) => !PlayerbotWater.Submerged(player.Map, candidate, player.Locomotion.CollisionHeight);
+        if (_spot is { } kept && IsReviveSpot(kept, body, hostiles, Dry)) return kept;
 
         Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
         {
@@ -1053,7 +1064,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 || route.Distance > ReviveSpotMaxWalkYards)
                 return null;
             return route.Points[^1];
-        });
+        }, Dry);
         if (found is null)
         {
             _spot = null;
@@ -1065,8 +1076,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         return found;
     }
 
-    private static bool IsReviveSpot(Vector3 spot, Vector3 body, IReadOnlyList<PlayerbotThreat> hostiles)
+    private static bool IsReviveSpot(Vector3 spot, Vector3 body, IReadOnlyList<PlayerbotThreat> hostiles,
+        Func<Vector3, bool>? safe = null)
     {
+        if (safe is not null && !safe(spot)) return false;
         if (Vector3.Distance(spot, body) > ReviveSpotMaxYards) return false;
         foreach (PlayerbotThreat hostile in hostiles)
             if (hostile.Reaches(spot, ReviveSpotMarginYards + ReviveSpotSlackYards)) return false;
@@ -1080,7 +1093,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// candidate to the point the ghost can actually walk to (the navigation mesh's, null when it cannot); the first reachable
     /// point that is still a revive spot is taken. At most <see cref="ReviveSpotMaxQueries"/> candidates are asked.
     /// </summary>
-    internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<PlayerbotThreat> hostileList, Func<Vector3, Vector3?> reach)
+    internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<PlayerbotThreat> hostileList,
+        Func<Vector3, Vector3?> reach, Func<Vector3, bool>? safe = null)
     {
         var candidates = new List<Vector3> { body };
         // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear.
@@ -1093,11 +1107,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
         int queries = 0;
         foreach (Vector3 candidate in candidates
-            .Where(c => IsReviveSpot(c, body, hostileList))
+            .Where(c => IsReviveSpot(c, body, hostileList, safe))
             .OrderBy(c => Vector2.Distance(new Vector2(c.X, c.Y), new Vector2(ghost.X, ghost.Y))))
         {
             if (++queries > ReviveSpotMaxQueries) break;
-            if (reach(candidate) is { } point && IsReviveSpot(point, body, hostileList)) return point;
+            if (reach(candidate) is { } point && IsReviveSpot(point, body, hostileList, safe)) return point;
         }
 
         return null;
@@ -1245,6 +1259,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         PlayerbotUnsafeBody.DiedHere => "it already died there",
         PlayerbotUnsafeBody.TooStrong => "a creature there is too strong for it",
+        PlayerbotUnsafeBody.Hazard => "the body is submerged",
         PlayerbotUnsafeBody.OutsideHome => "the body lies outside its home and the healer is nearer home",
         _ => "none",
     };

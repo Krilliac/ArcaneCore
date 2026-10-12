@@ -214,16 +214,19 @@ internal static class PlayerbotQaClassifier
 
     private static QaClassification DeathLoop(QaSignal s, IQaContentFacts facts, string? title)
     {
-        if (s.Attackers.Count == 0)
+        IReadOnlyList<string>? observedSources = s.Bot?.DeathSources is { Count: > 0 } all ? all : null;
+        bool creatureMajority = observedSources is not null
+            && observedSources.Count(source => source == "Creature") * 2 > observedSources.Count;
+        if (s.Attackers.Count == 0 || observedSources is not null && !creatureMajority)
         {
-            IReadOnlyList<string> sources = s.Bot?.DeathSources is { Count: > 0 } all ? all
-                : [s.Bot?.Source ?? "Unobserved"];
-            bool knownBehaviour = sources.All(source => source is "Fall" or "FallToVoid" or "Drowning" or "Exhausted"
+            IReadOnlyList<string> sources = observedSources ?? [s.Bot?.Source ?? "Unobserved"];
+            int behaviourDeaths = sources.Count(source => source is "Fall" or "FallToVoid" or "Drowning" or "Exhausted"
                 or "Lava" or "Slime" or "Fire" or "Self");
-            QaCause cause = s.Bot is null || knownBehaviour ? QaCause.BehaviourBug : QaCause.Unknown;
+            QaCause cause = s.Bot is null || behaviourDeaths * 2 > sources.Count ? QaCause.BehaviourBug : QaCause.Unknown;
             string deathDetail = sources.Count == 1 ? DescribeDeathSource(sources[0])
                 : "death sources in this loop: " + string.Join("; ", sources.Select(DescribeDeathSource));
-            return new QaClassification(cause, "died repeatedly with no attacker entry: " + deathDetail, title);
+            return new QaClassification(cause, (s.Attackers.Count == 0
+                ? "died repeatedly with no attacker entry: " : "died repeatedly with nearby attackers: ") + deathDetail, title);
         }
 
         var notes = new List<string>();
@@ -288,6 +291,7 @@ internal static class PlayerbotQaClassifier
         "Lava" => "lava environmental damage",
         "Slime" => "slime environmental damage",
         "Fire" => "fire environmental damage",
+        "Creature" => "a creature killing blow",
         "Player" => "a player killing blow (no creature entry)",
         "PlayerPet" => "a player-controlled pet killing blow (no content creature entry)",
         "Self" => "a self-inflicted killing blow",
