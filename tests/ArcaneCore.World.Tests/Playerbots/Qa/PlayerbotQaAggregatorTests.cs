@@ -284,4 +284,273 @@ public sealed class PlayerbotQaAggregatorTests
         Assert.Equal(5, all.Count);
         Assert.Equal(2000, all.Sum(f => f.Count));
     }
+
+    private static QaSignal Loop(float x, float y, uint map = 1, params uint[] attackers)
+        => new()
+        {
+            Kind = QaSignalKind.DeathLoop, AtUtc = QaData.T0, BotKey = Guid.NewGuid(), HasPosition = true, Map = map, X = x, Y = y, Z = 50f, Attackers = attackers,
+            Message = "Playerbot <bot> death loop",
+        };
+
+    [Fact]
+    public void DeathLoops_DriftingWithinTheAnchorRadius_AreOneFinding_AndFarOrOtherAttackersAreNew()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string first = Ingest(aggregator, Loop(2036f, -3378f, 1, 3821));
+        string drifted = Ingest(aggregator, Loop(2155f, -3386f, 1, 3821)); // 119 yd from the anchor, another 50-yd cell
+        Assert.Equal(first, drifted);
+        Assert.Equal(2, Assert.Single(aggregator.Snapshot()).Count);
+
+        string far = Ingest(aggregator, Loop(2275f, -3010f, 1, 3782, 3821)); // 440 yd from the anchor
+        Assert.NotEqual(first, far);
+        Assert.Equal(2, aggregator.Snapshot().Count);
+
+        string otherAttacker = Ingest(aggregator, Loop(2036f, -3378f, 1, 2829)); // the anchor's own spot, but nobody in common
+        Assert.NotEqual(first, otherAttacker);
+        Assert.NotEqual(far, otherAttacker);
+        Assert.Equal(3, aggregator.Snapshot().Count);
+
+        // The new one is found again by its attackers.
+        Assert.Equal(otherAttacker, Ingest(aggregator, Loop(2040f, -3380f, 1, 2829)));
+        Assert.Equal(first, Ingest(aggregator, Loop(2036f, -3378f, 1, 3821)));
+        Assert.Equal(3, aggregator.Snapshot().Count);
+    }
+
+    [Fact]
+    public void DeathLoops_WithoutAttackers_MergeOnlyOnTheSameDeathSource()
+    {
+        static QaSignal WithSource(float x, string source)
+            => Loop(x, 0, 1) with { Bot = new QaBotObservation(10, "Human", "Alliance", "Mage", "Quest", 0, 0, null, source, []) };
+
+        PlayerbotQaAggregator aggregator = New();
+        string a = Ingest(aggregator, WithSource(0, "Environment"));
+        Assert.Equal(a, Ingest(aggregator, WithSource(120, "Environment")));
+        Assert.NotEqual(a, Ingest(aggregator, WithSource(60, "Creature")));
+        Assert.Equal(2, aggregator.Snapshot().Count);
+    }
+
+    [Fact]
+    public void Stalls_DriftingWithinTheAnchorRadius_AreOneFinding_UnlessTheGoalDiffers()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, goal: "Explore"));
+        string b = Ingest(aggregator, QaData.Stall(QaData.Bot2, 77, 0, goal: "Explore"));
+        Assert.Equal(a, b);
+        Assert.Single(aggregator.Snapshot());
+
+        string quest = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, goal: "Quest"));
+        Assert.NotEqual(a, quest);
+        Assert.Equal(2, aggregator.Snapshot().Count);
+
+        QaSignal outside = QaData.Stall(QaData.Bot1, 10, 10, goal: "Explore") with { OutsideHome = true };
+        Assert.NotEqual(a, Ingest(aggregator, outside));
+        Assert.Equal(3, aggregator.Snapshot().Count);
+    }
+
+    [Fact]
+    public void TheAnchor_DoesNotChain()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0));
+        Assert.Equal(a, Ingest(aggregator, QaData.Stall(QaData.Bot1, 150, 0)));
+        string c = Ingest(aggregator, QaData.Stall(QaData.Bot1, 300, 0)); // 150 yd from B, 300 from the anchor
+        Assert.NotEqual(a, c);
+        Assert.Equal(2, aggregator.Snapshot().Count);
+    }
+
+    [Fact]
+    public void DifferentMaps_NeverMerge()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string a = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, map: 0));
+        string b = Ingest(aggregator, QaData.Stall(QaData.Bot1, 60, 0, map: 1));
+        Assert.NotEqual(a, b);
+        string c = Ingest(aggregator, Loop(0, 0, 0, 5));
+        string d = Ingest(aggregator, Loop(60, 0, 1, 5));
+        Assert.NotEqual(c, d);
+        Assert.Equal(4, aggregator.Snapshot().Count);
+    }
+
+    [Fact]
+    public void RestoredFindingWithoutSamples_StillMatchesThroughItsPersistedAnchor()
+    {
+        PlayerbotQaAggregator source = New();
+        string id = Ingest(source, QaData.Stall(QaData.Bot1, 0, 0));
+        string loopId = Ingest(source, Loop(2036f, -3378f, 1, 3821));
+        QaAggregatorState saved = source.Export();
+        Assert.All(saved.Findings, f => Assert.NotNull(f.Anchor));
+        QaAggregatorState bare = saved with { Findings = [.. saved.Findings.Select(f => f with { Samples = [] })] };
+
+        PlayerbotQaAggregator target = New();
+        Assert.Equal(0, target.Restore(bare));
+        Assert.Equal(id, Ingest(target, QaData.Stall(QaData.Bot2, 140, 0)));
+        Assert.Equal(loopId, Ingest(target, Loop(2150f, -3386f, 1, 3821, 99)));
+        Assert.NotEqual(loopId, Ingest(target, Loop(2150f, -3386f, 1, 2829)));
+        Assert.Equal(3, target.Snapshot().Count);
+
+        // The anchor survives a second save and load.
+        PlayerbotQaAggregator again = New();
+        Assert.Equal(0, again.Restore(target.Export()));
+        Assert.Equal(id, Ingest(again, QaData.Stall(QaData.Bot3, 155, 0)));
+    }
+
+    [Fact]
+    public void OldPersistedState_WithoutAnAnchor_LoadsAndMatches()
+    {
+        PlayerbotQaAggregator source = New();
+        string id = Ingest(source, QaData.Stall(QaData.Bot1, -5608.8f, -439.4f));
+        QaAggregatorState old = source.Export();
+
+        // A file written before the anchor existed: no Anchor, no Attackers, the sample still there -> the first sample is the anchor.
+        QaAggregatorState withSample = old with { Findings = [.. old.Findings.Select(f => f with { Anchor = null })] };
+        PlayerbotQaAggregator a = New();
+        Assert.Equal(0, a.Restore(withSample));
+        Assert.Equal(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 150f, -439.4f)));
+        Assert.NotEqual(id, Ingest(a, QaData.Stall(QaData.Bot2, -5608.8f + 170f, -439.4f)));
+
+        // No anchor and no sample -> the centre of the key's 50-yard cell (-113,-9): (-5625,-425).
+        QaAggregatorState bare = old with { Findings = [.. old.Findings.Select(f => f with { Anchor = null, Samples = [] })] };
+        PlayerbotQaAggregator b = New();
+        Assert.Equal(0, b.Restore(bare));
+        Assert.Equal(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 159f, -425f)));
+        Assert.NotEqual(id, Ingest(b, QaData.Stall(QaData.Bot2, -5625f + 161f, -425f)));
+
+        // Through JSON, as a real old findings.json: the new properties are simply absent.
+        string json = JsonSerializer.Serialize(new { Findings = old.Findings.Select(f => new { f.Id, f.Key, Kind = f.Kind.ToString(), f.Count, f.Map }) });
+        QaStoreFile? file = JsonSerializer.Deserialize(json, QaStoreJsonContext.Default.QaStoreFile);
+        Assert.NotNull(file);
+        PlayerbotQaAggregator c = New();
+        Assert.Equal(0, c.Restore(new QaAggregatorState(file.Findings, new Dictionary<string, ulong[]>())));
+        QaFindingView restored = Assert.Single(c.Snapshot());
+        Assert.Equal(new QaAnchor(0, -5625f, -425f), c.Export().Findings[0].Anchor); // the centre of cell (-113,-9)
+        Assert.Equal(id, restored.Id);
+        Assert.Equal(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 100f, -425f)));
+        Assert.NotEqual(id, Ingest(c, QaData.Stall(QaData.Bot2, -5625f + 200f, -425f)));
+    }
+
+    private static QaFindingView OldLoop(QaFindingView v, IReadOnlyList<QaSample>? samples = null, string? subject = null)
+        => v with { Anchor = null, Attackers = [], DeathSource = string.Empty, Samples = samples ?? v.Samples, Subject = subject ?? v.Subject };
+
+    private static QaSignal LoopFrom(float x, float y, string source, params uint[] attackers)
+        => Loop(x, y, 1, attackers) with { Bot = new QaBotObservation(10, "Human", "Alliance", "Mage", "Quest", 0, 0, null, source, []) };
+
+    [Fact]
+    public void OldFormatDeathLoop_TakesAttackersAndSourceFromItsSamples()
+    {
+        PlayerbotQaAggregator source = New();
+        string withAttackers = Ingest(source, LoopFrom(2036f, -3378f, "Creature", 3821));
+        string noAttackers = Ingest(source, LoopFrom(500f, 500f, "Environment"));
+        QaAggregatorState old = source.Export();
+        QaAggregatorState state = old with { Findings = [.. old.Findings.Select(f => OldLoop(f))] };
+
+        PlayerbotQaAggregator target = New();
+        Assert.Equal(0, target.Restore(state));
+        // The same cell: folds into the existing finding by the samples' attackers / source, not into a variant.
+        Assert.Equal(withAttackers, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 3821)));
+        Assert.Equal(noAttackers, Ingest(target, LoopFrom(505f, 505f, "Environment")));
+        Assert.Equal(2, target.Snapshot().Count);
+        // ...and another attacker / source in the same cell is a different loop.
+        Assert.NotEqual(withAttackers, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 2829)));
+        Assert.NotEqual(noAttackers, Ingest(target, LoopFrom(505f, 505f, "Creature")));
+        Assert.Equal(4, target.Snapshot().Count);
+    }
+
+    [Fact]
+    public void OldFormatDeathLoop_WithSamplesFromSeveralLoops_MatchesEveryLoopItAlreadyStoodFor()
+    {
+        // Before anchors one finding per cell merged every death loop there, so its samples hold several attacker sets.
+        PlayerbotQaAggregator first = New();
+        string id = Ingest(first, LoopFrom(2036f, -3378f, "Creature", 3821));
+        PlayerbotQaAggregator second = New();
+        Ingest(second, LoopFrom(2040f, -3380f, "Creature", 2829));
+        QaSample[] samples = [.. first.Export().Findings[0].Samples!, .. second.Export().Findings[0].Samples!];
+        QaAggregatorState old = first.Export();
+        QaAggregatorState state = old with { Findings = [.. old.Findings.Select(f => OldLoop(f, samples: samples))] };
+
+        PlayerbotQaAggregator target = New();
+        Assert.Equal(0, target.Restore(state));
+        // The newer sample's attacker belongs to the existing finding (and its issue), not to a variant.
+        Assert.Equal(id, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 2829)));
+        Assert.Equal(id, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 3821)));
+        Assert.Single(target.Snapshot());
+    }
+
+    [Fact]
+    public void OldFormatDeathLoop_WithoutSamples_TakesAttackersFromTheSubject()
+    {
+        PlayerbotQaAggregator source = New();
+        string id = Ingest(source, Loop(2036f, -3378f, 1, 3821)); // cell (40,-68)
+        QaAggregatorState old = source.Export();
+        QaAggregatorState state = old with
+        {
+            Findings = [.. old.Findings.Select(f => OldLoop(f, samples: [], subject: "map 1 near 2000,-3400 attackers 3821/3782"))],
+        };
+
+        PlayerbotQaAggregator target = New();
+        Assert.Equal(0, target.Restore(state));
+        Assert.Equal(id, Ingest(target, Loop(2040f, -3380f, 1, 3821)));
+        Assert.Equal(id, Ingest(target, Loop(2040f, -3380f, 1, 3782)));
+        Assert.NotEqual(id, Ingest(target, Loop(2040f, -3380f, 1, 2829)));
+    }
+
+    [Fact]
+    public void StoreRoundTrip_KeepsAnchorAttackersAndSource_AndStillMatchesNearby()
+    {
+        PlayerbotQaAggregator source = New();
+        string stall = Ingest(source, QaData.Stall(QaData.Bot1, -5608.8f, -439.4f));
+        string loop = Ingest(source, LoopFrom(2036f, -3378f, "Creature", 3821, 3782));
+        QaAggregatorState saved = source.Export();
+
+        string directory = QaData.NewTempDirectory();
+        try
+        {
+            var store = new PlayerbotQaStore(directory, new ListLogger());
+            Assert.True(store.Save(new QaStoreFile { SaltBase64 = Convert.ToBase64String(Salt), Findings = saved.Findings, Bots = saved.Bots }));
+            QaStoreFile loaded = new PlayerbotQaStore(directory, new ListLogger()).Load() ?? throw new InvalidOperationException("not loaded");
+
+            QaFindingView loadedLoop = loaded.Findings.Single(f => f.Id == loop);
+            Assert.Equal(new QaAnchor(1, 2036f, -3378f), loadedLoop.Anchor);
+            Assert.Equal(new uint[] { 3782, 3821 }, loadedLoop.Attackers);
+            Assert.Equal("Creature", loadedLoop.DeathSource);
+            Assert.Equal(new QaAnchor(0, -5608.8f, -439.4f), loaded.Findings.Single(f => f.Id == stall).Anchor);
+
+            PlayerbotQaAggregator target = New();
+            Assert.Equal(0, target.Restore(new QaAggregatorState(loaded.Findings, loaded.Bots)));
+            Assert.Equal(stall, Ingest(target, QaData.Stall(QaData.Bot2, -5608.8f + 150f, -439.4f)));
+            Assert.Equal(loop, Ingest(target, LoopFrom(2036f + 150f, -3378f, "Creature", 3821)));
+            Assert.Equal(2, target.Snapshot().Count);
+        }
+        finally
+        {
+            QaData.DeleteQuietly(directory);
+        }
+    }
+
+    [Fact]
+    public void DeathLoopIdentity_IsTheFirstSignalsAttackers_AndDoesNotChain()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string a = Ingest(aggregator, Loop(0, 0, 1, 1));
+        Assert.Equal(a, Ingest(aggregator, Loop(10, 0, 1, 1, 2))); // overlaps {1}: folds, but the identity stays {1}
+        string c = Ingest(aggregator, Loop(20, 0, 1, 2, 3)); // overlaps {1,2} but not {1}
+        Assert.NotEqual(a, c);
+        Assert.Equal(2, aggregator.Snapshot().Count);
+        Assert.Equal(new uint[] { 1 }, aggregator.Snapshot().Single(f => f.Id == a).Attackers);
+    }
+
+    [Fact]
+    public void AFoldedSignalFromAnotherCell_KeepsTheFirstSignalsGoalAndCause()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        string id = Ingest(aggregator, QaData.Stall(QaData.Bot1, 0, 0, goal: "Explore"));
+        QaFindingView first = aggregator.Snapshot().Single();
+        Assert.Equal(id, Ingest(aggregator, QaData.Stall(QaData.Bot2, 100, 0, goal: "Explore", quest: 1656) with { Goal = "Explore" }));
+        QaFindingView after = aggregator.Snapshot().Single();
+        Assert.Equal(first.Subject, after.Subject);
+        Assert.Equal(first.Goal, after.Goal);
+        Assert.Equal(first.Cause, after.Cause);
+        Assert.Equal(first.CauseDetail, after.CauseDetail);
+        Assert.Equal(first.Quest, after.Quest);
+        Assert.Equal(2, after.Count);
+    }
 }

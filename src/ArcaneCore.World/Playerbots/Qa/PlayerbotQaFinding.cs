@@ -74,6 +74,12 @@ internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, floa
 }
 
 /// <summary>
+/// Where a finding began: the position of its first sample. Fixed for the life of the finding (it never follows later signals), so a signal
+/// folds into the finding only when it lies within <see cref="PlayerbotQaAggregator.AnchorYards"/> of this point. Persisted with the finding.
+/// </summary>
+internal sealed record QaAnchor(uint Map, float X, float Y);
+
+/// <summary>
 /// An immutable snapshot of a finding (commands, reports and the publisher read these; the aggregator keeps the mutable state). Also the
 /// persisted form. It holds no bot name and no bot id.
 /// </summary>
@@ -161,6 +167,21 @@ internal sealed record QaFindingView
     /// <summary>The start-up spell coverage lists it (<see cref="QaSignal.FromCoverage"/>): it is a gap whether or not a bot met it yet.</summary>
     public bool Coverage { get; init; }
 
+    /// <summary>
+    /// The position of the finding's first sample (null for a finding without a position, and in files written before 2026-10-12:
+    /// <see cref="PlayerbotQaAggregator.Restore"/> then takes the first sample's position, else the centre of the key's location cell).
+    /// </summary>
+    public QaAnchor? Anchor { get; init; }
+
+    /// <summary>
+    /// A death loop's identity: the attacker entries of its first signal (at most <see cref="QaFinding.MaxAttackers"/>); empty for other kinds
+    /// and in older files (the oldest saved sample's attackers, else the subject's, stand in then).
+    /// </summary>
+    public IReadOnlyList<uint> Attackers { get; init; } = [];
+
+    /// <summary>A death loop without attackers: the death source of its first signal (<c>Environment</c>, <c>Unobserved</c>...); empty otherwise.</summary>
+    public string DeathSource { get; init; } = string.Empty;
+
     [JsonIgnore]
     public string ShortId => PlayerbotQaFingerprint.ShortId(Id);
 
@@ -208,6 +229,8 @@ internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? 
 internal sealed class QaFinding
 {
     internal const int MaxTrackedBots = 512;
+
+    internal const int MaxAttackers = 32;
 
     public required string Id { get; init; }
 
@@ -280,6 +303,19 @@ internal sealed class QaFinding
 
     public bool Coverage { get; set; }
 
+    /// <summary>Where the first sample was; never changes once set.</summary>
+    public QaAnchor? Anchor { get; set; }
+
+    /// <summary>A death loop's identity: the attackers (non-zero) of its first signal; never widened afterwards.</summary>
+    public SortedSet<uint> Attackers { get; } = [];
+
+    private string? _identity;
+
+    /// <summary>The key without its location (cached; <see cref="Key"/> never changes).</summary>
+    public string Identity => _identity ??= PlayerbotQaFingerprint.LocationFreeKey(Key);
+
+    public string DeathSource { get; set; } = string.Empty;
+
     /// <summary>Different bots seen (saturates at <see cref="MaxTrackedBots"/> tracked ids; a bot-less signal's own count counts too).</summary>
     public int DistinctBots => Math.Max(Bots.Count, AnonymousBots);
 
@@ -290,6 +326,6 @@ internal sealed class QaFinding
         CauseDetail = CauseDetail, Severity = Severity, Publication = Publication, LastCommentUtc = LastCommentUtc,
         OccurrencesReported = OccurrencesReported, Spell = Spell, SpellName = SpellName, SpellRank = SpellRank, EffectIndex = EffectIndex,
         EffectName = EffectName, EffectValue = EffectValue, Aura = Aura, Reason = Reason, ReasonDetail = ReasonDetail, Item = Item, Npc = Npc,
-        GameObject = GameObject, ClassMask = ClassMask, Coverage = Coverage,
+        GameObject = GameObject, ClassMask = ClassMask, Coverage = Coverage, Anchor = Anchor, Attackers = [.. Attackers], DeathSource = DeathSource,
     };
 }
