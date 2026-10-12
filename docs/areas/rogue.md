@@ -64,7 +64,7 @@ The Vanish script for 1856, 1857 and 27617 runs before the second triggered-spel
 - Pick Pocket, poisons, and rogue talent
   consumers, combo points, finisher scaling, energy modifiers (Adrenaline Rush, Vigor, Rate.Energy) and the 82 percent energy refund on a miss remain absent. Each is in the lane's
   `slices_not_done` with its blocker.
-- No COOLDOWN_ON_EVENT start for Stealth (10 s cooldown after the aura fades) and no cancel-removes-Vanish: both need the fade hook that spell-breadth owns.
+- The COOLDOWN_ON_EVENT start (Stealth, Shadowmeld, Prowl: cooldown plus SMSG_COOLDOWN_EVENT when the aura ends) is `SpellSystem.StartCooldownOnAuraEnd`. No cancel-removes-Vanish: it needs the fade hook that spell-breadth owns.
 - Interaction breaks (gossip, trainer, vendor, quest NPC, game object use, item use): the dispatcher is public; each owning lane calls it after its own validation (list in `rogue-aura-interrupt.md`).
 - No proc-flag skip in the damage break (SpellInfo has no proc flags yet); the damaging spell is not excluded from its own damage break.
 - Ordinary invisibility and detection auras18/19 now use active aura types/levels, immediate visibility refresh and player glow; removal and saved-aura restoration are covered. Alcohol-based type6 detection, GM-invisibility policy and original-client visual acceptance remain pending.

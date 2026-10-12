@@ -34,6 +34,9 @@ internal sealed class SpellTestServices : IWorldTestServices
     /// </summary>
     public const uint StackingEquipSpell = 9011;
 
+    /// <summary>A Stealth-shaped self aura: permanent, Attributes COOLDOWN_ON_EVENT (0x02000000), 10 s recovery that starts when the aura ends.</summary>
+    public const uint StealthLike = 9012;
+
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
@@ -102,6 +105,16 @@ internal sealed class SpellTestServices : IWorldTestServices
                 s.EffectApplyAuraName1 = 4; // SPELL_AURA_DUMMY
                 s.DurationIndex = 21;       // permanent
                 s.StackAmount = 3;
+                s.SpellVisual = 1;
+            }),
+            With(Spell(StealthLike, "Test Stealth", effect: 6, value: 0, targetA: 1), s =>
+            {
+                s.EffectApplyAuraName1 = 4; // SPELL_AURA_DUMMY
+                s.DurationIndex = 21;       // permanent
+                s.Attributes = 0x02000000;  // COOLDOWN_ON_EVENT
+                s.RecoveryTime = 10_000;
+                s.StartRecoveryCategory = 0;
+                s.StartRecoveryTime = 0;
                 s.SpellVisual = 1;
             }),
         ],
