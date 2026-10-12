@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots.Qa;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Qa;
@@ -58,6 +60,52 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         ledger.Reset();
         ledger.Record("worldtick", One("a"));
         Assert.Equal(1, feed.Pull().Sum(s => s.Occurrences));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Exception Socket()
+    {
+        try { throw new System.Net.Sockets.SocketException(); } catch (Exception ex) { return ex; }
+    }
+
+    [Fact]
+    public void TheFeed_SkipsTheBotSite_AndConnectionNoise_WithTheDefaultCap()
+    {
+        var ledger = new FaultLedger();
+        ledger.Record("playerbot", One("bot"));
+        ledger.Record("session", Socket());
+        ledger.Record("worldtick", Two("real"));
+        Assert.Equal(3, ledger.Distinct); // all three hold a real slot, none is in the overflow bucket
+
+        IReadOnlyList<QaSignal> signals = new PlayerbotQaFaultFeed(ledger).Pull();
+
+        Assert.Equal("worldtick", Assert.Single(signals).Goal);
+    }
+
+    [Fact]
+    public async Task TheFeature_FoldsTheLedgerIntoAServerFaultFinding_OnAPass()
+    {
+        var ledger = new FaultLedger();
+        for (int i = 0; i < 3; i++) ledger.Record("worldtick", One("a"));
+        var options = new PlayerbotQaOptions { Directory = _directory };
+        using ServiceProvider services = new ServiceCollection()
+            .AddSingleton<IOptions<PlayerbotQaOptions>>(Options.Create(options))
+            .AddSingleton(new PlayerbotQaSignalBus(64))
+            .BuildServiceProvider();
+        var feature = new PlayerbotQaFeature(services) { FaultSource = ledger };
+        feature.Attach(null!);
+        try
+        {
+            feature.RunPass(CancellationToken.None);
+
+            QaFindingView view = Assert.Single(feature.Aggregator!.Snapshot());
+            Assert.Equal(QaSignalKind.ServerFault, view.Kind);
+            Assert.Equal(3, view.Count);
+        }
+        finally
+        {
+            await feature.StopAsync();
+        }
     }
 
     [Fact]

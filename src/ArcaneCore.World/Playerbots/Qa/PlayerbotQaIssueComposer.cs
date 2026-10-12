@@ -117,7 +117,7 @@ internal static class PlayerbotQaIssueComposer
     }
 
     /// <summary>
-    /// The server-fault table: the catch site, the exception type, the ledger id, the top frames (type and method names inside ArcaneCore only; no
+    /// paths, no line numbers); never the exception message, which can carry player names. Everything goes through <see cref="PlayerbotQaRedactor.RedactFault"/>: the issue is public.
     /// paths, no line numbers) and the sample message. Everything goes through <see cref="PlayerbotQaRedactor.RedactFault"/>: the issue is public.
     /// </summary>
     private static void AppendServerFault(StringBuilder sb, QaFindingView f, PlayerbotQaRedactor redactor)

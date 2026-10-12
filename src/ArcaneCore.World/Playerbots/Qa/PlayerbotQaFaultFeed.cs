@@ -25,14 +25,14 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
     /// <summary>The signals for what the ledger recorded since the previous call (none when nothing changed).</summary>
     internal IReadOnlyList<QaSignal> Pull()
     {
-        IReadOnlyList<FaultSnapshot> snapshot = ledger.Snapshot();
         var signals = new List<QaSignal>();
         lock (_gate)
         {
+            IReadOnlyList<FaultSnapshot> snapshot = ledger.Snapshot(); // under the gate: two overlapping pulls must not both send the same delta
             var seen = new Dictionary<string, long>(snapshot.Count, StringComparer.Ordinal);
             foreach (FaultSnapshot fault in snapshot)
             {
-                if (fault.Id == FaultLedger.OverflowId || string.Equals(fault.Site, BotSite, StringComparison.Ordinal))
+                if (fault.Id == FaultLedger.OverflowId || string.Equals(fault.Site, BotSite, StringComparison.Ordinal) || IsConnectionNoise(fault))
                 {
                     continue;
                 }
@@ -63,6 +63,15 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
 
         return signals;
     }
+
+    /// <summary>
+    /// Connection teardown at the session site (a peer that reset, a closed stream, a cancelled read) is the network, not a server bug: it is counted in
+    /// the ledger and metrics but never becomes a public issue.
+    /// </summary>
+    internal static bool IsConnectionNoise(FaultSnapshot fault)
+        => string.Equals(fault.Site, "session", StringComparison.Ordinal)
+            && fault.ExceptionType is "System.Net.Sockets.SocketException" or "System.IO.IOException" or "System.IO.EndOfStreamException"
+                or "System.ObjectDisposedException" or "System.OperationCanceledException" or "System.Threading.Tasks.TaskCanceledException";
 
     private static QaSignal SignalOf(FaultSnapshot fault, DateTimeOffset at, long occurrences) => new()
     {

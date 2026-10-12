@@ -15,8 +15,8 @@ namespace ArcaneCore.Kernel.Diagnostics;
 /// distinct fault is counted once per <em>signature</em>, so an operator sees "this failed 40 000 times since
 /// start" instead of 40 000 log lines, and the bot-QA publisher can file one issue per fault.
 /// <para>
-/// Signature: the exception type, the recording <c>site</c> (the catch site's name, e.g. <c>worldtick</c>) and up to
-/// <see cref="TopFrames"/> frames inside <c>ArcaneCore.*</c> as <c>Type.Method</c> (no line numbers, no addresses; generic
+/// Signature: the exception type, the recording <c>site</c> (the catch site's name, e.g. <c>worldtick</c>) and the first <see cref="SignatureFrames"/> of
+/// the up to <see cref="TopFrames"/> frames kept for display, inside <c>ArcaneCore.*</c> as <c>Type.Method</c> (no line numbers, no addresses; generic
 /// arity, async state machines, lambdas and local functions are normalised away so one throw site is one
 /// signature however it is compiled). The id is the first 8 bytes of the SHA-256 of that text, as 16 lower-case hex digits.
 /// <see cref="AggregateException"/> and <see cref="TargetInvocationException"/> wrappers are unwrapped to the exception inside.
@@ -40,10 +40,16 @@ public sealed class FaultLedger
     /// <summary>Frames inside ArcaneCore.* that make up a signature.</summary>
     public const int TopFrames = 5;
 
+    /// <summary>Frames (the throw site and the two callers above it) that identify a signature; the rest are shown but do not split it.</summary>
+    public const int SignatureFrames = 3;
+
     /// <summary>Longest sample message kept (characters).</summary>
     public const int MaxMessageLength = 300;
 
     private const string AppAssemblyPrefix = "ArcaneCore.";
+
+    /// <summary>Distinct signatures remembered by the overflow bucket so each logs its first occurrence.</summary>
+    private const int MaxOverflowSeen = 256;
 
     private readonly ConcurrentDictionary<string, FaultEntry> _entries = new(StringComparer.Ordinal);
     private readonly object _addGate = new();
@@ -100,7 +106,7 @@ public sealed class FaultLedger
 
     /// <summary>
     /// Count <paramref name="exception"/> as caught at <paramref name="site"/> and say whether the caller should log it now
-    /// (<see cref="FaultRecording.ShouldLog"/>). Never throws.
+    /// (<see cref="FaultRecording.ShouldLog"/>). Swallows its own failures except OutOfMemoryException: a caller that must not be interrupted wraps the call.
     /// </summary>
     public FaultRecording Record(string site, Exception exception)
     {
@@ -188,7 +194,7 @@ public sealed class FaultLedger
         frames = CollectFrames(root);
         var text = new StringBuilder(128);
         text.Append(type).Append('|').Append(site);
-        foreach (string frame in frames)
+        foreach (string frame in frames.Take(SignatureFrames))
         {
             text.Append('|').Append(frame);
         }
@@ -224,7 +230,7 @@ public sealed class FaultLedger
 
         Interlocked.Increment(ref _total);
         Interlocked.Exchange(ref _lastTicks, now.UtcTicks);
-        return entry.Note(now, _logLimit, Truncate(exception.Message));
+        return entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
     }
 
     private static Exception Unwrap(Exception exception)
@@ -293,21 +299,24 @@ public sealed class FaultLedger
             return typeName;
         }
 
-        // Lambdas and local functions: <Owner>b__N_M / <Owner>g__Local|N_M.
+        // Lambdas and local functions: <Owner>b__N_M / <Owner>g__Local|N_M (nested: <<Owner>g__Local|N_M>b__K).
         if (methodName.StartsWith('<'))
         {
-            int close = methodName.IndexOf('>');
-            if (close > 1)
+            string owner = CleanName(methodName);
+            int g = methodName.IndexOf(">g__", StringComparison.Ordinal);
+            if (g >= 0)
             {
-                string owner = methodName[1..close];
-                string rest = methodName[(close + 1)..];
-                if (rest.StartsWith("g__", StringComparison.Ordinal))
+                string rest = methodName[(g + 4)..];
+                int bar = rest.IndexOf('|');
+                string local = CleanName(bar >= 0 ? rest[..bar] : rest);
+                if (local.Length != 0 && local != owner)
                 {
-                    int bar = rest.IndexOf('|');
-                    string local = bar > 3 ? rest[3..bar] : rest[3..];
-                    return typeName.Length == 0 ? owner + "." + local : typeName + "." + owner + "." + local;
+                    owner += "." + local;
                 }
+            }
 
+            if (owner.Length != 0)
+            {
                 return typeName.Length == 0 ? owner : typeName + "." + owner;
             }
         }
@@ -344,26 +353,7 @@ public sealed class FaultLedger
                 continue; // the closure class (<>c, <>c__DisplayClass4_0) adds nothing to the owner's name
             }
 
-            if (part.StartsWith('<'))
-            {
-                int close = part.IndexOf('>');
-                if (close > 1)
-                {
-                    part = part[1..close];
-                }
-            }
-
-            int tick = part.IndexOf('`');
-            if (tick > 0)
-            {
-                part = part[..tick];
-            }
-
-            int generic = part.IndexOf('<');
-            if (generic > 0)
-            {
-                part = part[..generic];
-            }
+            part = CleanName(part);
 
             if (part.Length > 0)
             {
@@ -372,6 +362,41 @@ public sealed class FaultLedger
         }
 
         return string.Join('.', parts);
+    }
+
+    /// <summary>
+    /// A compiler-generated name reduced to the name the author wrote: <c>&lt;Owner&gt;b__0_0</c> and the async lambda state machine
+    /// <c>&lt;&lt;Owner&gt;b__0_0&gt;d</c> become <c>Owner</c>; generic arity (<c>Foo`1</c>) is cut. Never contains '&lt;' or '&gt;'.
+    /// </summary>
+    internal static string CleanName(string name)
+    {
+        while (name.Length > 0 && name[0] == '<')
+        {
+            int depth = 0;
+            int end = -1;
+            for (int i = 0; i < name.Length; i++)
+            {
+                if (name[i] == '<')
+                {
+                    depth++;
+                }
+                else if (name[i] == '>' && --depth == 0)
+                {
+                    end = i;
+                    break;
+                }
+            }
+
+            if (end < 2)
+            {
+                return string.Empty; // <>c and other nameless artefacts
+            }
+
+            name = name[1..end];
+        }
+
+        int cut = name.IndexOfAny(['`', '<', '>']);
+        return cut >= 0 ? name[..cut] : name;
     }
 
     private static string HashOf(string signature)
@@ -400,8 +425,9 @@ public sealed class FaultLedger
         private string _message = message;
         private long _count;
         private long _sinceLog;
+        private HashSet<string>? _overflowSeen;
 
-        public FaultRecording Note(DateTimeOffset now, int logLimit, string latestMessage)
+        public FaultRecording Note(DateTimeOffset now, int logLimit, Exception exception, string? overflowId)
         {
             lock (this)
             {
@@ -410,12 +436,14 @@ public sealed class FaultLedger
                 if (_count == 1)
                 {
                     _first = now;
-                    _message = latestMessage;
+                    _message = Truncate(exception.Message);
                 }
 
+                // A brand-new signature that lands in the overflow bucket still logs its first occurrence (with the exception): the bucket keeps no frames.
+                bool firstOverflow = overflowId is not null && (_overflowSeen ??= []).Count < MaxOverflowSeen && _overflowSeen.Add(overflowId);
                 bool log;
                 long suppressed = 0;
-                if (_count <= logLimit)
+                if (firstOverflow || _count <= logLimit)
                 {
                     log = true;
                     _lastLog = now;
@@ -444,6 +472,7 @@ public sealed class FaultLedger
                 _count = 0;
                 _sinceLog = 0;
                 _lastLog = DateTimeOffset.MinValue;
+                _overflowSeen?.Clear();
                 _message = string.Empty;
             }
         }

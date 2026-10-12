@@ -230,6 +230,9 @@ public sealed class M6LogoutAndCommandTests
         await player.CollectAsync();
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server info");
         for (int i = 0; i < 13; i++) Assert.DoesNotContain("faults:", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
+        // A stray 14th line would be the first reply to the next command, so the negative check can fail.
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
+        Assert.StartsWith("Current Message of the day", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
     }
 
     [Fact]

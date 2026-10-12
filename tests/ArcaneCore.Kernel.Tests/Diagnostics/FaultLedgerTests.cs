@@ -118,6 +118,51 @@ public sealed class FaultLedgerTests
         Assert.Equal("FaultLedgerTests.F7", frames[0]);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)] private static void G1() => F4();
+
+    [Fact]
+    public void OneBugReachedFromDifferentCallers_IsOneSignature_ButKeepsItsFramesForDisplay()
+    {
+        Exception? viaF1 = null;
+        Exception? viaG1 = null;
+        try { F1(); } catch (Exception ex) { viaF1 = ex; }
+        try { G1(); } catch (Exception ex) { viaG1 = ex; }
+
+        Assert.Equal(FaultLedger.SignatureOf("s", viaF1!, out _, out _), FaultLedger.SignatureOf("s", viaG1!, out _, out IReadOnlyList<string> g1Frames));
+        Assert.Equal("FaultLedgerTests.G1", g1Frames[4]);
+    }
+
+    [Fact]
+    public async Task AsyncLambdaFrames_ContainNoCompilerBrackets()
+    {
+        Func<Task> lambda = async () =>
+        {
+            await Task.Yield();
+            throw new InvalidOperationException("x");
+        };
+        Exception? caught = null;
+        try { await lambda(); } catch (Exception ex) { caught = ex; }
+
+        FaultLedger.SignatureOf("s", caught!, out _, out IReadOnlyList<string> frames);
+        Assert.NotEmpty(frames);
+        Assert.All(frames, f => Assert.DoesNotContain('<', f));
+        Assert.All(frames, f => Assert.DoesNotContain('>', f));
+        Assert.Contains(nameof(AsyncLambdaFrames_ContainNoCompilerBrackets), frames[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ANewSignatureBeyondTheCap_StillLogsItsFirstOccurrence()
+    {
+        var ledger = new FaultLedger(new FaultLedgerLimits(MaxSignatures: 1, LogLimit: 1), TimeProvider.System);
+        Assert.True(ledger.Record("s", ThrowA()).ShouldLog);
+        Assert.False(ledger.Record("s", ThrowA()).ShouldLog);
+
+        Assert.True(ledger.Record("s", ThrowB()).ShouldLog);
+        Assert.True(ledger.Record("s", ThrowOther()).ShouldLog); // a different brand-new bug, in the already-busy overflow bucket
+        Assert.False(ledger.Record("s", ThrowOther()).ShouldLog); // but only its first occurrence
+        Assert.False(ledger.Record("s", ThrowB()).ShouldLog);
+    }
+
     [Fact]
     public void BeyondTheCap_FaultsAreCountedInTheOverflowBucket_NeverDropped()
     {
