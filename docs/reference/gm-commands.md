@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 192 |
-| `Administrator` | 6 | 290 |
+| `GameMaster` | 3 | 193 |
+| `Administrator` | 6 | 291 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -182,6 +182,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server idleshutdown cancel` | 6 | Administrator | stored level through the map | Syntax: .server idleshutdown cancel — abort the pending countdown. |
 | `.server idlerestart` ... | 6 | Administrator | stored level through the map | Syntax: .server idlerestart [cancel \| #delay [#exitcode]] — restart when no sessions remain. |
 | `.server idlerestart cancel` | 6 | Administrator | stored level through the map | Syntax: .server idlerestart cancel — abort the pending countdown. |
+| `.server faults` | 3 | GameMaster | stored level through the map | Syntax: .server faults [top #count \| show $id \| reset] List the exceptions the server caught, most frequent first; show one in full; reset (administrator) clears the list. |
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |

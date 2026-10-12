@@ -36,6 +36,7 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
 
         store.Start();
         _ = RuntimeMeters.Meter;
+        _ = Diagnostics.FaultMeters.Meter;
         if (options.Exporter is MetricsExporter.Prometheus or MetricsExporter.Both)
         {
             string prefix = ConfiguredPrometheusPrefix;

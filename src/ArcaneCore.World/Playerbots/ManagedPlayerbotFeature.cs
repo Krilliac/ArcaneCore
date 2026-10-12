@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Characters;
@@ -1444,6 +1445,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// </summary>
     private void Fault(ActiveBot active, string what, Exception ex)
     {
+        // Counted in the fault ledger (.server faults); logged below on every occurrence (not throttled): the QA log tap reads these lines as action faults.
+        FaultLedger.Shared.Record("playerbot", ex);
         logger.LogWarning(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
         active.Session.Kick();

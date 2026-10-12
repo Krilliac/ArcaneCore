@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
@@ -40,12 +41,16 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private bool _coverageFailureLogged;
     private QaSpellCoverageReport? _coverage;
     private WorldRuntime? _world;
+    private PlayerbotQaFaultFeed? _faultFeed;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
 
     /// <summary>Test seam: makes the REST transport of a publish pass (default: the GitHub REST client).</summary>
     internal Func<string, IQaIssueTransport>? TransportFactory { get; init; }
+
+    /// <summary>Test seam: the fault ledger the server-fault signals are read from (default: the container's, else the process-wide one).</summary>
+    internal FaultLedger? FaultSource { get; init; }
 
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
 
@@ -102,6 +107,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
+        // Only a host that registered the ledger (UseArcaneDiagnostics) feeds server faults; a bare provider has no ledger to read.
+        if ((FaultSource ?? services.GetService<FaultLedger>()) is { } ledger) _faultFeed = new PlayerbotQaFaultFeed(ledger);
         if (services.GetService<SpellFeature>() is { } spells)
         {
             // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).
@@ -130,6 +137,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         try
         {
             Drain();
+            PollServerFaults();
             Persist();
             Export();
         }
@@ -181,6 +189,30 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         return total;
     }
 
+    /// <summary>
+    /// Fold what the server's fault ledger recorded since the previous pass into the findings as <see cref="QaSignalKind.ServerFault"/> signals
+    /// (<see cref="PlayerbotQaFaultFeed"/>); how many signals. Runs on the QA task (or the test's caller), never on the world thread.
+    /// </summary>
+    internal int PollServerFaults()
+    {
+        if (Aggregator is null || _faultFeed is null) return 0;
+        IReadOnlyList<QaSignal> signals = _faultFeed.Pull();
+        DateTime now = DateTime.UtcNow;
+        foreach (QaSignal signal in signals)
+        {
+            try
+            {
+                Aggregator.Ingest(signal, _facts, now);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (Interlocked.Increment(ref _ingestFailures) == 1) _log.LogError(ex, "Bot QA could not fold a server fault into its findings");
+            }
+        }
+
+        return signals.Count;
+    }
+
     /// <summary>The publish task of the latest pass (completed when none runs); tests await it.</summary>
     internal Task Publishing => _publishing;
 
@@ -192,6 +224,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     {
         if (Aggregator is null || _publisher is null) return;
         Drain();
+        PollServerFaults();
         TryComputeSpellCoverage();
         if (services.GetService<IPlayerbotService>() is { } bots)
         {

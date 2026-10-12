@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -555,7 +556,7 @@ public sealed class WorldRuntime : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "map {MapId} update failed", map.MapId);
+                    _logger.LogFault("map-update", ex, "map {MapId} update failed", map.MapId);
                 }
 
                 if (MapUpdated is { } mapUpdated)
@@ -732,7 +733,7 @@ public sealed class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
+                _logger.LogFault("updated-handler", ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
             }
 
             string name = TickWorkNames.Of(handler);
@@ -764,7 +765,7 @@ public sealed class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(WorldTick), diffMs);
+                _logger.LogFault("worldtick", ex, "{Event} handler failed for {Subject}", nameof(WorldTick), diffMs);
             }
 
             Type? type = handler.Method.DeclaringType;
@@ -804,7 +805,7 @@ public sealed class WorldRuntime : IDisposable
             catch (Exception ex)
             {
                 object? description = subject is Player player ? player.Name : subject;
-                _logger.LogError(ex, "{Event} handler failed for {Subject}", name, description);
+                _logger.LogFault("event-handler", ex, "{Event} handler failed for {Subject}", name, description);
             }
         }
     }
@@ -842,7 +843,7 @@ public sealed class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "unloading map {MapId} instance {InstanceId} failed", map.MapId, map.InstanceId);
+                _logger.LogFault("map-unload", ex, "unloading map {MapId} instance {InstanceId} failed", map.MapId, map.InstanceId);
             }
         }
     }
@@ -866,7 +867,7 @@ public sealed class WorldRuntime : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "world command failed");
+                _logger.LogFault("world-command", ex, "world command failed");
             }
 
             if (drainAll)

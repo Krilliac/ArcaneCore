@@ -229,6 +229,7 @@ public sealed class M6LogoutAndCommandTests
         foreach (string prefix in new[] { "Tick target:", "Tick frames:", "Tick work:", "Commands: pending=", "Managed bots:",
             "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: ", "Tick allocation mean: ", "GC: " })
             Assert.StartsWith("Server diagnostics: " + prefix, (await client.ReadChatAsync()).Text);
+        Assert.StartsWith("Server diagnostics: faults: ", (await client.ReadChatAsync()).Text);
 
         // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.
         await client.SendChatAsync(ChatType.Say, Language.Common, ".server motd");

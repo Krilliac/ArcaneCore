@@ -58,6 +58,25 @@ internal sealed partial class PlayerbotQaRedactor
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespacePattern();
 
+    [GeneratedRegex(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s""'<>|*?]*|\\\\[^\s\\""'<>|*?]+\\[^\s""'<>|*?]*|(?<![\w:/.\\-])/(?:[\w.@+-]+/)+[\w.@+-]*", RegexOptions.CultureInvariant)]
+    private static partial Regex FilePathPattern();
+
+    [GeneratedRegex(@"\b0[xX][0-9a-fA-F]{6,16}\b|\b(?<k>guid|owner|caster|account)(?<s>\s*[=:#]?\s*)\d{3,}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex GameIdPattern();
+
+    /// <summary>
+    /// <see cref="Redact"/> for text taken from an exception (a server fault's message): also removes absolute file paths (drive, UNC and
+    /// rooted POSIX paths), hexadecimal object ids and <c>guid 12345</c>-style numeric ids. An exception message can carry anything a handler formatted
+    /// into it, so this is the stricter reading used for the public issue.
+    /// </summary>
+    public string RedactFault(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        text = FilePathPattern().Replace(text, "<path>"); // before Redact: its user-folder rule would leave a path tail behind
+        text = Redact(text);
+        return GameIdPattern().Replace(text, m => m.Groups["k"].Success ? m.Groups["k"].Value + m.Groups["s"].Value + "<id>" : "<id>");
+    }
+
     /// <summary>A redactor with the same names that also removes the literal <paramref name="token"/> wherever it appears.</summary>
     public PlayerbotQaRedactor WithToken(string token) => new(token) { _names = _names };
 

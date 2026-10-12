@@ -152,12 +152,14 @@ public sealed class CrashHandler : IDisposable
     private void OnUnhandled(object? sender, UnhandledExceptionEventArgs e)
     {
         var exception = e.ExceptionObject as Exception;
+        RecordFault("unhandled", exception);
         Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
         Terminate(_options.OnUnhandled == UnhandledExceptionPolicy.FailFast, exception);
     }
 
     private void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
     {
+        RecordFault("unobserved-task", e.Exception);
         UnobservedTaskPolicy policy = _options.OnUnobservedTask;
         bool terminating = policy != UnobservedTaskPolicy.Log;
         Report(CrashKind.UnobservedTask, e.Exception, terminating ? LogLevel.Critical : LogLevel.Error, terminating);
@@ -168,6 +170,15 @@ public sealed class CrashHandler : IDisposable
         }
 
         Terminate(policy == UnobservedTaskPolicy.FailFast, e.Exception);
+    }
+
+    /// <summary>Count the fault in the ledger before the report and policy run (the ledger never throws, so the policy is unaffected).</summary>
+    private static void RecordFault(string site, Exception? exception)
+    {
+        if (exception is not null)
+        {
+            FaultLedger.Shared.Record(site, exception);
+        }
     }
 
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)

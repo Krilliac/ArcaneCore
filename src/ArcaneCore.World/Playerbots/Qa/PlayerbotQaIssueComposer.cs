@@ -34,7 +34,7 @@ internal static class PlayerbotQaIssueComposer
         Row(sb, "Likely cause", f.Cause.ToString());
         Row(sb, "Severity", f.Severity.ToString("F1", CultureInfo.InvariantCulture));
         Row(sb, "Occurrences", f.Count.ToString(CultureInfo.InvariantCulture));
-        Row(sb, "Distinct bots", f.DistinctBots.ToString(CultureInfo.InvariantCulture));
+        if (f.Kind != QaSignalKind.ServerFault) Row(sb, "Distinct bots", f.DistinctBots.ToString(CultureInfo.InvariantCulture));
         Row(sb, "First seen (UTC)", f.FirstSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Last seen (UTC)", f.LastSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Build", PlayerbotQaRedactor.RedactSecrets(build));
@@ -47,6 +47,7 @@ internal static class PlayerbotQaIssueComposer
         }
         sb.Append("\n## Likely cause\n\n").Append(Cell(redactor.Redact(f.CauseDetail))).Append("\n\n");
         if (QaKinds.Of(f.Kind).SpellKind) AppendSpell(sb, f, redactor);
+        if (f.Kind == QaSignalKind.ServerFault) AppendServerFault(sb, f, redactor);
 
         sb.Append("## Evidence\n\n");
         foreach (QaSample s in f.Samples.TakeLast(MaxEvidence))
@@ -74,7 +75,7 @@ internal static class PlayerbotQaIssueComposer
                         $"  - {attacker.Entry}: level {attacker.Level} (template {attacker.MinLevel}-{attacker.MaxLevel}), rank {rank}, guard {(attacker.Guard ? "yes" : "no")}, hostile {(attacker.Hostile ? "yes" : "no")}\n");
                 }
             }
-            sb.Append("  `").Append(Code(redactor.Redact(s.Message))).Append("`\n");
+            sb.Append("  `").Append(Code(f.Kind == QaSignalKind.ServerFault ? redactor.RedactFault(s.Message) : redactor.Redact(s.Message))).Append("`\n");
         }
 
         sb.Append("\n## Reproduction\n\n");
@@ -92,11 +93,52 @@ internal static class PlayerbotQaIssueComposer
         }
 
         if (f.Target != 0) sb.Append(CultureInfo.InvariantCulture, $"- Find the creature: `.lookup creature` for entry {f.Target}\n");
-        sb.Append("- Start a few bots (`.playerbot start`), let them play, and watch `.playerbot qa`.\n");
+        if (f.Kind == QaSignalKind.ServerFault)
+        {
+            sb.Append("- On the server console: `.server faults show ").Append(LedgerId(f)).Append("` shows the live count, frames and message.\n");
+        }
+        else
+        {
+            sb.Append("- Start a few bots (`.playerbot start`), let them play, and watch `.playerbot qa`.\n");
+        }
+
         sb.Append("\n---\n").Append(Footer).Append('\n');
 
         string title = redactor.Title(f.KindLabel, f.Subject);
         return new QaIssueDraft(f.Id, marker, title, redactor.Body(sb.ToString(), marker), labels);
+    }
+
+    /// <summary>The fault ledger id of a server-fault finding (the last part of its key, <c>v1|serverfault|&lt;id&gt;</c>).</summary>
+    internal static string LedgerId(QaFindingView f)
+    {
+        int bar = f.Key.LastIndexOf('|');
+        string id = bar >= 0 ? f.Key[(bar + 1)..] : f.Key;
+        return id.Length <= 16 && id.All(char.IsAsciiHexDigit) ? id : "unknown";
+    }
+
+    /// <summary>
+    /// The server-fault table: the catch site, the exception type, the ledger id, the top frames (type and method names inside ArcaneCore only; no
+    /// paths, no line numbers) and the sample message. Everything goes through <see cref="PlayerbotQaRedactor.RedactFault"/>: the issue is public.
+    /// </summary>
+    private static void AppendServerFault(StringBuilder sb, QaFindingView f, PlayerbotQaRedactor redactor)
+    {
+        sb.Append("## Server fault\n\n| Field | Value |\n|---|---|\n");
+        Row(sb, "Site", redactor.RedactFault(f.Goal));
+        Row(sb, "Exception type", redactor.RedactFault(f.Reason));
+        Row(sb, "Ledger id", LedgerId(f));
+        sb.Append("\n**Top frames**\n\n");
+        string[] frames = f.ReasonDetail.Length == 0 ? [] : f.ReasonDetail.Split(" > ", StringSplitOptions.RemoveEmptyEntries);
+        if (frames.Length == 0)
+        {
+            sb.Append("- (no ArcaneCore frame)\n");
+        }
+
+        foreach (string frame in frames)
+        {
+            sb.Append("- `").Append(Code(redactor.RedactFault(frame))).Append("`\n");
+        }
+
+        sb.Append('\n');
     }
 
     /// <summary>The spell table of a spell finding: the spell, the effect, the aura, the bots and classes, and an id reference.</summary>

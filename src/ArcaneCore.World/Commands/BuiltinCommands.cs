@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
@@ -118,6 +119,7 @@ public static class BuiltinCommands
         context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
         foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services)))
             context.Reply("Server diagnostics: " + line);
+        context.Reply("Server diagnostics: " + ServerFaultCommands.InfoLine(FaultLedger.Shared, DateTimeOffset.UtcNow));
         return true;
     }
 
