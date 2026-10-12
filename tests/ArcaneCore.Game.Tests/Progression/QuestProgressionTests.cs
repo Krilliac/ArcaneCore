@@ -121,6 +121,38 @@ public sealed class QuestProgressionTests
     }
 
     [Fact]
+    public void QuestXp_FollowsALiveChangeOfRateXpQuest()
+    {
+        // .rates set Rate.XP.Quest changes the shared options object after the services exist: the next reward must use it, no rebuild.
+        var quest = new QuestTemplate { Entry = 910021, Method = 2, QuestLevel = 10, RewXP = 1000 };
+        using var kit = new Kit([quest], level: 10);
+        Assert.True(kit.Accept(910021));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910021, 0, out QuestRewardPlan? before));
+        Assert.Equal(1000u, before.Experience);
+
+        kit.Services.Options.RateXpQuest = 3.0f;
+
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910021, 0, out QuestRewardPlan? after));
+        Assert.Equal(3000u, after.Experience);
+    }
+
+    [Fact]
+    public void QuestMoney_FollowsALiveChangeOfRateDropMoney()
+    {
+        var quest = new QuestTemplate { Entry = 910022, Method = 2, QuestLevel = 10, RewOrReqMoney = 100 };
+        using var kit = new Kit([quest], level: 10);
+        Assert.True(kit.Accept(910022));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910022, 0, out QuestRewardPlan? before));
+        uint baseline = before.MoneyAfter - kit.Player.Money;
+        Assert.Equal(100u, baseline);
+
+        kit.Services.Options.RateDropMoney = 4.0f;
+
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910022, 0, out QuestRewardPlan? after));
+        Assert.Equal(400u, after.MoneyAfter - kit.Player.Money);
+    }
+
+    [Fact]
     public void MaximumLevel_PaysRewMoneyMaxLevelInsteadOfXp()
     {
         var quest = new QuestTemplate { Entry = 910004, Method = 2, QuestLevel = 60, RewXP = 500, RewMoneyMaxLevel = 120, RewOrReqMoney = 30 };

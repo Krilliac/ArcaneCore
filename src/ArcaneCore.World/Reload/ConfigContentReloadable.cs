@@ -6,9 +6,12 @@ using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Rates;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Reload;
@@ -108,13 +111,13 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         PlayerbotOptions? livePlayerbots = services.GetService<IOptions<PlayerbotOptions>>()?.Value;
         AntiCheatFeature? liveAntiCheat = services.GetService<AntiCheatFeature>();
         return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions, antiCheat, liveAntiCheat,
-            services.GetService<Scripting.ScriptHooksFeature>(), modules));
+            services.GetService<Scripting.ScriptHooksFeature>(), modules, services));
     }
 
     private sealed class ConfigCandidate(
         WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, PlayerbotOptions? livePlayerbots,
         IReadOnlyList<string> substitutions, AntiCheatOptions antiCheat, AntiCheatFeature? liveAntiCheat,
-        Scripting.ScriptHooksFeature? scripts, IConfiguration modules) : ContentCandidate
+        Scripting.ScriptHooksFeature? scripts, IConfiguration modules, IServiceProvider services) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -182,6 +185,27 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 int refreshed = 0;
                 transaction.Step("player speed rates", () => refreshed = SpeedRates.ApplyToAll(world, liveLocomotion!), static () => { });
                 transaction.Note($"Player speed rates changed; the speeds of {refreshed} online player(s) were re-sent.");
+            }
+
+            // .rates set overrides last until the next reload config (docs/areas/rates.md): the rates go back to the values they were
+            // configured with, and a rollback puts the overrides back. The rate options themselves are not part of the reload set.
+            ServerRates rates = ServerRates.For(world);
+            if (rates.OverrideCount > 0)
+            {
+                var rateScope = new RateScope(services, world, (services.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance).CreateLogger("ArcaneCore.World.Rates"));
+                IReadOnlyList<(RateDefinition Rate, float Value)> overrides = rates.SnapshotOverrides(rateScope);
+                int cleared = 0;
+                transaction.Step(
+                    "rate overrides",
+                    () => cleared = rates.ResetAll(rateScope, "reload config", RateChangeKind.Reload),
+                    () =>
+                    {
+                        foreach ((RateDefinition rate, float value) in overrides)
+                        {
+                            rates.TrySet(rateScope, rate, value, "reload config rollback", null, out _);
+                        }
+                    });
+                transaction.Note($"{cleared} .rates override(s) cleared; the rates are back to their configured values.");
             }
 
             if (liveAntiCheat is not null)

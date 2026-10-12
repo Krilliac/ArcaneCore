@@ -56,7 +56,7 @@ public sealed record HonorOptions
     /// such rate; the MaNGOS Zero fork and mangos-classic declare Rate.Honor (WorldConfig.cpp:215, World.cpp:452) but never read it, so the semantics
     /// are cmangos-tbc / TrinityCore's Player::RewardHonor (<c>honor *= Rate.Honor</c>). Dishonor and a GM's exact <c>.honor add</c> are not scaled.
     /// </summary>
-    public float Rate { get; init; } = 1.0f;
+    public float Rate { get; set; } = 1.0f;
 
     /// <summary>The weekly calculation's options.</summary>
     public HonorMaintenanceOptions Maintenance => new(RpDecay, MinHonorKills, PoolSizePerFaction);
