@@ -148,6 +148,71 @@ public sealed class SqliteLockedWriteTests : IDisposable
         Assert.Contains(nameof(ASlowTransaction_IsLoggedAtWarn_NamingTheContextAndTheCallingCode), warning.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("FULL", "synchronous=FULL")]
+    [InlineData("NORMAL", "no WAL fsync under synchronous=NORMAL")]
+    public async Task ASlowTransaction_NamesTheSynchronousSettingInEffect(string synchronous, string expected)
+    {
+        var logs = new CaptureProvider();
+        string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, Guid.NewGuid().ToString("N") + ".db"), Pooling = false }.ToString();
+        await using ServiceProvider provider = Build(logs, ("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection),
+            ("Database:SlowTransactionWarnMs", "50"), ("Database:SqliteSynchronous", synchronous));
+        await InitializeAsync(provider);
+
+        await using (AsyncServiceScope scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            await Task.Delay(150);
+            await transaction.CommitAsync();
+        }
+
+        (LogLevel Level, string Message) warning = Assert.Single(logs.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains(nameof(SqliteLockedWriteTests), StringComparison.Ordinal));
+        Assert.Contains(expected, warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NormalIsRefusedOnADatabaseNotInWalMode_FallsBackToFull_AndLogsAnError()
+    {
+        // A file left in rollback-journal mode (the WAL switch failed or never ran): NORMAL there can corrupt the database on power loss, so it must not apply.
+        var logs = new CaptureProvider();
+        string path = Path.Combine(_directory, Guid.NewGuid().ToString("N") + ".db");
+        string connection = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        await using (var raw = new SqliteConnection(connection))
+        {
+            await raw.OpenAsync();
+            Assert.Equal("delete", await ScalarAsync(raw, "PRAGMA journal_mode=DELETE"));
+        }
+
+        await using ServiceProvider provider = Build(logs, ("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection), ("Database:SqliteSynchronous", "NORMAL"));
+        await using (AsyncServiceScope scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            await db.Database.OpenConnectionAsync();
+            var sqlite = (SqliteConnection)db.Database.GetDbConnection();
+            Assert.Equal("delete", await ScalarAsync(sqlite, "PRAGMA journal_mode"));
+            Assert.Equal(2L, await ScalarAsync(sqlite, "PRAGMA synchronous")); // FULL, not NORMAL (1)
+        }
+
+        (LogLevel Level, string Message) error = Assert.Single(logs.Entries, e => e.Level == LogLevel.Error);
+        Assert.Contains("not WAL", error.Message, StringComparison.Ordinal);
+        Assert.Contains("delete", error.Message, StringComparison.Ordinal);
+
+        // The same file once it is in WAL mode gets NORMAL (1).
+        await using (var raw = new SqliteConnection(connection))
+        {
+            await raw.OpenAsync();
+            Assert.Equal("wal", await ScalarAsync(raw, "PRAGMA journal_mode=WAL"));
+        }
+
+        await using (AsyncServiceScope scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal(1L, await ScalarAsync((SqliteConnection)db.Database.GetDbConnection(), "PRAGMA synchronous"));
+        }
+    }
+
     [Fact]
     public async Task AFastTransaction_IsNotLogged_AndZeroDisablesTheWarning()
     {

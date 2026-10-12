@@ -12,6 +12,17 @@ public enum DatabaseProvider
     Sqlite = 3,
 }
 
+/// <summary>
+/// SQLite's <c>PRAGMA synchronous</c> levels a deployment may choose (<c>Database:SqliteSynchronous</c>). Full (SQLite's default, 2) fsyncs the WAL at every commit.
+/// Normal (1) skips that fsync in WAL mode: the database stays consistent, but the most recent commits can be lost on power loss or an OS crash
+/// (never on an application crash). Normal is applied only to a database that is in WAL mode; any other (rollback-journal) database stays on Full, with an error logged.
+/// </summary>
+public enum SqliteSynchronousMode
+{
+    Full = 0,
+    Normal = 1,
+}
+
 /// <summary>The three logical databases (ROADMAP § Persistence).</summary>
 public enum DatabaseComponent
 {
@@ -37,6 +48,13 @@ public sealed class DatabaseConnectionOptions
     /// Unset inherits it. Other engines ignore it.
     /// </summary>
     public int? SqliteBusyTimeoutMs { get; set; }
+
+    /// <summary>
+    /// SQLite only: this component's <c>PRAGMA synchronous</c> (Full or Normal), overriding <c>Database:SqliteSynchronous</c>. Unset inherits it.
+    /// Normal avoids the fsync stall at every commit but can lose the most recent commits on power loss or an OS crash; it is applied only when the database is in WAL mode, otherwise the
+    /// database stays on Full and an error is logged. Other engines ignore it.
+    /// </summary>
+    public SqliteSynchronousMode? SqliteSynchronous { get; set; }
 }
 
 /// <summary>
@@ -62,6 +80,16 @@ public sealed class DatabaseOptions
     /// each other. 0 disables the pragma. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
     public int SqliteBusyTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs;
+
+    /// <summary>
+    /// SQLite only: the <c>PRAGMA synchronous</c> set on every connection, Full (default) or Normal. Full fsyncs the WAL at every commit, so a committed save survives power loss.
+    /// Normal skips that fsync, which removes multi-second commit stalls on a slow disk (and the "database is locked" failures they cause in other writers); the database
+    /// stays consistent, but the most recent commits can be lost on power loss or an OS crash, never on an application crash. Normal is applied only to a database that is in WAL mode
+    /// (the schema bootstrap switches file databases to WAL, best effort): a database that is not in WAL mode (the switch failed or was refused) stays on Full and an error is logged,
+    /// because Normal outside WAL can corrupt the database on power loss. Each component may override it with a Database:Auth, Database:Characters or Database:World
+    /// SqliteSynchronous key. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
+    /// </summary>
+    public SqliteSynchronousMode SqliteSynchronous { get; set; } = SqliteSynchronousMode.Full;
 
     /// <summary>
     /// SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection
@@ -110,14 +138,19 @@ public sealed class DatabaseOptions
 
         if (specific is not null && !string.IsNullOrWhiteSpace(specific.ConnectionString))
         {
-            return specific.SqliteBusyTimeoutMs is null
-                ? new DatabaseConnectionOptions
+            return specific.SqliteBusyTimeoutMs is not null && specific.SqliteSynchronous is not null
+                ? specific
+                : new DatabaseConnectionOptions
                 {
-                    Provider = specific.Provider, ConnectionString = specific.ConnectionString, SqliteBusyTimeoutMs = SqliteBusyTimeoutMs,
-                }
-                : specific;
+                    Provider = specific.Provider, ConnectionString = specific.ConnectionString,
+                    SqliteBusyTimeoutMs = specific.SqliteBusyTimeoutMs ?? SqliteBusyTimeoutMs,
+                    SqliteSynchronous = specific.SqliteSynchronous ?? SqliteSynchronous,
+                };
         }
 
-        return new DatabaseConnectionOptions { Provider = Provider, ConnectionString = ConnectionString, SqliteBusyTimeoutMs = SqliteBusyTimeoutMs };
+        return new DatabaseConnectionOptions
+        {
+            Provider = Provider, ConnectionString = ConnectionString, SqliteBusyTimeoutMs = SqliteBusyTimeoutMs, SqliteSynchronous = SqliteSynchronous,
+        };
     }
 }

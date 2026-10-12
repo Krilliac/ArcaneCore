@@ -121,8 +121,8 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     public async Task WalAndSynchronousFullArePinned()
     {
         // Durability note (docs/areas/persistence.md): journal_mode=WAL is applied by the schema bootstrap, and synchronous stays at
-        // SQLite's default FULL. NORMAL in WAL mode can lose the most recent commits on power loss, which the save queue's
-        // "never lose a save" rule does not allow, and the fsync is not where the time goes.
+        // SQLite's default FULL unless Database:SqliteSynchronous opts a database into NORMAL (which can lose the most recent commits on
+        // power loss or an OS crash, and is applied only in WAL mode). FULL is the shipped default.
         string characters = Connection("characters.db");
         await using ServiceProvider provider = Build(("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters));
         int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
@@ -132,6 +132,74 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         await db.Database.OpenConnectionAsync();
         Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
         Assert.Equal(2L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+    }
+
+    [Fact]
+    public async Task SynchronousIsNormalOnlyWhereConfigured_AndFullByDefault()
+    {
+        // NORMAL is only applied to a database already in WAL mode (the schema bootstrap normally puts it there), so put the files there first.
+        string auth = WalConnection("auth.db");
+        string characters = WalConnection("characters.db");
+        string world = WalConnection("world.db");
+
+        // Unset: FULL (2) everywhere, today's behaviour.
+        await using (ServiceProvider provider = Build(("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // Only the characters database is NORMAL (1).
+        await using (ServiceProvider provider = Build(("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters), ("Database:Characters:SqliteSynchronous", "NORMAL"),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // The shared key is inherited by every component without its own; a component's own key overrides it.
+        await using (ServiceProvider provider = Build(("Database:SqliteSynchronous", "Normal"),
+            ("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", auth),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", characters), ("Database:Characters:SqliteSynchronous", "Full"),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", world)))
+        {
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(2L, await SynchronousAsync(provider, DatabaseComponent.Characters));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.World));
+        }
+
+        // Single-database layout, with the busy-timeout clamp object rebuilt by the guard: the setting survives it.
+        await using (ServiceProvider provider = Build(true, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", auth), ("Database:SqliteSynchronous", "NORMAL"),
+            ("Database:SqliteBusyTimeoutMs", "5000"), ("Resilience:Database:QueryTimeoutMs", "2000")]))
+        {
+            Assert.Equal(2000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
+            Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
+        }
+    }
+
+    [Fact]
+    public async Task TheInterceptor_AppliesTheSynchronousModeItWasBuiltWith()
+    {
+        foreach ((SqliteSynchronousMode mode, long expected) in new[] { (SqliteSynchronousMode.Normal, 1L), (SqliteSynchronousMode.Full, 2L) })
+        {
+            var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(WalConnection($"sync-{mode}.db")).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, mode));
+            await using var db = new DbContext(builder.Options);
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal(expected, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+        }
+    }
+
+    [Fact]
+    public void AnUnknownSynchronousModeIsRefused()
+    {
+        Assert.Throws<InvalidOperationException>(() => SqliteConnectionPragmaInterceptor.For(5000, 0, (SqliteSynchronousMode)7));
+        Assert.Same(SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal), SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal));
+        Assert.NotSame(SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal), SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Full));
     }
 
     [Fact]
@@ -260,6 +328,18 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         Assert.Equal(300L, await ScalarAsync(sqlite, "PRAGMA busy_timeout"));
     }
 
+    /// <summary>A connection string for a database file that is already in WAL mode (the mode is persistent in the file).</summary>
+    private string WalConnection(string name)
+    {
+        string connection = Connection(name);
+        using var raw = new SqliteConnection(connection);
+        raw.Open();
+        using SqliteCommand command = raw.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL;";
+        Assert.Equal("wal", command.ExecuteScalar());
+        return connection;
+    }
+
     private string Connection(string name, int defaultTimeout = 30)
         => new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, name), Pooling = false, DefaultTimeout = defaultTimeout }.ToString();
 
@@ -276,6 +356,22 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         {
             await db.Database.OpenConnectionAsync();
             return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA busy_timeout"))!;
+        }
+    }
+
+    private static async Task<long> SynchronousAsync(ServiceProvider provider, DatabaseComponent component)
+    {
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        DbContext db = component switch
+        {
+            DatabaseComponent.Auth => scope.ServiceProvider.GetRequiredService<AuthDbContext>(),
+            DatabaseComponent.Characters => scope.ServiceProvider.GetRequiredService<CharacterDbContext>(),
+            _ => await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(),
+        };
+        await using (db)
+        {
+            await db.Database.OpenConnectionAsync();
+            return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"))!;
         }
     }
 

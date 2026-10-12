@@ -57,6 +57,22 @@ public sealed class ConfigValidationTests
     public void Port_Invalid_IsAnError(string port)
         => Assert.Contains(Run(Config(("World:Port", port))).Issues, i => i.Key == "World:Port" && i.Severity == ConfigSeverity.Error);
 
+    [Theory]
+    [InlineData("Database:SqliteSynchronous")]
+    [InlineData("Database:Characters:SqliteSynchronous")]
+    public void SqliteSynchronous_OnlyFullOrNormalIsAccepted(string key)
+    {
+        foreach (string good in new[] { "FULL", "Normal", "full", "NORMAL" })
+        {
+            Assert.DoesNotContain(Run(Config((key, good))).Issues, i => i.Key == key);
+        }
+
+        foreach (string bad in new[] { "OFF", "EXTRA", "1", "2", "fast" })
+        {
+            Assert.Contains(Run(Config((key, bad))).Issues, i => i.Key == key && i.Severity == ConfigSeverity.Error);
+        }
+    }
+
     [Fact]
     public void TickInterval_Zero_IsAnError_AndSlowIsAWarning()
     {

@@ -2,11 +2,12 @@ using System.Collections.Concurrent;
 using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Resilience;
 
 /// <summary>
-/// Sets SQLite's <c>busy_timeout</c> on every connection EF opens (SQLite only; <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
+/// Sets SQLite's <c>busy_timeout</c> and <c>synchronous</c> on every connection EF opens (SQLite only; <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
 /// adds it to the Sqlite case alone). Without it SQLite reports "busy" at once and Microsoft.Data.Sqlite's own retry loop sleeps a fixed
 /// 150 ms per attempt, so with a dozen background writers on one file a writer is admitted up to 150 ms after the lock frees and the
 /// writers starve each other. With it SQLite's own busy handler waits inside the call and retries within a few milliseconds.
@@ -25,13 +26,32 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>The largest accepted <c>Database:SqliteBusyTimeoutMs</c>.</summary>
     public const int MaxBusyTimeoutMs = 60000;
 
-    private static readonly ConcurrentDictionary<(int Busy, int Write), SqliteConnectionPragmaInterceptor> Instances = new();
+    private static readonly ConcurrentDictionary<(int Busy, int Write, SqliteSynchronousMode Synchronous, ILogger? Logger), SqliteConnectionPragmaInterceptor> Instances = new();
 
-    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs)
+    private readonly ILogger? _logger;
+
+    /// <summary>Files whose configured NORMAL was refused because they are not in WAL mode (value: the journal mode seen); cleared when the file is seen in WAL again.</summary>
+    private readonly ConcurrentDictionary<string, string> _fellBack = new(StringComparer.OrdinalIgnoreCase);
+
+    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs, SqliteSynchronousMode synchronous, ILogger? logger)
     {
+        _logger = logger;
+        Synchronous = synchronous;
         BusyTimeoutMs = busyTimeoutMs;
         WriteTimeoutMs = writeTimeoutMs;
     }
+
+    /// <summary>
+    /// The configured <c>Database:SqliteSynchronous</c>. Normal is only applied to a database that is in WAL mode (in a rollback-journal mode NORMAL can corrupt the
+    /// file on power loss); any other database gets FULL and an error log line. See <see cref="EffectiveFor"/>.
+    /// </summary>
+    public SqliteSynchronousMode Synchronous { get; }
+
+    /// <summary>The mode actually in force for the database at <paramref name="dataSource"/>: Full when the configured Normal was refused because the file is not in WAL mode.</summary>
+    public SqliteSynchronousMode EffectiveFor(string? dataSource)
+        => Synchronous == SqliteSynchronousMode.Normal && !string.IsNullOrEmpty(dataSource) && _fellBack.ContainsKey(dataSource)
+            ? SqliteSynchronousMode.Full
+            : Synchronous;
 
     /// <summary>The configured busy timeout in milliseconds; 0 leaves SQLite's own "fail at once" behaviour.</summary>
     public int BusyTimeoutMs { get; }
@@ -50,7 +70,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// The shared interceptor for a timeout. One instance per value keeps EF's internal service provider cache keyed on the same
     /// interceptor object across the many option builds a host makes.
     /// </summary>
-    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0)
+    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0, SqliteSynchronousMode synchronous = SqliteSynchronousMode.Full, ILogger? logger = null)
     {
         if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
         {
@@ -64,7 +84,12 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
                 $"Database:SqliteWriteTimeoutMs must be between 0 and {MaxBusyTimeoutMs}, not {writeTimeoutMs}.");
         }
 
-        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write));
+        if (!Enum.IsDefined(synchronous))
+        {
+            throw new InvalidOperationException($"Database:SqliteSynchronous must be Full or Normal, not {synchronous}.");
+        }
+
+        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs, synchronous, logger), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write, key.Synchronous, key.Logger));
     }
 
     /// <summary>
@@ -89,6 +114,16 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         {
             using SqliteCommand command = CreatePragma(sqlite);
             command.ExecuteNonQuery();
+            if (Synchronous == SqliteSynchronousMode.Normal && IsFileBacked(sqlite))
+            {
+                using SqliteCommand mode = sqlite.CreateCommand();
+                mode.CommandText = "PRAGMA journal_mode;";
+                ApplySynchronous(sqlite, mode.ExecuteScalar() as string);
+            }
+            else
+            {
+                ApplySynchronous(sqlite, "wal");
+            }
         }
     }
 
@@ -98,7 +133,48 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         {
             await using SqliteCommand command = CreatePragma(sqlite);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (Synchronous == SqliteSynchronousMode.Normal && IsFileBacked(sqlite))
+            {
+                await using SqliteCommand mode = sqlite.CreateCommand();
+                mode.CommandText = "PRAGMA journal_mode;";
+                ApplySynchronous(sqlite, await mode.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string);
+            }
+            else
+            {
+                ApplySynchronous(sqlite, "wal");
+            }
         }
+    }
+
+    private static bool IsFileBacked(SqliteConnection connection)
+        => !string.IsNullOrEmpty(connection.DataSource) && connection.DataSource != ":memory:"
+            && new SqliteConnectionStringBuilder(connection.ConnectionString).Mode is not (SqliteOpenMode.Memory or SqliteOpenMode.ReadOnly);
+
+    /// <summary>
+    /// Sets <c>PRAGMA synchronous</c> for a just-opened connection. Fails closed: Normal is applied only when <paramref name="journalMode"/> is "wal" (SQLite documents that NORMAL
+    /// outside WAL can corrupt the database on power loss), otherwise the connection stays on FULL and the refusal is logged at ERROR once per file (until the file is seen in WAL again).
+    /// </summary>
+    private void ApplySynchronous(SqliteConnection connection, string? journalMode)
+    {
+        bool wal = string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase);
+        string dataSource = connection.DataSource ?? string.Empty;
+        if (Synchronous == SqliteSynchronousMode.Normal && !wal)
+        {
+            if (_fellBack.TryAdd(dataSource, journalMode ?? "(unknown)"))
+            {
+                _logger?.LogError(
+                    "SQLite database {DataSource} is in journal mode '{JournalMode}', not WAL: Database:SqliteSynchronous=NORMAL is refused for it (NORMAL outside WAL can corrupt the database on power loss) and it stays on FULL",
+                    dataSource, journalMode ?? "(unknown)");
+            }
+        }
+        else if (Synchronous == SqliteSynchronousMode.Normal)
+        {
+            _fellBack.TryRemove(dataSource, out _);
+        }
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = Synchronous == SqliteSynchronousMode.Normal && wal ? "PRAGMA synchronous = NORMAL;" : "PRAGMA synchronous = FULL;";
+        command.ExecuteNonQuery();
     }
 
     private SqliteCommand CreatePragma(SqliteConnection connection)
