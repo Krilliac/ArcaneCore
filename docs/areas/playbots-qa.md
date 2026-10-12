@@ -12,7 +12,7 @@ A logger provider (`PlayerbotQaLogTap`) is registered next to the normal ones. I
 `ManagedPlayerbotFeature` (the bots) and `CreatureWorldFeature` (the creature scripts), only at Warning and above, and gives every
 other category a null logger. A log call parses the formatted line (`PlayerbotQaSignalParser`) and does one non-blocking write to a
 bounded queue (`PlayerbotQaSignalBus`, `SignalQueueCapacity`; a full queue drops the oldest and counts it). It does no I/O, takes no
-lock beyond the queue's and never throws, so it cannot slow the world thread. One background task drains the queue.
+lock beyond the queue's and never throws, so it cannot slow the world thread. One background task drains the queue; `.playerbot qa` and `.playerbot qa top` also fold in at most 512 queued signals on the calling thread before they list (the rest waits for the background pass), so a finding just met is not shown as stale.
 
 | Kind | The warning it comes from |
 |---|---|
@@ -153,7 +153,7 @@ list the same way. Every chat line is at most 220 characters and redacted.
 (the findings file keeps them across restarts). `.playerbot qa` and `.playerbot qa top [n]` first fold in the queued warnings, then hide
 the stale ones behind one hint line ("N stale findings (not seen since this server started) hidden"); `.playerbot qa top [n] all` lists
 them after every current one, marked `(stale)`. A stale finding whose issue is open (Published) is not hidden: it is listed in its place,
-marked `(stale)`. Every `top` line shows when the finding was last seen (`<1m ago`, `5m ago`, `2h ago`, `1d ago`). `report.md` lists the stale ones
+marked `(stale)`, and `report.md` keeps it in its main table the same way. Every `top` line shows when the finding was last seen (`<1m ago`, `5m ago`, `2h ago`, `1d ago`). `report.md` lists the stale ones
 last under "Stale (not seen since <start>)" (one table row each, no evidence block) and has a "Last seen" column; `report.json` marks them `"Stale": true`.
 
 **Pruning.** `.playerbot qa prune [#hours] [closed] [dry]` forgets the findings not seen for `#hours` (default 12, 1..720); `dry` lists what
@@ -168,6 +168,9 @@ It is local only (GitHub is never touched) and takes effect on disk at the next 
   loop that hashes to the same id never takes its issue.
 - A finding without an issue that recurs is created again with the same id; the publisher finds an existing issue by its marker as usual, and if that
   lookup finds nothing, it files a new one like for any new finding.
+- `reset` keeps the tombstones (they are only memory of closed issues); a finding that recurs after a `reset` of a pruned one is still `KnownClosed`.
+- `findings.json` stays at format version 1: the `Tombstones` field is additive, an older build ignores the unknown field and drops it on its next save
+  (a recurrence is then found by its marker, as before this feature).
 - Skipped: a finding the publisher is working on, a finding with a duplicate issue still to close, and the start-up spell-coverage findings (by age).
 
 `World:Playerbots:Qa:AutoPruneHours` (default 0, off) runs the same age prune (without `closed`) on every pass, counted from the later of a

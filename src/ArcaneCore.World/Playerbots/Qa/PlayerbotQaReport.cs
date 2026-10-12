@@ -74,10 +74,11 @@ internal static class PlayerbotQaReport
         QaFindingView[] current = [.. ranked.Where(f => !IsHidden(f, since))];
         QaFindingView[] stale = [.. ranked.Where(f => IsHidden(f, since))];
         QaFindingView[] shown = all ? [.. current, .. stale] : current;
+        const string HintTail = "hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with a GitHub issue is always kept.";
         string hint = !all && stale.Length > 0
-            ? string.Create(CultureInfo.InvariantCulture, $"{stale.Length} stale findings (not seen since this server started) hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with an open issue is always kept.")
+            ? string.Create(CultureInfo.InvariantCulture, $"{stale.Length} stale findings (not seen since this server started) {HintTail}")
             : string.Empty;
-        if (shown.Length == 0) return [Cut("Bot QA: no findings seen since this server started. " + hint)];
+        if (shown.Length == 0) return [string.Create(CultureInfo.InvariantCulture, $"Bot QA: no findings seen since start; {stale.Length} stale {HintTail}")];
         var lines = new List<string> { string.Create(CultureInfo.InvariantCulture, $"Bot QA: top {Math.Min(n, shown.Length)} of {shown.Length} findings (.playerbot qa show <id> for the evidence)") };
         for (int i = 0; i < Math.Min(n, shown.Length); i++)
         {
@@ -192,8 +193,9 @@ internal static class PlayerbotQaReport
     {
         QaFindingView[] all = [.. findings];
         IReadOnlyList<QaFindingView> seen = Rank(all.Where(f => f.Count > 0));
-        QaFindingView[] ranked = [.. seen.Where(f => !IsStale(f, since))];
-        QaFindingView[] stale = [.. seen.Where(f => IsStale(f, since))];
+        // The same split as the chat list: a stale finding whose issue is open stays in the main table.
+        QaFindingView[] ranked = [.. seen.Where(f => !IsHidden(f, since))];
+        QaFindingView[] stale = [.. seen.Where(f => IsHidden(f, since))];
         int listedOnly = all.Length - seen.Count;
         var sb = new StringBuilder();
         sb.Append("# Playerbot QA report\n\n");

@@ -182,8 +182,11 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             Interlocked.Read(ref _ingestFailures), Aggregator?.Count ?? 0, _store?.DisabledReason);
     }
 
-    /// <summary>Fold every queued signal into the findings; how many were taken. Safe to call from any thread.</summary>
-    internal int Drain()
+    /// <summary>
+    /// Fold the queued signals into the findings (at most <paramref name="max"/>, the rest stays queued for the background pass); how many were taken.
+    /// Safe to call from any thread.
+    /// </summary>
+    internal int Drain(int max = int.MaxValue)
     {
         if (Aggregator is null || _bus is null) return 0;
         var batch = new List<QaSignal>(256);
@@ -192,7 +195,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         do
         {
             batch.Clear();
-            moved = _bus.Drain(batch, 4096);
+            moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
             foreach (QaSignal signal in batch)
             {

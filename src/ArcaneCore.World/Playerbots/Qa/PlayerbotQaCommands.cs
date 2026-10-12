@@ -15,6 +15,9 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     /// <summary>The findings a bare <c>.playerbot qa</c> lists.</summary>
     internal const int DefaultTop = 10;
 
+    /// <summary>The most queued signals a viewing command folds in on the world thread before it lists (the background pass takes the rest).</summary>
+    internal const int MaxViewDrain = 512;
+
     public string Path => "playerbot";
 
     public IReadOnlyList<ChatCommand> Children { get; } =
@@ -53,7 +56,7 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     {
         if (args.Trim().Length != 0) return false;
         if (FeatureOf(context) is not { } feature) return true;
-        feature.Drain();
+        feature.Drain(MaxViewDrain);
         QaStatus status = feature.Status();
         context.Reply(string.Create(CultureInfo.InvariantCulture,
             $"Bot QA: {status.Findings} findings, {status.Received} warnings seen, {status.Dropped} dropped. GitHub: {status.GitHubMode}{(status.GitHubMode == "off" || status.TokenVariable.Length == 0 ? string.Empty : $", {status.TokenVariable} {(status.TokenSet ? "set" : "not set")}")}. {PlayerbotRetreatStats.Shared.Describe()}"));
@@ -73,7 +76,7 @@ public sealed class PlayerbotQaCommands : ICommandExtension
         int n = DefaultTop;
         if (numbers.Length == 1 && !int.TryParse(numbers[0].TrimStart('#'), NumberStyles.None, CultureInfo.InvariantCulture, out n)) return false;
         if (FeatureOf(context) is not { } feature) return true;
-        feature.Drain(); // thread-safe; without it a finding the bots just met would still look stale for up to one export interval
+        feature.Drain(MaxViewDrain); // thread-safe; without it a finding the bots just met would still look stale for up to one export interval
         foreach (string line in PlayerbotQaReport.ChatTop(feature.Aggregator!.Snapshot(), n, feature.Redactor, feature.UtcNow, feature.StartedUtc, all)) context.Reply(line);
         return true;
     }

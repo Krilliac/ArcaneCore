@@ -635,10 +635,11 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 Remove(f);
             }
 
-            while (_tombs.Count > TombstoneCap)
+            int excess = _tombs.Count - TombstoneCap;
+            if (excess > 0)
             {
-                QaTombstone oldest = _tombs.Values.OrderBy(static t => t.PrunedUtc).ThenBy(static t => t.Id, StringComparer.Ordinal).First();
-                _tombs.Remove(oldest.Id);
+                // One sort, then one pass: the oldest go first.
+                foreach (QaTombstone oldest in _tombs.Values.OrderBy(static t => t.PrunedUtc).ThenBy(static t => t.Id, StringComparer.Ordinal).Take(excess).ToList()) _tombs.Remove(oldest.Id);
             }
 
             PruneAbsorbed();

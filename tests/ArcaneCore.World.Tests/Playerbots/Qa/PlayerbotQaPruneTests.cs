@@ -233,7 +233,7 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         Assert.Contains("top 1 of 1 findings", top[0], StringComparison.Ordinal);
         Assert.StartsWith("#1 " + PlayerbotQaFingerprint.ShortId(current), top[1], StringComparison.Ordinal);
         Assert.Contains(" <1m ago ", top[1], StringComparison.Ordinal);
-        Assert.Equal("1 stale findings (not seen since this server started) hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with an open issue is always kept.", top[2]);
+        Assert.Equal("1 stale findings (not seen since this server started) hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with a GitHub issue is always kept.", top[2]);
         Assert.DoesNotContain(top, l => l.Contains(PlayerbotQaFingerprint.ShortId(stale), StringComparison.Ordinal));
 
         Assert.Equal(3, all.Length);
@@ -255,8 +255,8 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         string[] top = await RunAsync(host, ".playerbot qa top");
 
         Assert.Single(top);
-        Assert.StartsWith("Bot QA: no findings seen since this server started. 1 stale findings", top[0], StringComparison.Ordinal);
-        Assert.Contains("qa top all lists them", top[0], StringComparison.Ordinal);
+        Assert.Equal("Bot QA: no findings seen since start; 1 stale hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with a GitHub issue is always kept.", top[0]);
+        Assert.True(top[0].Length <= 220);
     }
 
     [Fact]
@@ -650,6 +650,66 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         string[] lines = await RunAsync(host, ".playerbot qa prune");
 
         Assert.Equal("Bot QA: forgot 1 findings not seen for 12h (stall 1); 2 remain. 2 old ones with a GitHub issue are kept. GitHub is untouched.", lines[0]);
+    }
+
+    [Fact]
+    public void Markdown_KeepsAStalePublishedFindingInTheMainTable_LikeTheChatList()
+    {
+        DateTime start = QaData.T0;
+        QaFindingView published = QaData.View("a0000000a0000000", last: start.AddHours(-30), subject: "open issue thing") with { Publication = new QaPublication(QaPublicationState.Published, 9) };
+        QaFindingView stale = QaData.View("5000000050000000", last: start.AddHours(-30), subject: "stale thing");
+
+        string md = PlayerbotQaReport.RenderMarkdown([stale, published], start.AddHours(2), "b", new PlayerbotQaRedactor(), since: start);
+
+        Assert.True(md.IndexOf("open issue thing", StringComparison.Ordinal) < md.IndexOf("## Stale", StringComparison.Ordinal));
+        Assert.True(md.IndexOf("## Stale", StringComparison.Ordinal) < md.IndexOf("stale thing", StringComparison.Ordinal));
+        Assert.Contains("## 1. stall: open issue thing", md, StringComparison.Ordinal);
+        Assert.Contains("1 more were not seen since", md, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AViewingCommand_FoldsInAtMostTheCap_AndTheRestWaitsForTheBackgroundPass()
+    {
+        var bus = new PlayerbotQaSignalBus(2000);
+        PlayerbotQaFeature feature = NewFeature(new PlayerbotQaOptions { Directory = _directory }, new ManualTime(QaData.T0), bus);
+        for (uint quest = 1; quest <= 600; quest++) Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot1, 1, 1, quest)));
+
+        Assert.Equal(PlayerbotQaCommands.MaxViewDrain, feature.Drain(PlayerbotQaCommands.MaxViewDrain));
+        Assert.Equal(512, feature.Aggregator!.Count);
+        Assert.Equal(88, feature.Drain());
+        Assert.Equal(600, feature.Aggregator.Count);
+        await feature.StopAsync();
+    }
+
+    [Fact]
+    public void Reset_KeepsTheTombstones_SoAPrunedClosedFindingStillComesBackClosed()
+    {
+        var aggregator = new PlayerbotQaAggregator(100, 5, new byte[16]);
+        string id = aggregator.Ingest(QaData.Stall(QaData.Bot1, 1, 1, 3), NoQaContentFacts.Instance, QaData.T0)!;
+        aggregator.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.KnownClosed, 31)));
+        aggregator.Prune(QaData.T0.AddHours(1), TimeSpan.FromHours(12), closed: true, dry: false);
+
+        aggregator.Reset(null);
+        Assert.Single(aggregator.Export().Tombstones!);
+        aggregator.Ingest(QaData.Stall(QaData.Bot1, 1, 1, 3), NoQaContentFacts.Instance, QaData.T0);
+
+        Assert.Equal(new QaPublication(QaPublicationState.KnownClosed, 31), aggregator.Get(id)!.Publication);
+        Assert.Empty(aggregator.Export().Tombstones!); // claimed
+    }
+
+    [Fact]
+    public void AFindingsFileWithTombstones_IsReadByTheStore_AndAnUnknownFieldDoesNotMakeItRefuse()
+    {
+        string path = Path.Combine(_directory, "format");
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "findings.json"), "{\"FormatVersion\":1,\"Tombstones\":[{\"Id\":\"x\",\"Kind\":\"Stall\",\"Issue\":1,\"Attackers\":[],\"DeathSource\":\"\",\"PrunedUtc\":\"2026-10-10T00:00:00Z\"}],\"FutureField\":7}");
+        var store = new PlayerbotQaStore(path, NullLogger.Instance);
+
+        QaStoreFile? loaded = store.Load();
+
+        Assert.NotNull(loaded);
+        Assert.Null(store.DisabledReason);
+        Assert.Single(loaded.Tombstones);
     }
 
     [Theory]
