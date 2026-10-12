@@ -84,6 +84,13 @@ public sealed class StealthRegistry
     /// <summary>A snapshot of the units in the Stealth group (vmangos AnyStealthedCheck: VISIBILITY_GROUP_STEALTH).</summary>
     public IReadOnlyList<Unit> Stealthed() => [.. _stealthed];
 
+    /// <summary>
+    /// The enumerator of the Stealth group itself, without the copy <see cref="Stealthed"/> makes (no allocation: a struct). World
+    /// thread only; the group must not change while it is walked (<see cref="SetVisibility"/> invalidates it). The units are those of
+    /// every map: filter by <see cref="WorldObject.Map"/>.
+    /// </summary>
+    public HashSet<Unit>.Enumerator EnumerateStealthed() => _stealthed.GetEnumerator();
+
     /// <summary>Forget units that left the world for good (their auras were dropped without handlers, e.g. at logout): they go back to the On group.</summary>
     public void Prune(Func<Unit, bool> isGone)
     {
