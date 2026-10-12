@@ -154,13 +154,20 @@ within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
 across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
 set-aside), the brain asks
-`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 60 yards out; an island ends every one within 45 yards) and, out of combat in the
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
 The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
 brain), a duel, on a battleground, in the air, during another teleport (an unsafe landing replaces the resurrection's near one), to a map
 not allowed; not urgent, at most one every 5 minutes, so a bind point that is itself an island cannot loop (`PlayerbotMeshIslandTests`,
-`AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An island beside water or a void, where a probe point
+`AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An exploring bot that stays within 55 yards of its
+first position for 15 seconds asks the same island question once before the full stall bound. This handles the isolated upper Stormwind
+ridge near (-8490, 489, 150), where short routes repeatedly ended within ten yards, and the lower ledge near (-8486, 510, 121), where
+the bot could move twelve yards without leaving the island and the mesh ends within 50 yards in every direction. Both previously held the
+bot for two minutes
+(bot QA #207, `StormwindRidge_ExploringBotEscapesTheIslandBeforeTheStallBound`). Connected ground around the sampled #221, #180,
+#130 and #131 points remains on ordinary exploration (`ConnectedExploreGround_DoesNotTriggerAnIslandTeleport`).
+An island beside water or a void, where a probe point
 has no polygon near it (a NoPath answer), is never detected: its bots still stall and give their goals up one by one.
 
 **Intercontinent quest handoffs.** The bot's tram and elevators stay on one continent, and its ordinary
