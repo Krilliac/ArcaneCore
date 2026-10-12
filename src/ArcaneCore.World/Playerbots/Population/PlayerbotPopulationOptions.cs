@@ -192,6 +192,22 @@ public sealed class PlayerbotPopulationOptions
     /// <summary>The most bots relocated in one pass (0..50).</summary>
     public int MaxRelocationsPerInterval { get; set; } = 2;
 
+    /// <summary>
+    /// Fresh-launch mode (off by default; live): new bots the population creates stay level 1 with their default starting kit at their
+    /// race's native start location (no boost, no teleport), the race and class mix stays balanced across both factions, and the level
+    /// bands, the zone atlas and relocation are bypassed (the target is one pool; bots level up on their own).
+    /// </summary>
+    public bool FreshLaunch { get; set; }
+
+    /// <summary>
+    /// The safety brake of <c>.playerbot population rush</c>: the rush pauses while the world tick p95 is above this many milliseconds
+    /// in RushBrakeWindows consecutive windows (50..10000).
+    /// </summary>
+    public int RushBrakeP95Ms { get; set; } = 500;
+
+    /// <summary>The consecutive windows of WindowTicks ticks over RushBrakeP95Ms that pause a rush, and under the resume line that lift the pause (1..20).</summary>
+    public int RushBrakeWindows { get; set; } = 3;
+
     /// <summary>Area table zone ids bots are never placed in (at most 256, no duplicates). Capitals and cities are never used.</summary>
     public uint[] ExcludedZones { get; set; } = [];
 
@@ -278,6 +294,8 @@ public sealed class PlayerbotPopulationOptions
             : CheckDefined(Relocation) is { } l ? $"Relocation {l}"
             : CheckRange(MaxRelocationsPerInterval, 0, 50) is { } m ? $"MaxRelocationsPerInterval {m}"
             : CheckZones(ExcludedZones) is { } x ? $"ExcludedZones {x}"
+            : CheckRange(RushBrakeP95Ms, 50, 10000) is { } rb ? $"RushBrakeP95Ms {rb}"
+            : CheckRange(RushBrakeWindows, 1, 20) is { } rw ? $"RushBrakeWindows {rw}"
             : null;
         if (problem is not null) throw new InvalidOperationException($"{SectionName}: {problem}.");
     }

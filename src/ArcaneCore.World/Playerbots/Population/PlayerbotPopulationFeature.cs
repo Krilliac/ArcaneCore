@@ -54,7 +54,8 @@ public sealed record PopulationStatus(
     string? LastError,
     long Passes,
     int OperatorRunning = 0,
-    int OwnedTarget = 0)
+    int OwnedTarget = 0,
+    bool FreshLaunch = false)
 {
     public static PopulationStatus Idle(bool enabled, string state, string reason) => new(enabled, state, reason, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         "unknown", 0, 0, [], null, 0);
@@ -239,6 +240,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         return _pass = Task.Run(() => RunAsync(input));
     }
 
+    /// <summary>Fresh launch counts the whole population as one pool: one band over every level, so levelling up never opens a gap to refill.</summary>
+    private static readonly PopulationBand[] FreshBands = [new() { MinLevel = 1, MaxLevel = PlayerbotPopulationOptions.MaxLevel, Weight = 1 }];
+
     private void Publish(PopulationStatus status) => Volatile.Write(ref _status, status);
 
     private sealed record PassInput(
@@ -269,8 +273,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         PlayerbotPopulationOptions pop = _options.Population;
-        PopulationZoneAtlas atlas = AtlasFor(world, pop);
-        string? terrainHold = TerrainHold();
+        // Fresh launch places nobody (the character-create handler puts a bot at its race start): no atlas, no terrain lookup, no hold.
+        PopulationZoneAtlas atlas = pop.FreshLaunch ? _atlas : AtlasFor(world, pop);
+        string? terrainHold = pop.FreshLaunch ? null : TerrainHold();
         var realZones = new HashSet<uint>();
         foreach (Player online in world.OnlinePlayers)
             if (online.Session is not WorldSession { IsManaged: true }) realZones.Add(online.ZoneId);
@@ -300,7 +305,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         IPopulationTickSource source = Source;
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
-        return new PassInput(pop, pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
+        return new PassInput(pop, pop.FreshLaunch ? FreshBands : pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
             ClockMs, managed, terrainHold, teleports is not null);
     }
 
@@ -593,7 +598,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             bool relocate = decision.State is "under-budget" or "under-budget-confirming" or "at-target" or "hysteresis" && pop.Relocation == PopulationRelocation.Teleport
-                && pop.MaxRelocationsPerInterval > 0;
+                && pop.MaxRelocationsPerInterval > 0 && !pop.FreshLaunch; // a fresh-launch bot is never moved out of its starting zone
             if (relocate && input.TerrainHold is { } relocationHold) ctx.Note ??= relocationHold; // no relocation on the fallback atlas either
             else if (relocate)
             {
@@ -636,7 +641,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             input.P95Ms, input.Samples, pop.TickP95BudgetMs, pop.TargetOnline, effectiveTarget, input.RunningAll, ownedRunning, ownedParked,
             _createTimes.Count, input.BoostAvailable ? "available" : "missing: " + input.BoostMissing,
             input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde), bands,
-            _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget));
+            _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget, pop.FreshLaunch));
     }
 
     /// <summary>What one pass works on: the captured facts, the stores, the membership read at its start, and the band counts it keeps current.</summary>
@@ -761,8 +766,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         int created = 0;
-        if (ctx.Input.TerrainHold is { } hold) return (0, quietWhenNothingFits ? null : hold, false);
-        if (!ctx.Input.TeleportAvailable) return (0, "the teleport service is not available", false);
+        bool fresh = pop.FreshLaunch;
+        if (!fresh && ctx.Input.TerrainHold is { } hold) return (0, quietWhenNothingFits ? null : hold, false);
+        if (!fresh && !ctx.Input.TeleportAvailable) return (0, "the teleport service is not available", false);
         if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass > PauseLiftsAfterPasses)
             _placementRefusals = 0; // the pause lifts on its own: content may have been reloaded
         while (created < count)
@@ -775,16 +781,30 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
-            PopulationPlan? plan = await _world!.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
-                ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
-                (location, level, faction) => _provisioner.IsSafe(_world!, location, level, faction)), ct).ConfigureAwait(false);
-            if (plan is null)
-                return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
+            PopulationPlan? plan = null;
+            PopulationFreshPlan? freshPlan = null;
+            if (fresh)
+            {
+                freshPlan = PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random);
+                if (freshPlan is null) return (created, quietWhenNothingFits ? null : "no valid race and class for the configured factions and classes", false);
+            }
+            else
+            {
+                plan = await _world!.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
+                    ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
+                    (location, level, faction) => _provisioner.IsSafe(_world!, location, level, faction)), ct).ConfigureAwait(false);
+                if (plan is null)
+                    return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
+            }
+
+            (Team planTeam, byte planRace, byte planClass, int planBand) = fresh
+                ? (freshPlan!.Team, freshPlan.Race, freshPlan.Class, 0)
+                : (plan!.Team, plan.Race, plan.Class, plan.Band);
 
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
             {
-                made = await managed.CreateAsync(_names.Next(), plan.Race, plan.Class, ct).ConfigureAwait(false);
+                made = await managed.CreateAsync(_names.Next(), planRace, planClass, ct).ConfigureAwait(false);
                 if (made.Success || !(made.Code == "name-in-use" || made.Code.StartsWith("character-create-refused", StringComparison.Ordinal))) break;
             }
 
@@ -800,17 +820,19 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             ManagedPlayerbot? record = await ctx.Scoped.GetRequiredService<IManagedPlayerbotStore>().FindAsync(botId, ct).ConfigureAwait(false);
             if (record is null) { Fail($"created bot {botId} is not in the registry"); return (created, null, true); }
             long now = NowUnix();
-            var member = new PlayerbotPopulationMember(botId, record.CharacterId, 0, (byte)plan.Band, now, now);
+            var member = new PlayerbotPopulationMember(botId, record.CharacterId, 0, (byte)planBand, now, now);
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
             ctx.Members[botId] = member;
-            planned[plan.Band]++;
+            planned[planBand]++;
 
             PlayerbotOperationResult start = await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false);
             if (!start.Success) { Fail($"start of new bot {made.Name} refused: {start.Code}"); return (created, null, true); }
             ctx.RunningNow.Add(botId);
             _startedAt[botId] = ctx.Input.ClockMs;
 
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan.Level, plan.Placement.Location), ct).ConfigureAwait(false);
+            // Fresh launch: no boost and no teleport; the bot stands where CMSG_CHAR_CREATE put it. Its zone is recorded as it is.
+            string? refusal = fresh ? null
+                : await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan!.Level, plan.Placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
                 // The plan was safe when it was made (a content reload can change that before the teleport). A level-1 bot that
@@ -827,7 +849,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 ctx.RunningNow.Remove(botId);
                 ctx.Members.Remove(botId);
                 _startedAt.Remove(botId);
-                planned[plan.Band]--;
+                planned[planBand]--;
                 // Mark first (not cancellable: a shutdown must not lose the mark), then delete the bot, then the row.
                 await ctx.Store.UpsertAsync(member with { Band = PendingDeleteBand, UpdatedUnix = NowUnix() }, CancellationToken.None).ConfigureAwait(false);
                 await TryDeletePendingAsync(managed, ctx.Store, botId, made.Name, ct).ConfigureAwait(false);
@@ -836,12 +858,15 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             _placementRefusals = 0;
 
-            member = member with { ZoneId = plan.Placement.Zone.ZoneId, UpdatedUnix = NowUnix() };
+            uint zone = fresh
+                ? await _world!.InvokeAsync(() => managed.FindSession(botId)?.Player?.ZoneId ?? 0u, ct).ConfigureAwait(false)
+                : plan!.Placement.Zone.ZoneId;
+            member = member with { ZoneId = zone, UpdatedUnix = NowUnix() };
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
             ctx.Members[botId] = member;
-            ctx.Have[plan.Band]++;
-            ctx.Assigned[plan.Placement.Zone.ZoneId] = ctx.Assigned.GetValueOrDefault(plan.Placement.Zone.ZoneId) + 1;
-            if (plan.Team == Team.Alliance) ctx.Alliance++; else ctx.Horde++;
+            ctx.Have[planBand]++;
+            ctx.Assigned[zone] = ctx.Assigned.GetValueOrDefault(zone) + 1;
+            if (planTeam == Team.Alliance) ctx.Alliance++; else ctx.Horde++;
         }
 
         return (created, null, false);
@@ -995,6 +1020,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (!s.Enabled && s.Passes == 0) yield break;
         yield return string.Create(c, $"Target {s.Target} (effective {s.EffectiveTarget}), running {s.RunningAll} ({s.OwnedRunning} owned), parked {s.OwnedParked}, created in the last minute {s.CreatesLastMinute}; {s.OperatorRunning} operator bots running leave the population {s.OwnedTarget}.");
         yield return string.Create(c, $"Tick p95 {s.P95Ms:0.0} ms over {s.Samples} ticks, budget {s.BudgetMs} ms. Boost {s.Boost}. Zones: {s.AllianceZones} Alliance, {s.HordeZones} Horde.");
+        if (s.FreshLaunch)
+            yield return "Fresh launch: new bots stay level 1 at their race start (no boost, no teleport, no relocation); the bands are bypassed.";
         foreach (PopulationBandStatus band in s.Bands)
             yield return string.Create(c, $"  Levels {band.MinLevel}-{band.MaxLevel} (weight {band.Weight}): want {band.Want}, have {band.Have}.");
         if (s.LastError is not null) yield return "Last problem: " + s.LastError;
