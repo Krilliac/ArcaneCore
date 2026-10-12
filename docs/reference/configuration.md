@@ -1349,6 +1349,7 @@ How to read the tables:
 | `World:Playerbots:Qa:Directory` | `string` | `"qa"` | - | The folder of the findings file, the exports (`report.md`, `report.json`) and the dry-run issues (`pending-issues/`): relative to the profile folder, or absolute. |
 | `World:Playerbots:Qa:Enabled` | `bool` | `true` | - | Aggregate the bot stall, death-loop, fault and missing-data warnings into findings (on by default; it is cheap and never touches the world thread). |
 | `World:Playerbots:Qa:ExportIntervalSeconds` | `int` | `300` | - | Seconds between two passes that save the findings, write the exports and publish (10..86400). |
+| `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` | `bool` | `false` | - | When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close, each with the surviving issue) keeps the absorbed issue open and untouched; the merge is recorded in the store either way. |
 | `World:Playerbots:Qa:GitHub:CommentIntervalHours` | `int` | `24` | - | At most one comment per finding in this many hours (1..720). |
 | `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
 | `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
@@ -1368,9 +1369,10 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
 | `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |
 | `World:Playerbots:Qa:GitHub:Transport` | `PlayerbotQaGitHubTransport` | `Rest` | - | How issues are read and written: `Rest` (default; the GitHub REST API with the token from `TokenEnvironmentVariable`) or `GhCli` (runs the `gh` tool with an argument list and no shell, using the login of the user the server runs as; the token variable is not needed). Values: `Rest`, `GhCli`. |
-| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it the lowest-severity unpublished finding is dropped. |
+| `World:Playerbots:Qa:MaxFindings` | `int` | `2000` | - | The most findings kept (10..100000); beyond it an unpublished finding is dropped, a one-off of a single bot first, then the lowest severity, then the oldest. A published or known-closed finding is never dropped. |
 | `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
+| `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 
 ## `World:Social`
 

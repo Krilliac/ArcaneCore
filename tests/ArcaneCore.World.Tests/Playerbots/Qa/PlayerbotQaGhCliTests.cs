@@ -68,6 +68,13 @@ internal sealed class FakeGh : IQaProcessRunner
 
                 case "comment":
                     return Ok("https://github.com/x/y/issues/1#issuecomment-1\n");
+                case "close":
+                    {
+                        int number = int.Parse(request.Arguments[2], CultureInfo.InvariantCulture);
+                        _issues.Single(i => (int)i["number"]! == number)["state"] = "CLOSED";
+                        return Ok(string.Empty);
+                    }
+
                 case "reopen":
                     {
                         int number = int.Parse(request.Arguments[2], CultureInfo.InvariantCulture);

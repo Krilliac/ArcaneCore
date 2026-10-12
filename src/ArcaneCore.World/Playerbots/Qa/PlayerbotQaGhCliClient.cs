@@ -266,6 +266,9 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
     public async Task ReopenAsync(int number, CancellationToken cancellationToken)
         => await RunAsync(["issue", "reopen", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository], "issue reopen", cancellationToken).ConfigureAwait(false);
 
+    public async Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken)
+        => await RunAsync(["issue", "close", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--reason", "not planned"], "issue close", cancellationToken).ConfigureAwait(false);
+
     private async Task<QaProcessResult> RunAsync(IReadOnlyList<string> arguments, string what, CancellationToken cancellationToken, bool allowNotFound = false)
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)

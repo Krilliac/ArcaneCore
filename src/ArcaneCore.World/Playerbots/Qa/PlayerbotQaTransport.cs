@@ -21,12 +21,18 @@ internal sealed partial class QaIssueIndex(bool complete)
 
     public QaIssueRef? ByNumber(int number) => _byNumber.GetValueOrDefault(number);
 
+    /// <summary>Whether <paramref name="body"/> carries a Bot QA marker of ANY finding (an issue handed over by a merged finding carries that finding's, not the holder's).</summary>
+    public static bool HasAnyMarker(string body) => !string.IsNullOrEmpty(body) && MarkerPattern().IsMatch(body);
+
     /// <summary>Index <paramref name="issue"/> under every exact <c>&lt;!-- arcanecore-bot-qa:id --&gt;</c> marker in <paramref name="body"/>.</summary>
     public void Add(QaIssueRef issue, string body)
     {
         _byNumber.TryAdd(issue.Number, issue);
         if (string.IsNullOrEmpty(body)) return;
-        foreach (Match match in MarkerPattern().Matches(body)) _byId.TryAdd(match.Groups["id"].Value, issue);
+        foreach (Match match in MarkerPattern().Matches(body))
+        {
+            _byId.TryAdd(match.Groups["id"].Value, issue);
+        }
     }
 
     /// <summary>Index an issue the pass created for finding <paramref name="id"/>.</summary>
@@ -63,4 +69,7 @@ internal interface IQaIssueTransport : IDisposable
     Task CommentAsync(int number, string body, CancellationToken cancellationToken);
 
     Task ReopenAsync(int number, CancellationToken cancellationToken);
+
+    /// <summary>Close an issue as not planned (a duplicate of another issue the caller has just linked in a comment).</summary>
+    Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken);
 }

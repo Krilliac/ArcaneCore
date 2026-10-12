@@ -78,6 +78,42 @@ internal static partial class PlayerbotQaFingerprint
     /// <summary>The cell index of a coordinate.</summary>
     internal static int Cell(float coordinate) => (int)Math.Floor(coordinate / CellYards);
 
+    /// <summary>
+    /// The side of a zone cell in yards: the coarse place a stall or death loop belongs to (a multiple of <see cref="CellYards"/>, so a key's cell
+    /// always lies inside one zone cell). Not part of any key or id; it only decides which findings are one problem.
+    /// </summary>
+    internal const int ZoneYards = 500;
+
+    /// <summary>The zone cell index of a coordinate.</summary>
+    internal static int ZoneCell(float coordinate) => (int)Math.Floor(coordinate / ZoneYards);
+
+    /// <summary>
+    /// The coarse identity of a stall: what makes two stalls one actionable problem. A Quest goal is its quest and target and a Combat goal its
+    /// target (wherever on the map they stood: the position stays in the samples); any other goal is the goal in a zone cell. <c>Base</c> is the
+    /// identity without the zone cell (null when the group has no place), so stalls just across a zone cell border still fold by distance.
+    /// Never a bot, never a name. An outside-home stall is a group of its own, as it is a finding of its own.
+    /// </summary>
+    internal static (string Group, string? Base) StallGroup(QaSignal s)
+    {
+        string outside = s.OutsideHome ? "|outside" : string.Empty;
+        // The map is part of every group: a quest or a creature entry can be met on several maps (a city guard stalls in every capital), and those are not one problem.
+        string map = s.HasPosition ? string.Create(CultureInfo.InvariantCulture, $"|map={s.Map}") : "|nomap";
+        if (string.Equals(s.Goal, "Quest", StringComparison.Ordinal) && s.Quest != 0)
+        {
+            return (string.Create(CultureInfo.InvariantCulture, $"stall|goal=Quest|quest={s.Quest}|target={s.Target}") + map + outside, null);
+        }
+
+        if (string.Equals(s.Goal, "Combat", StringComparison.Ordinal) && s.Target != 0)
+        {
+            return (string.Create(CultureInfo.InvariantCulture, $"stall|goal=Combat|target={s.Target}") + map + outside, null);
+        }
+
+        string baseKey = "stall|goal=" + s.Goal + outside;
+        return s.HasPosition
+            ? (baseKey + string.Create(CultureInfo.InvariantCulture, $"|map={s.Map}|zone={ZoneCell(s.X)},{ZoneCell(s.Y)}"), baseKey)
+            : (baseKey + "|nowhere", null);
+    }
+
     /// <summary>The canonical key of a signal.</summary>
     internal static string Key(QaSignal s)
     {

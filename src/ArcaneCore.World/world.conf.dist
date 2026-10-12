@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       356 keys
+#   WORLD                       357 keys
 #
 ###############################################################################
 
@@ -11710,6 +11710,22 @@ World.Playerbots.Qa.Enabled = true
 World.Playerbots.Qa.ExportIntervalSeconds = 300
 
 #
+#    World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates
+#        Description: When findings are merged into one (the same problem met in several places) and
+#                     each had its own issue, comment on the absorbed issue with a link to the
+#                     surviving one and close it as not planned (a duplicate). Off (the default, so
+#                     the first start after an upgrade can be checked: the start-up log lists every
+#                     issue it would close, each with the surviving issue) keeps the absorbed issue
+#                     open and untouched; the merge is recorded in the store either way.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = false
+
+#
 #    World.Playerbots.Qa.GitHub.CommentIntervalHours
 #        Description: At most one comment per finding in this many hours (1..720).
 #        Type: int
@@ -11941,8 +11957,9 @@ World.Playerbots.Qa.GitHub.Transport = Rest
 
 #
 #    World.Playerbots.Qa.MaxFindings
-#        Description: The most findings kept (10..100000); beyond it the lowest-severity unpublished
-#                     finding is dropped.
+#        Description: The most findings kept (10..100000); beyond it an unpublished finding is
+#                     dropped, a one-off of a single bot first, then the lowest severity, then the
+#                     oldest. A published or known-closed finding is never dropped.
 #        Type: int
 #        Default: 2000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -11973,6 +11990,18 @@ World.Playerbots.Qa.MaxSamples = 5
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.SignalQueueCapacity = 4096
+
+#
+#    World.Playerbots.Qa.StaleHours
+#        Description: Hours after which a finding not seen again and not published or known-closed
+#                     is dropped, on load and on every pass (0..8760; 0 keeps them for ever).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.StaleHours = 24
 
 #----------------------------------------------------------------------------
 # World:Social
