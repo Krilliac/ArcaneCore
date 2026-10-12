@@ -1316,24 +1316,91 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             ActiveBot[] bots = _active.Values.ToArray();
             // One world-thread hop for every bot's goal (the coordinators' collections are world-thread owned).
             (PlayerbotGoalKind Goal, uint TargetEntry, uint QuestId)[] goals = await GoalsOnWorldThreadAsync(bots).ConfigureAwait(false);
+            // Only a bot whose persisted goal fields changed is written (UpdatedUnix alone is never a reason), and all of them
+            // together: one transaction per chunk instead of one autocommit (one fsync) per bot per checkpoint.
+            var live = new List<(ActiveBot Active, ManagedPlayerbot Next)>(bots.Length);
             for (int i = 0; i < bots.Length; i++)
             {
                 ActiveBot active = bots[i];
                 if (active.Record.State == ManagedPlayerbotState.Faulted) continue;
                 if (active.Session.State == SessionState.Closed)
                 {
-                    if (Volatile.Read(ref active.FaultCode) is { } fault)
+                    // One bot's failed stop must not keep the other bots from being checkpointed.
+                    try
                     {
-                        (bool desired, string code) = RecordFault(active.Record.BotId, fault);
-                        await StopCoreAsync(active.Record, desired, CancellationToken.None, code).ConfigureAwait(false);
+                        if (Volatile.Read(ref active.FaultCode) is { } fault)
+                        {
+                            (bool desired, string code) = RecordFault(active.Record.BotId, fault);
+                            await StopCoreAsync(active.Record, desired, CancellationToken.None, code).ConfigureAwait(false);
+                        }
+                        else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
                     }
-                    else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    { logger.LogWarning(ex, "Playerbot {BotId} checkpoint stop failed ({Type}: {Message})", active.Record.BotId, ex.GetType().Name, ex.Message); }
                     continue;
                 }
-                active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
-                { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }, CancellationToken.None).ConfigureAwait(false);
-                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+                live.Add((active, active.Record with { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }));
             }
+
+            var conflicted = new HashSet<ActiveBot>();
+            var changed = live.Where(item => GoalFieldsDiffer(item.Active.Record, item.Next)).ToList();
+            if (changed.Count > 0)
+            {
+                // A failed write (not a refused row) leaves these bots' records as they were, so the next checkpoint retries them,
+                // and it must not keep the set-asides below from being saved.
+                try
+                {
+                    await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                    IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    for (int start = 0; start < changed.Count; start += ManagedPlayerbotUpdate.MaxBatch)
+                    {
+                        int count = Math.Min(ManagedPlayerbotUpdate.MaxBatch, changed.Count - start);
+                        var updates = new ManagedPlayerbotUpdate[count];
+                        for (int j = 0; j < count; j++)
+                        {
+                            ManagedPlayerbot next = changed[start + j].Next;
+                            updates[j] = new ManagedPlayerbotUpdate(next with { Revision = next.Revision + 1, UpdatedUnix = now }, next.Revision);
+                        }
+
+                        IReadOnlyList<bool> applied = await store.UpdateManyAsync(updates, CancellationToken.None).ConfigureAwait(false);
+                        // The committed rows first: nothing below may leave a written bot with a stale revision.
+                        var refused = new List<ActiveBot>();
+                        for (int j = 0; j < count; j++)
+                        {
+                            ActiveBot active = changed[start + j].Active;
+                            if (applied[j]) active.Record = updates[j].Bot;
+                            else refused.Add(active);
+                        }
+
+                        foreach (ActiveBot active in refused)
+                        {
+                            // Someone else changed or removed the row (in-process paths run under _operations and never do). Fault only this bot.
+                            conflicted.Add(active);
+                            logger.LogWarning("Playerbot {BotId} checkpoint refused: managed-revision-conflict", active.Record.BotId);
+                            ManagedPlayerbot? stored;
+                            try { stored = await store.FindAsync(active.Record.BotId, CancellationToken.None).ConfigureAwait(false); }
+                            catch (Exception ex) when (ex is not OutOfMemoryException)
+                            {
+                                logger.LogWarning(ex, "Playerbot {BotId} conflicting row could not be read ({Type})", active.Record.BotId, ex.GetType().Name);
+                                continue; // not faulted: the next checkpoint finds the same conflict and looks again
+                            }
+
+                            if (stored is null || stored.State == ManagedPlayerbotState.Faulted) { await DropFromActiveAsync(active, stored).ConfigureAwait(false); continue; }
+                            // Adopt the other writer's whole record, so the stop (a revision-checked write) changes only what it means to
+                            // on top of its values (a manual DesiredEnabled = false survives) and can leave _active cleanly.
+                            active.Record = stored;
+                            Interlocked.CompareExchange(ref active.FaultCode, "checkpoint: managed-revision-conflict", null);
+                            active.Session.Kick();
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                { logger.LogWarning(ex, "Managed playerbot checkpoint write failed ({Type})", ex.GetType().Name); }
+            }
+
+            foreach ((ActiveBot active, _) in live)
+                if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1341,6 +1408,32 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// A running bot whose registry row no longer exists (<paramref name="row"/> null, deleted out of band) or was faulted out of band
+    /// (the checkpoint skips Faulted records, so it could never stop): it leaves <see cref="_active"/> without a revision-checked
+    /// write instead of failing or lingering every checkpoint. Logged once. The faulted row is published as stopped.
+    /// </summary>
+    private async Task DropFromActiveAsync(ActiveBot active, ManagedPlayerbot? row)
+    {
+        Guid botId = active.Record.BotId;
+        if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
+        else logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
+        active.Paused = true;
+        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
+        active.Brain.Stop();
+        if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId);
+        active.Session.Kick();
+        if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
+        if (row is not null) { active.Record = row; PublishStopped(row, active.Name, active.MapId); }
+        try { await active.Scope.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { logger.LogWarning(ex, "Playerbot {BotId} scope disposal failed ({Type})", botId, ex.GetType().Name); }
+    }
+
+    /// <summary>Whether the checkpoint's persisted fields (the goal, its target and its quest) differ between two records.</summary>
+    private static bool GoalFieldsDiffer(ManagedPlayerbot stored, ManagedPlayerbot next)
+        => stored.Goal != next.Goal || stored.TargetEntry != next.TargetEntry || stored.QuestId != next.QuestId;
 
     /// <summary>A running bot's status line: the one it had when nothing in it changed (no allocation), otherwise a new one.</summary>
     private PlayerbotStatus StatusOf(ActiveBot b)

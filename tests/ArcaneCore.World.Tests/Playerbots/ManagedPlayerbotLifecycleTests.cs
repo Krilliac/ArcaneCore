@@ -573,7 +573,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid holder = Assert.IsType<Guid>((await feature.CreateAsync("Holdlock", 1, 1)).BotId);
-        Assert.True((await feature.StartAsync(holder.ToString())).Success);
+        Assert.True((await feature.StartScriptedAsync(holder.ToString(), new IdleController())).Success);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Stoprace", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
 
@@ -583,6 +583,8 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.DoesNotContain(log.Entries, e => e.Message.Contains($"{id} quarantine retry starting"));
 
         // The next checkpoint (5 s of game time on, the retry due): hold it inside the operation lock at the running bot's update.
+        // The checkpoint writes only a bot whose goal changed, so the running bot's goal changes to give it an update to hold at.
+        await host.World.InvokeAsync(() => { feature.FindBrain(holder)!.HoldGoalForTests(PlayerbotGoalKind.Quest, 4242, 1); return true; });
         TaskCompletionSource held = owners.HoldUpdatesOf(holder);
         await StepUntilAsync(host, feature, () => held.Task.IsCompleted, held.Task, "the checkpoint with the retry due");
 
@@ -804,7 +806,7 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
-    private sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
+    internal sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
     {
         private int _remaining = faults;
 
@@ -890,6 +892,31 @@ public sealed class ManagedPlayerbotLifecycleTests
         private readonly ConcurrentDictionary<Guid, ManagedPlayerbot> _items = new();
         public bool FailNextCreate { get; set; }
         public bool FailNextUpdate { get; set; }
+
+        private int _rowsWritten;
+
+        /// <summary>Change a stored row behind the feature's back, bumping its revision as any other writer would.</summary>
+        public void ChangeOutOfBand(Guid botId, Func<ManagedPlayerbot, ManagedPlayerbot> change)
+            => _items.AddOrUpdate(botId, _ => throw new InvalidOperationException("unknown-bot"),
+                (_, current) => change(current) with { Revision = current.Revision + 1 });
+
+        /// <summary>Remove a stored row behind the feature's back.</summary>
+        public void DropOutOfBand(Guid botId) => _items.TryRemove(botId, out _);
+
+        /// <summary>Raise a stored row's revision behind the feature's back, as another writer would (the next update of it is stale).</summary>
+        public void BumpRevision(Guid botId)
+            => _items.AddOrUpdate(botId, _ => throw new InvalidOperationException("unknown-bot"), (_, current) => current with { Revision = current.Revision + 1 });
+
+        /// <summary>Rows written by update (single or batched) since the store was made.</summary>
+        public int RowsWritten => Volatile.Read(ref _rowsWritten);
+
+        public async Task<IReadOnlyList<bool>> UpdateManyAsync(IReadOnlyList<ManagedPlayerbotUpdate> updates, CancellationToken cancellationToken = default)
+        {
+            var results = new bool[updates.Count];
+            for (int i = 0; i < updates.Count; i++)
+                results[i] = await UpdateAsync(updates[i].Bot, updates[i].ExpectedRevision, cancellationToken);
+            return results;
+        }
 
         private TaskCompletionSource? _loadHeld;
         private TaskCompletionSource _loadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -991,7 +1018,7 @@ public sealed class ManagedPlayerbotLifecycleTests
                 if (current.Revision != expectedRevision || current.AccountId != bot.AccountId
                     || current.CharacterId != bot.CharacterId || current.AccountName != bot.AccountName)
                     return false;
-                if (_items.TryUpdate(bot.BotId, bot, current)) return true;
+                if (_items.TryUpdate(bot.BotId, bot, current)) { Interlocked.Increment(ref _rowsWritten); return true; }
             }
 
             return false;
