@@ -47,6 +47,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private uint _repairBackoffUntil;
     private PlayerbotRoute? _route;
     private ObjectGuid _routeTarget;
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this controller's plans.</summary>
+    private TileWait _tileWait;
     private ObjectGuid _trainerTarget;
     private bool _trainerListPending;
     private readonly HashSet<uint> _greenTrainerSpells = [];
@@ -122,7 +125,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (player.Map is not { }) return false;
             if (_route is null || _routeTarget != npc.Guid)
             {
-                if (!PlayerbotNavigation.TryPlan(player, new(npc.X, npc.Y, npc.Z), options, out _route)) return false;
+                PlanOutcome visit = PlayerbotNavigation.PlanExact(player, new(npc.X, npc.Y, npc.Z), options, ref _tileWait,
+                    session.World.NowMs, out _route);
+                if (visit == PlanOutcome.Pending) return true; // a tile of the way is being read: keep the visit, plan again next think
+                if (visit == PlanOutcome.Refused) return false;
                 _routeTarget = npc.Guid;
             }
             return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
@@ -388,7 +394,16 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 // A leg walked to its end (the motion stops there without completing the route) is followed by the next one.
                 if (_repairRoute is null || _repairRoute.Complete || _repairRoute.Points.Count == 0
                     || Vector3.Distance(here, _repairRoute.Points[^1]) < 1f)
-                    _repairRoute = PlayerbotNavigation.TryPlanToward(player, at, options, out PlayerbotRoute? leg) ? leg : null;
+                {
+                    PlanOutcome next = PlayerbotNavigation.PlanToward(player, at, options, ref _tileWait, now, out PlayerbotRoute? leg);
+                    _repairRoute = leg;
+                    if (next == PlanOutcome.Pending)
+                    {
+                        // A tile of the next leg is being read: the walk waits, it is not stuck. Give back this think's stuck time.
+                        _repairStuckMs = _repairStuckMs > elapsedMs ? _repairStuckMs - elapsedMs : 0;
+                        return true;
+                    }
+                }
                 if (_repairRoute is not null && PlayerbotNavigation.TryAdvance(session, _repairRoute, options, elapsedMs, now)) return true;
                 _repairRoute = null;
                 return false; // planned again at the next think, until the stuck clock runs out
@@ -401,13 +416,22 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // At most MaxRepairPlansPerThink new candidates are planned to in one think (however many Updates it makes), nearest first;
         // the rest wait for the next think, the blocked set keeping the refused ones out. A refused plan blocks its spawn as ever: a
         // start off the mesh still reaches some spawns (the steep-ground escape depends on the destination), so none is skipped.
+        bool tilesPending = false;
         foreach ((uint entry, CreatureSpawn spawn) in _repairSpawns.Where(s => !_blockedRepairSpawns.Contains(s.Spawn.Guid))
                      .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
             if (_repairPlansThisThink >= MaxRepairPlansPerThink) return false;
             _repairPlansThisThink++;
-            if (!PlayerbotNavigation.TryPlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, out PlayerbotRoute? route) || route is null)
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, ref _tileWait, now,
+                out PlayerbotRoute? route);
+            if (planned == PlanOutcome.Pending)
+            {
+                // Not a verdict on this spawn (a tile of the way is being read): leave it unblocked and plan again next think.
+                tilesPending = true;
+                continue;
+            }
+            if (planned == PlanOutcome.Refused || route is null)
             {
                 _blockedRepairSpawns.Add(spawn.Guid);
                 continue;
@@ -422,6 +446,13 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
             _blockedRepairSpawns.Add(spawn.Guid);
             ClearRepairTrip();
+        }
+
+        // Candidates waiting for tiles are neither walked to nor refused: no rest and nothing cleared, the same ones are planned again.
+        if (tilesPending)
+        {
+            Goal = PlayerbotGoalKind.Vendor;
+            return true;
         }
 
         // Nothing to walk to: rest from trips a while, then look again with every spawn.

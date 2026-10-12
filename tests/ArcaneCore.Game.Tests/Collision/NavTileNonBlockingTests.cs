@@ -96,7 +96,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.True(nav.GetNavMesh(0)!.IsTerrainTileLoaded(31, 31));
         Assert.Equal(1, _reads);
         Assert.Equal(1, nav.TileReadsStarted);
-        Assert.Equal(NavMeshPathfinder.MaxConcurrentTileReads, nav.FreeTileReadSlots);
+        Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         }
 
         Assert.Equal(tiles, nav.TileReadsStarted);
-        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref _running) == NavMeshPathfinder.MaxConcurrentTileReads, TimeSpan.FromSeconds(10)));
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref _running) == nav.MaxConcurrentTileReads, TimeSpan.FromSeconds(10)));
         Assert.Equal(0, nav.FreeTileReadSlots);
 
         _gate.Set();
@@ -139,7 +139,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         }
 
         Assert.Equal(tiles, _reads);
-        Assert.Equal(NavMeshPathfinder.MaxConcurrentTileReads, _peak);
+        Assert.Equal(nav.MaxConcurrentTileReads, _peak);
     }
 
     [Fact]

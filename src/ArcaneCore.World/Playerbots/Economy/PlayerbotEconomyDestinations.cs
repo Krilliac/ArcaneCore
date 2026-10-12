@@ -210,17 +210,24 @@ internal sealed class PlayerbotEconomyWalker(WorldSession session, PlayerbotOpti
     private const uint StuckMs = 5_000;
 
     private PlayerbotRoute? _route;
+    private TileWait _tileWait;
     private Vector3 _target;
     private Vector3 _last;
     private uint _stuckMs;
 
-    /// <summary>One step towards <paramref name="target"/>; false when no route exists, the route cannot be followed or the bot is stuck.</summary>
+    /// <summary>
+    /// One step towards <paramref name="target"/>; false when no route exists, the route cannot be followed or the bot is stuck. True
+    /// (and standing) while a tile of the way is still being read, for <see cref="TileWait.MaxMs"/>.
+    /// </summary>
     internal bool Step(Player player, Vector3 target, uint elapsedMs)
     {
         if (!float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z)) return false;
         if (_route is null || _route.Complete || Vector3.DistanceSquared(_target, target) > 1f)
         {
-            if (!PlayerbotNavigation.TryPlanToward(player, target, options, out _route) || _route is null)
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, options, ref _tileWait, session.World.NowMs, out _route);
+            // A tile of the way is still being read: not a verdict on this target. The step holds and plans again next think.
+            if (planned == PlanOutcome.Pending) return true;
+            if (planned != PlanOutcome.Route || _route is null)
             {
                 Clear();
                 return false;

@@ -300,6 +300,7 @@ internal sealed class PlayerbotHomeReturn
     internal const uint TeleportCooldownMs = 300_000;
 
     private PlayerbotRoute? _route;
+    private TileWait _tileWait;
     private Vector3 _lastPosition;
     private uint _stuckMs;
     private int _failures;
@@ -551,13 +552,13 @@ internal sealed class PlayerbotHomeReturn
         _lastPosition = position;
         if (_route is null or { Complete: true })
         {
-            long pendingMark = PlayerbotNavigation.PendingMark;
-            if (!PlayerbotNavigation.TryPlanToward(player, area.Centre, options, out _route))
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, area.Centre, options, ref _tileWait, nowMs, out _route);
+            if (planned != PlanOutcome.Route)
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
-                // A tile still being read is no failure of the walk home: plan again next think (the read ends either way).
-                if (!PlayerbotNavigation.PendingSince(pendingMark)) Fail(nowMs);
+                // A tile still being read is no failure of the walk home: plan again next think, for TileWait.MaxMs (then it counts).
+                if (planned == PlanOutcome.Refused) Fail(nowMs);
                 return false;
             }
 

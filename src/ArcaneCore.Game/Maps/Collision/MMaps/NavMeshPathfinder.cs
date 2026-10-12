@@ -33,11 +33,13 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
 
-    public NavMeshPathfinder(string directory, ILogger? logger = null)
+    public NavMeshPathfinder(string directory, ILogger? logger = null, int maxConcurrentTileReads = DefaultConcurrentTileReads)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _directory = directory;
         _logger = logger ?? NullLogger.Instance;
+        MaxConcurrentTileReads = Math.Clamp(maxConcurrentTileReads, 1, 16);
+        _tileReadSlots = new SemaphoreSlim(MaxConcurrentTileReads, MaxConcurrentTileReads);
     }
 
     public bool Enabled => true;
@@ -411,10 +413,17 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         NavMeshTile? readTile = null;
         if (nonBlocking)
         {
+            int startedBefore = TileReadsStarted;
             switch (PollTileRead(mapId, terrain.X, terrain.Y, out readTile))
             {
                 case TileReadState.Pending:
                     PathSearchCounters.RecordTilePending();
+                    // A read started here is work this query asked for, like a tile loaded: it counts against MaxTilesPerQuery.
+                    if (TileReadsStarted != startedBefore)
+                    {
+                        _queryLoads++;
+                    }
+
                     return false;
                 case TileReadState.Unavailable:
                     if (_noTile.Count < 16_384)
@@ -491,11 +500,15 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     /// </summary>
     public const int MaxPendingTileReads = 16;
 
-    /// <summary>The most tile files read at the same time; further reads wait for a slot without holding a thread.</summary>
-    public const int MaxConcurrentTileReads = 3;
+    /// <summary>The default for <see cref="MaxConcurrentTileReads"/> (<see cref="CollisionOptions.NavTileReadConcurrency"/>).</summary>
+    public const int DefaultConcurrentTileReads = 2;
 
+    /// <summary>The most tile files read at the same time; further reads wait for a slot without holding a thread.</summary>
+    public int MaxConcurrentTileReads { get; }
+
+    /// <summary>Held reads by tile: the read, and the sequence number of the last time a query asked for it (least recently asked is dropped first).</summary>
     private readonly Dictionary<(uint Map, int X, int Y), (Task<TileRead> Read, long Sequence)> _async = [];
-    private readonly SemaphoreSlim _tileReadSlots = new(MaxConcurrentTileReads, MaxConcurrentTileReads);
+    private readonly SemaphoreSlim _tileReadSlots;
     private long _asyncSequence;
 
     /// <summary>Background tile reads started (diagnostics and tests).</summary>
@@ -521,6 +534,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         (uint, int, int) key = (mapId, tileX, tileY);
         if (_async.TryGetValue(key, out (Task<TileRead> Read, long Sequence) entry))
         {
+            _async[key] = (entry.Read, ++_asyncSequence); // asked for now: the last to be dropped when the table is full
             if (!entry.Read.IsCompleted)
             {
                 return TileReadState.Pending;
@@ -549,16 +563,18 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             return TileReadState.Pending;
         }
 
+        // The held reads are bounded whatever their source (a prefetched tile is held until installed, as a read is): with the table
+        // full and no finished read to drop, nothing starts and nothing is taken from the prefetch cache; the answer is pending.
+        if (_async.Count >= MaxPendingTileReads && !DropLeastRecentFinishedRead())
+        {
+            return TileReadState.Pending;
+        }
+
         if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile prefetched))
         {
             _async[key] = (Task.FromResult(new TileRead(prefetched, null)), ++_asyncSequence);
             tile = prefetched;
             return TileReadState.Ready;
-        }
-
-        if (_async.Count >= MaxPendingTileReads && !DropOldestFinishedRead())
-        {
-            return TileReadState.Pending;
         }
 
         string file = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
@@ -567,7 +583,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         return TileReadState.Pending;
     }
 
-    private bool DropOldestFinishedRead()
+    /// <summary>Drop the finished read that was asked for longest ago (one a query just asked for is the last): true when one was dropped.</summary>
+    private bool DropLeastRecentFinishedRead()
     {
         (uint, int, int)? oldest = null;
         long oldestSequence = long.MaxValue;

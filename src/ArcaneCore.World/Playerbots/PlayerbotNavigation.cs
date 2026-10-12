@@ -70,6 +70,62 @@ internal sealed class PlayerbotRoute
     internal bool Complete => NextPoint >= Points.Count;
 }
 
+/// <summary>The answer of a planning call that may wait for navigation tiles read in the background (<see cref="PlayerbotNavigation.PlanToward"/>).</summary>
+internal enum PlanOutcome : byte
+{
+    /// <summary>A route was planned.</summary>
+    Route,
+    /// <summary>No verdict yet: a tile on the way is being read. Keep the goal, set nothing aside, plan again on a later think.</summary>
+    Pending,
+    /// <summary>The destination was judged unreachable (or the wait for tiles passed <see cref="TileWait.MaxMs"/>): handle as a refusal.</summary>
+    Refused,
+}
+
+/// <summary>
+/// One goal's wait for navigation tiles (<see cref="PlanOutcome.Pending"/>): held by the caller, passed by reference to the planning call.
+/// A wait is a run of holds, each within <see cref="GapMs"/> of the last. Past <see cref="MaxMs"/> it is spent: the refusal stands, for
+/// every further pending answer of the run, until a plan succeeds (<see cref="Reset"/>) or the run breaks off. Owned and touched by the
+/// world thread only.
+/// </summary>
+internal struct TileWait
+{
+    /// <summary>How long a bot waits for the tiles of one plan before the refusal counts as any other.</summary>
+    internal const uint MaxMs = 15_000;
+
+    /// <summary>Holds further apart than this are separate waits.</summary>
+    internal const uint GapMs = 5_000;
+
+    private uint _since;
+    private uint _lastHold;
+    private bool _spent;
+
+    /// <summary>Whether a wait is under way (not yet spent).</summary>
+    internal readonly bool Active => _since != 0 && !_spent;
+
+    /// <summary>Whether to keep waiting at <paramref name="now"/> (clock in ms, wrapping); false once the wait passed <see cref="MaxMs"/>.</summary>
+    internal bool Hold(uint now)
+    {
+        if (_since == 0 || unchecked(now - _lastHold) > GapMs)
+        {
+            _since = now == 0 ? 1 : now;
+            _spent = false;
+        }
+
+        _lastHold = now;
+        if (_spent) return false;
+        if (unchecked(now - _since) <= MaxMs) return true;
+        _spent = true;
+        return false;
+    }
+
+    /// <summary>A plan succeeded or the goal changed: the next pending answer starts a new wait.</summary>
+    internal void Reset()
+    {
+        _since = 0;
+        _spent = false;
+    }
+}
+
 internal static class PlayerbotNavigation
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
@@ -102,6 +158,46 @@ internal static class PlayerbotNavigation
 
     /// <summary>Whether a search since <paramref name="mark"/> (<see cref="PendingMark"/>) waited for a navigation tile.</summary>
     internal static bool PendingSince(long mark) => PathSearchCounters.TilesPending != mark;
+
+    /// <summary>
+    /// Plans like <see cref="TryPlan"/>, but tells a refusal for want of a navigation tile still being read in the background
+    /// (<see cref="PlanOutcome.Pending"/>) from a verdict on the destination (<see cref="PlanOutcome.Refused"/>). The wait is bounded by
+    /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
+    /// </summary>
+    internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, bool completedQuestReturn = false)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn), mark, ref wait, now, ref route);
+    }
+
+    /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
+    internal static PlanOutcome PlanFar(Player player, Vector3 destination, PlayerbotOptions options, int searchNodes, ref TileWait wait,
+        uint now, out PlayerbotRoute? route)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlanFar(player, destination, options, searchNodes, out route), mark, ref wait, now, ref route);
+    }
+
+    /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
+    internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, bool completedQuestReturn = false)
+    {
+        long mark = PendingMark;
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn), mark, ref wait, now, ref route);
+    }
+
+    private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
+    {
+        if (planned && route is not null)
+        {
+            wait.Reset();
+            return PlanOutcome.Route;
+        }
+
+        route = null;
+        return PendingSince(mark) && wait.Hold(now) ? PlanOutcome.Pending : PlanOutcome.Refused;
+    }
 
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
@@ -273,6 +369,7 @@ internal static class PlayerbotNavigation
 
         Vector3 along = Vector3.Normalize(flat);
         Vector3 side = new(-along.Y, along.X, 0);
+        long detourMark = PendingMark;
         // Other ways after the direct one was refused: held to the think's search budget (PlayerbotThinkProbe.Fallback).
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         foreach (float extra in HazardDetourYards)
@@ -300,6 +397,8 @@ internal static class PlayerbotNavigation
                 return true;
             }
 
+        // A detour leg that waited for a tile still being read is no evidence of a ring: the caller asks again once it is in.
+        if (PendingSince(detourMark)) return false;
         // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
         if (!trial) risk.Refused(player, hazard);
         return false;

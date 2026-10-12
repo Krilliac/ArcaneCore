@@ -31,6 +31,13 @@ public sealed class CollisionOptions
     /// <summary>Use navmeshes for paths (vmangos <c>mmap.enabled</c>, default on).</summary>
     public bool EnablePathfinding { get; set; } = true;
 
+    /// <summary>
+    /// The most navigation tile files (<c>NNNXXYY.mmtile</c>) read at the same time by bots' path searches, in the background. Reads share
+    /// the data disk with the map, so a low number keeps a cold start from starving it; a tile a search waits for is then ready a little
+    /// later. At least 1.
+    /// </summary>
+    public int NavTileReadConcurrency { get; set; } = MMaps.NavMeshPathfinder.DefaultConcurrentTileReads;
+
     /// <summary>The vmap directory actually used: the setting, else <c>vmaps/</c> under the terrain data directory; null when neither is set.</summary>
     public string? ResolveVMapDirectory(string? dataDirectory) => Resolve(VMapDirectory, dataDirectory, "vmaps");
 
