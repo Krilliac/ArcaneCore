@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Instances;
@@ -113,6 +114,37 @@ public sealed class PlayerbotRunWorldTests
         await world.OnWorldAsync(() =>
         {
             group.Members.Add(new PlayerbotGroupCoordinator.Member(Guid.NewGuid(), default, "Realone", PlayerbotGroupRole.Damage, PlayerbotRole.MeleeDps, 0, real: true));
+            group.Run!.Apply(PlayerbotRunSignal.Arrived);
+            group.Run.Apply(PlayerbotRunSignal.AllInside);
+            group.Run.Apply(PlayerbotRunSignal.BossDead(BossEntry));
+            group.Run.Apply(PlayerbotRunSignal.Left);
+            Assert.True(group.Run.Complete);
+            group.Succeeded = true;
+            group.State = PlayerbotGroupState.Disbanding;
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset request skipped: a member is not a managed bot", StringComparison.Ordinal));
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("reset instance", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompletedRun_WithAnOfflineCharacterOnlyInTheServerGroup_LeaderDoesNotSendTheReset()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Offline");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+
+        // A character the coordinator never tracked (offline, so possibly human) sits in the server group; no coordinator member is Real.
+        await world.OnWorldAsync(() =>
+        {
+            var stranger = new ObjectGuid(0x7FFFFF01UL);
+            Assert.True(world.GroupManager.GetGroup(group.LeaderGuid)!.AddMemberSlot(stranger, "Stranger"));
+            Assert.DoesNotContain(group.Members, m => m.Real || m.Guid == stranger);
             group.Run!.Apply(PlayerbotRunSignal.Arrived);
             group.Run.Apply(PlayerbotRunSignal.AllInside);
             group.Run.Apply(PlayerbotRunSignal.BossDead(BossEntry));
