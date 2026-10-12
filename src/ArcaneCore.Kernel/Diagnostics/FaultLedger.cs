@@ -80,6 +80,13 @@ public sealed class FaultLedger
     /// <summary>The process-wide ledger.</summary>
     public static FaultLedger Shared { get; } = new();
 
+    /// <summary>
+    /// Raised on the recording thread, after the counts are updated, for each fault whose recording says the caller should log it (so a fault
+    /// storm raises it as rarely as it logs: the first <c>FaultLogLimit</c> occurrences of a signature, then at most once a minute). Handlers must
+    /// be quick and must not throw; one that throws is ignored.
+    /// </summary>
+    public event Action<FaultNotice>? FaultNoticed;
+
     /// <summary>Faults recorded since start or the last <see cref="Reset"/> (every occurrence, logged or not).</summary>
     public long Total => Volatile.Read(ref _total);
 
@@ -230,7 +237,20 @@ public sealed class FaultLedger
 
         Interlocked.Increment(ref _total);
         Interlocked.Exchange(ref _lastTicks, now.UtcTicks);
-        return entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
+        FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
+        if (recording.ShouldLog && FaultNoticed is { } noticed)
+        {
+            try
+            {
+                noticed(new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A subscriber must never turn a handled fault into a second one.
+            }
+        }
+
+        return recording;
     }
 
     private static Exception Unwrap(Exception exception)
@@ -495,6 +515,9 @@ public sealed record FaultLedgerLimits(int MaxSignatures = 512, int LogLimit = 1
 /// whether the caller should write its log line, and how many occurrences since the previous line were held back.
 /// </summary>
 public readonly record struct FaultRecording(string Id, long Count, bool ShouldLog, long Suppressed);
+
+/// <summary>A fault the ledger wants logged now (<see cref="FaultLedger.FaultNoticed"/>): its signature id, where and what, how often so far and how many repeats were held back since the previous notice.</summary>
+public sealed record FaultNotice(string Id, string Site, string ExceptionType, string Message, long Count, long Suppressed);
 
 /// <summary>A point-in-time copy of one ledger entry (safe to hold and read from any thread).</summary>
 public sealed record FaultSnapshot(
