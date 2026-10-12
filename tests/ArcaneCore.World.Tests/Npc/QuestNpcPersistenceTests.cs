@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
@@ -358,7 +359,8 @@ public sealed class QuestNpcPersistenceTests
             }
         }
 
-        public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> rows)
+        public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> rows,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Attempts.Enqueue($"quests:{characterId}:{string.Join(",", rows.Select(q => q.Quest))}");
             if (Interlocked.Increment(ref _questAttempts) == 1 && BlockFirstQuestSave)
@@ -382,7 +384,8 @@ public sealed class QuestNpcPersistenceTests
             }
         }
 
-        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask)
+        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Attempts.Enqueue($"taxi:{characterId}");
             ThrowIfFailing(characterId);
@@ -415,10 +418,12 @@ public sealed class QuestNpcPersistenceTests
         public Task<CharacterQuestData> LoadAsync(int characterId, CancellationToken cancellationToken = default) =>
             Task.FromResult(_storage.Snapshot(characterId));
 
-        public Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts, CancellationToken cancellationToken = default) =>
+        public Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null) =>
             _storage.SaveQuestsAsync(characterId, upserts);
 
-        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default) =>
+        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null) =>
             _storage.SaveTaxiMaskAsync(characterId, mask);
 
         public void Dispose() => Interlocked.Increment(ref _storage.ScopesDisposed);

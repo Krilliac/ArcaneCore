@@ -127,8 +127,8 @@ public sealed record SchemaPlan(
     /// <summary>Whether an apply would be refused.</summary>
     public bool IsRefused => Refusal is not null || Blockers.Count > 0;
 
-    /// <summary>The number of DDL statements-worth of changes (actions that create something).</summary>
-    public int CreateCount => Actions.Count(a => a.Decision == ChangeDecision.Create);
+    /// <summary>The number of DDL statements-worth of changes (creating tables, columns or indexes; row seeds are DML).</summary>
+    public int CreateCount => Actions.Count(a => a.Decision == ChangeDecision.Create && a.Object != ChangeObject.Row);
 
     /// <summary>The first refusal text: the state refusal, else the first blocking action's.</summary>
     public string? FirstRefusal => Refusal ?? Blockers.FirstOrDefault()?.Detail;
