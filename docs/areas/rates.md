@@ -9,6 +9,34 @@ The full description of every key is in the generated [configuration reference](
 `.movement set` changes them at runtime); every other rate is read when its feature starts, so a change needs a restart, as the
 reference table's `Reload` column says (`-`: not part of the reload set).
 
+## Changing rates live: `.rates`
+
+`.rates [show] [$filter]` (GameMaster), `.rates set $name $value [$reason]` and `.rates reset [$name|all]` (Administrator) view and change the rates below
+for the whole server without a restart, the sibling of `.movement` (which keeps the player speed rates). A set changes the shared option object the
+consumer reads at every use, so it applies at once; it lasts until `.rates reset`, `.reload config` (which puts every overridden rate back to its configured
+value and notes it in the reload summary) or a restart. **Nothing is written to a configuration file**: to keep a value across restarts, edit it in
+`appsettings.json` / `world.conf` (the key column of the tables above). `show` prints the value in force, the configured value (the value before the first
+set) and whether the rate is overridden. `.reload config` does not re-read these keys from the file (they were never part of the reload set); it only clears
+overrides. `.modify xprate` is separate: it sets one player's personal rate and is untouched, except that `Rate.XP.Personal.Min/Max` are rates here too.
+
+`$name` is the vmangos name, any case, with or without `Rate.`, or a short form: `xp`, `xp.elite`, `rest`, `rep`, `honor`, `talent`, `health`, `mana`,
+`rage`, `energy`, `fall`, `drop.poor` ... `drop.artifact`, `drop.referenced`, `money`, `corpse`, `aggro`. `$value` is 0 to 100 (finite; 1 is retail), with
+tighter bounds for `Rate.Auction.Time` (0.1 up) and the creature health rates (0.01 up). Every change is logged at Information (`Rate Rate.XP.Kill Set: 1 -> 2
+by Admin (reason: ...)`), written to the GM command audit and published through `ServerRates.RateChanged` (one event per world, old and new value, kind,
+actor, reason), the hook an announcer can subscribe to.
+
+Live-tunable: `Rate.XP.Kill`, `Rate.XP.Kill.Elite`, `Rate.XP.Quest`, `Rate.XP.Explore`, `Rate.XP.Personal.Min`, `Rate.XP.Personal.Max`, `Rate.Rest.InGame`,
+`Rate.Rest.Offline.InTavernOrCity`, `Rate.Rest.Offline.InWilderness`, `Rate.Reputation.Gain`, `Rate.Reputation.LowLevel.Kill`, `Rate.Honor`, `Rate.Talent`,
+`Rate.Health`, `Rate.Mana`, `Rate.Rage.Income`, `Rate.Rage.Loss`, `Rate.Energy`, `Rate.Damage.Fall`, `Rate.Drop.Item.Poor`, `Rate.Drop.Item.Normal`,
+`Rate.Drop.Item.Uncommon`, `Rate.Drop.Item.Rare`, `Rate.Drop.Item.Epic`, `Rate.Drop.Item.Legendary`, `Rate.Drop.Item.Artifact`, `Rate.Drop.Item.Referenced`,
+`Rate.Drop.Money` (sets `Loot:MoneyRate` and `Quests:RateDropMoney` together, as the one vmangos key does), `Rate.Corpse.Decay.Looted`, `Rate.Mining.Amount`,
+`Rate.Mining.Next`, `Rate.Auction.Time`, `Rate.Auction.Deposit`, `Rate.Auction.Cut`, `Rate.Creature.Aggro`, and for each rank `Normal`, `Elite.Elite`,
+`Elite.RAREELITE`, `Elite.WORLDBOSS`, `Elite.RARE` the `Rate.Creature.<rank>.HP` (creatures created or respawned afterwards), `.Damage` and `.SpellDamage`
+(live on existing creatures). The fifteen names: `Rate.Creature.Normal.HP`, `Rate.Creature.Normal.Damage`, `Rate.Creature.Normal.SpellDamage`, `Rate.Creature.Elite.Elite.HP`, `Rate.Creature.Elite.Elite.Damage`, `Rate.Creature.Elite.Elite.SpellDamage`, `Rate.Creature.Elite.RAREELITE.HP`, `Rate.Creature.Elite.RAREELITE.Damage`, `Rate.Creature.Elite.RAREELITE.SpellDamage`, `Rate.Creature.Elite.WORLDBOSS.HP`, `Rate.Creature.Elite.WORLDBOSS.Damage`, `Rate.Creature.Elite.WORLDBOSS.SpellDamage`, `Rate.Creature.Elite.RARE.HP`, `Rate.Creature.Elite.RARE.Damage`, `Rate.Creature.Elite.RARE.SpellDamage`.
+
+Not live-tunable: the player speed rates (use `.movement set`), `Skills:Gain*` and `Skills:Chance*` (an immutable record copied into each player's skills at
+login), `Rate.InstanceResetTime` (nothing reads it after the schedules are built), the respec cost keys, the durability chances and the ghost run speeds.
+
 ## Movement speed (non-retail when not 1)
 
 Not in vmangos. The model is the MaNGOS Zero fork's `Movement.PlayerSpeedRate` and `Movement.{Run,Swim,Walk}SpeedRate`

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 193 |
-| `Administrator` | 6 | 292 |
+| `GameMaster` | 3 | 195 |
+| `Administrator` | 6 | 296 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -347,6 +347,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
 | `.playerbot qa spells` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa spells [#n] The spell coverage of the bots (how many of the spells they can cast are fully handled, the gaps shared by the most spells) and the n (default 10, at most 25) highest-ranked spell findings bots met. |
 | `.playerbot qa reset` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa reset [$id] Forget one finding, or all of them. Local only: GitHub issues are not touched. |
+| `.rates` ... | 3 | GameMaster | stored level through the map | Live server rates. Syntax: .rates [show\|set\|reset] |
+| `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
+| `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |
+| `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |
