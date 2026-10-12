@@ -1323,7 +1323,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         if (_attackerFacts.TryGetValue(creature.Entry, out QaAttackerFact? known))
         {
-            if (known.Level == creature.Level) return; // already captured this combat: no per-update allocation or hostility query
+            if (known.Level == creature.Level) return; // already captured in this update (attacker and threat, or the killing blow): skip the repeat. RememberAttackers clears the facts each living update, so hostility stays fresh.
         }
         else if (_attackerFacts.Count >= 16) return;
         var template = creature.Template;
