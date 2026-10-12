@@ -393,15 +393,26 @@ module already registered, a hook class that overrides nothing) rejects the whol
   (selected by a template's `AIName` / `ScriptName`). Same slots as the server's own entry scripts and named AIs.
 * Script hooks: a public class with a public parameterless constructor implementing e.g. `IPlayerHooks` and overriding only the
   methods it needs. On a swap every dispatch array is rebuilt from the hook objects that stay (registration order) plus the new
-  ones, so an unloaded module's hooks are referenced by nothing.
+  ones, so an unloaded module's hooks are referenced by nothing. The new arrays are built completely before they replace the old
+  ones, so a failure while building leaves the live hooks untouched. The bridges to game events (equipment, group, guild and
+  spell hooks) are subscribed the first time any hook of that kind exists, so a module may add `IItemHooks.OnEquip` /
+  `OnUnequip`, `IGroupHooks`, `IGuildHooks` or `ISpellHooks` even when no built-in module did (players already online are bound at
+  that moment). **`IWorldHooks.OnStartup` is rejected for a module**: it runs once while the world starts, which has already happened.
 * **Creatures that already exist.** A creature whose entry, `ScriptName` or `AIName` the module registers, or whose current AI is
   code of the module being replaced or unloaded, gets a new AI object **at once** unless it is in combat (a new AI would not have
   seen the fight begin). Only the AI object is rebuilt: position, health, threat and motion are untouched. Dead creatures are
   switched too (the new AI hears `OnRespawn`). Creatures in combat keep the old AI, are counted in the reply
-  (`N in combat keep the old AI for now`) and retried every 5 seconds for up to 10 minutes; one still in combat after that keeps
+  (`N in combat keep the old AI for now`) and retried every 5 seconds for up to 10 minutes (only those creatures: one that already switched is never rebuilt, which would
+  wipe its AI state); one still in combat after that keeps
   the retired module alive (`Unloaded modules not yet freed` stays above 0) until it gets another AI. Pets and charmed creatures
   are never touched.
 * A module's AI state does not carry over a replace; the new AI starts from nothing.
+* Known limits: swapping rebuilds only the AI object. It does not run the creature's `ForgetAi` cleanup (summons, scripted despawns and
+  arrival relays the old AI had queued stay queued) and does not call `OnRespawn` on the new AI of a living creature (a dead one hears it
+  when it respawns). A map-specific entry AI (and the built-in dungeon boss scripts) is consulted before the module's registration, so
+  a module cannot shadow those entries.
+* If applying the creature AI or script hooks fails after validation (not expected), the reply is a failure ("only partly applied": the
+  opcode and command tables had already changed), the announcement is `Failed` and the audit log gets `module-failed`.
 * Not available to modules yet: spell scripts (their registry and effect chain are built once with the spell system),
   map-specific entry AI, `IWorldFeature`s and tables.
 
@@ -422,6 +433,9 @@ powershell -File scripts\hotmodule-hash.ps1 -Name GmCommands -ModuleDirectory D:
 ```
 
 `scripts/hotmodule-hash.ps1` prints the SHA-256 of the exact file and appends it to the allowlist; it never loads anything.
+
+The allowlist covers `<name>.dll` only. A private dependency dll copied into the module folder is **not** hashed (and is loaded
+with the module), so keep the module directory writable only by the operator, or ship the module as one self-contained dll.
 
 ### Unload: what is proven and what is not
 

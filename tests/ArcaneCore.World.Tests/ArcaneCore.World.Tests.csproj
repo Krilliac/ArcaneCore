@@ -38,6 +38,7 @@
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV2\HotFixtureV2.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV2Output" />
     <ProjectReference Include="..\hotmodule-fixtures\HotGameV1\HotGameV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotGameV1Output" />
     <ProjectReference Include="..\hotmodule-fixtures\HotGameV2\HotGameV2.csproj" ReferenceOutputAssembly="false" OutputItemType="HotGameV2Output" />
+    <ProjectReference Include="..\hotmodule-fixtures\HotCreaturesV1\HotCreaturesV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotCreaturesOutput" />
     <ProjectReference Include="..\hotmodule-fixtures\SampleGm\SampleGm.csproj" ReferenceOutputAssembly="false" OutputItemType="SampleGmOutput" />
   </ItemGroup>
 
@@ -46,6 +47,7 @@
     <Copy SourceFiles="@(HotFixtureV2Output)" DestinationFolder="$(OutDir)hotfixtures\v2" />
     <Copy SourceFiles="@(HotGameV1Output)" DestinationFolder="$(OutDir)hotfixtures\game1" />
     <Copy SourceFiles="@(HotGameV2Output)" DestinationFolder="$(OutDir)hotfixtures\game2" />
+    <Copy SourceFiles="@(HotCreaturesOutput)" DestinationFolder="$(OutDir)hotfixtures\creatures" />
     <Copy SourceFiles="@(SampleGmOutput)" DestinationFolder="$(OutDir)hotfixtures\sample" />
   </Target>
 

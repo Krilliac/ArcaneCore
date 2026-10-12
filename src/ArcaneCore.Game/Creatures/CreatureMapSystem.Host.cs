@@ -218,8 +218,16 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            CreateAi(creature);
-            changed++;
+            try
+            {
+                CreateAi(creature);
+                changed++;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A script factory that throws leaves the creature with the AI it has; the other creatures still switch.
+                _logger.LogError(ex, "building the new AI of creature {Entry} failed; it keeps its previous AI", creature.Template.Entry);
+            }
         }
 
         return changed;

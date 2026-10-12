@@ -65,7 +65,7 @@ All keys restart-only. `Enabled` and the category switches only decide delivery;
 | `World:Announce:HotSwap:WorldMessageIncludeReason` | `true` | Put the typed reason in the world line. |
 | `World:Announce:HotSwap:AllowNamesInWorldMessage` | `false` | Generic switch; the hot swap texts never contain names, so it changes nothing here. |
 | `World:Announce:HotSwap:RateBurst` / `RatePerMinute` | `10` / `20` | Per-category token bucket (0 burst = unlimited). Suppressed ones are counted (`outcome=rate_limited`) and the next delivered line says how many. |
-| `World:Announce:HotSwap:DedupSeconds` | `0` | Suppress an identical text this many seconds after it was delivered. |
+| `World:Announce:HotSwap:DedupSeconds` | `0` | Suppress an identical text this many seconds after it was delivered. Hot swap events are compared by lane + action + area + result + actor (the same swap by the same person), not by the full text. |
 
 `check-config` / the start-up report validate the section (`AnnounceConfigChecks`): booleans, ranges, severity names, lane names.
 
