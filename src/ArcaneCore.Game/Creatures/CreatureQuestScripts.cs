@@ -62,7 +62,7 @@ public static class CreatureQuestScripts
     /// exploration/event quests the scripts complete (<see cref="QuestNpcServices.ScriptCreditedQuests"/>): the QUEST_EXPLORED quests of
     /// the content's DB scripts and the escort quests of <paramref name="factory"/>'s entry scripts. With <paramref name="factory"/> the
     /// ScriptName-bound gossip and quest handlers of <see cref="CreatureAiFactory.RegisterNpcScript"/> are reached too: the gossip handler
-    /// through <see cref="QuestNpcServices.GossipByScriptName"/>, the quest handler beside the creature AI's own hook. A throwing reward hook is
+    /// through <see cref="QuestNpcServices.GossipByScriptName"/>, the quest handler beside the creature AI's own hook. A throwing accept or reward hook is
     /// logged to <paramref name="logger"/> and recorded in <see cref="FaultLedger.Shared"/>; the reward carries on. Returns the unsubscription.
     /// </summary>
     public static IDisposable Attach(QuestNpcServices npcs, Func<Map, CreatureMapSystem?> systemOf, Func<CreatureContent?>? contentOf = null,
@@ -82,7 +82,7 @@ public static class CreatureQuestScripts
             npcs.GossipByScriptName = gossipOf;
         }
 
-        void Accepted(Player player, ObjectGuid giver, Quest quest) => OnQuestAccepted(systemOf, factory, player, giver, quest);
+        void Accepted(Player player, ObjectGuid giver, Quest quest) => OnQuestAccepted(systemOf, factory, log, player, giver, quest);
         void Rewarded(Player player, ObjectGuid giver, Quest quest) => OnQuestRewarded(systemOf, factory, log, player, giver, quest);
         void Gossip(Player player, ObjectGuid npc, uint scriptId, bool playerIsSource) => OnGossipScript(systemOf, player, npc, scriptId, playerIsSource);
         npcs.QuestAccepted += Accepted;
@@ -100,7 +100,8 @@ public static class CreatureQuestScripts
         });
     }
 
-    private static void OnQuestAccepted(Func<Map, CreatureMapSystem?> systemOf, Func<CreatureAiFactory?>? factory, Player player, ObjectGuid giverGuid, Quest quest)
+    private static void OnQuestAccepted(Func<Map, CreatureMapSystem?> systemOf, Func<CreatureAiFactory?>? factory, ILogger log, Player player,
+        ObjectGuid giverGuid, Quest quest)
     {
         if (giverGuid.High == HighGuid.Item)
         {
@@ -117,14 +118,30 @@ public static class CreatureQuestScripts
             return;
         }
 
-        if (giver is Creature { AI: IQuestScriptAI script })
+        // The quest is already in the log when the hooks run: a script's fault must not skip the DB StartScript, the later subscribers, the
+        // party fan-out, the source spell, nor reach the caller's catch (which kicks the session).
+        if (giver is Creature { AI: IQuestScriptAI script } aiCreature)
         {
-            script.OnQuestAccept(player, quest.Id);
+            try
+            {
+                script.OnQuestAccept(player, quest.Id);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogHookFault(log, AcceptSite, ex, script.GetType().Name, aiCreature, quest.Id);
+            }
         }
 
         if (giver is Creature creature && ScriptQuestHandler(factory, creature) is { } registered)
         {
-            registered.OnQuestAccept(player, creature, quest.Id);
+            try
+            {
+                registered.OnQuestAccept(player, creature, quest.Id);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogHookFault(log, AcceptSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
+            }
         }
 
         if (quest.Template.StartScript != 0 && player.Map is { } map && systemOf(map) is { } system)
@@ -152,7 +169,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    LogHookFault(log, ex, script.GetType().Name, creature, quest.Id);
+                    LogHookFault(log, RewardSite, ex, script.GetType().Name, creature, quest.Id);
                 }
             }
 
@@ -164,7 +181,7 @@ public static class CreatureQuestScripts
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    LogHookFault(log, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
+                    LogHookFault(log, RewardSite, ex, creature.Template.ScriptName ?? string.Empty, creature, quest.Id);
                 }
             }
         }
@@ -176,9 +193,12 @@ public static class CreatureQuestScripts
         }
     }
 
-    private static void LogHookFault(ILogger log, Exception ex, string scriptName, Creature creature, uint questId)
-        => log.LogFault("CreatureQuestScripts.OnQuestRewarded", ex,
-            "quest-rewarded hook of script {Script} failed (quest {Quest}, creature entry {Entry}); the reward carries on", scriptName, questId, creature.Template.Entry);
+    private const string AcceptSite = "CreatureQuestScripts.OnQuestAccept";
+    private const string RewardSite = "CreatureQuestScripts.OnQuestRewarded";
+
+    private static void LogHookFault(ILogger log, string site, Exception ex, string scriptName, Creature creature, uint questId)
+        => log.LogFault(site, ex,
+            "{Site} hook of script {Script} failed (quest {Quest}, creature entry {Entry}); the quest carries on", site, scriptName, questId, creature.Template.Entry);
 
     private static void OnGossipScript(Func<Map, CreatureMapSystem?> systemOf, Player player, ObjectGuid npcGuid, uint scriptId, bool playerIsSource)
     {
