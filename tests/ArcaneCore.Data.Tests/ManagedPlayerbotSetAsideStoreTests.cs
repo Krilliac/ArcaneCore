@@ -44,4 +44,22 @@ public sealed class ManagedPlayerbotSetAsideStoreTests
         await new ManagedPlayerbotSetAsideDataModule().DeleteCharacterDataAsync(db, character.Id, default);
         Assert.Equal([shared], await store.LoadAllAsync());
     }
+
+    [Fact]
+    public async Task UnreachableQuestRow_NeverExpiring_RoundTrips()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options;
+        await using var db = new CharacterDbContext(options);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord
+            { AccountId = 8, Name = "Unreachbot", Race = 1, Class = 1, Level = 1 });
+        var store = new EfManagedPlayerbotSetAsideStore(db);
+        Guid bot = Guid.NewGuid();
+        var row = new PlayerbotSetAside(bot, character.Id, PlayerbotSetAsideKind.UnreachableQuest, 1361, long.MaxValue);
+        Assert.Equal((byte)5, (byte)PlayerbotSetAsideKind.UnreachableQuest);
+        await store.ReplaceAsync(bot, [row]);
+        Assert.Equal([row], await store.LoadAllAsync());
+    }
 }

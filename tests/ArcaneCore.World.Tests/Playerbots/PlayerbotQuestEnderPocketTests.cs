@@ -108,9 +108,67 @@ public sealed partial class PlayerbotQuestReturnTests
             string trace = await fixture.Host.World.InvokeAsync(() =>
                 $"x={fixture.Session.Player!.X:F1} goal={brain.Goal} visible={fixture.Session.Player.VisibleObjects.Count} " +
                 $"risk={brain.RiskReport} rewarded={fixture.Feature.Services.StateOf(fixture.Session.Player)!.Quests.Get(QuestId)!.Rewarded}");
-            Assert.True(sawStrong, "the return walk must actually encounter the same-level strong ring: " + trace);
+            Assert.True(sawStrong, "the return walk must actually encounter the same-level strong pack: " + trace);
             Assert.True(await fixture.Host.World.InvokeAsync(() =>
                 fixture.Feature.Services.StateOf(fixture.Session.Player!)!.Quests.Get(QuestId)!.Rewarded), trace);
+        }
+        finally { await StopAsync(fixture, brain); }
+    }
+
+    [Fact]
+    public async Task RelaxedReturnRoute_DoesNotOutliveThatQuestsReturnCall()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
+        await fixture.AcceptAndCompleteAsync();
+        await AddPocketAsync(fixture, 6);
+        var options = new PlayerbotOptions { Enabled = true };
+        var brain = new PlayerbotBrain(fixture.Session, options);
+        var destinations = new PlayerbotWorldDestinations(fixture.Session, options);
+        try
+        {
+            await fixture.Host.World.InvokeAsync(() =>
+            {
+                var player = fixture.Session.Player!;
+                brain.Risk.ScanHazards(player);
+                PlayerbotNavigation.Guard(player, brain.Risk);
+                fixture.Session.ManagedBudget = new ManagedActionBudget(4);
+                destinations.Update(player, 0, 500, QuestId);
+                Assert.True(destinations.RouteIsRelaxed, "the return trip starts under the relaxed rule");
+                // The same NPC, now an ordinary trip (no return quest): RefreshEntries keys its cache on the return quest and drops the route.
+                fixture.Session.ManagedBudget = new ManagedActionBudget(4);
+                destinations.Update(player, 0, 500);
+                Assert.False(destinations.RouteIsRelaxed, "an ordinary trip must not keep the return's relaxed route");
+                return true;
+            });
+        }
+        finally
+        {
+            await fixture.Host.World.InvokeAsync(() => { PlayerbotNavigation.Guard(fixture.Session.Player!, null); return true; });
+            await StopAsync(fixture, brain);
+        }
+    }
+
+    [Theory]
+    [InlineData((byte)9, true)]   // 3 above the bot: a manageable pack may be crossed on the return
+    [InlineData((byte)10, false)] // 4 above: manageable one at a time, but only the level cap blocks the crossing
+    public async Task PackHazard_IsReturnPassableOnlyWithinTheLevelCap(byte mobLevel, bool passable)
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
+        await fixture.AcceptAndCompleteAsync();
+        await AddPocketAsync(fixture, mobLevel);
+        var brain = new PlayerbotBrain(fixture.Session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await fixture.Host.World.InvokeAsync(() =>
+            {
+                var player = fixture.Session.Player!;
+                brain.Risk.ScanHazards(player);
+                var strong = brain.Risk.Hazards.Active(player.MapId, fixture.Host.World.NowMs)
+                    .Where(hazard => hazard.Kind == PlayerbotHazards.StrongKind).ToList();
+                Assert.NotEmpty(strong);
+                Assert.All(strong, hazard => Assert.Equal(passable, hazard.ReturnPassable));
+                return true;
+            });
         }
         finally { await StopAsync(fixture, brain); }
     }

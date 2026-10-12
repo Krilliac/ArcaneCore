@@ -195,7 +195,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (!float.IsFinite(distanceSquared) || !float.IsFinite(reach) || reach <= 0 || distanceSquared >= reach * reach)
         {
             if (_route is null && !PlayerbotNavigation.TryPlan(player,
-                    new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, out _route))
+                    new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, out _route,
+                    completedQuestReturn: target.Action >= QuestAction.Complete
+                        && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false }))
             {
                 Backoff(now);
                 return false;
