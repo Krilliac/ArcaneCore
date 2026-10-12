@@ -94,7 +94,7 @@ public sealed class WorldFixtureSchemaTests : IDisposable
     }
 
     [Fact]
-    public void AFixtureInAReadOnlyDirectoryStillReportsItsVersion()
+    public void AReadOnlyFlaggedFixtureFileStillReportsItsVersion()
     {
         string path = Create("CREATE TABLE world_schema (Id INTEGER PRIMARY KEY, Version INTEGER NOT NULL); INSERT INTO world_schema (Id, Version) VALUES (1, 53);", wal: true);
         var info = new FileInfo(path) { IsReadOnly = true };
@@ -139,4 +139,24 @@ public sealed class WorldFixtureSchemaTests : IDisposable
     [Fact]
     public void SkipReasonForPathReadsTheNamedFile()
         => Assert.Contains("schema 51 is older", WorldFixtureSchema.SkipReasonForPath(WithVersion(51), 53));
+
+    [Fact]
+    public void AVersionOnlyInTheWalIsStillSeen()
+    {
+        string path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".db");
+        using var writer = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ConnectionString);
+        writer.Open();
+        Exec(writer, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE world_schema (Id INTEGER PRIMARY KEY, Version INTEGER NOT NULL); INSERT INTO world_schema (Id, Version) VALUES (1, 51); PRAGMA wal_checkpoint(TRUNCATE);");
+        Exec(writer, "UPDATE world_schema SET Version = 53 WHERE Id = 1;");
+        Assert.True(new FileInfo(path + "-wal").Length > 0, "the newer version row must live only in the -wal");
+
+        Assert.Null(WorldFixtureSchema.SkipReasonForPath(path, 53));
+    }
+
+    private static void Exec(SqliteConnection connection, string sql)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 }

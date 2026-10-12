@@ -51,9 +51,13 @@ internal static class WorldFixtureSchema
 
     private static int? ReadVersion(string path)
     {
+        string full = Path.GetFullPath(path);
+        // A non-empty -wal may hold the newest version row, which an immutable open ignores; its sidecars already exist, so a plain
+        // read-only open creates nothing. A UNC path cannot be written as a file: URI here, so it also takes the plain open.
+        bool plain = full.StartsWith("\\\\", StringComparison.Ordinal) || (File.Exists(full + "-wal") && new FileInfo(full + "-wal").Length > 0);
         var builder = new SqliteConnectionStringBuilder
         {
-            DataSource = new Uri(Path.GetFullPath(path)).AbsoluteUri + "?immutable=1",
+            DataSource = plain ? full : new Uri(full).AbsoluteUri + "?immutable=1",
             Mode = SqliteOpenMode.ReadOnly,
             Pooling = false,
             DefaultTimeout = 1,
