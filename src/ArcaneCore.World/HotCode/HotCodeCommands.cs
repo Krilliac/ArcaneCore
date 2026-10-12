@@ -31,7 +31,7 @@ public static class HotCodeCommands
                 {
                     string who = context.InvokerName;
                     audit.Record("hotcode-command", $"{who} refresh");
-                    Task<RefreshResult> task = refresh.RefreshNowAsync($"requested by {who}");
+                    Task<RefreshResult> task = refresh.RefreshNowAsync($"requested by {who}", HotSwapOrigin.FromCommand(context));
 
                     // The commit is posted to this very (world) thread: never block on it. Answer from the next tick.
                     _ = task.ContinueWith(

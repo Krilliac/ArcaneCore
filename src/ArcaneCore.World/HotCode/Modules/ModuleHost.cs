@@ -1,20 +1,24 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using ArcaneCore.Game.Scripting;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Ops.Announce;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.HotCode.Modules;
 
 /// <summary>One loaded module, as <c>.hotmodule list</c> shows it.</summary>
-public sealed record ModuleInfo(string Name, int Opcodes, IReadOnlyList<string> CommandRoots, DateTimeOffset LoadedUtc, string Sha256);
+public sealed record ModuleInfo(string Name, int Opcodes, IReadOnlyList<string> CommandRoots, DateTimeOffset LoadedUtc, string Sha256, int CreatureAi = 0, int ScriptHooks = 0);
 
 /// <summary>What a load, reload or unload did.</summary>
-public sealed record ModuleResult(bool Ok, string Detail);
+public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<AnnounceField>? Fields = null);
 
 /// <summary>
 /// Loads, replaces and unloads code in the running server: a module is an assembly in
@@ -58,6 +62,8 @@ public sealed class ModuleHost
     private readonly ILogger _logger;
     private readonly TimeSpan _commitTimeout;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly IHotSwapReporter _reporter;
+    private readonly ModuleGameSeams? _seams;
     private readonly SemaphoreSlim _serial = new(1, 1);
     private readonly Lock _gate = new();
     private readonly Dictionary<string, LoadedModule> _loaded = new(StringComparer.OrdinalIgnoreCase);
@@ -71,8 +77,12 @@ public sealed class ModuleHost
         HotCodeAudit audit,
         ILogger logger,
         TimeSpan? commitTimeout = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        IHotSwapReporter? reporter = null,
+        ModuleGameSeams? seams = null)
     {
+        _seams = seams;
+        _reporter = reporter ?? NullHotSwapReporter.Instance;
         _options = options;
         _world = world;
         _opcodes = opcodes;
@@ -109,11 +119,14 @@ public sealed class ModuleHost
         }
     }
 
-    public Task<ModuleResult> LoadAsync(string name) => RunAsync("load", name, ModuleOperation.Load);
+    /// <summary>Load <paramref name="name"/>. <paramref name="origin"/> (who and why) goes to the hot swap announcement; null is the console.</summary>
+    public Task<ModuleResult> LoadAsync(string name, HotSwapOrigin? origin = null) => RunAsync("load", name, ModuleOperation.Load, origin);
 
-    public Task<ModuleResult> ReloadAsync(string name) => RunAsync("reload", name, ModuleOperation.Reload);
+    /// <summary>Replace the loaded version of <paramref name="name"/> with the dll now on disk.</summary>
+    public Task<ModuleResult> ReloadAsync(string name, HotSwapOrigin? origin = null) => RunAsync("reload", name, ModuleOperation.Reload, origin);
 
-    public Task<ModuleResult> UnloadAsync(string name) => RunAsync("unload", name, ModuleOperation.Unload);
+    /// <summary>Remove the module's registrations and release it.</summary>
+    public Task<ModuleResult> UnloadAsync(string name, HotSwapOrigin? origin = null) => RunAsync("unload", name, ModuleOperation.Unload, origin);
 
     private enum ModuleOperation
     {
@@ -122,9 +135,10 @@ public sealed class ModuleHost
         Unload,
     }
 
-    private async Task<ModuleResult> RunAsync(string verb, string name, ModuleOperation operation)
+    private async Task<ModuleResult> RunAsync(string verb, string name, ModuleOperation operation, HotSwapOrigin? origin)
     {
         await _serial.WaitAsync().ConfigureAwait(false);
+        long started = Stopwatch.GetTimestamp();
         try
         {
             ModuleResult result;
@@ -138,6 +152,7 @@ public sealed class ModuleHost
             }
 
             Record(verb, name, result);
+            ReportSwap(verb, name, result, origin ?? HotSwapOrigin.Console, Stopwatch.GetElapsedTime(started));
             return result;
         }
         finally
@@ -204,7 +219,7 @@ public sealed class ModuleHost
         {
             if (prepared is not null)
             {
-                _loaded[name] = new LoadedModule(name, prepared.Context, prepared.Opcodes, prepared.RootNames, _clock(), prepared.Sha256);
+                _loaded[name] = new LoadedModule(name, prepared.Context, prepared.Opcodes, prepared.RootNames, _clock(), prepared.Sha256, prepared.Game);
             }
             else
             {
@@ -218,13 +233,69 @@ public sealed class ModuleHost
             Retire(existing.Context);
         }
 
-        return operation switch
+        ModuleResult final = operation switch
         {
-            ModuleOperation.Unload => new ModuleResult(true, $"unloaded '{name}' ({existing!.Opcodes.Count} opcode handlers, {existing.RootNames.Length} command roots removed)"),
+            ModuleOperation.Unload => new ModuleResult(
+                true,
+                $"unloaded '{name}' ({existing!.Opcodes.Count} opcode handlers, {existing.RootNames.Length} command roots removed)",
+                [new("sha256", existing.Info.Sha256[..12]), new("opcodes_removed", existing.Opcodes.Count.ToString(CultureInfo.InvariantCulture)), new("roots_removed", existing.RootNames.Length.ToString(CultureInfo.InvariantCulture))]),
             _ => new ModuleResult(
                 true,
-                $"{(operation == ModuleOperation.Reload ? "reloaded" : "loaded")} '{name}': {prepared!.Opcodes.Count} opcode handlers, {prepared.RootNames.Length} command roots ({string.Join(", ", prepared.RootNames.Select(r => "." + r))}); sha256 {prepared.Sha256}"),
+                $"{(operation == ModuleOperation.Reload ? "reloaded" : "loaded")} '{name}': {prepared!.Opcodes.Count} opcode handlers, {prepared.RootNames.Length} command roots ({string.Join(", ", prepared.RootNames.Select(r => "." + r))}); sha256 {prepared.Sha256}",
+                SwapFields(prepared, existing)),
         };
+        if (swap.Game.CreaturesSwitched > 0 || swap.Game.CreaturesDeferred > 0)
+        {
+            List<AnnounceField> fields = [.. final.Fields ?? [], new("creatures_switched", swap.Game.CreaturesSwitched.ToString(CultureInfo.InvariantCulture)), new("creatures_in_combat_deferred", swap.Game.CreaturesDeferred.ToString(CultureInfo.InvariantCulture))];
+            final = final with
+            {
+                Detail = $"{final.Detail}; {swap.Game.CreaturesSwitched} creatures switched AI, {swap.Game.CreaturesDeferred} in combat keep the old AI for now",
+                Fields = fields,
+            };
+        }
+
+        return final;
+    }
+
+    private static List<AnnounceField> SwapFields(Prepared prepared, LoadedModule? replaced)
+    {
+        var fields = new List<AnnounceField>
+        {
+            new("sha256", prepared.Sha256[..12]),
+            new("opcodes", prepared.Opcodes.Count.ToString(CultureInfo.InvariantCulture)),
+            new("roots", string.Join(' ', prepared.RootNames.Select(r => "." + r))),
+        };
+        if (!prepared.Game.IsEmpty)
+        {
+            fields.Add(new("creature_ai", $"{prepared.Game.AiEntries.Count} entries, {prepared.Game.AiNames.Count} named"));
+            fields.Add(new("script_hooks", prepared.Game.Hooks.Count.ToString(CultureInfo.InvariantCulture)));
+        }
+        if (replaced is not null)
+        {
+            fields.Add(new("replaced_sha256", replaced.Info.Sha256[..12]));
+        }
+
+        return fields;
+    }
+
+    private void ReportSwap(string verb, string name, ModuleResult result, HotSwapOrigin origin, TimeSpan duration)
+    {
+        try
+        {
+            _reporter.Report(new HotSwapEvent(
+                HotSwapLane.Module,
+                verb == "reload" ? "replace" : verb,
+                name,
+                result.Ok ? HotSwapResult.Applied : HotSwapResult.Rejected,
+                origin,
+                duration,
+                result.Ok ? string.Empty : result.Detail,
+                result.Fields));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "could not report the module {Verb} of '{Name}'", verb, name);
+        }
     }
 
     /// <summary>World thread, start of a tick: swap the old version of the module (if any) for the new one (if any).</summary>
@@ -240,6 +311,12 @@ public sealed class ModuleHost
             return opcodeError;
         }
 
+        // Creature AI and script hooks are checked before the command table is touched, so a clash there still changes nothing.
+        if (_seams?.Validate(old?.Game, added?.Game) is { } gameError)
+        {
+            return gameError;
+        }
+
         CommandAddResult commands = _commands.TryReplace(removeRoots, added?.Roots ?? []);
         if (!commands.Applied)
         {
@@ -248,6 +325,11 @@ public sealed class ModuleHost
 
         // Both checks passed: the remaining step is a pointer flip that cannot fail.
         _opcodes.Replace(swapped);
+        if (_seams is not null)
+        {
+            swap.Game = _seams.Commit(old?.Game, added?.Game, old?.Context);
+        }
+
         return null;
     }
 
@@ -360,11 +442,15 @@ public sealed class ModuleHost
 
             var fresh = new OpcodeTable();
             var roots = new List<ChatCommand>();
+            var aiRegistry = new CollectingAiRegistry();
+            var hooks = new List<IScriptHooks>();
             foreach (Type type in types.Where(t => t is { IsClass: true, IsAbstract: false, IsPublic: true }).OrderBy(t => t.FullName, StringComparer.Ordinal))
             {
                 bool opcodeGroup = typeof(IOpcodeHandlerGroup).IsAssignableFrom(type);
                 bool commandGroup = typeof(ICommandGroup).IsAssignableFrom(type);
-                if (!opcodeGroup && !commandGroup)
+                bool aiGroup = typeof(ICreatureAiGroup).IsAssignableFrom(type);
+                bool hookObject = typeof(IScriptHooks).IsAssignableFrom(type);
+                if (!opcodeGroup && !commandGroup && !aiGroup && !hookObject)
                 {
                     continue;
                 }
@@ -374,7 +460,22 @@ public sealed class ModuleHost
                     throw new ModuleRejectedException($"{type.FullName} needs a public parameterless constructor");
                 }
 
+                if ((aiGroup || hookObject) && _seams is null)
+                {
+                    throw new ModuleRejectedException($"{type.FullName}: this server does not offer creature AI or script hooks to modules");
+                }
+
                 object instance = Activator.CreateInstance(type)!;
+                if (instance is ICreatureAiGroup aiGroupInstance)
+                {
+                    aiGroupInstance.Register(aiRegistry);
+                }
+
+                if (instance is IScriptHooks hooksInstance)
+                {
+                    hooks.Add(hooksInstance);
+                }
+
                 if (instance is IOpcodeHandlerGroup opcodes)
                 {
                     opcodes.Register(fresh);
@@ -386,9 +487,9 @@ public sealed class ModuleHost
                 }
             }
 
-            if (fresh.Count == 0 && roots.Count == 0)
+            if (fresh.Count == 0 && roots.Count == 0 && aiRegistry.Entries.Count == 0 && aiRegistry.Names.Count == 0 && hooks.Count == 0)
             {
-                throw new ModuleRejectedException("the module has no public IOpcodeHandlerGroup or ICommandGroup that registers anything");
+                throw new ModuleRejectedException("the module has no public IOpcodeHandlerGroup, ICommandGroup, ICreatureAiGroup or script hook class that registers anything");
             }
 
             if (CommandTableSource.Validate([], roots) is { } rootError)
@@ -396,7 +497,7 @@ public sealed class ModuleHost
                 throw new ModuleRejectedException(rootError);
             }
 
-            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha);
+            return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, new ModuleGameParts(aiRegistry.Entries, aiRegistry.Names, hooks));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -410,6 +511,9 @@ public sealed class ModuleHost
     /// <summary>What a queued commit will swap; emptied once it ran (or was given up on) so the closure never pins a module.</summary>
     private sealed class PendingSwap(LoadedModule? old, Prepared? added)
     {
+        /// <summary>What the creature AI / script hook part of the commit did (set on the world thread, read after the commit completed).</summary>
+        public ModuleGameCommit Game { get; set; }
+
         private LoadedModule? _old = old;
         private Prepared? _added = added;
 
@@ -435,7 +539,8 @@ public sealed class ModuleHost
         IReadOnlyCollection<WorldOpcode> Opcodes,
         IReadOnlyList<ChatCommand> Roots,
         string[] RootNames,
-        string Sha256);
+        string Sha256,
+        ModuleGameParts Game);
 
     private sealed class LoadedModule(
         string name,
@@ -443,8 +548,11 @@ public sealed class ModuleHost
         IReadOnlyCollection<WorldOpcode> opcodes,
         string[] rootNames,
         DateTimeOffset loadedUtc,
-        string sha256)
+        string sha256,
+        ModuleGameParts game)
     {
+        public ModuleGameParts Game { get; } = game;
+
         public string Name { get; } = name;
 
         public System.Runtime.Loader.AssemblyLoadContext Context { get; } = context;
@@ -453,6 +561,6 @@ public sealed class ModuleHost
 
         public string[] RootNames { get; } = rootNames;
 
-        public ModuleInfo Info { get; } = new(name, opcodes.Count, rootNames, loadedUtc, sha256);
+        public ModuleInfo Info { get; } = new(name, opcodes.Count, rootNames, loadedUtc, sha256, game.AiEntries.Count + game.AiNames.Count, game.Hooks.Count);
     }
 }

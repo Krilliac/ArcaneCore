@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       342 keys
+#   WORLD                       354 keys
 #
 ###############################################################################
 
@@ -7876,6 +7876,157 @@ World.UpdateCompressionThreshold = 128
 #        Docs: docs/reference/configuration.md#world
 #
 World.WriterDrainGrace = 00:00:00
+
+#----------------------------------------------------------------------------
+# World:Announce
+#----------------------------------------------------------------------------
+
+#
+#    World.Announce.Enabled
+#        Description: Master switch for delivery to players and staff. When false announcements are
+#                     still logged and counted.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Enabled = true
+
+#
+#    World.Announce.HotSwap.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.HotSwap.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.DedupSeconds = 0
+
+#
+#    World.Announce.HotSwap.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.GmNotify = true
+
+#
+#    World.Announce.HotSwap.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.IncludeDetails = true
+
+#
+#    World.Announce.HotSwap.Lanes
+#        Description: Lanes to announce: any of Data, Module, Code. Empty (the default) announces
+#                     all of them. A lane that is not turned on never reports anything.
+#        Type: List<string>
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+# Empty by default.
+# World.Announce.HotSwap.Lanes.0 =
+
+#
+#    World.Announce.HotSwap.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.MinimumSeverity = Info
+
+#
+#    World.Announce.HotSwap.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.RateBurst = 10
+
+#
+#    World.Announce.HotSwap.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.RatePerMinute = 20
+
+#
+#    World.Announce.HotSwap.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.WorldMessage = false
+
+#
+#    World.Announce.HotSwap.WorldMessageIncludeReason
+#        Description: Put the free-text reason the staff member gave (.reload creature_template
+#                     fixed drop rates) into the world message. The reason is shown to players as
+#                     typed.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.WorldMessageIncludeReason = true
+
+#
+#    World.Announce.HotSwap.WorldMessageOnFailure
+#        Description: Also send the world message for a swap that was rejected or failed. Default
+#                     false: players only hear about changes that happened.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.HotSwap.WorldMessageOnFailure = false
 
 #----------------------------------------------------------------------------
 # World:Chat

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Ops.Announce;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.HotCode;
@@ -76,6 +77,7 @@ public sealed class HotCodeRefresh
     private readonly SemaphoreSlim _serial = new(1, 1);
     private readonly Action? _onCodeEdited;
     private readonly IServiceProvider? _services;
+    private readonly IHotSwapReporter _reporter;
 
     public HotCodeRefresh(
         HotCodeState state,
@@ -88,8 +90,10 @@ public sealed class HotCodeRefresh
         TimeSpan? commitTimeout = null,
         Func<DateTimeOffset>? clock = null,
         Action? onCodeEdited = null,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        IHotSwapReporter? reporter = null)
     {
+        _reporter = reporter ?? NullHotSwapReporter.Instance;
         _onCodeEdited = onCodeEdited;
         _services = services;
         _state = state;
@@ -132,11 +136,21 @@ public sealed class HotCodeRefresh
 
         long generation = _state.NextGeneration();
         string reason = updatedTypes is null ? "metadata update (types unknown)" : $"metadata update ({updatedTypes.Length} types)";
-        _ = RunInBackgroundAsync(generation, reason);
+        _ = RunInBackgroundAsync(generation, reason, updatedTypes);
     }
 
     /// <summary>Refresh now under a new generation (<c>.hotcode refresh</c>).</summary>
-    public Task<RefreshResult> RefreshNowAsync(string reason) => RunAsync(_state.NextGeneration(), reason);
+    public async Task<RefreshResult> RefreshNowAsync(string reason, HotSwapOrigin? origin = null)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        RefreshResult result = await RunAsync(_state.NextGeneration(), reason).ConfigureAwait(false);
+        if (result.Status != RefreshStatus.AlreadyApplied)
+        {
+            ReportSwap("refresh", "registries", result, origin ?? HotSwapOrigin.Console, System.Diagnostics.Stopwatch.GetElapsedTime(started), null);
+        }
+
+        return result;
+    }
 
     public async Task<RefreshResult> RunAsync(long generation, string reason)
     {
@@ -153,15 +167,64 @@ public sealed class HotCodeRefresh
         }
     }
 
-    private async Task RunInBackgroundAsync(long generation, string reason)
+    private async Task RunInBackgroundAsync(long generation, string reason, Type[]? updatedTypes)
     {
         try
         {
-            await RunAsync(generation, reason).ConfigureAwait(false);
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            RefreshResult result = await RunAsync(generation, reason).ConfigureAwait(false);
+            if (result.Status != RefreshStatus.AlreadyApplied)
+            {
+                ReportSwap("metadata-update", DescribeAssemblies(updatedTypes), result, HotSwapOrigin.Runtime, System.Diagnostics.Stopwatch.GetElapsedTime(started), updatedTypes);
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogError(ex, "code hot reload refresh (generation {Generation}) failed unexpectedly", generation);
+        }
+    }
+
+    private static string DescribeAssemblies(Type[]? updatedTypes)
+    {
+        if (updatedTypes is null || updatedTypes.Length == 0)
+        {
+            return "assemblies unknown";
+        }
+
+        string[] names = [.. updatedTypes.Select(t => t.Assembly.GetName().Name ?? "?").Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+        return names.Length <= 3 ? string.Join(", ", names) : $"{string.Join(", ", names.Take(3))} and {names.Length - 3} more";
+    }
+
+    /// <summary>
+    /// Tell the hot swap reporter. The runtime already applied a code edit before the refresh ran, so a rejected registry refresh is
+    /// reported as a failure of the refresh, not of the edit.
+    /// </summary>
+    private void ReportSwap(string action, string area, RefreshResult result, HotSwapOrigin origin, TimeSpan duration, Type[]? updatedTypes)
+    {
+        try
+        {
+            string detail = result.Status == RefreshStatus.Rejected
+                ? $"the runtime applied the edit but the registry refresh was rejected: {result.Detail}"
+                : action == "metadata-update" ? $"registry refresh {result.Status}: {result.Detail}" : result.Detail;
+            List<AnnounceField> fields = [new("generation", result.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture))];
+            if (updatedTypes is not null)
+            {
+                fields.Add(new("types", updatedTypes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            if (result.Status == RefreshStatus.Applied)
+            {
+                fields.Add(new("added", $"{result.NewOpcodes} opcodes, {result.NewCommandRoots} roots, {result.NewMapUpdaters} updaters"));
+            }
+
+            _reporter.Report(new HotSwapEvent(
+                HotSwapLane.Code, action, area,
+                result.Status == RefreshStatus.Rejected ? HotSwapResult.Failed : HotSwapResult.Applied,
+                origin, duration, detail, fields));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "could not report the code hot reload");
         }
     }
 

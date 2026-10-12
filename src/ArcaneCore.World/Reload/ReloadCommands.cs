@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.HotCode;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Reload;
@@ -25,10 +26,10 @@ public sealed class ReloadCommands : ICommandGroup
         new ChatCommand(
             "reload",
             AccountSecurity.Administrator,
-            "Syntax: .reload #name | all | status — reload configuration or content without a restart (config, spell_template, …).",
+            "Syntax: .reload #name [reason] | all [reason] | status — reload configuration or content without a restart (config, spell_template, …). The optional free-text reason is announced to staff with the result (World:Announce:HotSwap).",
             Reload,
             [
-                new ChatCommand("all", AccountSecurity.Administrator, "Syntax: .reload all — reload every content table (not the config).", ReloadAll),
+                new ChatCommand("all", AccountSecurity.Administrator, "Syntax: .reload all [reason] — reload every content table (not the config).", ReloadAll),
                 new ChatCommand("status", AccountSecurity.Administrator, "Syntax: .reload status — what can be reloaded and how each reload last ended.", Status),
             ]),
     ];
@@ -41,7 +42,7 @@ public sealed class ReloadCommands : ICommandGroup
     private static bool Reload(CommandContext context, string args)
     {
         ReloadFeature feature = Feature(context);
-        string word = args.Trim();
+        (string word, string reason) = AnnounceTexts.SplitReason(args);
         if (word.Length == 0)
         {
             return false;
@@ -67,7 +68,8 @@ public sealed class ReloadCommands : ICommandGroup
         }
 
         context.Reply($"Re-loading {name}...");
-        Run(context, feature, async () => [await feature.Coordinator.ReloadAsync(name).ConfigureAwait(false)]);
+        HotSwapOrigin origin = HotSwapOrigin.FromCommand(context, reason);
+        Run(context, async () => [await feature.Coordinator.ReloadAsync(name, origin: origin).ConfigureAwait(false)]);
         return true;
     }
 
@@ -75,7 +77,8 @@ public sealed class ReloadCommands : ICommandGroup
     {
         ReloadFeature feature = Feature(context);
         context.Reply("Re-loading all...");
-        Run(context, feature, () => feature.Coordinator.ReloadAllAsync());
+        HotSwapOrigin origin = HotSwapOrigin.FromCommand(context, AnnounceTexts.Reason(args));
+        Run(context, () => feature.Coordinator.ReloadAllAsync(origin: origin));
         return true;
     }
 
@@ -101,7 +104,7 @@ public sealed class ReloadCommands : ICommandGroup
     /// Start the reload without blocking the world thread (the swap needs it), then report on it:
     /// results go back through the world thread, where the invoker's session is written to.
     /// </summary>
-    private static void Run(CommandContext context, ReloadFeature feature, Func<Task<IReadOnlyList<ReloadResult>>> reload)
+    private static void Run(CommandContext context, Func<Task<IReadOnlyList<ReloadResult>>> reload)
     {
         WorldRuntime world = context.World;
         _ = Task.Run(async () =>
