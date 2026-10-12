@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -167,14 +169,25 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         switch (verdict.Action)
         {
             case WardenAction.Kick:
+                Announce(session, verdict, "Warden disconnected a client", AnnounceSeverity.Warning);
                 session.Kick();
                 break;
             case WardenAction.Ban:
+                Announce(session, verdict, "Warden banned an account", AnnounceSeverity.Error);
                 _ = BanAsync(session.AccountId, verdict.Reason);
                 session.Kick();
                 break;
         }
     }
+
+    // Staff only by default (World:Announce:AntiCheat); account and character names stay out of the player-safe text.
+    private void Announce(WorldSession session, WardenVerdict verdict, string text, AnnounceSeverity severity)
+        => services.GetService<IOpsAnnouncer>()?.Announce(
+            AnnounceCategory.AntiCheat,
+            severity,
+            text,
+            $"account {session.AccountName} ({session.AccountId}): {verdict.Reason}{(verdict.IsProtocolFailure ? " (protocol failure)" : string.Empty)}",
+            dedupKey: $"warden:{session.AccountId}:{verdict.Action}");
 
     private async Task BanAsync(int accountId, string reason)
     {

@@ -9,10 +9,12 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.AntiCheat;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +54,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
     private readonly List<AntiCheatFinding> _scratch = [];
     private AntiCheatOptions _options = new();
     private WorldRuntime? _world;
+    private IOpsAnnouncer? _announcer;
     private TimeProvider _time = TimeProvider.System;
     private Task _flush = Task.CompletedTask;
     private uint _sinceFlushMs;
@@ -76,6 +79,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
     public void Attach(WorldRuntime world)
     {
         _world = world;
+        _announcer = services.GetService<IOpsAnnouncer>();
         _time = services.GetService<TimeProvider>() ?? TimeProvider.System;
         AntiCheatOptions configured = services.GetService<IOptions<AntiCheatOptions>>()?.Value ?? new AntiCheatOptions();
         IReadOnlyList<string> problems = configured.Validate();
@@ -310,6 +314,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             logger.LogWarning("AntiCheat: kicking {Player} (account {Account}) at score {Score:0} ({Type} '{Detail}')", player.Name, session.AccountId, score, finding.Type, finding.Detail);
             int account = session.AccountId;
             string name = player.Name;
+            AnnounceKick(player, account, finding, score);
             session.Kick();
             _scores.Set(characterId, 0f, now, options.DecayPerSecond);
             if (options.Autoban.Enabled && _autoban.AddKick(account, _time.GetUtcNow().ToUnixTimeSeconds(), options.Autoban))
@@ -338,6 +343,21 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             return;
         }
 
+        if (_announcer is { } announcer)
+        {
+            // Through the announcer: the staff line (and the on-screen notice) honour World:Announce:AntiCheat, and the world line, off by
+            // default, never carries the name unless AllowNamesInWorldMessage.
+            string where = string.Create(CultureInfo.InvariantCulture, $"map {player.MapId} ({player.X:0.0}, {player.Y:0.0}, {player.Z:0.0})");
+            announcer.Announce(
+                AnnounceCategory.AntiCheat,
+                AnnounceSeverity.Warning,
+                $"Anti-cheat raised an alert ({finding.Type})",
+                string.Create(CultureInfo.InvariantCulture, $"{player.Name}: {finding.Detail}, score {score:0}, action {action}, {where}"),
+                shortTextWithNames: $"Anti-cheat raised an alert for {player.Name} ({finding.Type})",
+                dedupKey: $"alert:{player.Guid.Low}:{finding.Type}");
+            return;
+        }
+
         string text = string.Create(CultureInfo.InvariantCulture,
             $"{AlertPrefix}{player.Name}: {finding.Detail} ({finding.Type}), score {score:0}, action {action}. Map {player.MapId} ({player.X:0.0}, {player.Y:0.0}, {player.Z:0.0}).");
         byte[] packet = ChatPackets.BuildSystemMessage(text);
@@ -349,6 +369,15 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             }
         }
     }
+
+    private void AnnounceKick(Player player, int account, AntiCheatFinding finding, float score)
+        => _announcer?.Announce(
+            AnnounceCategory.AntiCheat,
+            AnnounceSeverity.Error,
+            "Anti-cheat kicked a player",
+            string.Create(CultureInfo.InvariantCulture, $"{player.Name} (account {account}): {finding.Detail} ({finding.Type}), score {score:0}"),
+            shortTextWithNames: $"Anti-cheat kicked {player.Name}",
+            dedupKey: $"kick:{player.Guid.Low}");
 
     /// <summary>Move the player back to the last position that passed every check (a near teleport; the next packet is trusted).</summary>
     public bool Rubberband(Player player) => Rubberband(player, StateOf(player));
@@ -383,10 +412,24 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             await bans.BanAccountAsync(new BanRequest(accountId, duration, $"AntiCheat: repeated kicks ({characterName})", BanAuthor)).ConfigureAwait(false);
             logger.LogWarning("AntiCheat: account {Account} banned {Duration} after repeated kicks (character {Character}, {Earlier} earlier autoban(s))",
                 accountId, duration == 0 ? "permanently" : $"for {duration} s", characterName, earlier);
+            _announcer?.Announce(
+                AnnounceCategory.AntiCheat,
+                AnnounceSeverity.Error,
+                "Anti-cheat banned an account after repeated kicks",
+                string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {(duration == 0 ? "permanent" : $"{duration} s")}, {earlier} earlier autoban(s)"),
+                shortTextWithNames: $"Anti-cheat banned {characterName} after repeated kicks",
+                dedupKey: $"ban:{accountId}");
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "AntiCheat: autoban of account {Account} failed", accountId);
+            _announcer?.Announce(
+                AnnounceCategory.AntiCheat,
+                AnnounceSeverity.Error,
+                "Anti-cheat could not ban an account",
+                string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}"),
+                gmOnly: true,
+                dedupKey: $"banfail:{accountId}");
         }
     }
 
