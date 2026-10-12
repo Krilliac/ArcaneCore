@@ -47,6 +47,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private readonly Dictionary<int, FailedSave> _failed = [];
     private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
+    private readonly HashSet<int> _quarantineAnnounced = []; // quarantined characters whose first refused snapshot was announced (guarded by _gate)
     private readonly Dictionary<int, Slot> _slots = [];
     private readonly Queue<int> _priorityHints = new();
     private readonly Queue<int> _normalHints = new();
@@ -123,11 +124,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         CharacterState copy = Copy(state);
         bool quarantined = false;
         bool closed = false;
+        bool announceQuarantine = false;
         lock (_gate)
         {
             if (_quarantined.Contains(state.Id))
             {
                 quarantined = true;
+                announceQuarantine = _quarantineAnnounced.Add(state.Id); // the periodic save re-enqueues every few seconds: tell the staff once per quarantine
             }
             else if (_held.Contains(state.Id))
             {
@@ -150,7 +153,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         {
             if (quarantined)
             {
-                Announce(AnnounceSeverity.Warning, "A character snapshot was refused: its save ownership is quarantined", $"character {state.Id}; the snapshot is dropped until the character is resumed", $"save-quarantined:{state.Id}");
+                if (announceQuarantine)
+                {
+                    Announce(AnnounceSeverity.Warning, "A character snapshot was refused: its save ownership is quarantined", $"character {state.Id}; the snapshot is dropped until the character is resumed", $"save-quarantined:{state.Id}");
+                }
             }
             else
             {
@@ -244,7 +250,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     {
         lock (_gate)
         {
-            _quarantined.Add(characterId);
+            if (_quarantined.Add(characterId))
+            {
+                _quarantineAnnounced.Remove(characterId);
+            }
         }
     }
 
@@ -253,6 +262,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         lock (_gate)
         {
             _held.Remove(characterId);
+            _quarantineAnnounced.Remove(characterId);
             if (_quarantined.Remove(characterId))
             {
                 // Authoritative publication/loading supersedes any retained old-session state.
@@ -271,6 +281,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         {
             _held.Remove(characterId);
             _quarantined.Remove(characterId);
+            _quarantineAnnounced.Remove(characterId);
             _failed.Remove(characterId);
         }
     }

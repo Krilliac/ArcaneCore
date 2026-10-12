@@ -53,7 +53,8 @@ public readonly record struct AnnounceField(string Name, string Value);
 /// <param name="StaffChat">Chat line for every online account above Player.</param>
 /// <param name="StaffNotify">On-screen notification for the same accounts.</param>
 /// <param name="WorldChat">System chat line for every online player.</param>
-public sealed record AnnounceDelivery(string? StaffChat, string? StaffNotify, string? WorldChat);
+/// <param name="StaffHandled">The caller already told the staff itself: they are not sent <paramref name="WorldChat"/> as well.</param>
+public sealed record AnnounceDelivery(string? StaffChat, string? StaffNotify, string? WorldChat, bool StaffHandled = false);
 
 /// <summary>Sends a delivery to the online players. Any thread may call it; implementations hop to the world thread.</summary>
 public interface IAnnounceSink
@@ -77,6 +78,7 @@ public interface IOpsAnnouncer
     /// <param name="shortTextWithNames">A world-message text that names characters. Used only when the category's <c>AllowNamesInWorldMessage</c> is on; otherwise <paramref name="shortText"/> is sent.</param>
     /// <param name="gmOnly">Never send a world message for this one (a failure players need not hear about).</param>
     /// <param name="dedupKey">Identity for the duplicate window; defaults to <paramref name="shortText"/>.</param>
+    /// <param name="staffHandled">The caller already told the staff online itself (full detail, outside this category's switches and rate limit); send only the world message, and only if the category has one and <paramref name="gmOnly"/> is off.</param>
     void Announce(
         AnnounceCategory category,
         AnnounceSeverity severity,
@@ -85,7 +87,8 @@ public interface IOpsAnnouncer
         IReadOnlyList<AnnounceField>? fields = null,
         string? shortTextWithNames = null,
         bool gmOnly = false,
-        string? dedupKey = null);
+        string? dedupKey = null,
+        bool staffHandled = false);
 }
 
 /// <summary>How the announcer treated a call (the <c>outcome</c> tag of <c>arcanecore.announce</c>).</summary>
@@ -153,11 +156,12 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         IReadOnlyList<AnnounceField>? fields = null,
         string? shortTextWithNames = null,
         bool gmOnly = false,
-        string? dedupKey = null)
+        string? dedupKey = null,
+        bool staffHandled = false)
     {
         try
         {
-            AnnounceCore(category, severity, shortText, gmDetail, fields, shortTextWithNames, gmOnly, dedupKey);
+            AnnounceCore(category, severity, shortText, gmDetail, fields, shortTextWithNames, gmOnly, dedupKey, staffHandled);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -173,20 +177,25 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         IReadOnlyList<AnnounceField>? fields,
         string? shortTextWithNames,
         bool gmOnly,
-        string? dedupKey)
+        string? dedupKey,
+        bool staffHandled)
     {
         AnnounceCategoryOptions options = OptionsFor(category);
         string text = Clean(shortText, MaxShort);
         string detail = BuildDetail(gmDetail, fields);
+        bool toStaff = options.GmNotify && !staffHandled;
+        bool toWorld = options.WorldMessage && !gmOnly;
 
-        string outcome = Decide(category, severity, options, dedupKey ?? text, out int suppressed);
+        string outcome = Decide(category, severity, options, toStaff || toWorld, dedupKey ?? text, out int suppressed);
         AnnounceMeters.Announcements.Add(
             1,
             new KeyValuePair<string, object?>("category", category.ToString()),
             new KeyValuePair<string, object?>("severity", severity.ToString()),
             new KeyValuePair<string, object?>("outcome", outcome));
+
+        // A repeat inside the duplicate window is expected noise (a SQLite lock storm repeats every few seconds): Debug, and counted in the metric.
         _logger.Log(
-            severity >= AnnounceSeverity.Warning ? LogLevel.Warning : LogLevel.Information,
+            outcome == AnnounceOutcome.Duplicate ? LogLevel.Debug : severity >= AnnounceSeverity.Warning ? LogLevel.Warning : LogLevel.Information,
             "Announce [{Category}/{Severity}] {Text}{Detail} ({Outcome})",
             category, severity, text, detail.Length == 0 ? string.Empty : " | " + detail, outcome);
         if (outcome != AnnounceOutcome.Sent)
@@ -197,7 +206,7 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         string tag = $"[{category}]";
         string? staffChat = null;
         string? staffNotify = null;
-        if (options.GmNotify)
+        if (toStaff)
         {
             string line = text;
             if (options.IncludeDetails && detail.Length > 0)
@@ -215,7 +224,7 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         }
 
         string? worldChat = null;
-        if (options.WorldMessage && !gmOnly)
+        if (toWorld)
         {
             string world = options.AllowNamesInWorldMessage && shortTextWithNames is not null ? Clean(shortTextWithNames, MaxShort) : text;
             worldChat = $"|cffffcc00[Server]|r {world}";
@@ -223,12 +232,12 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
 
         if (staffChat is not null || worldChat is not null)
         {
-            _sink.Deliver(new AnnounceDelivery(staffChat, staffNotify, worldChat));
+            _sink.Deliver(new AnnounceDelivery(staffChat, staffNotify, worldChat, staffHandled));
         }
     }
 
     /// <summary>The outcome for this call; consumes a rate-limit token and records the duplicate window when it is <see cref="AnnounceOutcome.Sent"/>.</summary>
-    private string Decide(AnnounceCategory category, AnnounceSeverity severity, AnnounceCategoryOptions options, string key, out int suppressed)
+    private string Decide(AnnounceCategory category, AnnounceSeverity severity, AnnounceCategoryOptions options, bool anyoneToTell, string key, out int suppressed)
     {
         suppressed = 0;
         if (!_options.Enabled)
@@ -241,7 +250,7 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
             return AnnounceOutcome.BelowMinimum;
         }
 
-        if (!options.GmNotify && !options.WorldMessage)
+        if (!anyoneToTell)
         {
             return AnnounceOutcome.Off;
         }
@@ -278,7 +287,8 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
                 }
             }
 
-            if (options.RateBurst > 0)
+            // Critical (a hung world thread, a crash) is never held back by the rate limit: a fault storm must not hide it. The duplicate window still applies.
+            if (options.RateBurst > 0 && severity < AnnounceSeverity.Critical)
             {
                 double refill = options.RatePerMinute * (now - state.RefillMs) / 60_000.0;
                 state.Tokens = Math.Min(options.RateBurst, state.Tokens + Math.Max(0, refill));
@@ -419,7 +429,7 @@ public sealed class WorldAnnounceSink(Func<WorldRuntime> world) : IAnnounceSink
                 bool staff = player.Security > AccountSecurity.Player;
 
                 // Staff who get the (longer) staff line are not sent the world line as well.
-                if (worldChat is not null && !(staff && staffChat is not null))
+                if (worldChat is not null && !(staff && (staffChat is not null || delivery.StaffHandled)))
                 {
                     player.Session.Send(WorldOpcode.SmsgMessagechat, worldChat);
                 }

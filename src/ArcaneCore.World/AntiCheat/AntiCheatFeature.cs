@@ -335,7 +335,12 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         return true;
     }
 
-    /// <summary>The GM alert, unlike the fork's (which only logs): a system message to every staff member online.</summary>
+    /// <summary>
+    /// The GM alert, unlike the fork's (which only logs): a system message to every staff member online, always, with the name, the
+    /// finding and the position. Limited only by <c>GmAlertIntervalSeconds</c> per player (the caller); it does not depend on
+    /// World:Announce, so a disabled announcer, a severity floor or the announcer's shared rate bucket can never hide a cheater from staff.
+    /// Never sent to players: the detector type tells a cheater which check to dodge.
+    /// </summary>
     private void AlertStaff(Player player, AntiCheatFinding finding, float score, AntiCheatAction action)
     {
         if (_world is null)
@@ -343,23 +348,21 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             return;
         }
 
-        if (_announcer is { } announcer)
+        SendToStaff(string.Create(CultureInfo.InvariantCulture,
+            $"{AlertPrefix}{player.Name}: {finding.Detail} ({finding.Type}), score {score:0}, action {action}. Map {player.MapId} ({player.X:0.0}, {player.Y:0.0}, {player.Z:0.0})."));
+    }
+
+    /// <summary>From any thread: <see cref="SendToStaff"/> on the world thread.</summary>
+    private void PostToStaff(string text) => _world?.Post(() => SendToStaff(text));
+
+    /// <summary>One system line to every staff member online (world thread).</summary>
+    private void SendToStaff(string text)
+    {
+        if (_world is null)
         {
-            // Through the announcer: the staff line (and the on-screen notice) honour World:Announce:AntiCheat, and the world line, off by
-            // default, never carries the name unless AllowNamesInWorldMessage.
-            string where = string.Create(CultureInfo.InvariantCulture, $"map {player.MapId} ({player.X:0.0}, {player.Y:0.0}, {player.Z:0.0})");
-            announcer.Announce(
-                AnnounceCategory.AntiCheat,
-                AnnounceSeverity.Warning,
-                $"Anti-cheat raised an alert ({finding.Type})",
-                string.Create(CultureInfo.InvariantCulture, $"{player.Name}: {finding.Detail}, score {score:0}, action {action}, {where}"),
-                shortTextWithNames: $"Anti-cheat raised an alert for {player.Name} ({finding.Type})",
-                dedupKey: $"alert:{player.Guid.Low}:{finding.Type}");
             return;
         }
 
-        string text = string.Create(CultureInfo.InvariantCulture,
-            $"{AlertPrefix}{player.Name}: {finding.Detail} ({finding.Type}), score {score:0}, action {action}. Map {player.MapId} ({player.X:0.0}, {player.Y:0.0}, {player.Z:0.0}).");
         byte[] packet = ChatPackets.BuildSystemMessage(text);
         foreach (Player staff in _world.OnlinePlayers)
         {
@@ -370,14 +373,20 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         }
     }
 
+    // Staff get the full line directly (always); the announcer adds the optional world line (World:Announce:AntiCheat:WorldMessage, no names unless allowed) and the log/metric.
     private void AnnounceKick(Player player, int account, AntiCheatFinding finding, float score)
-        => _announcer?.Announce(
+    {
+        SendToStaff(string.Create(CultureInfo.InvariantCulture,
+            $"{AlertPrefix}Kicked {player.Name} (account {account}): {finding.Detail} ({finding.Type}), score {score:0}."));
+        _announcer?.Announce(
             AnnounceCategory.AntiCheat,
             AnnounceSeverity.Error,
             "Anti-cheat kicked a player",
             string.Create(CultureInfo.InvariantCulture, $"{player.Name} (account {account}): {finding.Detail} ({finding.Type}), score {score:0}"),
             shortTextWithNames: $"Anti-cheat kicked {player.Name}",
-            dedupKey: $"kick:{player.Guid.Low}");
+            dedupKey: $"kick:{player.Guid.Low}",
+            staffHandled: true);
+    }
 
     /// <summary>Move the player back to the last position that passed every check (a near teleport; the next packet is trusted).</summary>
     public bool Rubberband(Player player) => Rubberband(player, StateOf(player));
@@ -412,24 +421,30 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             await bans.BanAccountAsync(new BanRequest(accountId, duration, $"AntiCheat: repeated kicks ({characterName})", BanAuthor)).ConfigureAwait(false);
             logger.LogWarning("AntiCheat: account {Account} banned {Duration} after repeated kicks (character {Character}, {Earlier} earlier autoban(s))",
                 accountId, duration == 0 ? "permanently" : $"for {duration} s", characterName, earlier);
+            string banned = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {(duration == 0 ? "permanent" : $"{duration} s")}, {earlier} earlier autoban(s)");
+            PostToStaff($"{AlertPrefix}Autoban after repeated kicks, {banned}.");
             _announcer?.Announce(
                 AnnounceCategory.AntiCheat,
                 AnnounceSeverity.Error,
                 "Anti-cheat banned an account after repeated kicks",
-                string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {(duration == 0 ? "permanent" : $"{duration} s")}, {earlier} earlier autoban(s)"),
+                banned,
                 shortTextWithNames: $"Anti-cheat banned {characterName} after repeated kicks",
-                dedupKey: $"ban:{accountId}");
+                dedupKey: $"ban:{accountId}",
+                staffHandled: true);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "AntiCheat: autoban of account {Account} failed", accountId);
+            string failed = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}");
+            PostToStaff($"{AlertPrefix}Could not autoban {failed}.");
             _announcer?.Announce(
                 AnnounceCategory.AntiCheat,
                 AnnounceSeverity.Error,
                 "Anti-cheat could not ban an account",
-                string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}"),
+                failed,
                 gmOnly: true,
-                dedupKey: $"banfail:{accountId}");
+                dedupKey: $"banfail:{accountId}",
+                staffHandled: true);
         }
     }
 

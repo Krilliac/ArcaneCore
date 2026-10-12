@@ -1,5 +1,9 @@
 using System.Buffers.Binary;
 using ArcaneCore.Data.World.Warden;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Ops.Announce;
+using ArcaneCore.World.Tests.HotCode;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -814,6 +818,104 @@ public sealed class WardenTests
 
         await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
         await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "Warden kick closed the session");
+    }
+
+    private static async Task<List<string>> ChatLinesAsync(WorldTestClient client)
+    {
+        var lines = new List<string>();
+        foreach ((WorldOpcode opcode, byte[] payload) in await client.CollectAsync(TimeSpan.FromMilliseconds(500)))
+        {
+            if (opcode == WorldOpcode.SmsgMessagechat)
+            {
+                lines.Add(ChatMessage.Parse(payload).Text);
+            }
+        }
+
+        return lines;
+    }
+
+    private static WorldTestHost WardenHost(Action<AnnounceOptions> configure, RecordingSink sink)
+    {
+        var announce = new AnnounceOptions();
+        configure(announce);
+        var announcer = new OpsAnnouncer(announce, sink, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        return WorldTestHost.Start(configureServices: services =>
+        {
+            // Staff are exempt from Warden (they would be sent module data the test client does not answer).
+            services.AddSingleton<IOptions<WardenOptions>>(Options.Create(new WardenOptions
+            {
+                Enabled = true,
+                ProtocolAction = WardenAction.Kick,
+                LoadFromDatabase = false,
+                ExemptSecurity = AccountSecurity.Moderator,
+            }));
+            services.AddSingleton<IOpsAnnouncer>(announcer);
+        });
+    }
+
+    private static async Task<(WorldTestClient Cheater, string Reason)> KickedAsync(WorldTestHost host, string account)
+    {
+        byte[] key = await host.AddAccountAsync(account);
+        WorldTestClient cheater = await host.ConnectAsync();
+        await cheater.AuthenticateAsync(account, key);
+        WorldSession session = host.Registry.Sessions.Single(s => s.AccountName.Equals(account, StringComparison.OrdinalIgnoreCase));
+        WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+        var verdicts = new System.Collections.Concurrent.ConcurrentQueue<WardenVerdict>();
+        feature.Verdict += (_, verdict) => verdicts.Enqueue(verdict);
+
+        await cheater.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "Warden kick closed the session");
+        return (cheater, Assert.Single(verdicts).Reason);
+    }
+
+    [Fact]
+    public async Task AKickVerdict_ReachesStaffInFull_EvenWhenTheAnnouncerWouldDropIt()
+    {
+        // The announcer would send nothing for a Warning (floor Critical, staff line off): the staff line must not depend on it.
+        var sink = new RecordingSink();
+        await using WorldTestHost host = WardenHost(o =>
+        {
+            o.AntiCheat.GmNotify = false;
+            o.AntiCheat.IncludeDetails = false;
+            o.AntiCheat.MinimumSeverity = AnnounceSeverity.Critical;
+        }, sink);
+        await using WorldTestClient staff = await host.EnterWorldAsync("WARDSTAFF", "Wardstaff", AccountSecurity.Moderator);
+        await staff.CollectAsync();
+
+        (WorldTestClient cheater, string reason) = await KickedAsync(host, "wardencheater");
+        await using (cheater)
+        {
+            string staffLine = Assert.Single(await ChatLinesAsync(staff));
+            Assert.Contains("[Warden]", staffLine, StringComparison.Ordinal);
+            Assert.Contains("wardencheater", staffLine, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(reason, staffLine, StringComparison.Ordinal);
+            Assert.Empty(sink.Sent);
+        }
+    }
+
+    [Fact]
+    public async Task AKickVerdict_AccountNameAndReason_AppearOnlyInTheStaffLine_NeverInTheWorldLine()
+    {
+        var sink = new RecordingSink();
+        await using WorldTestHost host = WardenHost(o => o.AntiCheat.WorldMessage = true, sink);
+        await using WorldTestClient staff = await host.EnterWorldAsync("WARDSTAFF2", "Wardstafftwo", AccountSecurity.Moderator);
+        await staff.CollectAsync();
+
+        (WorldTestClient cheater, string reason) = await KickedAsync(host, "wardencheater2");
+        await using (cheater)
+        {
+            string staffLine = Assert.Single(await ChatLinesAsync(staff)); // the one full line, not the world line as well
+            Assert.Contains(reason, staffLine, StringComparison.Ordinal);
+            Assert.Contains("wardencheater2", staffLine, StringComparison.OrdinalIgnoreCase);
+
+            AnnounceDelivery delivery = Assert.Single(sink.Sent);
+            Assert.Null(delivery.StaffChat);
+            Assert.Null(delivery.StaffNotify);
+            Assert.True(delivery.StaffHandled);
+            Assert.Contains("Warden disconnected a client", delivery.WorldChat, StringComparison.Ordinal);
+            Assert.DoesNotContain(reason, delivery.WorldChat, StringComparison.Ordinal);
+            Assert.DoesNotContain("wardencheater2", delivery.WorldChat, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]

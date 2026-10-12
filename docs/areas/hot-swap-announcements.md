@@ -6,7 +6,7 @@ Every live change the server takes without a restart is reported in one place: t
 modules (`.hotmodule`) and the code hot reload (`dotnet watch`, Development / Staging only). The report is always logged
 and counted; it is also sent to the staff who are online and, if you ask for it, to every player.
 
-The service behind it is generic (`IOpsAnnouncer`, categories, per-category switches, severity floor and rate limit), so
+The service behind it is generic (`IOpsAnnouncer`, categories, per-category switches, severity floor and rate limit; a Critical announcement is never rate limited), so
 other areas announce through the same switches. Categories wired today: **HotSwap**, **AntiCheat**, **Faults**, **Wiring**,
 **Shutdown**, **Saves**, **BotQa** (see "Other categories" below). Rate-change announcements wait for the `ServerRates` branch.
 
@@ -80,7 +80,7 @@ Every category has the same keys as HotSwap (`GmNotify`, `WorldMessage`, `Includ
 
 | Category | What it announces (hook point) | Severity | Defaults that differ |
 |---|---|---|---|
-| `AntiCheat` | a GM alert (`AntiCheatFeature.AlertStaff`, replaces the old direct staff chat line), a kick, an autoban and an autoban failure; Warden kick / ban verdicts (`WardenFeature.OnVerdict`) | Warning (alert), Error (kick, ban) | `DedupSeconds` 30. Character names are in the staff line only; the world line carries a name only with `AllowNamesInWorldMessage`. |
+| `AntiCheat` | a kick, an autoban and an autoban failure; Warden kick / ban verdicts (`WardenFeature.OnVerdict`). The staff line itself is sent directly and always (the GM alert too, limited only by `AntiCheat:GmAlertIntervalSeconds`), so `Enabled`, `GmNotify`, `MinimumSeverity`, `IncludeDetails` and the rate bucket never hide a cheater from staff; the announcer adds only the optional world line, the log line and the metric (`staffHandled`) | Error (kick, ban), Warning (Warden kick) | `DedupSeconds` 30. The alert has no world line (it would tell the cheater which check fired). Names, reasons and detector types are in the staff line only; the world line carries a name only with `AllowNamesInWorldMessage`. |
 | `Faults` | each fault the `FaultLedger` wants logged (`FaultLedger.FaultNoticed`, announced by `FaultAnnouncerFeature`), and tick hangs / overruns (`TickMonitor.Alerted`, wired in `TickWatchdogFeature`) | Warning; Critical for a tick hang or an unhandled exception | `MinimumSeverity` Warning, `DedupSeconds` 300, burst 5. Always staff-only (`gmOnly`), whatever `WorldMessage` says. An unhandled exception that ends the process races the shutdown: the log and the ledger are the record. A hung world thread delays delivery until it recovers. |
 | `Wiring` | the start-up wiring audit found problems, or could not run (`WiringAuditReporter.Report`) | Warning / Error | `MinimumSeverity` Warning, `DedupSeconds` 300. Usually nobody is online at start-up: the log line is the record. |
 | `Shutdown` | a scheduled shutdown / restart (and when it begins), its cancellation, and the stop itself (`ServerLifecycleFeature.Request/Cancel/AfterChange`); `by <actor>` is staff detail | Warning (request, stop), Info (cancel) | `WorldMessage` stays **off**: the countdown already reaches every player as the client's own server message (`SMSG_SERVER_MESSAGE`, unchanged), so a chat line would duplicate it. Turn it on for a chat line at the request and the cancel (not each countdown step). |

@@ -25,9 +25,12 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
 {
     public const string BanAuthor = "Warden";
 
+    private const string StaffPrefix = "|cffff4040[Warden]|r ";
+
     private readonly ConcurrentDictionary<WorldSession, WardenSession> _sessions = new(ReferenceEqualityComparer.Instance);
     private WardenOptions _options = new();
     private volatile IReadOnlyList<WardenCheckOptions> _checks = [];
+    private WorldRuntime? _world;
     private bool _usable;
 
     public WardenOptions Options => _options;
@@ -37,6 +40,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
 
     public void Attach(WorldRuntime world)
     {
+        _world = world;
         WardenOptions configured = services.GetService<IOptions<WardenOptions>>()?.Value ?? new WardenOptions();
         IReadOnlyList<string> problems = configured.Validate();
         if (problems.Count > 0)
@@ -180,14 +184,33 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         }
     }
 
-    // Staff only by default (World:Announce:AntiCheat); account and character names stay out of the player-safe text.
+    // Staff always get the full line (the account, the reason) directly, outside World:Announce and its shared rate bucket; the announcer adds the
+    // optional player-safe world line (no names, no reason) and the log/metric.
     private void Announce(WorldSession session, WardenVerdict verdict, string text, AnnounceSeverity severity)
-        => services.GetService<IOpsAnnouncer>()?.Announce(
+    {
+        string detail = $"account {session.AccountName} ({session.AccountId}): {verdict.Reason}{(verdict.IsProtocolFailure ? " (protocol failure)" : string.Empty)}";
+        WorldRuntime? world = _world;
+        world?.Post(() => SendToStaff(world, $"{StaffPrefix}{text}: {detail}"));
+        services.GetService<IOpsAnnouncer>()?.Announce(
             AnnounceCategory.AntiCheat,
             severity,
             text,
-            $"account {session.AccountName} ({session.AccountId}): {verdict.Reason}{(verdict.IsProtocolFailure ? " (protocol failure)" : string.Empty)}",
-            dedupKey: $"warden:{session.AccountId}:{verdict.Action}");
+            detail,
+            dedupKey: $"warden:{session.AccountId}:{verdict.Action}",
+            staffHandled: true);
+    }
+
+    private static void SendToStaff(WorldRuntime world, string text)
+    {
+        byte[] packet = Packets.ChatPackets.BuildSystemMessage(text);
+        foreach (Game.Entities.Player player in world.OnlinePlayers)
+        {
+            if (player.Security > AccountSecurity.Player)
+            {
+                player.Session.Send(WorldOpcode.SmsgMessagechat, packet);
+            }
+        }
+    }
 
     private async Task BanAsync(int accountId, string reason)
     {

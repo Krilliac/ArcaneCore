@@ -259,6 +259,44 @@ public sealed class OpsAnnounceCategoriesTests
         Assert.Contains("shutdown scheduled", sent.WorldChat);
     }
 
+    [Fact]
+    public void ACriticalAnnouncement_IsNotHeldBackByTheRateLimit_ALaterFaultStormCannotHideIt()
+    {
+        (OpsAnnouncer announcer, RecordingSink sink, _) = Rig(o =>
+        {
+            o.Faults.RateBurst = 2;
+            o.Faults.RatePerMinute = 1;
+        });
+        for (int i = 0; i < 6; i++)
+        {
+            announcer.Announce(AnnounceCategory.Faults, AnnounceSeverity.Warning, $"fault {i}");
+        }
+
+        Assert.Equal(2, sink.Sent.Count); // the storm used the bucket up
+        announcer.Announce(AnnounceCategory.Faults, AnnounceSeverity.Critical, "the world tick is hung");
+        Assert.Equal(3, sink.Sent.Count);
+        Assert.Contains("hung", sink.Sent[^1].StaffChat);
+    }
+
+    [Fact]
+    public void StaffHandled_SendsOnlyTheWorldLine_AndConsumesNothingWhenThereIsNone()
+    {
+        (OpsAnnouncer announcer, RecordingSink sink, _) = Rig(o => o.AntiCheat.RateBurst = 1);
+
+        // No world message configured: nothing to send, no token used.
+        announcer.Announce(AnnounceCategory.AntiCheat, AnnounceSeverity.Error, "kicked", "who: Alice", staffHandled: true);
+        Assert.Empty(sink.Sent);
+
+        (announcer, sink, _) = Rig(o => o.AntiCheat.WorldMessage = true);
+        announcer.Announce(AnnounceCategory.AntiCheat, AnnounceSeverity.Error, "kicked", "who: Alice", staffHandled: true);
+        AnnounceDelivery sent = Assert.Single(sink.Sent);
+        Assert.Null(sent.StaffChat);
+        Assert.Null(sent.StaffNotify);
+        Assert.True(sent.StaffHandled);
+        Assert.Contains("kicked", sent.WorldChat);
+        Assert.DoesNotContain("Alice", sent.WorldChat);
+    }
+
     // --- Saves --------------------------------------------------------------------------------------------------
 
     [Fact]

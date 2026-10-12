@@ -114,6 +114,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         ulong? bot = signal.BotKey is { } guid ? BotHash(guid) : null;
         Probe? probe = signal.FromCoverage ? null : ProbeOf(signal);
         QaFindingView? created = null;
+        bool isNew = false;
         string? ingested;
         lock (_gate)
         {
@@ -162,7 +163,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
                 if (!signal.FromCoverage && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
                 Add(finding);
-                created = signal.FromCoverage ? null : finding.ToView();
+                isNew = !signal.FromCoverage;
             }
 
             if (signal.FromCoverage)
@@ -240,9 +241,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             finding.Severity = PlayerbotQaClassifier.Severity(finding.Kind, finding.Count, finding.DistinctBots, finding.LastSeenUtc, now);
             _snapshot = null;
             ingested = finding.Id;
-            if (created is not null)
+            if (isNew)
             {
-                created = finding.ToView();
+                created = finding.ToView(); // once, after the signal has been folded in
             }
         }
 
