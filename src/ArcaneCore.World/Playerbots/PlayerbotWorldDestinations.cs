@@ -61,6 +61,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>Quests not worth a trip: the server refused their exchange lately (<see cref="PlayerbotQuestGoals.IsRefused"/>).</summary>
     internal Func<uint, bool>? SkipQuest { get; set; }
 
+    /// <summary>
+    /// Whether the quest-giver controller (<see cref="PlayerbotQuestGoals.HasCandidate"/>) has something to take or turn in with the
+    /// quest NPCs in sight. Asked once when a trip ends with its NPC in sight (<see cref="SettleArrival"/>).
+    /// </summary>
+    internal Func<Player, bool>? GiverHasCandidate { get; set; }
+
+    /// <summary>Sets a quest aside for this bot (<see cref="PlayerbotQuestGoals.SetAside"/>, the set-aside <see cref="SkipQuest"/> reads).</summary>
+    internal Action<uint>? SetQuestAside { get; set; }
+
+    // The giver and quest of the trip last committed to (route, tram or lift); consumed by SettleArrival.
+    private uint _travelEntry;
+    private uint _travelQuest;
+
     /// <summary>Quest givers and enders a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
     internal PlayerbotSuspensions? Suspensions { get; set; }
 
@@ -104,11 +117,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
             if (Suspended(entry.Entry) || !IsPresent(player, entry.Spawn)) continue;
-            if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, out _)) continue;
+            if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, _content, GiverInHome(entry.Spawn), out _)) continue;
             liveEligible = true;
             // A visible eligible giver belongs to ordinary interaction handling.
             // Do not let this advisory seam steal it for travel.
-            if (VisibleTarget(player, entry.Entry, 0)) return false;
+            if (VisibleTarget(player, entry.Entry, 0))
+            {
+                // The trip ended in sight of its NPC. When the quest-giver controller has nothing here, the quest is set aside
+                // so the bot does not walk out of sight and be sent back for it (SettleArrival); another quest of the NPC may remain.
+                SettleArrival(player, entry.Entry);
+                if (Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, loot, Home, _content, GiverInHome(entry.Spawn), out _))
+                    return false;
+                continue;
+            }
             if (IsBlocked(entry.Spawn.Guid, now))
             {
                 blockedEligible = true;
@@ -143,13 +164,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             QuestNpcServices? currentServices = _session.Services.GetService<QuestNpcFeature>()?.Services;
             PlayerNpcState? currentState = currentServices?.StateOf(player);
             if ((preferredCreatureEntry != 0 && preferredCreatureEntry != _routeTarget)
-                || !Eligible(_routeTarget, preferredCreatureEntry, player, currentServices, currentState, returnQuestId, SkipQuest, loot, out _))
+                || !Eligible(_routeTarget, preferredCreatureEntry, player, currentServices, currentState, returnQuestId, SkipQuest, loot,
+                    Home, _content, Home is null || _content is not null && Home.HasSpawnInside(_content, _routeTarget), out _))
             {
                 ClearRoute();
                 return false;
             }
             if (VisibleTarget(player, _routeTarget, returnQuestId))
             {
+                if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, _routeTarget);
                 ClearRoute();
                 return false;
             }
@@ -190,8 +213,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             if (++scanned > MaxEntryScan) break;
             if (Suspended(entry.Entry)) continue;
-            if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot, out uint questId)) continue;
-            if (VisibleTarget(player, entry.Entry, returnQuestId)) return false;
+            if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot,
+                    Home, _content, GiverInHome(entry.Spawn), out uint questId)) continue;
+            if (VisibleTarget(player, entry.Entry, returnQuestId))
+            {
+                if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, entry.Entry);
+                return false;
+            }
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
             // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
@@ -201,6 +229,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 ClearRoute();
                 TargetEntry = entry.Entry;
                 QuestId = questId;
+                _travelEntry = entry.Entry;
+                _travelQuest = questId;
                 return true;
             }
 
@@ -212,6 +242,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 ClearRoute();
                 TargetEntry = entry.Entry;
                 QuestId = questId;
+                _travelEntry = entry.Entry;
+                _travelQuest = questId;
                 return true;
             }
 
@@ -241,6 +273,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _routeSpawnGuid = entry.Spawn.Guid;
             TargetEntry = entry.Entry;
             QuestId = questId;
+            _travelEntry = entry.Entry;
+            _travelQuest = questId;
             _failedPlans = 0;
             _lastPosition = new(player.X, player.Y, player.Z);
             _stuckMs = 0;
@@ -249,6 +283,27 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (attempted) Backoff(now);
         return false;
+    }
+
+    private bool GiverInHome(CreatureSpawn spawn) => Home is not { } home || home.Contains(spawn);
+
+    /// <summary>
+    /// The backstop for a disagreement between the travel rule and the quest-giver controller. Called when a trip's NPC is in sight:
+    /// the quest-giver controller takes over from here, and if it finds nothing to take or turn in (<see cref="GiverHasCandidate"/>),
+    /// the quest the trip was for is set aside for this bot (<see cref="SetQuestAside"/>, about 10 minutes), so the bot does not walk
+    /// out of sight again and be sent back for the same quest. Consumes the trip; a giver reached without a trip of ours is left alone.
+    /// </summary>
+    private void SettleArrival(Player player, uint entry)
+    {
+        if (_travelEntry != entry || _travelQuest == 0) return;
+        uint quest = _travelQuest;
+        _travelEntry = 0;
+        _travelQuest = 0;
+        if (GiverHasCandidate is null || SetQuestAside is null || GiverHasCandidate(player)) return;
+        SetQuestAside(quest);
+        ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
+        log?.LogInformation("Playerbot {Bot} sets aside quest {Quest}: its trip to {Entry} ended in sight with nothing the quest giver would take or turn in",
+            player.Name, quest, entry);
     }
 
     /// <summary>
@@ -474,8 +529,27 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return !missing;
     }
 
+    /// <summary>
+    /// The one rule for "may this bot take this quest here", shared by the travel planner (<see cref="Eligible"/>) and the quest-giver
+    /// controller (<c>PlayerbotQuestGoals.FindCandidate</c>) so the two cannot disagree: the home (<paramref name="giverInHome"/>, and
+    /// <see cref="PlayerbotHomeArea.QuestInside"/>: its enders and kill targets have spawns inside; without creature content nothing is),
+    /// not a proven handoff to the other continent (<see cref="RequiresIntercontinentTravel"/>), not an item-only repeatable the bot
+    /// cannot supply (<see cref="CanPursueStarter"/>), and the journal and prerequisites
+    /// (<see cref="QuestNpcServices.CanTakeQuest(Player, uint)"/>, no running or complete status).
+    /// </summary>
+    internal static bool MayTakeQuest(Player player, QuestNpcServices services, PlayerNpcState state, CreatureContent? content,
+        LootContent? loot, PlayerbotHomeArea? home, bool giverInHome, Quest quest)
+    {
+        if (home is not null && !(giverInHome && content is not null && home.QuestInside(services.Quests, content, quest))) return false;
+        if (content is not null && RequiresIntercontinentTravel(player.MapId, services.Quests, content, quest.Id)) return false;
+        if (!CanPursueStarter(player, quest, loot, services.Npcs)) return false;
+        return services.CanTakeQuest(player, quest.Id) == true
+            && state.Quests.Get(quest.Id) is not { Status: QuestStatus.Incomplete or QuestStatus.Complete };
+    }
+
     private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
-        PlayerNpcState? state, uint returnQuestId, Func<uint, bool>? skipQuest, LootContent? loot, out uint questId)
+        PlayerNpcState? state, uint returnQuestId, Func<uint, bool>? skipQuest, LootContent? loot,
+        PlayerbotHomeArea? home, CreatureContent? content, bool giverInHome, out uint questId)
     {
         questId = 0;
         if (returnQuestId != 0)
@@ -498,8 +572,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (uint id in services.Quests.StartersOf(entry))
         {
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
-                && services.Quests.Get(id) is { } quest && CanPursueStarter(player, quest, loot, services.Npcs)
-                && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
+                && services.Quests.Get(id) is { } quest
+                && MayTakeQuest(player, services, state, content, loot, home, giverInHome, quest)) { questId = id; return true; }
         }
         return false;
     }
