@@ -141,6 +141,50 @@ public sealed partial class PlayerbotGroupCoordinator
     private readonly record struct RunCandidate(PlayerbotGroupBot Bot, Player Player);
 
     /// <summary>
+    /// Start one catalogue wing with explicitly selected managed bots on the world thread. This skips only the random start roll;
+    /// formation, level, entrance, team, role and group ownership checks remain the same as an automatic run.
+    /// </summary>
+    internal BotGroup? StartRun(PlayerbotRunPlan requested, IReadOnlyList<Guid> botIds)
+    {
+        ArgumentNullException.ThrowIfNull(requested);
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is null || !_options.Groups.Enabled || !_options.Groups.DungeonRuns.Enabled
+            || _groups.Count >= _options.Groups.MaxGroups || GroupManagerOrNull() is not { } groupManager) return null;
+        PlayerbotRunPlan? plan = Catalogue().Plans.FirstOrDefault(p => p.MapId == requested.MapId && p.Segment == requested.Segment);
+        if (plan is null || botIds.Count != plan.Size || botIds.Distinct().Count() != botIds.Count) return null;
+        PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+        int active = _groups.Count(g => g.Run is { } run && run.Plan.Raid == plan.Raid);
+        if (plan.Raid ? !runs.Raids.Enabled || active >= runs.Raids.MaxConcurrentRaids : active >= runs.MaxConcurrentRuns) return null;
+        if (WorldMaps.Of(_world).FindAreaTriggerTeleport(plan.EntranceTrigger) is not { } teleport) return null;
+
+        IWorldFeature[] features = [.. services.GetServices<IWorldFeature>()];
+        IConditionEvaluator? conditions = features.OfType<IConditionEvaluator>().FirstOrDefault();
+        IAreaTriggerGate[] gates = [.. features.OfType<IAreaTriggerGate>()];
+        InstanceFeature? instances = features.OfType<InstanceFeature>().FirstOrDefault();
+        AreaTriggerWaivers waivers = plan.Raid && runs.Raids.SkipPrerequisites
+            ? AreaTriggerWaivers.Item | AreaTriggerWaivers.Quest | AreaTriggerWaivers.Condition : AreaTriggerWaivers.None;
+        (byte min, byte max) = plan.Band(runs);
+        var candidates = new List<PlayerbotGroupCandidate>(botIds.Count);
+        foreach (Guid id in botIds)
+        {
+            if (!_bots.TryGetValue(id, out PlayerbotGroupBot bot) || !bot.Free || _memberOf.ContainsKey(id) || _waiting.ContainsKey(id)
+                || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player || (player.Flags & PlayerFlags.Ghost) != 0
+                || player.Combat.IsInCombat || player.MapId != plan.EntranceMap || player.Level < min || player.Level > max
+                || IsRunSetAside(id, plan) || groupManager.GetGroup(player.Guid) is not null || groupManager.GetInvite(player.Guid) is not null
+                || Vector3.Distance(new Vector3(player.X, player.Y, player.Z), plan.Entrance) > runs.MaxTravelYards
+                || !AreaTriggerRequirements.Check(player, teleport, conditions, gates, waivers).Verdict.Allowed
+                || plan.Raid && instances?.Instances.GetPlayerBind(player.Guid, plan.MapId) is { Permanent: true }) return null;
+            candidates.Add(Candidate(id, player, Now));
+        }
+
+        if (candidates.Select(c => c.Team).Distinct().Count() != 1) return null;
+        (int tanks, int healers) = PlayerbotGroupContent.RunRoleNeeds(plan.Size, plan.Raid, _options.Groups);
+        if (PlayerbotGroupContent.Match(candidates, plan.Size, _options.Groups, (tanks, healers)) is not { } formed) return null;
+        FormRun(plan, formed, runs);
+        return _groups[^1];
+    }
+
+    /// <summary>
     /// Every scan: when a dungeon or raid slot is free and the start roll succeeds, pick the wing with the most eligible free bots that
     /// can fill its roles and form its group.
     /// </summary>
