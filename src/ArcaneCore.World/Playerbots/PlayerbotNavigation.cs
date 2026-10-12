@@ -100,7 +100,7 @@ internal static class PlayerbotNavigation
         plan.ResetPass();
         using IDisposable scope = plan.Activate();
         bool planned = TryPlanToward(player, goal, options, out route, completedQuestReturn);
-        deferred = plan.Deferred || plan.NextRequest is not null;
+        deferred = plan.Deferred || plan.Exhausted || plan.NextRequest is not null;
         if (deferred) route = null;
         return planned && !deferred;
     }
@@ -311,7 +311,9 @@ internal static class PlayerbotNavigation
             }
 
         // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
-        if (!trial) risk.Refused(player, hazard);
+        PlayerbotAsyncNavigationPlan? currentPlan = PlayerbotAsyncNavigationPlan.Current;
+        if (!trial && (currentPlan is null || (!currentPlan.Deferred && !currentPlan.Exhausted)))
+            risk.Refused(player, hazard);
         return false;
     }
 
