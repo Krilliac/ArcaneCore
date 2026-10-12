@@ -24,8 +24,11 @@ public enum FleetResetCodeResult
     TooManyAttempts,
 }
 
-/// <summary>What the preview promised, bound to its code: the counts the operator saw.</summary>
-public sealed record FleetResetPromise(int Characters, int Accounts);
+/// <summary>
+/// What the preview promised, bound to its code: the counts the operator saw and, when known, the ids of the characters that would go
+/// (the reset then refuses if the set differs, not only the counts).
+/// </summary>
+public sealed record FleetResetPromise(int Characters, int Accounts, IReadOnlyList<int>? CharacterIds = null);
 
 /// <summary>
 /// The two-step confirmation of <c>.playerbot fleet reset</c>: <see cref="Issue"/> stores a short random code with the counts the

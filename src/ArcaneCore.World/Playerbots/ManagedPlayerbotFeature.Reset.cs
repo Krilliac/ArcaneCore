@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
@@ -25,6 +26,9 @@ public sealed record FleetResetCensus(IReadOnlyList<FleetResetBot> Bots, int Cha
 {
     /// <summary>The bot accounts (one per registry row).</summary>
     public int Accounts => Bots.Count;
+
+    /// <summary>Every character id the reset would delete (what a confirm code is bound to).</summary>
+    public IReadOnlyList<int> CharacterIds => [.. Bots.SelectMany(b => b.CharacterIds)];
 }
 
 /// <summary>What a confirmed fleet reset did. Counts are of this run only; <see cref="Code"/> is "reset" or the refusal.</summary>
@@ -38,6 +42,20 @@ public sealed partial class ManagedPlayerbotFeature
     private TimeProvider _resetClock = TimeProvider.System;
     private FleetResetConfirmation? _resetConfirmation;
 
+    // Emptied bot accounts of earlier resets, handed to CreateAsync (single consumer under the operation lock). Memory only: after
+    // a restart the empty accounts are simply left alone. CreateAsync re-checks every one before use.
+    private readonly ConcurrentQueue<SpareAccount> _spareAccounts = new();
+
+    private sealed record SpareAccount(int AccountId, string Name);
+
+    /// <summary>
+    /// A warning for the reset preview when the population would fill the emptied fleet again at once with boosted bots (the population
+    /// is on and FreshLaunch is off), otherwise null.
+    /// </summary>
+    internal string? RefillWarning => _options.Population is { Enabled: true, FreshLaunch: false }
+        ? "WARNING: the population manager is on and World:Playerbots:Population:FreshLaunch is off, so it would refill the fleet at once with boosted bots at their usual levels, not level 1. Turn FreshLaunch on (.reload config) before you confirm."
+        : null;
+
     /// <summary>True while <c>.playerbot fleet reset</c> runs: bots cannot be created or started, and the population stands still.</summary>
     internal bool ResetInProgress => Volatile.Read(ref _resetting) != 0;
 
@@ -49,13 +67,21 @@ public sealed partial class ManagedPlayerbotFeature
     }
 
     /// <summary>The pending preview of <c>.playerbot fleet reset</c>.</summary>
-    internal FleetResetConfirmation ResetConfirmation => _resetConfirmation ??= new FleetResetConfirmation(() => _resetClock);
+    internal FleetResetConfirmation ResetConfirmation => Volatile.Read(ref _resetConfirmation) ?? CreateResetConfirmation();
+
+    // Two commands racing on the first use must end up with one confirmation object, or a code could be issued to one and redeemed on the other.
+    private FleetResetConfirmation CreateResetConfirmation()
+    {
+        var created = new FleetResetConfirmation(() => _resetClock);
+        return Interlocked.CompareExchange(ref _resetConfirmation, created, null) ?? created;
+    }
 
     /// <summary>
     /// Read the fleet: every registry row is a bot account. Bot ownership comes only from the registry; the account store and the
     /// character store are then asked to agree with it, and any disagreement is a <see cref="FleetResetCensus.Refusal"/> rather than a guess:
     /// a registry row whose account is not the named one or is not a plain player account, a bot account somebody has logged in to
-    /// (<see cref="Account.SessionKey"/>), a character on a bot account that is online in a real (non-managed) session, or a registry
+    /// (<see cref="Account.SessionKey"/>), a character on a bot account that the registry does not name for that account (a human's
+    /// character on a bot account), a character on a bot account that is online in a real (non-managed) session, or a registry
     /// character that belongs to another account.
     /// </summary>
     internal async Task<FleetResetCensus> TakeFleetCensusAsync(CancellationToken cancellationToken = default)
@@ -66,7 +92,15 @@ public sealed partial class ManagedPlayerbotFeature
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
         IAccountStore accounts = provider.GetRequiredService<IAccountStore>();
         ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
-        HashSet<int> botAccounts = [.. registered.Select(b => b.AccountId)];
+        // The only characters a bot account may hold are the registry's own: a bot has one account and one character, and anything else
+        // on the account (a character somebody made there, a second one the registry does not name) is not ours to delete.
+        Dictionary<int, HashSet<int>> registryCharacters = [];
+        foreach (ManagedPlayerbot row in registered)
+        {
+            if (!registryCharacters.TryGetValue(row.AccountId, out HashSet<int>? own)) registryCharacters[row.AccountId] = own = [];
+            own.Add(row.CharacterId);
+        }
+
         var bots = new List<FleetResetBot>(registered.Count);
         string? refusal = null;
         int characterCount = 0;
@@ -86,9 +120,9 @@ public sealed partial class ManagedPlayerbotFeature
             }
 
             IReadOnlyList<CharacterRecord> held = await characters.GetByAccountAsync(bot.AccountId, cancellationToken).ConfigureAwait(false);
-            if (held.FirstOrDefault(c => !botAccounts.Contains(c.AccountId)) is { } stray)
+            if (held.FirstOrDefault(c => !registryCharacters[bot.AccountId].Contains(c.Id)) is { } stray)
             {
-                refusal ??= $"character {stray.Id} ('{stray.Name}') is on account {stray.AccountId}, which is not a bot account";
+                refusal ??= $"character {stray.Id} ('{stray.Name}') is on bot account '{bot.AccountName}' but is not that bot's registry character";
                 continue;
             }
 
@@ -170,10 +204,8 @@ public sealed partial class ManagedPlayerbotFeature
                     return new(false, "census-refused", refusal);
                 }
 
-                if (census.Characters != promise.Characters || census.Accounts != promise.Accounts)
+                if (DescribeFleetChange(promise, census) is { } changed)
                 {
-                    string changed = string.Create(CultureInfo.InvariantCulture,
-                        $"the fleet changed since the preview ({promise.Characters} characters on {promise.Accounts} accounts then, {census.Characters} on {census.Accounts} now)");
                     logger.LogWarning("Playerbot fleet reset REFUSED: {Reason}. Nothing was stopped or deleted", changed);
                     return new(false, "fleet-changed", changed);
                 }
@@ -214,13 +246,29 @@ public sealed partial class ManagedPlayerbotFeature
                     counts.CharactersDeleted, counts.CharactersFailed, counts.Removed.Count, counts.MembersRemoved, counts.GuildsReleased, census.Accounts);
                 return new(counts.CharactersFailed == 0, counts.CharactersFailed == 0 ? "reset" : "reset-incomplete",
                     string.Create(CultureInfo.InvariantCulture,
-                        $"{counts.CharactersDeleted} characters deleted ({counts.CharactersFailed} failed), {stopped} bots stopped ({stopFailed} failed), {counts.Removed.Count} registry rows and {counts.MembersRemoved} population member rows removed, {counts.GuildsReleased} guilds handed over or disbanded, {tradesCancelled} trades cancelled, {census.GroupedWithPlayers} bots had been grouped with real players, {census.Accounts} bot accounts kept."),
+                        $"{counts.CharactersDeleted} characters deleted ({counts.CharactersFailed} failed), {stopped} bots stopped ({stopFailed} failed), {counts.Removed.Count} registry rows and {counts.MembersRemoved} population member rows removed, {counts.GuildsReleased} guilds handed over or disbanded, {tradesCancelled} trades cancelled, {census.GroupedWithPlayers} bots had been grouped with real players, {census.Accounts} bot accounts kept for reuse."),
                     stopped, stopFailed, counts.CharactersDeleted, counts.CharactersFailed, counts.Removed.Count, counts.MembersRemoved,
                     counts.GuildsReleased, tradesCancelled, census.GroupedWithPlayers, census.Accounts);
             }
             finally { _operations.Release(); }
         }
         finally { Interlocked.Exchange(ref _resetting, 0); }
+    }
+
+    /// <summary>Null when the fleet is what the preview showed: the same characters when the preview named them, otherwise the same counts.</summary>
+    private static string? DescribeFleetChange(FleetResetPromise promise, FleetResetCensus census)
+    {
+        string then = string.Create(CultureInfo.InvariantCulture, $"{promise.Characters} characters on {promise.Accounts} accounts then, {census.Characters} on {census.Accounts} now");
+        if (promise.CharacterIds is not { } promised)
+            return census.Characters == promise.Characters && census.Accounts == promise.Accounts ? null : $"the fleet changed since the preview ({then})";
+
+        HashSet<int> before = [.. promised];
+        HashSet<int> now = [.. census.CharacterIds];
+        int gone = before.Count(id => !now.Contains(id));
+        int added = now.Count(id => !before.Contains(id));
+        if (gone == 0 && added == 0 && census.Accounts == promise.Accounts) return null;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"the fleet changed since the preview ({gone} of the previewed characters are gone, {added} new ones appeared; {then})");
     }
 
     private sealed class ResetCounts
@@ -305,6 +353,17 @@ public sealed partial class ManagedPlayerbotFeature
             ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
             IReadOnlyList<CharacterRecord> held = await characters.GetByAccountAsync(bot.AccountId, cancellationToken).ConfigureAwait(false);
             bool allGone = true;
+            // The census vetted exactly these characters. One that was not in it has appeared on the account since (or the account
+            // changed hands): that is not a bot's character, so nothing on this account is deleted.
+            if (held.FirstOrDefault(c => c.AccountId != bot.AccountId || !bot.CharacterIds.Contains(c.Id)) is { } stray)
+            {
+                counts.CharactersFailed += held.Count;
+                logger.LogWarning(
+                    "Playerbot fleet reset: character {CharacterId} ('{Name}') appeared on the account of bot {BotId} after the census; nothing on that account is deleted",
+                    stray.Id, stray.Name, bot.BotId);
+                return;
+            }
+
             if (held.Count != 0)
             {
                 WorldSession session = await NewSessionAsync(owner, null, provider, cancellationToken).ConfigureAwait(false);
@@ -312,8 +371,6 @@ public sealed partial class ManagedPlayerbotFeature
                 {
                     foreach (CharacterRecord character in held)
                     {
-                        // The character must be the bot account's own (TryDeleteAsync checks it again against the session's account).
-                        if (character.AccountId != bot.AccountId) { allGone = false; counts.CharactersFailed++; continue; }
                         if (await ReleaseGuildLeadershipAsync(character.Id).ConfigureAwait(false)) counts.GuildsReleased++;
                         if (await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false)) counts.CharactersDeleted++;
                         else
@@ -348,6 +405,7 @@ public sealed partial class ManagedPlayerbotFeature
             _homes.TryRemove(bot.BotId, out _);
             _loadedSetAsides.TryRemove(bot.BotId, out _);
             counts.Removed.Add(bot.BotId);
+            _spareAccounts.Enqueue(new SpareAccount(bot.AccountId, bot.AccountName));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
         {
@@ -358,7 +416,12 @@ public sealed partial class ManagedPlayerbotFeature
 
     /// <summary>
     /// A character that leads a guild cannot be deleted (the social module refuses it). Remove it from the guild first: leadership
-    /// passes to the next member, or the guild disbands when it was the last. True when the character led one.
+    /// passes to the next member (who may be a real player), or the guild disbands when it was the last. True when the character led one.
+    /// <para>
+    /// Nothing is handed over for a character that is still in the world (the deletion would be refused anyway). A deletion that is
+    /// refused later (a delete hook, the database transaction) leaves the bot out of its guild with its character kept; the
+    /// reset then reports it as failed and the character is deleted by the next reset.
+    /// </para>
     /// </summary>
     private async Task<bool> ReleaseGuildLeadershipAsync(int characterId)
     {
@@ -368,6 +431,7 @@ public sealed partial class ManagedPlayerbotFeature
         bool led = await world.InvokeAsync(() =>
         {
             ArcaneCore.Game.Guilds.GuildManager guilds = social.Context.Guilds;
+            if (world.FindOnlinePlayer(ObjectGuid.Player(id)) is not null) return false;
             if (guilds.GetGuildOf(id) is not { } guild || guild.LeaderId != id) return false;
             guilds.AdminUninvite(id);
             return true;

@@ -184,7 +184,7 @@ public sealed class FleetResetTests
         await admin.CollectAsync();
 
         string line = await SayAsync(admin, ".playerbot fleet reset", l => l.StartsWith("Playerbot fleet reset would", StringComparison.Ordinal));
-        Assert.Equal("Playerbot fleet reset would stop 2 running bots and delete 3 bot characters on 3 bot accounts. The bot accounts are kept; real players' characters are not touched.", line);
+        Assert.Equal("Playerbot fleet reset would stop 2 running bots and delete 3 bot characters on 3 bot accounts. The emptied bot accounts are kept and reused for new bots; real players' characters are not touched.", line);
         string proceed = await ReadLineAsync(admin, l => l.StartsWith("To proceed within 60 seconds:", StringComparison.Ordinal));
         string code = proceed[(proceed.LastIndexOf(' ') + 1)..];
         Assert.Equal(6, code.Length);
@@ -247,6 +247,52 @@ public sealed class FleetResetTests
         Assert.Null(await world.Host.World.InvokeAsync(() =>
             world.WorldGroups()?.GetGroup(world.Host.World.FindOnlinePlayer("Realgroup")!.Guid)));
         Assert.Single(await world.Host.Characters.GetByAccountAsync(realAccount.Id));
+    }
+
+    [Fact]
+    public async Task Reset_WhenABotAccountHoldsAnotherCharacter_RefusesAndDeletesNothing()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 2, started: 1);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        CharacterRecord human = await world.Host.Characters.CreateAsync(
+            new CharacterRecord { AccountId = registry[0].AccountId, Name = "Humanalt", Race = 1, Class = 1, Level = 30 });
+
+        FleetResetCensus census = await world.Bots.TakeFleetCensusAsync();
+        Assert.Contains($"character {human.Id}", census.Refusal);
+        Assert.Contains("not that bot's registry character", census.Refusal);
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(census.Characters, census.Accounts), _ => { });
+
+        Assert.Equal(("census-refused", false), (result.Code, result.Success));
+        Assert.NotNull(await world.Host.Characters.GetByIdAsync(human.Id));
+        foreach (ManagedPlayerbot bot in registry) Assert.NotNull(await world.Host.Characters.GetByIdAsync(bot.CharacterId));
+        Assert.Equal(1, world.RunningCount); // nothing was even stopped
+        Assert.Equal(2, (await world.Owners.LoadAllAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Reset_WhenACharacterAppearsOnABotAccountAfterTheCensus_KeepsThatAccountsCharacters_AndResetsTheRest()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 2, started: 0);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        ManagedPlayerbot tainted = registry[0], clean = registry[1];
+        CharacterRecord? human = null;
+
+        // The census has passed when the first progress line is written: a character shows up on one bot account now.
+        FleetResetResult result = await world.Bots.ResetFleetAsync(new FleetResetPromise(2, 2), line =>
+        {
+            human ??= world.Host.Characters.CreateAsync(
+                new CharacterRecord { AccountId = tainted.AccountId, Name = "Latealt", Race = 1, Class = 1, Level = 30 }).GetAwaiter().GetResult();
+        });
+
+        Assert.False(result.Success);
+        Assert.Equal("reset-incomplete", result.Code);
+        Assert.NotNull(human);
+        Assert.NotNull(await world.Host.Characters.GetByIdAsync(human!.Id));
+        Assert.NotNull(await world.Host.Characters.GetByIdAsync(tainted.CharacterId));
+        Assert.Null(await world.Host.Characters.GetByIdAsync(clean.CharacterId));
+        Assert.Single(await world.Owners.LoadAllAsync());
     }
 
     private sealed class FakeClock : TimeProvider

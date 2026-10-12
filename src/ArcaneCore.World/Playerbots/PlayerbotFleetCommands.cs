@@ -510,12 +510,13 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
             }
 
             if (census.Accounts == 0) { Say(context, "Playerbot fleet reset: there are no playerbot accounts."); return; }
-            string code = feature.ResetConfirmation.Issue(invoker, new FleetResetPromise(census.Characters, census.Accounts));
+            string code = feature.ResetConfirmation.Issue(invoker, new FleetResetPromise(census.Characters, census.Accounts, census.CharacterIds));
             context.Session.Logger.LogInformation(
                 "Playerbot fleet reset previewed by {Invoker}: {Characters} characters on {Accounts} bot accounts, {Running} running; confirm code issued",
                 invoker, census.Characters, census.Accounts, census.Running);
             Say(context, string.Create(CultureInfo.InvariantCulture,
-                $"Playerbot fleet reset would stop {census.Running} running bots and delete {census.Characters} bot characters on {census.Accounts} bot accounts. The bot accounts are kept; real players' characters are not touched."));
+                $"Playerbot fleet reset would stop {census.Running} running bots and delete {census.Characters} bot characters on {census.Accounts} bot accounts. The emptied bot accounts are kept and reused for new bots; real players' characters are not touched."));
+            if (feature.RefillWarning is { } warning) Say(context, warning);
             if (census.GroupedWithPlayers != 0 || census.TradingWithPlayers != 0)
                 Say(context, string.Create(CultureInfo.InvariantCulture,
                     $"{census.GroupedWithPlayers} bots are grouped with real players (they leave their groups as their characters are deleted) and {census.TradingWithPlayers} are in a trade (cancelled)."));

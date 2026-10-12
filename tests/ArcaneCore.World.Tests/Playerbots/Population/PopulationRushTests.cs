@@ -160,6 +160,27 @@ public sealed class PopulationRushTests
     }
 
     [Fact]
+    public async Task TheBrake_TripsOnASlowWorld_WithinBoundedWallClockTime_AtTwiceTheTickBudget()
+    {
+        await using PopulationTestHost world = await StartAsync(o => o.Population.TickP95BudgetMs = 60);
+        using var stop = new CancellationTokenSource();
+        Task feeder = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested) { world.Ticks.Set(5, 120); await Task.Delay(20); }
+        });
+        var clock = Stopwatch.StartNew();
+        Assert.Null(world.Feature.StartRush(6, 2));
+
+        PopulationRushStatus paused = await WaitRushAsync(world, r => r.State == "paused", "the brake to pause the rush", seconds: 25);
+        clock.Stop();
+        await stop.CancelAsync();
+        await feeder;
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(25), $"tripped after {clock.Elapsed}");
+        Assert.True(paused.Created < 6);
+    }
+
+    [Fact]
     public async Task TheExistingCaps_StopARush_MaxBotsAndTheRegistrySize()
     {
         await using (PopulationTestHost world = await StartAsync(o => o.MaxBots = 2))
