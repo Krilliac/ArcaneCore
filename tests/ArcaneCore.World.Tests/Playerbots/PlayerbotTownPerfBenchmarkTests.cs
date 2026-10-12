@@ -72,7 +72,7 @@ public sealed class PlayerbotTownPerfBenchmarkTests(ITestOutputHelper output)
     /// </summary>
     [RealTerrainBotFact]
     public async Task RepairTrip_MeshIsland_ReportsCostPerThink()
-        => await Measure("mesh-island", new Vector3(-10283.04f, 1379.96f, 40.49f));
+        => await Measure("mesh-island", new Vector3(-10283.04f, 1379.96f, 40.49f), maxQueriesPerThink: 6.0);
 
     [RealTerrainBotFact]
     public async Task RepairTrip_Northshire_ReportsCostPerThink()
@@ -124,13 +124,15 @@ public sealed class PlayerbotTownPerfBenchmarkTests(ITestOutputHelper output)
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"BENCH dense-city: {visible} visible objects, {updates} updates; ms/update {ms / updates:F4}, path queries {probe.Queries}, "
                     + $"allocated {bytes / updates} B/update"));
+                Assert.Equal(0, probe.Queries);
+                Assert.True(bytes / updates <= 80_000, $"{bytes / updates} B allocated per update (93 KB before the scan was made lazy)");
             }
             finally { session.Kick(); await session.ManagedClosed; }
         }
         finally { DenseCityServices.Current.Value = null; }
     }
 
-    private async Task Measure(string label, Vector3 start)
+    private async Task Measure(string label, Vector3 start, double maxQueriesPerThink = 1.0)
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(Boots(9212, durability: 20));
@@ -194,7 +196,6 @@ public sealed class PlayerbotTownPerfBenchmarkTests(ITestOutputHelper output)
                         return (probe.ElapsedMs, probe.Queries, probe.Search.Nodes, GC.GetAllocatedBytesForCurrentThread() - before, step);
                     });
                     millis.Add(ms);
-                    if (Environment.GetEnvironmentVariable("BENCH_TRACE") == label && (think < 80 || think % 50 == 0)) output.WriteLine($"TRACE {think} q={q} stepped={stepped} target={goals.TargetEntry} ms={ms:F2}");
                     queries += q;
                     nodes += n;
                     allocated += bytes;
@@ -209,6 +210,8 @@ public sealed class PlayerbotTownPerfBenchmarkTests(ITestOutputHelper output)
                     + $"path queries {queries} ({(double)queries / millis.Count:F2}/think), nodes {nodes} ({(double)nodes / millis.Count:F0}/think); "
                     + $"ms/think mean {total / millis.Count:F3} p99 {millis[(int)(millis.Count * 0.99)]:F2} max {millis[^1]:F2}, total {total:F0} ms; "
                     + $"thinks over 50 ms {over50}; thinks that stepped {moved}; allocated {allocated / millis.Count} B/think"));
+                // Loose upper bounds (before the town-phase work: Northshire 3.53 queries/think, the mesh island 4.42).
+                Assert.True((double)queries / millis.Count <= maxQueriesPerThink, $"{queries} path queries in {millis.Count} thinks");
             }
             finally { session.Kick(); await session.ManagedClosed; }
         }
