@@ -91,6 +91,15 @@ public sealed class PlayerbotOptions
     /// </summary>
     public bool MovementPackets { get; set; } = true;
 
+    /// <summary>
+    /// How much real-client packet work a bot's session does (<see cref="PlayerbotClientFidelity.Lean"/> by default). Lean: a bot has no
+    /// client, so the map builds no SMSG_UPDATE_OBJECT blocks for it (its visible set is still maintained) and its session keeps only
+    /// the received packets a bot reads back (<see cref="PlayerbotPacketIntake"/>). Full: bots are treated like real clients, every
+    /// packet is built, compressed and copied into the bot's receive ring, which is the stress-test mode for load testing. A session
+    /// with an observer attached (scenario, packet capture) always receives everything. Read at start; a restart applies a change.
+    /// </summary>
+    public PlayerbotClientFidelity ClientFidelity { get; set; } = PlayerbotClientFidelity.Lean;
+
     /// <summary>The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1).</summary>
     public uint[] AllowedMaps { get; set; } = [0, 1];
 
@@ -192,6 +201,7 @@ public sealed class PlayerbotOptions
         if (!float.IsFinite(MoveSpeed) || MoveSpeed <= 0 || MoveSpeed > 100)
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
         if (StallSeconds is < 10 or > 86_400) throw new InvalidOperationException($"{SectionName}: StallSeconds must be 10..86400.");
+        if (!Enum.IsDefined(ClientFidelity)) throw new InvalidOperationException($"{SectionName}: ClientFidelity must be Lean or Full.");
         if (AllowedMaps is null || AllowedMaps.Length == 0 || AllowedMaps.Distinct().Count() != AllowedMaps.Length)
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
         if (FaultBackoffSeconds is < 1 or > 3600 || MaxFaults is < 1 or > 100 || FaultWindowSeconds is < 1 or > 604_800)
@@ -222,6 +232,16 @@ public sealed class PlayerbotOptions
         if (Battlegrounds is null) throw new InvalidOperationException($"{SectionName}:Battlegrounds is missing.");
         Battlegrounds.Validate();
     }
+}
+
+/// <summary>How much real-client packet work a bot session does (<see cref="PlayerbotOptions.ClientFidelity"/>).</summary>
+public enum PlayerbotClientFidelity
+{
+    /// <summary>No update-object blocks are built for bots and only the packets bots read back are kept.</summary>
+    Lean,
+
+    /// <summary>Bots are treated like real clients: every packet is built, compressed and copied into the bot's receive ring (load-test mode).</summary>
+    Full,
 }
 
 /// <summary>Who may invite a managed bot into a group (<see cref="PlayerbotPartyOptions.InvitePolicy"/>).</summary>

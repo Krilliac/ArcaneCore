@@ -16,6 +16,12 @@ public interface IPlayerSession
     /// <summary>The account's GM level.</summary>
     AccountSecurity Security { get; }
 
+    /// <summary>
+    /// False when nothing reads this session's SMSG_UPDATE_OBJECT packets (a lean playerbot): the map then keeps the viewer's visible
+    /// set exactly as before but builds no create, values or out-of-range blocks for it. Real clients return true. World thread.
+    /// </summary>
+    bool WantsUpdateObjects => true;
+
     /// <summary>Queue a packet for this client. Thread-safe; never blocks on the socket.</summary>
     void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 

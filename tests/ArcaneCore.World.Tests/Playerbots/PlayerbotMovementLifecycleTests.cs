@@ -129,7 +129,7 @@ public sealed class PlayerbotMovementLifecycleTests
     [Fact]
     public async Task RealRoute_ObserverSeesPackedStartHeartbeatAndStopInOrder()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = BotFidelity.Start(PlayerbotClientFidelity.Full);
         WorldSession mover = await EnterNamedAsync(host, "BOTMOVEA", "Movera");
         WorldSession observer = await EnterNamedAsync(host, "BOTMOVEB", "Watcherb");
         try

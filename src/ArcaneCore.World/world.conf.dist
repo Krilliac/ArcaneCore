@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       342 keys
+#   WORLD                       343 keys
 #
 ###############################################################################
 
@@ -9791,6 +9791,25 @@ World.Playerbots.Chat.Safety.TermsFile = ""
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.TimeoutSeconds = 10
+
+#
+#    World.Playerbots.ClientFidelity
+#        Description: How much real-client packet work a bot's session does
+#                     (PlayerbotClientFidelity.Lean by default). Lean: a bot has no client, so the
+#                     map builds no SMSG_UPDATE_OBJECT blocks for it (its visible set is still
+#                     maintained) and its session keeps only the received packets a bot reads back
+#                     (PlayerbotPacketIntake). Full: bots are treated like real clients, every
+#                     packet is built, compressed and copied into the bot's receive ring, which is
+#                     the stress-test mode for load testing. A session with an observer attached
+#                     (scenario, packet capture) always receives everything. Read at start; a
+#                     restart applies a change. Values: Lean, Full.
+#        Type: PlayerbotClientFidelity
+#        Default: Lean
+#        Allowed: Lean | Full
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ClientFidelity = Lean
 
 #
 #    World.Playerbots.Economy.BuyUpgradeBudgetFraction

@@ -1,10 +1,13 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Net;
 
@@ -115,8 +118,32 @@ public sealed partial class WorldSession
         return MovementHandlers.MoveManagedBot(this, player, opcode, movement) && _state == SessionState.InWorld;
     }
 
+    private PlayerbotOptions? _botOptions;
+
+    /// <summary>True when this is a playerbot session and <c>World:Playerbots:ClientFidelity</c> is Lean (read at start; the missing options object means the defaults).</summary>
+    private bool IsLeanBot => IsPlayerbot
+        && (_botOptions ??= Services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new PlayerbotOptions())
+            .ClientFidelity == PlayerbotClientFidelity.Lean;
+
+    /// <summary>A scenario tap, an outbound observer or a packet capture is attached: it must see every packet.</summary>
+    private bool HasPacketObserver => ManagedPacketObserver is not null || _outboundPacketObserver is not null
+        || Volatile.Read(ref _packetCapture) is not null;
+
+    /// <summary>
+    /// Whether the map builds SMSG_UPDATE_OBJECT blocks for this session (<see cref="IPlayerSession.WantsUpdateObjects"/>): always for a
+    /// real client and in Full fidelity, and for a lean bot only while an observer is attached to it. World thread.
+    /// </summary>
+    public bool WantsUpdateObjects => !IsLeanBot || HasPacketObserver;
+
     private void CaptureManagedPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
+        // Lean bot: nothing reads this packet back, so it is neither copied nor queued (the ring is not read for other opcodes).
+        if (IsLeanBot && !PlayerbotPacketIntake.Contains(opcode) && !HasPacketObserver)
+        {
+            BotLeanStats.SkippedRingPacket(payload.Length);
+            return;
+        }
+
         lock (_sendLock)
         {
             if (_state == SessionState.Closed) return;
