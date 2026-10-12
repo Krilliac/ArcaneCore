@@ -110,7 +110,7 @@ public sealed class ManagedPlayerbotCheckpointTests
         // The conflicted bot is faulted, stops through the normal path and leaves the active set; the next checkpoints are not blocked.
         for (int i = 0; i < 4 && owners.Peek(ids[0])!.State != ManagedPlayerbotState.Faulted; i++) await CheckpointAsync(host, feature);
         Assert.Equal(ManagedPlayerbotState.Faulted, owners.Peek(ids[0])!.State);
-        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
+        Assert.False(feature.IsActive(ids[0]));
 
         await host.World.InvokeAsync(() =>
         {
@@ -170,8 +170,9 @@ public sealed class ManagedPlayerbotCheckpointTests
         await CheckpointAsync(host, feature);
         await CheckpointAsync(host, feature);
 
-        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0]))); // gone from the active set
+        Assert.False(feature.IsActive(ids[0])); // gone from the active set
         Assert.Equal(12u, owners.Peek(ids[1])!.TargetEntry);
+        Assert.DoesNotContain(feature.Snapshot(), s => s.BotId == ids[0]); // no ghost status line for a bot with no row
         Assert.Equal(1, log.Entries.Count(e => e.Message.Contains($"Playerbot {ids[0]} has no registry row")));
         Assert.DoesNotContain(log.Entries, e => e.Message.Contains("checkpoint stop failed"));
     }
@@ -197,7 +198,7 @@ public sealed class ManagedPlayerbotCheckpointTests
         await CheckpointAsync(host, feature);
         await CheckpointAsync(host, feature);
 
-        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
+        Assert.False(feature.IsActive(ids[0]));
         Assert.Equal(ManagedPlayerbotState.Faulted, owners.Peek(ids[0])!.State);
         Assert.Equal("operator-fault", owners.Peek(ids[0])!.ErrorCode);
         Assert.Equal(12u, owners.Peek(ids[1])!.TargetEntry);
@@ -218,11 +219,14 @@ public sealed class ManagedPlayerbotCheckpointTests
         owners.FailUpdatesOf(faulty); // its stop's writes throw (not a conflict)
         await host.World.InvokeAsync(() => { feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 77, 0); return true; });
 
-        for (int i = 0; i < 4 && owners.Peek(ids[0])!.TargetEntry != 77; i++) await CheckpointAsync(host, feature);
+        try
+        {
+            for (int i = 0; i < 4 && owners.Peek(ids[0])!.TargetEntry != 77; i++) await CheckpointAsync(host, feature);
 
-        Assert.Equal(77u, owners.Peek(ids[0])!.TargetEntry);
-        Assert.Contains(log.Entries, e => e.Message.Contains($"Playerbot {faulty} checkpoint stop failed"));
-        owners.FailUpdatesOf(null);
+            Assert.Equal(77u, owners.Peek(ids[0])!.TargetEntry);
+            Assert.Contains(log.Entries, e => e.Message.Contains($"Playerbot {faulty} checkpoint stop failed"));
+        }
+        finally { owners.FailUpdatesOf(null); }
     }
 
     private sealed class RecordingSetAsideStore : IManagedPlayerbotSetAsideStore
