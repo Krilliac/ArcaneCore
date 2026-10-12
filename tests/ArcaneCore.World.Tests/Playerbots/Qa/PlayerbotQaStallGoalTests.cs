@@ -92,6 +92,8 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
     public void EnderTripStall_WithTheEnderOnAnotherMap_SaysSo()
     {
         FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 1, 1634f, -4439f, 30f));
+        facts.Spawns.Remove((0, 963)); // the ender spawns on map 1 only: the facts must agree with the spawn it is reported at
+        facts.Spawns[(1, 963)] = 1;
         QaFindingView f = IngestOne(ReturnTripLine, facts);
 
         Assert.Contains("ender 963 (Gryan Stoutmantle), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
@@ -116,6 +118,33 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
 
         Assert.Contains("the bot was walking to its ender 900010 (Synthetic questgiver)", f.CauseDetail, StringComparison.Ordinal);
         Assert.Contains("nearest spawn 149 yd from the bot on map 0", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoRouteTripStall_WithTheOnlyEnderOnAnotherMap_SaysSo()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 1, 1634f, -4439f, 30f));
+        facts.Spawns[(1, 900010)] = 1;
+        facts.Templates[900010] = new QaTemplateFacts(0, 1, 1, string.Empty);
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Contains("ender 900010 (Synthetic questgiver), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>The quest is complete, so a kill objective without a spawn says nothing about the walk home.</summary>
+    [Fact]
+    public void NoRouteTripStall_IgnoresTheObjectivesOfTheCompletedQuest()
+    {
+        FakeFacts facts = FixtureTrip(new QaEnderFact(900010, "Synthetic questgiver", 0, -8799.95f, -132.5f, 83.5f));
+        facts.Objectives[900001] = [90]; // no spawn of entry 90 anywhere
+        QaFindingView f = IngestOne(NoRouteTripLine, facts);
+
+        Assert.Equal(QaCause.Unknown, f.Cause);
+        Assert.Contains("the bot was walking to its ender 900010", f.CauseDetail, StringComparison.Ordinal);
+
+        // Before the quest is complete the same facts are missing data.
+        QaFindingView unmarked = IngestOne(NoRouteTripLine.Replace(" return-trip", string.Empty, StringComparison.Ordinal), facts);
+        Assert.Equal(QaCause.MissingData, unmarked.Cause);
     }
 
     [Fact]

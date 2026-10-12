@@ -127,7 +127,7 @@ internal static class PlayerbotQaClassifier
                 return new QaClassification(QaCause.MissingData, NoSpawns(s, target, template is null), title);
             }
 
-            if (target == 0 && objectives.Count > 0 && objectives.All(entry => Spawns(s, facts, entry) == 0))
+            if (target == 0 && !s.ReturnTrip && objectives.Count > 0 && objectives.All(entry => Spawns(s, facts, entry) == 0))
             {
                 return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
                     $"none of the quest objective creatures ({string.Join('/', objectives)}) has a spawn {Where(s)}"), title);
@@ -204,9 +204,10 @@ internal static class PlayerbotQaClassifier
 
     /// <summary>
     /// Whether the spawn check looks at the signal's map only. A shared set-aside's position is only its first stall (the bots behind it may
-    /// have stalled on other maps, and its finding's cause is recomputed with every repeat): its check stays on every map.
+    /// have stalled on other maps, and its finding's cause is recomputed with every repeat): its check stays on every map. So does a walk home
+    /// (<see cref="QaSignal.ReturnTrip"/>): the ender is where the quest was left, often on another map, and a spawn there is not missing data.
     /// </summary>
-    private static bool OnItsMap(QaSignal s) => s.HasPosition && s.Kind != QaSignalKind.SharedSetAside;
+    private static bool OnItsMap(QaSignal s) => s.HasPosition && s.Kind != QaSignalKind.SharedSetAside && !s.ReturnTrip;
 
     private static string NoSpawns(QaSignal s, uint entry, bool noTemplate)
         => string.Create(CultureInfo.InvariantCulture, $"creature entry {entry} has no spawn {Where(s)}") + (noTemplate ? " and no creature_template row" : string.Empty);

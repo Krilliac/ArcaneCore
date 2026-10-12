@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Qa;
@@ -128,14 +129,27 @@ public sealed partial class PlayerbotQuestReturnTests
     public async Task ARealStallOnTheWayToTakeTheQuest_IsNotMarkedAsAReturnTrip()
     {
         await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
-        // Not accepted: the NPC that gives the quest also ends it, and the bot is walking to it to take the quest.
-        PlayerbotBrain brain = await StartStallingAsync(fixture, completed: false);
+        // The quest is not accepted. The NPC that gives it also ends it; it stands in view but out of reach, so the bot walks to it to TAKE
+        // the quest, and no way is found.
+        await fixture.Host.World.InvokeAsync(() =>
+        {
+            var player = fixture.Session.Player!;
+            var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40, player.Y, player.Z, 0);
+            WorldCollision.Of(fixture.Host.World).Install(lineOfSight: new Walled(player.Z), pathfinder: new NoWay());
+            return true;
+        });
+        await fixture.Host.WaitForWorldAsync(() => fixture.Session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "visible giver");
+        var brain = new PlayerbotBrain(fixture.Session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
         try
         {
             string report = await StallAsync(fixture, brain);
             await fixture.Host.World.InvokeAsync(() =>
             {
                 Assert.StartsWith("stalled ", report, StringComparison.Ordinal);
+                Assert.Contains("goal=Quest", report, StringComparison.Ordinal);
+                Assert.Contains($"quest={QuestId}", report, StringComparison.Ordinal);
+                Assert.Equal(QuestStatus.None, fixture.Feature.Services.StateOf(fixture.Session.Player!)!.Quests.Get(QuestId)?.Status ?? QuestStatus.None);
                 string line = LogLine(brain, fixture.Session.Player!, report);
                 Assert.DoesNotContain("return-trip", line, StringComparison.Ordinal);
                 Assert.False(QaData.Parse(line).ReturnTrip, line);

@@ -256,7 +256,6 @@ public sealed partial class PlayerbotQuestReturnTests
         });
         await host.WaitForWorldAsync(() => !session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "offscreen return giver");
         var walkingHome = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
-        var takingIt = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
         try
         {
             await host.World.InvokeAsync(() =>
@@ -276,15 +275,12 @@ public sealed partial class PlayerbotQuestReturnTests
                     $"death loop: died 3 times in 60s within 20 yd of 0.0,0.0,0.0 map 0 attackers=none goal=Quest quest={QuestInteractionFixture.QuestId}"), StringComparison.Ordinal);
                 Assert.DoesNotContain("return-trip", walkingHome.QaReportContext(player,
                     $"stalled 120s: goal=Group target=0 quest={QuestInteractionFixture.QuestId} at 0.0,0.0,0.0 map 0"), StringComparison.Ordinal);
-                // On its way to take the quest from the NPC that also ends it.
-                takingIt.HoldGoalForTests(PlayerbotGoalKind.Quest, QuestInteractionFixture.Entry, QuestInteractionFixture.QuestId);
-                takingIt.GiveUpStalledGoal(player);
-                Assert.Equal(0u, takingIt.StallReturnQuest);
-                Assert.DoesNotContain("return-trip", takingIt.QaReportContext(player, stall(QuestInteractionFixture.QuestId)), StringComparison.Ordinal);
+                // The bot on its way to TAKE the quest from the NPC that also ends it is covered by
+                // ARealStallOnTheWayToTakeTheQuest_IsNotMarkedAsAReturnTrip, which drives a real stall.
                 return true;
             });
         }
-        finally { walkingHome.Stop(); takingIt.Stop(); }
+        finally { walkingHome.Stop(); }
     }
 
     /// <summary>
