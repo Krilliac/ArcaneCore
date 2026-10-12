@@ -33,7 +33,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IWorldFeature, IPlayerbotService
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IWorldFeature, IPlayerbotService
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -196,10 +196,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (ResetInProgress) return new(false, "fleet-reset-running");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
+            if (ResetInProgress) return new(false, "fleet-reset-running");
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
@@ -642,6 +644,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     {
         bool quarantineRetry = kind != StartKind.Operator;
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (ResetInProgress) return new(false, "fleet-reset-running");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
         WorldSession? session = null;
@@ -650,6 +653,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
+            if (ResetInProgress) return new(false, "fleet-reset-running");
             bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
             if (kind == StartKind.Operator) _quarantine.TryRemove(bot.BotId, out _);

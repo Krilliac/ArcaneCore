@@ -199,6 +199,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         _clockMs += elapsedMs;
         _sinceMs += elapsedMs;
         if (_stopping) return;
+        // A fleet reset (.playerbot fleet reset) deletes every bot: the population stands still until it is done.
+        if (Managed is { ResetInProgress: true }) return;
         PlayerbotPopulationOptions pop = _options.Population;
         if (!_options.Enabled || !pop.Enabled)
         {
