@@ -68,7 +68,19 @@ public sealed class PlayerbotPopulationFeatureTests
             configureServices: UnsafeStarterServices);
         world.Ticks.Set(200, 10);
 
+        // The creature survey runs in the background and holds creation until it is in; only a pass after the hold can show that
+        // every zone was refused as unsafe.
         PopulationStatus status = await world.PassAsync();
+        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+        {
+            await Task.Delay(20);
+            world.Ticks.Set(200, 10);
+            status = await world.PassAsync();
+        }
+
+        Assert.DoesNotContain("waiting for the graveyard terrain lookup", status.Reason);
+        Assert.Contains("no safe zone, level and race-class placement is available", status.Reason);
         Assert.Contains("created 0", status.Reason);
         Assert.Empty(world.Members.Snapshot);
         Assert.Empty(await world.Owners.LoadAllAsync());
@@ -215,6 +227,7 @@ public sealed class PlayerbotPopulationFeatureTests
         PopulationStatus status = await PassWithTicksAsync(world);
         Assert.Equal(0, status.Bands.Sum(b => b.Have)); // never counted towards a band, not even for the pass it was running in
         Assert.Equal(0, status.OwnedRunning);
+        Assert.Equal(0, status.OperatorRunning); // not an operator bot either: the target (1) is not lowered by it
         Assert.DoesNotContain(await world.Owners.LoadAllAsync(), b => b.BotId == id);
         Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == id);
     }
@@ -399,15 +412,7 @@ public sealed class PlayerbotPopulationFeatureTests
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
 
         world.Ticks.Set(200, 10);
-        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
-        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
-        {
-            await Task.Delay(20);
-            world.Ticks.Set(200, 10);
-            status = await world.PassAsync();
-        }
 
         Assert.Contains("created 1", status.Reason);
         Assert.Null(status.LastError);
@@ -503,15 +508,7 @@ public sealed class PlayerbotPopulationFeatureTests
         });
 
         world.Ticks.Set(200, 10);
-        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
-        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
-        {
-            await Task.Delay(20);
-            world.Ticks.Set(200, 10);
-            status = await world.PassAsync();
-        }
 
         Assert.Contains("created 1", status.Reason);
         Assert.Contains("the bot registry is full (MaxRegisteredBots)", status.Reason);
@@ -928,15 +925,7 @@ public sealed class PlayerbotPopulationFeatureTests
     private static async Task<Guid> StartOneBotInElwynnAsync(PopulationTestHost world)
     {
         world.Ticks.Set(200, 10);
-        // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
-        for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
-        {
-            await Task.Delay(20);
-            world.Ticks.Set(200, 10);
-            status = await world.PassAsync();
-        }
 
         Assert.Contains("created 1", status.Reason);
         await world.WaitForSettledAsync(1);
