@@ -895,6 +895,10 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         private int _rowsWritten;
 
+        /// <summary>Raise a stored row's revision behind the feature's back, as another writer would (the next update of it is stale).</summary>
+        public void BumpRevision(Guid botId)
+            => _items.AddOrUpdate(botId, _ => throw new InvalidOperationException("unknown-bot"), (_, current) => current with { Revision = current.Revision + 1 });
+
         /// <summary>Rows written by update (single or batched) since the store was made.</summary>
         public int RowsWritten => Volatile.Read(ref _rowsWritten);
 

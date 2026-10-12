@@ -82,6 +82,70 @@ public sealed class ManagedPlayerbotCheckpointTests
     }
 
     [Fact]
+    public async Task ARevisionConflict_FaultsOnlyThatBot_ItLeavesCleanly_AndTheOthersKeepCheckpointing()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var setAsides = new RecordingSetAsideStore();
+        var log = new ManagedPlayerbotLifecycleTests.CapturingLogger();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            logger: log, manualClock: true, setAsideStore: setAsides, configure: o => o.FaultBackoffSeconds = 3600);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 3);
+        await CheckpointAsync(host, feature);
+
+        // Another writer moves the first bot's row on; the bot's next write is stale. The second bot changes goal and set-asides too.
+        owners.BumpRevision(ids[0]);
+        await host.World.InvokeAsync(() =>
+        {
+            feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 11, 0);
+            feature.FindBrain(ids[1])!.HoldGoalForTests(PlayerbotGoalKind.Quest, 22, 5);
+            feature.FindBrain(ids[1])!.Suspensions.SuspendQuest(1361, host.World.NowMs);
+            return true;
+        });
+        await CheckpointAsync(host, feature);
+        ManagedPlayerbot second = owners.Peek(ids[1])!;
+        Assert.Equal((PlayerbotGoalKind.Quest, 22u), (second.Goal, second.TargetEntry)); // the conflict did not stop the batch
+        Assert.NotEmpty(setAsides.RowsOf(ids[1]));
+
+        // The conflicted bot is faulted, stops through the normal path and leaves the active set; the next checkpoints are not blocked.
+        for (int i = 0; i < 4 && owners.Peek(ids[0])!.State != ManagedPlayerbotState.Faulted; i++) await CheckpointAsync(host, feature);
+        Assert.Equal(ManagedPlayerbotState.Faulted, owners.Peek(ids[0])!.State);
+        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
+
+        await host.World.InvokeAsync(() =>
+        {
+            feature.FindBrain(ids[2])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 33, 0);
+            feature.FindBrain(ids[2])!.Suspensions.SuspendQuest(6605, host.World.NowMs);
+            return true;
+        });
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+        ManagedPlayerbot third = owners.Peek(ids[2])!;
+        Assert.Equal((PlayerbotGoalKind.Grind, 33u), (third.Goal, third.TargetEntry));
+        Assert.NotEmpty(setAsides.RowsOf(ids[2]));
+
+        // One fault recorded, no stop failure repeating every round.
+        Assert.Equal(1, log.Entries.Count(e => e.Message.Contains($"Playerbot {ids[0]} quarantined for")));
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains("checkpoint stop failed"));
+    }
+
+    private sealed class RecordingSetAsideStore : IManagedPlayerbotSetAsideStore
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, PlayerbotSetAside[]> _rows = new();
+
+        public PlayerbotSetAside[] RowsOf(Guid botId) => _rows.GetValueOrDefault(botId) ?? [];
+
+        public Task<IReadOnlyList<PlayerbotSetAside>> LoadAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PlayerbotSetAside>>([.. _rows.Values.SelectMany(rows => rows)]);
+
+        public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotSetAside> rows, CancellationToken cancellationToken = default)
+        {
+            _rows[botId] = [.. rows];
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task AGoalChange_SurvivesARestart_AndSkippedBotsLoseNothing()
     {
         var accounts = new InMemoryAccountStore();

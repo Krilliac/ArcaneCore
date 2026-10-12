@@ -50,7 +50,8 @@ public sealed class ManagedPlayerbotUpdateManyTests : IAsyncLifetime
         DataServiceCollectionExtensions.ConfigureProvider(builder, cs);
         builder.AddInterceptors(counter);
         ManagedPlayerbotUpdate[] updates = bots.Select(Next).ToArray();
-        updates[150] = updates[150] with { ExpectedRevision = 5 }; // stale: the stored row is at revision 0
+        // Stale in the database, not in the arithmetic: Revision = Expected + 1 passes the pre-check, the stored row is at revision 0.
+        updates[150] = updates[150] with { Bot = updates[150].Bot with { Revision = 6 }, ExpectedRevision = 5 };
 
         IReadOnlyList<bool> results;
         await using (var db = new CharacterDbContext(builder.Options))
@@ -68,6 +69,23 @@ public sealed class ManagedPlayerbotUpdateManyTests : IAsyncLifetime
         Assert.Equal((0L, PlayerbotGoalKind.Explore), (stale.Revision, stale.Goal));
         ManagedPlayerbot done = (await store.FindAsync(bots[299].BotId))!;
         Assert.Equal((1L, PlayerbotGoalKind.Grind, 9u, 3u), (done.Revision, done.Goal, done.TargetEntry, done.QuestId));
+    }
+
+    [Fact]
+    public async Task AFailureMidBatch_RollsBackItsChunk_AndKeepsTheEarlierChunks()
+    {
+        (DatabaseConnectionOptions cs, ManagedPlayerbot[] bots) = await SeedAsync(300);
+        DbContextOptionsBuilder<CharacterDbContext> builder = new();
+        DataServiceCollectionExtensions.ConfigureProvider(builder, cs);
+        builder.AddInterceptors(new ThrowOnNthUpdate(140)); // inside the second chunk (rows 128..255)
+        await using (var db = new CharacterDbContext(builder.Options))
+            await Assert.ThrowsAnyAsync<Exception>(() => new EfManagedPlayerbotStore(db).UpdateManyAsync(bots.Select(Next).ToArray()));
+
+        await using CharacterDbContext read = TestContexts.Create<CharacterDbContext>(cs);
+        long[] revisions = await read.Set<ManagedPlayerbotRow>().OrderBy(r => r.AccountId).Select(r => r.Revision).ToArrayAsync();
+        Assert.Equal(300, revisions.Length);
+        Assert.All(revisions.Take(128), r => Assert.Equal(1L, r)); // chunk one committed
+        Assert.All(revisions.Skip(128), r => Assert.Equal(0L, r)); // chunk two rolled back, chunk three never started
     }
 
     [Fact]
@@ -94,6 +112,19 @@ public sealed class ManagedPlayerbotUpdateManyTests : IAsyncLifetime
         IReadOnlyList<bool> results = await store.UpdateManyAsync([wrongOwner, Next(bots[1])]);
         Assert.Equal([false, true], results);
         Assert.Equal(0, (await store.FindAsync(bots[0].BotId))!.Revision);
+    }
+
+    private sealed class ThrowOnNthUpdate(int n) : DbCommandInterceptor
+    {
+        private int _seen;
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.TrimStart().StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase) && Interlocked.Increment(ref _seen) == n)
+                throw new IOException("injected: update failed");
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 
     private sealed class TransactionCounter : DbTransactionInterceptor
