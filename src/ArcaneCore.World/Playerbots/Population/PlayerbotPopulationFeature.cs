@@ -562,7 +562,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
-            PopulationCounts counts = PopulationCounts.Of(input.Bands, effectiveTarget, input.RunningAll,
+            // A pending bot a restart brought back is the population's own, not an operator's: it must not lower the owned target.
+            int pendingRunning = pendingIds.Count(id => input.States.TryGetValue(id, out ManagedPlayerbotState s) && s == ManagedPlayerbotState.Running);
+            PopulationCounts counts = PopulationCounts.Of(input.Bands, effectiveTarget, input.RunningAll - pendingRunning,
                 members.Keys.Count(id => input.States.TryGetValue(id, out ManagedPlayerbotState s) && s == ManagedPlayerbotState.Running),
                 input.Running.Where(f => members.ContainsKey(f.BotId)).Select(f => f.Level));
             (desired, have, operatorRunning, ownedTarget) = (counts.Desired, counts.Have, counts.OperatorRunning, counts.OwnedTarget);
