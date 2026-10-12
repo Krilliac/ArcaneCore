@@ -76,7 +76,8 @@ public sealed class StartActionsFeature : IWorldFeature, ICharacterHooks
         await session.Services.GetRequiredService<ICharacterStore>().SaveStateAsync(new CharacterState(
             character.Id, character.MapId, character.ZoneId, character.X, character.Y, character.Z, character.Orientation,
             character.Level, character.PlayedTime, character.LevelPlayedTime, character.Money, character.ActionBarToggles,
-            ActionButtons: valid)).ConfigureAwait(false);
+            ActionButtons: valid,
+            Ownership: session.World.CharacterOwnership)).ConfigureAwait(false);
     }
 
     /// <summary>
