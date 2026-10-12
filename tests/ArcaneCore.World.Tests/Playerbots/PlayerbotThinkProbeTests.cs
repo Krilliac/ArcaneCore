@@ -102,8 +102,7 @@ public sealed class PlayerbotThinkProbeTests
         {
             PlayerbotThinkProbe.Phase("a");
             Spin(4);
-            PlayerbotThinkProbe.Phase("b");
-            Spin(1);
+            PlayerbotThinkProbe.Phase("b"); // no work in b: preemption can only lengthen "a", or land in the few ticks between the two marks
             PlayerbotThinkProbe.Phase("a");
             Spin(4);
         }
@@ -115,6 +114,7 @@ public sealed class PlayerbotThinkProbeTests
         var phases = probe.Phases().ToDictionary(p => p.Phase, p => p.Ms);
         Assert.Equal("a", probe.SlowestPhase);
         Assert.True(phases["a"] >= 8, $"phase a {phases["a"]} ms");
+        Assert.True(phases.ContainsKey("b"));
         Assert.DoesNotContain("nowhere", phases.Keys);
         PlayerbotThinkProbe.Phase("after"); // ended: ignored again
         Assert.Null(PlayerbotThinkProbe.Active);

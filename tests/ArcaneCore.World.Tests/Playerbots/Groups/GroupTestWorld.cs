@@ -135,6 +135,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
         });
         await world.Host.OnWorldAsync(() =>
         {
+            world.Bots.ThinkBudgetMs = double.PositiveInfinity; // manual clock: no wall-time think budget
             WorldCollision.Of(world.Host.World).Install(lineOfSight: new Floor(rfc), pathfinder: rfc ? new GroupRfcContent.Pathfinder() : new OpenPathfinder());
             SpellFeature spells = world.Services.GetRequiredService<SpellFeature>();
             spells.System.Store = new SpellStore([.. spells.System.Store.All, TauntSpell(), ResurrectionSpell()], [], []);

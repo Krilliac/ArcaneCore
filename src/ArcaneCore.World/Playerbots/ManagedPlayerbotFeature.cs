@@ -75,6 +75,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
 
+    /// <summary>
+    /// The wall time a tick spends on the bots' thinks (<see cref="PlayerbotThinkRotation.TickBudgetMs"/> in production). A test world on a
+    /// manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend on how loaded the machine is.
+    /// </summary>
+    internal double ThinkBudgetMs { get; set; } = PlayerbotThinkRotation.TickBudgetMs;
+
     /// <summary>The slow-think log (null before the first think).</summary>
     internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
     private uint _checkpointMs;
@@ -1137,7 +1143,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
         // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
-        _rotation.TickWithin(bots.Length, PlayerbotThinkRotation.TickBudgetMs, index =>
+        _rotation.TickWithin(bots.Length, ThinkBudgetMs, index =>
         {
             if (budget.Remaining <= 0) return false;
             Think(bots[index], budget);
