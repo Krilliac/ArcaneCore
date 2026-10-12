@@ -129,6 +129,75 @@ public sealed class ManagedPlayerbotCheckpointTests
         Assert.DoesNotContain(log.Entries, e => e.Message.Contains("checkpoint stop failed"));
     }
 
+    [Fact]
+    public async Task AConflict_KeepsTheOtherWritersValues_WhenTheBotStops()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true, configure: o => o.FaultBackoffSeconds = 3600);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 2);
+        await CheckpointAsync(host, feature);
+
+        owners.ChangeOutOfBand(ids[0], b => b with { DesiredEnabled = false }); // an operator disabled it by hand
+        await host.World.InvokeAsync(() => { feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 11, 0); return true; });
+        for (int i = 0; i < 5 && owners.Peek(ids[0])!.State != ManagedPlayerbotState.Faulted; i++) await CheckpointAsync(host, feature);
+
+        ManagedPlayerbot stored = owners.Peek(ids[0])!;
+        Assert.Equal(ManagedPlayerbotState.Faulted, stored.State);
+        Assert.False(stored.DesiredEnabled);
+    }
+
+    [Fact]
+    public async Task AConflict_OnADeletedRow_DropsTheBotOnce_AndTheOthersKeepCheckpointing()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var log = new ManagedPlayerbotLifecycleTests.CapturingLogger();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            logger: log, manualClock: true, configure: o => o.FaultBackoffSeconds = 3600);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 2);
+        await CheckpointAsync(host, feature);
+
+        owners.DropOutOfBand(ids[0]);
+        await host.World.InvokeAsync(() =>
+        {
+            feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 11, 0);
+            feature.FindBrain(ids[1])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 12, 0);
+            return true;
+        });
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+
+        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0]))); // gone from the active set
+        Assert.Equal(12u, owners.Peek(ids[1])!.TargetEntry);
+        Assert.Equal(1, log.Entries.Count(e => e.Message.Contains($"Playerbot {ids[0]} has no registry row")));
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains("checkpoint stop failed"));
+    }
+
+    [Fact]
+    public async Task AStopThatThrows_DoesNotKeepTheOtherBotsFromBeingCheckpointed()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var log = new ManagedPlayerbotLifecycleTests.CapturingLogger();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            logger: log, manualClock: true, configure: o => o.FaultBackoffSeconds = 3600);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        PlayerbotOperationResult a = await feature.CreateAsync("Stopthrow", 1, 1);
+        Guid faulty = a.BotId!.Value;
+        Assert.True((await feature.StartScriptedAsync(faulty.ToString(), new ManagedPlayerbotLifecycleTests.ThrowingController(1))).Success);
+        Guid[] ids = await StartBotsAsync(feature, 1);
+        owners.FailUpdatesOf(faulty); // its stop's writes throw (not a conflict)
+        await host.World.InvokeAsync(() => { feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 77, 0); return true; });
+
+        for (int i = 0; i < 4 && owners.Peek(ids[0])!.TargetEntry != 77; i++) await CheckpointAsync(host, feature);
+
+        Assert.Equal(77u, owners.Peek(ids[0])!.TargetEntry);
+        Assert.Contains(log.Entries, e => e.Message.Contains($"Playerbot {faulty} checkpoint stop failed"));
+        owners.FailUpdatesOf(null);
+    }
+
     private sealed class RecordingSetAsideStore : IManagedPlayerbotSetAsideStore
     {
         private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, PlayerbotSetAside[]> _rows = new();

@@ -806,7 +806,7 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
-    private sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
+    internal sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
     {
         private int _remaining = faults;
 
@@ -894,6 +894,14 @@ public sealed class ManagedPlayerbotLifecycleTests
         public bool FailNextUpdate { get; set; }
 
         private int _rowsWritten;
+
+        /// <summary>Change a stored row behind the feature's back, bumping its revision as any other writer would.</summary>
+        public void ChangeOutOfBand(Guid botId, Func<ManagedPlayerbot, ManagedPlayerbot> change)
+            => _items.AddOrUpdate(botId, _ => throw new InvalidOperationException("unknown-bot"),
+                (_, current) => change(current) with { Revision = current.Revision + 1 });
+
+        /// <summary>Remove a stored row behind the feature's back.</summary>
+        public void DropOutOfBand(Guid botId) => _items.TryRemove(botId, out _);
 
         /// <summary>Raise a stored row's revision behind the feature's back, as another writer would (the next update of it is stale).</summary>
         public void BumpRevision(Guid botId)
