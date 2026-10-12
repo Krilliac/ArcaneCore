@@ -6,6 +6,24 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
+/// <summary>
+/// A real-terrain diagnostic probe: it prints route and walk measurements and asserts nothing, and takes minutes (Probe_StallPatterns
+/// alone ~7 min). It runs only when asked, with <c>ARCANECORE_RUN_PROBES=1</c> or <c>PROBE_ONLY=&lt;case-name prefix&gt;</c>, on top of
+/// the real-terrain data <see cref="RealTerrainBotFactAttribute"/> requires; a gate or CI run with terrain data skips it.
+/// </summary>
+internal sealed class RealTerrainProbeFactAttribute : FactAttribute
+{
+    public RealTerrainProbeFactAttribute()
+    {
+        Skip = new RealTerrainBotFactAttribute().Skip;
+        if (Skip is null && Environment.GetEnvironmentVariable("ARCANECORE_RUN_PROBES") != "1"
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PROBE_ONLY")))
+        {
+            Skip = "Diagnostic probe (no assertions, minutes long): set ARCANECORE_RUN_PROBES=1 or PROBE_ONLY to run it.";
+        }
+    }
+}
+
 public sealed partial class PlayerbotRealTerrainNavigationTests
 {
     private static readonly (string Name, uint Map, Vector3 From, Vector3 To)[] ProbeCases =
@@ -29,7 +47,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         ("2161 ukor", 1, new(207.5f, -4458.7f, 27.7f), new(-599.4f, -4715.3f, 35.2f)),
     ];
 
-    [RealTerrainBotFact]
+    [RealTerrainProbeFact]
     public async Task Probe_StallPatterns()
     {
         string only = Environment.GetEnvironmentVariable("PROBE_ONLY") ?? "";
@@ -64,7 +82,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
 
 public sealed partial class PlayerbotRealTerrainNavigationTests
 {
-    [RealTerrainBotFact]
+    [RealTerrainProbeFact]
     public async Task Probe_Islands()
     {
         (string, uint, Vector3, Vector3)[] islands =
@@ -111,7 +129,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
 
 public sealed partial class PlayerbotRealTerrainNavigationTests
 {
-    [RealTerrainBotFact]
+    [RealTerrainProbeFact]
     public async Task Probe_Two()
     {
         (string, uint, Vector3, Vector3)[] cases =
