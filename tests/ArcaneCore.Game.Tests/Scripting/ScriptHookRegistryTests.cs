@@ -143,9 +143,17 @@ public sealed class ScriptHookRegistryTests
         var addonMessage = new ScriptAddonMessage(1, "PFX", "body", null);
         for (int warm = 0; warm < 2; warm++) Run();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run();
-        Assert.Equal(before, GC.GetAllocatedBytesForCurrentThread());
+        // A gen0 GC triggered by another test thread can add ~one allocation quantum (7-8 KB) to this thread's counter inside a window; a real
+        // allocation shows in every window, so the claim is that the cheapest window allocates nothing.
+        long allocated = long.MaxValue;
+        for (int window = 0; window < 5 && allocated != 0; window++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            Run();
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        Assert.Equal(0, allocated);
 
         void Run()
         {

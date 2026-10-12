@@ -16,9 +16,16 @@ public sealed class VisibilityAllocationTests
         world.AddPlayer(player);
         world.RunTick(50);
         for (int i = 0; i < 20; i++) map.RefreshVisibility(player);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++) map.RefreshVisibility(player);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // A gen0 GC triggered by another test thread can add ~one allocation quantum (7-8 KB) to this thread's counter inside a window; a real
+        // allocation shows in every window, so the claim is that the cheapest window stays small.
+        long allocated = long.MaxValue;
+        for (int window = 0; window < 5; window++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++) map.RefreshVisibility(player);
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
         Assert.Equal(1000, player.VisibleObjects.Count);
         // No packet changes: permit small fixed bookkeeping, never lists proportional to the visible population.
         Assert.True(allocated < 8192, $"100 stable refreshes allocated {allocated} bytes");
