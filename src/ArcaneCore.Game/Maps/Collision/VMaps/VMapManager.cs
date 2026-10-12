@@ -93,7 +93,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
             }
             catch (InvalidDataException ex)
             {
-                _logger.LogError("VMaps: {Path} is not a usable {Magic} tile ({Reason}); the tile is ignored", path, VMapFormat.Magic, ex.Message);
+                _logger.LogError(ex, "VMaps: {Path} is not a usable {Magic} tile ({Reason}); the tile is ignored", path, VMapFormat.Magic, ex.Message);
                 return false;
             }
         }
@@ -244,7 +244,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
         }
         catch (InvalidDataException ex)
         {
-            _logger.LogError("VMaps: {Path} is not a usable {Magic} tree ({Reason}); map {MapId} has no line of sight data", path, VMapFormat.Magic, ex.Message, mapId);
+            _logger.LogError(ex, "VMaps: {Path} is not a usable {Magic} tree ({Reason}); map {MapId} has no line of sight data", path, VMapFormat.Magic, ex.Message, mapId);
             return null;
         }
     }
@@ -299,7 +299,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
                 }
                 catch (InvalidDataException ex)
                 {
-                    _logger.LogError("VMaps: {Path} is not a usable model ({Reason}); its spawns are skipped", path, ex.Message);
+                    _logger.LogError(ex, "VMaps: {Path} is not a usable model ({Reason}); its spawns are skipped", path, ex.Message);
                 }
             }
         }

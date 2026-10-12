@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Globalization;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
@@ -1031,6 +1032,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Backoff(botId);
+            logger.LogFault("playerbot-population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
             return false;
         }

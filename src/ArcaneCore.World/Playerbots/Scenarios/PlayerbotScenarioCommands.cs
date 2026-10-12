@@ -75,6 +75,7 @@ internal static class PlayerbotScenarioCommands
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                bots.ReportCommandFault("scenario " + scenario.Name, error);
                 context.Reply($"Playerbot scenario {scenario.Name} failed: {error.GetType().Name}.");
             }
             finally

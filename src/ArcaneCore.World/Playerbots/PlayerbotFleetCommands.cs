@@ -615,6 +615,7 @@ public sealed class PlayerbotFleetCommands : ICommandExtension
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                feature.ReportCommandFault(start ? "fleet start" : "fleet stop", error);
                 failed.Add(new Outcome(status.Name, error.GetType().Name));
             }
         }

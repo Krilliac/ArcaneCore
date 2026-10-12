@@ -162,7 +162,7 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
                     if (!failing)
                     {
                         failing = true;
-                        logger.LogWarning("metrics: OTLP push to {Endpoint} failed: {Message}", options.OtlpEndpoint, ex.Message);
+                        logger.LogWarning(ex, "metrics: OTLP push to {Endpoint} failed: {Message}", options.OtlpEndpoint, ex.Message);
                     }
                 }
             }

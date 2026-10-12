@@ -295,7 +295,10 @@ public sealed class PlayerbotCommands : ICommandGroup
             {
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
-                { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+                {
+                    service.ReportCommandFault("home clear", error);
+                    context.Reply($"Playerbot home failed: {error.GetType().Name}.");
+                }
             });
             return true;
         }
@@ -397,7 +400,10 @@ public sealed class PlayerbotCommands : ICommandGroup
                     + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
             catch (Exception error) when (error is not OutOfMemoryException)
-            { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+            {
+                service.ReportCommandFault("home set", error);
+                context.Reply($"Playerbot home failed: {error.GetType().Name}.");
+            }
         });
         return true;
     }
@@ -495,6 +501,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            if (service is ManagedPlayerbotFeature managed) managed.ReportCommandFault("operation", error);
             context.Reply($"Playerbot failed: {error.GetType().Name}.");
         }
     }

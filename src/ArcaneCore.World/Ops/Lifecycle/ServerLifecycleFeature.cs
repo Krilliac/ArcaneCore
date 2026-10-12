@@ -48,6 +48,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         }
         catch (OperationCanceledException)
         {
+            // the stop timer was cancelled: that is how the run ends
         }
 
         _stopTimer.Dispose();
@@ -155,6 +156,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         }
         catch (OperationCanceledException)
         {
+            // cancelled by Stop or a newer timer: the run ends
         }
         finally
         {
@@ -173,6 +175,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             }
             catch (ObjectDisposedException)
             {
+                // see the type's comment: the timer already disposed its source
             }
         }
     }

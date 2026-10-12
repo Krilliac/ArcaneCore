@@ -389,6 +389,8 @@ internal sealed class PlayerbotQaPublisher
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // Type only, by policy (AnUnexpectedException_FailsTheFinding_WithItsTypeOnly): the exception text of a GitHub call may carry a
+            // token or an issue body, and neither the log nor the fault ledger may hold it. The type is stored in the finding's publication state.
             Fail(id, current, ex.GetType().Name);
             return true;
         }
@@ -533,7 +535,7 @@ internal sealed class PlayerbotQaPublisher
             {
                 if (Interlocked.Exchange(ref _warnedDirectory, 1) == 0)
                 {
-                    _logger.LogWarning("Bot QA could not write {Folder} ({Type}); dry-run issues are not saved", folder, ex.GetType().Name);
+                    _logger.LogWarning(ex, "Bot QA could not write {Folder} ({Type}); dry-run issues are not saved", folder, ex.GetType().Name);
                 }
 
                 continue;

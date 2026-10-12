@@ -116,6 +116,7 @@ public sealed class ReloadCommands : ICommandGroup
             }
             catch (Exception ex)
             {
+                CommandFaultLogging.Log(context, "reload-command", ex, "reload");
                 results = [new ReloadResult("reload", ReloadStatus.Failed, ex.Message, [], TimeSpan.Zero, DateTimeOffset.UtcNow)];
             }
 

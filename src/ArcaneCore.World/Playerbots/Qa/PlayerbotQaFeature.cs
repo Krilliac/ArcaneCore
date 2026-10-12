@@ -371,7 +371,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             if (!_exportFailureLogged)
             {
                 _exportFailureLogged = true;
-                _log.LogError("Bot QA could not write its report to {Folder} ({Type}); it retries on the next pass", _directory, ex.GetType().Name);
+                _log.LogError(ex, "Bot QA could not write its report to {Folder} ({Type}); it retries on the next pass", _directory, ex.GetType().Name);
             }
         }
     }

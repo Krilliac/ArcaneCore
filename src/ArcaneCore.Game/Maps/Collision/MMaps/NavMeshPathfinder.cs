@@ -73,7 +73,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             }
             catch (InvalidDataException ex)
             {
-                _logger.LogError("MMaps: {Path} is not usable navmesh parameters ({Reason}); map {MapId} paths are straight lines", path, ex.Message, mapId);
+                _logger.LogError(ex, "MMaps: {Path} is not usable navmesh parameters ({Reason}); map {MapId} paths are straight lines", path, ex.Message, mapId);
             }
         }
 
@@ -128,7 +128,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
         catch (InvalidDataException ex)
         {
-            _logger.LogError("MMaps: {Path} is not a usable navmesh tile ({Reason}); ignored", path, ex.Message);
+            _logger.LogError(ex, "MMaps: {Path} is not a usable navmesh tile ({Reason}); ignored", path, ex.Message);
         }
 
         return false;

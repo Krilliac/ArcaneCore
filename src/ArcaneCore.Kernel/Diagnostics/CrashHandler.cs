@@ -161,7 +161,8 @@ public sealed class CrashHandler : IDisposable
     {
         UnobservedTaskPolicy policy = _options.OnUnobservedTask;
         bool terminating = policy != UnobservedTaskPolicy.Log;
-        Report(CrashKind.UnobservedTask, e.Exception, terminating ? LogLevel.Critical : LogLevel.Error, terminating);
+        // Critical either way: an unobserved fault is an exception nobody handled, whether or not the policy ends the process.
+        Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating);
         RecordFault("unobserved-task", e.Exception);
         if (!terminating)
         {

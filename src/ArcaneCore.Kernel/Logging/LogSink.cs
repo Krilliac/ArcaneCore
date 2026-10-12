@@ -39,6 +39,22 @@ public abstract class LogSink : IDisposable
 
     public abstract void Emit<TState>(in LogEvent evt, TState state, IExternalScopeProvider? scopes);
 
+    /// <summary>The line this sink writes to report <paramref name="lost"/> Error or Critical lines that no queue slot could be found for (at Error).</summary>
+    public abstract string PriorityDropNotice(long lost);
+
+    /// <summary>Hands a finished line to the writer; Error and above are priority lines of a queued writer (never displaced by ordinary ones).</summary>
+    protected void Deliver(in LogEvent evt, ReadOnlySpan<char> line)
+    {
+        if (evt.Level >= LogLevel.Error && Writer is QueuedLineWriter queued)
+        {
+            queued.Write(line, priority: true);
+        }
+        else
+        {
+            Writer.Write(line);
+        }
+    }
+
     /// <summary>The line this sink writes to report <paramref name="dropped"/> lost lines (its own format, at Warning).</summary>
     public abstract string DropNotice(long dropped);
 
@@ -67,7 +83,7 @@ public sealed class TextLogSink(string name, ILineWriter writer, bool color) : L
         try
         {
             LogLineFormatter.Write(ref buffer, in evt, scopes, _color);
-            Writer.Write(buffer.Written);
+            Deliver(in evt, buffer.Written);
         }
         finally
         {
@@ -89,6 +105,21 @@ public sealed class TextLogSink(string name, ILineWriter writer, bool color) : L
             buffer.Dispose();
         }
     }
+
+    public override string PriorityDropNotice(long lost)
+    {
+        var buffer = new LogBuffer(stackalloc char[256]);
+        try
+        {
+            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Error, "ArcaneCore.Logging", default, $"{Name} sink LOST {lost} Error/Critical log line(s): the queue was full of Error/Critical lines.", null);
+            LogLineFormatter.Write(ref buffer, in evt, null, _color);
+            return buffer.Written.ToString();
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
 }
 
 /// <summary>The JSON-lines format (<see cref="JsonLineFormatter"/>).</summary>
@@ -100,7 +131,7 @@ public sealed class JsonLogSink(string name, ILineWriter writer) : LogSink(name,
         try
         {
             JsonLineFormatter.Write(ref buffer, in evt, state, scopes);
-            Writer.Write(buffer.Written);
+            Deliver(in evt, buffer.Written);
         }
         finally
         {
@@ -114,6 +145,21 @@ public sealed class JsonLogSink(string name, ILineWriter writer) : LogSink(name,
         try
         {
             var evt = new LogEvent(DateTime.UtcNow, LogLevel.Warning, "ArcaneCore.Logging", default, $"{Name} sink dropped {dropped} log line(s): the queue was full.", null);
+            JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
+            return buffer.Written.ToString();
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
+
+    public override string PriorityDropNotice(long lost)
+    {
+        var buffer = new LogBuffer(stackalloc char[256]);
+        try
+        {
+            var evt = new LogEvent(DateTime.UtcNow, LogLevel.Error, "ArcaneCore.Logging", default, $"{Name} sink LOST {lost} Error/Critical log line(s): the queue was full of Error/Critical lines.", null);
             JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
             return buffer.Written.ToString();
         }

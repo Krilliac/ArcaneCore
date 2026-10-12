@@ -489,6 +489,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
         var log = new CapturingLogger();
+        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Reset(); // the first occurrence of a signature is the one logged with its exception
         await using WorldTestHost host = Start(accounts, characters, owners, logger: log);
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
@@ -503,6 +504,29 @@ public sealed class ManagedPlayerbotLifecycleTests
         (Exception? error, string message) = Assert.Single(log.Entries, e => e.Message.Contains("action failed"));
         Assert.IsType<InvalidOperationException>(error);
         Assert.Contains("fixture-action-fault", message);
+        // Error, not Warning: the console colours it red and an operator reading only errors sees it. The QA tap still parses this text.
+        Assert.Equal(LogLevel.Error, Assert.Single(log.Leveled, e => e.Message.Contains("action failed")).Level);
+    }
+
+    /// <summary>A fire-and-forget operator command used to answer with the exception type only and lose the exception; it is now logged at Error and counted.</summary>
+    [Fact]
+    public async Task ACommandFault_IsLoggedAtError_WithTheException_AndCountedInTheLedger()
+    {
+        var log = new CapturingLogger();
+        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Reset();
+        await using WorldTestHost host = Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new MemoryManagedPlayerbotStore(), logger: log);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        static long CountAtSite() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+            .Where(f => f.Site == "playerbot-command" && f.ExceptionType.EndsWith("InvalidOperationException", StringComparison.Ordinal)).Sum(f => f.Count);
+        long before = CountAtSite();
+
+        feature.ReportCommandFault("probe-command", new InvalidOperationException("fixture-command-fault"));
+
+        (LogLevel level, Exception? error, string message) = Assert.Single(log.Leveled, e => e.Message.Contains("probe-command"));
+        Assert.Equal(LogLevel.Error, level);
+        Assert.Equal("fixture-command-fault", Assert.IsType<InvalidOperationException>(error).Message);
+        Assert.Contains("failed", message);
+        Assert.Equal(before + 1, CountAtSite());
     }
 
     [Fact]
@@ -821,15 +845,23 @@ public sealed class ManagedPlayerbotLifecycleTests
     internal sealed class CapturingLogger : ILogger<ManagedPlayerbotFeature>
     {
         private readonly ConcurrentQueue<(Exception? Error, string Message)> _entries = new();
+        private readonly ConcurrentQueue<(LogLevel Level, Exception? Error, string Message)> _leveled = new();
 
         public IReadOnlyList<(Exception? Error, string Message)> Entries => [.. _entries];
+
+        /// <summary>The same entries with the level they were logged at.</summary>
+        public IReadOnlyList<(LogLevel Level, Exception? Error, string Message)> Leveled => [.. _leveled];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => _entries.Enqueue((exception, formatter(state, exception)));
+        {
+            string message = formatter(state, exception);
+            _entries.Enqueue((exception, message));
+            _leveled.Enqueue((logLevel, exception, message));
+        }
     }
 
     internal static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,

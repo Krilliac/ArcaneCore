@@ -58,6 +58,23 @@ public sealed class CrashProcessTests
     }
 
     [Fact]
+    public async Task UnhandledException_IsLoggedThroughTheSink_AtCritical_WithTheException()
+    {
+        ProbeResult result = await RunProbeAsync("unhandled-level");
+
+        Assert.Contains("CRASH-SINK level=Critical exception=System.InvalidOperationException", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnobservedTask_UnderTheDefaultLogPolicy_IsLoggedThroughTheSink_AtCritical()
+    {
+        ProbeResult result = await RunProbeAsync("unobserved-level");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("CRASH-SINK level=Critical exception=System.AggregateException", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UnobservedTask_ExitPolicy_Exits70()
     {
         ProbeResult result = await RunProbeAsync("unobserved-exit");

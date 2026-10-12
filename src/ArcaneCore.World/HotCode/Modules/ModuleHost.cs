@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -148,6 +149,7 @@ public sealed class ModuleHost
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                _logger.LogFault("hotmodule", ex, "Hot module {Name} failed unexpectedly", name);
                 result = new ModuleResult(false, $"unexpected failure: {ex.GetType().Name}: {ex.Message}");
             }
 
@@ -509,6 +511,12 @@ public sealed class ModuleHost
         {
             context.Unload();
             Retire(context);
+            if (ex is not ModuleRejectedException)
+            {
+                // A rejection is a refusal the operator is told about. Anything else (a module constructor or static initialiser that throws, a loader failure) is unexpected and keeps its stack.
+                _logger.LogFault("hotmodule-load", ex, "Hot module {Name} could not be loaded", name);
+            }
+
             throw ex as ModuleRejectedException
                 ?? new ModuleRejectedException($"the module could not be loaded: {ex.GetType().Name}: {ex.Message}");
         }

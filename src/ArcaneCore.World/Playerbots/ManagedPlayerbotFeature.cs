@@ -271,13 +271,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // A refusal of the character handler names its reason; any other failure names the exception and its message (the reason
             // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
             string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
-            logger.LogWarning("Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
+            // A refusal names its own reason and a cancellation is a shutdown: both expected (Warning). Anything else is a server bug (Error).
+            logger.Log(ex is PlayerbotCreateRefusedException or OperationCanceledException ? LogLevel.Warning : LogLevel.Error, ex,
+                "Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
             // A reused account has no provisioning journal, so what this attempt put on it is removed here (cancellation included).
             if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
-            { logger.LogError("Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
+            { logger.LogError(failure, "Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
             if (ex is OperationCanceledException) throw;
             return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
@@ -314,7 +316,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     session.Kick();
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException) { logger.LogWarning("Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
+                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
                 }
 
                 if ((await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false)).Count != 0)
@@ -823,9 +825,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             await saves.FlushCharacterAsync(characterId, cancellationToken).WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException timeout)
         {
-            logger.LogWarning("Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
+            logger.LogWarning(timeout, "Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
         }
     }
 
@@ -881,7 +883,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     session.Kick();
                     // A close that is slow after a committed deletion must not skip the cleanup below.
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException) { logger.LogWarning("Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
+                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
                 }
             }
 
@@ -1060,7 +1062,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         ErrorCode = "stop-incomplete" }, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
-                { logger.LogError("Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name); }
+                { logger.LogError(failure, "Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name); }
                 PublishStopped(active.Record, active.Name, active.MapId);
                 throw;
             }
@@ -1652,12 +1654,28 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private void Fault(ActiveBot active, string what, Exception ex)
     {
-        // Counted in the fault ledger (.server faults); logged below on every occurrence (not throttled): the QA log tap reads these lines as action faults.
-        FaultLedger.Shared.Record("playerbot", ex);
-        logger.LogWarning(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        // Counted in the fault ledger (.server faults). Every occurrence is logged, because the QA log tap reads these lines as action faults,
+        // but only the first FaultLogLimit of one signature carry the exception (Error, with the stack trace): a storm of one fault is then a
+        // short Warning line per bot instead of a stack trace per bot, so it cannot flood the console.
+        FaultRecording recording = FaultLedger.Shared.Record("playerbot", ex);
+        // Error, not Warning: an action fault is an exception the server did not expect, and Error is what the console colours red. The
+        // line text ("Playerbot {BotId} {What} failed ({Type}: {Message})") is what PlayerbotQaSignalParser matches; the level is not part of it.
+        if (recording.ShouldLog)
+        {
+            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        }
+        else
+        {
+            logger.LogWarning("Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        }
+
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
         active.Session.Kick();
     }
+
+    /// <summary>Log and count an exception a fire-and-forget operator command caught (<c>.playerbot</c> subcommands answer the GM with the type only).</summary>
+    internal void ReportCommandFault(string command, Exception error)
+        => logger.LogFault("playerbot-command", error, "Playerbot command {Command} failed", command);
 
     /// <summary>
     /// Count one fault of a bot and schedule its retry: whether the bot stays desired, and the error code to store. The

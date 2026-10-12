@@ -47,6 +47,9 @@ public static class HotModuleCommands
             string who = context.InvokerName;
             audit.Record("hotmodule-command", reason.Length == 0 ? $"{who} {verb} {name}" : $"{who} {verb} {name}; reason: {reason}");
             Task<ModuleResult> task = run(name, HotSwapOrigin.FromCommand(context, reason));
+            _ = task.ContinueWith(
+                finished => CommandFaultLogging.Log(context, "hotmodule-command", finished.Exception!.GetBaseException(), "hotmodule " + verb),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
             // The commit is posted to this very (world) thread: never block on it. Answer from the next tick.
             _ = task.ContinueWith(

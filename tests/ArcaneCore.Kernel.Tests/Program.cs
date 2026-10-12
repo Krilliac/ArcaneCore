@@ -50,6 +50,12 @@ public static class DiagnosticsProbe
             case "unobserved-log":
                 return Unobserved(UnobservedTaskPolicy.Log);
 
+            case "unhandled-level":
+                return Unhandled(UnhandledExceptionPolicy.Exit, LevelEchoSink.Instance);
+
+            case "unobserved-level":
+                return Unobserved(UnobservedTaskPolicy.Log, LevelEchoSink.Instance);
+
             case "unobserved-exit":
                 return Unobserved(UnobservedTaskPolicy.Exit);
 
@@ -67,9 +73,9 @@ public static class DiagnosticsProbe
         }
     }
 
-    private static int Unhandled(UnhandledExceptionPolicy policy)
+    private static int Unhandled(UnhandledExceptionPolicy policy, ICrashSink? sink = null)
     {
-        CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = policy }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = policy }, sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
         var thread = new Thread(static () => throw new InvalidOperationException("probe-unhandled-message")) { Name = "probe-thrower" };
         thread.Start();
         thread.Join(TimeSpan.FromSeconds(20));
@@ -77,9 +83,9 @@ public static class DiagnosticsProbe
         return Survive();
     }
 
-    private static int Unobserved(UnobservedTaskPolicy policy)
+    private static int Unobserved(UnobservedTaskPolicy policy, ICrashSink? sink = null)
     {
-        CrashHandler.Install(new DiagnosticsOptions { OnUnobservedTask = policy }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        CrashHandler.Install(new DiagnosticsOptions { OnUnobservedTask = policy }, sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
         DropFaultedTask();
         for (int i = 0; i < 20; i++)
         {
@@ -104,6 +110,20 @@ public static class DiagnosticsProbe
         Console.Out.WriteLine(Program.SurvivedMarker);
         Console.Out.Flush();
         return 0;
+    }
+
+    /// <summary>A synchronous sink that states the level and exception type the hook logged at, so a test can assert on them.</summary>
+    private sealed class LevelEchoSink : ICrashSink
+    {
+        public static LevelEchoSink Instance { get; } = new();
+
+        public bool IsSynchronous => true;
+
+        public void Write(Microsoft.Extensions.Logging.LogLevel level, string report, Exception? exception)
+        {
+            Console.Error.WriteLine($"CRASH-SINK level={level} exception={exception?.GetType().FullName}");
+            Console.Error.Flush();
+        }
     }
 
     private sealed class ProbeContext : ICrashContextProvider
