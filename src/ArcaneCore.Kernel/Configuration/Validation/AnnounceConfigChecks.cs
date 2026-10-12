@@ -10,7 +10,7 @@ namespace ArcaneCore.Kernel.Configuration.Validation;
 public sealed class AnnounceConfigChecks : IConfigCheck
 {
     /// <summary>The category sections under <c>World:Announce</c>. A new category adds its name here.</summary>
-    public static readonly string[] Categories = ["HotSwap"];
+    public static readonly string[] Categories = ["HotSwap", "AntiCheat", "Faults", "Wiring", "Shutdown", "Saves", "BotQa"];
 
     /// <summary>The lane names <c>World:Announce:HotSwap:Lanes</c> accepts.</summary>
     public static readonly string[] HotSwapLanes = ["Data", "Module", "Code"];

@@ -26,6 +26,24 @@ public enum AnnounceCategory
 {
     /// <summary>Data reloads, hot modules and code hot reload.</summary>
     HotSwap,
+
+    /// <summary>Anti-cheat detections, kicks and bans.</summary>
+    AntiCheat,
+
+    /// <summary>Caught server faults, slow or hung world ticks, crashes.</summary>
+    Faults,
+
+    /// <summary>Start-up wiring audit.</summary>
+    Wiring,
+
+    /// <summary>Scheduled shutdown and restart.</summary>
+    Shutdown,
+
+    /// <summary>Character save queue trouble.</summary>
+    Saves,
+
+    /// <summary>A new playerbot QA finding.</summary>
+    BotQa,
 }
 
 /// <summary>One name/value pair of staff-only detail.</summary>
@@ -118,6 +136,12 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
     public AnnounceCategoryOptions OptionsFor(AnnounceCategory category) => category switch
     {
         AnnounceCategory.HotSwap => _options.HotSwap,
+        AnnounceCategory.AntiCheat => _options.AntiCheat,
+        AnnounceCategory.Faults => _options.Faults,
+        AnnounceCategory.Wiring => _options.Wiring,
+        AnnounceCategory.Shutdown => _options.Shutdown,
+        AnnounceCategory.Saves => _options.Saves,
+        AnnounceCategory.BotQa => _options.BotQa,
         _ => throw new ArgumentOutOfRangeException(nameof(category), category, "no options for this category"),
     };
 
