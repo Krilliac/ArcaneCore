@@ -145,6 +145,7 @@ How to read the tables:
 | `AntiCheat:SpeedClock:Window` | `int` | `20` | - | Pairs of consecutive packets in the window. Default 20. |
 | `AntiCheat:SpeedSlackYards` | `float` | `2` | - | Distance in yards that one packet may always cover on top of the speed budget (rounding, collision push). Default 2. |
 | `AntiCheat:SpeedTolerancePercent` | `float` | `10` | - | Tolerance above the allowed speed, in percent, before the speed check scores. Default 10. |
+| `AntiCheat:StaffNoticeCooldownSeconds` | `int` | `30` | - | The staff line for a kick, an autoban or a failed autoban is sent at most once per account and kind per this many seconds; repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30. |
 | `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
 | `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
 
@@ -944,6 +945,7 @@ How to read the tables:
 | `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
 | `Warden:ScanIntervalMinSeconds` | `uint` | `30` | - | Warden:ScanIntervalMinSeconds: the shortest random gap between scan requests (MaNGOS Zero normal interval 30-60 s). |
 | `Warden:ScansPerRequest` | `int` | `3` | - | Warden:ScansPerRequest (vmangos Warden.NumScans). Default 3. |
+| `Warden:StaffNoticeCooldownSeconds` | `uint` | `30` | - | Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is sent at most once per account and action per this many seconds; repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30. |
 
 ## `World`
 

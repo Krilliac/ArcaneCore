@@ -56,6 +56,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
     private WorldRuntime? _world;
     private IOpsAnnouncer? _announcer;
     private TimeProvider _time = TimeProvider.System;
+    private StaffNoticeLimiter _staffLimiter = StaffNoticeLimiter.On(TimeProvider.System);
     private Task _flush = Task.CompletedTask;
     private uint _sinceFlushMs;
     private uint _sincePruneMs;
@@ -73,6 +74,9 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
     /// <summary>Findings recorded since start (diagnostics and tests; exempt players add nothing).</summary>
     public long Recorded { get; private set; }
 
+    /// <summary>The cooldown of the direct kick and autoban staff lines (tests, diagnostics).</summary>
+    public StaffNoticeLimiter StaffLimiter => _staffLimiter;
+
     /// <summary>Raised on the world thread for every recorded finding (tests and tools; must not throw).</summary>
     public event Action<Player, AntiCheatFinding, float, AntiCheatAction>? FindingRecorded;
 
@@ -81,6 +85,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         _world = world;
         _announcer = services.GetService<IOpsAnnouncer>();
         _time = services.GetService<TimeProvider>() ?? TimeProvider.System;
+        _staffLimiter = StaffNoticeLimiter.On(_time);
         AntiCheatOptions configured = services.GetService<IOptions<AntiCheatOptions>>()?.Value ?? new AntiCheatOptions();
         IReadOnlyList<string> problems = configured.Validate();
         if (problems.Count > 0)
@@ -355,6 +360,29 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
     /// <summary>From any thread: <see cref="SendToStaff"/> on the world thread.</summary>
     private void PostToStaff(string text) => _world?.Post(() => SendToStaff(text));
 
+    /// <summary>
+    /// A kick or autoban line for <paramref name="account"/>, sent at most once per account and <paramref name="kind"/> per
+    /// <c>AntiCheat:StaffNoticeCooldownSeconds</c> (any thread unless <paramref name="onWorldThread"/>; the line goes out on the world
+    /// thread). Repeats inside the window are counted; the count rides on the next line that passes, or goes out alone from the world
+    /// tick. Independent of World:Announce.
+    /// </summary>
+    private void StaffNotice(int account, string kind, string text, bool onWorldThread = false)
+    {
+        int cooldown = _options.StaffNoticeCooldownSeconds;
+        if (_staffLimiter.TryPass($"{account}:{kind}", $"account {account}: {kind}", cooldown, out int suppressed))
+        {
+            string line = suppressed > 0 ? $"{text.TrimEnd('.')}{StaffNoticeLimiter.SuffixFor(suppressed, cooldown)}." : text;
+            if (onWorldThread)
+            {
+                SendToStaff(line);
+            }
+            else
+            {
+                PostToStaff(line);
+            }
+        }
+    }
+
     /// <summary>One system line to every staff member online (world thread).</summary>
     private void SendToStaff(string text)
     {
@@ -373,11 +401,11 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         }
     }
 
-    // Staff get the full line directly (always); the announcer adds the optional world line (World:Announce:AntiCheat:WorldMessage, no names unless allowed) and the log/metric.
+    // Staff get the full line directly (once per account per AntiCheat:StaffNoticeCooldownSeconds; see StaffNotice); the announcer adds the optional world line (World:Announce:AntiCheat:WorldMessage, no names unless allowed) and the log/metric.
     private void AnnounceKick(Player player, int account, AntiCheatFinding finding, float score)
     {
-        SendToStaff(string.Create(CultureInfo.InvariantCulture,
-            $"{AlertPrefix}Kicked {player.Name} (account {account}): {finding.Detail} ({finding.Type}), score {score:0}."));
+        StaffNotice(account, "kick", string.Create(CultureInfo.InvariantCulture,
+            $"{AlertPrefix}Kicked {player.Name} (account {account}): {finding.Detail} ({finding.Type}), score {score:0}."), onWorldThread: true);
         _announcer?.Announce(
             AnnounceCategory.AntiCheat,
             AnnounceSeverity.Error,
@@ -422,7 +450,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             logger.LogWarning("AntiCheat: account {Account} banned {Duration} after repeated kicks (character {Character}, {Earlier} earlier autoban(s))",
                 accountId, duration == 0 ? "permanently" : $"for {duration} s", characterName, earlier);
             string banned = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {(duration == 0 ? "permanent" : $"{duration} s")}, {earlier} earlier autoban(s)");
-            PostToStaff($"{AlertPrefix}Autoban after repeated kicks, {banned}.");
+            StaffNotice(accountId, "autoban", $"{AlertPrefix}Autoban after repeated kicks, {banned}.");
             _announcer?.Announce(
                 AnnounceCategory.AntiCheat,
                 AnnounceSeverity.Error,
@@ -436,7 +464,7 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         {
             logger.LogError(ex, "AntiCheat: autoban of account {Account} failed", accountId);
             string failed = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}");
-            PostToStaff($"{AlertPrefix}Could not autoban {failed}.");
+            StaffNotice(accountId, "autoban failure", $"{AlertPrefix}Could not autoban {failed}.");
             _announcer?.Announce(
                 AnnounceCategory.AntiCheat,
                 AnnounceSeverity.Error,
@@ -465,6 +493,12 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
             {
                 // the teleport feature is not attached in this host: the position check still re-baselines
             }
+        }
+
+        // A kick or autoban window that ended with lines held back: one summary line per account and kind.
+        foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
+        {
+            SendToStaff($"{AlertPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
         }
 
         AntiCheatOptions options = _options;

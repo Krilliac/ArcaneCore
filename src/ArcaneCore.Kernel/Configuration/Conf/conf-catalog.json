@@ -668,6 +668,22 @@
       "isCollection": false
     },
     {
+      "path": "AntiCheat:StaffNoticeCooldownSeconds",
+      "section": "AntiCheat",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "30",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The staff line for a kick, an autoban or a failed autoban is sent at most once per account and kind per this many seconds; repeats inside the window are counted and reported as one \"N more suppressed\" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#anticheat",
+      "isCollection": false
+    },
+    {
       "path": "AntiCheat:TeleportDistance",
       "section": "AntiCheat",
       "type": "float",
@@ -9327,6 +9343,22 @@
       "reload": "start",
       "meaning": "Warden:ScansPerRequest (vmangos Warden.NumScans). Default 3.",
       "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#warden",
+      "isCollection": false
+    },
+    {
+      "path": "Warden:StaffNoticeCooldownSeconds",
+      "section": "Warden",
+      "type": "uint",
+      "kind": "scalar",
+      "elementType": "uint",
+      "enumValues": null,
+      "default": "30",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is sent at most once per account and action per this many seconds; repeats inside the window are counted and reported as one \"N more suppressed\" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30.",
+      "allowed": "a whole number, 0 to 4294967295",
       "docs": "docs/reference/configuration.md#warden",
       "isCollection": false
     },

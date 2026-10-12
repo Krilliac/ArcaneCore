@@ -20,6 +20,12 @@ namespace ArcaneCore.World.Warden;
 /// on (vmangos Warden::ApplyPenalty): Log keeps the session, Kick disconnects it, Ban bans the account through <see cref="IBanStore"/>
 /// with author "Warden" and disconnects. Never scanned: managed playerbot sessions, staff at or above
 /// <see cref="WardenOptions.ExemptSecurity"/>, other client builds.
+/// <para>
+/// The verdicts of one driver call (one CMSG_WARDEN_DATA, one tick update, one flush) are one batch: each is logged and raised through
+/// <see cref="Verdict"/>, but the batch is acted on once, at its strongest action, so a scan reply with several failed scans sends one
+/// staff line and starts one ban. The staff line goes to staff directly (outside World:Announce) and at most once per account and
+/// action per <see cref="WardenOptions.StaffNoticeCooldownSeconds"/>; the held-back count follows as one line.
+/// </para>
 /// </summary>
 public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeature> logger) : IWorldFeature
 {
@@ -27,8 +33,9 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
 
     private const string StaffPrefix = "|cffff4040[Warden]|r ";
 
-    private readonly ConcurrentDictionary<WorldSession, WardenSession> _sessions = new(ReferenceEqualityComparer.Instance);
+    private readonly ConcurrentDictionary<WorldSession, Tracked> _sessions = new(ReferenceEqualityComparer.Instance);
     private WardenOptions _options = new();
+    private StaffNoticeLimiter _staffLimiter = StaffNoticeLimiter.On(TimeProvider.System);
     private volatile IReadOnlyList<WardenCheckOptions> _checks = [];
     private WorldRuntime? _world;
     private bool _usable;
@@ -38,9 +45,13 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
     /// <summary>Verdicts reported since start (tests and diagnostics).</summary>
     public event Action<WorldSession, WardenVerdict>? Verdict;
 
+    /// <summary>The cooldown of the direct staff lines (tests, diagnostics).</summary>
+    public StaffNoticeLimiter StaffLimiter => _staffLimiter;
+
     public void Attach(WorldRuntime world)
     {
         _world = world;
+        _staffLimiter = StaffNoticeLimiter.On(services.GetService<TimeProvider>() ?? TimeProvider.System);
         WardenOptions configured = services.GetService<IOptions<WardenOptions>>()?.Value ?? new WardenOptions();
         IReadOnlyList<string> problems = configured.Validate();
         if (problems.Count > 0)
@@ -70,9 +81,9 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
     /// <summary>Report every session's held protocol verdicts, so no count is lost at shutdown.</summary>
     public Task StopAsync()
     {
-        foreach (WardenSession warden in _sessions.Values)
+        foreach ((WorldSession session, Tracked tracked) in _sessions)
         {
-            warden.Flush();
+            Drive(session, tracked, static (w, _) => w.Flush(), 0u);
         }
 
         return Task.CompletedTask;
@@ -113,7 +124,7 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
     }
 
     /// <summary>The Warden of <paramref name="session"/>, if it has one.</summary>
-    public WardenSession? Find(WorldSession session) => _sessions.GetValueOrDefault(session);
+    public WardenSession? Find(WorldSession session) => _sessions.GetValueOrDefault(session)?.Warden;
 
     /// <summary>Start Warden for a session that just received AUTH_OK (session task). <paramref name="sessionKey"/> is not retained.</summary>
     public void OnAuthenticated(WorldSession session, uint build, ReadOnlySpan<byte> sessionKey)
@@ -123,80 +134,154 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             return;
         }
 
-        var warden = new WardenSession(sessionKey, _options, body => session.Send(WorldOpcode.SmsgWardenData, body), verdict => OnVerdict(session, verdict), checks: _checks);
-        if (_sessions.TryAdd(session, warden))
+        var pending = new VerdictQueue();
+        var warden = new WardenSession(sessionKey, _options, body => session.Send(WorldOpcode.SmsgWardenData, body), pending.Add, checks: _checks);
+        var tracked = new Tracked(warden, pending);
+        if (_sessions.TryAdd(session, tracked))
         {
-            warden.Start();
+            Drive(session, tracked, static (w, _) => w.Start(), 0u);
         }
     }
 
     /// <summary>CMSG_WARDEN_DATA (session task).</summary>
     public void Handle(WorldSession session, byte[] payload)
     {
-        if (Find(session) is not { } warden)
+        if (_sessions.GetValueOrDefault(session) is not { } tracked)
         {
             return;
         }
 
-        warden.Handle(payload);
+        Drive(session, tracked, static (w, body) => w.Handle(body), payload);
         if (session.State == SessionState.Closed)
         {
             // A packet that lands after the world tick already flushed this session (or before it removes it) may have throttled a Log
             // verdict; nothing would report that count later, so report it now. Flush is idempotent.
             _sessions.TryRemove(session, out _);
-            warden.Flush();
+            Drive(session, tracked, static (w, _) => w.Flush(), 0u);
         }
     }
 
     private void OnWorldTick(uint diffMs)
     {
-        foreach ((WorldSession session, WardenSession warden) in _sessions)
+        foreach ((WorldSession session, Tracked tracked) in _sessions)
         {
             if (session.State == SessionState.Closed)
             {
-                if (_sessions.TryRemove(session, out WardenSession? removed))
+                if (_sessions.TryRemove(session, out Tracked? removed))
                 {
-                    removed.Flush(); // the held protocol verdict count is reported, not dropped with the session
+                    Drive(session, removed, static (w, _) => w.Flush(), 0u); // the held protocol verdict count is reported, not dropped with the session
                 }
 
                 continue;
             }
 
-            warden.Update(diffMs);
+            Drive(session, tracked, static (w, diff) => w.Update(diff), diffMs);
+        }
+
+        // A staff line window that ended with lines held back: one summary line per account and action (world thread).
+        WorldRuntime? world = _world;
+        if (world is not null)
+        {
+            foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
+            {
+                SendToStaff(world, $"{StaffPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
+            }
         }
     }
 
-    private void OnVerdict(WorldSession session, WardenVerdict verdict)
+    /// <summary>
+    /// One driver call of <paramref name="tracked"/> (any thread), then act on the verdicts it reported as one batch. The call and the
+    /// taking of its verdicts share the session's drive gate, so a tick update and a packet on another thread never split a batch; the
+    /// verdicts are acted on outside it.
+    /// </summary>
+    private void Drive<TState>(WorldSession session, Tracked tracked, Action<WardenSession, TState> call, TState state)
     {
-        logger.LogWarning("Warden: account {Account} ({AccountId}): {Reason}; action {Action}", session.AccountName, session.AccountId, verdict.Reason, verdict.Action);
-        Verdict?.Invoke(session, verdict);
-        switch (verdict.Action)
+        List<WardenVerdict>? batch;
+        lock (tracked.Gate)
+        {
+            call(tracked.Warden, state);
+            batch = tracked.Pending.TakeAll();
+        }
+
+        if (batch is not null)
+        {
+            OnVerdicts(session, batch);
+        }
+    }
+
+    /// <summary>One batch: every verdict is logged and raised; the batch is acted on once, at its strongest action.</summary>
+    private void OnVerdicts(WorldSession session, List<WardenVerdict> batch)
+    {
+        List<WardenVerdict>? acting = null;
+        WardenAction action = WardenAction.Log;
+        foreach (WardenVerdict verdict in batch)
+        {
+            logger.LogWarning("Warden: account {Account} ({AccountId}): {Reason}; action {Action}", session.AccountName, session.AccountId, verdict.Reason, verdict.Action);
+            Verdict?.Invoke(session, verdict);
+            if (verdict.Action != WardenAction.Log)
+            {
+                (acting ??= []).Add(verdict);
+                if (verdict.Action > action)
+                {
+                    action = verdict.Action;
+                }
+            }
+        }
+
+        if (acting is null)
+        {
+            return;
+        }
+
+        string reason = ReasonOf(acting);
+        switch (action)
         {
             case WardenAction.Kick:
-                Announce(session, verdict, "Warden disconnected a client", AnnounceSeverity.Warning);
+                Announce(session, action, reason, "Warden disconnected a client", AnnounceSeverity.Warning);
                 session.Kick();
                 break;
             case WardenAction.Ban:
-                Announce(session, verdict, "Warden banned an account", AnnounceSeverity.Error);
-                _ = BanAsync(session.AccountId, verdict.Reason);
+                Announce(session, action, reason, "Warden banned an account", AnnounceSeverity.Error);
+                _ = BanAsync(session.AccountId, reason);
                 session.Kick();
                 break;
         }
     }
 
-    // Staff always get the full line (the account, the reason) directly, outside World:Announce and its shared rate bucket; the announcer adds the
-    // optional player-safe world line (no names, no reason) and the log/metric.
-    private void Announce(WorldSession session, WardenVerdict verdict, string text, AnnounceSeverity severity)
+    /// <summary>The batch's reasons in one line: up to three, then a count of the rest.</summary>
+    private static string ReasonOf(List<WardenVerdict> acting)
     {
-        string detail = $"account {session.AccountName} ({session.AccountId}): {verdict.Reason}{(verdict.IsProtocolFailure ? " (protocol failure)" : string.Empty)}";
+        static string One(WardenVerdict v) => v.IsProtocolFailure ? $"{v.Reason} (protocol failure)" : v.Reason;
+        if (acting.Count == 1)
+        {
+            return One(acting[0]);
+        }
+
+        string shown = string.Join("; ", acting.Take(3).Select(One));
+        return acting.Count > 3 ? $"{acting.Count} failures: {shown}; +{acting.Count - 3} more" : $"{acting.Count} failures: {shown}";
+    }
+
+    // Staff get the full line (the account, the reason) directly, outside World:Announce and its shared rate bucket, at most once per account
+    // and action per Warden:StaffNoticeCooldownSeconds, so a reconnect loop of one account cannot flood them; the held count follows. The
+    // announcer adds the optional player-safe world line (no names, no reason) and the log/metric.
+    private void Announce(WorldSession session, WardenAction action, string reason, string text, AnnounceSeverity severity)
+    {
+        string who = $"account {session.AccountName} ({session.AccountId})";
+        string detail = $"{who}: {reason}";
+        int cooldown = (int)_options.StaffNoticeCooldownSeconds;
         WorldRuntime? world = _world;
-        world?.Post(() => SendToStaff(world, $"{StaffPrefix}{text}: {detail}"));
+        if (_staffLimiter.TryPass($"{session.AccountId}:{action}", $"{who}: {action.ToString().ToLowerInvariant()}", cooldown, out int suppressed))
+        {
+            string line = $"{StaffPrefix}{text}: {detail}{StaffNoticeLimiter.SuffixFor(suppressed, cooldown)}";
+            world?.Post(() => SendToStaff(world, line));
+        }
+
         services.GetService<IOpsAnnouncer>()?.Announce(
             AnnounceCategory.AntiCheat,
             severity,
             text,
             detail,
-            dedupKey: $"warden:{session.AccountId}:{verdict.Action}",
+            dedupKey: $"warden:{session.AccountId}:{action}",
             staffHandled: true);
     }
 
@@ -208,6 +293,36 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             if (player.Security > AccountSecurity.Player)
             {
                 player.Session.Send(WorldOpcode.SmsgMessagechat, packet);
+            }
+        }
+    }
+
+    private sealed record Tracked(WardenSession Warden, VerdictQueue Pending)
+    {
+        public Lock Gate { get; } = new();
+    }
+
+    /// <summary>The verdicts a <see cref="WardenSession"/> reported during one driver call (it reports under its own lock, on either thread).</summary>
+    private sealed class VerdictQueue
+    {
+        private readonly Lock _gate = new();
+        private List<WardenVerdict>? _items;
+
+        public void Add(WardenVerdict verdict)
+        {
+            lock (_gate)
+            {
+                (_items ??= []).Add(verdict);
+            }
+        }
+
+        public List<WardenVerdict>? TakeAll()
+        {
+            lock (_gate)
+            {
+                List<WardenVerdict>? items = _items;
+                _items = null;
+                return items;
             }
         }
     }

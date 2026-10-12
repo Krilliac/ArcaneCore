@@ -97,6 +97,13 @@ public sealed class AntiCheatOptions
     /// <summary>At most one GM alert per offender per this many seconds. Default 10.</summary>
     public int GmAlertIntervalSeconds { get; set; } = 10;
 
+    /// <summary>
+    /// The staff line for a kick, an autoban or a failed autoban is sent at most once per account and kind per this many seconds;
+    /// repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce. 0 sends every
+    /// line. 0-3600, default 30.
+    /// </summary>
+    public int StaffNoticeCooldownSeconds { get; set; } = 30;
+
     /// <summary>At most one rubberband per offender per this many milliseconds. Default 2000.</summary>
     public int RubberbandIntervalMs { get; set; } = 2000;
 
@@ -157,6 +164,11 @@ public sealed class AntiCheatOptions
         Positive(problems, "MaxTimeSkipsPer10Seconds", MaxTimeSkipsPer10Seconds);
         NotNegative(problems, "GmAlertIntervalSeconds", GmAlertIntervalSeconds);
         NotNegative(problems, "RubberbandIntervalMs", RubberbandIntervalMs);
+        if (StaffNoticeCooldownSeconds is < 0 or > 3600)
+        {
+            problems.Add($"AntiCheat:StaffNoticeCooldownSeconds ({StaffNoticeCooldownSeconds}) must be 0-3600.");
+        }
+
         problems.AddRange(SpeedClock.Validate());
         problems.AddRange(Log.Validate());
         problems.AddRange(Autoban.Validate());

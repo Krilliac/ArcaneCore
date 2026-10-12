@@ -11,6 +11,7 @@ using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Tests.HotCode;
+using ArcaneCore.World.Tests.Ops;
 using ArcaneCore.World.Tests.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -251,16 +252,56 @@ public sealed class AntiCheatWorldTests
 
         List<string> staffLines = await ChatLinesAsync(staff);
         Assert.Single(staffLines, l => l.Contains("Announced", StringComparison.Ordinal) && l.Contains("Teleport", StringComparison.Ordinal) && !l.Contains("Kicked", StringComparison.Ordinal));
-        Assert.Single(staffLines, l => l.Contains("Kicked Announced", StringComparison.Ordinal)); // the kick line reaches staff once, not again from the announcer
+        Assert.Single(staffLines, l => l.Contains("Kicked Announced", StringComparison.Ordinal)); // the feature sends its direct kick line once
         Assert.All(staffLines, l => Assert.Contains("[AntiCheat]", l, StringComparison.Ordinal));
 
-        // The announcer's part: the world line (the category's WorldMessage is on) and nothing else. Staff are not sent a second line.
+        // The announcer's part: the world line (the category's WorldMessage is on) and no staff line (StaffChat/StaffNotify null,
+        // StaffHandled set). The sink here only records; that the real sink then keeps the world line from staff is proven in
+        // WardenTests.WithTheRealSink_StaffGetOnlyTheDirectLine_AndPlayersOnlyTheWorldLine.
         AnnounceDelivery delivery = Assert.Single(sink.Sent);
         Assert.Null(delivery.StaffChat);
         Assert.Null(delivery.StaffNotify);
         Assert.Contains("kicked a player", delivery.WorldChat, StringComparison.Ordinal);
         Assert.DoesNotContain("Announced", delivery.WorldChat, StringComparison.Ordinal);
         Assert.DoesNotContain("Teleport", delivery.WorldChat, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RepeatedKicksOfOneAccount_GiveStaffOneKickLine_ThenOneSuppressedCount()
+    {
+        // AntiCheat:StaffNoticeCooldownSeconds (default 30): one kick line per account per window, then the held count once.
+        var clock = new ManualTimestamp();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<TimeProvider>(clock));
+        await using WorldTestClient staff = await host.EnterWorldAsync("WATCH3", "Watcherthree", AccountSecurity.Moderator);
+        await using WorldTestClient cheater = await host.EnterWorldAsync("REKICK", "Rekicked");
+        await ApplyAsync(host, new AntiCheatOptions { Action = AntiCheatAction.Kick, ScoreGmAlert = 20, ScoreRubberband = 30, ScoreKick = 40 });
+        Account account = (await host.Accounts.FindByUsernameAsync("REKICK"))!;
+        int characterId = (await host.Characters.GetByAccountAsync(account.Id)).Single().Id;
+
+        async Task KickAsync(WorldTestClient client)
+        {
+            Mover mover = await MoverAsync(host, client, "Rekicked");
+            await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+            await mover.StepAsync(100, 80f); // teleport 25
+            await mover.StepAsync(100, 80f); // 50: kick
+            Assert.True(await client.IsClosedByServerAsync());
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Rekicked") is null, "the kicked character left the world");
+        }
+
+        await staff.CollectAsync();
+        await KickAsync(cheater);
+        await using WorldTestClient again = await host.ConnectAsync();
+        await again.AuthenticateAsync("REKICK", account.SessionKey!);
+        await again.LoginAsync((ulong)characterId);
+        await KickAsync(again);
+
+        List<string> lines = await ChatLinesAsync(staff);
+        Assert.Single(lines, l => l.Contains("Kicked Rekicked", StringComparison.Ordinal)); // the second kick is held back, not sent
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        string count = Assert.Single(await ChatLinesAsync(staff));
+        Assert.Contains("[AntiCheat]", count, StringComparison.Ordinal);
+        Assert.Contains($"account {account.Id}: kick: 1 more suppressed in the last 30 s", count, StringComparison.Ordinal);
     }
 
     [Fact]
