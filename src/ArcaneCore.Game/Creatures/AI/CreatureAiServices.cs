@@ -327,6 +327,69 @@ public sealed class CreatureAiFactory
         }
     }
 
+    /// <summary>
+    /// Whether <see cref="CommitSwap"/> would work, checked without changing anything (hot module lane): every entry and name to remove is
+    /// registered, and every one to add is free once the removals are done. Null when it would; else why not.
+    /// </summary>
+    public string? ValidateSwap(IReadOnlyCollection<uint> removeEntries, IReadOnlyCollection<string> removeNames, IEnumerable<uint> addEntries, IEnumerable<string> addNames)
+    {
+        ArgumentNullException.ThrowIfNull(removeEntries);
+        ArgumentNullException.ThrowIfNull(removeNames);
+        foreach (uint entry in removeEntries.Where(e => !_entryScripts.ContainsKey(e)))
+        {
+            return $"creature entry {entry} has no script AI to remove";
+        }
+
+        foreach (string name in removeNames.Where(n => !_factories.ContainsKey(n)))
+        {
+            return $"creature AI '{name}' is not registered, so it cannot be removed";
+        }
+
+        foreach (uint entry in addEntries.Where(e => _entryScripts.ContainsKey(e) && !removeEntries.Contains(e)))
+        {
+            return $"creature entry {entry} already has a script AI";
+        }
+
+        foreach (string name in addNames.Where(n => _factories.ContainsKey(n) && !removeNames.Contains(n)))
+        {
+            return $"creature AI '{name}' is already registered";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Remove the entry scripts and named AIs in <paramref name="removeEntries"/> / <paramref name="removeNames"/> and add the given ones in one step
+    /// (the hot module lane; call at a tick boundary on the world thread, after <see cref="ValidateSwap"/>). Creatures already running a removed AI keep
+    /// it until they are given a new one; this only changes what the next selection picks.
+    /// </summary>
+    public void CommitSwap(
+        IReadOnlyCollection<uint> removeEntries,
+        IReadOnlyCollection<string> removeNames,
+        IReadOnlyDictionary<uint, Func<Creature, CreatureAI>> addEntries,
+        IReadOnlyDictionary<string, Func<Creature, CreatureAI>> addNames)
+    {
+        foreach (uint entry in removeEntries)
+        {
+            _entryScripts.Remove(entry);
+        }
+
+        foreach (string name in removeNames)
+        {
+            _factories.Remove(name);
+        }
+
+        foreach ((uint entry, Func<Creature, CreatureAI> factory) in addEntries)
+        {
+            _entryScripts[entry] = factory;
+        }
+
+        foreach ((string name, Func<Creature, CreatureAI> factory) in addNames)
+        {
+            _factories[name] = (c, _) => factory(c);
+        }
+    }
+
     /// <summary>The AI for <paramref name="creature"/>; <paramref name="unknown"/> is true when its AIName is not registered.</summary>
     public CreatureAI Create(Creature creature, CreatureContent content, out bool unknown)
         => Create(creature, content, out unknown, implicitEventAi: false);
