@@ -87,16 +87,25 @@ per finding, then the count saturates). Nothing keeps a bot name or id.
 finding's *first* signal and never changes; there is no key version bump and no migration of published findings. What decides whether a
 later signal is the same problem is the group, computed in memory (and recomputed on load) from the same content ids plus a 500-yard zone cell:
 
-* Stall, Quest goal: the quest and target, wherever it stood. Combat goal: the target entry. Any other goal (Explore, Retreat, Loot...): the goal in a zone cell;
-  a stall just across a cell border still folds into the finding whose anchor (its first sample, which never moves) lies within 160 yards. The outside-home flag keeps its own group.
+* Stall, Quest goal: the quest and target on the map, wherever on it they stood. Combat goal: the target entry on the map (a city guard stalling in two capitals is two findings).
+  Any other goal (Explore, Retreat, Loot...): the goal in a zone cell; a stall just across a cell border still folds into the finding whose anchor (its first sample,
+  which never moves) lies within 160 yards, the nearest first, the lower id on a tie. The outside-home flag keeps its own group.
 * Death loop: the map and zone cell (or an anchor within 160 yards) and its attackers. A loop that shares an attacker entry with a finding of the area is that
-  finding; a loop that shares entries with several merges them (the published one survives, then the busiest); with no attacker on either side the death source decides.
-  A finding's attackers are the union over its signals.
+  finding; a loop that shares entries with several merges them; with no attacker on either side the death source decides. A finding collects at most 8 attacker
+  entries from its signals (a real loop has one to three): a bound, so one entry that is common to a whole zone cannot chain every loop of it into one finding.
+
+Signals find their finding through indexes (by group, by group base, by map), not by scanning every finding.
 
 The position stays in the samples and the subject of the first signal. **Store hygiene:** a finding not seen for `StaleHours` (24) that has no issue is dropped on load
-and on every pass; at `MaxFindings` the lowest-value unpublished finding is evicted (a single occurrence of a single bot first, then lowest severity, then the oldest),
-and a finding that has an issue is never evicted (its issue number is the only local memory of it). Loading an older store merges the fragments that are one problem now,
-keeping the id and publication state of the published one, so the issues already filed are neither orphaned nor filed again.
+and on every pass, except one the publisher is working on at that moment; at `MaxFindings` the lowest-value unpublished finding is evicted (a single occurrence of a single bot
+first, then lowest severity, then the oldest), and a finding that has an issue is never evicted or dropped by the cap (its issue number is the only local memory of it).
+
+**Merging never loses an issue.** The survivor of a merge is the finding with an open issue (then one a person closed), the lowest issue number first, else the busiest; it keeps its id and
+publication state. Every absorbed id is recorded in the store (`Absorbed`: the id, its survivor, and its issue number if it had one that the survivor's does not replace) and is never reused
+for another problem. A publish that was in flight when its finding was absorbed reports its outcome to the survivor (it becomes the survivor's issue when the survivor had none; otherwise it is
+recorded as another absorbed issue). The issue of an absorbed published finding is then commented ("Duplicate of #N", numbers only, no name or id of any bot) and closed as not planned, once,
+under the hourly comment cap; `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` (default on) turns that off, and the mapping is recorded either way. Each merge of two issues is logged as
+`issue #a ... absorbed into #b`; the start-up line counts the merges and the issues left to close.
 
 ## Classifier: why it probably happens
 

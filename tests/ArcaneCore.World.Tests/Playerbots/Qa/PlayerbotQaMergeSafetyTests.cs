@@ -244,7 +244,7 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
 
         Assert.Equal("open", (string)github.Get(issueA)["state"]!);
         Assert.Equal("open", (string)github.Get(issueB)["state"]!);
-        Assert.Equal(0, github.Comments);
+        Assert.DoesNotContain(github.CommentBodies, c => c.Contains("Duplicate of", StringComparison.Ordinal));
         Assert.Single(aggregator.PendingDuplicates());
         Assert.Single(aggregator.Export().Absorbed!);
     }

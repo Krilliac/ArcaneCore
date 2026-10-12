@@ -14260,6 +14260,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates",
+      "section": "World:Playerbots:Qa",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and close it as not planned (a duplicate). Off keeps the absorbed issue open and untouched; the merge is recorded in the store either way.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Qa:GitHub:CommentIntervalHours",
       "section": "World:Playerbots:Qa",
       "type": "int",
