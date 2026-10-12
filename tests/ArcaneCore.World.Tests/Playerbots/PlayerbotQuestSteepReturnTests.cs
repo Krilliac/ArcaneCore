@@ -110,6 +110,16 @@ public sealed partial class PlayerbotQuestReturnTests
             Assert.NotEqual(QuestStatus.Complete, await StatusAsync(fixture));
             Assert.Equal(0u, await fixture.Host.World.InvokeAsync(() => new PlayerbotQuestGoals(fixture.Session,
                 new PlayerbotOptions { Enabled = true }).CompletedReturnQuest(fixture.Session.Player!)));
+            await fixture.Host.World.AdvanceClockAsync(PlayerbotSuspensions.SuspendMs + 100);
+            Assert.True(await fixture.Host.World.InvokeAsync(() => brain.QuestGoals.IsRefused(QuestId)),
+                "a quest abandoned for an unreachable ender must stay refused after the temporary set-aside expires");
+            Assert.True(await fixture.Host.World.InvokeAsync(() =>
+            {
+                uint now = fixture.Host.World.NowMs;
+                var restored = new PlayerbotSuspensions();
+                restored.Restore(brain.Suspensions.Export(Guid.NewGuid(), 1, now, 1_000_000), now, 1_000_000);
+                return restored.IsQuestSuspended(QuestId, now + PlayerbotSuspensions.SuspendMs + 100);
+            }), "the per-bot refusal must survive an export and restore");
         }
         finally { await StopAsync(fixture, brain); }
     }

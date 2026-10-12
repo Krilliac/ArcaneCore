@@ -662,9 +662,14 @@ internal sealed class PlayerbotRisk
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.LethalMarginYards, now, seconds, "lethal", creature.Guid);
             else if (Memory.IsRemembered(creature.Guid, now))
                 Hazards.Add(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.FledMarginYards, now, seconds, "fled", creature.Guid);
-            else if (strong && (BeyondStrength(player, creature, spells, botDps)
-                || BeyondStrengthWithNearby(index)))
-                Hazards.SetStrong(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards, now, StrongHazardLifeMs, creature.Guid);
+            else if (strong)
+            {
+                bool alone = BeyondStrength(player, creature, spells, botDps);
+                if (alone || BeyondStrengthWithNearby(index))
+                    Hazards.SetStrong(player.MapId, threat.Position, threat.Radius + PlayerbotHazards.StrongMarginYards,
+                        now, StrongHazardLifeMs, creature.Guid,
+                        returnPassable: !alone && creature.Level <= player.Level + MaxLevelsAbove);
+            }
         }
 
         _threats.Clear();
@@ -739,10 +744,13 @@ internal sealed class PlayerbotRisk
     /// Whether a living bot may walk <paramref name="points"/>: none of them inside a hazard it did not start in. A retreat walks
     /// where it must; a dead bot (a ghost) is not attacked. Without <paramref name="strong"/> the creatures beyond the bot's strength
     /// are not held against it: only for the escape route itself (<see cref="EscapeRoute"/>, <see cref="PlayerbotNavigation.TryAdvance"/>);
-    /// an ordinary route never has them relaxed, and deaths, retreats, lethal creatures and those the bot fled from always hold.
+    /// a completed quest return also relaxes pack-only hazards of individually manageable, in-range creatures.
+    /// Deaths, retreats, lethal creatures and those the bot fled from always hold.
     /// </summary>
-    internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points, bool strong = true)
-        => !Enabled || !player.IsAlive || Retreat.Active ? null : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs, strong);
+    internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points, bool strong = true,
+        bool completedReturn = false)
+        => !Enabled || !player.IsAlive || Retreat.Active ? null
+            : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs, strong, completedReturn);
 
     /// <summary>
     /// The route out of a ring of strong creatures (<see cref="Refused"/>), walked by the brain before any goal (as a retreat is), or

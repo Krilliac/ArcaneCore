@@ -1,7 +1,7 @@
 namespace ArcaneCore.Kernel.Characters;
 
 /// <summary>The scope and target of a managed playerbot's temporary set-aside.</summary>
-public enum PlayerbotSetAsideKind : byte { Entry, Quest, Training, SharedEntry, SharedQuest }
+public enum PlayerbotSetAsideKind : byte { Entry, Quest, Training, SharedEntry, SharedQuest, UnreachableQuest }
 
 /// <summary>Absolute expiry prevents a restart from extending a world-time suspension.</summary>
 public sealed record PlayerbotSetAside(Guid BotId, int CharacterId, PlayerbotSetAsideKind Kind,
