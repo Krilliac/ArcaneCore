@@ -7,7 +7,8 @@ namespace ArcaneCore.Game.Updates;
 /// UNIT_DYNAMIC_FLAGS and GAMEOBJECT_DYN_FLAGS per target player). Attach with
 /// <see cref="WorldObject.ViewerFieldFilter"/>; when the answer for a viewer changes without the
 /// stored value changing, call <see cref="WorldObject.ForceFieldUpdate"/>. World thread; must be
-/// cheap and side-effect free.
+/// cheap. An implementation may record what it answered per viewer (the game object quest flags do, as the baseline of their refresh), so a
+/// caller asks for a viewer's value only to send it to that viewer.
 /// </summary>
 public interface IViewerFieldFilter
 {

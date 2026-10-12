@@ -501,6 +501,28 @@ public sealed class GameObjectTests
     }
 
     [Fact]
+    public void QuestChest_NeedAddedAfterTheViewersCreateBlockButBeforeTheFirstRefresh_StillReachesTheViewer()
+    {
+        Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
+        (Player first, _) = Player(2);
+        (Player viewer, FakeSession session) = Player(1);
+        rig.World.AddPlayer(first);
+        rig.World.RunTick(50); // the chest loads and the first refresh runs, with only another player watching it
+        GameObject chest = rig.Single(QuestChestEntry);
+
+        rig.World.AddPlayer(viewer);
+        rig.World.RunTick(50); // the viewer's create block is built (no need yet); the next refresh is a second away
+        ParsedBlock create = Assert.Single(DrainBlocks(session), b => b.Type is ObjectUpdateType.CreateObject or ObjectUpdateType.CreateObject2 && b.Guids.Contains(chest.Guid.Value));
+        Assert.Equal(0u, create.Values.GetValueOrDefault(UpdateFields.GameobjectDynFlags));
+
+        rig.Quests.Needs.Add((viewer.Guid, QuestItem)); // the quest is accepted before any refresh saw this viewer
+        rig.World.RunTick(1000);
+
+        ParsedBlock update = Assert.Single(DrainBlocks(session), b => b.Type == ObjectUpdateType.Values && b.Guids.Contains(chest.Guid.Value));
+        Assert.Equal((uint)(GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle), update.Values[UpdateFields.GameobjectDynFlags]);
+    }
+
+    [Fact]
     public void QuestChest_WithQuestItemOnlyForOthers_ShowsNothingToANonNeedingOpener()
     {
         Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
