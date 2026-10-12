@@ -87,6 +87,16 @@ public static class DataServiceCollectionExtensions
             ?? new CharacterOwnershipContext();
         services.TryAddSingleton(holder);
         services.TryAddSingleton<ICharacterOwnershipContext>(holder);
+
+        var transactions = new CharacterWriteFenceInterceptor(holder);
+        var commands = new CharacterWriteFenceCommandInterceptor();
+        services.ConfigureDbContext<CharacterDbContext>(builder =>
+        {
+            if (bool.TryParse(configuration[FencingEnabledKey], out bool enabled) && enabled)
+            {
+                builder.AddInterceptors(transactions, commands);
+            }
+        });
     }
 
     /// <summary>Static world content (world daemon, content importer).</summary>

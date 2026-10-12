@@ -32,7 +32,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {
@@ -97,7 +97,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {

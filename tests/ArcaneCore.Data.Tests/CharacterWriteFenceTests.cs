@@ -41,6 +41,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         public IReadOnlyList<string> Texts { get { lock (_gate) return [.. _texts]; } }
         public void Clear() { lock (_gate) _texts.Clear(); }
         private void Record(DbCommand command) { lock (_gate) _texts.Add(command.CommandText); }
+        public void Mark(string text) { lock (_gate) _texts.Add(text); }
 
         public override InterceptionResult<DbDataReader> ReaderExecuting(DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result)
         { Record(command); return result; }
@@ -61,6 +62,16 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         { Record(command); return new(result); }
     }
 
+    /// <summary>Adds a marker to the command log for every transaction EF begins, so transaction counts are compared as well.</summary>
+    private sealed class TransactionLog(CommandLog log) : DbTransactionInterceptor
+    {
+        public override DbTransaction TransactionStarted(DbConnection connection, TransactionEndEventData eventData, DbTransaction result)
+        { log.Mark("<begin transaction>"); return result; }
+
+        public override ValueTask<DbTransaction> TransactionStartedAsync(DbConnection connection, TransactionEndEventData eventData, DbTransaction result, CancellationToken cancellationToken = default)
+        { log.Mark("<begin transaction>"); return new(result); }
+    }
+
     private static async Task<ServiceProvider> BuildAsync(DatabaseConnectionOptions connection, bool fence, CommandLog? log = null)
     {
         var settings = new Dictionary<string, string?>
@@ -75,7 +86,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         services.AddLogging();
         services.AddCharacterDatabase(configuration);
         if (log is not null)
-            services.ConfigureDbContext<CharacterDbContext>(builder => builder.AddInterceptors(log));
+            services.ConfigureDbContext<CharacterDbContext>(builder => builder.AddInterceptors(log, new TransactionLog(log)));
         ServiceProvider provider = services.BuildServiceProvider();
         await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
         return provider;
@@ -280,7 +291,9 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
 
         Assert.NotEmpty(off);
         Assert.Equal(plain, off);
-        Assert.True(on.Count > off.Count, "the fence adds its verification statement(s); it is not free when on");
+        // One-row saves autocommit with the fence off; with it on every save is a verified transaction.
+        Assert.True(on.Count(t => t == "<begin transaction>") > off.Count(t => t == "<begin transaction>"),
+            "the fence wraps single-statement saves in a verified transaction; it is not free when on");
     }
 
     /// <summary>The same writes in every configuration; fence null builds the context with no registration at all.</summary>
@@ -307,7 +320,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
                     await ArcaneCore.Data.Schema.SchemaBootstrapper.EnsureAsync(setup, CharacterDbContext.Schema);
                 var builder = new DbContextOptionsBuilder<CharacterDbContext>();
                 DataServiceCollectionExtensions.ConfigureProvider(builder, connection);
-                builder.AddInterceptors(log);
+                builder.AddInterceptors(log, new TransactionLog(log));
                 direct = new CharacterDbContext(builder.Options);
             }
 

@@ -23,7 +23,8 @@ public sealed class WorldHost(
     IServiceScopeFactory scopes,
     ILogger<WorldHost> logger,
     IOptions<CharacterFencingOptions>? fencingOptions = null,
-    IHostApplicationLifetime? applicationLifetime = null) : IHostedService
+    IHostApplicationLifetime? applicationLifetime = null,
+    CharacterOwnershipContext? ownershipContext = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
     private readonly IHostApplicationLifetime? _applicationLifetime = applicationLifetime;
@@ -116,6 +117,8 @@ public sealed class WorldHost(
         if (_ownership is null)
             throw new InvalidOperationException("the characters database is already owned by another world authority");
         world.CharacterOwnership = _ownership;
+        if (ownershipContext is not null)
+            ownershipContext.Current = _ownership; // the ambient token the characters write fence verifies every unaware store's transaction against
     }
 
     private async Task ReleaseOwnershipAsync(CancellationToken cancellationToken, List<Exception> failures)
@@ -128,6 +131,8 @@ public sealed class WorldHost(
                 .ReleaseAsync(_ownership, cancellationToken).ConfigureAwait(false);
             _ownership = null;
             world.CharacterOwnership = null;
+            if (ownershipContext is not null)
+                ownershipContext.Current = null;
         }
         catch (Exception ex) { failures.Add(ex); }
     }

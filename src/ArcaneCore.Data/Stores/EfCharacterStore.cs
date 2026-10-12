@@ -231,7 +231,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {

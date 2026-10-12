@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.EntityFrameworkCore.Storage;
 using ArcaneCore.Data.Schema.Upgrade;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -177,6 +178,7 @@ public static class SchemaBootstrapper
         DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // the bootstrap creates and seeds the ownership row itself
         TimeSpan lockTimeout = options.LockTimeout;
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (!await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
@@ -357,6 +359,7 @@ public static class SchemaBootstrapper
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(options);
+        using IDisposable exempt = CharacterWriteFence.Exempt();
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (definition.ForeignLines.Count == 0 || !await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
