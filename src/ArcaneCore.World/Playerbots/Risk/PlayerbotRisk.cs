@@ -128,6 +128,9 @@ internal sealed class PlayerbotRisk
 
     internal PlayerbotRetreat Retreat { get; }
 
+    /// <summary>Where this bot's retreat outcomes and refusals are counted (the fleet's counters unless a test replaces them).</summary>
+    internal PlayerbotRetreatStats RetreatStats { get; set; } = PlayerbotRetreatStats.Shared;
+
     /// <summary>The last pre-engagement verdict (the target taken, or the best one passed over).</summary>
     internal PlayerbotEngagement? LastEngagement { get; private set; }
 
@@ -201,6 +204,7 @@ internal sealed class PlayerbotRisk
         }
 
         _cornered = false;
+        _refusalCounted = false;
         if (Tracker.Active) Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
     }
 
@@ -217,6 +221,13 @@ internal sealed class PlayerbotRisk
         if (Enabled)
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");
+        // A death on the way out of a retreat is the retreat's end: the place where the fight turned is remembered as for any other.
+        if (Enabled && Retreat.Active)
+        {
+            RememberFlight();
+            RetreatStats.Record("died");
+        }
+
         Retreat.Stop("died");
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         Breadcrumbs.Clear();
@@ -907,10 +918,36 @@ internal sealed class PlayerbotRisk
         PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs, priorIn, priorOut)
             with { Lethal = enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)) };
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);
+        if (verdict.Retreat && !facts.Lethal)
+        {
+            // The bot would run: can it get away before it dies? Looked at only now (it plans the goal and asks the spellbook).
+            PlayerbotPursuit pursuit = Retreat.Assess(player, enemies, Tracker.Anchors, Breadcrumbs.Points, e => Enemy(e, RiskJoin.Target, player).Dps);
+            verdict = PlayerbotRiskModel.Judge(facts with { Pursuit = pursuit }, _options.Risk);
+            if (!verdict.Retreat && !_refusalCounted)
+            {
+                _refusalCounted = true;
+                RetreatStats.RecordRefused();
+            }
+        }
+
         Tracker.Record(verdict);
         if (!verdict.Retreat) return false;
         StartRetreat(player, enemies, verdict.Reason);
         return true;
+    }
+
+    /// <summary>The refusal of a retreat is counted once per fight (<see cref="Track"/> clears it out of combat).</summary>
+    private bool _refusalCounted;
+
+    /// <summary>
+    /// Remember where the fight turned and the creatures fled from: the danger memory and the hazard at <c>_fledAt</c>. A retreat
+    /// that ends in the bot's death does so too (it is the most common ending, live w29), whichever of the retreat's update and
+    /// <see cref="OnDeath"/> sees the death first.
+    /// </summary>
+    private void RememberFlight()
+    {
+        Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+        Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
     }
 
     /// <summary>
@@ -935,11 +972,8 @@ internal sealed class PlayerbotRisk
     {
         if (!Retreat.Active) return false;
         if (Retreat.Update(player, interval)) return true;
-        if (Retreat.Outcome != "died")
-        {
-            Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
-            Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
-        }
+        RememberFlight();
+        RetreatStats.Record(Retreat.Outcome);
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         if (Retreat.Outcome == "safe") BeginWait(player);
         else if (Retreat.Outcome == "cornered") _cornered = true;

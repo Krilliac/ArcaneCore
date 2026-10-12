@@ -109,6 +109,18 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         _extensions = 0;
         _attackStopped = false;
         _startedMs = session.World.NowMs;
+        _zones.AddRange(BuildZones(player, enemies, anchors));
+        Goal = ChooseGoal(player, crumbs, _zones, _enemies);
+        if (Goal is { } goal) _route = Plan(player, goal, crumbs);
+        FirstGoal = Goal;
+        Trace = $"goal {Goal} route {(_route is null ? "none" : _route.Points.Count + " points")}";
+    }
+
+    /// <summary>The areas round the enemies' fight starts a pursuer gives up outside of: (centre, radius), two for each enemy.</summary>
+    private static List<(Vector3 Anchor, float Safe)> BuildZones(Player player, IReadOnlyList<Creature> enemies,
+        IReadOnlyDictionary<ObjectGuid, Vector3> anchors)
+    {
+        var zones = new List<(Vector3 Anchor, float Safe)>(enemies.Count * 2);
         CreatureMapSystem? system = player.Map?.FindUpdater<CreatureMapSystem>();
         foreach (Creature enemy in enemies)
         {
@@ -116,15 +128,45 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             float aggro = system?.GetAttackDistance(enemy, player) ?? CreatureTemplate.DefaultDetectionRange;
             float threat = system?.Options.ThreatRadius ?? 50f;
             float safe = MathF.Max(MathF.Max(aggro * 1.5f, threat), enemy.Template.Leash) + LeashMarginYards;
-            _zones.Add((anchor, safe));
+            zones.Add((anchor, safe));
             // Where it was placed too: an idle creature's fight begins at its home, and the leash is measured from there.
-            _zones.Add((new Vector3(enemy.Home.X, enemy.Home.Y, enemy.Home.Z), safe));
+            zones.Add((new Vector3(enemy.Home.X, enemy.Home.Y, enemy.Home.Z), safe));
         }
 
-        Goal = ChooseGoal(player, crumbs);
-        if (Goal is { } goal) _route = Plan(player, goal, crumbs);
-        FirstGoal = Goal;
-        Trace = $"goal {Goal} route {(_route is null ? "none" : _route.Points.Count + " points")}";
+        return zones;
+    }
+
+    /// <summary>
+    /// What a retreat from <paramref name="enemies"/> would face now, without starting one (<see cref="PlayerbotRiskModel.RetreatSucceeds"/>):
+    /// the yards to the goal it would choose (along the trail when the goal is a crumb of it, else straight), the bot's current run
+    /// speed (<see cref="Unit.RunSpeed"/>: snares and speed auras are in it), each living enemy's current run speed and damage per
+    /// second nearest first, and the escapes ready. <paramref name="damagePerSecond"/> gives an enemy's damage per second against the bot.
+    /// </summary>
+    internal PlayerbotPursuit Assess(Player player, IReadOnlyList<Creature> enemies, IReadOnlyDictionary<ObjectGuid, Vector3> anchors,
+        IReadOnlyList<Vector3> crumbs, Func<Creature, float> damagePerSecond)
+    {
+        Creature[] chasing = [.. enemies.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map)).OrderBy(e => Distance(player, e))];
+        List<(Vector3 Anchor, float Safe)> zones = BuildZones(player, chasing, anchors);
+        Vector3 here = new(player.X, player.Y, player.Z);
+        Vector3? goal = ChooseGoal(player, crumbs, zones, chasing);
+        float yards = 0f;
+        if (goal is { } target)
+        {
+            yards = Vector3.Distance(here, target);
+            int end = -1;
+            for (int index = crumbs.Count - 1; index >= 0; index--)
+                if (crumbs[index] == target) { end = index; break; }
+            if (end >= 0)
+            {
+                yards = Vector3.Distance(here, crumbs[^1]);
+                for (int index = crumbs.Count - 1; index > end; index--) yards += Vector3.Distance(crumbs[index], crumbs[index - 1]);
+            }
+        }
+
+        var pursuers = new List<RiskPursuer>(chasing.Length);
+        foreach (Creature enemy in chasing) pursuers.Add(new RiskPursuer(enemy.RunSpeed, damagePerSecond(enemy)));
+        PlayerbotEscapeKit kit = PlayerbotEscapes.Kit(ReadyEscapes(player, chasing, ignoreUsed: true));
+        return new PlayerbotPursuit(yards, player.RunSpeed, pursuers, kit);
     }
 
     internal void Stop(string outcome)
@@ -191,26 +233,10 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
     private void TryEscape(Player player)
     {
-        Creature? victim = _enemies.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map))
-            .OrderBy(e => Distance(player, e)).FirstOrDefault();
         PlayerbotAbilities known = spells.Escapes(player);
         if (known.Count == 0) return;
-        int within8 = 0, within10 = 0;
-        foreach (Creature enemy in _enemies)
-        {
-            if (!enemy.IsAlive || !ReferenceEquals(enemy.Map, player.Map)) continue;
-            float d = Distance(player, enemy);
-            if (d <= 8f) within8++;
-            if (d <= 10f) within10++;
-        }
-
-        var situation = new EscapeSituation(player.Class, player.MaxHealth == 0 ? 0 : player.Health * 100f / player.MaxHealth,
-            player.Combat.IsInCombat, within8, within10, victim is not null && Distance(player, victim) <= PlayerbotClassRotation.MeleeRange + 1f,
-            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat);
-        EscapeAction? action = PlayerbotEscapes.Choose(situation, candidate =>
-            !_used.Contains(candidate.Spell) && known[candidate.Spell] is { } spell
-            && (candidate.Target == EscapeTarget.Self || victim is not null)
-            && spells.CanCastNow(player, spell, candidate.Target == EscapeTarget.Self ? player : victim!));
+        EscapeSituation situation = SituationOf(player, _enemies, out Creature? victim);
+        EscapeAction? action = PlayerbotEscapes.Choose(situation, candidate => IsReady(player, known, candidate, victim, ignoreUsed: false));
         if (action is not { } chosen || known[chosen.Spell] is not { } chosenSpell) return;
         if (chosen.FaceAway)
         {
@@ -228,25 +254,26 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             && feature.System.GetAuras(player).Any(holder => string.Equals(holder.Spell.Name, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The newest place on the trail outside every enemy's leash and farther from the enemies than the bot is now.</summary>
-    private Vector3? ChooseGoal(Player player, IReadOnlyList<Vector3> crumbs)
+    private static Vector3? ChooseGoal(Player player, IReadOnlyList<Vector3> crumbs, IReadOnlyList<(Vector3 Anchor, float Safe)> zones,
+        IReadOnlyList<Creature> enemyList)
     {
         Vector3 here = new(player.X, player.Y, player.Z);
-        Vector3 enemies = Centroid(player);
+        Vector3 enemies = Centroid(player, enemyList, zones);
         for (int index = crumbs.Count - 1; index >= 0; index--)
         {
             Vector3 crumb = crumbs[index];
-            if (Safe(crumb) && Vector3.Distance(crumb, enemies) > Vector3.Distance(here, enemies)) return crumb;
+            if (Safe(crumb, zones) && Vector3.Distance(crumb, enemies) > Vector3.Distance(here, enemies)) return crumb;
         }
 
         // No trail out of reach: straight away from the enemies, past the farthest leash.
         float needed = 0;
-        foreach ((Vector3 anchor, float safe) in _zones) needed = MathF.Max(needed, safe - Vector3.Distance(here, anchor));
-        return here + (Away(player) * MathF.Max(ExtendYards, needed + LeashMarginYards));
+        foreach ((Vector3 anchor, float safe) in zones) needed = MathF.Max(needed, safe - Vector3.Distance(here, anchor));
+        return here + (Away(player, enemyList, zones) * MathF.Max(ExtendYards, needed + LeashMarginYards));
     }
 
-    private bool Safe(Vector3 point)
+    private static bool Safe(Vector3 point, IReadOnlyList<(Vector3 Anchor, float Safe)> zones)
     {
-        foreach ((Vector3 anchor, float safe) in _zones)
+        foreach ((Vector3 anchor, float safe) in zones)
             if (Vector3.Distance(point, anchor) < safe) return false;
         return true;
     }
@@ -272,11 +299,11 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         return points.Count >= 2 ? new PlayerbotRoute(points, length) : null;
     }
 
-    private Vector3 Centroid(Player player)
+    private static Vector3 Centroid(Player player, IReadOnlyList<Creature> enemyList, IReadOnlyList<(Vector3 Anchor, float Safe)> zones)
     {
         Vector3 sum = Vector3.Zero;
         int count = 0;
-        foreach (Creature enemy in _enemies)
+        foreach (Creature enemy in enemyList)
         {
             if (!ReferenceEquals(enemy.Map, player.Map)) continue;
             sum += new Vector3(enemy.X, enemy.Y, enemy.Z);
@@ -284,17 +311,55 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         }
 
         if (count == 0)
-            foreach ((Vector3 anchor, _) in _zones) { sum += anchor; count++; }
+            foreach ((Vector3 anchor, _) in zones) { sum += anchor; count++; }
         return count == 0 ? new Vector3(player.X, player.Y, player.Z) : sum / count;
     }
 
     /// <summary>The flat direction from the enemies to the bot (behind the bot when they stand on it).</summary>
-    private Vector3 Away(Player player)
+    private Vector3 Away(Player player) => Away(player, _enemies, _zones);
+
+    private static Vector3 Away(Player player, IReadOnlyList<Creature> enemyList, IReadOnlyList<(Vector3 Anchor, float Safe)> zones)
     {
-        Vector3 from = Centroid(player);
+        Vector3 from = Centroid(player, enemyList, zones);
         var flat = new Vector3(player.X - from.X, player.Y - from.Y, 0);
         if (flat.Length() < 0.5f) flat = new Vector3(-MathF.Cos(player.Orientation), -MathF.Sin(player.Orientation), 0);
         return Vector3.Normalize(flat);
+    }
+
+    /// <summary>What <see cref="PlayerbotEscapes"/> reads about the retreat; <paramref name="victim"/> is the nearest living enemy.</summary>
+    private static EscapeSituation SituationOf(Player player, IReadOnlyList<Creature> enemyList, out Creature? victim)
+    {
+        victim = enemyList.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map)).OrderBy(e => Distance(player, e)).FirstOrDefault();
+        int within8 = 0, within10 = 0;
+        foreach (Creature enemy in enemyList)
+        {
+            if (!enemy.IsAlive || !ReferenceEquals(enemy.Map, player.Map)) continue;
+            float d = Distance(player, enemy);
+            if (d <= 8f) within8++;
+            if (d <= 10f) within10++;
+        }
+
+        return new EscapeSituation(player.Class, player.MaxHealth == 0 ? 0 : player.Health * 100f / player.MaxHealth,
+            player.Combat.IsInCombat, within8, within10, victim is not null && Distance(player, victim) <= PlayerbotClassRotation.MeleeRange + 1f,
+            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat);
+    }
+
+    /// <summary>An escape that is known, castable at its target now and (unless <paramref name="ignoreUsed"/>) not used yet this retreat.</summary>
+    private bool IsReady(Player player, PlayerbotAbilities known, EscapeAction candidate, Creature? victim, bool ignoreUsed)
+        => (ignoreUsed || !_used.Contains(candidate.Spell)) && known[candidate.Spell] is { } spell
+            && (candidate.Target == EscapeTarget.Self || victim is not null)
+            && spells.CanCastNow(player, spell, candidate.Target == EscapeTarget.Self ? player : victim!);
+
+    /// <summary>Every escape of the bot's class that is ready now, in the order the retreat would cast them.</summary>
+    private List<EscapeAction> ReadyEscapes(Player player, IReadOnlyList<Creature> enemyList, bool ignoreUsed)
+    {
+        var ready = new List<EscapeAction>();
+        PlayerbotAbilities known = spells.Escapes(player);
+        if (known.Count == 0) return ready;
+        EscapeSituation situation = SituationOf(player, enemyList, out Creature? victim);
+        foreach (EscapeAction candidate in PlayerbotEscapes.Candidates(situation))
+            if (IsReady(player, known, candidate, victim, ignoreUsed)) ready.Add(candidate);
+        return ready;
     }
 
     private static float Distance(WorldObject a, WorldObject b)

@@ -1,6 +1,7 @@
 using System.Text;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Ops.ServerConsole;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -91,6 +92,17 @@ public sealed class PlayerbotQaCommandsTests : IDisposable
         Assert.DoesNotContain(lines, l => l.Contains("ghp_", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("#1 " + PlayerbotQaFingerprint.ShortId(id), StringComparison.Ordinal));
         Assert.Equal(lines[1..], await RunAsync(host, ".playerbot qa top"));
+    }
+
+    [Fact]
+    public async Task Qa_ShowsTheRetreatCounters()
+    {
+        await using WorldTestHost host = StartWithQa();
+        PlayerbotRetreatStats.Shared.RecordRefused();
+
+        string[] lines = await RunAsync(host, ".playerbot qa");
+
+        Assert.Matches(@"Retreats: \d+ ended \(safe \d+, cornered \d+, died \d+\), [1-9]\d* refused as cornered-no-escape\.", lines[0]);
     }
 
     [Fact]

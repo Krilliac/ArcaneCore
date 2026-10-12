@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -106,6 +107,58 @@ internal static class PlayerbotEscapes
                 if (s.HasVictim) yield return new(FrostShock, EscapeTarget.Victim);
                 break;
         }
+    }
+
+    /// <summary>
+    /// What an escape buys a retreat, in the terms the feasibility estimate uses (<see cref="PlayerbotRiskModel.RetreatSucceeds"/>):
+    /// seconds the pursuers it reaches cannot hit the bot (root, stun, fear, vanish, a blink's head start), the bot's speed multiplier,
+    /// the speed multiplier it puts on its victim (a snare). Rounded 1.12 rank 1 figures; an escape that does not move the bot out of
+    /// reach (Power Word: Shield, Fade, Cat Form) buys nothing here.
+    /// </summary>
+    /// <param name="FreeSeconds">Seconds without blows from the pursuers reached (infinity: contact is lost for good).</param>
+    /// <param name="AllPursuers">Reaches every pursuer (an area or a stealth) rather than the nearest only.</param>
+    /// <param name="SelfSpeed">The bot's run speed multiplier.</param>
+    /// <param name="VictimSpeed">The nearest pursuer's run speed multiplier.</param>
+    internal readonly record struct EscapeEffect(float FreeSeconds, bool AllPursuers, float SelfSpeed = 1f, float VictimSpeed = 1f);
+
+    /// <summary>The effect of an escape by spell name (none for a name that is not an escape or buys nothing).</summary>
+    internal static EscapeEffect EffectOf(string spell) => spell switch
+    {
+        FrostNova => new(8f, true),
+        PsychicScream => new(8f, true),
+        HowlOfTerror => new(8f, true),
+        IntimidatingShout => new(8f, true),
+        Vanish => new(float.PositiveInfinity, true),
+        FeignDeath => new(float.PositiveInfinity, true),
+        DivineShield => new(12f, true),
+        Blink => new(20f / Unit.BaseRunSpeed, true),
+        Sprint => new(0f, true, SelfSpeed: 1.5f),
+        AspectOfTheCheetah => new(0f, true, SelfSpeed: 1.3f),
+        TravelForm => new(0f, true, SelfSpeed: 1.4f),
+        Dash => new(0f, true, SelfSpeed: 1.6f),
+        EntanglingRoots => new(12f, false),
+        Fear => new(10f, false),
+        Gouge => new(4f, false),
+        HammerOfJustice => new(3f, false),
+        DeathCoil => new(3f, false),
+        Hamstring or WingClip or ConcussiveShot or FrostShock => new(0f, false, VictimSpeed: 0.5f),
+        _ => new(0f, false),
+    };
+
+    /// <summary>The escapes of a retreat together: free seconds add up per reach, the fastest self speed and the strongest snare stand.</summary>
+    internal static PlayerbotEscapeKit Kit(IEnumerable<EscapeAction> ready)
+    {
+        float all = 0f, victim = 0f, self = 1f, snare = 1f;
+        foreach (EscapeAction action in ready)
+        {
+            EscapeEffect effect = EffectOf(action.Spell);
+            if (effect.AllPursuers) all += effect.FreeSeconds;
+            else victim += effect.FreeSeconds;
+            self = MathF.Max(self, effect.SelfSpeed);
+            snare = MathF.Min(snare, effect.VictimSpeed);
+        }
+
+        return new PlayerbotEscapeKit(all, victim, self, snare);
     }
 
     /// <summary>The first escape of the class that is ready (<paramref name="ready"/>: known, castable at its target, not used yet).</summary>

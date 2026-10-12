@@ -92,9 +92,29 @@ internal readonly record struct PlayerbotEngagement(uint Entry, float Risk, floa
         $"risk={Risk:F2} reward={Reward:F2} decision={Decision.ToString().ToLowerInvariant()} reason={Reason} target={Entry}");
 }
 
+/// <summary>One creature that would chase a retreating bot: its current run speed (yards a second) and its damage per second against the bot.</summary>
+internal readonly record struct RiskPursuer(float RunSpeed, float Dps);
+
+/// <summary>
+/// What the escapes a retreat would use (ready now, <see cref="PlayerbotEscapes.Kit"/>) buy together: seconds the pursuers cannot hit
+/// the bot (all of them, or the nearest only), the bot's speed multiplier and the nearest pursuer's (a snare).
+/// </summary>
+internal readonly record struct PlayerbotEscapeKit(float AllFreeSeconds, float VictimFreeSeconds, float SelfSpeed, float VictimSpeed)
+{
+    /// <summary>No escape ready.</summary>
+    internal static PlayerbotEscapeKit None { get; } = new(0f, 0f, 1f, 1f);
+}
+
+/// <summary>
+/// What a retreat from this fight would face (a plain snapshot): the yards to run to the retreat goal, the bot's current run speed
+/// (snares and speed auras included), the chasers nearest first, and the escapes ready. See <see cref="PlayerbotRiskModel.RetreatSucceeds"/>.
+/// </summary>
+internal sealed record PlayerbotPursuit(float EscapeYards, float BotRunSpeed, IReadOnlyList<RiskPursuer> Pursuers, PlayerbotEscapeKit Kit);
+
 /// <summary>Everything one in-combat estimate reads.</summary>
+/// <param name="Pursuit">What a retreat would face; null when the caller does not know (the retreat is then never refused).</param>
 internal readonly record struct PlayerbotFightFacts(uint BotHealth, uint BotMaxHealth, float DpsIn, float DpsOut, uint EnemyHealth,
-    int Enemies, float TargetHealthPct, bool Lethal = false);
+    int Enemies, float TargetHealthPct, bool Lethal = false, PlayerbotPursuit? Pursuit = null);
 
 /// <summary>The in-combat verdict: the times to kill and to die and whether to retreat.</summary>
 internal readonly record struct PlayerbotFightVerdict(bool Retreat, float TimeToKill, float TimeToDie, string Reason)
@@ -316,7 +336,54 @@ internal static class PlayerbotRiskModel
             return new(false, ttk, ttd, "nearly-won");
         bool losing = ttd * options.Tolerance < ttk;
         if (!losing) return new(false, ttk, ttd, "winning");
-        if (healthPct <= options.RetreatHealthPct || ttd < 4f) return new(true, ttk, ttd, facts.Enemies > 1 ? $"losing-to-{facts.Enemies}" : "losing");
+        if (healthPct <= options.RetreatHealthPct || ttd < 4f)
+        {
+            // A retreat that cannot break contact before the bot dies is only a death with no blow dealt on the way: fight on.
+            if (facts.Pursuit is { } pursuit && !RetreatSucceeds(pursuit, facts.BotHealth, facts.DpsIn))
+                return new(false, ttk, ttd, CorneredReason);
+            return new(true, ttk, ttd, facts.Enemies > 1 ? $"losing-to-{facts.Enemies}" : "losing");
+        }
+
         return new(false, ttk, ttd, "behind");
+    }
+
+    /// <summary>The reason of a fight kept up because the retreat could not succeed (<see cref="RetreatSucceeds"/>).</summary>
+    internal const string CorneredReason = "cornered-no-escape";
+
+    /// <summary>The share of its health the bot may lose on the run and still count the retreat a success.</summary>
+    internal const float RetreatHealthBudget = 0.9f;
+
+    /// <summary>
+    /// Whether a retreat breaks contact before it kills the bot (pure estimate). The bot runs <see cref="PlayerbotPursuit.EscapeYards"/>
+    /// at its run speed (times the best speed escape ready); a pursuer no faster than the bot falls behind at once (it never lands
+    /// a blow on the run), a faster one keeps hitting for the whole run less the seconds the ready escapes keep it off (a root, a
+    /// stun, a fear, a stealth; a snare slows the nearest one first). The damage taken is the observed damage rate
+    /// (<paramref name="dpsIn"/>) shared out by the pursuers' own damage per second; the retreat succeeds when it stays under
+    /// <see cref="RetreatHealthBudget"/> of <paramref name="botHealth"/>. An unknown speed counts as faster. The escapes are taken as
+    /// one after another, the way <see cref="PlayerbotRetreat"/> casts them (each once), which flatters a pair of the same kind.
+    /// </summary>
+    internal static bool RetreatSucceeds(PlayerbotPursuit pursuit, uint botHealth, float dpsIn)
+    {
+        ArgumentNullException.ThrowIfNull(pursuit);
+        if (!(pursuit.EscapeYards > 0f) || !(dpsIn > 0.01f)) return true;
+        PlayerbotEscapeKit kit = pursuit.Kit;
+        float botSpeed = MathF.Max(0.1f, pursuit.BotRunSpeed * kit.SelfSpeed);
+        float run = pursuit.EscapeYards / botSpeed;
+        float totalDps = 0f;
+        foreach (RiskPursuer pursuer in pursuit.Pursuers) totalDps += MathF.Max(0f, pursuer.Dps);
+        if (!(totalDps > 0f)) return true;
+        float damage = 0f;
+        for (int index = 0; index < pursuit.Pursuers.Count; index++)
+        {
+            RiskPursuer pursuer = pursuit.Pursuers[index];
+            bool nearest = index == 0;
+            float speed = (float.IsFinite(pursuer.RunSpeed) && pursuer.RunSpeed > 0f ? pursuer.RunSpeed : float.PositiveInfinity)
+                * (nearest ? kit.VictimSpeed : 1f);
+            if (speed <= botSpeed) continue;
+            float exposed = MathF.Max(0f, run - (kit.AllFreeSeconds + (nearest ? kit.VictimFreeSeconds : 0f)));
+            damage += dpsIn * (MathF.Max(0f, pursuer.Dps) / totalDps) * exposed;
+        }
+
+        return damage < botHealth * RetreatHealthBudget;
     }
 }
