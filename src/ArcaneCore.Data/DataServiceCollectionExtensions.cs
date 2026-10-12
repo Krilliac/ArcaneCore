@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.WorldData;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -108,6 +109,30 @@ public static class DataServiceCollectionExtensions
         return resolved;
     }
 
+    /// <summary>
+    /// The SQLite connection string with <c>Default Timeout</c> lowered to the write bound (whole seconds, rounded up; never raised; a Default Timeout of 0, unlimited, is replaced; a bound of 0 leaves it).
+    /// It must be in the string, not only set when the connection opens: <c>SqliteConnection.CreateCommand</c> copies DefaultTimeout into the command
+    /// when it is created, and EF creates a non-query command (ExecuteUpdate/Delete, ExecuteScalar, raw SQL) before it opens the connection, so a value lowered at
+    /// open would leave that first command on the string's 30 s.
+    /// </summary>
+    private static string WithWriteBound(string connectionString, int writeTimeoutMs)
+    {
+        if (writeTimeoutMs <= 0)
+        {
+            return connectionString;
+        }
+
+        var builder = new SqliteConnectionStringBuilder(connectionString);
+        int seconds = SqliteConnectionPragmaInterceptor.ApplyWriteBound(builder.DefaultTimeout, writeTimeoutMs);
+        if (seconds == builder.DefaultTimeout)
+        {
+            return connectionString;
+        }
+
+        builder.DefaultTimeout = seconds;
+        return builder.ConnectionString;
+    }
+
     /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> and <paramref name="slowCommands"/> (when given) are attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
     public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null)
     {
@@ -141,7 +166,7 @@ public static class DataServiceCollectionExtensions
                 break;
 
             case DatabaseProvider.Sqlite:
-                builder.UseSqlite(options.ConnectionString)
+                builder.UseSqlite(WithWriteBound(options.ConnectionString, sqliteWriteTimeoutMs))
                     .AddInterceptors(SqliteConnectionPragmaInterceptor.For(options.SqliteBusyTimeoutMs ?? SqliteConnectionPragmaInterceptor.DefaultBusyTimeoutMs, sqliteWriteTimeoutMs));
                 break;
 
