@@ -32,6 +32,40 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
+    public void Alerted_ReportsAnOverrun_AndACompletedHang_RightAfterTheirLogLines()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 1000);
+        var alerts = new List<TickAlert>();
+        monitor.Alerted = alerts.Add;
+
+        Tick(monitor, 99, 50);
+        Tick(monitor, 1, 150); // one slow frame
+        Tick(monitor, 1, 50);
+        monitor.Check(_clock.NowMicros);
+        TickAlert overrun = Assert.Single(alerts);
+        Assert.Equal(TickAlertKind.Overrun, overrun.Kind);
+        Assert.Contains("1 frame(s) over the 100 ms budget", overrun.Detail);
+
+        Tick(monitor, 2, 3000); // a frame of 3 s, over the 1 s hang threshold
+        monitor.Check(_clock.NowMicros);
+        Assert.Contains(alerts, a => a.Kind == TickAlertKind.Hang && a.Detail.Contains("hang threshold 1000 ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Alerted_ThrowingSubscriber_DoesNotStopTheCheck()
+    {
+        TickMonitor monitor = Create();
+        monitor.Alerted = _ => throw new InvalidOperationException("subscriber failed");
+        Tick(monitor, 99, 50);
+        Tick(monitor, 1, 150);
+        Tick(monitor, 1, 50);
+
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Single(_log.Of(WatchdogEvents.TickOverrun)); // the line was written before the subscriber ran
+    }
+
+    [Fact]
     public void Budget_DefaultsToTwiceTheTickInterval_AndHangToTheOption()
     {
         TickMonitor monitor = Create(tickMs: 50);

@@ -240,13 +240,17 @@ public sealed class FaultLedger
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
         if (recording.ShouldLog && FaultNoticed is { } noticed)
         {
-            try
+            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed);
+            foreach (Action<FaultNotice> handler in noticed.GetInvocationList())
             {
-                noticed(new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed));
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                // A subscriber must never turn a handled fault into a second one.
+                try
+                {
+                    handler(notice);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // A subscriber must never turn a handled fault into a second one, nor stop the subscribers after it.
+                }
             }
         }
 

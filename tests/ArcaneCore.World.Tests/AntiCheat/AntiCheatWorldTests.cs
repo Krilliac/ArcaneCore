@@ -5,9 +5,12 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.AntiCheat;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
+using ArcaneCore.World.Tests.HotCode;
 using ArcaneCore.World.Tests.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -210,6 +213,33 @@ public sealed class AntiCheatWorldTests
         reader.ReadUInt32(); // movement counter
         MovementInfo block = MovementInfo.Read(ref reader);
         Assert.Equal(valid, block.X, 2);
+    }
+
+    [Fact]
+    public async Task TheAnnouncer_GetsTheAlertAndTheKick_StaffOnly_WithTheNameOnlyInTheStaffLine()
+    {
+        var sink = new RecordingSink();
+        var announce = new AnnounceOptions();
+        announce.AntiCheat.WorldMessage = true; // names stay out of the world line anyway
+        var announcer = new OpsAnnouncer(announce, sink, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IOpsAnnouncer>(announcer));
+        await using WorldTestClient cheater = await host.EnterWorldAsync("ANNOUNCED", "Announced");
+        await ApplyAsync(host, new AntiCheatOptions { Action = AntiCheatAction.Kick, ScoreGmAlert = 20, ScoreRubberband = 30, ScoreKick = 40 });
+        Mover mover = await MoverAsync(host, cheater, "Announced");
+
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 80f); // teleport 25: alert
+        await mover.StepAsync(100, 80f); // 50: kick
+        Assert.True(await cheater.IsClosedByServerAsync());
+
+        AnnounceDelivery[] sent = [.. sink.Sent];
+        Assert.Contains(sent, d => d.StaffChat!.Contains("raised an alert", StringComparison.Ordinal) && d.StaffChat.Contains("Announced", StringComparison.Ordinal));
+        Assert.Contains(sent, d => d.StaffChat!.Contains("kicked a player", StringComparison.Ordinal));
+        Assert.All(sent, d =>
+        {
+            Assert.Contains("[AntiCheat]", d.StaffChat, StringComparison.Ordinal);
+            Assert.DoesNotContain("Announced", d.WorldChat ?? string.Empty, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
