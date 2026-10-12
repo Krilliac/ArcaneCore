@@ -1386,7 +1386,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                                 continue; // not faulted: the next checkpoint finds the same conflict and looks again
                             }
 
-                            if (stored is null) { await DropOrphanAsync(active).ConfigureAwait(false); continue; }
+                            if (stored is null || stored.State == ManagedPlayerbotState.Faulted) { await DropFromActiveAsync(active, stored).ConfigureAwait(false); continue; }
                             // Adopt the other writer's whole record, so the stop (a revision-checked write) changes only what it means to
                             // on top of its values (a manual DesiredEnabled = false survives) and can leave _active cleanly.
                             active.Record = stored;
@@ -1410,19 +1410,22 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     }
 
     /// <summary>
-    /// A running bot whose registry row no longer exists (deleted out of band): nothing can be persisted for it, so it leaves
-    /// <see cref="_active"/> without a revision-checked write instead of failing the same stop every checkpoint. Logged once.
+    /// A running bot whose registry row no longer exists (<paramref name="row"/> null, deleted out of band) or was faulted out of band
+    /// (the checkpoint skips Faulted records, so it could never stop): it leaves <see cref="_active"/> without a revision-checked
+    /// write instead of failing or lingering every checkpoint. Logged once. The faulted row is published as stopped.
     /// </summary>
-    private async Task DropOrphanAsync(ActiveBot active)
+    private async Task DropFromActiveAsync(ActiveBot active, ManagedPlayerbot? row)
     {
         Guid botId = active.Record.BotId;
-        logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
+        if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
+        else logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
         active.Paused = true;
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId);
         active.Session.Kick();
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
+        if (row is not null) { active.Record = row; PublishStopped(row, active.Name, active.MapId); }
         try { await active.Scope.DisposeAsync().ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         { logger.LogWarning(ex, "Playerbot {BotId} scope disposal failed ({Type})", botId, ex.GetType().Name); }

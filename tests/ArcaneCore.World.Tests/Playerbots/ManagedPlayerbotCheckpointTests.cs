@@ -177,6 +177,33 @@ public sealed class ManagedPlayerbotCheckpointTests
     }
 
     [Fact]
+    public async Task AConflict_WithAnOutOfBandFaultedRow_StillLeavesTheActiveSet()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true, configure: o => o.FaultBackoffSeconds = 3600);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid[] ids = await StartBotsAsync(feature, 2);
+        await CheckpointAsync(host, feature);
+
+        owners.ChangeOutOfBand(ids[0], b => b with { State = ManagedPlayerbotState.Faulted, ErrorCode = "operator-fault" });
+        await host.World.InvokeAsync(() =>
+        {
+            feature.FindBrain(ids[0])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 11, 0);
+            feature.FindBrain(ids[1])!.HoldGoalForTests(PlayerbotGoalKind.Grind, 12, 0);
+            return true;
+        });
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+
+        Assert.Null(await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
+        Assert.Equal(ManagedPlayerbotState.Faulted, owners.Peek(ids[0])!.State);
+        Assert.Equal("operator-fault", owners.Peek(ids[0])!.ErrorCode);
+        Assert.Equal(12u, owners.Peek(ids[1])!.TargetEntry);
+    }
+
+    [Fact]
     public async Task AStopThatThrows_DoesNotKeepTheOtherBotsFromBeingCheckpointed()
     {
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
