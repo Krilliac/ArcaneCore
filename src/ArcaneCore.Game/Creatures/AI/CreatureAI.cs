@@ -111,6 +111,15 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>
+    /// A player was rewarded <paramref name="questId"/> by this creature as the quest giver (ScriptDev2 <c>pQuestRewardedNPC</c>, called by
+    /// vmangos Player::RewardQuest). Raised by <see cref="CreatureQuestScripts"/> after the reward is committed and before the quest's DB
+    /// CompleteScript runs. Nothing by default.
+    /// </summary>
+    public virtual void OnQuestRewarded(Player player, uint questId)
+    {
+    }
+
     /// <summary>Spawned or respawned (vmangos JustRespawned / Reset).</summary>
     public virtual void OnRespawn()
     {

@@ -19,8 +19,13 @@ namespace ArcaneCore.Game.Creatures;
 /// action instead of all three; the combat-action flag (0x400) keeps the timer when the first action fails so the event
 /// retries. The phase returns to 0 when the creature dies and is otherwise kept (cmangos JustDied, Reset).
 /// </para>
+/// <para>
+/// Not sealed so that a ScriptName AI can host the entry's EventAI rows: derive from it, register the type with
+/// <see cref="CreatureAiFactory.RegisterEventAiScript"/> and call <c>base</c> from every hook the script overrides; the rows then fire
+/// exactly as under the plain EventAI (see <see cref="StonedEventAI"/>).
+/// </para>
 /// </summary>
-public sealed class CreatureEventAI : AggressorAI
+public class CreatureEventAI : AggressorAI
 {
     public const byte FlagRepeatable = (byte)EventAiFlags.Repeatable;
     public const byte FlagRandomAction = (byte)EventAiFlags.RandomAction;

@@ -333,6 +333,48 @@ public sealed class CreatureAiFactory
         _entryScriptQuests.UnionWith(eventQuests);
     }
 
+    /// <summary>
+    /// Register a ScriptName AI that hosts the EventAI rows of its creature: <paramref name="factory"/> builds a type derived from
+    /// <see cref="CreatureEventAI"/> from the creature and the loaded AI content, so the entry's <c>creature_ai_scripts</c> rows keep firing under the
+    /// ScriptName (the ScriptName otherwise replaces EventAI, see <see cref="Create(Creature, CreatureContent, out bool, bool)"/>). A duplicate throws.
+    /// </summary>
+    public void RegisterEventAiScript(string name, Func<Creature, CreatureAiContent, CreatureEventAI> factory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        if (!_factories.TryAdd(name, (c, content) => factory(c, content.Ai)))
+        {
+            throw new InvalidOperationException($"creature AI '{name}' is already registered");
+        }
+    }
+
+    private readonly Dictionary<string, (ScriptKind Kind, string Implementation)> _npcScripts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Declare that <paramref name="scriptName"/> is implemented as a gossip script (<see cref="ScriptKind.GossipScript"/>) or a quest script
+    /// (<see cref="ScriptKind.QuestScript"/>, a <see cref="IQuestScriptAI"/> or an <c>OnQuestRewarded</c> hook) named <paramref name="implementation"/>, with
+    /// no AI of its own: <see cref="ScriptCatalog"/> then counts the ScriptName as implemented. A duplicate, or an AI already registered
+    /// under the name, throws (fail closed).
+    /// </summary>
+    public void RegisterNpcScript(string scriptName, ScriptKind kind, string implementation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scriptName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(implementation);
+        if (kind is not (ScriptKind.GossipScript or ScriptKind.QuestScript))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "only a gossip or quest script is a non-AI script");
+        }
+
+        if (_factories.ContainsKey(scriptName) || !_npcScripts.TryAdd(scriptName, (kind, implementation)))
+        {
+            throw new InvalidOperationException($"script '{scriptName}' is already registered");
+        }
+    }
+
+    /// <summary>The gossip/quest-only script registered under <paramref name="scriptName"/>, or null.</summary>
+    internal (ScriptKind Kind, string Implementation)? NpcScriptOf(string scriptName)
+        => _npcScripts.TryGetValue(scriptName, out (ScriptKind Kind, string Implementation) script) ? script : null;
+
     /// <summary>Register a C# AI under <paramref name="name"/> (a duplicate throws: fail closed).</summary>
     public void Register(string name, Func<Creature, CreatureAI> factory)
     {

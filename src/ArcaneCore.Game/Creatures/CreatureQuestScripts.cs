@@ -93,8 +93,14 @@ public static class CreatureQuestScripts
 
     private static void OnQuestRewarded(Func<Map, CreatureMapSystem?> systemOf, Player player, ObjectGuid giverGuid, Quest quest)
     {
-        // No ScriptDev2 OnQuestRewarded script of this server claims a quest, so the DB script always runs (Player.cpp:12712-12713).
-        if (quest.Template.CompleteScript != 0 && Giver(player, giverGuid) is { } giver && player.Map is { } map && systemOf(map) is { } system)
+        WorldObject? giver = Giver(player, giverGuid);
+        if (giver is Creature { AI: { } script })
+        {
+            script.OnQuestRewarded(player, quest.Id);
+        }
+
+        // The creature's hook never claims a quest, so the DB script always runs (Player.cpp:12712-12713).
+        if (quest.Template.CompleteScript != 0 && giver is not null && player.Map is { } map && systemOf(map) is { } system)
         {
             system.StartDbScript(DbScriptKind.QuestEnd, quest.Template.CompleteScript, giver, player);
         }

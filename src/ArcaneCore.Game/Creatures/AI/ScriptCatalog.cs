@@ -21,6 +21,15 @@ public enum ScriptKind
     /// <summary>A world-wide entry script (<see cref="CreatureAiFactory.RegisterEntryScript"/>).</summary>
     EntryScript,
 
+    /// <summary>
+    /// A ScriptName implemented only as a gossip or quest script (<see cref="CreatureAiFactory.RegisterNpcScript"/>): it owns the creature's
+    /// gossip menu or quest hooks, and the creature runs the AI of its AIName as usual.
+    /// </summary>
+    GossipScript,
+
+    /// <inheritdoc cref="GossipScript"/>
+    QuestScript,
+
     /// <summary>EventAI: the AIName is EventAI/GuardEventAI, or (with the implicit option) <c>creature_ai_scripts</c> rows exist.</summary>
     EventAI,
 
@@ -55,7 +64,7 @@ public readonly record struct ScriptResolution(ScriptKind Kind, string Implement
 /// <summary>
 /// One runtime answer to "which AI does creature entry X get on map M". It mirrors the selection order of
 /// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>, then <see cref="InstanceScriptedAis"/>), the template's ScriptName
-/// (named AI, then entry script), then the AIName, then the defaults. What an instance script (or a raid boss selection) gives an entry at run
+/// (named AI, then entry script, then a gossip/quest-only script), then the AIName, then the defaults. What an instance script (or a raid boss selection) gives an entry at run
 /// time is read from <see cref="InstanceScriptedAis"/>. Read-only; the registries are filled at start-up, so any thread may call it
 /// (a live <see cref="CreatureMapSystem"/> only from its map's thread).
 /// </summary>
@@ -96,6 +105,11 @@ public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent con
         if (factory.EntryScriptName(entry) is { } entryScript)
         {
             return new ScriptResolution(ScriptKind.EntryScript, entryScript, scriptName, true);
+        }
+
+        if (scriptName.Length > 0 && factory.NpcScriptOf(scriptName) is { } npcScript)
+        {
+            return new ScriptResolution(npcScript.Kind, npcScript.Implementation, scriptName, true);
         }
 
         bool resolved = scriptName.Length == 0;

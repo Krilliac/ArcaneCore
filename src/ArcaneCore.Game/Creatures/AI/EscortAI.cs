@@ -111,13 +111,50 @@ public abstract class EscortAI : CreatureAI
 
     protected void RemoveEscortState(EscortState state) => State &= ~state;
 
-    /// <summary>vmangos setCurrentWP: an index past the path is refused (logged in vmangos).</summary>
+    /// <summary>
+    /// vmangos setCurrentWP: an index past the path is refused (logged in vmangos). <paramref name="index"/> is a 0-BASED POSITION in the
+    /// loaded path, NOT the 1-based DB point id that <see cref="WaypointReached"/> reports: a script that has a point id (a ScriptDev2
+    /// "jump to point 10") must call <see cref="SetCurrentWaypointByPointId"/>.
+    /// </summary>
     public void SetCurrentWaypoint(int index)
     {
         if (index >= 0 && index < _waypoints.Count)
         {
             CurrentWaypointIndex = index;
         }
+    }
+
+    /// <summary>
+    /// The 0-based position in the loaded path of the point whose DB point id is <paramref name="pointId"/> (the id
+    /// <see cref="WaypointReached"/> reports; ids start at 1), or -1 when the path has no such point or no path is loaded.
+    /// </summary>
+    public int IndexOfPointId(uint pointId)
+    {
+        for (int i = 0; i < _waypoints.Count; i++)
+        {
+            if (_waypoints[i].Point == pointId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Continue the path at the point with DB point id <paramref name="pointId"/> (the id <see cref="WaypointReached"/> reports), the call
+    /// scripts use for a ScriptDev2 <c>SetCurrentWaypoint(n)</c> given in point ids. False, and nothing changes, when the path has no such point.
+    /// </summary>
+    public bool SetCurrentWaypointByPointId(uint pointId)
+    {
+        int index = IndexOfPointId(pointId);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        CurrentWaypointIndex = index;
+        return true;
     }
 
     /// <summary>
@@ -210,7 +247,7 @@ public abstract class EscortAI : CreatureAI
         _running = run;
     }
 
-    /// <summary>A point of the path was reached (its point id).</summary>
+    /// <summary>A point of the path was reached: <paramref name="pointId"/> is its 1-BASED DB point id, not its 0-based index (see <see cref="SetCurrentWaypointByPointId"/>).</summary>
     protected abstract void WaypointReached(uint pointId);
 
     /// <summary>The escort set off towards a point.</summary>
