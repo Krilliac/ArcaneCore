@@ -114,7 +114,7 @@ public abstract class EscortAI : CreatureAI
     /// <summary>
     /// vmangos setCurrentWP: an index past the path is refused (logged in vmangos). <paramref name="index"/> is a 0-BASED POSITION in the
     /// loaded path, NOT the 1-based DB point id that <see cref="WaypointReached"/> reports: a script that has a point id (a ScriptDev2
-    /// "jump to point 10") must call <see cref="SetCurrentWaypointByPointId"/>.
+    /// "jump to point 10") must call <see cref="SetNextWaypointByPointId"/>.
     /// </summary>
     public void SetCurrentWaypoint(int index)
     {
@@ -142,10 +142,12 @@ public abstract class EscortAI : CreatureAI
     }
 
     /// <summary>
-    /// Continue the path at the point with DB point id <paramref name="pointId"/> (the id <see cref="WaypointReached"/> reports), the call
-    /// scripts use for a ScriptDev2 <c>SetCurrentWaypoint(n)</c> given in point ids. False, and nothing changes, when the path has no such point.
+    /// Make the point with DB point id <paramref name="pointId"/> (the id <see cref="WaypointReached"/> reports; 1-based) the NEXT point the escort
+    /// walks to: the call for "jump so that point 10 is next" and "go back to point 9". It does the right thing from inside
+    /// <see cref="WaypointReached"/> too (the escort does not advance past the chosen point when the callback returns) and outside it (the
+    /// escort heads for that point). False, and nothing changes, when the path has no such point.
     /// </summary>
-    public bool SetCurrentWaypointByPointId(uint pointId)
+    public bool SetNextWaypointByPointId(uint pointId)
     {
         int index = IndexOfPointId(pointId);
         if (index < 0)
@@ -154,8 +156,12 @@ public abstract class EscortAI : CreatureAI
         }
 
         CurrentWaypointIndex = index;
+        _nextPointChosen = _inWaypointCallback;
         return true;
     }
+
+    private bool _inWaypointCallback;
+    private bool _nextPointChosen;
 
     /// <summary>
     /// vmangos npc_escortAI::Start (ScriptedEscortAI.cpp:452-506): refused in combat, while escorting, or without points. The points are
@@ -247,7 +253,7 @@ public abstract class EscortAI : CreatureAI
         _running = run;
     }
 
-    /// <summary>A point of the path was reached: <paramref name="pointId"/> is its 1-BASED DB point id, not its 0-based index (see <see cref="SetCurrentWaypointByPointId"/>).</summary>
+    /// <summary>A point of the path was reached: <paramref name="pointId"/> is its 1-BASED DB point id, not its 0-based index (see <see cref="SetNextWaypointByPointId"/>).</summary>
     protected abstract void WaypointReached(uint pointId);
 
     /// <summary>The escort set off towards a point.</summary>
@@ -563,8 +569,23 @@ public abstract class EscortAI : CreatureAI
             System?.StartDbScript(DbScriptKind.CreatureMovement, point.ScriptId, Me, GetPlayerForEscort() ?? (WorldObject)Me);
         }
         if (!Me.IsInWorld || !Me.IsAlive) return;
-        WaypointReached(point.Point);
+        _inWaypointCallback = true;
+        _nextPointChosen = false;
+        try
+        {
+            WaypointReached(point.Point);
+        }
+        finally
+        {
+            _inWaypointCallback = false;
+        }
+
         _waypointWaitMs = point.WaitTimeMs + 1;
-        CurrentWaypointIndex++;
+        if (!_nextPointChosen)
+        {
+            CurrentWaypointIndex++;
+        }
+
+        _nextPointChosen = false;
     }
 }

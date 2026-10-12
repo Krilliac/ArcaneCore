@@ -53,14 +53,16 @@ public sealed class StonedDormancy(Creature creature)
     public event Action? Woke;
 
     /// <summary>
-    /// Forget the state without touching the creature: a respawn re-initializes its flags and immobilization from the template
-    /// (<c>CreatureMapSystem</c> respawn), so nothing is left to undo.
+    /// A respawn: drop the state. The flag bits and the immobilization this helper added are undone (a respawn re-initializes both from the
+    /// template anyway, so this is a no-op there, and it keeps a repeated respawn call from losing track of what was added).
+    /// <see cref="Woke"/> is not raised.
     /// </summary>
     public void Forget()
     {
-        IsDormant = false;
-        _addedFlags = UnitFlags.None;
-        _addedImmobilize = false;
+        if (IsDormant)
+        {
+            Exit();
+        }
     }
 
     /// <summary>Leave dormancy now without waiting for the aura (the creature died, or a script wakes it by force). The aura itself is untouched.</summary>
