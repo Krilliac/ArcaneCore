@@ -33,7 +33,6 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
     /// </summary>
     private static readonly (uint Map, uint Entry, string Script)[] KnownMissing =
     [
-        (70, 7076, "mob_archaeras_add"), (70, 7077, "mob_archaeras_add"), (70, 7309, "mob_archaeras_add"), (70, 10120, "mob_archaeras_add"),
         (230, 8982, "npc_ironhand_guardian"), (230, 9022, "npc_dughal_stormwing"), (230, 9023, "npc_marshal_windsor"),
         (230, 9500, "npc_mistress_nagmara"), (230, 9503, "npc_rocknot"), (230, 9679, "npc_tobias_seecher"), (230, 16079, "npc_theldren_trigger"),
         // Doom'rel has his gossip (DoomrelGossip, an INpcGossipScript registered by DungeonEventFeature) but no AI; the catalogue answers for AIs.

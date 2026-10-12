@@ -291,6 +291,9 @@ public sealed class CreatureAiFactory
         {
             RegisterEntryScript(spec.Entry, E(c => new Scripts.Escorts.DataDrivenEscortAI(c, spec)), spec.QuestId);
         }
+
+        // Dungeon and raid ScriptNames that bind by name (an EventAI host, a gossip/quest script, an inert trigger AI).
+        Instances.Scripts.Uldaman.ArchaerasAddAI.Register(this);
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;

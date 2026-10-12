@@ -101,6 +101,13 @@ public sealed class ArchaedasAi(Creature creature, UldamanInstance instance) : S
 
     internal void Awaken(Creature dwarf)
     {
+        // Spec 70-mob_archaeras_add 11.4 (recommended): the hallway warders are never woken; a pick that lands on one wakes a sleeping room warder.
+        if (UldamanInstance.IsHallwayWarder(dwarf))
+        {
+            if (instance.NextDormantRoomWarder() is not { } substitute) return;
+            dwarf = substitute;
+        }
+
         System?.RemoveAuras(dwarf, UldamanInstance.SpellStoned);
         if (Victim is { } victim) dwarf.AI?.AttackStart(victim);
     }
