@@ -78,6 +78,46 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     public Task Quest7_FromStormwind_TheBotWalksBackToMarshalMcBride()
         => WalksAsync(new(-8842.1f, 464.0f, 109.8f), new(-8902.6f, -162.6f, 82.0f), map: 0);
 
+    /// <summary>Quest 2159 from a second place its bots stalled (positions of main's former probe cases).</summary>
+    [RealTerrainBotFact]
+    public Task Quest2159_FromTheHillNorthEastOfDolanaar_TheBotWalksToInnkeeperKeldamyr()
+        => WalksAsync(new(10199.2f, 991.2f, 1376.4f), InnkeeperKeldamyr);
+
+    /// <summary>Quest 4495 (A Good Friend) from a second stall spot in Shadowglen, on its way to Iverron.</summary>
+    [RealTerrainBotFact]
+    public Task Quest4495_FromTheSecondStallSpotInShadowglen_TheBotWalksToIverron()
+        => WalksAsync(new(10577.5f, 894.5f, 1312.8f), new(10711.6f, 1034.9f, 1347.3f));
+
+    /// <summary>Quest 459 (The Woodland Protector) from a second stall spot near Dolanaar, on its way to Tarindrella.</summary>
+    [RealTerrainBotFact]
+    public Task Quest459_FromTheSecondStallSpotNearDolanaar_TheBotWalksToTarindrella()
+        => WalksAsync(new(10037.1f, 958.1f, 1337.4f), new(10296.9f, 870.2f, 1335.9f));
+
+    /// <summary>Quest 3087 from a far stall spot (about 540 yards out) to Jenshan.</summary>
+    [RealTerrainBotFact]
+    public Task Quest3087_FromFarOut_TheBotWalksToJenshan()
+        => WalksAsync(new(-212.3f, -4559.7f, 72.0f), new(-635.5f, -4227.5f, 38.4f));
+
+    /// <summary>Quest 3087 from a stall spot to Galgar, 23 yards away.</summary>
+    [RealTerrainBotFact]
+    public Task Quest3087_FromTheCampSpot_TheBotWalksToGalgar()
+        => WalksAsync(new(-585.1f, -4223.8f, 38.5f), new(-561.6f, -4221.8f, 41.7f));
+
+    /// <summary>Quest 3087 from the same spot to Jenshan, 50 yards the other way.</summary>
+    [RealTerrainBotFact]
+    public Task Quest3087_FromTheCampSpot_TheBotWalksToJenshan()
+        => WalksAsync(new(-585.1f, -4223.8f, 38.5f), new(-635.5f, -4227.5f, 38.4f));
+
+    /// <summary>Quest 3361 from a stall spot to Felix, 39 yards away, on the eastern kingdoms map.</summary>
+    [RealTerrainBotFact]
+    public Task Quest3361_FromTheHeights_TheBotWalksToFelix()
+        => WalksAsync(new(-6135.3f, 386.1f, 395.6f), new(-6098.1f, 396.1f, 395.5f), map: 0);
+
+    /// <summary>Quest 2161 from the mesh fragment north of Razor Hill to Ukor, 880 yards west.</summary>
+    [RealTerrainBotFact]
+    public Task Quest2161_FromAFragmentOfMeshNorthOfRazorHill_TheBotWalksToUkor()
+        => WalksAsync(new(207.5f, -4458.7f, 27.7f), new(-599.4f, -4715.3f, 35.2f));
+
     // Innkeeper Kauth (creature 6747), Bloodhoof Village; Innkeeper Keldamyr (6736), Dolanaar.
     private static readonly Vector3 InnkeeperKauth = new(-2365.4f, -347.3f, -8.9f);
     private static readonly Vector3 InnkeeperKeldamyr = new(9802.2f, 982.6f, 1314.0f);
